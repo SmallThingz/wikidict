@@ -1,4 +1,10 @@
 const canonicalRGB=value=>typeof value==='string'&&value.length===7&&/^#[0-9a-f]{6}$/.test(value);
+const contrastInk=background=>{
+  const linear=value=>{value/=255;return value<=0.04045?value/12.92:((value+0.055)/1.055)**2.4;};
+  const rgb=[1,3,5].map(at=>linear(parseInt(background.slice(at,at+2),16)));
+  const luminance=.2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];
+  return (luminance+.05)/.05>=1.05/(luminance+.05)?'#000000':'#ffffff';
+};
 import {safeURL} from './validate.js';
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; };
 let explanationSequence = 0;
@@ -13,7 +19,7 @@ function poemMetadata(span) {
   const direction=directionTokens.length===0?'':directionTokens.length===1&&['wikidict-poem-dir-ltr','wikidict-poem-dir-rtl'].includes(directionTokens[0])?directionTokens[0].slice(-3):null;
   return {indent,direction};
 }
-function poemSpans(values,onLink,explanations,withinSummary) {
+function poemSpans(values,onLink,explanations,withinSummary,cellBackground) {
   const fragment=document.createDocumentFragment();
   let line=[],metadata=null,endedWithBreak=false,lastBreak=null;
   const include=span=>{
@@ -28,7 +34,7 @@ function poemSpans(values,onLink,explanations,withinSummary) {
     const el=node('span',null,'poem-line');el.style.display='block';
     if(metadata?.indent>0)el.style.marginInlineStart=metadata.indent+'em';
     if(metadata?.direction)el.dir=metadata.direction;
-    el.append(spans(line,onLink,true,explanations,withinSummary));
+    el.append(spans(line,onLink,true,explanations,withinSummary,cellBackground));
     if(!line.some(s=>/[^ \t\r]/.test((s.text||'')+(s.trail||''))))el.append(node('br'));
     fragment.append(el);line=[];metadata=null;
   };
@@ -65,17 +71,17 @@ function poemSpans(values,onLink,explanations,withinSummary) {
   else if(endedWithBreak){include(lastBreak);appendLine();}
   return fragment;
 }
-export function spans(values = [], onLink = () => {}, preserve = false, explanations = null, withinSummary = false) {
-  if (!preserve && values.some(isPoem)) return poemSpans(values,onLink,explanations,withinSummary);
+export function spans(values = [], onLink = () => {}, preserve = false, explanations = null, withinSummary = false, cellBackground = null) {
+  if (!preserve && values.some(isPoem)) return poemSpans(values,onLink,explanations,withinSummary,cellBackground);
   const fragment = document.createDocumentFragment();
   const compact=[];
   const blank=value=>!(value||'').includes('\u00a0')&&!(value||'').trim();
   for(const span of values){
     if(span.kind==='line_break' && !span.trail && (!compact.length||compact.at(-1).kind==='line_break'))continue;
-    if(span.kind==='text'&&blank(span.text)&&blank(span.trail)&&(!compact.length||compact.at(-1).kind==='line_break'))continue;
+    if(!canonicalRGB(span.background)&&span.kind==='text'&&blank(span.text)&&blank(span.trail)&&(!compact.length||compact.at(-1).kind==='line_break'))continue;
     compact.push(span);
   }
-  while(compact.length&&((compact.at(-1).kind==='line_break'&&blank(compact.at(-1).trail))||(blank(compact.at(-1).text)&&blank(compact.at(-1).trail))))compact.pop();
+  while(compact.length&&!canonicalRGB(compact.at(-1).background)&&((compact.at(-1).kind==='line_break'&&blank(compact.at(-1).trail))||(blank(compact.at(-1).text)&&blank(compact.at(-1).trail))))compact.pop();
   const visible = preserve?values:compact, described = new Map();
   for (let i=0;i<visible.length;) {
     const explanation=visible[i].explanation;
@@ -91,18 +97,23 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
     }
     i=end;
   }
+  const inkFor=span=>canonicalRGB(span.foreground)?span.foreground:
+    canonicalRGB(span.background)?contrastInk(span.background):canonicalRGB(cellBackground)?contrastInk(cellBackground):null;
   const trailNode=(span,i)=>{
-    if(!span.explanation&&!canonicalRGB(span.foreground))return document.createTextNode(span.trail||'');
+    if(!span.explanation&&!inkFor(span)&&!canonicalRGB(span.background))return document.createTextNode(span.trail||'');
     if(!span.trail)return document.createTextNode('');
     const trail=node(span.explanation?'abbr':'span',span.trail);
     if(span.explanation){trail.title=span.explanation;if(described.has(i))trail.setAttribute('aria-describedby',described.get(i));}
-    if(canonicalRGB(span.foreground))trail.style.color=span.foreground;
+    if(inkFor(span))trail.style.color=inkFor(span);
+    if(canonicalRGB(span.background)){trail.style.backgroundColor=span.background;trail.style.whiteSpace='pre-wrap';}
     return trail;
   };
   for (const [i,span] of visible.entries()) {
     if (span.kind === 'line_break') { fragment.append(node('br'),trailNode(span,i)); continue; }
     let el = node('span', span.text || '');
-    if(canonicalRGB(span.foreground))el.style.color=span.foreground;
+    if(inkFor(span))el.style.color=inkFor(span);
+    if(!canonicalRGB(span.foreground)&&inkFor(span)&&((span.kind==='link'&&span.target)||(span.kind==='external_link'&&safeURL(span.target))))el.style.textDecoration='underline';
+    if(canonicalRGB(span.background)){el.style.backgroundColor=span.background;el.style.whiteSpace='pre-wrap';}
     if (span.language) el.lang = span.language;
     if (['rtl','ltr','auto'].includes(span.direction)) { el.dir = span.direction; el.style.unicodeBidi = 'isolate'; }
     if (['label','citation','pronunciation','headword'].includes(span.role)) el.classList.add(span.role);
@@ -151,7 +162,7 @@ function destination(el, value, legacy = '') {
 }
 function legacyDestinations(entry) {
   const candidates = [], counts = new Map();
-  if (entry.presentation_version === 'DPR5') return new Map();
+  if (['DPR5','DPR6'].includes(entry.presentation_version)) return new Map();
   const add = (value, label) => {
     if (value.anchor || value.anchor_fallback) return;
     const id = label.replaceAll(' ','_');
@@ -186,7 +197,7 @@ function blockView(block, onLink, explanations, legacy = '') {
     }
     const wrap = node('div', null, 'table-scroll'), table = node('table'); wrap.style.marginInlineStart = margin; wrap.tabIndex = 0; wrap.setAttribute('aria-label','Scrollable table');
     if (block.table.caption?.length) { const caption = node('caption'); caption.append(spans(block.table.caption,onLink,false,explanations)); table.append(caption); }
-    for (const row of block.table.rows) { const tr = node('tr'); for (const cell of row.cells) { const td = node(cell.header?'th':'td'); td.colSpan = cell.colspan || 1; td.rowSpan = cell.rowspan || 1; if(canonicalRGB(cell.background))td.style.backgroundColor=cell.background; td.append(spans(cell.spans,onLink,false,explanations)); tr.append(td); } table.append(tr); }
+    for (const row of block.table.rows) { const tr = node('tr'); for (const cell of row.cells) { const td = node(cell.header?'th':'td'); td.colSpan = cell.colspan || 1; td.rowSpan = cell.rowspan || 1; if(canonicalRGB(cell.background))td.style.backgroundColor=cell.background; td.append(spans(cell.spans,onLink,false,explanations,false,cell.background)); tr.append(td); } table.append(tr); }
     wrap.append(table); return wrap;
   }
   if (block.kind === 'rule') return node('hr');
@@ -209,7 +220,7 @@ function sectionHeadingCompanion(section){
     explained=explained||!!span.explanation;
     navigable=navigable||(['link','external_link'].includes(span.kind)&&!!span.target&&!!(span.text||span.trail));
     const styled=['bold','italic','code','small','superscript','subscript','strike','underline'].some(flag=>span[flag])||
-      span.foreground!=null||!!span.classes||!!span.language||!!span.direction||(span.role??'normal')!=='normal';
+      span.foreground!=null||span.background!=null||!!span.classes||!!span.language||!!span.direction||(span.role??'normal')!=='normal';
     styledText=styledText||(span.kind==='text'&&!!span.text&&!span.target&&styled);
     label+=span.kind==='line_break'?'\n':(span.text||'')+(span.trail||'');
   }

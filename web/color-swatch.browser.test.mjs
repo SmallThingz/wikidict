@@ -54,7 +54,33 @@ try {
  await page.getByRole('link',{name:'Label 0',exact:true}).click();assert.deepEqual(await page.evaluate(()=>window.links),['Label 0']);
  await page.setViewportSize({width:768,height:640});
  await page.screenshot({path:path.join(report,'typed-rgb-768.png'),fullPage:true});frames.push('typed-rgb-768.png');
+ const paintResult=await page.evaluate(()=>{
+  document.querySelector('main').replaceChildren();
+  const painted={kind:'link',text:'Nested paint',trail:'!',target:'Paint target',foreground:'#01796f',background:'#ffffe0',code:true};
+  const entry={title:'Paint title',presentation_version:'DPR6',display_title:[{text:'Paint title',background:'#ffffe0'}],preamble_spans:[{text:'Preamble',background:'#ffffe0'}],sections:[{title:'Noun',level:3,blocks:[{kind:'heading',level:3,spans:[{kind:'text',text:'Noun',background:'#ffffe0'}]},{kind:'paragraph',spans:[{kind:'text',text:'   ',background:'#00ff00'},{text:'after paint'},{kind:'line_break',trail:'break trail',background:'#ff0000'}]},{kind:'table',table:{caption:[{text:'Caption',background:'#ffffe0'}],rows:[{cells:[{background:'#fffdd0',spans:[painted,{text:' plain neighbor'},{text:'Invalid',background:'#FFFFE0'}]}]}]}}]}],references:[]};
+  const before=JSON.stringify(entry);document.querySelector('main').append(Renderer.renderEntry(entry,()=>{}));
+  const td=document.querySelector('td'),link=td.querySelector('a span'),trail=td.querySelector(':scope > span');
+  return {unchanged:JSON.stringify(entry)===before,title:document.querySelector('h1 span').style.backgroundColor,heading:document.querySelector('summary .heading-label span').style.backgroundColor,nouns:[...document.querySelectorAll('summary')].filter(x=>x.textContent.includes('Noun')).length,outer:td.style.backgroundColor,inner:link.style.backgroundColor,trail:trail.style.backgroundColor,code:!!td.querySelector('code'),neighbor:td.children[2].style.backgroundColor,invalid:td.lastElementChild.style.backgroundColor,blank:document.querySelector('.paragraph .body').firstChild.textContent,blankFill:document.querySelector('.paragraph .body').firstChild.style.backgroundColor,caption:document.querySelector('caption span').style.backgroundColor,breakTrail:document.querySelector('.paragraph .body').lastChild.textContent,breakFill:document.querySelector('.paragraph .body').lastChild.style.backgroundColor,breakCount:[...document.querySelector('.paragraph .body').childNodes].filter(x=>x.nodeName==='BR').length};
+ });
+ assert.deepEqual(paintResult,{unchanged:true,title:'rgb(255, 255, 224)',heading:'rgb(255, 255, 224)',nouns:1,outer:'rgb(255, 253, 208)',inner:'rgb(255, 255, 224)',trail:'rgb(255, 255, 224)',code:true,neighbor:'',invalid:'',blank:'   ',blankFill:'rgb(0, 255, 0)',caption:'rgb(255, 255, 224)',breakTrail:'break trail',breakFill:'rgb(255, 0, 0)',breakCount:1});
+ await page.setViewportSize({width:768,height:640});
+ await page.locator('main').scrollIntoViewIfNeeded();
+ await page.screenshot({path:path.join(report,'span-background-768.png'),fullPage:true,animations:'disabled'});frames.push('span-background-768.png');
+ const contrastResults=[];
+ for(const theme of ['light','dark']){
+  contrastResults.push(await page.evaluate(theme=>{
+   document.documentElement.dataset.theme=theme;document.querySelector('main').replaceChildren();
+   const spans=[{kind:'link',text:'Pale link',target:'Target',background:'#ffffe0'},{text:'Dark paint',background:'#000000'},{text:'Authored ink',background:'#ffffe0',foreground:'#123456'},{kind:'link',text:'Cell link',target:'Cell target'},{text:'Cell plain'},{text:'Span override',background:'#000000'}];
+   const entry={title:'Contrast',sections:[{title:'Paint',blocks:[{kind:'table',table:{rows:[{cells:[{background:'#fffdd0',spans}]}]}},{kind:'paragraph',spans:[{text:'Theme neighbor'}]}]}]};
+   document.querySelector('main').append(Renderer.renderEntry(entry,()=>{}));
+   const text=value=>[...document.querySelectorAll('td span')].find(el=>el.textContent===value);
+   const color=value=>getComputedStyle(text(value)).color;
+   return {theme,pale:color('Pale link'),dark:color('Dark paint'),authored:color('Authored ink'),cellLink:color('Cell link'),cellPlain:color('Cell plain'),override:color('Span override'),underlined:getComputedStyle(text('Pale link')).textDecorationLine.includes('underline')&&getComputedStyle(text('Cell link')).textDecorationLine.includes('underline'),themeUnchanged:document.querySelector('.paragraph .body span').style.color===''};
+  },theme));
+ }
+ for(const measured of contrastResults)assert.deepEqual(measured,{theme:measured.theme,pale:'rgb(0, 0, 0)',dark:'rgb(255, 255, 255)',authored:'rgb(18, 52, 86)',cellLink:'rgb(0, 0, 0)',cellPlain:'rgb(0, 0, 0)',override:'rgb(255, 255, 255)',underlined:true,themeUnchanged:true});
+ await page.screenshot({path:path.join(report,'span-background-contrast-dark-768.png'),fullPage:true,animations:'disabled'});frames.push('span-background-contrast-dark-768.png');
  assert.deepEqual(errors,[]);
- await writeFile(path.join(report,'result.json'),JSON.stringify({passed:true,scope:'Focused compiled feature render, strict fallback, label accessibility, no focus stop, responsive bounds; synthetic typed input, not corpus import or public transport.',result,accessibleSnapshot:snapshot,frames,errors},null,2)+'\n');
+ await writeFile(path.join(report,'result.json'),JSON.stringify({passed:true,scope:'Focused compiled feature render, strict fallback, label accessibility, no focus stop, responsive bounds; synthetic typed input, not corpus import or public transport.',result,paintResult,contrastResults,accessibleSnapshot:snapshot,frames,errors},null,2)+'\n');
  console.log('WEB_COLOR_SWATCH_PASS');
 } finally {await browser.close();}

@@ -196,13 +196,20 @@ int main(int argc, char **argv) {
             LibraryStorage::recoverPendingMutation(first.path());
             require(!QFileInfo::exists(destination) && !QFileInfo::exists(first.filePath(QStringLiteral("languages.tsv"))), "interrupted first import restores genuinely empty root");
         }
-        // Both ordinary and DAL1 records use the same full native DPR2/3/4 decoder.
+        // Both ordinary and DAL1 records use the same full native DPR2-6 decoder.
         const QByteArray coloredPresentation = QByteArray::fromHex("445052340100000000000005000000636f6c6f72000000000000000000000000000000000000000000000000010700000023316333396262000000000000000000000000000000000000000000000000");
+        QByteArray paintedPresentation = coloredPresentation;
+        paintedPresentation.replace(0, 4, "DPR6");
+        const qsizetype foregroundEnd = paintedPresentation.indexOf("#1c39bb") + 7;
+        require(foregroundEnd >= 7, "painted fixture contains its canonical foreground");
+        paintedPresentation.insert(foregroundEnd, QByteArray::fromHex("010700000023666666666530"));
         const QList<QByteArray> supportedPresentations{
             QByteArray("DPR2") + QByteArray(28, '\0'),
             QByteArray("DPR3") + QByteArray(28, '\0'),
             QByteArray("DPR4") + QByteArray(28, '\0'),
-            coloredPresentation,
+            QByteArray("DPR5") + QByteArray(28, '\0'),
+            QByteArray("DPR6") + QByteArray(28, '\0'),
+            coloredPresentation, paintedPresentation,
         };
         for (qsizetype version = 0; version < supportedPresentations.size(); ++version) {
             const auto &presentation = supportedPresentations[version];
@@ -210,7 +217,7 @@ int main(int argc, char **argv) {
             const QByteArray ordinary = blob("English", {"annotation"}, 1, presentation);
             write(source, ordinary);
             auto accepted = LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress);
-            require(accepted->dictionary.words == 1, "accept complete ordinary DPR2/3/4 including RGB span");
+            require(accepted->dictionary.words == 1, "accept complete ordinary DPR2-6 including foreground and background spans");
             LibraryStorage::commitImport(gateRoot, *accepted);
             auto installed = LibraryStorage::installed(gateRoot);
             require(installed.size() == 1 && read(installed.first().path) == ordinary,
@@ -220,7 +227,7 @@ int main(int argc, char **argv) {
             write(source, alias);
             accepted = LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress);
             require(accepted->dictionary.kind == QStringLiteral("alias") && accepted->dictionary.words == 1,
-                    "accept complete DPR2/3/4 DAL1 including RGB span");
+                    "accept complete DPR2-6 DAL1 including foreground and background spans");
             LibraryStorage::commitImport(gateRoot, *accepted);
             installed = LibraryStorage::installed(gateRoot);
             require(installed.size() == 1 && read(installed.first().path) == alias,
@@ -231,9 +238,16 @@ int main(int argc, char **argv) {
         const qsizetype rgbAt = invalidRgb.indexOf("#1c39bb");
         require(rgbAt >= 0, "RGB fixture contains its canonical source color");
         invalidRgb[rgbAt + 1] = 'G';
+        QByteArray invalidBackground = paintedPresentation;
+        const qsizetype backgroundAt = invalidBackground.indexOf("#ffffe0");
+        require(backgroundAt >= 0, "painted fixture contains its canonical background");
+        invalidBackground[backgroundAt + 1] = 'G';
+        QByteArray invalidBackgroundPresence = paintedPresentation;
+        invalidBackgroundPresence[foregroundEnd] = char(2);
         for (const QByteArray &presentation : {
-                QByteArray("DPR5") + QByteArray(28, '\0'),
-                coloredPresentation.chopped(1), coloredPresentation + QByteArray(1, '\0'), invalidRgb}) {
+                QByteArray("DPR7") + QByteArray(28, '\0'),
+                coloredPresentation.chopped(1), coloredPresentation + QByteArray(1, '\0'), invalidRgb,
+                invalidBackground, invalidBackgroundPresence}) {
             const QString gateRoot = temporary.filePath(QStringLiteral("invalid-version-gate"));
             write(source, blob("English", {"annotation"}, 1, presentation));
             rejects([&] { LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress); },

@@ -4351,6 +4351,122 @@ private slots:
         QCOMPARE(table->cellAt(0, 1).format().background().style(), Qt::NoBrush);
     }
 
+    void spanBackgroundPreservesInnerPaintAndHeadingMetadata() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const auto painted = [](const QString &text, const QString &color) {
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")},
+                {QStringLiteral("text"), text}, {QStringLiteral("background"), color}};
+        };
+        QJsonObject link = painted(QStringLiteral("inner link"), QStringLiteral("#ffffe0"));
+        link.insert(QStringLiteral("kind"), QStringLiteral("link"));
+        link.insert(QStringLiteral("target"), QStringLiteral("dog"));
+        link.insert(QStringLiteral("trail"), QStringLiteral("!"));
+        link.insert(QStringLiteral("code"), true);
+        QJsonObject breakTrail = painted(QStringLiteral("ignored break text"), QStringLiteral("#ff0000"));
+        breakTrail.insert(QStringLiteral("kind"), QStringLiteral("line_break"));
+        breakTrail.insert(QStringLiteral("trail"), QStringLiteral("break trail"));
+        QJsonObject cellAuthoredInk = painted(QStringLiteral("cell authored ink"), QStringLiteral("#000000"));
+        cellAuthoredInk.insert(QStringLiteral("foreground"), QStringLiteral("#123456"));
+        const QJsonArray spans{link, QJsonObject{{QStringLiteral("text"), QStringLiteral(" plain neighbor")}}, breakTrail,
+            painted(QStringLiteral("dark inner override"), QStringLiteral("#000000")), cellAuthoredInk,
+            painted(QStringLiteral("   "), QStringLiteral("#00ff00"))};
+        const QJsonObject cell{{QStringLiteral("background"), QStringLiteral("#fffdd0")}, {QStringLiteral("spans"), spans}};
+        const QJsonObject table{{QStringLiteral("rows"), QJsonArray{QJsonObject{{QStringLiteral("cells"), QJsonArray{cell}}}}}};
+        for (const QString &theme : {QStringLiteral("light"), QStringLiteral("dark")}) {
+            window.learning_.setTheme(theme); window.applyTheme();
+            window.reading_->setHtml(window.tableHtml(table, 0));
+            const auto inner = window.reading_->document()->find(QStringLiteral("inner link!"));
+            QVERIFY(!inner.isNull());
+            QCOMPARE(inner.charFormat().background().color(), QColor(QStringLiteral("#ffffe0")));
+            QVERIFY(inner.charFormat().isAnchor());
+            const QString plain = window.reading_->toPlainText();
+            QVERIFY(plain.contains(QStringLiteral("plain neighbor\nbreak trail")));
+            QCOMPARE(plain.count(QStringLiteral("break trail")), 1);
+            QVERIFY(!plain.contains(QStringLiteral("ignored break text")));
+            const auto trail = window.reading_->document()->find(QStringLiteral("break trail"));
+            QCOMPARE(trail.charFormat().background().color(), QColor(QStringLiteral("#ff0000")));
+            QVERIFY(!trail.charFormat().isAnchor());
+            const auto neighbor = window.reading_->document()->find(QStringLiteral("plain neighbor"));
+            QCOMPARE(neighbor.charFormat().background().style(), Qt::NoBrush);
+            QCOMPARE(neighbor.charFormat().foreground().color(), QColor(QStringLiteral("#000000")));
+            const auto darkInner = window.reading_->document()->find(QStringLiteral("dark inner override"));
+            QCOMPARE(darkInner.charFormat().background().color(), QColor(QStringLiteral("#000000")));
+            QCOMPARE(darkInner.charFormat().foreground().color(), QColor(QStringLiteral("#ffffff")));
+            QCOMPARE(window.reading_->document()->find(QStringLiteral("cell authored ink")).charFormat().foreground().color(), QColor(QStringLiteral("#123456")));
+            QCOMPARE(inner.charFormat().foreground().color(), QColor(QStringLiteral("#000000")));
+            QVERIFY(inner.charFormat().fontUnderline());
+            QCOMPARE(trail.charFormat().foreground().color(), QColor(QStringLiteral("#000000")));
+            auto *rendered = qobject_cast<QTextTable *>(window.reading_->document()->rootFrame()->childFrames().first());
+            QVERIFY(rendered);
+            QCOMPARE(rendered->cellAt(0, 0).format().background().color(), QColor(QStringLiteral("#fffdd0")));
+            QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+            window.resize(900, 700);
+            QCoreApplication::processEvents();
+            window.reading_->verticalScrollBar()->setValue(0);
+            QCoreApplication::processEvents();
+            QVERIFY(window.reading_->grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-synthetic-span-background-%1.png").arg(theme)));
+        }
+        for (const QString &theme : {QStringLiteral("light"), QStringLiteral("dark")}) {
+            window.learning_.setTheme(theme); window.applyTheme();
+            QJsonObject explicitInk = painted(QStringLiteral("authored ink"), QStringLiteral("#ffffe0"));
+            explicitInk.insert(QStringLiteral("foreground"), QStringLiteral("#123456"));
+            window.reading_->setHtml(window.spansHtml(QJsonArray{painted(QStringLiteral("dark paint"), QStringLiteral("#000000")), explicitInk,
+                QJsonObject{{QStringLiteral("text"), QStringLiteral("theme neighbor")}}}));
+            QCOMPARE(window.reading_->document()->find(QStringLiteral("dark paint")).charFormat().foreground().color(), QColor(QStringLiteral("#ffffff")));
+            QCOMPARE(window.reading_->document()->find(QStringLiteral("authored ink")).charFormat().foreground().color(), QColor(QStringLiteral("#123456")));
+            QCOMPARE(window.reading_->document()->find(QStringLiteral("theme neighbor")).charFormat().foreground().style(), Qt::NoBrush);
+        }
+        for (const QString &invalid : {QStringLiteral("#FFFFE0"), QStringLiteral("#fff"), QStringLiteral("yellow"), QStringLiteral("#ffffe0\n")}) {
+            window.reading_->setHtml(window.spansHtml(QJsonArray{painted(QStringLiteral("invalid paint"), invalid)}));
+            QCOMPARE(window.reading_->document()->find(QStringLiteral("invalid paint")).charFormat().background().style(), Qt::NoBrush);
+        }
+        const QJsonObject heading{{QStringLiteral("kind"), QStringLiteral("heading")}, {QStringLiteral("level"), 3},
+            {QStringLiteral("spans"), QJsonArray{painted(QStringLiteral("Noun"), QStringLiteral("#ffffe0"))}}};
+        const QJsonObject section{{QStringLiteral("title"), QStringLiteral("Noun")}, {QStringLiteral("level"), 3},
+            {QStringLiteral("blocks"), QJsonArray{heading, QJsonObject{{QStringLiteral("kind"), QStringLiteral("paragraph")},
+                {QStringLiteral("spans"), QJsonArray{painted(QStringLiteral("   "), QStringLiteral("#00ff00"))}}}}}};
+        window.currentEntry_ = QJsonObject{{QStringLiteral("title"), QStringLiteral("Paint title")},
+            {QStringLiteral("display_title"), QJsonArray{painted(QStringLiteral("Paint title"), QStringLiteral("#ffffe0"))}},
+            {QStringLiteral("preamble_spans"), QJsonArray{painted(QStringLiteral("Paint preamble"), QStringLiteral("#ffffe0"))}},
+            {QStringLiteral("references"), QJsonArray{QJsonObject{{QStringLiteral("number"), 1}, {QStringLiteral("group_number"), 1},
+                {QStringLiteral("spans"), QJsonArray{painted(QStringLiteral("Paint reference"), QStringLiteral("#ffffe0"))}}}}},
+            {QStringLiteral("sections"), QJsonArray{section}}};
+        const QJsonObject response{{QStringLiteral("entries"), QJsonArray{window.currentEntry_}}};
+        window.renderResponse(QJsonDocument(response).toJson(), false);
+        QCOMPARE(window.title_->document()->find(QStringLiteral("Paint title")).charFormat().background().color(), QColor(QStringLiteral("#ffffe0")));
+        for (const QString &label : {QStringLiteral("Paint preamble"), QStringLiteral("Paint reference")}) {
+            const auto found = window.reading_->document()->find(label); QVERIFY(!found.isNull());
+            QCOMPARE(found.charFormat().background().color(), QColor(QStringLiteral("#ffffe0")));
+        }
+        const auto noun = window.reading_->document()->find(QStringLiteral("Noun"));
+        QVERIFY(!noun.isNull());
+        QCOMPARE(noun.charFormat().background().color(), QColor(QStringLiteral("#ffffe0")));
+        QCOMPARE(window.reading_->toPlainText().count(QStringLiteral("Noun")), 1);
+        QVERIFY(window.entryHtml(window.currentEntry_).contains(QStringLiteral("background-color:#00ff00")));
+    }
+
+    void aliasImportAcceptsAnchoredAndPaintedSourceVersions() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-painted-alias-XXXXXX"));
+        QVERIFY(directory.isValid());
+        const auto varint = [](quint64 n) { QByteArray out; do { unsigned char b = n & 127; n >>= 7; if (n) b |= 128; out.append(char(b)); } while (n); return out; };
+        for (const QByteArray &magic : {QByteArrayLiteral("DPR5"), QByteArrayLiteral("DPR6")}) {
+            const QByteArray presentation = magic + QByteArray(28, '\0');
+            QByteArray alias = QByteArrayLiteral("DAL1") + QByteArray(4, '\0') + char(1) + char(1) + QByteArray(4, '\0') + char(1);
+            for (const QByteArray &field : {QByteArrayLiteral("Alias"), QByteArrayLiteral("Alias"), QByteArrayLiteral("en"), QByteArrayLiteral("Target"), QByteArrayLiteral("Target"), QByteArrayLiteral("en"), presentation})
+                alias += varint(field.size()) + field;
+            QByteArray bytes = QByteArrayLiteral("WIKBLB08") + char(8) + QByteArray("1\tAlias\0", 8) + varint(alias.size()) + alias;
+            const QString source = directory.filePath(QString::fromLatin1(magic) + QStringLiteral(".wikblb"));
+            QFile file(source); QVERIFY(file.open(QIODevice::WriteOnly)); QCOMPARE(file.write(bytes), bytes.size()); file.close();
+            std::atomic_bool cancelled = false;
+            const QString root = directory.filePath(QString::fromLatin1(magic) + QStringLiteral("-library"));
+            auto prepared = LibraryStorage::prepareImport(root, source, {}, -1, cancelled, [](const QString &, qint64, qint64) {});
+            QVERIFY(prepared); LibraryStorage::commitImport(root, *prepared);
+            QCOMPARE(LibraryStorage::installed(root).size(), qsizetype(1));
+        }
+    }
+
     void typedColorSwatchRendersWithAccessibleTextAndKeepsFallback() {
         MainWindow window(fixture_, QStringLiteral("cat"));
         window.show();

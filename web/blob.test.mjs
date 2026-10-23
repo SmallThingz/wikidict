@@ -54,15 +54,15 @@ test('supplemental namespaces preserve full Unicode titles in raw and XZ',async(
 // Hand-encoded protocol controls; these do not stand in for the native fixture.
 const testU32=n=>{const b=Buffer.alloc(4);b.writeUInt32LE(n);return b;};
 const testString=value=>{const b=Buffer.isBuffer(value)?value:Buffer.from(value);return Buffer.concat([testU32(b.length),b]);};
-function explanationProtocolFixture(magic,{explanation='meaning',invalidLength=false,classes='Latn',blockKind=12,blockLevel=0,foreground=null,background=null,foregroundPresence=null,anchor='Usage_notes_2',anchorFallback='Usage.20notes_2',sectionAnchor='English_2',sectionFallback='English.202'}={}){
+function explanationProtocolFixture(magic,{explanation='meaning',invalidLength=false,classes='Latn',blockKind=12,blockLevel=0,foreground=null,background=null,spanBackground=null,backgroundPresence=null,foregroundPresence=null,anchor='Usage_notes_2',anchorFallback='Usage.20notes_2',sectionAnchor='English_2',sectionFallback='English.202'}={}){
  const string=testString;
  const rgb=value=>value===null?Buffer.from([0]):Buffer.concat([Buffer.from([1]),string(value)]);
- const span=text=>Buffer.concat([Buffer.from([1,0,1]),...[text,'Target','!','en',classes,'ltr'].map(string),...(magic!=='DPR2'?[invalidLength?Buffer.concat([testU32(32*1024*1024+1),Buffer.from('x')]):string(explanation)]:[]),...((magic==='DPR4'||magic==='DPR5')?[foregroundPresence===null?rgb(foreground):Buffer.from([foregroundPresence])]:[])]);
+ const span=text=>Buffer.concat([Buffer.from([1,0,1]),...[text,'Target','!','en',classes,'ltr'].map(string),...(magic!=='DPR2'?[invalidLength?Buffer.concat([testU32(32*1024*1024+1),Buffer.from('x')]):string(explanation)]:[]),...((magic==='DPR4'||magic==='DPR5'||magic==='DPR6')?[foregroundPresence===null?rgb(foreground):Buffer.from([foregroundPresence])]:[]),...(magic==='DPR6'?[backgroundPresence===null?rgb(spanBackground):Buffer.from([backgroundPresence])]:[])]);
  const spans=text=>Buffer.concat([testU32(1),span(text)]);
- const cell=Buffer.concat([Buffer.from([0,1,0,1,0]),...((magic==='DPR4'||magic==='DPR5')?[rgb(background)]:[]),spans('Cell')]);
+ const cell=Buffer.concat([Buffer.from([0,1,0,1,0]),...((magic==='DPR4'||magic==='DPR5'||magic==='DPR6')?[rgb(background)]:[]),spans('Cell')]);
  const table=Buffer.concat([spans('Caption'),testU32(1),testU32(1),cell]);
- const block=Buffer.concat([Buffer.from([blockKind,0,blockLevel]),spans('Body'),Buffer.from([0]),string(''),string(''),Buffer.from([1]),table,...(magic==='DPR5'?[string(anchor),string(anchorFallback)]:[])]);
- const section=Buffer.concat([Buffer.from([2]),string('Section'),...(magic==='DPR5'?[string(sectionAnchor),string(sectionFallback)]:[]),testU32(1),block]);
+ const block=Buffer.concat([Buffer.from([blockKind,0,blockLevel]),spans('Body'),Buffer.from([0]),string(''),string(''),Buffer.from([1]),table,...((magic==='DPR5'||magic==='DPR6')?[string(anchor),string(anchorFallback)]:[])]);
+ const section=Buffer.concat([Buffer.from([2]),string('Section'),...((magic==='DPR5'||magic==='DPR6')?[string(sectionAnchor),string(sectionFallback)]:[]),testU32(1),block]);
  const reference=Buffer.concat([testU32(1),testU32(1),string(''),string(''),spans('Reference')]);
  return Buffer.concat([Buffer.from(magic),spans('Display'),testU32(1),section,spans('Preamble'),testU32(0),testU32(0),testU32(1),reference,testU32(0)]);
 }
@@ -97,7 +97,7 @@ test('DPR2 and DPR3 use strict version framing in every serialized span containe
 });
 test('DPR3 refuses unknown versions incomplete strings UTF8 limits and trailing bytes',async()=>{
  const valid=explanationProtocolFixture('DPR3');
- for(const magic of ['DPR1','DPR6','XXXX']){
+ for(const magic of ['DPR1','DPR7','XXXX']){
   const invalid=Buffer.concat([Buffer.from(magic),valid.subarray(4)]);assert.throws(()=>decode(invalid,{}));
   await assert.rejects(()=>buildIndex(new RawSource(new Blob([dictionaryBlob(1,[['Bad',invalid]])]))));
  }
@@ -168,4 +168,25 @@ test('DPR5 rejects truncated boundaries invalid anchor UTF8 lengths and trailing
  for(const anchor of ['English_2','English.202','Usage_notes_2','Usage.20notes_2']){
   const invalid=Buffer.from(valid),at=invalid.indexOf(anchor);assert.ok(at>4);invalid.writeUInt32LE(32*1024*1024+1,at-4);assert.throws(()=>decode(invalid,{}));
  }
+});
+
+
+test('DPR6 span paint preserves every container, anchors and strict RGB framing',async()=>{
+ const payload=explanationProtocolFixture('DPR6',{foreground:'#01796f',background:'#fffdd0',spanBackground:'#ffffe0'});
+ const entry=decode(payload,{title:'Paint'});
+ const nested=decodeAlias(aliasPayload({compiled:payload}),'1	Cats');
+ assert.equal(nested.entry.display_title[0].background,'#ffffe0');
+ assert.equal(entry.presentation_version,'DPR6');
+ for(const list of presentationSpanLists(entry))for(const span of list){assert.equal(span.background,'#ffffe0');assert.equal(span.foreground,'#01796f');assert.equal(span.trail,'!');}
+ assert.equal(entry.sections[0].anchor,'English_2');
+ assert.equal(entry.sections[0].blocks[0].anchor,'Usage_notes_2');
+ assert.equal(entry.sections[0].blocks[0].table.rows[0].cells[0].background,'#fffdd0');
+ for(const magic of ['DPR2','DPR3','DPR4','DPR5'])for(const list of presentationSpanLists(decode(explanationProtocolFixture(magic),{})))for(const span of list)assert.equal(span.background,null);
+ for(const value of ['#ABCDEF','#abc','red','#ffffe0\n'])assert.throws(()=>decode(explanationProtocolFixture('DPR6',{spanBackground:value}),{}));
+ assert.throws(()=>decode(explanationProtocolFixture('DPR6',{backgroundPresence:2}),{}));
+ assert.throws(()=>decode(payload.subarray(0,-1),{}));
+ assert.throws(()=>decode(Buffer.concat([payload,Buffer.from([0])]),{}));
+ const variable=n=>{const bytes=[];do{let b=n&127;n=Math.floor(n/128);if(n)b|=128;bytes.push(b);}while(n);return Buffer.from(bytes);};
+ const raw=Buffer.concat([Buffer.from('WIKBLB08'),Buffer.from([1]),Buffer.from('en\0English\0Paint\0'),variable(payload.length),payload]);
+ const index=await buildIndex(new RawSource(new Blob([raw])));assert.equal(index.rows[0].title,'Paint');
 });
