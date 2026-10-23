@@ -236,6 +236,27 @@ try{
  assert.deepEqual(await rendererPage.evaluate(()=>window.headingLinks),['Heading target']);assert.equal(await headingSection.evaluate(el=>el.open),false);
  await headingSection.locator(':scope > summary').focus();await rendererPage.keyboard.press('Enter');assert.equal(await headingSection.evaluate(el=>el.open),true);
 
+ const styledHeadingCoverage=await rendererPage.evaluate(()=>{
+  const host=document.getElementById('compiled-renderer-fixture');
+  const styles=[...['bold','italic','code','small','superscript','subscript','strike','underline'].map(flag=>({[flag]:true})),
+   {foreground:'#123456'},{classes:'note'},{language:'fr'},{direction:'rtl'},{role:'label'}];
+  const section=(title,extra={},level=3)=>({title,level:3,blocks:[{kind:'heading',level,spans:[{kind:'text',text:title,...extra}]},
+   {kind:'paragraph',spans:[{kind:'text',text:'Retained styled heading body'}]}]});
+  const fixtures=styles.flatMap((style,i)=>[section('Styled '+i,style),section('Targeted '+i,{...style,target:'other'}),section('Wrong level '+i,style,2)]);
+  fixtures.push(section('Plain control'));
+  host.replaceChildren(WikidictRendererQA.renderEntry({title:'Styled companions',kind:'language',sections:fixtures},()=>{},{}));
+  return [...host.querySelectorAll(':scope > details')].map(el=>({headings:el.querySelectorAll('.block.heading').length,
+   lexicalLinks:el.querySelectorAll(':scope > summary a').length,body:el.textContent.includes('Retained styled heading body')}));
+ });
+ assert.equal(styledHeadingCoverage.length,40);
+ for(let i=0;i<13;i++){
+  assert.deepEqual(styledHeadingCoverage[i*3],{headings:0,lexicalLinks:0,body:true});
+  assert.deepEqual(styledHeadingCoverage[i*3+1],{headings:1,lexicalLinks:0,body:true});
+  assert.deepEqual(styledHeadingCoverage[i*3+2],{headings:1,lexicalLinks:0,body:true});
+ }
+ assert.deepEqual(styledHeadingCoverage.at(-1),{headings:1,lexicalLinks:0,body:true});
+ await rendererPage.screenshot({path:path.join(report,'styled-unlinked-heading-companions.png'),fullPage:true});
+
   const indentedHeading=await rendererPage.evaluate(()=>{
    const host=document.getElementById('compiled-renderer-fixture');window.indentedHeadingLinks=[];
    const phrase="Se beiga la conchugazión benasquesa d'este berbo.";

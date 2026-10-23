@@ -323,10 +323,19 @@ QJsonArray sectionHeadingSpans(const QJsonObject &section) {
         if ((kind == QStringLiteral("link") || kind == QStringLiteral("external_link")) &&
             !span.value(QStringLiteral("target")).toString().isEmpty() && (!text.isEmpty() || !trail.isEmpty()))
             rich = true;
-        const QStringList classes = poemClassTokens(span);
+        bool styled = false;
+        for (const QString &flag : {QStringLiteral("bold"), QStringLiteral("italic"), QStringLiteral("code"),
+             QStringLiteral("small"), QStringLiteral("superscript"), QStringLiteral("subscript"),
+             QStringLiteral("strike"), QStringLiteral("underline")})
+            styled = styled || span.value(flag).toBool();
+        const QJsonValue foreground = span.value(QStringLiteral("foreground"));
+        const QString role = span.value(QStringLiteral("role")).toString(QStringLiteral("normal"));
+        styled = styled || (!foreground.isUndefined() && !foreground.isNull()) ||
+            !span.value(QStringLiteral("classes")).toString().isEmpty() ||
+            !span.value(QStringLiteral("language")).toString().isEmpty() ||
+            !span.value(QStringLiteral("direction")).toString().isEmpty() || role != QStringLiteral("normal");
         if (kind == QStringLiteral("text") && !text.isEmpty() &&
-            span.value(QStringLiteral("target")).toString().isEmpty() &&
-            classes.contains(QStringLiteral("mw-selflink")) && classes.contains(QStringLiteral("selflink")))
+            span.value(QStringLiteral("target")).toString().isEmpty() && styled)
             rich = true;
         if (!span.value(QStringLiteral("explanation")).toString().isEmpty() && (!text.isEmpty() || !trail.isEmpty()))
             rich = true;

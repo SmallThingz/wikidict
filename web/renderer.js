@@ -203,17 +203,18 @@ function blockView(block, onLink, explanations, legacy = '') {
 function sectionHeadingCompanion(section){
   const first=section.blocks?.[0];
   if(!section.title||!first||first.kind!=='heading'||first.level!==section.level)return null;
-  let navigable=false,explained=false,selfStyled=false,label='';
+  let navigable=false,explained=false,styledText=false,label='';
   for(const span of first.spans||[]){
     if(span.kind==='line_break'&&span.trail)return null;
     explained=explained||!!span.explanation;
     navigable=navigable||(['link','external_link'].includes(span.kind)&&!!span.target&&!!(span.text||span.trail));
-    const tokens=poemTokens(span);
-    selfStyled=selfStyled||(span.kind==='text'&&!!span.text&&!span.target&&tokens.includes('mw-selflink')&&tokens.includes('selflink'));
+    const styled=['bold','italic','code','small','superscript','subscript','strike','underline'].some(flag=>span[flag])||
+      span.foreground!=null||!!span.classes||!!span.language||!!span.direction||(span.role??'normal')!=='normal';
+    styledText=styledText||(span.kind==='text'&&!!span.text&&!span.target&&styled);
     label+=span.kind==='line_break'?'\n':(span.text||'')+(span.trail||'');
   }
   const trimmed=label.replace(/^[ \t\r\n\u00a0]+|[ \t\r\n\u00a0]+$/g,'');
-  return (navigable||explained||selfStyled||first.depth>0)&&trimmed===section.title?first:null;
+  return (navigable||explained||styledText||first.depth>0)&&trimmed===section.title?first:null;
 }
 export function renderEntry(entry, onLink, settings = {}, mediaView = () => null) {
   const root = document.createDocumentFragment(), references = new Map(), legacy = legacyDestinations(entry);

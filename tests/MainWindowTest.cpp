@@ -5268,8 +5268,40 @@ private slots:
              QStringLiteral("not-mw-selflink selflink"), QStringLiteral("mw-selflink selflink-suffix")}) {
             QJsonObject span = self; span.insert(QStringLiteral("classes"), classes);
             QTextDocument doc; doc.setHtml(render(span));
-            QCOMPARE(doc.toPlainText().count(QStringLiteral("Self heading")), 2);
+            QCOMPARE(doc.toPlainText().count(QStringLiteral("Self heading")), 1);
         }
+        // Each compiled style/semantic field independently makes an unlinked companion rich.
+        const QJsonObject plain{{QStringLiteral("kind"), QStringLiteral("text")},
+            {QStringLiteral("text"), QStringLiteral("Self heading")}};
+        QList<QJsonObject> styles;
+        for (const QString &flag : {QStringLiteral("bold"), QStringLiteral("italic"), QStringLiteral("code"),
+             QStringLiteral("small"), QStringLiteral("superscript"), QStringLiteral("subscript"),
+             QStringLiteral("strike"), QStringLiteral("underline")})
+            styles.append(QJsonObject{{flag, true}});
+        styles.append(QJsonObject{{QStringLiteral("foreground"), QStringLiteral("#123456")}});
+        styles.append(QJsonObject{{QStringLiteral("classes"), QStringLiteral("note")}});
+        styles.append(QJsonObject{{QStringLiteral("language"), QStringLiteral("fr")}});
+        styles.append(QJsonObject{{QStringLiteral("direction"), QStringLiteral("rtl")}});
+        styles.append(QJsonObject{{QStringLiteral("role"), QStringLiteral("label")}});
+        for (const QJsonObject &style : styles) {
+            QJsonObject span = plain;
+            for (auto i = style.begin(); i != style.end(); ++i) span.insert(i.key(), i.value());
+            QTextDocument doc; doc.setHtml(render(span));
+            QCOMPARE(doc.toPlainText().count(QStringLiteral("Self heading")), 1);
+            QVERIFY(doc.find(QStringLiteral("Self heading")).charFormat().anchorHref().isEmpty());
+            doc.setHtml(render(span, 2)); QCOMPARE(doc.toPlainText().count(QStringLiteral("Self heading")), 2);
+            span.insert(QStringLiteral("target"), QStringLiteral("other"));
+            doc.setHtml(render(span)); QCOMPARE(doc.toPlainText().count(QStringLiteral("Self heading")), 2);
+        }
+        QTextDocument plainDocument; plainDocument.setHtml(render(plain));
+        QCOMPARE(plainDocument.toPlainText().count(QStringLiteral("Self heading")), 2);
+        QJsonObject italicOnly = plain; italicOnly.insert(QStringLiteral("italic"), true);
+        window.resize(780, 480); window.reading_->setHtml(render(italicOnly));
+        QCOMPARE(window.reading_->toPlainText().count(QStringLiteral("Self heading")), 1);
+        const QTextCursor styledHeading = window.reading_->document()->find(QStringLiteral("Self heading"));
+        QVERIFY(styledHeading.charFormat().fontItalic());
+        QVERIFY(styledHeading.charFormat().anchorHref().isEmpty());
+        QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-client-styled-unlinked-heading-780.png")));
         QJsonObject targeted = self; targeted.insert(QStringLiteral("target"), QStringLiteral("other"));
         QTextDocument invalid; invalid.setHtml(render(targeted)); QCOMPARE(invalid.toPlainText().count(QStringLiteral("Self heading")), 2);
         invalid.setHtml(render(self, 2)); QCOMPARE(invalid.toPlainText().count(QStringLiteral("Self heading")), 2);

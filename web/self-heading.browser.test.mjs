@@ -19,8 +19,8 @@ try {
   const self={kind:'text',text:'Self heading',target:'',classes:'mw-selflink selflink',bold:true,italic:true};
   const make=(span,level=3,title='Self heading')=>({title,level,blocks:[{kind:'heading',level,spans:[span]},{kind:'paragraph',spans:[{kind:'text',text:'Visible body'}]}]});
   const sections=[make(self),make({...self,bold:false,italic:false}),make({...self,classes:'extra\tmw-selflink\nselflink note'})];
-  const negatives=[{classes:''},{classes:'mw-selflink'},{classes:'selflink'},{classes:'not-mw-selflink selflink'},{classes:'mw-selflink selflink-suffix'},{target:'other'},{kind:'link'},{text:'',trail:'Self heading'}];
-  sections.push(...negatives.map(extra=>make({...self,...extra})),make(self,2),make(self,3,'Different'));
+  const controls=[{classes:''},{classes:'mw-selflink'},{classes:'selflink'},{classes:'not-mw-selflink selflink'},{classes:'mw-selflink selflink-suffix'},{target:'other'},{kind:'link'},{text:'',trail:'Self heading'},{classes:'',bold:false,italic:false}];
+  sections.push(...controls.map(extra=>make({...self,...extra})),make(self,2),make(self,3,'Different'));
   // Level mismatch is a section/block mismatch, not a different valid heading level.
   sections[sections.length-2].level=3;
   const entry={title:'CLIENT-ONLY self heading controls',language:'English',sections};const before=JSON.stringify(entry);
@@ -30,7 +30,7 @@ try {
   const styles=details.slice(0,3).map(d=>({italic:!!d.querySelector('summary em'),bold:!!d.querySelector('summary strong'),anchors:d.querySelectorAll('summary a').length,bodyHeadings:d.querySelectorAll('.block.heading').length}));
   return {unchanged:before===JSON.stringify(entry),counts,styles};
  });
- assert.equal(controls.unchanged,true);assert.deepEqual(controls.counts,[1,1,1,2,2,2,2,2,2,2,2,2,1]);
+ assert.equal(controls.unchanged,true);assert.deepEqual(controls.counts,[1,1,1,1,1,1,1,1,2,2,2,2,2,1]);
  assert.deepEqual(controls.styles,[{italic:true,bold:true,anchors:0,bodyHeadings:0},{italic:false,bold:false,anchors:0,bodyHeadings:0},{italic:true,bold:true,anchors:0,bodyHeadings:0}]);
  await page.evaluate(()=>{
   const self={kind:'text',text:'Styled self',target:'',classes:'mw-selflink selflink',bold:true,italic:true};
