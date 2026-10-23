@@ -23,6 +23,14 @@ class ColorSwatchTest {
         assertEquals(0xff000000L, canonicalColorArgb("#000000"))
         assertNull(canonicalColorArgb(null))
         for (value in listOf("", "red", "#EEEEEE", "#eee", "#gggggg", "background:#eeeeee")) assertNull(canonicalColorArgb(value))
+        for (background in listOf("#ffffff", "#ffffe0", "#00ff00", "#ff0000"))
+            assertEquals(0xff000000L, authoredSpanForegroundArgb(null, background))
+        for (background in listOf("#000000", "#0000ff"))
+            assertEquals(0xffffffffL, authoredSpanForegroundArgb(null, background))
+        assertEquals(0xff123456L, authoredSpanForegroundArgb("#123456", "#ffffe0"))
+        assertEquals(0xff123456L, authoredSpanForegroundArgb("#123456", null))
+        assertNull(authoredSpanForegroundArgb(null, null))
+        assertNull(authoredSpanForegroundArgb(null, "#FFFFE0"))
     }
 
 }

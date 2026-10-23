@@ -61,12 +61,13 @@ private val EgyptianFontFamily = FontFamily(Font(R.font.egyptian_hieroglyphs))
 private val spanClassWhitespace = Regex("\\s+")
 
 private class TextCache(val link: State<(String) -> Unit>) {
-    val values = java.util.IdentityHashMap<List<Span>, MutableMap<Pair<FontWeight?, LayoutDirection>, AnnotatedString>>()
+    val values = java.util.IdentityHashMap<List<Span>, MutableMap<Triple<FontWeight?, LayoutDirection, String?>, AnnotatedString>>()
 }
 private val LocalEntryMedia = staticCompositionLocalOf<List<Media>> { emptyList() }
 private val LocalEntryEdition = staticCompositionLocalOf { "" }
 private val LocalReaderSettings = staticCompositionLocalOf { AppSettings() }
 private val LocalTextCache = staticCompositionLocalOf<TextCache?> { null }
+internal val LocalAuthoredBackground = staticCompositionLocalOf<String?> { null }
 
 @Composable
 internal fun EntryPronunciationButton(active: Boolean, onClick: () -> Unit) {
@@ -363,7 +364,9 @@ private fun TableView(table: Table, onLink: (String) -> Unit) {
             }, content = {
                 grid.cells.forEachIndexed { index, placed ->
                     Box(Modifier.background(authoredColors[index] ?: if (placed.cell.header) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface).padding(10.dp)) {
-                        StyledText(placed.cell.spans, weight = if (placed.cell.header) FontWeight.SemiBold else null, onLink = onLink)
+                        CompositionLocalProvider(LocalAuthoredBackground provides placed.cell.background) {
+                            StyledText(placed.cell.spans, weight = if (placed.cell.header) FontWeight.SemiBold else null, onLink = onLink)
+                        }
                     }
                 }
             }) { measurables, _ ->
@@ -446,20 +449,28 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
     val cache = LocalTextCache.current
     val currentLink = rememberUpdatedState(onLink)
     val layoutDirection = LocalLayoutDirection.current
-    val cacheKey = weight to layoutDirection
-    val annotated = remember(spans, weight, linkColor, codeColor, cache, layoutDirection) {
+    val inheritedBackground = LocalAuthoredBackground.current
+    val cacheKey = Triple(weight, layoutDirection, inheritedBackground)
+    val annotated = remember(spans, weight, linkColor, codeColor, cache, layoutDirection, inheritedBackground) {
         cache?.values?.get(spans)?.get(cacheKey) ?: buildAnnotatedString {
             val appendedSpans = ArrayList<Pair<Span, IntRange>>(spans.size)
             spans.forEach { span ->
-                val foreground = canonicalColorArgb(span.foreground)?.let { Color(it) }
-                val linkStyle = TextLinkStyles(style = SpanStyle(color = foreground ?: linkColor), pressedStyle = SpanStyle(textDecoration = TextDecoration.Underline))
+                val effectiveBackground = span.background ?: inheritedBackground.takeIf { !span.code }
+                val foreground = authoredSpanForegroundArgb(span.foreground, effectiveBackground)?.let { Color(it) }
+                val background = canonicalColorArgb(span.background)?.let { Color(it) }
+                val readableLinkFallback = canonicalColorArgb(span.foreground) == null && canonicalColorArgb(effectiveBackground) != null
+                val linkStyle = TextLinkStyles(style = SpanStyle(color = foreground ?: linkColor,
+                    textDecoration = if (readableLinkFallback) TextDecoration.Underline else null),
+                    pressedStyle = SpanStyle(textDecoration = TextDecoration.Underline))
                 val start = length
                 when (span.direction) {
                     "rtl" -> append('\u2067')
                     "ltr" -> append('\u2066')
                     "auto" -> append('\u2068')
                 }
-                append(if (span.kind == "line_break") "\n" else span.text)
+                val displayText = if (span.kind == "line_break") "\n" else span.text
+                val contentStart = length
+                append(displayText)
                 append(span.trail)
                 if (span.direction in listOf("rtl", "ltr", "auto")) append('\u2069')
                 val end = length
@@ -480,7 +491,7 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
                         letterSpacing = if (fontFamily == EgyptianFontFamily) 0.sp else TextUnit.Unspecified,
                         fontSize = if (span.small || span.superscript || span.subscript) 0.8.em else 1.em,
                         baselineShift = when { span.superscript -> BaselineShift.Superscript; span.subscript -> BaselineShift.Subscript; else -> null },
-                        background = if (span.code) codeColor else androidx.compose.ui.graphics.Color.Unspecified,
+                        background = if (background == null && span.code) codeColor else Color.Unspecified,
                         textDecoration = when {
                             span.strike && span.underline -> TextDecoration.combine(listOf(TextDecoration.LineThrough, TextDecoration.Underline))
                             span.strike -> TextDecoration.LineThrough
@@ -488,6 +499,18 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
                             else -> null
                         },
                     ), start, end)
+                    if (background != null) {
+                        // Authored paint covers text and trails, without filling line breaks.
+                        var paintStart = start
+                        for ((relative, character) in (displayText + span.trail).withIndex()) {
+                            if (character == '\n') {
+                                val offset = contentStart + relative
+                                if (offset > paintStart) addStyle(SpanStyle(background = background), paintStart, offset)
+                                paintStart = offset + 1
+                            }
+                        }
+                        if (end > paintStart) addStyle(SpanStyle(background = background), paintStart, end)
+                    }
                     if (span.kind == "link" && span.target.isNotBlank()) addLink(LinkAnnotation.Clickable(span.target, linkStyle) { (cache?.link?.value ?: currentLink.value)(span.target) }, start, end)
                     else {
                         val external = externalLinkUrl(span)

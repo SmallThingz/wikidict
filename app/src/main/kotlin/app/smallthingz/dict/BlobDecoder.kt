@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2/DPR3/DPR4/DPR5 decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2-DPR6 decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
@@ -13,10 +13,11 @@ object BlobDecoder {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val version = r.byte()
-        require(version in 50..53) { "Unsupported presentation format" }
+        require(version in 50..54) { "Unsupported presentation format" }
         r.explanations = version >= 51
         r.colors = version >= 52
         r.anchors = version >= 53
+        r.spanBackgrounds = version >= 54
         val display = r.spans()
         val sections = List(r.count(if (r.anchors) 17 else 9)) {
             val level = r.byte(); val name = r.string()
@@ -54,6 +55,7 @@ object BlobDecoder {
         var explanations = false
         var colors = false
         var anchors = false
+        var spanBackgrounds = false
         fun byte(): Int { require(buffer.remaining() >= 1); return buffer.get().toInt() and 255 }
         fun u16(): Int { require(buffer.remaining() >= 2); return buffer.short.toInt() and 65535 }
         fun u32(): Long { require(buffer.remaining() >= 4); return buffer.int.toLong() and 0xffffffffL }
@@ -71,7 +73,7 @@ object BlobDecoder {
         fun index(limit: Int): Int { val n = u32(); require(n < limit); return n.toInt() }
         fun optionalIndex(limit: Int) { val n = u32(); require(n == 0xffffffffL || n < limit) }
         fun indices(limit: Int) { repeat(count(4)) { index(limit) } }
-        fun spans(): List<Span> = List(count(if (colors) 32 else if (explanations) 31 else 27)) {
+        fun spans(): List<Span> = List(count(if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27)) {
             val kind = enum(inline); val role = enum(roles); val f = byte()
             val text = string(); val target = string(); val trail = string()
             val language = string(); val classes = string(); val direction = string()
@@ -79,9 +81,12 @@ object BlobDecoder {
             val foreground = if (colors && presence()) string().also {
                 require(canonicalColorArgb(it) != null) { "Invalid span foreground" }
             } else null
+            val background = if (spanBackgrounds && presence()) string().also {
+                require(canonicalColorArgb(it) != null) { "Invalid span background" }
+            } else null
             Span(kind, text, target, trail, language, classes, direction,
                 bold=f and 1 != 0, italic=f and 2 != 0, code=f and 4 != 0, small=f and 8 != 0,
-                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground)
+                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background)
         }
         fun block(): Block {
             val kind = enum(kinds); val depth = byte(); val level = byte()

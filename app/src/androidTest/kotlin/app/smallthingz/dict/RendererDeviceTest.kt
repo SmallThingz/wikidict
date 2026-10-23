@@ -307,19 +307,23 @@ class RendererDeviceTest {
 
     @Test fun authoredCellBackgroundFillsRowspansInBothDirectionsAndKeepsLinks() {
         val table = Table(emptyList(), listOf(
-            listOf(Cell(listOf(Span("text", "\u00a0")), false, 1, 2, "#ff0000"),
-                Cell(listOf(Span("text", "\u00a0")), true, 1, 1, "#00ff00")),
-            listOf(Cell(listOf(Span("link", "Follow", target = "B")), false, 1, 1, "#0000ff"))))
+            listOf(Cell(listOf(Span("text", "Cell")), false, 1, 2, "#ff0000"),
+                Cell(listOf(Span("text", "Header", foreground = "#000080")), true, 1, 1, "#00ff00")),
+            listOf(Cell(listOf(Span("link", "Follow", target = "B", background = "#ffffe0"),
+                Span("link", " Base", target = "C")), false, 1, 1, "#0000ff"))))
         val direction = mutableStateOf(androidx.compose.ui.unit.LayoutDirection.Ltr)
+        val mode = mutableStateOf("light")
         var followed: String? = null
         try {
             compose.activityRule.scenario.onActivity { activity -> activity.setContent {
                 androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides direction.value) {
-                    androidx.compose.material3.MaterialTheme { CompiledTableView(table, null) { followed = it } }
+                    DictTheme(mode.value) { androidx.compose.material3.Surface {
+                        CompiledTableView(table, null) { followed = it }
+                    } }
                 }
             } }
-            for (value in listOf(androidx.compose.ui.unit.LayoutDirection.Ltr, androidx.compose.ui.unit.LayoutDirection.Rtl)) {
-                compose.runOnIdle { direction.value = value; followed = null }
+            for (theme in listOf("light", "dark")) for (value in listOf(androidx.compose.ui.unit.LayoutDirection.Ltr, androidx.compose.ui.unit.LayoutDirection.Rtl)) {
+                compose.runOnIdle { mode.value = theme; direction.value = value; followed = null }
                 compose.waitForIdle()
                 val image = compose.onNodeWithTag("compiled-table-grid", useUnmergedTree = true).captureToImage().asAndroidBitmap()
                 try {
@@ -329,9 +333,29 @@ class RendererDeviceTest {
                     assertEquals(android.graphics.Color.RED, image.getPixel(redX, image.height * 3 / 4))
                     assertEquals(android.graphics.Color.GREEN, image.getPixel(otherX, 2))
                     assertEquals(android.graphics.Color.BLUE, image.getPixel(otherX, image.height - 3))
+                    assertTrue((0 until image.height).any { y ->
+                        (0 until image.width).any { x -> image.getPixel(x, y) == 0xffffffe0.toInt() }
+                    })
                 } finally { image.recycle() }
-                compose.onNodeWithText("Follow").assertIsDisplayed().performClick()
-                compose.runOnIdle { assertEquals("B", followed) }
+                for ((label, expected) in listOf("Cell" to 0xff000000L, "Header" to 0xff000080L)) {
+                    val text = compose.onNodeWithText(label, useUnmergedTree = true).fetchSemanticsNode()
+                        .config[androidx.compose.ui.semantics.SemanticsProperties.Text].single()
+                    assertTrue(text.spanStyles.any { it.start == 0 && it.end == label.length && it.item.color == androidx.compose.ui.graphics.Color(expected) })
+                }
+                val actions = compose.onNodeWithText("Follow Base", useUnmergedTree = true).assertIsDisplayed()
+                val text = actions.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.Text].single()
+                val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                actions.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                for ((target, expected) in listOf("B" to 0xff000000L, "C" to 0xffffffffL)) {
+                    val range = text.getLinkAnnotations(0, text.length).single {
+                        (it.item as? androidx.compose.ui.text.LinkAnnotation.Clickable)?.tag == target
+                    }
+                    assertTrue(text.spanStyles.any { it.start == range.start && it.end == range.end && it.item.color == androidx.compose.ui.graphics.Color(expected) })
+                    val link = range.item as androidx.compose.ui.text.LinkAnnotation.Clickable
+                    assertEquals(androidx.compose.ui.text.style.TextDecoration.Underline, link.styles?.style?.textDecoration)
+                    actions.performTouchInput { click(layouts.single().getBoundingBox(range.start + if (target == "C") 1 else 0).center) }
+                    compose.runOnIdle { assertEquals(target, followed) }
+                }
                 compose.onNodeWithText("Color sample #ff0000").assertDoesNotExist()
             }
         } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
@@ -339,32 +363,37 @@ class RendererDeviceTest {
 
     @Test fun authoredForegroundSurvivesLinksAndNativeEgyptianPaintInBothDirections() {
         val direction = mutableStateOf(androidx.compose.ui.unit.LayoutDirection.Ltr)
+        val mode = mutableStateOf("light")
         val signs = "\uD80C\uDC00"
         val spans = listOf(
-            Span("link", "Green", target = "green-target", foreground = "#008000"),
-            Span("text", " / "), Span("text", "Blue", foreground = "#0000ff"), Span("text", " / "),
-            Span("link", signs, target = "sign-target", classes = "Egyp", direction = "ltr", foreground = "#40e0d0"))
-        val expectedText = "Green / Blue / \u2066" + signs + "\u2069"
+            Span("link", "Green", target = "green-target", trail = "s", foreground = "#008000", background = "#ffffe0"),
+            Span("text", " / "), Span("text", "Blue", foreground = "#0000ff", background = "#ffd0e0"), Span("text", " / "),
+            Span("link", signs, target = "sign-target", classes = "Egyp", direction = "ltr", foreground = "#40e0d0", background = "#ff8000"),
+            Span("text", " / "), Span("text", "Dark", background = "#000000"), Span("text", " / "),
+            Span("link", "Light", target = "fallback-target", trail = "s", background = "#ffffe0"), Span("text", " / "),
+            Span("link", signs, target = "native-fallback-target", classes = "Egyp", direction = "ltr", background = "#000000"))
+        val expectedText = "Greens / Blue / \u2066" + signs + "\u2069 / Dark / Lights / \u2066" + signs + "\u2069"
         val clicked = java.util.concurrent.CopyOnWriteArrayList<String>()
         try {
             compose.activityRule.scenario.onActivity { activity -> activity.setContent {
                 androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides direction.value) {
-                    androidx.compose.material3.MaterialTheme {
+                    DictTheme(mode.value) { androidx.compose.material3.Surface {
                         StyledText(spans, Modifier.width(300.dp).testTag("authored-foreground"), onLink = { clicked.add(it) })
-                    }
+                    } }
                 }
             } }
-            for (value in listOf(androidx.compose.ui.unit.LayoutDirection.Ltr, androidx.compose.ui.unit.LayoutDirection.Rtl)) {
-                compose.runOnIdle { direction.value = value; clicked.clear() }
+            for (theme in listOf("light", "dark")) for (value in listOf(androidx.compose.ui.unit.LayoutDirection.Ltr, androidx.compose.ui.unit.LayoutDirection.Rtl)) {
+                compose.runOnIdle { mode.value = theme; direction.value = value; clicked.clear() }
                 if (android.os.Build.VERSION.SDK_INT >= 31) compose.waitUntil(10000) {
-                    compose.onAllNodes(SemanticsMatcher.expectValue(EgyptianShapedRunCount, 1), useUnmergedTree = true)
+                    compose.onAllNodes(SemanticsMatcher.expectValue(EgyptianShapedRunCount, 2), useUnmergedTree = true)
                         .fetchSemanticsNodes().isNotEmpty()
                 }
                 compose.waitForIdle()
                 val node = compose.onNodeWithText(expectedText, useUnmergedTree = true)
                 val image = compose.onNodeWithTag("authored-foreground", useUnmergedTree = true).captureToImage().asAndroidBitmap()
                 try {
-                    val expected = setOf(0xff008000.toInt(), 0xff0000ff.toInt(), 0xff40e0d0.toInt())
+                    val expected = setOf(0xff008000.toInt(), 0xff0000ff.toInt(), 0xff40e0d0.toInt(),
+                        0xffffffe0.toInt(), 0xffffd0e0.toInt(), 0xffff8000.toInt(), 0xff000000.toInt(), 0xffffffff.toInt())
                     val found = mutableSetOf<Int>()
                     for (y in 0 until image.height) for (x in 0 until image.width) {
                         val pixel = image.getPixel(x, y)
@@ -377,15 +406,32 @@ class RendererDeviceTest {
                 val layout = layouts.single()
                 val annotated = layout.layoutInput.text
                 assertEquals(expectedText, annotated.text)
-                for (target in listOf("green-target", "sign-target")) {
+                val greenPaint = annotated.spanStyles.single { it.start == 0 && it.item.background == androidx.compose.ui.graphics.Color(0xffffffe0.toInt()) }
+                assertEquals(0, greenPaint.start)
+                assertEquals(6, greenPaint.end)
+                assertFalse(annotated.spanStyles.any { it.item.background != androidx.compose.ui.graphics.Color.Unspecified && it.start <= 6 && it.end > 6 })
+                val darkStart = annotated.text.indexOf("Dark")
+                assertTrue(annotated.spanStyles.any { it.start == darkStart && it.end == darkStart + 4 && it.item.color == androidx.compose.ui.graphics.Color.White })
+                val targets = listOf("green-target", "sign-target", "fallback-target", "native-fallback-target")
+                for (target in targets) {
                     val range = annotated.getLinkAnnotations(0, annotated.length).single {
                         (it.item as? androidx.compose.ui.text.LinkAnnotation.Clickable)?.tag == target
                     }
-                    val offset = range.start + if (target == "sign-target") 1 else 0
+                    val link = range.item as androidx.compose.ui.text.LinkAnnotation.Clickable
+                    val expected = when (target) {
+                        "green-target" -> 0xff008000L
+                        "sign-target" -> 0xff40e0d0L
+                        "fallback-target" -> 0xff000000L
+                        else -> 0xffffffffL
+                    }
+                    assertTrue(annotated.spanStyles.any { it.start == range.start && it.end == range.end && it.item.color == androidx.compose.ui.graphics.Color(expected) })
+                    if (target.endsWith("fallback-target"))
+                        assertEquals(androidx.compose.ui.text.style.TextDecoration.Underline, link.styles?.style?.textDecoration)
+                    val offset = range.start + if (target == "sign-target" || target == "native-fallback-target") 1 else 0
                     val bounds = layout.getBoundingBox(offset)
                     node.performTouchInput { click(bounds.center) }
                 }
-                compose.runOnIdle { assertEquals(listOf("green-target", "sign-target"), clicked.toList()) }
+                compose.runOnIdle { assertEquals(targets, clicked.toList()) }
                 node.assertTextEquals(expectedText)
             }
         } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
@@ -727,7 +773,7 @@ class RendererDeviceTest {
                 var expectedWeight: androidx.compose.ui.text.font.FontWeight? = null
                 fun value(): Entry {
                     val heading = Block("heading", depth.value,
-                        if (plain || styled) listOf(Span("text", label, italic = styled)) else spans,
+                        if (plain || styled) listOf(Span("text", label, italic = styled, background = if (styled) "#ffffe0" else null)) else spans,
                         listPath = ":".repeat(depth.value), level = 4)
                     return Entry("templlar", emptyList(), "language", "Aragonese", "an",
                         listOf(Section(4, if (companion) label else "Conchugazión", listOf(heading,
@@ -805,6 +851,7 @@ class RendererDeviceTest {
                         assertTrue(text.getLinkAnnotations(0, text.length).isEmpty())
                         if (styled) {
                             assertTrue(text.spanStyles.any { it.start == 0 && it.end == text.length && it.item.fontStyle == androidx.compose.ui.text.font.FontStyle.Italic })
+                            assertTrue(text.spanStyles.any { it.start == 0 && it.end == text.length && it.item.background == androidx.compose.ui.graphics.Color(0xffffffe0.toInt()) })
                             node.performTouchInput { click(layouts.single().getBoundingBox(0).center) }
                             compose.runOnIdle { assertEquals(null, followed) }
                         }

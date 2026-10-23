@@ -101,7 +101,7 @@ class ReadingLayoutTest {
             plain.copy(bold = true), plain.copy(italic = true), plain.copy(code = true),
             plain.copy(small = true), plain.copy(superscript = true), plain.copy(subscript = true),
             plain.copy(strike = true), plain.copy(underline = true),
-            plain.copy(foreground = "#123456"), plain.copy(classes = "note"),
+            plain.copy(foreground = "#123456"), plain.copy(background = "#ffffe0"), plain.copy(classes = "note"),
             plain.copy(language = "de"), plain.copy(direction = "rtl"), plain.copy(role = "label"),
         )
         for (span in listOf(self, self.copy(bold = false, italic = false),
@@ -176,6 +176,16 @@ class ReadingLayoutTest {
         assertEquals(rows.size, rows.map { it.key }.toSet().size)
         assertTrue(blocks.all { it.spans.size == 2 })
         assertEquals(spans.filter { it.kind != "line_break" }, blocks.flatMap { it.spans })
+        val painted = Span("text", " \u00a0 ", background = "#ffffe0")
+        val breakWithTrail = Span("line_break", "\n", trail = "  ", background = "#ffffe0")
+        val paintedSpans = List(40) { listOf(painted, breakWithTrail) }.flatten() + painted
+        val paintedRows = readingRows(listOf(Section(3, "Notes", listOf(Block("paragraph", 0, paintedSpans)))))
+            .mapNotNull { it.block }
+        assertEquals(41, paintedRows.size)
+        assertEquals(listOf(painted), paintedRows.first().spans)
+        paintedRows.drop(1).forEach { row ->
+            assertEquals(listOf(Span("text", "  ", background = "#ffffe0"), painted), row.spans)
+        }
     }
 
     @Test fun explicitMediaOwnersKeepActionsAndRejectUnknownOrAmbiguousTokens() {
@@ -329,6 +339,9 @@ class ReadingLayoutTest {
         assertEquals(3, rows.size)
         assertEquals(listOf(Span("text", "one"), br, Span("text", "two")), rows[1].block!!.spans)
         assertEquals(spans, rows[2].block!!.spans)
+        val painted = Span("text", " \u00a0 ", trail = "  ", background = "#ffffe0")
+        assertEquals(listOf(painted, br, painted, br, painted), compactSpans(listOf(painted, br, br, painted, br, painted)))
+        assertTrue(compactSpans(listOf(Span("text", "", background = "#ffffe0"), br.copy(background = "#ffffe0"))).isEmpty())
     }
     @Test fun numberedListItemsDisplayCompiledLabelsWithoutBecomingSenses() {
         fun item(number: String, path: String = "#", depth: Int = 1) =

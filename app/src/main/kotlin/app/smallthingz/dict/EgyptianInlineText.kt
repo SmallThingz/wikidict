@@ -40,7 +40,7 @@ import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 
-internal data class EgyptianTextRun(val start: Int, val end: Int, val text: String, val reuseLtr: Boolean, val foreground: String? = null) {
+internal data class EgyptianTextRun(val start: Int, val end: Int, val text: String, val reuseLtr: Boolean, val foreground: String? = null, val background: String? = null) {
     val id: String get() = "egyptian:$start:$end"
 }
 
@@ -59,7 +59,7 @@ internal fun egyptianTextRuns(spans: List<Span>): List<EgyptianTextRun> {
                 if (point !in 0x13000..0x13455) { at += Character.charCount(point); continue }
                 val begin = at
                 while (at < text.length && text.codePointAt(at) in 0x13000..0x13455) at += Character.charCount(text.codePointAt(at))
-                runs.add(EgyptianTextRun(offset + begin, offset + at, text.substring(begin, at), span.direction == "ltr", span.foreground))
+                runs.add(EgyptianTextRun(offset + begin, offset + at, text.substring(begin, at), span.direction == "ltr", span.foreground, span.background))
             }
         }
         offset += text.length + span.trail.length
@@ -151,6 +151,7 @@ private fun EgyptianInlineTextApi31(original: AnnotatedString, runs: List<Egypti
     val fallbackRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val effectiveStyle = LocalTextStyle.current.merge(style)
     val contentColor = if (effectiveStyle.color != Color.Unspecified) effectiveStyle.color else LocalContentColor.current
+    val inheritedBackground = LocalAuthoredBackground.current
     val baseSize = with(density) { (if (effectiveStyle.fontSize.isSp) effectiveStyle.fontSize else 16.sp).toPx() }
     val viewportWidth = LocalWindowInfo.current.containerSize.width.toFloat().coerceAtLeast(1f)
     val annotated = remember(original, runs, fallbackRtl) { egyptianInlineText(original, runs, fallbackRtl) }
@@ -231,13 +232,21 @@ private fun EgyptianInlineTextApi31(original: AnnotatedString, runs: List<Egypti
                 max(1f, ceil(2f * max(center - top, bottom - center)) + 2f)
             } else baseSize
             val linked = original.getLinkAnnotations(run.start, run.end).isNotEmpty()
-            val color = canonicalColorArgb(run.foreground)?.let { Color(it) } ?: if (linked) linkColor else contentColor
+            val color = authoredSpanForegroundArgb(run.foreground, run.background ?: inheritedBackground)
+                ?.let { Color(it) } ?: if (linked) linkColor else contentColor
+            val background = canonicalColorArgb(run.background)
             run.id to InlineTextContent(Placeholder(with(density) { width.toSp() }, with(density) { height.toSp() }, PlaceholderVerticalAlign.TextCenter)) {
                 Canvas(Modifier.fillMaxSize()) {
                     drawIntoCanvas { composeCanvas ->
                         val canvas = composeCanvas.nativeCanvas
                         val paint = glyphPaint(ink?.glyphs?.textSize ?: baseSize, ink?.bold ?: false, ink?.italic ?: false).apply { this.color = color.toArgb() }
                         if (ink != null && scale > 0f) {
+                            if (background != null) {
+                                // Paint the existing reserved range without changing its geometry.
+                                paint.color = background.toInt()
+                                canvas.drawRect(0f, 0f, size.width, size.height, paint)
+                                paint.color = color.toArgb()
+                            }
                             val saved = canvas.save()
                             try {
                                 // Invert AndroidParagraph's exact integer TextCenter

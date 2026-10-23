@@ -56,7 +56,8 @@ class BlobDecoderTest {
         assertThrows(Exception::class.java){Catalog.parse("asset://English.wikblb")}
         assertEquals(1,Catalog.parse("asset://English.wikblb",true).size)
     }
-    private fun explanationFixture(version: Int, background: String? = null, backgroundPresence: Int? = null, foreground: String? = null, foregroundPresence: Int? = null): ByteArray {
+    private fun explanationFixture(version: Int, background: String? = null, backgroundPresence: Int? = null, foreground: String? = null, foregroundPresence: Int? = null,
+        spanBackground: String? = null, spanBackgroundPresence: Int? = null, anchored: Boolean = false): ByteArray {
         val out = java.io.ByteArrayOutputStream()
         fun byte(v: Int) { out.write(v) }
         fun u32(v: Int) { repeat(4) { byte(v ushr (it * 8) and 255) } }
@@ -65,9 +66,13 @@ class BlobDecoderTest {
             u32(1); byte(1); byte(1); byte(10)
             listOf(label, "glossary", "!", "en", "abbr", "ltr").forEach(::string)
             if (version >= 3) string("Meaning & <plain> \u2067معنى\u2069: $label")
-            if (version == 4) {
+            if (version >= 4) {
                 byte(foregroundPresence ?: if (foreground == null) 0 else 1)
                 if (foreground != null) string(foreground)
+            }
+            if (version >= 6) {
+                byte(spanBackgroundPresence ?: if (spanBackground == null) 0 else 1)
+                if (spanBackground != null) string(spanBackground)
             }
         }
         fun block(table: Boolean) {
@@ -76,15 +81,18 @@ class BlobDecoderTest {
             byte(0); string(""); string(""); byte(if (table) 1 else 0)
             if (table) {
                 spans("caption"); u32(1); u32(1); byte(0); byte(1); byte(0); byte(1); byte(0)
-                if (version == 4) {
+                if (version >= 4) {
                     byte(backgroundPresence ?: if (background == null) 0 else 1)
                     if (background != null) string(background)
                 }
                 spans("cell")
             }
+            if (version >= 5) { string(""); string("") }
         }
         out.write("DPR$version".toByteArray()); spans("display")
-        u32(1); byte(3); string("Noun"); u32(2); block(false); block(true)
+        u32(1); byte(3); string("Noun")
+        if (version >= 5) { string(if (anchored) "Noun" else ""); string(if (anchored) "Noun_fallback" else "") }
+        u32(2); block(false); block(true)
         spans("preamble"); u32(0); u32(0)
         u32(1); u32(1); u32(1); string(""); string(""); spans("reference"); u32(0)
         return out.toByteArray()
@@ -117,7 +125,7 @@ class BlobDecoderTest {
         for (length in listOf(0, 3, 8, bytes.size - 1)) assertThrows(Exception::class.java) {
             BlobDecoder.decode(bytes.copyOf(length), "Word", "language", "English", "en")
         }
-        val unknown = bytes.copyOf().also { it[3] = '6'.code.toByte() }
+        val unknown = bytes.copyOf().also { it[3] = '7'.code.toByte() }
         assertThrows(Exception::class.java) { BlobDecoder.decode(unknown, "Word", "language", "English", "en") }
         val marker = "Meaning &".toByteArray()
         val start = bytes.asList().windowed(marker.size).indexOfFirst { it == marker.asList() }
@@ -125,6 +133,14 @@ class BlobDecoderTest {
         val invalid = bytes.copyOf().also { it[start] = 0xff.toByte() }
         assertThrows(Exception::class.java) { BlobDecoder.decode(invalid, "Word", "language", "English", "en") }
         assertThrows(Exception::class.java) { BlobDecoder.decode(bytes + byteArrayOf(0), "Word", "language", "English", "en") }
+        for (color in listOf("", "red", "#FFF000", "#ff0", "#ff000000", "#gggggg", " #ffff00", "#ffff00 ", "background:#ffff00"))
+            assertThrows(Exception::class.java) { BlobDecoder.decode(explanationFixture(6, spanBackground = color), "Word", "language", "English", "en") }
+        assertThrows(Exception::class.java) { BlobDecoder.decode(explanationFixture(6, spanBackgroundPresence = 2), "Word", "language", "English", "en") }
+        val painted = explanationFixture(6, background = "#fffdd0", foreground = "#008000", spanBackground = "#ffffe0")
+        for (length in painted.indices) assertThrows(Exception::class.java) {
+            BlobDecoder.decode(painted.copyOf(length), "Word", "language", "English", "en")
+        }
+        assertThrows(Exception::class.java) { BlobDecoder.decode(painted + byteArrayOf(0), "Word", "language", "English", "en") }
     }
 
     @Test fun cellBackgroundWirePreservesEveryOtherEntryFieldAndLegacyRecords() {
@@ -162,6 +178,26 @@ class BlobDecoderTest {
             entry.references.single().spans)
         val before = containers(legacy)
         val after = containers(colored)
+        for (version in 2..6) {
+            val absent = BlobDecoder.decode(explanationFixture(version), "Word", "language", "English", "en")
+            assertTrue(containers(absent).flatten().all { it.background == null })
+            if (version >= 3) assertEquals(legacy, absent)
+        }
+        val backgroundOnly = BlobDecoder.decode(explanationFixture(6, spanBackground = "#ffffe0"), "Word", "language", "English", "en")
+        containers(backgroundOnly).zip(before).forEach { (spans, original) ->
+            assertNull(spans.single().foreground)
+            assertEquals("#ffffe0", spans.single().background)
+            assertEquals(original, spans.map { it.copy(background = null) })
+        }
+        val painted = BlobDecoder.decode(explanationFixture(6, background = "#fffdd0", foreground = "#008000", spanBackground = "#ffffe0", anchored = true), "Word", "language", "English", "en")
+        containers(painted).zip(before).forEach { (spans, original) ->
+            assertEquals("#008000", spans.single().foreground)
+            assertEquals("#ffffe0", spans.single().background)
+            assertEquals(original, spans.map { it.copy(foreground = null, background = null) })
+        }
+        assertEquals("#fffdd0", painted.sections.single().blocks[1].table!!.rows.single().single().background)
+        assertEquals("Noun", painted.sections.single().anchor)
+        assertEquals("Noun_fallback", painted.sections.single().anchorFallback)
         assertEquals(7, after.size)
         after.zip(before).forEach { (spans, original) ->
             assertEquals("#008000", spans.single().foreground)

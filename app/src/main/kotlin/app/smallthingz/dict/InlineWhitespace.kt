@@ -19,8 +19,8 @@ internal fun ordinaryInlineDisplaySpans(block: Block): List<Span> {
     }
     val result = ArrayList<Span>(source.size)
     for (span in source) {
-        if (span.code || span.kind == "line_break") {
-            // Literal code and explicit break/trail content do not participate in a run.
+        if (span.code || span.kind == "line_break" || span.background != null) {
+            // Authored paint, literal code and explicit break/trails retain their extent.
             inAsciiSpace = false
             result.add(span)
             continue

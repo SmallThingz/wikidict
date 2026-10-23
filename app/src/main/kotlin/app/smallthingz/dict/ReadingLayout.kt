@@ -111,7 +111,7 @@ internal fun sectionHeadingCompanion(section: Section): Block? {
             (it.kind in setOf("link", "external_link") && it.target.isNotEmpty()) ||
             (it.kind == "text" && it.text.isNotEmpty() && it.target.isEmpty() &&
                 (it.bold || it.italic || it.code || it.small || it.superscript || it.subscript ||
-                    it.strike || it.underline || it.foreground != null || it.classes.isNotEmpty() ||
+                    it.strike || it.underline || it.foreground != null || it.background != null || it.classes.isNotEmpty() ||
                     it.language.isNotEmpty() || it.direction.isNotEmpty() || it.role != "normal"))) &&
             (it.text.isNotEmpty() || it.trail.isNotEmpty()) }) return null
     val label = block.spans.joinToString("") { if (it.kind == "line_break") "\n" else it.text + it.trail }
@@ -148,9 +148,9 @@ fun readingRows(sections: List<Section>, media: List<Media> = emptyList()): List
                 var part = 0
                 for (span in block.spans) {
                     if (span.kind == "line_break") {
-                        if (line.any { it.text.isNotBlank() || it.trail.isNotBlank() }) add(ReadingRow("$key-${part++}", block = block.copy(spans = line), compact = true, sectionKey = sectionKey, meaningSection = meaningSection))
+                        if (line.any { it.text.isNotBlank() || it.trail.isNotBlank() || it.hasPaintedInlineContent() }) add(ReadingRow("$key-${part++}", block = block.copy(spans = line), compact = true, sectionKey = sectionKey, meaningSection = meaningSection))
                         line = ArrayList()
-                        if (span.trail.isNotEmpty()) line.add(Span("text", span.trail, explanation = span.explanation))
+                        if (span.trail.isNotEmpty()) line.add(Span("text", span.trail, explanation = span.explanation, background = span.background))
                     } else line.add(span)
                 }
                 if (line.isNotEmpty()) add(ReadingRow("$key-$part", block = block.copy(spans = line), compact = true, sectionKey = sectionKey, meaningSection = meaningSection))
@@ -185,14 +185,17 @@ fun initiallyFolded(row: ReadingRow, settings: AppSettings): Boolean {
     }
 }
 
+private fun Span.hasPaintedInlineContent(): Boolean = background != null &&
+    ((kind != "line_break" && text.any { it != '\n' }) || trail.any { it != '\n' })
+
 /** Compact ordinary spacing; compiled poem and literal preformatted spacing is semantic. */
 fun compactSpans(spans: List<Span>): List<Span> {
-    val trimmed = spans.dropWhile { !it.hasClassToken("wikidict-poem") && it.text.isBlank() && it.trail.isBlank() }
-        .dropLastWhile { !it.hasClassToken("wikidict-poem") && it.text.isBlank() && it.trail.isBlank() }
+    val trimmed = spans.dropWhile { !it.hasClassToken("wikidict-poem") && !it.hasPaintedInlineContent() && it.text.isBlank() && it.trail.isBlank() }
+        .dropLastWhile { !it.hasClassToken("wikidict-poem") && !it.hasPaintedInlineContent() && it.text.isBlank() && it.trail.isBlank() }
     val result = ArrayList<Span>(trimmed.size)
     for (span in trimmed) {
-        if (!span.hasClassToken("wikidict-poem") && span.kind == "line_break" && result.lastOrNull()?.kind == "line_break") continue
-        if (!span.hasClassToken("wikidict-poem") && span.kind != "line_break" && span.text.isBlank() && span.trail.isBlank() && result.lastOrNull()?.kind == "line_break") continue
+        if (!span.hasClassToken("wikidict-poem") && !span.hasPaintedInlineContent() && span.kind == "line_break" && result.lastOrNull()?.kind == "line_break") continue
+        if (!span.hasClassToken("wikidict-poem") && !span.hasPaintedInlineContent() && span.kind != "line_break" && span.text.isBlank() && span.trail.isBlank() && result.lastOrNull()?.kind == "line_break") continue
         result.add(span)
     }
     return if (result == spans) spans else result

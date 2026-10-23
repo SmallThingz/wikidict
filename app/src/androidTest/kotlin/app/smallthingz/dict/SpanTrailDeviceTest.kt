@@ -36,7 +36,7 @@ class SpanTrailDeviceTest {
         assertTrue(text.getLinkAnnotations(4, 5).isEmpty())
     }
     @Test fun styledSuffixSharesStyleWithoutStylingFollowingPlainText() {
-        show(listOf(Span("text", "code", trail = "d", bold = true, code = true), Span("text", "!")))
+        show(listOf(Span("text", "code", trail = "d", bold = true, code = true, background = "#ffffe0"), Span("text", "!")))
         val text = compose.onNodeWithText("coded!", useUnmergedTree = true)
             .fetchSemanticsNode().config[SemanticsProperties.Text].single()
         assertEquals("coded!", text.text)
@@ -45,6 +45,15 @@ class SpanTrailDeviceTest {
         assertEquals(0, style.start)
         assertEquals(5, style.end)
         assertFalse(text.spanStyles.any { it.start <= 5 && it.end > 5 })
+        val painted = text.spanStyles.single { it.item.background == androidx.compose.ui.graphics.Color(0xffffffe0.toInt()) }
+        assertEquals(0, painted.start)
+        assertEquals(5, painted.end)
+        show(listOf(Span("text", "a\nb", trail = "c", code = true, background = "#ffffe0")))
+        val multiline = compose.onNodeWithText("a\nbc", useUnmergedTree = true)
+            .fetchSemanticsNode().config[SemanticsProperties.Text].single()
+        val paints = multiline.spanStyles.filter { it.item.background != androidx.compose.ui.graphics.Color.Unspecified }
+        assertEquals(listOf(0 to 1, 2 to 4), paints.map { it.start to it.end })
+        assertTrue(paints.all { it.item.background == androidx.compose.ui.graphics.Color(0xffffffe0.toInt()) })
     }
     @Test fun rtlSuffixRemainsInsideTheDirectionIsolate() {
         show(listOf(Span("link", "אב", target = "אב", trail = "ג", direction = "rtl"), Span("text", "!")))

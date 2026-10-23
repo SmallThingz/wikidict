@@ -45,5 +45,9 @@ class InlineWhitespaceTest {
         val result = ordinaryInlineDisplaySpans(Block("paragraph", 0, spans))
         assertEquals("a \u00a0 b \n   c code \t  kept d", text(result))
         assertSame(hardBreak, result[1]); assertSame(code, result[3])
+        val painted = Span("text", " \t \u00a0 ", trail = "  ", background = "#ffffe0")
+        val paintedBreak = hardBreak.copy(background = "#ffffe0")
+        val paintedSpans = listOf(painted, paintedBreak, painted)
+        assertEquals(paintedSpans, ordinaryInlineDisplaySpans(Block("paragraph", 0, paintedSpans)))
     }
 }

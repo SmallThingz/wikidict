@@ -20,6 +20,7 @@ data class Span(
     val role: String = "normal",
     val explanation: String = "",
     val foreground: String? = null,
+    val background: String? = null,
 )
 
 data class Cell(val spans: List<Span>, val header: Boolean, val colspan: Int, val rowspan: Int, val background: String? = null)
