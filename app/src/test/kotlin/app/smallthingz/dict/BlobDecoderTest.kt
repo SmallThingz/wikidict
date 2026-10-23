@@ -6,6 +6,140 @@ import java.io.File
 import java.io.RandomAccessFile
 
 class BlobDecoderTest {
+    private fun producerEnvironment(name: String): String = System.getenv(name)?.takeIf { it.isNotEmpty() }
+        ?: error("Required producer conformance input is absent: $name")
+    private fun producerDigest(bytes: ByteArray): String = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(bytes).joinToString("") { "%02x".format(it.toInt() and 255) }
+    private fun producerInput(name: String): File {
+        val file = File(producerEnvironment(name)).canonicalFile
+        require(file.isFile) { "Missing producer conformance file: $name" }
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(65536)
+            while (true) { val n = input.read(buffer); if (n < 0) break; digest.update(buffer, 0, n) }
+        }
+        val actual = digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
+        require(actual == producerEnvironment(name + "_SHA256")) { "Producer input identity differs: $name" }
+        return file
+    }
+    private fun producerJson(value: Any?): String = when (value) {
+        null -> "null"
+        is String -> buildString {
+            append('"')
+            for (character in value) when (character) {
+                '"' -> append("\\\""); '\\' -> append("\\\\")
+                '\n' -> append("\\n"); '\r' -> append("\\r"); '\t' -> append("\\t")
+                else -> if (character.code < 32) append("\\u%04x".format(character.code)) else append(character)
+            }
+            append('"')
+        }
+        is Boolean, is Int, is Long -> value.toString()
+        is Map<*, *> -> value.entries.joinToString(",", "{", "}") { (key, item) ->
+            require(key is String); producerJson(key) + ":" + producerJson(item)
+        }
+        is Iterable<*> -> value.joinToString(",", "[", "]") { producerJson(it) }
+        else -> error("Unsupported conformance projection value")
+    }
+    private fun producerSpan(span: Span): Map<String, Any?> = linkedMapOf(
+        "kind" to span.kind, "text" to span.text, "target" to span.target, "trail" to span.trail,
+        "language" to span.language, "classes" to span.classes, "direction" to span.direction,
+        "explanation" to span.explanation, "foreground" to span.foreground, "background" to span.background,
+        "bold" to span.bold, "italic" to span.italic, "code" to span.code, "small" to span.small,
+        "superscript" to span.superscript, "subscript" to span.subscript, "strike" to span.strike,
+        "underline" to span.underline, "role" to span.role)
+    private fun producerTable(table: Table): Map<String, Any?> = linkedMapOf(
+        "caption" to table.caption.map(::producerSpan),
+        "geometry" to table.geometry?.let { geometry -> linkedMapOf(
+            "border" to geometry.border, "cell_spacing" to geometry.cellSpacing, "cell_padding" to geometry.cellPadding,
+            "width" to geometry.width?.let { linkedMapOf("unit" to if (it.unit == TableWidthUnit.Px) "px" else "percent", "value" to it.value) }) },
+        "rows" to table.rows.map { row -> linkedMapOf("cells" to row.map { cell -> linkedMapOf(
+            "spans" to cell.spans.map(::producerSpan), "header" to cell.header, "colspan" to cell.colspan,
+            "rowspan" to cell.rowspan, "background" to cell.background, "nested_table" to cell.nestedTable?.let(::producerTable)) }) })
+    private fun producerBlock(block: Block): Map<String, Any?> = linkedMapOf(
+        "kind" to block.kind, "depth" to block.depth, "spans" to block.spans.map(::producerSpan),
+        "feature" to block.feature?.let { linkedMapOf("kind" to it.kind, "language" to it.language,
+            "data" to it.data, "tail_kind" to it.tailKind, "tail" to it.tail) },
+        "list_path" to block.listPath, "number" to block.number, "level" to block.level,
+        "anchor" to block.anchor, "anchor_fallback" to block.anchorFallback, "table" to block.table?.let(::producerTable))
+    private fun producerEntry(entry: Entry): Map<String, Any?> = linkedMapOf(
+        "title" to entry.title, "kind" to entry.kind, "language" to entry.language, "language_code" to entry.languageCode,
+        "display_title" to entry.displayTitle.map(::producerSpan), "preamble_spans" to entry.preamble.map(::producerSpan),
+        "sections" to entry.sections.map { linkedMapOf("level" to it.level, "title" to it.title,
+            "anchor" to it.anchor, "anchor_fallback" to it.anchorFallback, "blocks" to it.blocks.map(::producerBlock)) },
+        "references" to entry.references.map { linkedMapOf("number" to it.number, "group_number" to it.groupNumber,
+            "group" to it.group, "spans" to it.spans.map(::producerSpan)) },
+        "media" to entry.media.map { linkedMapOf("file" to it.file, "kind" to it.kind, "caption" to it.caption) })
+
+    /** Configured producer case is a separate required run of the existing conformance target. */
+    private fun requiredProducerConformance() {
+        require(producerEnvironment("WIKBLB_DPR7_REQUIRED") == "1")
+        val blob = producerInput("WIKBLB_DPR7_BLOB")
+        val headerFile = producerInput("WIKBLB_DPR7_HEADER")
+        val payloadFile = producerInput("WIKBLB_DPR7_PAYLOAD")
+        val titleFile = producerInput("WIKBLB_DPR7_TITLE")
+        producerInput("WIKBLB_DPR7_CORE")
+        producerInput("WIKBLB_DPR7_SOURCE_FACTS")
+        producerInput("WIKBLB_DPR7_CASE")
+        val wantedTitle = titleFile.readBytes().decodeToString(throwOnInvalidSequence = true)
+        require(wantedTitle == "geacen")
+        var selected: Entry? = null
+        var selectedOffset = -1L
+        var selectedLength = -1
+        var actualHeader: Map<String, Any?>? = null
+        RandomAccessFile(blob, "r").use { input ->
+            fun nul(): String {
+                val bytes = java.io.ByteArrayOutputStream()
+                while (true) { val b = input.read(); require(b >= 0 && bytes.size() < 65536); if (b == 0) break; bytes.write(b) }
+                return bytes.toByteArray().decodeToString(throwOnInvalidSequence = true)
+            }
+            fun size(): Int {
+                var value = 0L; var shift = 0
+                while (true) {
+                    val b = input.read(); require(b >= 0 && shift < 35)
+                    value = value or ((b and 127).toLong() shl shift)
+                    if (b and 128 == 0) { require(shift == 0 || b != 0); break }; shift += 7
+                }
+                require(value in 4..128L * 1024 * 1024 && value <= input.length() - input.filePointer)
+                return value.toInt()
+            }
+            val magic = ByteArray(8); input.readFully(magic); require(magic.decodeToString() == "WIKBLB08")
+            val kind = blobKind(input.read()); require(kind != "alias")
+            val code = if (kind == "language") nul() else ""
+            val language = if (kind == "language") nul() else null
+            val headerEnd = input.filePointer
+            require(headerEnd <= 131080)
+            input.seek(0); val headerBytes = ByteArray(headerEnd.toInt()); input.readFully(headerBytes)
+            require(headerBytes.contentEquals(headerFile.readBytes()))
+            actualHeader = linkedMapOf("kind" to kind, "language" to language, "language_code" to code)
+            var recordCount = 0
+            while (input.filePointer < input.length()) {
+                val title = nul(); require(title.isNotEmpty())
+                val length = size(); val offset = input.filePointer; recordCount++
+                if (title == wantedTitle) {
+                    require(selected == null) { "Producer fixture title is duplicated" }
+                    val payload = ByteArray(length); input.readFully(payload)
+                    require(payload.copyOfRange(0, 4).decodeToString() == "DPR7")
+                    require(payload.contentEquals(payloadFile.readBytes()))
+                    selected = BlobDecoder.decode(payload, title, kind, language, code)
+                    selectedOffset = offset; selectedLength = length
+                } else input.seek(offset + length)
+            }
+            require(recordCount == 1 && selected != null) { "Genuine geacen Writer fixture must contain its one record" }
+        }
+        val output = File(producerEnvironment("WIKBLB_DPR7_ACTUAL")).canonicalFile
+        require(output.parentFile.isDirectory && output.createNewFile()) { "Use a fresh owned output path" }
+        output.writeText(producerJson(linkedMapOf(
+            "schema" to "wikidict.android.dpr7-producer-actual.v1",
+            "case_sha256" to producerEnvironment("WIKBLB_DPR7_CASE_SHA256"),
+            "blob_sha256" to producerEnvironment("WIKBLB_DPR7_BLOB_SHA256"),
+            "header_sha256" to producerDigest(headerFile.readBytes()),
+            "payload_sha256" to producerDigest(payloadFile.readBytes()),
+            "core_sha256" to producerEnvironment("WIKBLB_DPR7_CORE_SHA256"),
+            "source_facts_sha256" to producerEnvironment("WIKBLB_DPR7_SOURCE_FACTS_SHA256"),
+            "record_offset" to selectedOffset, "record_length" to selectedLength,
+            "header" to actualHeader, "entry" to producerEntry(checkNotNull(selected)))), Charsets.UTF_8)
+    }
+
     private fun records(): List<Pair<String, ByteArray>> = RandomAccessFile(File("src/debug/assets/English.wikblb"), "r").use { f ->
         fun nul(): String { val b = java.io.ByteArrayOutputStream(); while(true) { val v=f.read(); require(v>=0); if(v==0)break; b.write(v) }; return b.toByteArray().decodeToString() }
         val magic=ByteArray(8);f.readFully(magic);assertEquals("WIKBLB08",magic.decodeToString());assertEquals(1,f.read());assertEquals("en",nul());assertEquals("English",nul())
@@ -34,6 +168,10 @@ class BlobDecoderTest {
     }
 
     @Test fun everyRealCorpusRecordDecodesDirectly() {
+        if (System.getenv("WIKBLB_DPR7_REQUIRED") != null) {
+            requiredProducerConformance()
+            return
+        }
         val records=records();assertTrue(records.size>20)
         records.forEach { (title,payload)-> val e=BlobDecoder.decode(payload,title,"language","English","en");assertEquals(title,e.title);assertTrue(e.sections.isNotEmpty()) }
         val cat=records.first{it.first=="cat"}.let{BlobDecoder.decode(it.second,it.first,"language","English","en")}

@@ -203,7 +203,10 @@ fun compactSpans(spans: List<Span>): List<Span> {
 private fun compactBlock(block: Block): Block {
     if (block.kind == "preformatted") return block
     val spans = compactSpans(block.spans)
-    val table = block.table?.let { t -> t.copy(caption = compactSpans(t.caption), rows = t.rows.map { row -> row.map { cell -> cell.copy(spans = compactSpans(cell.spans)) } }) }
+    fun compactTable(table: Table): Table = table.copy(caption = compactSpans(table.caption),
+        rows = table.rows.map { row -> row.map { cell -> cell.copy(spans = compactSpans(cell.spans),
+            nestedTable = cell.nestedTable?.let(::compactTable)) } })
+    val table = block.table?.let(::compactTable)
     return if (spans === block.spans && table == null) block else block.copy(spans = spans, table = table)
 }
 

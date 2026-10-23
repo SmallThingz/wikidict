@@ -23,8 +23,26 @@ data class Span(
     val background: String? = null,
 )
 
-data class Cell(val spans: List<Span>, val header: Boolean, val colspan: Int, val rowspan: Int, val background: String? = null)
-data class Table(val caption: List<Span>, val rows: List<List<Cell>>)
+internal const val MaxTableDepth = 16
+
+enum class TableWidthUnit { Px, Percent }
+data class TableWidth(val unit: TableWidthUnit, val value: Long)
+data class TableGeometry(val border: Int? = null, val cellSpacing: Int? = null,
+                         val cellPadding: Int? = null, val width: TableWidth? = null)
+data class Cell(val spans: List<Span>, val header: Boolean, val colspan: Int, val rowspan: Int,
+                val background: String? = null, val nestedTable: Table? = null) {
+    init { require(nestedTable == null || spans.isEmpty()) { "A nested table cell cannot also contain spans" } }
+}
+data class Table(val caption: List<Span>, val rows: List<List<Cell>>, val geometry: TableGeometry? = null)
+
+/** Ordered traversal of the compiled table tree; no textual substitute for a grid. */
+internal fun Table.visitSpans(visit: (List<Span>) -> Unit) {
+    visit(caption)
+    rows.forEach { row -> row.forEach { cell ->
+        visit(cell.spans)
+        cell.nestedTable?.visitSpans(visit)
+    } }
+}
 data class Block(
     val kind: String,
     val depth: Int,
@@ -132,12 +150,15 @@ internal fun entryAbbreviations(entry: Entry): List<Abbreviation> {
         val location = section.title.ifBlank { entry.title }
         section.blocks.forEach { block ->
             include(block.spans, location)
-            block.table?.let { table ->
-                include(table.caption, "$location · Table")
+            fun includeTable(table: Table, tableLocation: String) {
+                include(table.caption, "$tableLocation · Table")
                 table.rows.forEachIndexed { row, cells -> cells.forEachIndexed { column, cell ->
-                    include(cell.spans, "$location · Table ${row + 1}, ${column + 1}")
+                    val cellLocation = "$tableLocation · Table ${row + 1}, ${column + 1}"
+                    include(cell.spans, cellLocation)
+                    cell.nestedTable?.let { includeTable(it, cellLocation) }
                 } }
             }
+            block.table?.let { includeTable(it, location) }
         }
     }
     entry.references.forEach { include(it.spans, "References ${it.number}") }

@@ -34,6 +34,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.collectionInfo
+import androidx.compose.ui.semantics.collectionItemInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.Modifier
@@ -335,69 +337,108 @@ internal fun CompiledTableView(table: Table, feature: Feature?, onLink: (String)
 }
 
 @Composable
-private fun TableView(table: Table, onLink: (String) -> Unit) {
+private fun TableView(table: Table, onLink: (String) -> Unit, path: String = "root", nested: Boolean = false) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (table.caption.isNotEmpty()) StyledText(table.caption, onLink = onLink)
+        if (nested) BoxWithConstraints(Modifier.fillMaxWidth()) {
+            TableGridView(table, onLink, path, constraints.maxWidth.takeIf { constraints.hasBoundedWidth })
+        } else BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val viewportWidth = constraints.maxWidth.takeIf { constraints.hasBoundedWidth }
+            // A child grid belongs to the same scroll surface as its outer table.
+            Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                TableGridView(table, onLink, path, viewportWidth)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TableGridView(table: Table, onLink: (String) -> Unit, path: String, widthReference: Int? = null) {
     val grid = remember(table) { tableGrid(table) }
+    val density = LocalDensity.current
+    val inheritedBackground = LocalAuthoredBackground.current
+    val inheritedColor = canonicalColorArgb(inheritedBackground)?.let { Color(it) }
+    val natural = remember(table, density.density) {
+        tableRenderMetrics(table, with(density) { 136.dp.roundToPx() }, with(density) { 10.dp.roundToPx() },
+            with(density) { 40.dp.roundToPx() }, density.density)
+    }
     val authoredColors = remember(table) { grid.cells.map { placed ->
         canonicalColorArgb(placed.cell.background)?.let { androidx.compose.ui.graphics.Color(it) }
     } }
-    var unavailable by remember(table) { mutableStateOf(false) }
-    var drawingPixels by remember(table) { mutableStateOf<TablePixelLayout?>(null) }
+    var unavailable by remember(table, density.density, density.fontScale, widthReference) { mutableStateOf(false) }
+    var drawingPixels by remember(table, density.density, density.fontScale, widthReference) { mutableStateOf<TablePixelLayout?>(null) }
     val headerColor = MaterialTheme.colorScheme.surfaceContainerHigh
     val cellColor = MaterialTheme.colorScheme.surface
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        if (table.caption.isNotEmpty()) StyledText(table.caption, onLink = onLink)
-        if (unavailable) {
-            Text("Table is too large to display.")
-        } else Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-            Layout(modifier = Modifier.testTag("compiled-table-grid").drawBehind {
-                val pixels = drawingPixels ?: return@drawBehind
-                grid.cells.forEachIndexed { index, placed ->
-                    val left = if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Ltr)
-                        pixels.columnWidth * placed.column
-                    else pixels.width - pixels.columnWidth * (placed.column + placed.colspan)
-                    val top = pixels.rowOffsets[placed.row]
-                    val bottom = pixels.rowOffsets[placed.row + placed.cell.rowspan]
-                    drawRect(authoredColors[index] ?: if (placed.cell.header) headerColor else cellColor,
-                        topLeft = Offset(left.toFloat(), top.toFloat()),
-                        size = Size((pixels.columnWidth * placed.colspan).toFloat(), (bottom - top).toFloat()))
+    val borderColor = MaterialTheme.colorScheme.outline
+    if (unavailable || natural == null) {
+        Text("Table is too large to display.")
+        return
+    }
+    Layout(modifier = Modifier.testTag(if (path == "root") "compiled-table-grid" else "compiled-table-grid-$path")
+        .semantics { collectionInfo = androidx.compose.ui.semantics.CollectionInfo(grid.rows, grid.columns) }
+        .drawBehind {
+            val pixels = drawingPixels ?: return@drawBehind
+            grid.cells.forEachIndexed { index, placed ->
+                val cellWidth = pixels.cellWidth(placed.colspan, placed.column)
+                val left = if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Ltr)
+                    pixels.cellLeft(placed.column)
+                else pixels.width - pixels.cellLeft(placed.column) - cellWidth
+                val top = pixels.cellTop(placed.row)
+                val bottom = pixels.cellBottom(placed.row, placed.cell.rowspan)
+                drawRect(authoredColors[index] ?: inheritedColor ?: if (placed.cell.header) headerColor else cellColor,
+                    topLeft = Offset(left.toFloat(), top.toFloat()), size = Size(cellWidth.toFloat(), (bottom - top).toFloat()))
+                if (pixels.borderWidth > 0) {
+                    val inset = pixels.borderWidth / 2f
+                    drawRect(borderColor, Offset(left + inset, top + inset),
+                        Size((cellWidth - pixels.borderWidth).toFloat(), (bottom - top - pixels.borderWidth).toFloat()),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(pixels.borderWidth.toFloat()))
                 }
-            }, content = {
-                grid.cells.forEachIndexed { index, placed ->
-                    Box(Modifier.background(authoredColors[index] ?: if (placed.cell.header) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface).padding(10.dp)) {
-                        CompositionLocalProvider(LocalAuthoredBackground provides placed.cell.background) {
-                            StyledText(placed.cell.spans, weight = if (placed.cell.header) FontWeight.SemiBold else null, onLink = onLink)
-                        }
-                    }
+            }
+            if (pixels.borderWidth > 0 && pixels.width > 0 && pixels.height > 0) {
+                val inset = pixels.borderWidth / 2f
+                drawRect(borderColor, Offset(inset, inset),
+                    Size((pixels.width - pixels.borderWidth).toFloat(), (pixels.height - pixels.borderWidth).toFloat()),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(pixels.borderWidth.toFloat()))
+            }
+        }, content = {
+        grid.cells.forEachIndexed { index, placed ->
+            val padding = with(density) { (natural.cellPadding + natural.borderWidth).toDp() }
+            Box(Modifier.testTag("compiled-table-cell-$path-$index").semantics {
+                collectionItemInfo = androidx.compose.ui.semantics.CollectionItemInfo(
+                    placed.row, placed.cell.rowspan, placed.column, placed.colspan)
+                if (placed.cell.header) heading()
+            }.padding(padding)) {
+                CompositionLocalProvider(LocalAuthoredBackground provides (placed.cell.background ?: inheritedBackground)) {
+                    val child = placed.cell.nestedTable
+                    if (child == null) StyledText(placed.cell.spans,
+                        weight = if (placed.cell.header) FontWeight.SemiBold else null, onLink = onLink)
+                    else TableView(child, onLink, "$path/$index", nested = true)
                 }
-            }) { measurables, _ ->
-                val columnWidth = tableColumnWidth(grid.columns, 136.dp.roundToPx())
-                val heightLimit = columnWidth?.let { tableHeightLimit(it * grid.columns) }
-                // Measure once; native Egyptian cells use SubcomposeLayout, which
-                // deliberately has no intrinsic measurement implementation.
-                val children = if (columnWidth == null || heightLimit == null) emptyList() else measurables.mapIndexed { index, measurable ->
-                    val width = columnWidth * grid.cells[index].colspan
-                    measurable.measure(Constraints(minWidth = width, maxWidth = width,
-                        minHeight = 0, maxHeight = heightLimit))
-                }
-                // Saturation at the child height limit is unavailable: it could
-                // mean clipped content, so it must not be promoted to success.
-                val pixels = if (columnWidth == null || heightLimit == null) null else tablePixelLayout(grid, columnWidth,
-                    40.dp.roundToPx(), IntArray(children.size) { children[it].height })
-                if (pixels == null) {
-                    // A following composition exposes the explicit unavailable state.
-                    // No partial table or clipped cell is presented as successful layout.
-                    drawingPixels = null
-                    unavailable = true
-                    layout(0, 0) {}
-                } else {
-                    val offsets = pixels.rowOffsets
-                    drawingPixels = pixels
-                    layout(pixels.width, pixels.height) {
-                        children.forEachIndexed { index, child ->
-                            val placed = grid.cells[index]
-                            child.placeRelative(pixels.columnWidth * placed.column, offsets[placed.row])
-                        }
-                    }
+            }
+        }
+    }) { measurables, incoming ->
+        val reference = widthReference ?: incoming.maxWidth.takeIf { incoming.hasBoundedWidth }
+        val metrics = tableMetricsInWidth(table, natural, grid.columns, reference)
+        val heightLimit = metrics?.let { tableHeightLimit(it.width) }
+        // One measure per cell. Native Egyptian descendants do not support intrinsic queries.
+        val children = if (metrics == null || heightLimit == null) emptyList() else measurables.mapIndexed { index, measurable ->
+            val placed = grid.cells[index]
+            val width = metrics.cellWidth(placed.column, placed.colspan)
+            measurable.measure(Constraints(minWidth = width, maxWidth = width, minHeight = 0, maxHeight = heightLimit))
+        }
+        val pixels = if (metrics == null || heightLimit == null) null else tablePixelLayout(grid, metrics.columnWidth,
+            metrics.minRowHeight, IntArray(children.size) { children[it].height }, metrics.cellSpacing, metrics.borderWidth,
+            metrics.width, metrics.extraColumns)
+        if (pixels == null) {
+            drawingPixels = null
+            unavailable = true
+            layout(0, 0) {}
+        } else {
+            drawingPixels = pixels
+            layout(pixels.width, pixels.height) {
+                children.forEachIndexed { index, child ->
+                    val placed = grid.cells[index]
+                    child.placeRelative(pixels.cellLeft(placed.column), pixels.cellTop(placed.row))
                 }
             }
         }
@@ -419,8 +460,7 @@ private fun inlineMediaFiles(entry: Entry): Set<String> = buildSet {
             val table = block.table
             when {
                 table != null -> {
-                    include(table.caption)
-                    table.rows.forEach { cells -> cells.forEach { include(it.spans) } }
+                    table.visitSpans { include(it) }
                 }
                 block.kind != "rule" -> include(block.spans, preserveWhitespace = block.kind == "preformatted")
             }
