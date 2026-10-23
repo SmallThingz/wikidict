@@ -1602,6 +1602,24 @@ fn appendBoundarySemanticText(h: *Harness, value: std.json.Value, out: *std.Arra
     }
 }
 
+fn hasBoundaryDiagnostic(value: std.json.Value) bool {
+    switch (value) {
+        .object => |object| {
+            if (object.get("text")) |text| if (text == .string and std.mem.eql(u8, text.string, "[malformed template]")) {
+                const kind = object.get("kind") orelse return false;
+                const target = object.get("target") orelse return false;
+                return kind == .string and std.mem.eql(u8, kind.string, "text") and target == .string and target.string.len == 0;
+            };
+            for (object.values()) |child| if (hasBoundaryDiagnostic(child)) return true;
+        },
+        .array => |array| for (array.items) |child| {
+            if (hasBoundaryDiagnostic(child)) return true;
+        },
+        else => {},
+    }
+    return false;
+}
+
 fn preprocessingLiteralBoundaryProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
     const dump = try std.fs.path.join(h.a, &.{ dir, "preprocessing-boundaries.xml" });
     const root = try std.fs.path.join(h.a, &.{ dir, "preprocessing-boundaries-dictionary" });
@@ -1616,7 +1634,7 @@ fn preprocessingLiteralBoundaryProbe(h: *Harness, pipeline: []const u8, verifier
     const paired = "{{{missing|{<noinclude>x</noinclude>{uc:cat}}}}}";
     const commented = "{{{missing|{<!--x-->{uc:cat}}}}}";
     try writePages(h.io, h.a, dump, &.{
-        .{ .title = "Boundary entry", .ns = 0, .id = 1, .body = "==English==\n# paired: {{BoundaryPaired}}\n# comment: {{BoundaryComment}}\n# direct: " ++ commented ++ "\n# length: {{#len:{{BoundaryPaired}}}}\n# lua: {{#invoke:BoundaryLua|run|{{BoundaryPaired}}}}\n# supplied: {{BoundaryPaired|missing=provided}}\n# action: {{BoundaryAction}}\n# protected: {{BoundaryProtected}}\n# included: {{BoundaryIncluded}}\n# selected: {{BoundarySelected}}\n# nested: {{BoundarySelectedNested}}\n# parser-name: {{#i<!--x-->f:x|yes|no}}\n" },
+        .{ .title = "Boundary entry", .ns = 0, .id = 1, .body = "==English==\n# paired: {{BoundaryPaired}}\n# comment: {{BoundaryComment}}\n# direct: " ++ commented ++ "\n# length: {{#len:{{BoundaryPaired}}}}\n# lua: {{#invoke:BoundaryLua|run|{{BoundaryPaired}}}}\n# supplied: {{BoundaryPaired|missing=provided}}\n# action: {{BoundaryAction}}\n# protected: {{BoundaryProtected}}\n# included: {{BoundaryIncluded}}\n# selected: {{BoundarySelected}}\n# nested: {{BoundarySelectedNested}}\n# parser-name: {{#i<!--x-->f:x|yes|no}}\n# orphan: A<noinclude/>B }} {{uc:cat}} [[cat|after]]\n" },
         .{ .title = "Template:BoundaryPaired", .ns = 10, .id = 2, .body = paired },
         .{ .title = "Template:BoundaryComment", .ns = 10, .id = 3, .body = commented },
         .{ .title = "Template:BoundaryAction", .ns = 10, .id = 4, .body = paired ++ " [[cat|label]] {{uc:dog}} {{PAGENAME}}" },
@@ -1634,13 +1652,18 @@ fn preprocessingLiteralBoundaryProbe(h: *Harness, pipeline: []const u8, verifier
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(h.a);
     try appendBoundarySemanticText(h, parsed.value, &text);
-    for ([_][]const u8{ "paired: {{uc:cat}}", "comment: {{uc:cat}}", "direct: {{uc:cat}}", "length: 10", "lua: raw argument bytes verified", "supplied: provided}}", "action: {{uc:cat}} label DOG Boundary entry", "protected: {<!--x-->{uc:cat}}", "included: {{uc:cat}}", "selected: {{uc:cat}}", "nested: {{uc:CAT}}", "parser-name: yes" }) |expected|
+    for ([_][]const u8{ "paired: {{uc:cat}}", "comment: {{uc:cat}}", "direct: {{uc:cat}}", "length: 10", "lua: raw argument bytes verified", "supplied: provided}}", "action: {{uc:cat}} label DOG Boundary entry", "protected: {<!--x-->{uc:cat}}", "included: {{uc:cat}}", "selected: {{uc:cat}}", "nested: {{uc:CAT}}", "parser-name: yes", "orphan: AB [malformed template] CAT after" }) |expected|
         try h.require(std.mem.indexOf(u8, text.items, expected) != null, "real native expansion and Writer preserve exact literal defaults and independent actions");
     try h.require(hasSemanticLink(parsed.value, "cat", "label"), "default-boundary protection preserves the independent semantic link action");
     try h.require(std.mem.indexOf(u8, text.items, "<noinclude") == null and std.mem.indexOf(u8, text.items, "&#123;") == null, "published semantic text contains decoded literals and no preprocessing markers");
     const fallbacks = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ root, "fallback-pages.jsonl" }), h.a, .limited(4096));
-    try h.require(std.mem.trim(u8, fallbacks, " \t\r\n").len == 0, "literal defaults publish without renderer/template fallback or strict-guard rejection");
-    for ([_][]const u8{"A<noinclude/>B }} {{uc:cat}}"}, 0..) |body, index| {
+    var fallback_row = try std.json.parseFromSlice(std.json.Value, h.a, std.mem.trim(u8, fallbacks, " \t\r\n"), .{});
+    defer fallback_row.deinit();
+    const reasons = fallback_row.value.object.get("reasons").?.array.items;
+    try h.require(std.mem.eql(u8, fallback_row.value.object.get("title").?.string, "Boundary entry") and reasons.len == 1 and
+        std.mem.eql(u8, reasons[0].string, "literal_markup"), "only the authored orphan closer adds a source diagnostic; literal defaults remain clean");
+    try h.require(hasBoundaryDiagnostic(parsed.value), "orphan close publishes one nonaction text diagnostic while CAT and the independent link survive");
+    for ([_][]const u8{"A<noinclude/>B [https://example.test broken link"}, 0..) |body, index| {
         const refused_dump = try std.fmt.allocPrint(h.a, "{s}/preprocessing-refused-{d}.xml", .{ dir, index });
         const refused_root = try std.fmt.allocPrint(h.a, "{s}/preprocessing-refused-{d}-dictionary", .{ dir, index });
         try writePages(h.io, h.a, refused_dump, &.{.{ .title = "Unrelated unresolved source", .ns = 0, .id = 1, .body = try std.fmt.allocPrint(h.a, "==English==\n# {s}\n", .{body}) }});

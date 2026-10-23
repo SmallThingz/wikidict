@@ -6272,6 +6272,18 @@ pub const Renderer = struct {
                 recovered = true;
                 continue;
             }
+            // Complete template/parameter pairs and URL tokens are consumed by
+            // inlineTextWithMissing before plain-token recovery. Diagnose only
+            // this still-parsed raw closing pair, never decoded literal text.
+            if (candidate == null and starts(raw[at..], "}}")) {
+                _ = try self.plainWithMagicLinks(raw[emitted..at], style, "");
+                try self.generatedDiagnostic("[malformed template]", style);
+                self.fallbacks.literal_markup = true;
+                at += 2;
+                emitted = at;
+                recovered = true;
+                continue;
+            }
             if (candidate == null and (raw[at] == '{' or raw[at] == '[') and
                 (at == 0 or raw[at - 1] != raw[at]) and
                 (at + 1 == raw.len or raw[at + 1] != raw[at]))
@@ -14302,9 +14314,27 @@ test "unknown parser entity braces reject malformed external targets and keep in
             try std.testing.expectEqual(Provenance.entity_literal, span.provenance);
     }
     try std.testing.expect(renderer.fallbacks.rejected_external_target);
-    // The paired raw closing-brace label remains an unresolved build error.
-    try std.testing.expectError(error.UncompiledTemplate, renderer.parseSpans("[https://example.test/?q=&#123;&#123;#urlencode:alpha beta}} label]", .{}));
-    try std.testing.expect(renderer.fallbacks.rejected_external_target);
+    // The rejected entity-authored URL remains nonaction. Its independently
+    // parsed raw closing pair follows the ordinary orphan-template policy.
+    var raw_renderer: Renderer = .{ .a = a, .context = .{} };
+    const raw_label = try raw_renderer.parseSpans("[https://example.test/?q=&#123;&#123;#urlencode:alpha beta}} label]", .{});
+    try std.testing.expectEqualStrings("beta[malformed template] label", try flattened(a, raw_label));
+    var generated: usize = 0;
+    for (raw_label) |span| {
+        try std.testing.expect(span.kind == .text and span.target.len == 0 and !span.self_link);
+        if (span.generated_diagnostic) {
+            generated += 1;
+            try std.testing.expectEqualStrings("[malformed template]", span.text);
+            try std.testing.expectEqual(Provenance.parsed, span.provenance);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), generated);
+    try std.testing.expect(raw_renderer.fallbacks.rejected_external_target and raw_renderer.fallbacks.literal_markup);
+    // An empty literal boundary cannot authorize two separately parsed braces.
+    // This still reaches the rejected-target strict label guard unchanged.
+    var split_renderer: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectError(error.UncompiledTemplate, split_renderer.parseSpans("[https://example.test/?q=&#123;&#123;#urlencode:alpha beta}<nowiki/>} label]", .{}));
+    try std.testing.expect(split_renderer.fallbacks.rejected_external_target);
     const authored_nowiki = try renderer.parseSpans("[https://example.test/?q=<nowiki>{{alpha beta}}</nowiki> label]", .{});
     try std.testing.expectEqualStrings("{{alpha beta}} label", try flattened(a, authored_nowiki));
     for (authored_nowiki) |span| try std.testing.expectEqualStrings("https://example.test/?q=", span.target);

@@ -3119,3 +3119,94 @@ test "orphan table recovery leaves inline protected entity and matched controls 
     try std.testing.expectEqualStrings("outer\ninner", cell_text.items);
     try std.testing.expect(!table_report.malformed_table and !table_report.literal_markup);
 }
+
+test "orphan template closer diagnoses Arabic source and preserves neighboring actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Retained AR page 101981/revision 1090426 has this authored close after
+    // the independent link; the native expansion preserves the same sequence.
+    const source = "'''عَمِلَ''' فعل ثلاثي مجرد (المضارع يَعْمَل والمصدر [[عَمَل]]}})\n# following [[Keep|kept]]\n";
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "entry", .language, "Arabic", "ar", source, null, &report);
+    const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "ar", .heading = "Arabic" });
+    var visible: std.ArrayList(u8) = .empty;
+    var diagnostics: usize = 0;
+    var arabic_link = false;
+    var following_link = false;
+    var bold_word = false;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.text, "[malformed template]")) {
+            diagnostics += 1;
+            try std.testing.expect(span.kind == .text and span.target.len == 0 and span.trail.len == 0);
+        }
+        if (span.kind == .link and std.mem.eql(u8, span.target, "عَمَل")) arabic_link = true;
+        if (span.kind == .link and std.mem.eql(u8, span.target, "Keep")) following_link = true;
+        if (span.bold and std.mem.indexOf(u8, span.text, "عَمِلَ") != null) bold_word = true;
+    };
+    try std.testing.expectEqual(@as(usize, 1), diagnostics);
+    try std.testing.expect(report.literal_markup and !report.missing_template);
+    try std.testing.expect(arabic_link and following_link and bold_word);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "عَمَل[malformed template])") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "following kept") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "}}") == null);
+
+    // A rejected label cannot donate its action to the generated marker.
+    var renderer: compiler.Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans("[[Keep|'''label}}tail''']]", .{});
+    var generated = false;
+    var child_link = false;
+    for (spans) |span| {
+        if (span.generated_diagnostic) {
+            generated = true;
+            try std.testing.expectEqualStrings("[malformed template]", span.text);
+            try std.testing.expect(span.provenance == .parsed and span.kind == .text and span.target.len == 0);
+            try std.testing.expect(span.flags.bold);
+        } else if (span.kind == .link) child_link = true;
+    }
+    try std.testing.expect(generated and child_link);
+    const leaked = [_]compiler.Span{.{ .text = "}}" }};
+    const split = [_]compiler.Span{ .{ .text = "}" }, .{ .text = "}", .flags = .{ .bold = true } } };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &leaked, null));
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &split, null));
+}
+
+test "orphan template recovery preserves literal URL balanced template and parameter paths" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "<nowiki>}}</nowiki>", .expected = "}}" },
+        .{ .source = "}<nowiki>}</nowiki>", .expected = "}}" },
+        .{ .source = "<pre>}}</pre>", .expected = "}}" },
+        .{ .source = "&#125;&#125;", .expected = "}}" },
+        .{ .source = "https://example.test/a}}", .expected = "https://example.test/a}}" },
+        .{ .source = "[https://example.test/a}}]", .expected = "[1]" },
+        .{ .source = "{{{absent|kept}}}", .expected = "kept" },
+        .{ .source = "{{{absent|{{{inner|nested}}}}}}", .expected = "nested" },
+        .{ .source = "single } suffix", .expected = "single } suffix" },
+    };
+    for (cases) |case| {
+        var report: Fallbacks = .{};
+        const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", case.source, null, &report);
+        const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+        var visible: std.ArrayList(u8) = .empty;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span|
+            try visible.appendSlice(a, span.text);
+        try std.testing.expectEqualStrings(case.expected, std.mem.trim(u8, visible.items, " \t\r\n"));
+        try std.testing.expect(!report.literal_markup);
+    }
+    var balanced_report: Fallbacks = .{};
+    const balanced = try compileReportedAlloc(a, "entry", .language, "English", "en", "{{MissingFixture|secret_argument_body}}", null, &balanced_report);
+    try std.testing.expect(balanced_report.missing_template and !balanced_report.literal_markup);
+    try std.testing.expect(std.mem.indexOf(u8, balanced, "[malformed template]") == null);
+    try std.testing.expect(std.mem.indexOf(u8, balanced, "secret_argument_body") == null);
+    // An empty literal node cannot authorize two surrounding parsed braces.
+    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "}<nowiki/>}", null));
+    // Ordinary code styling is not literal authority for authored raw closers.
+    var code_report: Fallbacks = .{};
+    const code_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", "<code>}}</code>", null, &code_report);
+    try std.testing.expect(code_report.literal_markup);
+    try std.testing.expect(std.mem.indexOf(u8, code_bytes, "[malformed template]") != null);
+}
