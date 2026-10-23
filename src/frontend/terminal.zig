@@ -461,6 +461,22 @@ pub const RenderRow = struct { bytes: []const u8, carry: TextStyle, left: usize 
 pub fn wrapStyled(a: std.mem.Allocator, text: []const u8, columns: usize) ![]RenderRow {
     return wrapStyledProjected(a, text, columns, &.{});
 }
+// Keep the existing UTF-8 byte midpoint policy, excluding renderer SGR atoms.
+// Styling must not move a soft word boundary; raw slices still own their offsets.
+fn textByteCount(text: []const u8) usize {
+    var count: usize = 0;
+    var pos: usize = 0;
+    while (pos < text.len) {
+        if (sgrLength(text[pos..])) |n| {
+            pos += n;
+        } else {
+            pos += 1;
+            count += 1;
+        }
+    }
+    return count;
+}
+
 /// Rows continue borrowing the original text; section offsets remain valid.
 pub fn wrapStyledProjected(a: std.mem.Allocator, text: []const u8, columns: usize, poem_lines: []const PoemLine) ![]RenderRow {
     var rows: std.ArrayList(RenderRow) = .empty;
@@ -484,7 +500,7 @@ pub fn wrapStyledProjected(a: std.mem.Allocator, text: []const u8, columns: usiz
             if (rest.len != 0 and end == 0) end = @min(rest.len, std.unicode.utf8ByteSequenceLength(rest[0]) catch 1);
             if (end < rest.len) if (std.mem.lastIndexOfScalar(u8, rest[0..end], ' ')) |space| {
                 const lead_bytes = if (poem) |p| if (first) p.lead_bytes else 0 else 0;
-                if (space > end / 2 and (poem == null or space > lead_bytes)) end = space;
+                if (textByteCount(rest[0..space]) > textByteCount(rest[0..end]) / 2 and (poem == null or space > lead_bytes)) end = space;
             };
             const slice = rest[0..end];
             try rows.append(a, .{ .bytes = slice, .carry = style, .left = left, .right = right });
@@ -515,6 +531,34 @@ test "styled wrapping preserves generated emphasis across Unicode cell boundarie
     for (rows) |row| try std.testing.expect(cellWidth(row.bytes) <= 3);
     try std.testing.expect(sgrLength("\x1b[2J") == null);
     try std.testing.expect(sgrLength("\x1b]0;unsafe\x07") == null);
+
+    // The old raw-byte midpoint moved breaks when zero-width styling was added.
+    // Keep the exact plain rows, including the captured Arabic label/trail split.
+    const cases = [_][2][]const u8{
+        .{ "alpha betaTRAIL", "\x1b[1malpha \x1b[0m\x1b[1;38;2;18;52;86mbeta\x1b[0m\x1b[1mTRAIL\x1b[0m" },
+        .{ "أسماء فاعلTRAIL\nNEXT ومفعولABCDEFGHIJKLMNO", "\x1b[1mأسماء \x1b[0m\x1b[1mفاعل\x1b[0m\x1b[1mTRAIL\x1b[0m\n\x1b[1mNEXT\x1b[0m \x1b[1;48;2;171;205;239mومفعول\x1b[0m\x1b[1mABCDEFGHIJKLMNO\x1b[0m" },
+        .{ "prefix αβgamma tail", "\x1b[1mprefix \x1b[0m\x1b[38;2;0;3;36mαβgamma\x1b[0m tail" },
+    };
+    for (cases) |pair| {
+        const plain = try wrapStyled(std.testing.allocator, pair[0], 10);
+        defer std.testing.allocator.free(plain);
+        const styled = try wrapStyled(std.testing.allocator, pair[1], 10);
+        defer std.testing.allocator.free(styled);
+        try std.testing.expectEqual(plain.len, styled.len);
+        for (plain, styled) |expected, actual| {
+            var visible: std.ArrayList(u8) = .empty;
+            defer visible.deinit(std.testing.allocator);
+            var pos: usize = 0;
+            while (pos < actual.bytes.len) {
+                if (sgrLength(actual.bytes[pos..])) |n| pos += n else {
+                    try visible.append(std.testing.allocator, actual.bytes[pos]);
+                    pos += 1;
+                }
+            }
+            try std.testing.expectEqualStrings(expected.bytes, visible.items);
+            try std.testing.expect(cellWidth(actual.bytes) <= 10);
+        }
+    }
 }
 
 /// Keep palette background/foreground after a renderer-owned reset inside a row.

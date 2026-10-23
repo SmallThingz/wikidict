@@ -245,14 +245,14 @@ fn contrastForeground(background: [3]u8) [3]u8 {
     return if (black >= white) .{ 0, 0, 0 } else .{ 255, 255, 255 };
 }
 
-fn spanPieceText(w: *std.Io.Writer, piece: SpanPiece, color: bool, whitespace: ?*OrdinaryDisplayWhitespace, scripts: *ScriptDisplayRuns, cell_background: ?[3]u8) !void {
+fn spanPieceText(w: *std.Io.Writer, piece: SpanPiece, color: bool, whitespace: ?*OrdinaryDisplayWhitespace, scripts: *ScriptDisplayRuns, cell_background: ?[3]u8, inherited_header: bool) !void {
     const span = piece.span;
     if (piece.bytes.len == 0) return;
     const explicit_foreground = canonicalRgb(span.foreground);
     const authored_background: ?[3]u8 = if (canonicalRgb(span.background)) |background| background else cell_background;
     const contrast_link = explicit_foreground == null and authored_background != null and
         (span.kind == .link or span.kind == .external_link);
-    if (color and span.bold) try w.writeAll("\x1b[1m");
+    if (color and (span.bold or inherited_header)) try w.writeAll("\x1b[1m");
     if (color and span.italic) try w.writeAll("\x1b[3m");
     if (color and (span.underline or contrast_link)) try w.writeAll("\x1b[4m");
     if (color and span.strike) try w.writeAll("\x1b[9m");
@@ -280,9 +280,9 @@ fn spansTextProjected(w: *std.Io.Writer, spans: []const model.Span, color: bool,
     return spansTextDisplayProjected(w, spans, color, projection, false);
 }
 fn spansTextDisplayProjected(w: *std.Io.Writer, spans: []const model.Span, color: bool, projection: ?*PoemProjection, ordinary: bool) !void {
-    return spansTextDisplayOnBackground(w, spans, color, projection, ordinary, null);
+    return spansTextDisplayOnBackground(w, spans, color, projection, ordinary, null, false);
 }
-fn spansTextDisplayOnBackground(w: *std.Io.Writer, spans: []const model.Span, color: bool, projection: ?*PoemProjection, ordinary: bool, cell_background: ?[3]u8) !void {
+fn spansTextDisplayOnBackground(w: *std.Io.Writer, spans: []const model.Span, color: bool, projection: ?*PoemProjection, ordinary: bool, cell_background: ?[3]u8, inherited_header: bool) !void {
     var collapse = ordinary;
     if (collapse) for (spans) |span| {
         if (PoemInfo.parse(span.classes).marked) {
@@ -307,7 +307,7 @@ fn spansTextDisplayOnBackground(w: *std.Io.Writer, spans: []const model.Span, co
             newline = piece.ends_line;
         }
         if (projection) |p| try p.record(info) else if (info.marked and !info.rtl) try w.splatByteAll(' ', info.depth);
-        for (0..count) |_| try spanPieceText(w, cursor.next().?, color, if (collapse) &whitespace else null, &scripts, cell_background);
+        for (0..count) |_| try spanPieceText(w, cursor.next().?, color, if (collapse) &whitespace else null, &scripts, cell_background, inherited_header);
         if (projection == null and info.marked and info.rtl) try w.splatByteAll(' ', info.depth);
         if (newline) {
             try w.writeByte('\n');
@@ -357,8 +357,7 @@ fn tablePixels(value: u32) usize {
 }
 
 fn tableCellText(w: *std.Io.Writer, cell: @import("blob_encoder").presentation_types.Cell, color: bool, columns: ?usize) anyerror!void {
-    if (color and cell.header) try w.writeAll("\x1b[1m");
-    try spansTextDisplayOnBackground(w, cell.spans, color, null, false, canonicalRgb(cell.background));
+    try spansTextDisplayOnBackground(w, cell.spans, color, null, false, canonicalRgb(cell.background), cell.header);
     if (color) try w.writeAll("\x1b[0m");
     if (cell.nested_table) |child| {
         if (cell.spans.len != 0) try w.writeByte('\n');
@@ -2850,4 +2849,79 @@ test "nested percent width uses expanded parent content budget without outer ove
     // fill cannot make a natural-width child satisfy this assertion.
     try std.testing.expectEqual(@as(usize, 50), terminal.cellWidth(std.mem.trimEnd(u8, first_line, " ")));
     try std.testing.expect(std.mem.endsWith(u8, first_line, "│"));
+}
+
+test "table header emphasis survives span resets trails newlines and painted wrapping" {
+    const T = @import("blob_encoder").presentation_types;
+    const Observe = struct {
+        fn boldAt(text: []const u8, limit: usize) bool {
+            var bold = false;
+            var pos: usize = 0;
+            while (pos < limit) {
+                if (terminal.sgrLength(text[pos..])) |n| {
+                    const atom = text[pos .. pos + n];
+                    if (std.mem.eql(u8, atom, "\x1b[0m") or std.mem.eql(u8, atom, "\x1b[m") or std.mem.eql(u8, atom, "\x1b[22m")) bold = false;
+                    if (std.mem.eql(u8, atom, "\x1b[1m")) bold = true;
+                    pos += n;
+                } else pos += 1;
+            }
+            return bold;
+        }
+        fn visibleState(text: []const u8) !void {
+            var pos: usize = 0;
+            var header_glyphs: usize = 0;
+            var ordinary_glyphs: usize = 0;
+            while (pos < text.len) {
+                if (terminal.sgrLength(text[pos..])) |n| {
+                    pos += n;
+                    continue;
+                }
+                const n = try std.unicode.utf8ByteSequenceLength(text[pos]);
+                const cp = try std.unicode.utf8Decode(text[pos..][0..n]);
+                if ((cp >= 'A' and cp <= 'Z') or (cp >= 0x0600 and cp <= 0x06ff)) {
+                    try std.testing.expect(boldAt(text, pos));
+                    header_glyphs += 1;
+                } else if (cp >= 'a' and cp <= 'z') {
+                    try std.testing.expect(!boldAt(text, pos));
+                    ordinary_glyphs += 1;
+                }
+                pos += n;
+            }
+            try std.testing.expect(header_glyphs > 20 and ordinary_glyphs == 5);
+        }
+    };
+    const a = std.testing.allocator;
+    // Exact captured header segmentation: default-false suffix and linked labels.
+    const root_spans = [_]model.Span{ .{ .text = "الجذر" }, .{ .text = ": س ف ر" } };
+    const linked_spans = [_]model.Span{
+        .{ .text = "أسماء " },
+        .{ .kind = .link, .text = "فاعل", .target = "فاعل", .trail = "TRAIL\nNEXT", .foreground = "#123456" },
+        .{ .text = " " },
+        .{ .kind = .link, .text = "ومفعول", .target = "مفعول", .background = "#abcdef" },
+        .{ .text = "ABCDEFGHIJKLMNO" },
+    };
+    const table: T.Table = .{ .rows = &.{
+        .{ .cells = &.{.{ .header = true, .spans = &root_spans }} },
+        .{ .cells = &.{.{ .header = true, .spans = &linked_spans, .background = "#010924" }} },
+        .{ .cells = &.{.{ .spans = &.{.{ .text = "plain" }} }} },
+    } };
+    for ([_]?usize{ null, 16 }) |columns| {
+        var styled: std.Io.Writer.Allocating = .init(a);
+        defer styled.deinit();
+        try tableTextWidth(&styled.writer, table, true, null, columns);
+        try Observe.visibleState(styled.written());
+        const trail = std.mem.indexOfScalar(u8, styled.written(), 'T').?;
+        try std.testing.expectEqual([3]u8{ 18, 52, 86 }, TypedColorOutputTest.at(styled.written(), trail).foreground.?);
+        const painted = std.mem.indexOf(u8, styled.written(), "و").?;
+        try std.testing.expectEqual([3]u8{ 171, 205, 239 }, TypedColorOutputTest.at(styled.written(), painted).background.?);
+        var plain: std.Io.Writer.Allocating = .init(a);
+        defer plain.deinit();
+        try tableTextWidth(&plain.writer, table, false, null, columns);
+        const stripped = try NarrowTableTest.plain(a, styled.written());
+        defer a.free(stripped);
+        try std.testing.expectEqualStrings(plain.written(), stripped);
+    }
+    try std.testing.expect(!root_spans[1].bold and !linked_spans[1].bold);
+    try std.testing.expectEqualStrings("فاعل", linked_spans[1].target);
+    try std.testing.expectEqualStrings("TRAIL\nNEXT", linked_spans[1].trail);
 }
