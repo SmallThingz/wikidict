@@ -3210,3 +3210,232 @@ test "orphan template recovery preserves literal URL balanced template and param
     try std.testing.expect(code_report.literal_markup);
     try std.testing.expect(std.mem.indexOf(u8, code_bytes, "[malformed template]") != null);
 }
+
+test "angle enclosed bare URLs retain literal delimiters and exact navigation bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const jstor = "http://links.jstor.org/sici?sici=0041-9907(196003)108%3A5%3C699%3A%22PFUTC%3E2.0.CO%3B2-Z";
+    const cases = [_]struct { source: []const u8, target: []const u8, visible: []const u8, bold: bool = false }{
+        .{ .source = "<" ++ jstor ++ ">", .target = jstor, .visible = "<" ++ jstor ++ ">" },
+        .{ .source = "<HTTPS://example.test/a%3Cb%3E>", .target = "HTTPS://example.test/a%3Cb%3E", .visible = "<HTTPS://example.test/a%3Cb%3E>" },
+        .{ .source = "<https://example.test/a).>", .target = "https://example.test/a", .visible = "<https://example.test/a).>" },
+        .{ .source = "<b><https://example.test/a></b>", .target = "https://example.test/a", .visible = "<https://example.test/a>", .bold = true },
+        .{ .source = "<https://example.test/a}}>", .target = "https://example.test/a}}", .visible = "<https://example.test/a}}>" },
+    };
+    for (cases) |case| {
+        var report: Fallbacks = .{};
+        const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", case.source, null, &report);
+        const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+        var visible: std.ArrayList(u8) = .empty;
+        var action_label: std.ArrayList(u8) = .empty;
+        var actions: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            if (span.kind == .external_link) {
+                actions += 1;
+                try action_label.appendSlice(a, span.text);
+                try std.testing.expectEqualStrings(case.target, span.target);
+                try std.testing.expectEqual(case.bold, span.bold);
+            }
+            if (std.mem.eql(u8, span.text, "<")) try std.testing.expect(span.kind == .text and span.target.len == 0);
+        };
+        // Closing-brace URL text intentionally spans parsed and protected runs.
+        try std.testing.expect(actions > 0);
+        try std.testing.expectEqualStrings(case.target, action_label.items);
+        try std.testing.expectEqualStrings(case.visible, visible.items);
+        try std.testing.expect(!report.any());
+    }
+    var renderer: compiler.Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans("<https://example.test/a> [[Keep|after]]", .{});
+    try std.testing.expect(spans[0].provenance == .protected_literal and spans[0].kind == .text and spans[0].target.len == 0);
+    try std.testing.expectEqualStrings("<", spans[0].text);
+
+    // Exact retained failed expansion, including its independently malformed
+    // nested wikilink. The footer repair must not drop that diagnosed child.
+    const captured =
+        \\
+        \\== إنجليزية[[تصنيف:إنجليزية]] ==
+        \\
+        \\=== Etymology ===
+        \\[[un-|Un-]] + [[copyright]] ([[copy]] + [[right]]) + [[-able]] + [[-s]].
+        \\
+        \\=== اسم ===
+        \\'''uncopyrightables'''
+        \\
+        \\# صِيغَةُ جَمْعٍ مُفْرَدُهَا [[[[uncopyrightable]]]][[تصنيف:صيغ جمع ]]
+        \\
+        \\#* '''1960''', W. J. G., H. K. S. [''sic''], "Copyright" Protection for '''Uncopyrightables''': The Common-Law Doctrines", in ''University of Pennsylvania Law Review'', Vol. 108, No. 5 (Mar., 1960), pp. 699-734
+        \\#* '''1969''', P Goldstein, "Federal System Ordering of the Copyright Interest", in ''Columbia Law Review'', pp. 49-92
+        \\#*: [...] are further condemned by Sears and Compco's second principle for their tendency to extend the equivalent of copyright protection to statutory '''uncopyrightables'''.
+        \\
+        \\==== Usage notes ====
+        \\* Normally hyphenated; otherwise considered a spelling/construction error by many.
+        \\
+        \\==== Trivia ====
+        \\"Uncopyrightables" is longest word in the [[Wikipedia:English language|English language]] that does not contain any repeated letters, if plurals are allowed.
+        \\
+        \\==== References ====
+        \\"Copyright" Protection for Uncopyrightables: The Common-Law Doctrines
+        \\W. J. G., H. K. S.
+        \\University of Pennsylvania Law Review, Vol. 108, No. 5 (Mar., 1960), pp. 699-734
+        \\doi:10.2307/3310268 <http://links.jstor.org/sici?sici=0041-9907(196003)108%3A5%3C699%3A%22PFUTC%3E2.0.CO%3B2-Z>
+    ;
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "uncopyrightables", .language, "English", "en", captured, null, &report);
+    const decoded = try codec.decodeAlloc(a, bytes, "uncopyrightables", .language, .{ .code = "en", .heading = "English" });
+    var visible: std.ArrayList(u8) = .empty;
+    var jstor_actions: usize = 0;
+    var nested_actions: usize = 0;
+    var malformed_links: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        if (span.kind == .external_link and std.mem.eql(u8, span.target, jstor)) jstor_actions += 1;
+        if (span.kind == .link and std.mem.eql(u8, span.target, "uncopyrightable")) nested_actions += 1;
+        if (std.mem.indexOf(u8, span.text, "[malformed link]") != null) {
+            malformed_links += 1;
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), jstor_actions);
+    try std.testing.expectEqual(@as(usize, 1), nested_actions);
+    try std.testing.expectEqual(@as(usize, 1), malformed_links);
+    try std.testing.expect(report.literal_markup and !report.missing_template);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "doi:10.2307/3310268 <" ++ jstor ++ ">") != null);
+    for ([_][]const u8{ "Federal System Ordering", "Normally hyphenated", "does not contain any repeated letters" }) |phrase|
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, phrase) != null);
+}
+
+test "angle URL classification leaves HTML and unresolved delimiters strict" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "<http:broken>",                                          "<http://>",                             "<http://example.test attribute=bad>",
+        "<unknown href=\"https://example.test\">label</unknown>", "<script>https://example.test</script>", "<https://example.test/a{|b>",
+        "<https://example.test/a[[b]]>",
+    }) |source| try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", source, null));
+    try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "entry", .language, "English", "en", "<https://example.test/{{missing}}>", null));
+    // A rejected bracketed destination retains only its independent authored label.
+    var rejected_report: Fallbacks = .{};
+    const rejected_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", "[https://example.test/{{missing}} label]", null, &rejected_report);
+    const rejected = try codec.decodeAlloc(a, rejected_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    var rejected_label: std.ArrayList(u8) = .empty;
+    for (rejected.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try rejected_label.appendSlice(a, span.text);
+        try std.testing.expect(span.kind == .text and span.target.len == 0);
+    };
+    try std.testing.expectEqualStrings("label", rejected_label.items);
+    try std.testing.expect(rejected_report.rejected_external_target and !rejected_report.literal_markup and !rejected_report.missing_template);
+    const cases = [_]struct { source: []const u8, visible: []const u8, actions: usize }{
+        .{ .source = "<nowiki><https://example.test/a></nowiki>", .visible = "<https://example.test/a>", .actions = 0 },
+        .{ .source = "&lt;https://example.test/a&gt;", .visible = "<https://example.test/a>", .actions = 1 },
+        .{ .source = "https://example.test/a", .visible = "https://example.test/a", .actions = 1 },
+        .{ .source = "<https://example.test/a", .visible = "<https://example.test/a", .actions = 1 },
+        .{ .source = "[https://example.test/a]", .visible = "[1]", .actions = 1 },
+        .{ .source = "[https://example.test/a <i>label</i>]", .visible = "label", .actions = 1 },
+        .{ .source = "<span title=\"https://example.test/a\">kept</span>", .visible = "kept", .actions = 0 },
+    };
+    for (cases) |case| {
+        const bytes = try compileAlloc(a, "entry", .language, "English", "en", case.source, null);
+        const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+        var visible: std.ArrayList(u8) = .empty;
+        var actions: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            if (span.kind == .external_link) actions += 1;
+        };
+        try std.testing.expectEqualStrings(case.visible, visible.items);
+        try std.testing.expectEqual(case.actions, actions);
+    }
+    // Even a manually inserted safe external action cannot exempt parsed HTML
+    // shaped display text. Only the compiler's proved source angle is literal.
+    const direct = [_]compiler.Span{.{ .text = "<http://example.test>" }};
+    const split = [_]compiler.Span{ .{ .text = "<" }, .{ .kind = .external_link, .text = "http://example.test", .target = "http://example.test" }, .{ .text = ">" } };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &direct, null));
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &split, null));
+}
+
+test "captured malformed quoted li preserves literal spelling dictionary text and translation actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const captured =
+        "== عربية[[تصنيف:عربية]] ==\n" ++
+        "[[ملف:Wikipedia-logo-v2.svg|30px]] '''[https://ar.wikipedia.org/wiki/إجرياء إجرياء]''' على [[ويكيبيديا]].\n" ++
+        "\n" ++
+        "=== تأثيل ===\n" ++
+        "من الفعل [[أَجْرَى|جرى#أجرى]]، وقد تثبت بلا همزة (≠إجريا—مثنى [[جرى|إجري]] الفعل)\n" ++
+        "\n" ++
+        "=== اسم ===\n" ++
+        "<ol style=\"list-style-type: upper-roman\">\n" ++
+        "<li\">'''إِجرياء'''</li>\n" ++
+        "* طريقة عمل الشيء؛ طبيعته۔\n" ++
+        "* (لسانيات) علم قواعد اللغة — ''علم الصرف والنحو''۔\n" ++
+        "=== تراجم ===\n" ++
+        "\n" ++
+        "{| class=\"wikitable collapsible\"\n" ++
+        "!لغة!!ترجمة!!إجرياء: (لسانيات) علم قواعد اللغة — ''علم الصرف والنحو''\n" ++
+        "|-\n" ++
+        "|إنجليزية||[[grammar]]\n" ++
+        "|-\n" ++
+        "|فارسيَّة||[[دستور زبان]]\n" ++
+        "|-\n" ++
+        "|فرنسية||[[grammaire]]\n" ++
+        "|-\n" ++
+        "|سريانية|| <sup>(شرقية)</sup> [[ܓܪܲܡܲܛܝܼܩܘܘܬܵܐ]]<br /><sup>(غربية)</sup> [[ܓܪܰܡܰܛܺܩܘܘܬܳܐ]]\n" ++
+        "|-\n" ++
+        "|صينية|| <sup>(تقليدية)</sup> [[語法]]<br /><sup>(مبسطة)</sup> [[语法]]\n" ++
+        "|-\n" ++
+        "|عبرانية||[[דקדוק]]\n" ++
+        "|-\n" ++
+        "|كردية|| <sup>(سۆراني)</sup> [[ڕێزمان]]<br /><sup>(کورمانجي)</sup> [[rêziman]]\n" ++
+        "|-\n" ++
+        "||لوجبان||[[gerna]]\n" ++
+        "|-\n" ++
+        "|ملايوية||<sup>(جاوية)</sup> [[تاتابهاس]]<br /><sup>(لاتينية)</sup> [[tatabahasa]]\n" ++
+        "|-\n" ++
+        "||يونانية||[[γραμματική]]\n" ++
+        "|}\n" ++
+        "\n" ++
+        "[[تصنيف:مفردات بلا تشكيل]]";
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "إجرياء", .language, "العربية", "ar", captured, null, &report);
+    const decoded = try codec.decodeAlloc(a, bytes, "إجرياء", .language, .{ .code = "ar", .heading = "العربية" });
+    const Check = struct {
+        const targets = [_][]const u8{ "أَجْرَى", "جرى", "grammar", "دستور زبان", "grammaire", "gerna", "γραμματική", "דקדוק" };
+        visible: std.ArrayList(u8) = .empty,
+        seen: [targets.len]bool = @splat(false),
+        bold: bool = false,
+        superscript: bool = false,
+        fn add(self: *@This(), alloc: A, values: []const types.Span) !void {
+            for (values) |span| {
+                try self.visible.appendSlice(alloc, span.text);
+                if (span.bold and std.mem.indexOf(u8, span.text, "إِجرياء") != null) self.bold = true;
+                if (span.superscript and std.mem.indexOf(u8, span.text, "تقليدية") != null) self.superscript = true;
+                for (targets, 0..) |target, i| if (span.kind == .link and std.mem.eql(u8, span.target, target)) {
+                    self.seen[i] = true;
+                };
+            }
+        }
+    };
+    var check: Check = .{};
+    for (decoded.entry.sections) |section| for (section.blocks) |block| {
+        try check.add(a, block.spans);
+        if (block.table) |table| for (table.rows) |row| for (row.cells) |cell| {
+            try check.add(a, cell.spans);
+        };
+    };
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, check.visible.items, "<li\">"));
+    try std.testing.expect(std.mem.indexOf(u8, check.visible.items, "</li>") == null);
+    try std.testing.expect(std.mem.indexOf(u8, check.visible.items, "طريقة عمل الشيء") != null);
+    try std.testing.expect(std.mem.indexOf(u8, check.visible.items, "علم قواعد اللغة") != null);
+    try std.testing.expect(check.bold and check.superscript and report.literal_markup and report.unclosed_formatting);
+    for (check.seen) |seen| try std.testing.expect(seen);
+    // Only proved source angles are escaped; raw parsed markup stays strict.
+    const raw = [_]compiler.Span{.{ .text = "<li\">" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+    // Apostrophes and malformed attributes are outside this finite token family.
+    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "<li'>word</li>", null));
+    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "<li\" attr=x>word</li>", null));
+}

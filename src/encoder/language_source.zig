@@ -201,6 +201,19 @@ pub const Iterator = struct {
         return code;
     }
 
+    fn enclosingTableCloses(self: *const Iterator, start: usize) bool {
+        var balance = self.balance;
+        const depth = balance.tables;
+        var cursor = start;
+        while (cursor < self.source.len) {
+            const end = std.mem.indexOfScalarPos(u8, self.source, cursor, '\n') orelse self.source.len;
+            balance.update(self.source, cursor, end);
+            if (balance.tables < depth) return true;
+            cursor = if (end == self.source.len) end else end + 1;
+        }
+        return false;
+    }
+
     pub fn next(self: *Iterator) ?Section {
         if (self.done) return null;
         self.balance.link_headings = self.link_headings;
@@ -214,7 +227,10 @@ pub const Iterator = struct {
 
             if (self.balance.comments == 0 and self.balance.tables != 0 and line_start >= self.balance.protected_until) {
                 if (self.table_boundary_filter) |filter| if (parseHeadingControlled(line, self.control_matcher)) |heading| {
-                    if (heading.level == 2 and filter.accepts(filter.ctx, heading.title)) self.balance.tables = 0;
+                    // Corroboration recovers an unterminated table; a matched
+                    // table keeps its cell-local headings inside that table.
+                    if (heading.level == 2 and filter.accepts(filter.ctx, heading.title) and
+                        !self.enclosingTableCloses(line_start)) self.balance.tables = 0;
                 };
             }
             if (!self.balance.isOpen() and line_start >= self.balance.protected_until) {
@@ -1043,4 +1059,26 @@ pub fn outsideNestedOrOpaque(source: []const u8, offset: usize) bool {
         cursor += 1;
     }
     return true;
+}
+
+test "corroborated recovery leaves matched table headings in their cell domain" {
+    const Accept = struct {
+        fn accepts(_: ?*const anyopaque, _: []const u8) bool {
+            return true;
+        }
+    };
+    const cases = [_]struct { source: []const u8, recovered: bool }{
+        .{ .source = "==English==\n{|\n|\n==French==\n[[chat]]\n|}</div>\n==German==\n[[Katze]]\n", .recovered = false },
+        .{ .source = "==English==\n{|\n|\n{|\n|\n==French==\n[[chat]]\n|}\n|}\n==German==\n[[Katze]]\n", .recovered = false },
+        .{ .source = "==English==\n{|\n|\n==French==\n[[chat]]\n<nowiki>\n|}\n</nowiki>\n<!--\n|}\n-->\n==German==\n[[Katze]]\n", .recovered = true },
+        .{ .source = "==English==\n{|\n|\n==French==\n[[chat]]\n{|\n| nested\n|}\n==German==\n[[Katze]]\n", .recovered = true },
+    };
+    for (cases) |case| {
+        var iterator = Iterator.init(case.source);
+        iterator.table_boundary_filter = .{ .ctx = null, .accepts = Accept.accepts };
+        try std.testing.expectEqualStrings("English", iterator.next().?.heading);
+        if (case.recovered) try std.testing.expectEqualStrings("French", iterator.next().?.heading);
+        try std.testing.expectEqualStrings("German", iterator.next().?.heading);
+        try std.testing.expect(iterator.next() == null);
+    }
 }

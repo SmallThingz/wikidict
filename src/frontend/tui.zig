@@ -696,7 +696,7 @@ const State = struct {
                     }
                 } else {
                     self.section_indices.clearRetainingCapacity();
-                    for (doc.entry.sections, 0..) |section, s| if (section.blocks.len != 0) try self.section_indices.append(self.a, s);
+                    for (doc.entry.sections, 0..) |section, s| if (output.foldedSectionVisible(section)) try self.section_indices.append(self.a, s);
                     self.section_count = self.section_indices.items.len;
                     self.section = @min(self.section, self.section_count -| 1);
                     if (self.nav == .learn and self.answered) try formatted.writer.writeAll("Space: next word\n\n");

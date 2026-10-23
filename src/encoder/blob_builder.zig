@@ -8058,3 +8058,125 @@ test "normal Writer preserves nested cell paint without promoting it to the oute
     try std.testing.expectEqual(@as(usize, 1), outer_tables);
     try std.testing.expect(red and blue and tail);
 }
+
+test "captured Arabic translation table keeps language-like cell headings in the page owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tfirst-letter\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tقالب\tTemplate\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tتصنيف\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const Local = struct {
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(ctx, value)) |owner| owner.code else null;
+        }
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            inline for (.{ .{ "ar", "العربية", "عربية" }, .{ "fa", "الفارسية", "فارسية" } }) |row|
+                if (std.mem.eql(u8, value, row[0]) or std.mem.eql(u8, value, row[1]) or std.mem.eql(u8, value, row[2])) return .{ .code = row[0], .heading = row[1] };
+            return null;
+        }
+    };
+    const codes: LanguageCodes = .{ .get_fn = Local.get, .resolve_fn = Local.resolve, .trusted_fn = Local.resolve, .strong_fn = Local.resolve, .namespace_catalog = &namespaces };
+    const raw =
+        "== {{اللغة|عربية}} ==\n" ++
+        "=== المعاني ===\n" ++
+        "# '''الرُّمَيْثِيَّة''' اسم مؤنث لمنطقة في محافظة حولي في الكويت.\n" ++
+        "#: ذهبت إلى '''الرميثية''' بالسيارة\n" ++
+        "\n" ++
+        "=== الأصل والاشتقاق ===\n" ++
+        "* نسبة إلى نبات [[w:ar:رمث|الرمث]]، أو نسبة إلى شخص يدعى ابن رمثان\n" ++
+        "\n" ++
+        "=== من الجذر نفسه ===\n" ++
+        "{{ر م ث}}\n" ++
+        "\n" ++
+        "== الترجمات ==\n" ++
+        "{{ترجمات}}\n" ++
+        "== {{اللغة|عربية}} ==\n" ++
+        "[[Rumaithiya]]\n" ++
+        "== {{اللغة|فارسية}} ==\n" ++
+        "[[الرميثيه]]\n" ++
+        "{{نهاية}}\n" ++
+        "\n" ++
+        "[[تصنيف:فُعَيْلِيَّة]]\n" ++
+        "[[تصنيف:مدن (عربية)|رميثية]]\n" ++
+        "[[تصنيف:كلمات ذات استخدام حديث|رميثية]]\n" ++
+        "[[تصنيف:مفردات بلا تشكيل|رميثية]]\n" ++
+        "[[تصنيف:أماكن في الكويت (عربية)|رميثية]]";
+    const expanded =
+        "== عربية[[تصنيف:عربية]] ==\n" ++
+        "=== المعاني ===\n" ++
+        "# '''الرُّمَيْثِيَّة''' اسم مؤنث لمنطقة في محافظة حولي في الكويت.\n" ++
+        "#: ذهبت إلى '''الرميثية''' بالسيارة\n" ++
+        "\n" ++
+        "=== الأصل والاشتقاق ===\n" ++
+        "* نسبة إلى نبات [[w:ar:رمث|الرمث]]، أو نسبة إلى شخص يدعى ابن رمثان\n" ++
+        "\n" ++
+        "=== من الجذر نفسه ===\n" ++
+        "<div class=\"navbox-styles\"><templatestyles src=\"Hlist/styles.css\"/><templatestyles src=\"Module:Navbox/styles.css\"/></div><div role=\"navigation\" class=\"navbox\" aria-labelledby=\"كلمات_من_الجذر_رمث\" style=\"padding:1px\"><table class=\"nowraplinks mw-collapsible expandCaption navbox-inner\" style=\"border-spacing:0;background:transparent;color:inherit\"><tr><th scope=\"col\" class=\"navbox-title\" colspan=\"2\"><templatestyles src=\"Module:Navbar/styles.css\"/><div class=\"navbar plainlinks hlist navbar-mini\"><ul><li class=\"nv-اعرض\">[[قالب:رمث|<abbr title=\"عرض هذا القالب\">ع</abbr>]]</li><li class=\"nv-ناقش\">[[نقاش القالب:رمث|<abbr title=\"ناقش هذا القالب\">ن</abbr>]]</li><li class=\"nv-عدل\">[//ar.wiktionary.org/w/index.php?title=%D9%82%D8%A7%D9%84%D8%A8:%D8%B1%D9%85%D8%AB&action=edit<abbr title=\"عدل هذا القالب\">ت</abbr>]</li></ul></div><div id=\"كلمات_من_الجذر_رمث\" style=\"font-size:114%;margin:0 4em\">[[:تصنيف:رمث|كلمات من الجذر رمث]]</div></th></tr><tr><th scope=\"row\" class=\"navbox-group\" style=\"width:1%\">[[:تصنيف:أفعال|أفعال]]</th><td class=\"navbox-list-with-group navbox-list navbox-odd\" style=\"width:100%;padding:0\"><div style=\"padding:0 0.25em\">[[رَمَّثَ]] &nbsp;'''·'''&#32; [[رَمَث]] &nbsp;'''·'''&#32; [[رَمِث]]</div></td></tr><tr><th scope=\"row\" class=\"navbox-group\" style=\"width:1%\">[[:تصنيف:مصادر|مصادر]]</th><td class=\"navbox-list-with-group navbox-list navbox-even\" style=\"width:100%;padding:0\"><div style=\"padding:0 0.25em\">[[رَمْث]]  &nbsp;'''·'''&#32; [[رِمْث]] &nbsp;'''·'''&#32; [[رَمَث]] &nbsp;'''·'''&#32; [[رَمَثَة]] &nbsp;'''·'''&#32;</div></td></tr><tr><th scope=\"row\" class=\"navbox-group\" style=\"width:1%\">أخرى</th><td class=\"navbox-list-with-group navbox-list navbox-odd\" style=\"width:100%;padding:0\"><div style=\"padding:0 0.25em\">[[الرميثية|الرُّمَيْثِية]] &nbsp;'''·'''&#32; [[رَمْثَان]] &nbsp;'''·'''&#32; [[رَمْثَاء]]</div></td></tr></table></div>\n" ++
+        "[[تصنيف:رمث]]\n" ++
+        "\n" ++
+        "== الترجمات ==\n" ++
+        "<div class=\"NavFrame\" style=\"border:solid .01em; border-collapse:collapse;\">\n" ++
+        "<div class=\"NavHead\" style=\"min-height: 1.6em; font-weight: bold; font-size: 100%; background-color: #efefef; padding-right: 10px; text-align: right;\">ترجمة </div>\n" ++
+        "<div class=\"NavContent\">\n" ++
+        "{| border=\"0\" width=\"100%\" class=\"translations\"\n" ++
+        "|-\n" ++
+        "| bgcolor=\"#FFFFE0\" valign=\"top\" width=\"48%\" align=\"right\" |[[تصنيف:رأس قالب الترجمة ليس مكتوب]]\n" ++
+        "== عربية[[تصنيف:عربية]] ==\n" ++
+        "[[Rumaithiya]]\n" ++
+        "== فارسية[[تصنيف:فارسية]] ==\n" ++
+        "[[الرميثيه]]\n" ++
+        "|}</div></div>\n" ++
+        "\n" ++
+        "[[تصنيف:فُعَيْلِيَّة]]\n" ++
+        "[[تصنيف:مدن (عربية)|رميثية]]\n" ++
+        "[[تصنيف:كلمات ذات استخدام حديث|رميثية]]\n" ++
+        "[[تصنيف:مفردات بلا تشكيل|رميثية]]\n" ++
+        "[[تصنيف:أماكن في الكويت (عربية)|رميثية]]";
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "الرميثية", expanded, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "العربية"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("الرميثية")).?;
+    const page = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+    try std.testing.expectEqualStrings("ar", page.entry.language_code);
+    var translations: usize = 0;
+    var translation_cells: usize = 0;
+    for (page.entry.sections) |section| {
+        if (std.mem.eql(u8, section.title, "الترجمات")) {
+            translations += 1;
+            try std.testing.expect(section.anchor.len != 0);
+        }
+        try std.testing.expect(std.mem.indexOf(u8, section.title, "فارسية") == null);
+        for (section.blocks) |block| if (block.table) |table| {
+            for (table.rows) |row| for (row.cells) |cell| {
+                var latin: usize = 0;
+                var persian: usize = 0;
+                for (cell.spans) |span| {
+                    if (span.kind == .link and std.mem.eql(u8, span.target, "Rumaithiya")) latin += 1;
+                    if (span.kind == .link and std.mem.eql(u8, span.target, "الرميثيه")) persian += 1;
+                }
+                if (latin != 0 or persian != 0) {
+                    try std.testing.expectEqual(@as(usize, 1), latin);
+                    try std.testing.expectEqual(@as(usize, 1), persian);
+                    translation_cells += 1;
+                }
+            };
+        };
+    }
+    try std.testing.expectEqual(@as(usize, 1), translations);
+    try std.testing.expectEqual(@as(usize, 1), translation_cells);
+}

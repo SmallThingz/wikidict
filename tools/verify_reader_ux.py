@@ -410,6 +410,38 @@ def exercise_swatch(reader: ReaderPty, initial_width: int) -> None:
         reader.wait(lambda: reader.entry_focused() and sample_and_reset(),
                     f"swatch sample, label and fallback survive resize to {width}", after=before)
         reader.snapshot(f"swatch-resize-{width}")
+    # Reuse this session and its marked fixture; no historical workflow replay.
+    def parent_selected(title: str) -> bool:
+        return any(line.rsplit("│", 1)[-1].strip() == f"> {title}" for line in reader.screen.display)
+
+    reader.action("]", lambda: "> Noun" in reader.text(), "navigate original compiled section 2 Noun")
+    reader.action("]", lambda: parent_selected("Personal"), "navigate anchored empty parent at compiled section 3")
+    reader.action("e", lambda: parent_selected("Personal") and "Personal table token" in reader.text(),
+                  "empty Personal parent has no fold marker and does not fold its child")
+    reader.action("]", lambda: "> 1st" in reader.text(), "next section is Personal child at compiled index 4")
+    reader.action("e", lambda: "> 1st  [+]" in reader.text() and "Personal table token" not in reader.text()
+                  and "Demonstrative table token" in reader.text(), "child toggle uses original index 4 and leaves other child open")
+    reader.action("[", lambda: parent_selected("Personal"), "previous section returns to empty Personal parent")
+    reader.action("]]", lambda: parent_selected("Demonstratives"), "navigate empty Demonstratives parent at compiled index 5")
+    reader.action("e", lambda: parent_selected("Demonstratives") and "Demonstrative table token" in reader.text(),
+                  "empty Demonstratives parent has no fold marker and leaves child visible")
+    reader.action("]", lambda: "> That, those, the" in reader.text(), "next section is Demonstratives child at original index 6")
+    reader.action("e", lambda: "> That, those, the  [+]" in reader.text()
+                  and "Demonstrative table token" not in reader.text(), "second child toggle uses original index 6")
+    reader.action("[", lambda: parent_selected("Demonstratives"), "return to second empty parent")
+    reader.action("d[]", lambda: parent_selected("Demonstratives") and "Demonstrative table token" not in reader.text(),
+                  "compact details preserve empty parent and default child folding")
+    reader.action("d[]", lambda: parent_selected("Demonstratives") and "Demonstrative table token" in reader.text(),
+                  "details reset second child fold without losing parent heading")
+    reader.action("[[", lambda: parent_selected("Personal") and "Personal table token" in reader.text(),
+                  "details reset first child fold at original compiled index 4")
+    reader.action("]]", lambda: parent_selected("Demonstratives"), "return to second parent before narrow resize")
+    before = reader.resize(40)
+    reader.wait(lambda: reader.entry_focused() and parent_selected("Demonstratives")
+                and "Demonstrative table token" in reader.text(), "empty parent navigation survives narrow terminal", after=before)
+    reader.snapshot("anchored-parent-narrow")
+    reader.action("[[", lambda: parent_selected("Personal"), "narrow previous navigation skips neither parent nor child")
+    reader.snapshot("anchored-parent-personal")
     reader.finish(b"q")
 
 
@@ -563,6 +595,7 @@ def main() -> int:
                       "elapsed_seconds": report["elapsed_seconds"]}, ensure_ascii=False))
     if args.swatch_only and report["status"] == "passed":
         print("CLI_SWATCH_PTY_PASS", flush=True)
+        print("CLI_ANCHORED_PARENT_PTY_PASS", flush=True)
     return 0 if report["status"] == "passed" else 1
 
 

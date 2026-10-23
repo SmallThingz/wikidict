@@ -68,10 +68,17 @@ fn writeCompiledFixture(io: std.Io, a: std.mem.Allocator, root: []const u8) !voi
     const history_blocks = [_]enc.presentation_types.Block{
         .{ .kind = .paragraph, .spans = &history_spans },
     };
+    // Empty authored parents reproduce Port:Bīnaman's compiled section shape.
+    const personal_rows = [_]enc.presentation_types.Row{.{ .cells = &.{.{ .spans = &.{.{ .text = "Personal table token" }} }} }};
+    const demonstrative_rows = [_]enc.presentation_types.Row{.{ .cells = &.{.{ .spans = &.{.{ .text = "Demonstrative table token" }} }} }};
     const sections = [_]enc.presentation_types.Section{
         .{ .level = 2, .title = "English" },
         .{ .level = 3, .title = "Etymology", .blocks = &history_blocks },
         .{ .level = 3, .title = "Noun", .blocks = &noun_blocks },
+        .{ .level = 1, .title = "Personal", .anchor = "Personal" },
+        .{ .level = 2, .title = "1st", .anchor = "1st", .blocks = &.{.{ .kind = .table, .table = .{ .rows = &personal_rows } }} },
+        .{ .level = 1, .title = "Demonstratives", .anchor = "Demonstratives" },
+        .{ .level = 2, .title = "That, those, the", .anchor = "That,_those,_the", .blocks = &.{.{ .kind = .table, .table = .{ .rows = &demonstrative_rows } }} },
     };
     const stored: enc.presentation_types.Stored = .{ .entry = .{
         .title = "cat",
@@ -188,11 +195,20 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = export_path, .data = exported });
 
     const complete = try h.entry(try h.run(&.{ bin, "lookup", "cat", "--root", root, "--format", "json" }, 0));
-    try h.require(complete.object.get("sections").?.array.items.len == 3, "complete compiled document");
+    const complete_sections = complete.object.get("sections").?.array.items;
+    try h.require(complete_sections.len == 7, "complete compiled document");
+    for ([_]usize{ 3, 5 }, [_][]const u8{ "Personal", "Demonstratives" }) |index, title| {
+        const section = complete_sections[index].object;
+        try h.require(std.mem.eql(u8, section.get("title").?.string, title) and
+            std.mem.eql(u8, section.get("anchor").?.string, title) and
+            section.get("blocks").?.array.items.len == 0, "actual CLI retains anchored empty parent at original compiled index");
+    }
     const text = try h.run(&.{ bin, "lookup", "cat", "--root", root }, 0);
     try h.require(std.mem.indexOf(u8, text, "small animal") != null, "compiled definition renders");
     const details_text = try h.run(&.{ bin, "lookup", "cat", "--root", root, "--details" }, 0);
     try h.require(std.mem.indexOf(u8, details_text, "Historical source") != null, "compiled supporting material renders");
+    for ([_][]const u8{ "\nPersonal\n", "\nDemonstratives\n", "Personal table token", "Demonstrative table token" }) |expected|
+        try h.require(std.mem.count(u8, details_text, expected) == 1, "actual CLI details preserve parent and child table labels exactly once");
     for ([_][]const u8{ "PREAMBLE", "After line break", "column A  column B", "Inflection table", "Reference content.", "Example image.svg", "Example pronunciation.ogg" }) |expected|
         try h.require(std.mem.indexOf(u8, details_text, expected) != null, expected);
 
@@ -203,6 +219,7 @@ pub fn main(init: std.process.Init) !void {
         try h.require(std.mem.indexOf(u8, details_text, fallback) != null, "malformed and unknown swatches preserve actual table fallback");
     const swatch_pty = try h.run(&.{ ux_python, "tools/verify_reader_ux.py", "--binary", bin, "--root", root, "--report", dir, "--swatch-only" }, 0);
     try h.require(std.mem.indexOf(u8, swatch_pty, "CLI_SWATCH_PTY_PASS") != null, "actual pyte swatch sample/reset/narrow/resize/terminal-restoration route");
+    try h.require(std.mem.indexOf(u8, swatch_pty, "CLI_ANCHORED_PARENT_PTY_PASS") != null, "actual anchored parent section navigation/folding/narrow terminal route");
     std.debug.print("CLI_SWATCH_PTY_PASS child summary/report: {s}\n", .{swatch_pty});
 
     _ = try h.run(&.{ bin, "save", "cat", "--root", root }, 0);

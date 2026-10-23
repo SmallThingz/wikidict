@@ -1102,6 +1102,11 @@ test "compact terminal output retains the displayed alias destination" {
     try std.testing.expectEqualStrings("B  / citations\n", out.written());
 }
 
+/// Empty authored headings remain visible; synthetic empty labels have no IDs.
+pub fn foldedSectionVisible(section: model.Section) bool {
+    return section.blocks.len != 0 or section.anchor.len != 0 or section.anchor_fallback.len != 0;
+}
+
 /// Terminal folds operate on compiled sections, never by reparsing source.
 pub fn entryTextFolded(frame: *std.Io.Writer.Allocating, entry: model.Entry, color: bool, preferences: @import("reading_state.zig").Data, expanded: []const usize, selected: usize) !usize {
     return entryTextFoldedProjected(frame, entry, color, preferences, expanded, selected, null);
@@ -1121,7 +1126,7 @@ pub fn entryTextFoldedProjected(frame: *std.Io.Writer.Allocating, entry: model.E
         try w.writeByte('\n');
     }
     for (entry.sections, 0..) |section, index| {
-        if (section.blocks.len == 0) continue;
+        if (!foldedSectionVisible(section)) continue;
         var meaning = false;
         for (section.blocks) |block| if (block.kind == .definition) {
             meaning = true;
@@ -1129,7 +1134,7 @@ pub fn entryTextFoldedProjected(frame: *std.Io.Writer.Allocating, entry: model.E
         };
         const initially_closed = if (preferences.details) false else if (std.mem.startsWith(u8, section.title, "Pronunciation")) preferences.collapse_pronunciation else if (std.mem.startsWith(u8, section.title, "Etymology")) preferences.collapse_etymology else if (meaning) preferences.collapse_notes else preferences.collapse_other;
         const toggled = std.mem.indexOfScalar(usize, expanded, index) != null;
-        const closed = initially_closed != toggled;
+        const closed = section.blocks.len != 0 and (initially_closed != toggled);
         try w.writeByte('\n');
         if (selected == index) selected_offset = frame.written().len;
         if (color and selected == index) try w.writeAll("\x1b[1m");
@@ -2637,4 +2642,59 @@ test "authored backgrounds select sRGB contrast while explicit foreground and th
     try std.testing.expectEqual([3]u8{ 255, 255, 255 }, TypedColorOutputTest.at(styled.written(), std.mem.indexOf(u8, styled.written(), "override").?).foreground.?);
     try std.testing.expectEqual([3]u8{ 18, 52, 86 }, TypedColorOutputTest.at(styled.written(), std.mem.indexOf(u8, styled.written(), "explicit").?).foreground.?);
     try std.testing.expect(std.mem.indexOf(u8, styled.written(), "\x1b[4m") != null);
+}
+
+test "folded reader retains addressable empty parent headings around pronoun tables" {
+    // Port:Binaman has literal empty Personal/Demonstratives parents before
+    // their pronoun tables. Empty implicit labels are a separate negative control.
+    const personal = [_]model.Span{.{ .kind = .link, .text = "ic", .target = "ic" }};
+    const demonstrative = [_]model.Span{.{ .kind = .link, .text = "se", .target = "se" }};
+    const first_table = [_]model.Block{.{ .kind = .table, .table = .{
+        .rows = &.{.{ .cells = &.{.{ .spans = &personal }} }},
+    } }};
+    const second_table = [_]model.Block{.{ .kind = .table, .table = .{
+        .rows = &.{.{ .cells = &.{.{ .spans = &demonstrative }} }},
+    } }};
+    const sections = [_]model.Section{
+        .{ .level = 2, .title = "Unclassified" },
+        .{ .level = 1, .title = "Personal", .anchor = "Personal" },
+        .{ .level = 2, .title = "1st", .anchor = "1st", .blocks = &first_table },
+        .{ .level = 1, .title = "Demonstratives", .anchor = "Demonstratives" },
+        .{ .level = 2, .title = "That, those, the", .anchor = "That,_those,_the", .anchor_fallback = "That.2C_those.2C_the", .blocks = &second_table },
+        .{ .level = 2, .title = "Legacy empty placeholder" },
+    };
+    const a = std.testing.allocator;
+    const codec = @import("blob_encoder").presentation_codec;
+    const bytes = try codec.encodeAlloc(a, .{ .entry = .{
+        .title = "pronoun groups",
+        .kind = .language,
+        .language = "Unclassified",
+        .sections = &sections,
+    } });
+    defer a.free(bytes);
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const decoded = try codec.decodeAlloc(arena.allocator(), bytes, "pronoun groups", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqualStrings("Personal", decoded.entry.sections[1].anchor);
+    try std.testing.expectEqualStrings("Demonstratives", decoded.entry.sections[3].anchor);
+    var indices: std.ArrayList(usize) = .empty;
+    defer indices.deinit(a);
+    for (decoded.entry.sections, 0..) |section, index| if (foldedSectionVisible(section)) try indices.append(a, index);
+    try std.testing.expectEqualSlices(usize, &.{ 1, 2, 3, 4 }, indices.items);
+    for ([_]bool{ false, true }) |details| for ([_]usize{ 1, 3 }) |selected| {
+        var text: std.Io.Writer.Allocating = .init(a);
+        defer text.deinit();
+        const offset = try entryTextFolded(&text, decoded.entry, false, .{ .details = details, .collapse_other = true }, &.{}, selected);
+        const rendered = text.written();
+        try std.testing.expect(std.mem.startsWith(u8, rendered[offset..], if (selected == 1) "> Personal\n" else "> Demonstratives\n"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, "Personal"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, "Demonstratives"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, "Unclassified"));
+        try std.testing.expect(std.mem.indexOf(u8, rendered, "Legacy empty placeholder") == null);
+        try std.testing.expect(std.mem.indexOf(u8, rendered, "Personal").? < std.mem.indexOf(u8, rendered, "1st").?);
+        try std.testing.expect(std.mem.indexOf(u8, rendered, "1st").? < std.mem.indexOf(u8, rendered, "Demonstratives").?);
+        try std.testing.expect(std.mem.indexOf(u8, rendered, "Demonstratives").? < std.mem.indexOf(u8, rendered, "That, those, the").?);
+        try std.testing.expectEqual(details, std.mem.indexOf(u8, rendered, "│ ic") != null);
+        try std.testing.expectEqual(details, std.mem.indexOf(u8, rendered, "│ se") != null);
+    };
 }

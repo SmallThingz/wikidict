@@ -557,6 +557,8 @@ pub const Span = struct {
     self_link: bool = false,
     // Build-only DOM eligibility for a containing auto-direction scope.
     bidi_auto_excluded: bool = false,
+    // Build-only identity for generated, actionless direction boundaries.
+    generated_bidi_boundary: bool = false,
     kind: ir.InlineKind = .text,
     text: []const u8,
     target: []const u8 = "",
@@ -4587,6 +4589,7 @@ pub const Renderer = struct {
     fn mediaLabel(self: *Renderer, label: []const u8, style: Style, heading: bool, authored_caption: bool, literal_label: bool, parsed: ?[]const Span) Error!void {
         const spans = parsed orelse try self.captureMediaCaption(label, .{ .mode = if (literal_label) .literal else .spans, .style = mediaCaptionStyle(style, heading, authored_caption) });
         for (spans) |span| {
+            const emitted_start = self.spans.items.len;
             var label_style = style;
             label_style.provenance = span.provenance;
             label_style.background = span.background;
@@ -4615,6 +4618,14 @@ pub const Renderer = struct {
                     label_style.self_link_target = "";
                 }
             }
+            if (span.generated_bidi_boundary) {
+                label_style.kind = .text;
+                label_style.target = "";
+                label_style.self_link_target = "";
+                label_style.direction = "";
+                label_style.explanation = "";
+                label_style.explanation_set = false;
+            }
             if (span.kind == .line_break) {
                 try self.lineBreak(label_style);
             } else {
@@ -4627,6 +4638,11 @@ pub const Renderer = struct {
                 else
                     try self.text(span.text, label_style);
             }
+            // Keep DOM eligibility and generated-boundary identity across reconstruction.
+            if (span.bidi_auto_excluded or span.generated_bidi_boundary) for (self.spans.items[emitted_start..]) |*emitted| {
+                emitted.bidi_auto_excluded = emitted.bidi_auto_excluded or span.bidi_auto_excluded;
+                emitted.generated_bidi_boundary = emitted.generated_bidi_boundary or span.generated_bidi_boundary;
+            };
         }
     }
     fn mediaOptionMode(file: []const u8, gallery_mode: bool) @import("namespace_registry").image_options.Mode {
@@ -5721,6 +5737,7 @@ pub const Renderer = struct {
         result.explanation = "";
         result.explanation_set = false;
         result.provenance = .protected_literal;
+        result.generated_bidi_boundary = true;
         // Retain layout classes (especially Poem) without creating an action.
         return result;
     }
@@ -5836,12 +5853,34 @@ pub const Renderer = struct {
         try out.appendSlice(self.a, tracked, emitted, input.len);
         return try out.finish(self.a);
     }
+    // Double quotes are part of the sanitizer's atomic name, not attributes.
+    // Such names cannot identify HTML elements. Keep this finite recovery free
+    // of attributes and apostrophes, which need their own quote-phase proof.
+    fn doubleQuotedHtmlNameEnd(input: []const u8, at: usize) ?usize {
+        var cursor = at + 1;
+        if (cursor < input.len and input[cursor] == '/') cursor += 1;
+        if (cursor >= input.len or !std.ascii.isAlphabetic(input[cursor])) return null;
+        var quoted = false;
+        while (cursor < input.len) : (cursor += 1) {
+            const ch = input[cursor];
+            if (std.ascii.isAlphanumeric(ch) or ch == '-') continue;
+            if (ch == '"') {
+                quoted = true;
+                continue;
+            }
+            return if (ch == '>' and quoted) cursor + 1 else null;
+        }
+        return null;
+    }
     fn htmlTagWithMissing(self: *Renderer, tracked: MissingText, at: usize, style: Style, depth: usize, no_more_nowiki_close: ?*bool, opaque_scan: *syntax.OpaqueScan) Error!?usize {
         const input = tracked.bytes;
         if (starts(input[at..], "<!--")) return syntax.protectedEnd(input, at);
-        const raw_tag = opaque_scan.tagAt(input, at, no_more_nowiki_close) orelse return null;
-        const tag = try self.normalizedTag(raw_tag);
-        if (oneOf(tag.name, &.{ "tbody", "thead", "tfoot" })) {
+        const raw_tag = opaque_scan.tagAt(input, at, no_more_nowiki_close);
+        const escaped_end: ?usize = if (raw_tag) |tag|
+            (if (oneOf(tag.name, &.{ "tbody", "thead", "tfoot" })) tag.end else null)
+        else
+            doubleQuotedHtmlNameEnd(input, at);
+        if (escaped_end) |end| {
             self.fallbacks.literal_markup = true;
             // MediaWiki's unknown-tag sanitizer escapes angles, not the
             // token's wiki markup. Only those emitted angles are literals;
@@ -5851,11 +5890,12 @@ pub const Renderer = struct {
             // The tag scanner rejects nested raw angles but permits actual
             // nowiki regions in attributes. Keep those protected extents intact.
             try escaped.append(self.a, missingEdit(tracked, at, at + 1, "&lt;"));
-            try escaped.appendSlice(self.a, tracked, at + 1, raw_tag.end - 1);
-            try escaped.append(self.a, missingEdit(tracked, raw_tag.end - 1, raw_tag.end, "&gt;"));
+            try escaped.appendSlice(self.a, tracked, at + 1, end - 1);
+            try escaped.append(self.a, missingEdit(tracked, end - 1, end, "&gt;"));
             try self.inlineTextWithMissing(try escaped.finish(self.a), style, depth + 1);
-            return raw_tag.end;
+            return end;
         }
+        const tag = try self.normalizedTag(raw_tag orelse return null);
         if (self.bidi_scope_depth != 0 and !tag.closing and !tag.self_closing and
             oneOf(tag.name, &.{ "script", "style", "textarea" }))
         {
@@ -6356,6 +6396,25 @@ pub const Renderer = struct {
             s.bold = it.bold;
             s.italic = it.italic;
             if (input[it.cursor] == '<') {
+                // An angle-enclosed bare URL is display punctuation around an
+                // ordinary external action, not an HTML tag. Prove the raw
+                // enclosing domain before classifying only its opening angle;
+                // URL recognition, target validation and punctuation stay below.
+                const after_angle = input[it.cursor + 1 ..];
+                if (s.provenance == .parsed and s.kind == .text and it.recognize_external_links and
+                    ir.hasExternalProtocol(after_angle) and !starts(after_angle, "//"))
+                {
+                    // Stop at the next opener or URL boundary, so repeated
+                    // malformed openers cannot rescan the rest of the input.
+                    if (std.mem.indexOfAny(u8, after_angle, "<> \t\r\n\"[]")) |relative| {
+                        const url = after_angle[0..relative];
+                        if (after_angle[relative] == '>' and safeUrl(url) and !unresolvedExternalActionTarget(url)) {
+                            try self.protectedLiteral("<", s);
+                            it.cursor += 1;
+                            continue;
+                        }
+                    }
+                }
                 if (try self.htmlTagWithMissing(prepared_missing, it.cursor, s, depth, &no_more_nowiki_close, &opaque_scan)) |end| {
                     it.cursor = end;
                     continue;
@@ -7957,7 +8016,16 @@ pub const Renderer = struct {
                             // Removing an inline opener must not move its same-line
                             // text to a wiki line start. Later physical lines retain
                             // normal list/heading/preformatted interpretation.
-                            const scoped_quote = try self.rawBodyQuoteSeed(input, rest[tag.end..pair.inner_end], &body_quotes);
+                            var scoped_quote = try self.rawBodyQuoteSeed(input, rest[tag.end..pair.inner_end], &body_quotes);
+                            // The reconstructed marker precedes the raw body. Keep
+                            // every relative quote coordinate in that same domain.
+                            if (list_seed) |seed| if (scoped_quote) |*quote| {
+                                const prefix_len = seed.path.len + 1;
+                                quote.line_end += prefix_len;
+                                if (quote.correction) |at| quote.correction = at + prefix_len;
+                                if (quote.boundaries.link_close) |at| quote.boundaries.link_close = at + prefix_len;
+                                if (quote.boundaries.template_close) |at| quote.boundaries.template_close = at + prefix_len;
+                            };
                             // Reconstruct only the already-admitted marker. This
                             // keeps the ordinary list/heading/table precedence on
                             // the scoped first line; no authored body is reparsed.
@@ -8472,14 +8540,14 @@ pub const Renderer = struct {
                     }
                 }
                 const last = path[path.len - 1];
-                const kind: Kind = if (path[0] == '#' and std.mem.indexOfScalar(u8, path, '*') != null)
-                    .quotation
-                else if (last == '#')
-                    .definition
-                else if (last == '*')
-                    .list_item
+                const kind: Kind = if (last == '#')
+                    (if (std.mem.allEqual(u8, path, '#')) .definition else .list_item)
                 else if (last == ';')
                     .term
+                else if (path[0] == '#' and std.mem.indexOfScalar(u8, path, '*') != null)
+                    .quotation
+                else if (last == '*')
+                    .list_item
                 else if (path[0] == '*' and last == ':')
                     .list_detail
                 else if (path[0] == '#')
@@ -10346,6 +10414,48 @@ test "list continuations keep list-detail semantics for nested rendering" {
     try std.testing.expectEqual(Kind.list_item, blocks[2].kind);
     try std.testing.expectEqualStrings("**", blocks[2].list_path);
     try std.testing.expectEqual(Kind.indent, blocks[3].kind);
+}
+
+test "nested final markers retain list roles without promoting quotation notes to senses" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const values = try r.renderBody("# sense\n#* quote\n#*# <i>first</i>\n#*# <nowiki>second  </nowiki> \t\n#*; <span>term</span>\n#*; <b>named</b> : detail\n#*: continuation\n## child sense\n# next");
+    const Check = struct {
+        fn shape(alloc: A, blocks: anytype) !void {
+            const kinds = [_][]const u8{ "definition", "quotation", "list_item", "list_item", "term", "term", "list_detail", "quotation", "definition", "definition" };
+            const paths = [_][]const u8{ "#", "#*", "#*#", "#*#", "#*;", "#*;", "#*:", "#*:", "##", "#" };
+            const numbers = [_][]const u8{ "1", "", "1.1", "1.2", "", "", "", "", "1.1", "2" };
+            const texts = [_][]const u8{ "sense", "quote", "first", "second  ", "term", "named", "detail", "continuation", "child sense", "next" };
+            try std.testing.expectEqual(kinds.len, blocks.len);
+            for (blocks, kinds, paths, numbers, texts) |value, kind, path, number, text_value| {
+                try std.testing.expectEqualStrings(kind, @tagName(value.kind));
+                try std.testing.expectEqualStrings(path, value.list_path);
+                try std.testing.expectEqualStrings(number, value.number);
+                try std.testing.expectEqualStrings(text_value, try FormattingScopeTest.text(alloc, value.spans));
+            }
+            try FormattingScopeTest.word(alloc, blocks, "first", .{ .italic = true });
+            try FormattingScopeTest.word(alloc, blocks, "named", .{ .bold = true });
+        }
+    };
+    try Check.shape(a, values);
+    const sections = [_]struct { title: []const u8, level: u8, blocks: []const Block }{.{ .title = "Noun", .level = 3, .blocks = values }};
+    const organization = try @import("presentation_layout.zig").build(a, &sections);
+    try std.testing.expectEqual(@as(usize, 1), organization.lexemes.len);
+    const noun = organization.lexemes[0];
+    try std.testing.expectEqual(@as(usize, 3), noun.definitions.len);
+    try std.testing.expectEqual(@as(usize, 0), noun.definitions[0].block);
+    try std.testing.expectEqual(@as(?usize, null), noun.definitions[0].parent);
+    try std.testing.expectEqualSlices(usize, &.{ 1, 7 }, noun.definitions[0].quotations);
+    try std.testing.expectEqualSlices(usize, &.{ 2, 3, 4, 5, 6 }, noun.definitions[0].notes);
+    try std.testing.expectEqual(@as(usize, 8), noun.definitions[1].block);
+    try std.testing.expectEqual(@as(?usize, 0), noun.definitions[1].parent);
+    try std.testing.expectEqual(@as(usize, 9), noun.definitions[2].block);
+    try std.testing.expectEqual(@as(?usize, null), noun.definitions[2].parent);
+    const stored = try FormattingScopeTest.encode(a, &r, values);
+    try Check.shape(a, stored.entry.sections[0].blocks);
+    try std.testing.expect(!r.fallbacks.any());
 }
 
 test "gallery media options stay metadata instead of leaking into captions" {
@@ -24097,6 +24207,8 @@ test "compiled bidi scopes retain overrides across styled actions and default au
         .{ .source = "<bdi><span dir=invalid>א</span>A</bdi>", .expected = "\u{2067}אA\u{2069}" },
         .{ .source = "<bdi>&#x5d0;A</bdi>", .expected = "\u{2067}אA\u{2069}" },
         .{ .source = "<bdi>&amp;#x5d0;א</bdi>", .expected = "\u{2066}&#x5d0;א\u{2069}" },
+        .{ .source = "<bdi>[[File:Example.jpg|thumb|<bdi>א</bdi>A]]</bdi>", .expected = "\u{2066}\u{2067}א\u{2069}A\u{2069}" },
+        .{ .source = "<bdi>[[File:Example.jpg|thumb|<bdi>A</bdi>א]]</bdi>", .expected = "\u{2067}\u{2066}A\u{2069}א\u{2069}" },
         .{ .source = "<bdi>[[English target|א]]A</bdi>", .expected = "\u{2067}אA\u{2069}" },
         .{ .source = "<bdi>\u{2068}א\u{2069}A</bdi>", .expected = "\u{2067}\u{2068}א\u{2069}A\u{2069}" },
         .{ .source = "<bdi>&#x200f;A</bdi>", .expected = "\u{2067}\u{200f}A\u{2069}" },
@@ -24108,6 +24220,21 @@ test "compiled bidi scopes retain overrides across styled actions and default au
         try std.testing.expectEqualStrings(case.expected, try flattened(a, result));
         try expectBalancedCompiledBidi(result);
     }
+    // Authored Unicode isolates remain ordinary caption action text, not generated boundaries.
+    const authored = try r.parseSpans("<bdi>[[File:Example.jpg|thumb|\u{2068}א\u{2069}A]]</bdi>", .{});
+    try std.testing.expectEqualStrings("\u{2067}\u{2068}א\u{2069}A\u{2069}", try flattened(a, authored));
+    var authored_action = false;
+    for (authored) |span| {
+        if (span.generated_bidi_boundary) {
+            try std.testing.expect(span.kind == .text and span.target.len == 0 and span.direction.len == 0 and span.explanation.len == 0);
+        } else if (span.text.len != 0) {
+            try std.testing.expectEqualStrings("\u{2068}א\u{2069}A", span.text);
+            try std.testing.expect(span.kind == .link);
+            try std.testing.expectEqualStrings("File:Example.jpg", span.target);
+            authored_action = true;
+        }
+    }
+    try std.testing.expect(authored_action);
     for ([_][]const u8{ "script", "style", "textarea" }) |tag| {
         const source = try std.fmt.allocPrint(a, "<bdi><{s}>A</{s}>א</bdi>", .{ tag, tag });
         const result = try r.parseSpans(source, .{});
@@ -27019,4 +27146,88 @@ test "inline nested HTML paint preserves empty tables and protected literal cont
     const literal = "<table bgcolor='#ff0000'><tr><td>literal</td></tr></table>";
     const protected_spans = try protected.cellSpans("<nowiki>" ++ literal ++ "</nowiki>");
     try std.testing.expectEqualStrings(literal, try flattened(a, protected_spans));
+}
+
+test "synthetic list formatting prefixes preserve seeded quote coordinates" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "# <small>[[mimer|mimes]] {{small|form}}\n''next'' <nowiki>''literal''</nowiki></small>\n# [[Tail|tail]]";
+    var ordinary: Renderer = .{ .a = a, .context = .{} };
+    const baseline = try ordinary.renderBodySlice(source, false, false, null, null);
+    var scan = QuoteBoundaryScan.initWithContext(source, null, .{});
+    const initial = try scan.at(a, 0, null);
+    var seeded: Renderer = .{ .a = a, .context = .{} };
+    const actual = try seeded.renderBodySlice(source, false, false, null, initial);
+    try std.testing.expectEqual(baseline.len, actual.len);
+    var mimes = false;
+    var next = false;
+    var literal = false;
+    var tail = false;
+    for (baseline, actual) |expected_block, block| {
+        try std.testing.expectEqual(expected_block.kind, block.kind);
+        try std.testing.expectEqualStrings(expected_block.list_path, block.list_path);
+        try std.testing.expectEqualStrings(try flattened(a, expected_block.spans), try flattened(a, block.spans));
+        try std.testing.expectEqual(expected_block.spans.len, block.spans.len);
+        for (expected_block.spans, block.spans) |expected, span| {
+            try std.testing.expectEqual(expected.kind, span.kind);
+            try std.testing.expectEqualStrings(expected.target, span.target);
+            try std.testing.expectEqual(expected.flags, span.flags);
+            try std.testing.expectEqual(expected.provenance, span.provenance);
+            if (std.mem.eql(u8, span.target, "mimer")) {
+                mimes = true;
+                try std.testing.expect(span.flags.small and !span.flags.italic);
+            }
+            if (std.mem.eql(u8, span.text, "next")) {
+                next = true;
+                try std.testing.expect(span.flags.small and span.flags.italic);
+            }
+            if (std.mem.eql(u8, span.text, "''literal''")) {
+                literal = true;
+                try std.testing.expect(span.flags.small and !span.flags.italic and span.provenance == .protected_literal);
+            }
+            if (std.mem.eql(u8, span.target, "Tail")) {
+                tail = true;
+                try std.testing.expect(!span.flags.small and !span.flags.italic);
+            }
+        }
+    }
+    try std.testing.expect(mimes and next and literal and tail);
+}
+
+test "double quoted HTML names escape angles while body formatting and actions continue" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, visible: []const u8 }{
+        .{ .source = "<li\">'''word'''</li> [[Tail|tail]]", .visible = "<li\">word tail" },
+        .{ .source = "<dIv\"name>'''word'''</li> [[Tail|tail]]", .visible = "<dIv\"name>word tail" },
+        .{ .source = "</li\">'''word''' [[Tail|tail]]", .visible = "</li\">word tail" },
+        .{ .source = "<x\"y\">'''word''' [[Tail|tail]]", .visible = "<x\"y\">word tail" },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
+        var bold = false;
+        var tail = false;
+        var angles: usize = 0;
+        for (spans) |span| {
+            if (std.mem.eql(u8, span.text, "word") and span.flags.bold) bold = true;
+            if (span.kind == .link and std.mem.eql(u8, span.target, "Tail") and std.mem.eql(u8, span.text, "tail")) tail = true;
+            if (std.mem.eql(u8, span.text, "<") or std.mem.eql(u8, span.text, ">")) {
+                angles += 1;
+                try std.testing.expect(span.kind == .text and span.target.len == 0 and span.provenance == .entity_literal);
+            }
+        }
+        try std.testing.expect(bold and tail and angles == 2 and renderer.fallbacks.literal_markup);
+    }
+    var valid: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings("• word\n", try flattened(a, try valid.parseSpans("<li>word</li>", .{})));
+    var literal: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings("<li\">'''word'''</li>", try flattened(a, try literal.parseSpans("<nowiki><li\">'''word'''</li></nowiki>", .{})));
+    try std.testing.expect(!literal.fallbacks.literal_markup);
+    var entity: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings("<li\">word", try flattened(a, try entity.parseSpans("&lt;li\"&gt;'''word'''", .{})));
+    try std.testing.expect(!entity.fallbacks.literal_markup);
 }

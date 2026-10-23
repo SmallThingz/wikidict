@@ -18,6 +18,8 @@ const Options = struct {
     expansion_timeout_ms: ?u32 = null,
     now_unix: ?i64 = null,
     shard_pages: ?usize = null,
+    audit_presentation_errors: bool = false,
+    audit_expanded_bytes: ?usize = null,
 };
 
 const PageIndexIdentity = struct {
@@ -311,12 +313,323 @@ fn languageCodes(registry: *const language_registry.Registry, namespaces: ?*cons
     };
 }
 
+const AuditInputContext = struct {
+    dump_path: []const u8,
+    expander_root: []const u8,
+    tool_path: []const u8 = "/proc/self/exe",
+    workers: usize = 1,
+    timeout_ms: u32 = expansion_deadline.default_ms,
+    now_unix: i64 = 0,
+    start_page: usize = 0,
+    requested_limit: ?usize = null,
+    index_byte_offset: ?usize = null,
+    expanded_byte_cap: usize = 0,
+};
+
+const AuditFileStamp = struct {
+    path: []const u8,
+    identity: ?PageIndexIdentity,
+    sha256: ?[]const u8,
+};
+const AuditPayload = struct {
+    present: bool,
+    bytes: usize = 0,
+    sha256: ?[]const u8 = null,
+    path: ?[]const u8 = null,
+    retained_bytes: usize = 0,
+    truncated: bool = false,
+    unretained: bool = false,
+};
+
+fn auditHash(a: std.mem.Allocator, bytes: []const u8) ![]const u8 {
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    return a.dupe(u8, &std.fmt.bytesToHex(digest, .lower));
+}
+
+fn auditFileStamp(io: std.Io, a: std.mem.Allocator, path: []const u8) !AuditFileStamp {
+    var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return .{ .path = path, .identity = null, .sha256 = null },
+        else => return err,
+    };
+    defer file.close(io);
+    const before = try fileIdentity(file);
+    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+    var buffer: [64 * 1024]u8 = undefined;
+    var offset: u64 = 0;
+    while (true) {
+        const n = try file.readPositionalAll(io, &buffer, offset);
+        if (n == 0) break;
+        hash.update(buffer[0..n]);
+        offset = try std.math.add(u64, offset, n);
+    }
+    if (offset != before.size or !std.meta.eql(before, try fileIdentity(file))) return error.AuditInputsChanged;
+    var digest: [32]u8 = undefined;
+    hash.final(&digest);
+    return .{ .path = path, .identity = before, .sha256 = try a.dupe(u8, &std.fmt.bytesToHex(digest, .lower)) };
+}
+
+// This is a diagnostic sink around the existing Writer, never a publication path.
+// Its initial incomplete summary survives aborts, OOM and external termination.
+const PresentationAudit = struct {
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    root: []const u8,
+    scratch_root: []const u8,
+    context: AuditInputContext,
+    failures_file: std.Io.File,
+    inputs: std.ArrayList(AuditFileStamp) = .empty,
+    selected: usize = 0,
+    dispatched: usize = 0,
+    consumed: usize = 0,
+    skipped: usize = 0,
+    direct_aliases: usize = 0,
+    expansion_fallbacks: usize = 0,
+    compile_attempts: usize = 0,
+    succeeded: usize = 0,
+    failed: usize = 0,
+    failure_records: usize = 0,
+    report_bytes: usize = 0,
+    payload_bytes: usize = 0,
+    finalized: bool = false,
+
+    fn init(io: std.Io, a: std.mem.Allocator, root: []const u8, context: AuditInputContext) !PresentationAudit {
+        if (context.expanded_byte_cap > 2 * 1024 * 1024) return error.Usage;
+        const leaf = std.fs.path.basename(root);
+        if (leaf.len == 0 or std.mem.eql(u8, leaf, ".") or std.mem.eql(u8, leaf, "..")) return error.Usage;
+        const parent = try std.Io.Dir.cwd().realPathFileAlloc(io, std.fs.path.dirname(root) orelse ".", a);
+        defer a.free(parent);
+        const absolute = try std.fs.path.join(a, &.{ parent, leaf });
+        var owns_absolute = true;
+        errdefer if (owns_absolute) a.free(absolute);
+        const retained = try std.Io.Dir.cwd().realPathFileAlloc(io, context.expander_root, a);
+        defer a.free(retained);
+        if (std.mem.eql(u8, absolute, retained) or (std.mem.startsWith(u8, absolute, retained) and absolute.len > retained.len and absolute[retained.len] == std.fs.path.sep)) return error.AuditRootOverlapsInputs;
+        try std.Io.Dir.cwd().createDir(io, absolute, .default_dir);
+        const summary_path = try std.fs.path.join(a, &.{ absolute, "audit-summary.json" });
+        defer a.free(summary_path);
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = summary_path, .data = "{\"schema\":\"wikidict.presentation-audit.summary.v1\",\"diagnostic_only\":true,\"inventory_complete\":false,\"semantic_acceptance\":false,\"publication_created\":false,\"error_name\":\"started\"}\n" });
+        const scratch = try std.fs.path.join(a, &.{ absolute, "compile-scratch" });
+        var owns_scratch = true;
+        errdefer if (owns_scratch) a.free(scratch);
+        const failures_path = try std.fs.path.join(a, &.{ absolute, "failures.jsonl" });
+        defer a.free(failures_path);
+        var self: PresentationAudit = .{ .io = io, .allocator = a, .root = absolute, .scratch_root = scratch, .context = context, .failures_file = try std.Io.Dir.cwd().createFile(io, failures_path, .{ .exclusive = true }) };
+        owns_absolute = false;
+        owns_scratch = false;
+        errdefer self.deinit();
+        self.loadInputs() catch |err| {
+            self.abort(err);
+            return err;
+        };
+        return self;
+    }
+
+    fn loadInputs(self: *PresentationAudit) !void {
+        const io = self.io;
+        const a = self.allocator;
+        const context = self.context;
+        try self.addInput(context.dump_path);
+        try self.addInput(context.tool_path);
+        // Exact runtime/provider assets plus source files consulted by languageCodes.
+        for ([_][]const u8{ "dict-bundle-expander", "page-index.tsv", dump_source.page_title_index_filename, "dump-streams.tsv", "namespace-registry.tsv", "namespace-siteinfo.raw.json", "site-statistics-format.json", "category-statistics-format.json", "language-registry.tsv", "behavior-switches.tsv", "image-options.tsv", "interwiki-map.tsv", "page-redirects.tsv", "transclusion-redirects.tsv", "commons-data.tsv", "category-stats.tsv", "interface-messages.tsv", "category-tree.tsv", "file-metadata.tsv", "wikibase-sitelinks.tsv", "wikibase-entity-text.tsv", "wikibase-page-links.tsv", "wikibase-entities.tsv", "wikibase-entity-terms.tsv", "date-numbering.tsv", "language-names.tsv", "language-fallbacks.tsv", "magic-words.tsv", "template-source.bin", "template-source.idx", "manifest.jsonl" }) |name| {
+            const path = try std.fs.path.join(a, &.{ context.expander_root, name });
+            defer a.free(path);
+            try self.addInput(path);
+        }
+        const manifest_path = try std.fs.path.join(a, &.{ context.expander_root, "manifest.jsonl" });
+        defer a.free(manifest_path);
+        if (std.Io.Dir.cwd().openFile(io, manifest_path, .{})) |opened| {
+            var manifest = opened;
+            defer manifest.close(io);
+            var buffer: [64 * 1024]u8 = undefined;
+            var reader = manifest.reader(io, &buffer);
+            while (try reader.interface.takeDelimiter('\n')) |line| {
+                if (line.len == 0) continue;
+                const row = try std.json.parseFromSlice(struct { page_id: u64 }, a, line, .{ .ignore_unknown_fields = true });
+                defer row.deinit();
+                if (row.value.page_id == 0) return error.InvalidModuleManifest;
+                const path = try std.fmt.allocPrint(a, "{s}/modules/{d}.lua", .{ context.expander_root, row.value.page_id });
+                defer a.free(path);
+                try self.addInput(path);
+            }
+        } else |err| if (err != error.FileNotFound) return err;
+        try self.writeJson("audit-inputs.json", .{ .schema = "wikidict.presentation-audit.inputs.v1", .context = context, .files = self.inputs.items });
+    }
+
+    fn deinit(self: *PresentationAudit) void {
+        self.failures_file.close(self.io);
+        for (self.inputs.items) |input| {
+            self.allocator.free(input.path);
+            if (input.sha256) |value| self.allocator.free(value);
+        }
+        self.inputs.deinit(self.allocator);
+        self.allocator.free(self.scratch_root);
+        self.allocator.free(self.root);
+    }
+
+    fn addInput(self: *PresentationAudit, path: []const u8) !void {
+        for (self.inputs.items) |input| if (std.mem.eql(u8, input.path, path)) return;
+        if (self.inputs.items.len >= 8192 or path.len > 4096) return error.AuditInputLimitExceeded;
+        const owned = try self.allocator.dupe(u8, path);
+        errdefer self.allocator.free(owned);
+        const stamp = try auditFileStamp(self.io, self.allocator, owned);
+        errdefer if (stamp.sha256) |value| self.allocator.free(value);
+        try self.inputs.append(self.allocator, stamp);
+    }
+
+    fn writeJson(self: *PresentationAudit, name: []const u8, value: anytype) !void {
+        const bytes = try std.json.Stringify.valueAlloc(self.allocator, value, .{});
+        defer self.allocator.free(bytes);
+        const path = try std.fs.path.join(self.allocator, &.{ self.root, name });
+        defer self.allocator.free(path);
+        const temporary = try std.fmt.allocPrint(self.allocator, "{s}.part", .{path});
+        defer self.allocator.free(temporary);
+        try std.Io.Dir.cwd().writeFile(self.io, .{ .sub_path = temporary, .data = bytes });
+        try std.Io.Dir.cwd().rename(temporary, std.Io.Dir.cwd(), path, self.io);
+    }
+
+    fn capture(self: *PresentationAudit, a: std.mem.Allocator, label: []const u8, value: ?[]const u8, cap: usize) !AuditPayload {
+        const bytes = value orelse return .{ .present = false };
+        const digest = try auditHash(a, bytes);
+        if (bytes.len == 0) return .{ .present = true, .sha256 = digest };
+        const n = @min(bytes.len, @min(cap, 64 * 1024 * 1024 - self.payload_bytes));
+        if (n == 0 and bytes.len != 0) return .{ .present = true, .bytes = bytes.len, .sha256 = digest, .unretained = true };
+        const path = try std.fmt.allocPrint(a, "{s}/failure-{d:0>8}-{s}", .{ self.root, self.failed, label });
+        try std.Io.Dir.cwd().writeFile(self.io, .{ .sub_path = path, .data = bytes[0..n] });
+        self.payload_bytes += n;
+        return .{ .present = true, .bytes = bytes.len, .sha256 = digest, .path = path, .retained_bytes = n, .truncated = n != bytes.len };
+    }
+
+    fn recordSuccess(self: *PresentationAudit) void {
+        self.compile_attempts += 1;
+        self.succeeded += 1;
+    }
+
+    fn recordFailure(self: *PresentationAudit, job: ExpansionJob, expanded: bundle_expander.Expansion) !void {
+        self.compile_attempts += 1;
+        self.failed += 1;
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var title_len = @min(job.title.len, 1024);
+        while (title_len != 0 and !std.unicode.utf8ValidateSlice(job.title[0..title_len])) title_len -= 1;
+        const alias_bytes = if (job.alias_record) |alias| try std.json.Stringify.valueAlloc(a, alias, .{}) else null;
+        const row = .{
+            .schema = "wikidict.presentation-audit.failure.v1",
+            .error_name = "UncompiledPresentation",
+            .ordinal = job.ordinal,
+            .namespace = job.ns.id,
+            .namespace_kind = @tagName(job.ns.kind),
+            .page_id = job.page_id,
+            .revision_id = job.revision_id,
+            .title = job.title[0..title_len],
+            .title_bytes = job.title.len,
+            .title_truncated = title_len != job.title.len,
+            .title_sha256 = try auditHash(a, job.title),
+            .alias = job.alias_record != null,
+            .unsupported_parser_function = expanded.unsupported_parser_function,
+            .raw_source = try self.capture(a, "raw.wikitext", job.source, 256 * 1024),
+            .expanded = try self.capture(a, "expanded.wikitext", expanded.source, self.context.expanded_byte_cap),
+            .display_title = try self.capture(a, "display-title.wikitext", expanded.display_title, 256 * 1024),
+            .poem_metadata = try self.capture(a, "poem.json", expanded.poem_metadata, 256 * 1024),
+            .missing_dependency_metadata = try self.capture(a, "missing-dependency.json", expanded.missing_dependency_metadata, 256 * 1024),
+            .index_row = try self.capture(a, "index-row.tsv", job.index_line, 256 * 1024),
+            .alias_record = try self.capture(a, "alias.json", alias_bytes, 256 * 1024),
+        };
+        const line = try std.json.Stringify.valueAlloc(a, row, .{});
+        if (line.len > 64 * 1024 or self.report_bytes + line.len + 1 > 256 * 1024 * 1024) return error.AuditReportLimitExceeded;
+        var buffer: [4096]u8 = undefined;
+        var output = self.failures_file.writerStreaming(self.io, &buffer);
+        try output.interface.writeAll(line);
+        try output.interface.writeByte('\n');
+        try output.interface.flush();
+        self.report_bytes += line.len + 1;
+        self.failure_records += 1;
+    }
+
+    fn writeSummary(self: *PresentationAudit, complete: bool, err: ?[]const u8) !void {
+        try self.writeJson("audit-summary.json", .{ .schema = "wikidict.presentation-audit.summary.v1", .diagnostic_only = true, .inventory_complete = complete, .semantic_acceptance = false, .publication_created = false, .selected = self.selected, .dispatched = self.dispatched, .consumed = self.consumed, .skipped = self.skipped, .direct_aliases = self.direct_aliases, .expansion_fallbacks = self.expansion_fallbacks, .compile_attempts = self.compile_attempts, .succeeded = self.succeeded, .failed = self.failed, .failure_records = self.failure_records, .payload_bytes = self.payload_bytes, .error_name = err });
+    }
+
+    fn abort(self: *PresentationAudit, err: anyerror) void {
+        if (!self.finalized) self.writeSummary(false, @errorName(err)) catch {};
+    }
+
+    fn finish(self: *PresentationAudit, eof: bool, drained: bool) !void {
+        if (self.finalized or !eof or !drained or self.dispatched != self.consumed or self.selected != self.skipped + self.direct_aliases + self.dispatched or self.failed != self.failure_records) return error.IncompletePresentationAudit;
+        for (self.inputs.items) |before| {
+            const after = try auditFileStamp(self.io, self.allocator, before.path);
+            defer if (after.sha256) |value| self.allocator.free(value);
+            if (!std.meta.eql(before.identity, after.identity) or (before.sha256 == null) != (after.sha256 == null) or (before.sha256 != null and !std.mem.eql(u8, before.sha256.?, after.sha256.?))) return error.AuditInputsChanged;
+        }
+        try self.writeSummary(true, null);
+        self.finalized = true;
+    }
+};
+
+fn discardAuditPage(writer: *encoder.blob_builder.Writer, a: std.mem.Allocator) !void {
+    // The Writer may have appended earlier owners before a later owner failed.
+    // Keep only a single page's transient spool footprint; no audit calls finish.
+    for (&writer.spools.language) |*spool| if (spool.offset != 0) {
+        try spool.file.setLength(writer.io, 0);
+        spool.offset = 0;
+    };
+    inline for (.{ "thesaurus", "citations", "reconstruction", "rhymes", "sign_gloss", "supplemental", "aliases" }) |name| {
+        const spool = &@field(writer.spools, name);
+        if (spool.offset != 0) {
+            try spool.file.setLength(writer.io, 0);
+            spool.offset = 0;
+        }
+    }
+    if (writer.stats.fallback_pages != 0) {
+        const path = try std.fs.path.join(a, &.{ writer.output_root, "fallback-pages.jsonl" });
+        defer a.free(path);
+        const replacement = try std.Io.Dir.cwd().createFile(writer.io, path, .{ .truncate = true });
+        writer.fallback_file.close(writer.io);
+        writer.fallback_file = replacement;
+    }
+    writer.stats = .{};
+}
+
+fn consumeExpandedPage(writer: *encoder.blob_builder.Writer, job: ExpansionJob, expanded: bundle_expander.Expansion, a: std.mem.Allocator, audit: ?*PresentationAudit) !bool {
+    const extra_reasons: []const []const u8 = if (expanded.unsupported_parser_function) &.{"unsupported_parser_function"} else &.{};
+    if (job.alias_record) |alias| {
+        writer.addAliasExpandedWithPhases(a, alias, expanded.source, expanded.display_title, .{}, extra_reasons, expanded.poem_metadata, expanded.missing_dependency_metadata) catch |err| {
+            if (audit) |value| if (err == error.UncompiledPresentation) {
+                try value.recordFailure(job, expanded);
+                try discardAuditPage(writer, a);
+                return false;
+            };
+            return err;
+        };
+    } else {
+        writer.addExpandedPageWithReasonsAndPhases(a, job.ns, job.title, expanded.source, job.source, expanded.display_title, extra_reasons, expanded.poem_metadata, expanded.missing_dependency_metadata) catch |err| {
+            diagnostics.printLine("blob add failed title={s} ordinal={d} ns={d} source_bytes={d} expanded_bytes={d} error={s}\n", .{ job.title, job.ordinal, job.ns.id, job.source.len, expanded.source.len, @errorName(err) });
+            if (audit) |value| if (err == error.UncompiledPresentation) {
+                try value.recordFailure(job, expanded);
+                try discardAuditPage(writer, a);
+                return false;
+            };
+            return err;
+        };
+    }
+    if (audit) |value| {
+        value.recordSuccess();
+        try discardAuditPage(writer, a);
+    }
+    return true;
+}
+
 const ExpansionJob = struct {
     ordinal: u64,
     ns: encoder.blob_builder.PageNamespace,
     title: []const u8,
     source: []const u8,
     alias_record: ?encoder.alias_codec.Record = null,
+    page_id: u64 = 0,
+    revision_id: u64 = 0,
+    index_line: []const u8 = "",
 };
 
 fn expansionFallbackReasonAlloc(a: std.mem.Allocator, err: anyerror, failure: ?bundle_expander.Failure) !?[]const u8 {
@@ -379,8 +692,9 @@ const ExpansionSlot = struct {
         self.job_event.set(self.io);
     }
 
-    fn consumeReady(self: *ExpansionSlot, writer: *encoder.blob_builder.Writer) !bool {
+    fn consumeReady(self: *ExpansionSlot, writer: *encoder.blob_builder.Writer, audit: ?*PresentationAudit) !bool {
         if (!self.busy or !self.done.load(.acquire)) return false;
+        if (audit) |value| value.consumed += 1;
         defer {
             self.done.store(false, .release);
             self.busy = false;
@@ -398,27 +712,25 @@ const ExpansionSlot = struct {
             // above rather than masquerading as successfully encoded empty pages.
             if (self.job.alias_record) |alias| {
                 try writer.addAliasExpanded(self.arena.allocator(), alias, "", null, .{ .expansion_error = true }, &.{fallback_reason});
+                if (audit) |value| {
+                    value.expansion_fallbacks += 1;
+                    try discardAuditPage(writer, self.arena.allocator());
+                }
                 return true;
             }
             try writer.addExpansionFailure(self.arena.allocator(), self.job.ns, self.job.title, &.{fallback_reason});
             try writer.namespace_coverage.outcome(self.job.ns.id, .fallback);
+            if (audit) |value| {
+                value.expansion_fallbacks += 1;
+                try discardAuditPage(writer, self.arena.allocator());
+            }
             return true;
         }
         if (self.expansion) |expanded| {
-            const extra_reasons: []const []const u8 = if (expanded.unsupported_parser_function) &.{"unsupported_parser_function"} else &.{};
-            if (self.job.alias_record) |alias| {
-                try writer.addAliasExpandedWithPhases(self.arena.allocator(), alias, expanded.source, expanded.display_title, .{}, extra_reasons, expanded.poem_metadata, expanded.missing_dependency_metadata);
-                return true;
-            }
             const fallback_before = writer.stats.fallback_pages;
-            writer.addExpandedPageWithReasonsAndPhases(self.arena.allocator(), self.job.ns, self.job.title, expanded.source, self.job.source, expanded.display_title, extra_reasons, expanded.poem_metadata, expanded.missing_dependency_metadata) catch |err| {
-                diagnostics.printLine(
-                    "blob add failed title={s} ordinal={d} ns={d} source_bytes={d} expanded_bytes={d} error={s}\n",
-                    .{ self.job.title, self.job.ordinal, self.job.ns.id, self.job.source.len, expanded.source.len, @errorName(err) },
-                );
-                return err;
-            };
-            try writer.namespace_coverage.outcome(self.job.ns.id, if (writer.stats.fallback_pages != fallback_before) .fallback else .expanded);
+            const compiled = try consumeExpandedPage(writer, self.job, expanded, self.arena.allocator(), audit);
+            if (compiled and audit == null and self.job.alias_record == null)
+                try writer.namespace_coverage.outcome(self.job.ns.id, if (writer.stats.fallback_pages != fallback_before) .fallback else .expanded);
         } else try writer.namespace_coverage.outcome(self.job.ns.id, .duplicate);
         return true;
     }
@@ -482,6 +794,7 @@ const ExpansionPool = struct {
     page_title_index: ?dump_source.PageTitleIndex = null,
     page_redirects: ?*const encoder.page_redirects.Snapshot = null,
     site_mainpage: ?SiteMainPage = null,
+    audit: ?*PresentationAudit = null,
 
     fn init(
         io: std.Io,
@@ -540,7 +853,7 @@ const ExpansionPool = struct {
 
     fn consumeReady(self: *ExpansionPool, writer: *encoder.blob_builder.Writer) !usize {
         var count: usize = 0;
-        for (self.slots) |*slot| if (try slot.consumeReady(writer)) {
+        for (self.slots) |*slot| if (try slot.consumeReady(writer, self.audit)) {
             count += 1;
         };
         return count;
@@ -572,7 +885,15 @@ fn parseOptions(args: []const []const u8) !Options {
     var index: usize = 3;
     while (index < args.len) {
         const arg = args[index];
-        if (std.mem.eql(u8, arg, "--start-page")) {
+        if (std.mem.eql(u8, arg, "--audit-presentation-errors")) {
+            if (out.audit_presentation_errors) return error.Usage;
+            out.audit_presentation_errors = true;
+        } else if (std.mem.eql(u8, arg, "--audit-expanded-bytes")) {
+            index += 1;
+            if (index >= args.len or out.audit_expanded_bytes != null) return error.Usage;
+            out.audit_expanded_bytes = try std.fmt.parseInt(usize, args[index], 10);
+            if (out.audit_expanded_bytes.? > 2 * 1024 * 1024) return error.Usage;
+        } else if (std.mem.eql(u8, arg, "--start-page")) {
             index += 1;
             if (index >= args.len) return error.Usage;
             out.start_page = try std.fmt.parseInt(usize, args[index], 10);
@@ -611,7 +932,7 @@ fn parseOptions(args: []const []const u8) !Options {
         } else return error.Usage;
         index += 1;
     }
-    if (out.expander_root.len == 0) return error.Usage;
+    if (out.expander_root.len == 0 or (out.audit_expanded_bytes != null and !out.audit_presentation_errors) or (out.audit_presentation_errors and (out.shard_pages != null or out.start_page != 0 or out.index_byte_offset != null or out.limit_pages != null))) return error.Usage;
     if (out.shard_pages) |shard_pages| {
         if (out.index_byte_offset == null or out.limit_pages == null or out.limit_pages.? == 0 or
             out.start_page % shard_pages != 0) return error.Usage;
@@ -758,13 +1079,17 @@ fn dispatchIndexedPage(
     const spec = namespaces.byId(std.math.cast(i32, page.ns) orelse return error.InvalidNamespace) orelse return error.InvalidNamespace;
     const role = compiledKind(spec);
     try writer.namespace_coverage.input(writer.allocator, page.ns, spec.name, role, page.has_source);
-    if (!page.has_source or role == null) return;
+    if (!page.has_source or role == null) {
+        if (pool.audit) |audit| audit.skipped += 1;
+        return;
+    }
     if (pool.site_mainpage != null and page.ns == 0) {
         var metadata_arena = std.heap.ArenaAllocator.init(writer.allocator);
         defer metadata_arena.deinit();
         if (try isSiteMetadata(pool, metadata_arena.allocator(), page)) {
             try writer.namespace_coverage.siteMetadata(page.ns, pool.site_mainpage.?.digest);
             writer.stats.main_pages += 1;
+            if (pool.audit) |audit| audit.skipped += 1;
             return;
         }
     }
@@ -773,6 +1098,7 @@ fn dispatchIndexedPage(
         const own_ref = (try index.lookup(pool.page_index_bytes, page.title)) orelse return error.InvalidPageTitleIndex;
         if (dump_source.pageRowRefOrdinal(own_ref) != ordinal) {
             try writer.namespace_coverage.outcome(page.ns, .duplicate);
+            if (pool.audit) |audit| audit.skipped += 1;
             return;
         }
         var arena = std.heap.ArenaAllocator.init(writer.allocator);
@@ -804,6 +1130,10 @@ fn dispatchIndexedPage(
         };
         if (tail.len == 0) {
             try writer.addAlias(a, alias);
+            if (pool.audit) |audit| {
+                audit.direct_aliases += 1;
+                try discardAuditPage(writer, a);
+            }
         } else {
             const slot = try pool.acquire(writer);
             const retained = slot.arena.allocator();
@@ -811,7 +1141,8 @@ fn dispatchIndexedPage(
             owned.target_title = try retained.dupe(u8, alias.target_title);
             owned.target_key = try retained.dupe(u8, alias.target_key);
             owned.fragment = try retained.dupe(u8, alias.fragment);
-            slot.dispatch(.{ .ordinal = @intCast(ordinal), .ns = .{ .id = page.ns, .kind = role.? }, .title = page.title, .source = try retained.dupe(u8, tail), .alias_record = owned });
+            if (pool.audit) |audit| audit.dispatched += 1;
+            slot.dispatch(.{ .ordinal = @intCast(ordinal), .ns = .{ .id = page.ns, .kind = role.? }, .title = page.title, .source = try retained.dupe(u8, tail), .alias_record = owned, .page_id = page.page_id, .revision_id = page.revision_id, .index_line = line });
         }
         return;
     }
@@ -822,7 +1153,11 @@ fn dispatchIndexedPage(
         try xml_decode.decodeSinglePassAlloc(page_allocator, raw_source)
     else
         raw_source;
+    if (pool.audit) |audit| audit.dispatched += 1;
     slot.dispatch(.{
+        .page_id = page.page_id,
+        .revision_id = page.revision_id,
+        .index_line = line,
         .ordinal = @intCast(ordinal),
         .ns = .{ .id = page.ns, .kind = role.? },
         .title = page.title,
@@ -967,11 +1302,11 @@ pub fn main(init: std.process.Init) !void {
     const a = std.heap.smp_allocator;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 3) {
-        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N]\n", .{});
+        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N] [--audit-presentation-errors [--audit-expanded-bytes N]]\n", .{});
         return error.Usage;
     }
     const options = parseOptions(args) catch {
-        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N]\n", .{});
+        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N] [--audit-presentation-errors [--audit-expanded-bytes N]]\n", .{});
         return error.Usage;
     };
     const cpu_limit = @min(max_worker_count, std.Thread.getCpuCount() catch 1);
@@ -980,21 +1315,33 @@ pub fn main(init: std.process.Init) !void {
         return error.ResourceLimit;
     }
 
-    var namespaces = try namespace_registry.Registry.load(init.io, a, options.expander_root);
+    var audit_storage: ?PresentationAudit = if (options.audit_presentation_errors)
+        try PresentationAudit.init(init.io, a, args[2], .{ .dump_path = args[1], .expander_root = options.expander_root, .workers = options.workers, .timeout_ms = options.expansion_timeout_ms orelse expansion_deadline.default_ms, .now_unix = options.now_unix orelse std.Io.Clock.real.now(init.io).toSeconds(), .start_page = options.start_page, .requested_limit = options.limit_pages, .index_byte_offset = options.index_byte_offset, .expanded_byte_cap = options.audit_expanded_bytes orelse 0 })
+    else
+        null;
+    defer if (audit_storage) |*audit| audit.deinit();
+    runBlobBuild(init.io, a, args, options, if (audit_storage) |*audit| audit else null) catch |err| {
+        if (audit_storage) |*audit| audit.abort(err);
+        return err;
+    };
+}
+
+fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, options: Options, audit: ?*PresentationAudit) !void {
+    var namespaces = try namespace_registry.Registry.load(io, a, options.expander_root);
     defer namespaces.deinit();
     const interwiki_path = try std.fs.path.join(a, &.{ options.expander_root, "interwiki-map.tsv" });
     defer a.free(interwiki_path);
-    const interwiki_bytes = std.Io.Dir.cwd().readFileAlloc(init.io, interwiki_path, a, .limited(4 * 1024 * 1024)) catch |err| switch (err) {
+    const interwiki_bytes = std.Io.Dir.cwd().readFileAlloc(io, interwiki_path, a, .limited(4 * 1024 * 1024)) catch |err| switch (err) {
         error.FileNotFound => null,
         else => return err,
     };
     defer if (interwiki_bytes) |bytes| a.free(bytes);
     if (interwiki_bytes) |bytes| try namespaces.attachInterwikiMap(bytes);
-    var registry = try loadLanguageRegistry(init.io, a, options.expander_root, &namespaces);
+    var registry = try loadLanguageRegistry(io, a, options.expander_root, &namespaces);
     defer registry.deinit();
     const behavior_path = try std.fs.path.join(a, &.{ options.expander_root, "behavior-switches.tsv" });
     defer a.free(behavior_path);
-    const behavior_bytes = std.Io.Dir.cwd().readFileAlloc(init.io, behavior_path, a, .limited(1024 * 1024)) catch |err| switch (err) {
+    const behavior_bytes = std.Io.Dir.cwd().readFileAlloc(io, behavior_path, a, .limited(1024 * 1024)) catch |err| switch (err) {
         error.FileNotFound => null,
         else => return err,
     };
@@ -1003,7 +1350,7 @@ pub fn main(init: std.process.Init) !void {
     defer if (behavior) |*value| value.deinit();
     const image_path = try std.fs.path.join(a, &.{ options.expander_root, "image-options.tsv" });
     defer a.free(image_path);
-    const image_bytes = std.Io.Dir.cwd().readFileAlloc(init.io, image_path, a, .limited(1024 * 1024)) catch |err| switch (err) {
+    const image_bytes = std.Io.Dir.cwd().readFileAlloc(io, image_path, a, .limited(1024 * 1024)) catch |err| switch (err) {
         error.FileNotFound => null,
         else => return err,
     };
@@ -1019,18 +1366,18 @@ pub fn main(init: std.process.Init) !void {
 
     const page_index_path = try std.fs.path.join(a, &.{ options.expander_root, "page-index.tsv" });
     defer a.free(page_index_path);
-    var page_index = try mmapPath(init.io, page_index_path);
+    var page_index = try mmapPath(io, page_index_path);
     defer page_index.deinit();
     const page_index_kind = dump_source.pageIndexKind(page_index.bytes);
     const page_title_index_path = try std.fs.path.join(a, &.{ options.expander_root, dump_source.page_title_index_filename });
     defer a.free(page_title_index_path);
-    var page_title_index = try mmapPath(init.io, page_title_index_path);
+    var page_title_index = try mmapPath(io, page_title_index_path);
     defer page_title_index.deinit();
     const title_index = try dump_source.PageTitleIndex.init(page_title_index.bytes);
     if (title_index.page_index_size != page_index.bytes.len or title_index.kind != page_index_kind) return error.PageTitleIndexMismatch;
     const redirects_path = try std.fs.path.join(a, &.{ options.expander_root, "page-redirects.tsv" });
     defer a.free(redirects_path);
-    var redirects_storage: ?Mapped = mmapPath(init.io, redirects_path) catch |err| switch (err) {
+    var redirects_storage: ?Mapped = mmapPath(io, redirects_path) catch |err| switch (err) {
         error.FileNotFound => null,
         else => return err,
     };
@@ -1040,7 +1387,7 @@ pub fn main(init: std.process.Init) !void {
     const stream_index_path = try std.fs.path.join(a, &.{ options.expander_root, "dump-streams.tsv" });
     defer a.free(stream_index_path);
     var dump = try dump_source.SourceReader.open(
-        init.io,
+        io,
         a,
         a,
         args[1],
@@ -1054,53 +1401,69 @@ pub fn main(init: std.process.Init) !void {
     // while another worker is retrying a request after a remote OOM.
     const worker_path = try std.fs.path.join(a, &.{ options.expander_root, "dict-bundle-expander" });
     defer a.free(worker_path);
-    var pool = try ExpansionPool.init(init.io, a, options.expander_root, worker_path, args[1], options.workers, options.now_unix, options.expansion_timeout_ms orelse expansion_deadline.default_ms);
+    var pool = try ExpansionPool.init(io, a, options.expander_root, worker_path, args[1], options.workers, if (audit) |value| value.context.now_unix else options.now_unix, options.expansion_timeout_ms orelse expansion_deadline.default_ms);
     defer pool.deinit();
+    pool.audit = audit;
     pool.page_index_bytes = page_index.bytes;
     pool.page_title_index = title_index;
     pool.page_redirects = if (redirects) |*snapshot| snapshot else null;
-    const site_mainpage = try loadSiteMainPage(init.io, a, options.expander_root, &namespaces);
+    const site_mainpage = try loadSiteMainPage(io, a, options.expander_root, &namespaces);
     defer if (site_mainpage) |site| a.free(site.title);
     pool.site_mainpage = site_mainpage;
     if (options.shard_pages != null) {
-        try runContinuous(init.io, a, args[2], options, codes, &namespaces, &pool, &dump, &page_index, page_index_kind, page_index_path);
+        try runContinuous(io, a, args[2], options, codes, &namespaces, &pool, &dump, &page_index, page_index_kind, page_index_path);
         return;
     }
 
-    var writer = try encoder.blob_builder.Writer.init(init.io, a, args[2]);
+    var writer = try encoder.blob_builder.Writer.init(io, a, if (audit) |value| value.scratch_root else args[2]);
     defer writer.deinit();
     writer.language_codes = codes;
     const index_start = try pageIndexStart(page_index.bytes, options);
     var lines = std.mem.splitScalar(u8, index_start.bytes, '\n');
     var corpus_ordinal: usize = index_start.ordinal;
     var pages_selected: usize = 0;
-    var next_progress = std.Io.Clock.awake.now(init.io).toNanoseconds() + 10 * std.time.ns_per_s;
+    var reached_eof = true;
+    var next_progress = std.Io.Clock.awake.now(io).toNanoseconds() + 10 * std.time.ns_per_s;
     while (lines.next()) |line| {
         if (line.len == 0 or line[0] == '#') continue;
         const page_ordinal = corpus_ordinal;
         corpus_ordinal += 1;
         if (page_ordinal < options.start_page) continue;
-        if (options.limit_pages) |limit| if (pages_selected >= limit) break;
+        if (options.limit_pages) |limit| if (pages_selected >= limit) {
+            reached_eof = false;
+            break;
+        };
         pages_selected += 1;
+        if (audit) |value| value.selected += 1;
         writer.stats.pages_seen = pages_selected;
         try dispatchIndexedPage(&pool, &writer, &dump, page_index_kind, &namespaces, line, page_ordinal);
-        const progress_now = std.Io.Clock.awake.now(init.io).toNanoseconds();
+        const progress_now = std.Io.Clock.awake.now(io).toNanoseconds();
         if (pages_selected % 100_000 == 0 or progress_now >= next_progress) {
             next_progress = progress_now + 10 * std.time.ns_per_s;
-            diagnostics.printLine(
+            if (audit) |value| {
+                diagnostics.printLine("presentation audit progress selected={d} consumed={d} failures={d} workers={d}\n", .{ value.selected, value.consumed, value.failed, pool.slots.len });
+            } else diagnostics.printLine(
                 "page compilation progress selected={d} ordinal={d} main_pages={d} language_records={d} workers={d}\n",
                 .{ pages_selected, page_ordinal, writer.stats.main_pages, writer.stats.language_records, pool.slots.len },
             );
         }
     }
     try pool.drain(&writer);
+    if (audit) |value| {
+        // No finish, coverage, shard publication or normal success path in audit mode.
+        if (!std.meta.eql(page_index.identity, try pathIdentity(io, page_index_path))) return error.AuditInputsChanged;
+        try value.finish(reached_eof, true);
+        diagnostics.printLine("presentation audit complete selected={d} failures={d}; no corpus publication\n", .{ value.selected, value.failed });
+        if (value.failed != 0) return error.PresentationAuditFailures;
+        return;
+    }
     const coverage = try pageCoverage(options, pages_selected, page_index.identity);
     const stats = try writer.finish(codes);
     if (stats.pages_seen != coverage.pages_seen) return error.PageCoverageMismatch;
-    if (!std.meta.eql(page_index.identity, try pathIdentity(init.io, page_index_path))) {
+    if (!std.meta.eql(page_index.identity, try pathIdentity(io, page_index_path))) {
         return error.PageIndexChanged;
     }
-    try writePageCoverage(init.io, a, args[2], coverage);
+    try writePageCoverage(io, a, args[2], coverage);
 
     diagnostics.printLine(
         "pages={d} main_pages={d} language_records={d} language_blobs={d} thesaurus={d} citations={d} reconstruction={d} rhymes={d} sign_gloss={d} supplemental={d} fallback_pages={d} alias_records={d}\n",
@@ -2526,4 +2889,363 @@ test "language code bridge preserves positive ambiguous labels without inventing
     try std.testing.expect(codes.isLanguageBoundary("Middelhēahþēodisc"));
     try std.testing.expect(codes.resolve("Middelhēahþēodisc") == null);
     try std.testing.expectEqualStrings("en", codes.resolve("Nīwenglisc").?.code);
+}
+
+fn auditControlFreshRoot(a: std.mem.Allocator, label: []const u8) ![]const u8 {
+    const io = std.testing.io;
+    try std.Io.Dir.cwd().createDirPath(io, ".tmp");
+    const root = try std.fmt.allocPrint(a, ".tmp/presentation-audit-{s}-{d}", .{ label, std.os.linux.getpid() });
+    // Refuse an old root instead of deleting anything this test did not create.
+    try std.Io.Dir.cwd().createDir(io, root, .default_dir);
+    return root;
+}
+
+fn auditControlNoPublishedFiles(a: std.mem.Allocator, root: []const u8) !void {
+    const io = std.testing.io;
+    for ([_][]const u8{ encoder.blob_catalog.manifest_filename, "complete.json", "page-coverage.json", "namespace-coverage.json", "aliases.wikblb", "thesaurus.wikblb", "citations.wikblb", "supplemental.wikblb" }) |name| {
+        const path = try std.fs.path.join(a, &.{ root, name });
+        if (std.Io.Dir.cwd().access(io, path, .{})) |_| return error.TestUnexpectedResult else |err| {
+            try std.testing.expect(err == error.FileNotFound);
+        }
+    }
+    var languages = try std.Io.Dir.cwd().openDir(io, try std.fs.path.join(a, &.{ root, "languages" }), .{ .iterate = true });
+    defer languages.close(io);
+    var entries = languages.iterate();
+    try std.testing.expect(try entries.next(io) == null);
+}
+
+fn auditControlLanguages(_: ?*const anyopaque, heading: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, heading, "English")) return "en";
+    if (std.mem.eql(u8, heading, "French")) return "fr";
+    return null;
+}
+fn auditControlBoundary(_: ?*const anyopaque, heading: []const u8) bool {
+    return std.mem.eql(u8, heading, "English") or std.mem.eql(u8, heading, "French");
+}
+
+test "diagnostic seam with nil audit retains real Writer strict guards and provenance errors" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try auditControlFreshRoot(a, "ordinary");
+    defer std.Io.Dir.cwd().deleteTree(io, root) catch {};
+    var writer = try encoder.blob_builder.Writer.init(io, a, root);
+    defer writer.deinit();
+    const job: ExpansionJob = .{ .ordinal = 1, .ns = .{ .id = 0, .kind = .language }, .title = "Strict fixture", .source = "raw fixture" };
+    try std.testing.expectError(error.UncompiledPresentation, consumeExpandedPage(&writer, job, .{ .source = "[https://example.test broken" }, a, null));
+    try std.testing.expectError(error.UncompiledPresentation, consumeExpandedPage(&writer, job, .{ .source = "before |} after" }, a, null));
+    try std.testing.expect(try consumeExpandedPage(&writer, job, .{ .source = "<nowiki>before |} after</nowiki>" }, a, null));
+    try std.testing.expectError(error.InvalidPoemMetadata, consumeExpandedPage(&writer, job, .{ .source = "valid text", .poem_metadata = "{" }, a, null));
+    try auditControlNoPublishedFiles(a, root);
+    // Deliberately never call Writer.finish: this is not a publishable build.
+}
+
+test "failed multi-owner page can touch scratch spools but never becomes a publication" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try auditControlFreshRoot(a, "partial-owner");
+    defer std.Io.Dir.cwd().deleteTree(io, root) catch {};
+    {
+        var writer = try encoder.blob_builder.Writer.init(io, a, root);
+        defer writer.deinit();
+        writer.language_codes = .{ .get_fn = auditControlLanguages, .boundary_fn = auditControlBoundary };
+        const source = "==English==\n# first owner is valid\n==French==\n# [https://example.test broken\n";
+        const job: ExpansionJob = .{ .ordinal = 2, .ns = .{ .id = 0, .kind = .language }, .title = "Partial owners", .source = source };
+        try std.testing.expectError(error.UncompiledPresentation, consumeExpandedPage(&writer, job, .{ .source = source }, a, null));
+        try std.testing.expect(writer.stats.language_records > 0);
+        const later: ExpansionJob = .{ .ordinal = 3, .ns = .{ .id = 0, .kind = .language }, .title = "Later valid", .source = "==English==\n# later valid" };
+        try std.testing.expect(try consumeExpandedPage(&writer, later, .{ .source = later.source }, a, null));
+        try auditControlNoPublishedFiles(a, root);
+    }
+    try auditControlNoPublishedFiles(a, root);
+    if (std.Io.Dir.cwd().access(io, try std.fs.path.join(a, &.{ root, ".spool" }), .{})) |_| return error.TestUnexpectedResult else |err| {
+        try std.testing.expect(err == error.FileNotFound);
+    }
+}
+
+test "audit leaves operational expansion classification unchanged" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_]anyerror{ error.OutOfMemory, error.Timeout, error.ExpansionWorkerDied, error.InvalidPoemMetadata, error.PageIndexChanged }) |err| {
+        try std.testing.expect(try expansionFallbackReasonAlloc(a, err, null) == null);
+    }
+    try std.testing.expect(try expansionFallbackReasonAlloc(a, error.ExpansionFailed, .{ .stage = "expand", .error_name = "Timeout", .detail = "deadline" }) == null);
+    // A real semantic expansion error retains the preexisting positive classifier.
+    try std.testing.expect(try expansionFallbackReasonAlloc(a, error.ExpansionFailed, .{ .stage = "expand", .error_name = "ExampleLuaError", .detail = "semantic fixture" }) != null);
+}
+
+const AuditControlInputs = struct {
+    root: []const u8,
+    audit_root: []const u8,
+    writer_root: []const u8,
+    context: AuditInputContext,
+};
+
+fn auditControlInputs(a: std.mem.Allocator, label: []const u8, cap: usize) !AuditControlInputs {
+    const io = std.testing.io;
+    const root = try auditControlFreshRoot(a, label);
+    errdefer std.Io.Dir.cwd().deleteTree(io, root) catch {};
+    const dump = try std.fs.path.join(a, &.{ root, "input.xml" });
+    const tool = try std.fs.path.join(a, &.{ root, "tool-identity" });
+    const inputs = try std.fs.path.join(a, &.{ root, "retained-inputs" });
+    try std.Io.Dir.cwd().createDir(io, inputs, .default_dir);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dump, .data = "<mediawiki><page><title>fixture</title></page></mediawiki>" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = tool, .data = "owned diagnostic unit-control identity; never executed" });
+    return .{
+        .root = root,
+        .audit_root = try std.fs.path.join(a, &.{ root, "audit" }),
+        .writer_root = try std.fs.path.join(a, &.{ root, "discarded-writer" }),
+        .context = .{ .dump_path = dump, .expander_root = inputs, .tool_path = tool, .expanded_byte_cap = cap },
+    };
+}
+
+fn auditControlSummary(a: std.mem.Allocator, root: []const u8) !std.json.Value {
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "audit-summary.json" }), a, .limited(64 * 1024));
+    return std.json.parseFromSliceLeaky(std.json.Value, a, bytes, .{});
+}
+fn auditControlHash(a: std.mem.Allocator, bytes: []const u8) ![]const u8 {
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    return a.dupe(u8, &std.fmt.bytesToHex(digest, .lower));
+}
+
+fn auditControlEmptySpools(writer: *encoder.blob_builder.Writer) !void {
+    for (writer.spools.language) |spool| {
+        try std.testing.expectEqual(@as(u64, 0), spool.offset);
+        try std.testing.expectEqual(@as(u64, 0), (try spool.file.stat(std.testing.io)).size);
+    }
+    inline for (.{ "thesaurus", "citations", "reconstruction", "rhymes", "sign_gloss", "supplemental", "aliases" }) |field| {
+        const spool = @field(writer.spools, field);
+        try std.testing.expectEqual(@as(u64, 0), spool.offset);
+        try std.testing.expectEqual(@as(u64, 0), (try spool.file.stat(std.testing.io)).size);
+    }
+    try std.testing.expectEqual(@as(usize, 0), writer.stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), writer.stats.fallback_pages);
+}
+
+fn auditControlSequence(a: std.mem.Allocator, label: []const u8, cap: usize) !void {
+    const io = std.testing.io;
+    const inputs = try auditControlInputs(a, label, cap);
+    defer std.Io.Dir.cwd().deleteTree(io, inputs.root) catch {};
+    var audit = try PresentationAudit.init(io, a, inputs.audit_root, inputs.context);
+    defer audit.deinit();
+    const before = try auditControlSummary(a, inputs.audit_root);
+    try std.testing.expect(!before.object.get("inventory_complete").?.bool);
+    const raw_request = "{{retained caller}}";
+    const bad_external = "[https://example.test broken unretained-expanded-A";
+    const bad_inline = "==English==\n# valid partial owner\n==French==\n# before |} after unretained-expanded-B\n";
+    const pages = [_]struct { title: []const u8, source: []const u8, valid: bool }{
+        .{ .title = "valid-before", .source = "==English==\n# valid before [[first]]", .valid = true },
+        .{ .title = "bad-external", .source = bad_external, .valid = false },
+        .{ .title = "valid-protected-middle", .source = "==English==\n# <nowiki>before |} after</nowiki>", .valid = true },
+        .{ .title = "bad-inline-close", .source = bad_inline, .valid = false },
+        .{ .title = "valid-after", .source = "==English==\n# valid after [[last]]", .valid = true },
+    };
+    {
+        var writer = try encoder.blob_builder.Writer.init(io, a, inputs.writer_root);
+        defer writer.deinit();
+        writer.language_codes = .{ .get_fn = auditControlLanguages, .boundary_fn = auditControlBoundary };
+        for (pages, 1000..) |page, ordinal| {
+            const job: ExpansionJob = .{ .ordinal = @intCast(ordinal), .ns = .{ .id = 0, .kind = .language }, .title = page.title, .source = raw_request };
+            try std.testing.expectEqual(page.valid, try consumeExpandedPage(&writer, job, .{ .source = page.source }, a, &audit));
+            // Includes a failure after English was already appended: diagnostic
+            // continuation must discard that partial owner before the next page.
+            try auditControlEmptySpools(&writer);
+        }
+        try std.testing.expectEqual(@as(usize, 5), audit.compile_attempts);
+        try std.testing.expectEqual(@as(usize, 3), audit.succeeded);
+        try std.testing.expectEqual(@as(usize, 2), audit.failed);
+        // Direct helper controls have no worker threads: all five supplied jobs
+        // were dispatched and consumed synchronously; no selected row was skipped.
+        audit.selected = 5;
+        audit.dispatched = 5;
+        audit.consumed = 5;
+        try audit.finish(true, true);
+        try auditControlNoPublishedFiles(a, inputs.writer_root);
+    }
+    try auditControlNoPublishedFiles(a, inputs.writer_root);
+    const summary = try auditControlSummary(a, inputs.audit_root);
+    try std.testing.expect(summary.object.get("inventory_complete").?.bool);
+    try std.testing.expect(summary.object.get("diagnostic_only").?.bool);
+    try std.testing.expect(!summary.object.get("semantic_acceptance").?.bool);
+    try std.testing.expect(!summary.object.get("publication_created").?.bool);
+    try std.testing.expectEqual(@as(i64, 5), summary.object.get("compile_attempts").?.integer);
+    try std.testing.expectEqual(@as(i64, 3), summary.object.get("succeeded").?.integer);
+    try std.testing.expectEqual(@as(i64, 2), summary.object.get("failed").?.integer);
+    try std.testing.expectEqual(@as(i64, 2), summary.object.get("failure_records").?.integer);
+    const lines = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ inputs.audit_root, "failures.jsonl" }), a, .limited(128 * 1024));
+    try std.testing.expect(std.mem.indexOf(u8, lines, "unretained-expanded-A") == null);
+    try std.testing.expect(std.mem.indexOf(u8, lines, "unretained-expanded-B") == null);
+    var split = std.mem.splitScalar(u8, lines, '\n');
+    const titles = [_][]const u8{ "bad-external", "bad-inline-close" };
+    const ordinals = [_]i64{ 1001, 1003 };
+    const sources = [_][]const u8{ bad_external, bad_inline };
+    for (titles, ordinals, sources) |title, ordinal, source| {
+        const line = split.next().?;
+        const value = try std.json.parseFromSliceLeaky(std.json.Value, a, line, .{});
+        try std.testing.expectEqualStrings("wikidict.presentation-audit.failure.v1", value.object.get("schema").?.string);
+        try std.testing.expectEqualStrings("UncompiledPresentation", value.object.get("error_name").?.string);
+        try std.testing.expectEqualStrings(title, value.object.get("title").?.string);
+        try std.testing.expectEqual(ordinal, value.object.get("ordinal").?.integer);
+        try std.testing.expectEqual(@as(i64, 0), value.object.get("namespace").?.integer);
+        const raw = value.object.get("raw_source").?;
+        try std.testing.expectEqualStrings(try auditControlHash(a, raw_request), raw.object.get("sha256").?.string);
+        try std.testing.expectEqual(@as(i64, @intCast(raw_request.len)), raw.object.get("bytes").?.integer);
+        const expanded = value.object.get("expanded").?;
+        try std.testing.expect(expanded.object.get("present").?.bool);
+        try std.testing.expectEqualStrings(try auditControlHash(a, source), expanded.object.get("sha256").?.string);
+        try std.testing.expectEqual(@as(i64, @intCast(source.len)), expanded.object.get("bytes").?.integer);
+        try std.testing.expectEqual(@as(i64, @intCast(cap)), expanded.object.get("retained_bytes").?.integer);
+        if (cap == 0) {
+            try std.testing.expect(expanded.object.get("unretained").?.bool);
+            try std.testing.expect(expanded.object.get("path").? == .null);
+        } else {
+            try std.testing.expect(expanded.object.get("truncated").?.bool);
+            try std.testing.expect(!expanded.object.get("unretained").?.bool);
+            const retained = try std.Io.Dir.cwd().readFileAlloc(io, expanded.object.get("path").?.string, a, .limited(32));
+            try std.testing.expectEqualStrings(source[0..cap], retained);
+        }
+    }
+    try std.testing.expectEqualStrings("", split.next().?);
+    try std.testing.expect(split.next() == null);
+    // No catalog, coverage or complete artifact exists in the diagnostic root.
+    for ([_][]const u8{ encoder.blob_catalog.manifest_filename, "complete.json", "page-coverage.json", "namespace-coverage.json" }) |name| {
+        if (std.Io.Dir.cwd().access(io, try std.fs.path.join(a, &.{ inputs.audit_root, name }), .{})) |_| return error.TestUnexpectedResult else |err| try std.testing.expect(err == error.FileNotFound);
+    }
+}
+
+test "audit collects two real strict failures separated by success and remains nonpublishing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try auditControlSequence(arena.allocator(), "sequence-no-expanded", 0);
+    try auditControlSequence(arena.allocator(), "sequence-capped-expanded", 8);
+}
+
+test "audit propagates real Writer phase and allocator failures and seals only incomplete inventory" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    inline for (.{ "provenance", "allocation" }) |label| {
+        const inputs = try auditControlInputs(a, label, 0);
+        defer std.Io.Dir.cwd().deleteTree(io, inputs.root) catch {};
+        var audit = try PresentationAudit.init(io, a, inputs.audit_root, inputs.context);
+        defer audit.deinit();
+        var writer = try encoder.blob_builder.Writer.init(io, a, inputs.writer_root);
+        defer writer.deinit();
+        const job: ExpansionJob = .{ .ordinal = 7, .ns = .{ .id = 0, .kind = .language }, .title = "Operational control", .source = "valid [[allocation]] source" };
+        if (comptime std.mem.eql(u8, label, "provenance")) {
+            try std.testing.expectError(error.InvalidPoemMetadata, consumeExpandedPage(&writer, job, .{ .source = job.source, .poem_metadata = "{" }, a, &audit));
+            audit.abort(error.InvalidPoemMetadata);
+        } else {
+            var failing = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
+            try std.testing.expectError(error.OutOfMemory, consumeExpandedPage(&writer, job, .{ .source = job.source }, failing.allocator(), &audit));
+            try std.testing.expect(failing.has_induced_failure);
+            audit.abort(error.OutOfMemory);
+        }
+        try std.testing.expectEqual(@as(usize, 0), audit.failed);
+        const summary = try auditControlSummary(a, inputs.audit_root);
+        try std.testing.expect(!summary.object.get("inventory_complete").?.bool);
+        try std.testing.expect(!summary.object.get("publication_created").?.bool);
+        const lines = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ inputs.audit_root, "failures.jsonl" }), a, .limited(1024));
+        try std.testing.expectEqual(@as(usize, 0), lines.len);
+        try auditControlNoPublishedFiles(a, inputs.writer_root);
+    }
+}
+
+test "audit requires EOF drained routing and unchanged actual input bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    inline for (.{ "no-eof", "not-drained", "routing-mismatch", "changed-dump", "appeared-input" }) |label| {
+        const inputs = try auditControlInputs(a, label, 0);
+        defer std.Io.Dir.cwd().deleteTree(io, inputs.root) catch {};
+        var audit = try PresentationAudit.init(io, a, inputs.audit_root, inputs.context);
+        defer audit.deinit();
+        if (comptime std.mem.eql(u8, label, "changed-dump")) {
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = inputs.context.dump_path, .data = "changed retained dump bytes" });
+            try std.testing.expectError(error.AuditInputsChanged, audit.finish(true, true));
+            audit.abort(error.AuditInputsChanged);
+        } else if (comptime std.mem.eql(u8, label, "appeared-input")) {
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ inputs.context.expander_root, "page-index.tsv" }), .data = "newly appeared retained index" });
+            try std.testing.expectError(error.AuditInputsChanged, audit.finish(true, true));
+            audit.abort(error.AuditInputsChanged);
+        } else {
+            if (comptime std.mem.eql(u8, label, "routing-mismatch")) audit.dispatched = 1;
+            try std.testing.expectError(error.IncompletePresentationAudit, audit.finish(!std.mem.eql(u8, label, "no-eof"), !std.mem.eql(u8, label, "not-drained")));
+            audit.abort(error.IncompletePresentationAudit);
+        }
+        const summary = try auditControlSummary(a, inputs.audit_root);
+        try std.testing.expect(!summary.object.get("inventory_complete").?.bool);
+        try std.testing.expect(!summary.object.get("publication_created").?.bool);
+    }
+}
+
+test "audit refuses a preexisting output root before any ordinary Writer initialization" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const inputs = try auditControlInputs(a, "existing-root", 0);
+    defer std.Io.Dir.cwd().deleteTree(io, inputs.root) catch {};
+    try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{ inputs.audit_root, "languages" }));
+    const sentinel = try std.fs.path.join(a, &.{ inputs.audit_root, "languages", "existing-owned-sentinel" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = sentinel, .data = "must survive refusal" });
+    if (PresentationAudit.init(io, a, inputs.audit_root, inputs.context)) |value| {
+        var unexpected = value;
+        unexpected.deinit();
+        return error.TestUnexpectedResult;
+    } else |_| {}
+    try std.testing.expectEqualStrings("must survive refusal", try std.Io.Dir.cwd().readFileAlloc(io, sentinel, a, .limited(1024)));
+}
+
+test "audit payload exhaustion retains hashes while report exhaustion aborts incomplete" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    inline for (.{ "payload-budget", "report-budget" }) |label| {
+        const inputs = try auditControlInputs(a, label, 8);
+        defer std.Io.Dir.cwd().deleteTree(io, inputs.root) catch {};
+        var audit = try PresentationAudit.init(io, a, inputs.audit_root, inputs.context);
+        defer audit.deinit();
+        var writer = try encoder.blob_builder.Writer.init(io, a, inputs.writer_root);
+        defer writer.deinit();
+        const source = "before |} after";
+        const job: ExpansionJob = .{ .ordinal = 99, .ns = .{ .id = 0, .kind = .language }, .title = "budget control", .source = source };
+        if (comptime std.mem.eql(u8, label, "payload-budget")) {
+            // Exercise the boundary without allocating a giant payload.
+            audit.payload_bytes = 64 * 1024 * 1024;
+            try std.testing.expect(!try consumeExpandedPage(&writer, job, .{ .source = source }, a, &audit));
+            try auditControlEmptySpools(&writer);
+            audit.selected = 1;
+            audit.dispatched = 1;
+            audit.consumed = 1;
+            try audit.finish(true, true);
+            const bytes = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ inputs.audit_root, "failures.jsonl" }), a, .limited(64 * 1024));
+            const value = try std.json.parseFromSliceLeaky(std.json.Value, a, std.mem.trim(u8, bytes, "\n"), .{});
+            inline for (.{ "raw_source", "expanded" }) |field| {
+                const capture = value.object.get(field).?;
+                try std.testing.expect(capture.object.get("present").?.bool);
+                try std.testing.expect(capture.object.get("unretained").?.bool);
+                try std.testing.expectEqual(@as(i64, 0), capture.object.get("retained_bytes").?.integer);
+                try std.testing.expect(capture.object.get("path").? == .null);
+                try std.testing.expectEqualStrings(try auditControlHash(a, source), capture.object.get("sha256").?.string);
+            }
+        } else {
+            audit.report_bytes = 256 * 1024 * 1024;
+            try std.testing.expectError(error.AuditReportLimitExceeded, consumeExpandedPage(&writer, job, .{ .source = source }, a, &audit));
+            audit.abort(error.AuditReportLimitExceeded);
+            try std.testing.expectEqual(@as(usize, 0), audit.failure_records);
+            const summary = try auditControlSummary(a, inputs.audit_root);
+            try std.testing.expect(!summary.object.get("inventory_complete").?.bool);
+            try std.testing.expectEqualStrings("AuditReportLimitExceeded", summary.object.get("error_name").?.string);
+        }
+        try auditControlNoPublishedFiles(a, inputs.writer_root);
+    }
 }
