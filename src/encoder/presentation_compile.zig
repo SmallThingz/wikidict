@@ -2254,6 +2254,8 @@ pub const Renderer = struct {
     span_limit_marker: bool = false,
     block_limit_reached: bool = false,
     body_depth: usize = 0,
+    // Inline table captures cannot prove a physical boundary at slice byte zero.
+    orphan_close_inline_origin: bool = false,
     // Build-only reading boundaries for one inline HTML table. Nested tables
     // restore their parent's state; cells/captions are independent domains.
     inline_table_boundaries: ?*InlineTableBoundaries = null,
@@ -2797,7 +2799,7 @@ pub const Renderer = struct {
             .literal => try self.text(input, capture.style),
             .inline_body => {
                 if (std.mem.indexOf(u8, input, "{|") != null) {
-                    try self.blocksInline(try self.renderBody(input), capture.style);
+                    try self.blocksInline(try self.renderInlineTableBody(input), capture.style);
                 } else try self.inlineText(input, capture.style, capture.depth);
             },
             .link => try self.link(input, capture.target, capture.style, capture.depth, capture.external),
@@ -6120,7 +6122,7 @@ pub const Renderer = struct {
                 self.body_language_direction = parent_language_direction;
                 self.block_formatting = parent_flags;
             }
-            try self.blocksInline(try self.renderBody(content), s);
+            try self.blocksInline(try self.renderInlineTableBody(content), s);
         } else try self.inlineTextWithMissing(try missingSlice(self.a, tracked, content), s, depth + 1);
         if (parenthetical and annotation_start < self.spans.items.len and
             std.mem.eql(u8, self.spans.items[annotation_start].text, "（"))
@@ -7701,6 +7703,19 @@ pub const Renderer = struct {
             }.match,
         } else null;
     }
+    fn renderInlineTableBody(self: *Renderer, source: []const u8) Error![]const Block {
+        // Keep existing table/heading parsing unchanged. Only orphan-close
+        // recovery needs the lost physical origin of this inline capture.
+        return self.renderBodyWithOrphanOrigin(MissingText.untracked(source), true);
+    }
+
+    fn renderBodyWithOrphanOrigin(self: *Renderer, source: MissingText, inline_origin: bool) Error![]const Block {
+        const previous = self.orphan_close_inline_origin;
+        self.orphan_close_inline_origin = inline_origin;
+        defer self.orphan_close_inline_origin = previous;
+        return self.renderBodyWithMissing(source);
+    }
+
     fn renderBodyWithInlineStart(self: *Renderer, source: []const u8, initial_inline: bool) Error![]const Block {
         return self.renderBodySlice(source, initial_inline, false, null, null);
     }
@@ -7782,6 +7797,36 @@ pub const Renderer = struct {
             const line = std.mem.trimEnd(u8, input[start..end], "\r");
             pos = if (end < input.len) end + 1 else end;
             const clean = trim(line);
+            // An unmatched physical table closer is malformed source. Compile
+            // an explicit diagnostic rather than shipping its raw delimiter.
+            // This is project recovery policy, not MediaWiki's literal display.
+            // Token-local starts, same-line continuations, protected/code and
+            // link-label domains do not establish this physical block boundary.
+            if (!anchored_inline and (start == 0 or input[start - 1] == '\n') and
+                (start != 0 or !self.orphan_close_inline_origin) and
+                !self.pre_block and !self.parsed_pre and !link_label_scope and
+                !self.in_reference and self.body_link_target.len == 0 and starts(line, "|}"))
+            {
+                if (para) |p| {
+                    try self.bodyRawParagraph(&blocks, input, input[p..start], if (p == 0) initial_quote else null, &body_quotes, &link_inline_join);
+                    para = null;
+                }
+                const diagnostic = try self.parseBodySpans("[malformed table]", .{});
+                for (@constCast(diagnostic)) |*span| span.generated_diagnostic = true;
+                try self.appendBlockBudgeted(&blocks, .{ .kind = .paragraph, .spans = diagnostic });
+                self.fallbacks.malformed_table = true;
+                self.fallbacks.literal_markup = true;
+                formatting_join_pending = false;
+                link_inline_join = null;
+                @memset(&counts, 0);
+                previous_list_path = "";
+                // Only the proved two-byte control is replaced. Its suffix stays
+                // on the same physical line and uses ordinary inline parsing.
+                pos = start + 2;
+                inline_line_end = physical_end;
+                logical_line_end = null;
+                continue;
+            }
             // Expansion can introduce a block newline immediately inside a
             // balanced formatting wrapper, e.g. <small>\n* notice</small>.
             // Match across the whole body before line splitting discards that
@@ -8286,7 +8331,7 @@ pub const Renderer = struct {
                     // Cells begin a local quote/observer domain, just as
                     // cellSpans -> renderBody does on the non-layout path.
                     try blocks.appendSlice(self.a, try self.indentTableBlocks(
-                        try self.renderBody(layout.body),
+                        try self.renderInlineTableBody(layout.body),
                         table_path,
                     ));
                     pos = layout.end;
@@ -8476,7 +8521,7 @@ pub const Renderer = struct {
         self.body_language_direction = .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set };
         defer self.body_language_direction = previous;
         const tracked = if (self.body_missing) |parent| try self.missingSliceWithHeadingSource(parent, input) else MissingText.untracked(input);
-        return self.renderBodyWithMissing(tracked);
+        return self.renderBodyWithOrphanOrigin(tracked, true);
     }
     fn parseSpansWithLanguageDirection(self: *Renderer, input: []const u8, style: Style) Error![]const Span {
         // HTML captions, like cells and wiki captions, are local inline domains.
@@ -8563,7 +8608,7 @@ pub const Renderer = struct {
                 }
                 continue;
             }
-            try blocks.appendSlice(self.a, try self.renderBody(input[preceding..at]));
+            try blocks.appendSlice(self.a, try self.renderInlineTableBody(input[preceding..at]));
             const pair = optionalListItemEnd(input, item);
             const mark: u8 = if (list_tag.is("ol")) '#' else if (list_tag.is("ul")) '*' else if (item.is("dt")) ';' else ':';
             const path = try std.fmt.allocPrint(self.a, "{s}{c}", .{ parent_path, mark });
@@ -8580,7 +8625,7 @@ pub const Renderer = struct {
             cursor = pair.end;
             preceding = cursor;
         }
-        try blocks.appendSlice(self.a, try self.renderBody(input[preceding..]));
+        try blocks.appendSlice(self.a, try self.renderInlineTableBody(input[preceding..]));
     }
     fn htmlListNumber(self: *Renderer, ordinal: i32, style: HtmlListNumberStyle) Error![]const u8 {
         if (style == .decimal or ordinal <= 0 or ((style == .lower_roman or style == .upper_roman) and ordinal > 3999))
@@ -8918,7 +8963,7 @@ pub const Renderer = struct {
             if (oneOf(tag.name, &.{ "div", "p", "blockquote", "center", "ul", "ol", "dl", "table", "h1", "h2", "h3", "h4", "h5", "h6" })) explicit_blocks = true;
         }
         try self.registerHeadingSourceCopies(source.items, heading_copies.items);
-        const produced = if (explicit_blocks) try self.renderBody(source.items) else blk: {
+        const produced = if (explicit_blocks) try self.renderInlineTableBody(source.items) else blk: {
             // Parsing inline character data directly retains source boundary
             // whitespace. Joining adds no separator that was not in source.
             const spans = try self.parseBodySpans(source.items, .{});
@@ -9094,7 +9139,7 @@ pub const Renderer = struct {
         const body = try source.take(self.a);
         try self.registerHeadingSourceCopies(body.bytes, copies.items);
         copies.clearRetainingCapacity();
-        try blocks.appendSlice(self.a, try self.renderBodyWithMissing(body));
+        try blocks.appendSlice(self.a, try self.renderBodyWithOrphanOrigin(body, true));
     }
     fn wikiTableIndent(line: []const u8) ?[]const u8 {
         var indent: usize = 0;
@@ -9520,7 +9565,7 @@ pub const Renderer = struct {
             if (body.len != 0) try self.lineBreak(.{});
         }
         const tracked_body = if (self.body_missing) |missing_parent| try missingSlice(self.a, missing_parent, body) else MissingText.untracked(body);
-        try self.blocksInline(try self.renderBodyWithMissing(tracked_body), .{});
+        try self.blocksInline(try self.renderBodyWithOrphanOrigin(tracked_body, body.ptr == source.ptr), .{});
         return self.spans.toOwnedSlice(self.a);
     }
 
@@ -11916,10 +11961,33 @@ test "unclosed formatting and rowless nested tables compile their contents" {
     try std.testing.expectEqualStrings("word tail", try flattened(a, spans));
     try std.testing.expect(spans[0].flags.small);
     const blocks = try r.renderBody("{|\n{|\n* [[one]]\n|}\n{|\n* [[two]]\n|}\n|}\n|}\nAfter");
-    try std.testing.expectEqual(@as(usize, 3), blocks.len);
-    try std.testing.expectEqualStrings("one", try flattened(a, blocks[0].spans));
-    try std.testing.expectEqualStrings("two", try flattened(a, blocks[1].spans));
-    try std.testing.expectEqualStrings("|} After", try flattened(a, blocks[2].spans));
+    // Three table opens consume three closes; the fourth physical close is
+    // malformed source and now has an explicit nonaction diagnostic.
+    try std.testing.expectEqual(@as(usize, 4), blocks.len);
+    for (blocks[0..2], [_][]const u8{ "one", "two" }) |block_value, target| {
+        try std.testing.expectEqual(Kind.list_item, block_value.kind);
+        try std.testing.expectEqualStrings("*", block_value.list_path);
+        try std.testing.expectEqualStrings(target, try flattened(a, block_value.spans));
+        var actions: usize = 0;
+        for (block_value.spans) |span| {
+            try std.testing.expect(!span.generated_diagnostic);
+            if (span.kind == .link) {
+                actions += 1;
+                try std.testing.expectEqualStrings(target, span.target);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), actions);
+    }
+    try std.testing.expectEqual(Kind.paragraph, blocks[2].kind);
+    try std.testing.expectEqualStrings("[malformed table]", try flattened(a, blocks[2].spans));
+    for (blocks[2].spans) |span| {
+        try std.testing.expect(span.generated_diagnostic and span.provenance == .parsed);
+        try std.testing.expect(span.kind == .text and span.target.len == 0 and !span.self_link);
+    }
+    try std.testing.expectEqual(Kind.paragraph, blocks[3].kind);
+    try std.testing.expectEqualStrings("After", try flattened(a, blocks[3].spans));
+    for (blocks[3].spans) |span| try std.testing.expect(!span.generated_diagnostic);
+    try std.testing.expect(r.fallbacks.malformed_table and r.fallbacks.literal_markup);
 }
 
 test "localized namespace aliases classify media and category membership" {
@@ -15088,17 +15156,32 @@ test "leading behavior control preserves table protected and unknown literal bou
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    for ([_][]const u8{ "__NOEDITSECTION__{|\n| lexical cell\n|}", "<nowiki>__NOEDITSECTION__# literal</nowiki>", "__UNKNOWN__# literal", "&#95;&#95;NOEDITSECTION&#95;&#95;# literal" }) |source| {
+    // Control projection cannot invent the earlier physical table opener.
+    // The authored final close is therefore an orphan with its own diagnostic.
+    var malformed: Renderer = .{ .a = a, .context = .{} };
+    const recovered = try malformed.renderBody("__NOEDITSECTION__{|\n| lexical cell\n|}");
+    try std.testing.expectEqual(@as(usize, 2), recovered.len);
+    for (recovered) |block_value| {
+        try std.testing.expectEqual(Kind.paragraph, block_value.kind);
+        try std.testing.expect(block_value.table == null and block_value.list_path.len == 0);
+    }
+    try std.testing.expectEqualStrings("{| | lexical cell", try flattened(a, recovered[0].spans));
+    for (recovered[0].spans) |span| try std.testing.expect(!span.generated_diagnostic and span.kind == .text and span.target.len == 0);
+    try std.testing.expectEqualStrings("[malformed table]", try flattened(a, recovered[1].spans));
+    for (recovered[1].spans) |span| {
+        try std.testing.expect(span.generated_diagnostic and span.provenance == .parsed);
+        try std.testing.expect(span.kind == .text and span.target.len == 0 and !span.self_link);
+    }
+    try std.testing.expect(malformed.fallbacks.malformed_table and malformed.fallbacks.literal_markup);
+    for ([_][]const u8{ "<nowiki>__NOEDITSECTION__# literal</nowiki>", "__UNKNOWN__# literal", "&#95;&#95;NOEDITSECTION&#95;&#95;# literal" }, [_][]const u8{ "__NOEDITSECTION__# literal", "__UNKNOWN__# literal", "__NOEDITSECTION__# literal" }) |source, expected| {
         var renderer: Renderer = .{ .a = a, .context = .{} };
         const blocks = try renderer.renderBody(source);
         try std.testing.expectEqual(@as(usize, 1), blocks.len);
         try std.testing.expectEqual(Kind.paragraph, blocks[0].kind);
         try std.testing.expect(blocks[0].table == null and blocks[0].list_path.len == 0);
-        const text = try flattened(a, blocks[0].spans);
-        if (std.mem.indexOf(u8, source, "lexical cell") != null) {
-            try std.testing.expect(std.mem.indexOf(u8, text, "{|") != null);
-            try std.testing.expect(std.mem.indexOf(u8, text, "lexical cell") != null);
-        } else try std.testing.expect(std.mem.indexOf(u8, text, "# literal") != null);
+        try std.testing.expectEqualStrings(expected, try flattened(a, blocks[0].spans));
+        for (blocks[0].spans) |span| try std.testing.expect(!span.generated_diagnostic);
+        try std.testing.expect(!renderer.fallbacks.malformed_table);
     }
 }
 
@@ -17510,16 +17593,30 @@ test "structural control projection preserves early table rule and protected bou
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    for ([_][]const u8{
-        "{__NOEDITSECTION__|\n| literal cell\n|}",
-        "--__NOEDITSECTION__--",
-        "<nowiki>=__NOEDITSECTION__=French==</nowiki>",
-    }) |source| {
+    var malformed: Renderer = .{ .a = a, .context = .{} };
+    const recovered = try malformed.renderBody("{__NOEDITSECTION__|\n| literal cell\n|}");
+    try std.testing.expectEqual(@as(usize, 2), recovered.len);
+    for (recovered) |block_value| {
+        try std.testing.expectEqual(Kind.paragraph, block_value.kind);
+        try std.testing.expect(block_value.table == null and block_value.list_path.len == 0);
+    }
+    try std.testing.expectEqualStrings("{| | literal cell", try flattened(a, recovered[0].spans));
+    for (recovered[0].spans) |span| try std.testing.expect(!span.generated_diagnostic and span.kind == .text and span.target.len == 0);
+    try std.testing.expectEqualStrings("[malformed table]", try flattened(a, recovered[1].spans));
+    for (recovered[1].spans) |span| {
+        try std.testing.expect(span.generated_diagnostic and span.provenance == .parsed);
+        try std.testing.expect(span.kind == .text and span.target.len == 0 and !span.self_link);
+    }
+    try std.testing.expect(malformed.fallbacks.malformed_table and malformed.fallbacks.literal_markup);
+    for ([_][]const u8{ "--__NOEDITSECTION__--", "<nowiki>=__NOEDITSECTION__=French==</nowiki>" }, [_][]const u8{ "----", "=__NOEDITSECTION__=French==" }) |source, expected| {
         var renderer: Renderer = .{ .a = a, .context = .{} };
         const blocks = try renderer.renderBody(source);
         try std.testing.expectEqual(@as(usize, 1), blocks.len);
         try std.testing.expectEqual(Kind.paragraph, blocks[0].kind);
         try std.testing.expect(blocks[0].table == null and blocks[0].list_path.len == 0);
+        try std.testing.expectEqualStrings(expected, try flattened(a, blocks[0].spans));
+        for (blocks[0].spans) |span| try std.testing.expect(!span.generated_diagnostic);
+        try std.testing.expect(!renderer.fallbacks.malformed_table);
     }
 }
 

@@ -1119,7 +1119,7 @@ test "reported recovery matches MediaWiki literal and formatting fixtures" {
         .{ "C <small>x<small> y", "C x y" },
         // The raw empty wrapper is compiled into a nonaction diagnostic.
         .{ "D [[]] E", "D [malformed link] E" },
-        .{ "|}\nAfter", "|} After" },
+        // Orphan table closers have a separate semantic diagnostic regression.
         .{ "{|\n* [[one]]\n|}", "one" },
         .{ "X <script>y</script> Z", "X <script>y</script> Z" },
     };
@@ -1130,9 +1130,7 @@ test "reported recovery matches MediaWiki literal and formatting fixtures" {
         var report: Fallbacks = .{};
         // The old MediaWiki literal display oracle is not a permission to ship
         // active parsed source. Preserve it above as the before-policy witness.
-        if (std.mem.eql(u8, case[0], "|}\nAfter") or
-            std.mem.eql(u8, case[0], "X <script>y</script> Z"))
-        {
+        if (std.mem.eql(u8, case[0], "X <script>y</script> Z")) {
             try std.testing.expectError(error.UncompiledPresentation, compileReportedAlloc(a, "entry", .language, "English", "en", case[0], null, &report));
             try std.testing.expect(report.literal_markup);
             continue;
@@ -3013,4 +3011,111 @@ test "legacy destination aliases and literal fallback-shaped headings retain dis
     }
     try std.testing.expectEqualStrings("#.C3.A4", decoded.entry.sections[0].blocks[1].spans[0].target);
     try std.testing.expectEqualStrings("#.C3.A4 3", decoded.entry.sections[2].blocks[1].spans[0].target);
+}
+
+test "orphan physical table closer compiles diagnostic and preserves lexical body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // The final closer models the extra translation footer, after a real table.
+    const source = "# prefix [[Before|before]]\n{|\n| [[Inside|cell]]\n|}\n|}</div></div>suffix [[After|after]]\n# following [[Last|last]]\n";
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "entry", .language, "Arabic", "ar", source, null, &report);
+    const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "ar", .heading = "Arabic" });
+    var visible: std.ArrayList(u8) = .empty;
+    var tables: usize = 0;
+    var diagnostics: usize = 0;
+    var before = false;
+    var inside = false;
+    var after = false;
+    var last = false;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| {
+        for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            if (std.mem.eql(u8, span.text, "[malformed table]")) {
+                diagnostics += 1;
+                try std.testing.expect(span.kind == .text and span.target.len == 0);
+            }
+            if (span.kind == .link and std.mem.eql(u8, span.target, "Before")) before = true;
+            if (span.kind == .link and std.mem.eql(u8, span.target, "After")) after = true;
+            if (span.kind == .link and std.mem.eql(u8, span.target, "Last")) last = true;
+        }
+        if (block.table) |table| {
+            tables += 1;
+            for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |span| {
+                if (span.kind == .link and std.mem.eql(u8, span.target, "Inside")) inside = true;
+            };
+        }
+    };
+    try std.testing.expect(report.malformed_table and report.literal_markup);
+    try std.testing.expectEqual(@as(usize, 1), tables);
+    try std.testing.expectEqual(@as(usize, 1), diagnostics);
+    try std.testing.expect(before and inside and after and last);
+    for ([_][]const u8{ "prefix", "suffix", "following" }) |word|
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, word) != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "|}") == null);
+
+    // A later physical LF stays eligible even inside an inline table capture.
+    for ([_][]const u8{ "|}\nAfter", "<span>first\n|}After\n{|\n| cell\n|}\n</span>" }) |simple_source| {
+        var simple_report: Fallbacks = .{};
+        const simple = try compileReportedAlloc(a, "entry", .language, "English", "en", simple_source, null, &simple_report);
+        const simple_decoded = try codec.decodeAlloc(a, simple, "entry", .language, .{ .code = "en", .heading = "English" });
+        visible.clearRetainingCapacity();
+        for (simple_decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span|
+            try visible.appendSlice(a, span.text);
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, "[malformed table]") != null);
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, "After") != null);
+        try std.testing.expect(simple_report.malformed_table and simple_report.literal_markup);
+    }
+    // The publication boundary still rejects any leaked parsed delimiter.
+    const leaked = [_]compiler.Span{.{ .text = "|}" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &leaked, null));
+}
+
+test "orphan table recovery leaves inline protected entity and matched controls unchanged" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var inline_report: Fallbacks = .{};
+    try std.testing.expectError(error.UncompiledPresentation, compileReportedAlloc(a, "entry", .language, "English", "en", "before |} after", null, &inline_report));
+    try std.testing.expect(!inline_report.malformed_table);
+    // Neither recursive same-line formatting nor a protected empty opener
+    // promotes the following inline token to a physical table boundary.
+    for ([_][]const u8{
+        "[[Before]]|} after",
+        "<small>|}</small>",
+        "<nowiki/>|}suffix",
+        "prefix <span>|} inline\n{|\n| cell\n|}\n</span> suffix [[After]]",
+        "<span data-phonos-audio=\"Sound.ogg\">|} inline\n{|\n| cell\n|}\n</span>",
+        "<ul>|}<li>item [[Keep]]</li></ul>",
+        "<ul><li>item [[Keep]]</li>|}</ul>",
+        "<table><tr><td>|} inline\n* later [[Keep]]</td></tr></table>",
+    }) |source| {
+        var split_report: Fallbacks = .{};
+        try std.testing.expectError(error.UncompiledPresentation, compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &split_report));
+        try std.testing.expect(!split_report.malformed_table);
+    }
+    for ([_][]const u8{ "<nowiki>|}</nowiki>", "&#124;}", "<nowiki>\n|}\n</nowiki>" }) |source| {
+        var protected_report: Fallbacks = .{};
+        const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &protected_report);
+        const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+        var visible: std.ArrayList(u8) = .empty;
+        for (decoded.entry.sections[0].blocks[0].spans) |span| try visible.appendSlice(a, span.text);
+        try std.testing.expectEqualStrings("|}", std.mem.trim(u8, visible.items, " \t\r\n"));
+        try std.testing.expect(!protected_report.malformed_table and !protected_report.literal_markup);
+    }
+    // The existing nested-table oracle also closes its real parent before after.
+    var table_report: Fallbacks = .{};
+    const nested = "{|\n|-\n| outer\n{|\n|-\n| inner\n|}\n| sibling\n|-\n| final\n|}\n# after\n";
+    const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", nested, null, &table_report);
+    const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    const blocks = decoded.entry.sections[0].blocks;
+    try std.testing.expect(blocks[0].table != null);
+    try std.testing.expectEqual(@as(usize, 2), blocks[0].table.?.rows.len);
+    var cell_text: std.ArrayList(u8) = .empty;
+    for (blocks[0].table.?.rows[0].cells[0].spans) |span| {
+        if (span.kind == .line_break) try cell_text.append(a, '\n') else try cell_text.appendSlice(a, span.text);
+    }
+    try std.testing.expectEqualStrings("outer\ninner", cell_text.items);
+    try std.testing.expect(!table_report.malformed_table and !table_report.literal_markup);
 }
