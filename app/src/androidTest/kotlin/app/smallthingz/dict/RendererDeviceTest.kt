@@ -60,31 +60,92 @@ internal fun renderedLayoutFailureEvidence(
     if (imageName == null) return details + viewportDetails
     // Only the named owned test viewport is captured, before finally clears it.
     // A failed/oversize capture supplements, and never replaces, the overflow assertion.
+    var captureStage = "captureToImage"
+    var captureWidth: Int? = null
+    var captureHeight: Int? = null
+    var encodedBytes = 0
+    var byteLimit = 64 * 1024
+    var limitExceeded = false
+    var writerFailure: java.io.IOException? = null
+    var partialFileRemoved: Boolean? = null
+    val headingNames = setOf("heading-ltr-ordinary.png", "heading-ltr-plain-companion.png",
+        "heading-ltr-rich-companion.png", "heading-ltr-styled-companion.png",
+        "heading-rtl-ordinary.png", "heading-rtl-plain-companion.png",
+        "heading-rtl-rich-companion.png", "heading-rtl-styled-companion.png")
     val capture = runCatching {
         val bitmap = viewport.captureToImage().asAndroidBitmap()
         try {
-            val bytes = java.io.ByteArrayOutputStream()
-            val limit = 64 * 1024
-            val bounded = object : java.io.OutputStream() {
-                override fun write(value: Int) {
-                    if (bytes.size() >= limit) throw java.io.IOException("Owned PNG exceeds 65536 bytes")
-                    bytes.write(value)
+            captureWidth = bitmap.width
+            captureHeight = bitmap.height
+            fun compressInto(output: java.io.OutputStream) {
+                val bounded = object : java.io.OutputStream() {
+                    private fun reserve(length: Int) {
+                        if (length > byteLimit - encodedBytes) {
+                            limitExceeded = true
+                            val failure = java.io.IOException("Owned PNG exceeds $byteLimit bytes")
+                            writerFailure = failure
+                            throw failure
+                        }
+                    }
+                    override fun write(value: Int) {
+                        reserve(1)
+                        try { output.write(value); encodedBytes++ }
+                        catch (failure: java.io.IOException) { writerFailure = failure; throw failure }
+                    }
+                    override fun write(data: ByteArray, offset: Int, length: Int) {
+                        reserve(length)
+                        try { output.write(data, offset, length); encodedBytes += length }
+                        catch (failure: java.io.IOException) { writerFailure = failure; throw failure }
+                    }
                 }
-                override fun write(data: ByteArray, offset: Int, length: Int) {
-                    if (length > limit - bytes.size()) throw java.io.IOException("Owned PNG exceeds 65536 bytes")
-                    bytes.write(data, offset, length)
-                }
+                captureStage = "PNG-compress"
+                val compressed = bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, bounded)
+                // The native encoder may report false after an OutputStream exception.
+                writerFailure?.let { throw it }
+                check(compressed) { "Owned PNG encoder returned false" }
             }
-            check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, bounded))
-            val png = bytes.toByteArray()
-            val sha = java.security.MessageDigest.getInstance("SHA-256").digest(png)
-                .joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
-            "\nOWNED_PNG_BEGIN " + imageName + " bytes=" + png.size + " sha256=" + sha +
-                " width=" + bitmap.width + " height=" + bitmap.height + "\n" +
-                android.util.Base64.encodeToString(png, android.util.Base64.NO_WRAP) +
-                "\nOWNED_PNG_END " + imageName
+            if (imageName in headingNames) {
+                byteLimit = 16 * 1024 * 1024
+                captureStage = "owned-file-path"
+                val files = InstrumentationRegistry.getInstrumentation().targetContext.filesDir
+                val directory = java.io.File(files, "qa-copy-evidence")
+                check(directory.mkdirs() || directory.isDirectory)
+                check(directory.canonicalFile.parentFile == files.canonicalFile)
+                val target = java.io.File(directory, imageName)
+                check(target.canonicalFile.parentFile == directory.canonicalFile && !target.exists())
+                val digest = java.security.MessageDigest.getInstance("SHA-256")
+                var complete = false
+                try {
+                    target.outputStream().use { output ->
+                        compressInto(java.security.DigestOutputStream(output, digest))
+                    }
+                    captureStage = "owned-file-verify"
+                    check(encodedBytes in 45..byteLimit && target.length() == encodedBytes.toLong())
+                    val sha = digest.digest().joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
+                    complete = true
+                    "\nOWNED_PNG_FILE " + imageName + " bytes=" + encodedBytes + " sha256=" + sha +
+                        " width=" + bitmap.width + " height=" + bitmap.height
+                } finally {
+                    if (!complete) partialFileRemoved = runCatching { !target.exists() || target.delete() }.getOrDefault(false)
+                }
+            } else {
+                val bytes = java.io.ByteArrayOutputStream()
+                compressInto(bytes)
+                val png = bytes.toByteArray()
+                val sha = java.security.MessageDigest.getInstance("SHA-256").digest(png)
+                    .joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
+                "\nOWNED_PNG_BEGIN " + imageName + " bytes=" + png.size + " sha256=" + sha +
+                    " width=" + bitmap.width + " height=" + bitmap.height + "\n" +
+                    android.util.Base64.encodeToString(png, android.util.Base64.NO_WRAP) +
+                    "\nOWNED_PNG_END " + imageName
+            }
         } finally { bitmap.recycle() }
-    }.getOrElse { "\nOWNED_PNG_UNAVAILABLE " + imageName + " " + it.javaClass.name + ": " + it.message }
+    }.getOrElse {
+        "\nOWNED_PNG_UNAVAILABLE " + imageName + " " + it.javaClass.name + ": " + it.message +
+            " stage=" + captureStage + " width=" + captureWidth + " height=" + captureHeight +
+            " encodedBytes=" + encodedBytes + " byteLimit=" + byteLimit + " limitExceeded=" + limitExceeded +
+            " partialFileRemoved=" + partialFileRemoved
+    }
     return details + viewportDetails + capture
 }
 
@@ -2428,6 +2489,33 @@ class RendererDeviceTest {
 
     @Test fun searchFieldKeepsAccessibleNameForEmptyAndPopulatedQuery() {
         val namedField = hasContentDescription("Find a word") and hasSetTextAction()
+        val learning = LearningStore.get(InstrumentationRegistry.getInstrumentation().targetContext)
+        val inputModeManager = java.util.concurrent.atomic.AtomicReference<androidx.compose.ui.input.InputModeManager?>()
+        var beforeTab = "not reached"
+        fun ownedFocusEvidence(): String {
+            val targets = listOf("field" to namedField,
+                "clear" to hasContentDescription("Clear search"),
+                "close" to hasContentDescription("Close search"))
+                .joinToString { (label, matcher) ->
+                    val ids = compose.onAllNodes(matcher, useUnmergedTree = true)
+                        .fetchSemanticsNodes(atLeastOneRootRequired = false).take(8).map { it.id }
+                    "$label=$ids"
+                }
+            val focused = compose.onAllNodes(isFocused(), useUnmergedTree = true)
+                .fetchSemanticsNodes(atLeastOneRootRequired = false).take(16).joinToString { node ->
+                    "id=${node.id},role=${node.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Role)}," +
+                        "editable=${node.config.getOrNull(androidx.compose.ui.semantics.SemanticsActions.SetText) != null}," +
+                        "bounds=${node.boundsInRoot}"
+                }
+            var ownedWindow = "unavailable"
+            compose.runOnIdle {
+                val activity = compose.activity
+                val decor = activity.window.decorView
+                ownedWindow = "inputMode=${inputModeManager.get()?.inputMode},touchMode=${decor.isInTouchMode}," +
+                    "activityFocus=${activity.hasWindowFocus()},decorFocus=${decor.hasWindowFocus()}"
+            }
+            return "targets={$targets};focused=[$focused];$ownedWindow"
+        }
         fun assertField(value: String) {
             compose.onAllNodes(namedField).assertCountEquals(1)
             compose.onNode(namedField).assertIsDisplayed().assertIsFocused()
@@ -2437,10 +2525,32 @@ class RendererDeviceTest {
                 ))
         }
         try {
+            // Capture the public manager around the same production app and store owners.
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                val manager = androidx.compose.ui.platform.LocalInputModeManager.current
+                SideEffect { inputModeManager.set(manager) }
+                DictTheme(learning.data.settings.darkMode) { DictApp(library, learning) {} }
+            } }
+            compose.waitUntil(15000) {
+                compose.onAllNodesWithTag("entry-scroll").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
+            }
             compose.onNodeWithContentDescription("Dictionary").performClick()
             assertField("")
             compose.onNode(namedField).performTextInput("ca")
             assertField("ca")
+            // System-defined focusability requires the platform keyboard mode first.
+            val manager = checkNotNull(inputModeManager.get())
+            compose.runOnIdle {
+                assertPhysicalActivity(compose.activity)
+                assertTrue(compose.activity.hasWindowFocus() && compose.activity.window.decorView.hasWindowFocus())
+                val before = manager.inputMode
+                val accepted = manager.requestInputMode(androidx.compose.ui.input.InputMode.Keyboard)
+                android.util.Log.i("TestRunner", "OWNED_SEARCH_INPUT_MODE before=$before accepted=$accepted after=${manager.inputMode}")
+                assertTrue("The platform must accept keyboard input mode", accepted)
+            }
+            compose.waitUntil(10000) { manager.inputMode == androidx.compose.ui.input.InputMode.Keyboard }
+            compose.runOnIdle { assertEquals(androidx.compose.ui.input.InputMode.Keyboard, manager.inputMode) }
+            beforeTab = ownedFocusEvidence()
             // Keyboard activation gives Clear its own focus before it removes itself.
             compose.onNode(namedField).performKeyInput {
                 keyDown(androidx.compose.ui.input.key.Key.Tab); keyUp(androidx.compose.ui.input.key.Key.Tab)
@@ -2456,6 +2566,12 @@ class RendererDeviceTest {
             compose.onNodeWithContentDescription("Close search").performClick()
             compose.onNodeWithTag("entry-scroll").assertExists()
             compose.onAllNodes(namedField).assertCountEquals(0)
+        } catch (failure: AssertionError) {
+            val afterFailure = runCatching { ownedFocusEvidence() }
+                .getOrElse { "unavailable:${it.javaClass.simpleName}" }
+            // IDs, roles and geometry only: no query text, dictionary text or foreign windows.
+            failure.addSuppressed(AssertionError("OWNED_SEARCH_FOCUS beforeTab={$beforeTab};afterFailure={$afterFailure}"))
+            throw failure
         } finally {
             if (compose.onAllNodesWithContentDescription("Close search")
                     .fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()) {
