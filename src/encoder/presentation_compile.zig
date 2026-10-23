@@ -2310,7 +2310,13 @@ pub const Renderer = struct {
     poem_boundary_pending: bool = false,
     poem_authored_token: bool = false,
 
-    const InlineTableBoundaries = struct { row_seen: bool = false, cell_seen: bool = false, caption_seen: bool = false };
+    const InlineTableBoundaries = struct {
+        row_seen: bool = false,
+        cell_seen: bool = false,
+        caption_seen: bool = false,
+        table_background: ?[]const u8 = null,
+        row_background: ?[]const u8 = null,
+    };
 
     const poem_prefix = "\x7fWDPOEM:";
     const PoemItem = struct {
@@ -5891,8 +5897,16 @@ pub const Renderer = struct {
             if (tag.closing or tag.self_closing) return tag.end;
             const pair = syntax.matchingTag(input, tag) orelse syntax.Pair{ .inner_end = input.len, .end = input.len };
             const parent_table = self.inline_table_boundaries;
+            const previous_row_background = if (parent_table) |table| table.row_background else null;
+            defer {
+                if (parent_table) |table| {
+                    if (tag.is("tr")) table.row_background = previous_row_background;
+                }
+            }
+            var cell_background: ?[]const u8 = null;
             if (parent_table) |table| {
                 if (tag.is("tr")) {
+                    table.row_background = try self.tableCellBackground(tag, table.table_background);
                     if (table.row_seen or table.cell_seen or table.caption_seen) try self.lineBreak(style);
                     table.row_seen = true;
                     table.cell_seen = false;
@@ -5908,6 +5922,8 @@ pub const Renderer = struct {
                     }
                     if (table.cell_seen) try self.text(" · ", style);
                     table.cell_seen = true;
+                    const fallback = if (try self.tableSpanAttr(tag, "rowspan") == 1) table.row_background else null;
+                    cell_background = try self.tableCellBackground(tag, fallback);
                 }
                 // A child cell/caption cannot consume its parent's separators.
                 // A nested table establishes a fresh scope in the ordinary arm.
@@ -5934,7 +5950,15 @@ pub const Renderer = struct {
                     if (self.poem_depth != 0) self.poem_base_style.italic = italic;
                 }
             }
+            const body_start = self.spans.items.len;
             try self.inlineTextWithMissing(try missingSlice(self.a, tracked, input[tag.end..pair.inner_end]), cell_style, depth + 1);
+            // Keep existing inline metadata and boundaries; only this cell's
+            // own runs receive its resolved opaque paint. Deeper paint wins.
+            if (cell_background) |background| {
+                for (self.spans.items[body_start..]) |*span| {
+                    if (span.background == null) span.background = background;
+                }
+            }
             return pair.end;
         }
         if (tag.is("ref") and !tag.closing) {
@@ -6045,7 +6069,8 @@ pub const Renderer = struct {
         defer self.block_formatting = inherited_formatting;
         const content = input[tag.end..pair.inner_end];
         if (matched != null and try self.chemicalScriptStack(content, tag, s)) return pair.end;
-        var table_boundaries: InlineTableBoundaries = .{};
+        const table_background = if (tag.is("table")) try self.tableCellBackground(tag, null) else null;
+        var table_boundaries: InlineTableBoundaries = .{ .table_background = table_background, .row_background = table_background };
         const parent_table = self.inline_table_boundaries;
         if (tag.is("table")) self.inline_table_boundaries = &table_boundaries;
         defer self.inline_table_boundaries = parent_table;
@@ -26896,4 +26921,72 @@ test "flattened nested cells retain only their own opaque background runs" {
     try std.testing.expect(first[1].background == null and second[0].background == null);
     // No dummy text or paint extent is invented for an empty colored cell.
     try std.testing.expectEqualStrings("caption\ndeepown · sibling · ", try flattened(a, r.spans.items));
+}
+
+test "nested HTML cells flatten own row and table paint without coloring the outer tail" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const source = "<table><tr><td bgcolor='#aaaaaa'>" ++
+        "<table class='IPA' bgcolor='#112233'><caption>[[Caption|caption]]</caption><tr bgcolor='#223344'>" ++
+        "<td colspan='2' rowspan='2' bgcolor='#334455'>[[Own|own]]s<br>[[Second|second]]" ++
+        "<table bgcolor='#445566'><tr><td>[[Deep|deep]]</td></tr></table></td>" ++
+        "<td>[[Row|row]]</td></tr><tr><td>[[Table|table]]</td><td rowspan='2'>[[NoFallback|no fallback]]</td></tr></table>" ++
+        "[[Tail|tail]]</td></tr></table>";
+    const blocks = try r.renderBody(source);
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const outer = blocks[0].table.?;
+    try std.testing.expectEqual(@as(usize, 1), outer.rows.len);
+    const cell = outer.rows[0].cells[0];
+    try std.testing.expectEqualStrings("#aaaaaa", cell.background.?);
+    const targets = [_][]const u8{ "Own", "Second", "Deep", "Row", "Table", "Tail", "Caption", "NoFallback" };
+    const colors = [_]?[]const u8{ "#334455", "#334455", "#445566", "#223344", "#112233", null, null, null };
+    var seen: [targets.len]bool = @splat(false);
+    var painted_break = false;
+    for (cell.spans) |span| {
+        for (targets, colors, 0..) |target, expected, index| if (std.mem.eql(u8, span.target, target)) {
+            seen[index] = true;
+            if (std.mem.eql(u8, target, "Tail")) {
+                try std.testing.expectEqualStrings("", span.classes);
+                try std.testing.expectEqual(Role.normal, span.role);
+            } else {
+                try std.testing.expectEqualStrings("IPA", span.classes);
+                try std.testing.expectEqual(Role.pronunciation, span.role);
+            }
+            if (expected) |color| try std.testing.expectEqualStrings(color, span.background.?) else try std.testing.expect(span.background == null);
+        };
+        if (span.kind == .line_break and span.background != null and std.mem.eql(u8, span.background.?, "#334455")) painted_break = true;
+    }
+    for (seen) |present| try std.testing.expect(present);
+    try std.testing.expect(painted_break);
+    const text = try flattened(a, cell.spans);
+    for ([_][]const u8{ "owns", "second", "deep", "row", "table", "tail" }) |word|
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, word));
+}
+
+test "inline nested HTML paint preserves empty tables and protected literal controls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "<nowiki><table bgcolor='#ff0000'><tr><td>literal</td></tr></table></nowiki>",
+        "<pre><table bgcolor='#ff0000'><tr><td>literal</td></tr></table></pre>",
+        "<!-- <table bgcolor='#ff0000'><tr><td>literal</td></tr></table> -->plain",
+        "&lt;table bgcolor='#ff0000'&gt;literal&lt;/table&gt;",
+        "<span title=\"literal <table bgcolor='#ff0000'>\">plain</span>",
+        "<table></table>plain",
+        "<table/>plain",
+    }) |source| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const spans = try r.cellSpans(source);
+        for (spans) |span| try std.testing.expect(span.background == null);
+    }
+    var empty: Renderer = .{ .a = a, .context = .{} };
+    const empty_spans = try empty.cellSpans("before<table></table>after");
+    try std.testing.expectEqualStrings("before\nafter", try flattened(a, empty_spans));
+    var protected: Renderer = .{ .a = a, .context = .{} };
+    const literal = "<table bgcolor='#ff0000'><tr><td>literal</td></tr></table>";
+    const protected_spans = try protected.cellSpans("<nowiki>" ++ literal ++ "</nowiki>");
+    try std.testing.expectEqualStrings(literal, try flattened(a, protected_spans));
 }
