@@ -1,13 +1,19 @@
 package app.smallthingz.dict
 
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -2589,7 +2595,7 @@ class RendererDeviceTest {
         }
     }
 
-    private val retentionFocus = java.util.concurrent.atomic.AtomicReference<androidx.compose.ui.focus.FocusManager?>()
+    private val retentionFocus = java.util.concurrent.atomic.AtomicReference<FocusRequester?>()
 
     private fun mountLearnRetentionPanel(
         words: List<SavedWord>,
@@ -2600,14 +2606,19 @@ class RendererDeviceTest {
         compose.activityRule.scenario.onActivity { activity ->
             activity.setContent {
                 val density = LocalDensity.current
-                val focus = androidx.compose.ui.platform.LocalFocusManager.current
+                val focus = remember { FocusRequester() }
                 SideEffect { retentionFocus.set(focus) }
                 CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 1f)) {
                     DictTheme(mode) {
-                        Box(Modifier.width(320.dp).height(120.dp).clipToBounds().testTag("learn-retention-viewport")) {
-                            // Real status/segments precede the game and can completely fill this short viewport.
-                            LearnPanel(words, 3, { key, right -> answers += key to right }, { opened += it }, {},
-                                sampleFailed = true)
+                        Column {
+                            // Park focus outside the game in either platform input mode.
+                            Box(Modifier.size(1.dp).testTag("learn-retention-focus-target")
+                                .focusRequester(focus).focusable())
+                            Box(Modifier.width(320.dp).height(120.dp).clipToBounds().testTag("learn-retention-viewport")) {
+                                // Real status/segments precede the game and can completely fill this short viewport.
+                                LearnPanel(words, 3, { key, right -> answers += key to right }, { opened += it }, {},
+                                    sampleFailed = true)
+                            }
                         }
                     }
                 }
@@ -2649,7 +2660,8 @@ class RendererDeviceTest {
     }
 
     private fun hideUnfocusedLearnGame(text: String) {
-        compose.runOnIdle { checkNotNull(retentionFocus.get()).clearFocus(force = true) }
+        compose.runOnIdle { assertTrue(checkNotNull(retentionFocus.get()).requestFocus()) }
+        compose.onNodeWithTag("learn-retention-focus-target").assertIsFocused()
         compose.onAllNodes(isFocused() and hasAnyAncestor(hasTestTag("learn-retention-viewport"))).assertCountEquals(0)
         val scroll = compose.onNode(SemanticsMatcher.keyIsDefined(
             androidx.compose.ui.semantics.SemanticsProperties.VerticalScrollAxisRange))

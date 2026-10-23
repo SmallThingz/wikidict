@@ -573,6 +573,9 @@ class EgyptianFontDeviceTest {
         val observingCopy = AtomicBoolean(false)
         val pointerCount = AtomicInteger(0)
         val pointerTrace = ConcurrentLinkedQueue<String>()
+        var originalKeyboardMode: androidx.compose.ui.input.InputMode? = null
+        var keyboardModeOwner: android.view.View? = null
+        var primaryFailure: Throwable? = null
         compose.runOnUiThread {
             compose.activity.setContent {
                 val platform = LocalClipboard.current
@@ -682,6 +685,8 @@ class EgyptianFontDeviceTest {
             val keyboardInputMode = checkNotNull(inputModeManager.get())
             compose.runOnIdle {
                 val before = keyboardInputMode.inputMode
+                originalKeyboardMode = before
+                keyboardModeOwner = compose.activity.window.decorView
                 val requested = keyboardInputMode.requestInputMode(androidx.compose.ui.input.InputMode.Keyboard)
                 android.util.Log.i("TestRunner", "OWNED_ABBREVIATION_INPUT_MODE before=$before requested=$requested after=${keyboardInputMode.inputMode}")
                 assertTrue("The platform must accept keyboard input mode", requested)
@@ -746,6 +751,43 @@ class EgyptianFontDeviceTest {
                     val event = android.view.MotionEvent.obtain(downTime, android.os.SystemClock.uptimeMillis(), action, collapsePoint.x, collapsePoint.y, 0)
                     try {
                         event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+                        // Observe only our fixture and the already validated owned window.
+                        // Keep the original native injection and its ownership checks unchanged.
+                        val buttonSnapshot = runCatching {
+                            button.fetchSemanticsNode().let { node ->
+                                "window=${node.boundsInWindow} root=${node.boundsInRoot} touchRoot=${node.touchBoundsInRoot}"
+                            }
+                        }.getOrElse { "unavailable:${it.javaClass.simpleName}" }
+                        val ownedSnapshot = AtomicReference("unavailable")
+                        runCatching {
+                            compose.runOnIdle {
+                                val activity = compose.activity
+                                val decor = activity.window.decorView
+                                val screen = IntArray(2)
+                                val window = IntArray(2)
+                                decor.getLocationOnScreen(screen)
+                                decor.getLocationInWindow(window)
+                                val visible = android.graphics.Rect()
+                                decor.getGlobalVisibleRect(visible)
+                                ownedSnapshot.set("display=${decor.display?.displayId} " +
+                                    "shown=${decor.isShown} attached=${decor.isAttachedToWindow} " +
+                                    "activityFocus=${activity.hasWindowFocus()} decorFocus=${decor.hasWindowFocus()} " +
+                                    "touchMode=${decor.isInTouchMode} inputMode=${keyboardInputMode.inputMode} " +
+                                    "decorSize=${decor.width}x${decor.height} screen=${screen.toList()} " +
+                                    "window=${window.toList()} visible=$visible " +
+                                    "focusedView=${decor.findFocus()?.javaClass?.name}")
+                            }
+                        }.onFailure { ownedSnapshot.set("unavailable:${it.javaClass.simpleName}") }
+                        android.util.Log.i("TestRunner", "OWNED_ABBREVIATION_NATIVE_TOUCH " +
+                            "action=${android.view.MotionEvent.actionToString(event.action)} " +
+                            "eventDisplay=unavailable-public-sdk source=${event.source} " +
+                            "xy=${event.x},${event.y} raw=${event.rawX},${event.rawY} " +
+                            "downTime=${event.downTime} eventTime=${event.eventTime} " +
+                            "pid=${android.os.Process.myPid()} uid=${android.os.Process.myUid()} " +
+                            "ownedWindowId=${focusedWindow.id} ownedWindowDisplay=${focusedWindow.displayId} " +
+                            "ownedWindowBounds=$focusedBounds observedFocus=${focusedWindow.isFocused} " +
+                            "observedActive=${focusedWindow.isActive} button=$buttonSnapshot " +
+                            "ownedView=${ownedSnapshot.get()}")
                         instrumentation.sendPointerSync(event)
                     } finally { event.recycle() }
                 }
@@ -841,9 +883,40 @@ class EgyptianFontDeviceTest {
             compose.onNodeWithTag("entry-abbreviations").assertDoesNotExist()
             compose.runOnIdle { selected = entry }
             compose.onNodeWithTag("entry-abbreviations").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
         } finally {
+            // Restore only the mode this test changed, through the same owned manager.
+            // A declined restoration remains evidence; never replace the original failure.
+            val modeCleanup = runCatching {
+                compose.runOnIdle {
+                    val original = originalKeyboardMode
+                    val manager = inputModeManager.get()
+                    if (original != null && manager != null && manager.inputMode != original) {
+                        val activity = compose.activity
+                        val decor = activity.window.decorView
+                        assertPhysicalActivity(activity)
+                        check(decor === keyboardModeOwner && decor.isAttachedToWindow && decor.isShown &&
+                            activity.hasWindowFocus() && decor.hasWindowFocus()) {
+                            "Input-mode restoration requires the same owned focused fixture window"
+                        }
+                        val before = manager.inputMode
+                        val accepted = manager.requestInputMode(original)
+                        android.util.Log.i("TestRunner", "OWNED_ABBREVIATION_INPUT_MODE_CLEANUP " +
+                            "before=$before original=$original accepted=$accepted after=${manager.inputMode}")
+                        check(accepted && manager.inputMode == original) { "Owned input mode was not restored" }
+                    }
+                }
+            }.exceptionOrNull()
+            if (modeCleanup != null) {
+                android.util.Log.i("TestRunner", "OWNED_ABBREVIATION_INPUT_MODE_CLEANUP " +
+                    "failed=${modeCleanup.javaClass.simpleName}")
+                if (modeCleanup !== primaryFailure) primaryFailure?.addSuppressed(modeCleanup)
+            }
             compose.runOnIdle { compose.activity.setContent {} }
             compose.waitForIdle()
+            if (primaryFailure == null && modeCleanup != null) throw modeCleanup
         }
     }
 
