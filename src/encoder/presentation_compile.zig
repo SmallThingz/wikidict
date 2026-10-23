@@ -2780,7 +2780,7 @@ pub const Renderer = struct {
         _ = try self.mediaFileKindWithSpans(raw, caption, authoritative_kind, null);
     }
     const MediaCaptionCapture = struct {
-        mode: enum { spans, inline_body, link } = .spans,
+        mode: enum { spans, literal, inline_body, link } = .spans,
         style: Style,
         depth: usize = 0,
         target: []const u8 = "",
@@ -2794,6 +2794,7 @@ pub const Renderer = struct {
         errdefer self.spans.deinit(self.a);
         switch (capture.mode) {
             .spans => unreachable,
+            .literal => try self.text(input, capture.style),
             .inline_body => {
                 if (std.mem.indexOf(u8, input, "{|") != null) {
                     try self.blocksInline(try self.renderBody(input), capture.style);
@@ -3989,7 +3990,7 @@ pub const Renderer = struct {
             media_style.classes = try self.mediaCaptionClasses(try self.mediaClasses(file), style.classes);
             if (emitted) try self.lineBreak(style);
             emitted = true;
-            try self.mediaLabel(visible_label, media_style, false, selected_label.authored_caption, parsed);
+            try self.mediaLabel(visible_label, media_style, false, selected_label.authored_caption, false, parsed);
         }
     }
     fn imageMap(self: *Renderer, input: []const u8, style: Style, depth: usize) Error!bool {
@@ -4571,8 +4572,8 @@ pub const Renderer = struct {
         caption_style.target = "";
         return caption_style;
     }
-    fn mediaLabel(self: *Renderer, label: []const u8, style: Style, heading: bool, authored_caption: bool, parsed: ?[]const Span) Error!void {
-        const spans = parsed orelse try self.parseSpans(label, mediaCaptionStyle(style, heading, authored_caption));
+    fn mediaLabel(self: *Renderer, label: []const u8, style: Style, heading: bool, authored_caption: bool, literal_label: bool, parsed: ?[]const Span) Error!void {
+        const spans = parsed orelse try self.captureMediaCaption(label, .{ .mode = if (literal_label) .literal else .spans, .style = mediaCaptionStyle(style, heading, authored_caption) });
         for (spans) |span| {
             var label_style = style;
             label_style.provenance = span.provenance;
@@ -6667,6 +6668,7 @@ pub const Renderer = struct {
                         selected_label.authored_caption = token.link_has_pipe and selected_label.authored_caption;
                         label_value = selected_label.text;
                         const metadata_caption = label_value;
+                        const metadata_is_filename = !selected_label.authored_caption;
                         const link_target = selected_label.link_target;
                         if (s.heading) {
                             selected_label = self.mediaHeadingCaption(if (token.link_has_pipe) token.text else "", file_name);
@@ -6675,14 +6677,19 @@ pub const Renderer = struct {
                         var media_style = s;
                         media_style.classes = try self.mediaCaptionClasses("", s.classes);
                         media_style = try self.mediaActionStyle(media_style, file_name, link_target);
-                        const caption_style: ?MediaCaptionCapture = if (std.mem.eql(u8, metadata_caption, label_value)) .{ .style = mediaCaptionStyle(media_style, s.heading, selected_label.authored_caption) } else null;
+                        const reuse_caption = std.mem.eql(u8, metadata_caption, label_value) and !(s.heading and metadata_is_filename);
+                        // A filename is decoded title text, not another wikitext input.
+                        const caption_style: MediaCaptionCapture = .{
+                            .mode = if (metadata_is_filename) .literal else .spans,
+                            .style = if (reuse_caption) mediaCaptionStyle(media_style, s.heading, selected_label.authored_caption) else .{},
+                        };
                         // Keep SVG heading decoration out of entry media as before.
                         const parsed = if (!s.heading or media_types.kind(file_name) != null)
                             try self.mediaFileKindWithSpans(file_name, metadata_caption, null, caption_style)
                         else
                             null;
                         media_style.classes = try self.mediaCaptionClasses(try self.mediaClasses(file_name), s.classes);
-                        try self.mediaLabel(label_value, media_style, s.heading, selected_label.authored_caption, parsed);
+                        try self.mediaLabel(label_value, media_style, s.heading, selected_label.authored_caption, !s.heading and metadata_is_filename, if (reuse_caption) parsed else null);
                     } else {
                         if (!token.link_has_pipe and label_spaces.len != 0)
                             label_value = try std.fmt.allocPrint(self.a, "{s}{s}", .{ label_value, label_spaces });
@@ -12498,6 +12505,37 @@ test "image option localized aliases preserve real body heading and gallery capt
     try std.testing.expectEqualStrings("GalleryCaption", r.media.items[2].caption);
     try std.testing.expectEqualStrings("200px", r.media.items[3].caption);
 }
+test "file filename fallbacks retain literal decoded title text and authored captions parse once" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const source = "[[File:Poisson &amp;amp; café.jpg|thumb]]";
+    const expected = "Poisson &amp; café.jpg";
+    const first = try r.parseSpans(source, .{});
+    try std.testing.expectEqualStrings(expected, try flattened(a, first));
+    try std.testing.expectEqualStrings(expected, r.media.items[0].file);
+    try std.testing.expectEqualStrings(expected, r.media.items[0].caption);
+    // Repeated media takes the uncaptured occurrence path after metadata dedup.
+    try std.testing.expectEqualStrings(expected, try flattened(a, try r.parseSpans(source, .{})));
+    try std.testing.expectEqual(@as(usize, 1), r.media.items.len);
+    const quotes = try r.parseSpans("[[File:Cat''s.jpg|thumb]]", .{});
+    try std.testing.expectEqualStrings("Cat''s.jpg", try flattened(a, quotes));
+    try std.testing.expectEqualStrings("Cat''s.jpg", r.media.items[1].caption);
+    const authored = try r.parseSpans("[[File:Other.jpg|thumb|''Fish &amp;amp; chips'']]", .{});
+    try std.testing.expectEqualStrings("Fish &amp; chips", try flattened(a, authored));
+    try std.testing.expect(authored[0].flags.italic);
+    var heading: Renderer = .{ .a = a, .context = .{} };
+    const alt = try heading.parseSpans("[[File:Heading.jpg|alt=Fish &amp;amp; chips]]", .{ .heading = true });
+    try std.testing.expectEqualStrings("Fish &amp; chips", try flattened(a, alt));
+    // Equal bytes can be decoded title text and authored alt source respectively.
+    var equal_heading: Renderer = .{ .a = a, .context = .{} };
+    const equal_alt = try equal_heading.parseSpans("[[File:A&amp;amp;.jpg|alt=A&amp;.jpg]]", .{ .heading = true });
+    try std.testing.expectEqualStrings("A&.jpg", try flattened(a, equal_alt));
+    try std.testing.expectEqualStrings("A&amp;.jpg", equal_heading.media.items[0].file);
+    try std.testing.expectEqualStrings("A&amp;.jpg", equal_heading.media.items[0].caption);
+}
+
 test "image option case invalid widths formats and unsupported parameters remain visible captions" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

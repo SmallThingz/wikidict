@@ -682,10 +682,11 @@ const State = struct {
                             }
                             try formatted.writer.writeAll("\nTab changes game.");
                         } else {
-                            var at = doc.entry.title.len;
+                            const answer_title = try self.db.titleAt(self.recordIndex(self.selected));
+                            var at = answer_title.len;
                             while (at > 0) {
-                                const prev = term.previousClusterStart(doc.entry.title, at);
-                                try output.terminalText(&formatted.writer, doc.entry.title[prev..at]);
+                                const prev = term.previousClusterStart(answer_title, at);
+                                try output.terminalText(&formatted.writer, answer_title[prev..at]);
                                 at = prev;
                             }
                             try formatted.writer.writeAll("\n\nYour answer: ");
@@ -1325,6 +1326,34 @@ test "terminal redirected reading preserves selected identity in history saved a
         try state.prepare(80);
         try std.testing.expectEqualStrings(source, try db.titleAt(state.recordIndex(state.selected)));
         try std.testing.expectEqual(n + 1, reading.data.history.len);
+    }
+    // Study the selected alias spelling while retaining the resolved definition.
+    {
+        var study_reading = ReadingState.init(a);
+        defer study_reading.deinit();
+        study_reading.data.study_pool = .saved;
+        for (sources) |source| try study_reading.bookmark(source);
+        var study: State = .{ .io = std.testing.io, .a = a, .db = &db, .reading = &study_reading, .label = label, .theme = .terminal, .color = false };
+        defer study.deinit();
+        for (sources, [_][]const u8{ "\nahplA\n", "\nerutaeF\n" }) |source, reversed| {
+            study.game = .cards;
+            try study.navigate(.learn);
+            _ = try study.key(.{ .key = .tab });
+            _ = try study.key(.{ .key = .tab });
+            study.selected = std.mem.indexOfScalar(usize, study.filtered.items, (try db.find(source)).?).?;
+            try study.prepare(80);
+            try std.testing.expectEqualStrings(source, try db.titleAt(study.recordIndex(study.selected)));
+            try std.testing.expect(std.mem.indexOf(u8, study.text, reversed) != null);
+            const before_right = study_reading.data.right;
+            const before_wrong = study_reading.data.wrong;
+            for (source) |c| {
+                _ = try study.key(.{ .key = .text, .bytes = .{ c, 0, 0, 0 }, .len = 1 });
+            }
+            _ = try study.key(.{ .key = .enter });
+            try std.testing.expect(study.answered);
+            try std.testing.expectEqual(before_right + 1, study_reading.data.right);
+            try std.testing.expectEqual(before_wrong, study_reading.data.wrong);
+        }
     }
     // The startup path resolves the persisted source title, not the body title.
     {

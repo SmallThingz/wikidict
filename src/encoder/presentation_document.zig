@@ -129,6 +129,8 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
             errdefer self.a.free(owned_direction);
             const owned_explanation = try self.a.dupe(u8, attributes.explanation);
             errdefer self.a.free(owned_explanation);
+            const owned_foreground = if (attributes.foreground) |color| try self.a.dupe(u8, color) else null;
+            errdefer if (owned_foreground) |color| self.a.free(color);
             try self.scopes.append(self.a, .{
                 .opening_start = absolute_open,
                 .body_start = base + body_start,
@@ -137,7 +139,7 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
                 .matched = matched,
                 .kind = kind,
                 .formatting = formatting,
-                .attributes = .{ .classes = owned_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set },
+                .attributes = .{ .classes = owned_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set, .foreground = owned_foreground, .foreground_set = attributes.foreground_set },
                 .target = owned_target,
                 .link_quotes = link_quotes,
                 .parent = parent,
@@ -153,6 +155,7 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
             a.free(scope.attributes.language);
             a.free(scope.attributes.direction);
             a.free(scope.attributes.explanation);
+            if (scope.attributes.foreground) |color| a.free(color);
         }
         collected.scopes.deinit(a);
         collected.refused_link_openings.deinit(a);
@@ -815,14 +818,18 @@ pub fn compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(
         var navigable = false;
         var explained = false;
         var styled_self = false;
+        var styled = false;
         for (section.title_spans) |span| {
             explained = explained or span.explanation.len != 0;
             styled_self = styled_self or (span.self_link and span.text.len != 0);
+            styled = styled or (span.kind == .text and span.text.len != 0 and span.target.len == 0 and
+                (@as(u8, @bitCast(span.flags)) != 0 or span.foreground != null or span.classes.len != 0 or
+                    span.language.len != 0 or span.direction.len != 0 or span.role != .normal));
             if ((span.kind == .link or span.kind == .external_link) and span.target.len != 0 and span.text.len != 0) {
                 navigable = true;
             }
         }
-        if (navigable or explained or styled_self or section.title_depth != 0 or section.title_list_path.len != 0) {
+        if (navigable or explained or styled_self or styled or section.title_depth != 0 or section.title_list_path.len != 0) {
             const blocks = try a.alloc(compiler.Block, section.blocks.len + 1);
             blocks[0] = .{ .kind = .heading, .spans = section.title_spans, .level = section.level, .depth = section.title_depth, .list_path = section.title_list_path, .anchor = section.anchor, .anchor_fallback = section.anchor_fallback };
             @memcpy(blocks[1..], section.blocks);
@@ -1689,6 +1696,49 @@ test "poem strip items cannot ship in reference identities or media metadata" {
     var visible: std.ArrayList(u8) = .empty;
     for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| try visible.appendSlice(a, span.text);
     try std.testing.expect(std.mem.indexOf(u8, visible.items, "readable caption") != null);
+}
+
+test "unlinked styled headings retain spans anchors and final sense indices" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const sources = [_][]const u8{
+        "=== <b>Noun</b> ===\n# definition\n#: example\n",
+        "=== <i>Noun</i> ===\n# definition\n#: example\n",
+        "=== <span style=\"color:red\">Noun</span> ===\n# definition\n#: example\n",
+        "=== <span class=label lang=fr dir=rtl>Noun</span> ===\n# definition\n#: example\n",
+    };
+    for (sources, 0..) |source, i| {
+        const encoded = try compileAlloc(a, "entry", .language, "English", "en", source, null);
+        const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+        const section = decoded.entry.sections[0];
+        try std.testing.expectEqualStrings("Noun", section.title);
+        try std.testing.expectEqualStrings("Noun", section.anchor);
+        try std.testing.expectEqual(@as(usize, 3), section.blocks.len);
+        const heading = section.blocks[0];
+        try std.testing.expect(heading.kind == .heading and heading.level == section.level);
+        try std.testing.expectEqualStrings(section.anchor, heading.anchor);
+        const span = heading.spans[0];
+        try std.testing.expect(span.kind == .text and span.target.len == 0);
+        try std.testing.expectEqualStrings("Noun", span.text);
+        switch (i) {
+            0 => try std.testing.expect(span.bold),
+            1 => try std.testing.expect(span.italic),
+            2 => try std.testing.expectEqualStrings("#ff0000", span.foreground.?),
+            3 => {
+                try std.testing.expectEqualStrings("label", span.classes);
+                try std.testing.expectEqualStrings("fr", span.language);
+                try std.testing.expectEqualStrings("rtl", span.direction);
+            },
+            else => unreachable,
+        }
+        const lexeme = decoded.entry.organization.lexemes[0];
+        try std.testing.expectEqualSlices(usize, &.{0}, lexeme.introduction);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.definitions[0].block);
+        try std.testing.expectEqualSlices(usize, &.{2}, lexeme.definitions[0].examples);
+        try std.testing.expectEqualStrings("definition", section.blocks[1].spans[0].text);
+        try std.testing.expectEqualStrings("example", section.blocks[2].spans[0].text);
+    }
 }
 
 test "linked section heading companions retain labels and final organization indices through DPR2" {

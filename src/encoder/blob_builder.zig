@@ -1605,6 +1605,7 @@ fn freeObservedScopes(a: std.mem.Allocator, scopes: []const presentation_documen
         a.free(scope.attributes.language);
         a.free(scope.attributes.direction);
         a.free(scope.attributes.explanation);
+        if (scope.attributes.foreground) |color| a.free(color);
     }
     if (scopes.len != 0) a.free(scopes);
 }
@@ -6384,7 +6385,7 @@ test "Writer attributed formatting crosses language owners and restores scope th
     var writer = try Writer.init(std.testing.io, a, root);
     defer writer.deinit();
     writer.language_codes = codes;
-    const source = "==English==\nlead\n<b class=\"Egyp IPA nyms\" lang=egy dir=rtl>\nalpha [[cat]]\n==French==\nbeta [[chat]]\n<i lang=\"\" dir=ltr>reset [[chien]]</i>\n==English==\ndelta [[dog]]\n</b> trailer [[wolf]]\nsoft [[fox]]\n\nOutside [[bear]]";
+    const source = "==English==\nlead\n<b class=\"Egyp IPA nyms\" lang=egy dir=rtl style=\"color:red\">\nalpha [[cat]]\n==French==\nbeta [[chat]]\n<i lang=\"\" dir=ltr style=\"color:blue\">reset [[chien]]</i>\n==English==\ndelta [[dog]]\n</b> trailer [[wolf]]\nsoft [[fox]]\n\nOutside [[bear]]";
     const observation = try presentation_document.observePreScopesAlloc(a, "attributed owner scope", source, .{}, null, null, null, .{}, null);
     defer freePreObservation(a, observation);
     var attributed_scope = false;
@@ -6394,11 +6395,14 @@ test "Writer attributed formatting crosses language owners and restores scope th
         try std.testing.expect(scope.attributes.relation_note);
         if (scope.attributes.language.len == 0) {
             try std.testing.expectEqualStrings("ltr", scope.attributes.direction);
+            try std.testing.expectEqualStrings("#0000ff", scope.attributes.foreground.?);
         } else {
             try std.testing.expectEqualStrings("egy", scope.attributes.language);
             try std.testing.expectEqualStrings("rtl", scope.attributes.direction);
+            try std.testing.expectEqualStrings("#ff0000", scope.attributes.foreground.?);
             attributed_scope = true;
         }
+        try std.testing.expect(scope.attributes.foreground_set);
     }
     try std.testing.expect(attributed_scope);
     try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "attributed owner scope", source, source, null);
@@ -6456,6 +6460,9 @@ test "Writer attributed formatting crosses language owners and restores scope th
                         try std.testing.expect(!span.code);
                         try std.testing.expectEqualStrings(if (item.scoped and !item.reset) "egy" else "", span.language);
                         try std.testing.expectEqualStrings(if (!item.scoped) "" else if (item.reset) "ltr" else "rtl", span.direction);
+                        if (item.scoped) {
+                            try std.testing.expectEqualStrings(if (item.reset) "#0000ff" else "#ff0000", span.foreground.?);
+                        } else try std.testing.expect(span.foreground == null);
                         try std.testing.expectEqualStrings(if (item.scoped) "pronunciation" else "normal", @tagName(span.role));
                         var egyp = false;
                         var ipa = false;

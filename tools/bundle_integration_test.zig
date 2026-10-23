@@ -31,6 +31,11 @@ const source =
     "# Subpage namespaces: {{BASEPAGENAME:Template:foo/bar}} / {{BASEPAGENAME:Category:foo/bar}}\n" ++
     "# Site magic: {{SERVER}} / {{SERVERNAME}}\n" ++
     "# Revision metadata: {{PAGEID}} / {{REVISIONID}} / {{REVISIONTIMESTAMP}} / {{REVISIONUSER}} / {{PAGEID:rat}} / {{REVISIONUSER:rat}}\n";
+const styled_heading_source =
+    "==English==\n" ++
+    "=== <b><i><span class=label lang=fr dir=rtl style=\"color:red\">Noun</span></i></b> ===\n" ++
+    "# Styled heading definition.\n#: Styled heading example.\n";
+
 const nullable_shape_module_source =
     \\local function verify(mode, middle)
     \\local function maybe(mode)
@@ -650,6 +655,7 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
         .{ .title = "User:Fixture/Forms", .ns = 2, .id = 27, .body = "<noinclude>private documentation</noinclude><includeonly>{{/Child|{{{word}}}}}</includeonly>" },
         .{ .title = "User:Fixture/Forms/Child", .ns = 2, .id = 28, .body = "<templatestyles src=\"Template:forms.css\" /><div class=\"NavFrame\">\n{| class=\"wikitable\"\n| user-space inflection {{{1}}}\n|}\n</div>" },
         .{ .title = "mouse", .ns = 0, .id = 20, .body = source },
+        .{ .title = "StyledHeadingWitness", .ns = 0, .id = 34, .body = styled_heading_source },
         .{ .title = "rat", .ns = 0, .id = 22, .body = "==English==\n===Noun===\n# Another rodent.\n", .user = "Rat editor" },
         .{ .title = "Shared", .ns = 0, .id = 23, .body = "shared main transclusion" },
         .{ .title = "SharedAlias", .ns = 0, .id = 24, .body = "#REDIRECT [[Shared#é]]", .redirect = "Shared" },
@@ -2275,6 +2281,33 @@ pub fn main(init: std.process.Init) !void {
     var shared_english_json = try std.json.parseFromSlice(std.json.Value, a, shared_english, .{});
     defer shared_english_json.deinit();
     try h.require(shared_english_json.value.object.get("total_matches").?.integer == 0 and shared_english_json.value.object.get("entries").?.array.items.len == 0, "headingless Shared has no false English record");
+
+    // This ordinary main page follows the same dump/worker/Writer pipeline as
+    // mouse. Keep it in the published artifact for the current CLI/FFI reader hook.
+    {
+        const styled_export = try h.run(&.{ bin, "export", "StyledHeadingWitness", "--root", root, "--language", "English", "--case-sensitive" }, 0);
+        var styled_json = try std.json.parseFromSlice(std.json.Value, a, styled_export, .{});
+        defer styled_json.deinit();
+        const styled_entries = styled_json.value.object.get("entries") orelse return error.InvalidExport;
+        try h.require(styled_json.value.object.get("total_matches").?.integer == 1 and styled_entries == .array and styled_entries.array.items.len == 1, "ordinary styled heading witness has one published English record");
+        const styled_entry_json = try std.json.Stringify.valueAlloc(a, styled_entries.array.items[0], .{});
+        var styled_entry = try std.json.parseFromSlice(encoder.presentation_types.Entry, a, styled_entry_json, .{});
+        defer styled_entry.deinit();
+        const entry = styled_entry.value;
+        try h.require(entry.organization.lexemes.len == 1, "styled heading retains one lexical layout");
+        const lexeme = entry.organization.lexemes[0];
+        try h.require(lexeme.section < entry.sections.len and lexeme.definitions.len == 1, "styled heading retains its section and definition ownership");
+        const section = entry.sections[lexeme.section];
+        try h.require(std.mem.eql(u8, section.title, "Noun") and section.level == 3 and std.mem.eql(u8, section.anchor, "Noun") and section.blocks.len == 3, "styled heading retains its plain label level anchor and final companion array");
+        const heading = section.blocks[0];
+        try h.require(heading.kind == .heading and heading.level == section.level and std.mem.eql(u8, heading.anchor, section.anchor) and heading.spans.len == 1, "authored styled heading is the addressable first semantic companion");
+        const span = heading.spans[0];
+        try h.require(span.kind == .text and span.target.len == 0 and std.mem.eql(u8, span.text, "Noun") and span.bold and span.italic and span.foreground != null and std.mem.eql(u8, span.foreground.?, "#ff0000") and std.mem.eql(u8, span.classes, "label") and std.mem.eql(u8, span.language, "fr") and std.mem.eql(u8, span.direction, "rtl"), "unlinked heading preserves authored emphasis RGB class language and direction through Writer and export");
+        const sense = lexeme.definitions[0];
+        try h.require(std.mem.eql(usize, lexeme.introduction, &.{0}) and sense.block == 1 and std.mem.eql(usize, sense.examples, &.{2}) and section.blocks[1].kind == .definition and section.blocks[2].kind == .example, "styled companion insertion preserves final definition and example indices");
+        const styled_text = try h.run(&.{ bin, "lookup", "StyledHeadingWitness", "--root", root, "--language", "English", "--case-sensitive", "--details" }, 0);
+        try h.require(std.mem.count(u8, styled_text, "Noun") == 1 and std.mem.count(u8, styled_text, "Styled heading definition.") == 1 and std.mem.count(u8, styled_text, "Styled heading example.") == 1, "current CLI renders authored styled heading definition and example exactly once");
+    }
 
     const forbidden = [_][]const u8{
         ".bundle-expander", "runtime",          "dict-bundle-expander",

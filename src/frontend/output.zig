@@ -558,14 +558,19 @@ fn sectionHeadingCompanion(section: model.Section) ?[]const model.Span {
     var navigable = false;
     var explained = false;
     var styled_self = false;
+    var styled = false;
     for (first.spans) |span| {
         explained = explained or span.explanation.len != 0;
         styled_self = styled_self or selfLinkHeadingSpan(span);
+        styled = styled or (span.kind == .text and span.text.len != 0 and span.target.len == 0 and
+            (span.bold or span.italic or span.code or span.small or span.superscript or span.subscript or
+                span.strike or span.underline or span.foreground != null or span.classes.len != 0 or
+                span.language.len != 0 or span.direction.len != 0 or span.role != .normal));
         if (span.kind == .line_break and span.trail.len != 0) return null;
         if ((span.kind == .link or span.kind == .external_link) and
             span.target.len != 0 and (span.text.len != 0 or span.trail.len != 0)) navigable = true;
     }
-    if (!navigable and !explained and !styled_self and first.depth == 0) return null;
+    if (!navigable and !explained and !styled_self and !styled and first.depth == 0) return null;
     var cursor: HeadingBytes = .{ .spans = first.spans };
     var offset: usize = 0;
     var begin: ?usize = null;
@@ -1004,7 +1009,7 @@ fn entryMetadataProjected(w: *std.Io.Writer, entry: model.Entry, color: bool, pr
                 try terminalText(w, ref.group);
                 try w.print(" {d}] ", .{ref.group_number});
             }
-            try spansTextProjected(w, ref.spans, color, projection);
+            try spansTextDisplayProjected(w, ref.spans, color, projection, true);
             try w.writeByte('\n');
         }
     }
@@ -1382,7 +1387,9 @@ test "self link heading companions require exact semantic markers and labels" {
     try std.testing.expect(sectionHeadingCompanion(section) != null);
     for ([_][]const u8{ "", "mw-selflink", "selflink", "xmw-selflink selflink", "mw-selflink selflink-x" }) |classes| {
         spans[0].classes = classes;
-        try std.testing.expect(sectionHeadingCompanion(section) == null);
+        try std.testing.expect(!selfLinkHeadingSpan(spans[0]));
+        // Nonempty authored classes retain presentation even without a self-link pair.
+        try std.testing.expectEqual(classes.len != 0, sectionHeadingCompanion(section) != null);
     }
     spans[0].classes = "selflink mw-selflink";
     spans[0].target = "Page";
@@ -1824,6 +1831,51 @@ test "abbreviation details escape plain metadata and leave unannotated output un
     try std.testing.expectEqualStrings("entry  / citations\n? \n", out.written());
 }
 
+test "unlinked styled heading companions render once and keep title and level guards" {
+    const styles = [_]model.Span{
+        .{ .text = "Noun", .bold = true },
+        .{ .text = "Noun", .italic = true },
+        .{ .text = "Noun", .code = true },
+        .{ .text = "Noun", .small = true },
+        .{ .text = "Noun", .superscript = true },
+        .{ .text = "Noun", .subscript = true },
+        .{ .text = "Noun", .strike = true },
+        .{ .text = "Noun", .underline = true },
+        .{ .text = "Noun", .foreground = "#ff0000" },
+        .{ .text = "Noun", .classes = "label" },
+        .{ .text = "Noun", .language = "fr" },
+        .{ .text = "Noun", .direction = "rtl" },
+        .{ .text = "Noun", .role = .label },
+    };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    for (styles) |style| {
+        const heading = [_]model.Span{style};
+        const meaning = [_]model.Span{.{ .text = "Definition." }};
+        const blocks = [_]model.Block{
+            .{ .kind = .heading, .level = 3, .spans = &heading },
+            .{ .kind = .definition, .depth = 1, .list_path = "#", .spans = &meaning },
+        };
+        const section: model.Section = .{ .level = 3, .title = "Noun", .blocks = &blocks };
+        const entry: model.Entry = .{ .title = "entry", .kind = .language, .language = "English", .sections = &.{section} };
+        try std.testing.expect(sectionHeadingCompanion(section) != null);
+        var wrong = section;
+        wrong.title = "Other";
+        try std.testing.expect(sectionHeadingCompanion(wrong) == null);
+        wrong = section;
+        wrong.level = 2;
+        try std.testing.expect(sectionHeadingCompanion(wrong) == null);
+        for ([_]bool{ false, true }) |color| for ([_]bool{ false, true }) |folded| {
+            out.clearRetainingCapacity();
+            if (folded) _ = try entryTextFolded(&out, entry, color, .{ .details = true }, &.{}, 0) else try entryText(&out.writer, entry, color);
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "Noun"));
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "Definition."));
+            if (color and style.italic) try std.testing.expect(std.mem.indexOf(u8, out.written(), "\x1b[3mNoun") != null);
+            if (color and style.foreground != null) try std.testing.expect(std.mem.indexOf(u8, out.written(), "\x1b[38;2;255;0;0mNoun") != null);
+        };
+    }
+}
+
 test "explained heading companions render once with exact title and level guards" {
     const heading = [_]model.Span{.{ .text = "Noun", .explanation = "part of speech" }};
     const meaning = [_]model.Span{.{ .text = "Definition." }};
@@ -2002,6 +2054,31 @@ test "human block whitespace projection preserves preformatted table and JSON da
     try json(&out.writer, .{ .operation = .lookup, .query = "entry", .kind = .language, .language = null, .record_count = 1, .total_matches = 1, .entries = &entries });
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "ste  street") != null);
     try std.testing.expectEqualStrings("ste  street", entries[0].sections[0].blocks[0].spans[0].text);
+}
+
+test "reference display collapses ordinary whitespace and preserves code and Poem" {
+    const ordinary = [_]model.Span{
+        .{ .text = "one  " },
+        .{ .kind = .link, .text = " two", .target = "Two", .trail = "  " },
+        .{ .text = "three\t\tfour" },
+    };
+    const code = [_]model.Span{.{ .text = "code  words", .code = true }};
+    const poem = [_]model.Span{.{ .text = "verse  words", .classes = "wikidict-poem" }};
+    const references = [_]model.Reference{
+        .{ .number = 1, .group_number = 1, .spans = &ordinary },
+        .{ .number = 2, .group_number = 2, .spans = &code },
+        .{ .number = 3, .group_number = 3, .spans = &poem },
+    };
+    const entry: model.Entry = .{ .title = "entry", .kind = .citations, .references = &references };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try entryText(&out.writer, entry, false);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "[1] one two three four\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "[2] code  words\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "[3] verse  words\n") != null);
+    try std.testing.expectEqualStrings("one  ", ordinary[0].text);
+    try std.testing.expectEqualStrings(" two", ordinary[1].text);
+    try std.testing.expectEqualStrings("  ", ordinary[1].trail);
 }
 
 test "script display keeps one marker across source welcome parentheses and external link" {
