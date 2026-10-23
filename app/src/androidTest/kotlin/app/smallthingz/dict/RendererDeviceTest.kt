@@ -710,16 +710,19 @@ class RendererDeviceTest {
             Span("text", " d'este berbo.", italic = true))
         val label = spans.joinToString("") { it.text }
         for (direction in listOf(androidx.compose.ui.unit.LayoutDirection.Ltr, androidx.compose.ui.unit.LayoutDirection.Rtl)) {
-            for (mode in listOf("ordinary", "rich-companion", "plain-companion")) {
+            for (mode in listOf("ordinary", "rich-companion", "plain-companion", "styled-companion")) {
                 val companion = mode != "ordinary"
                 val plain = mode == "plain-companion"
+                val styled = mode == "styled-companion"
                 val initialDepth = if (plain) 1 else 0
                 val depth = mutableStateOf(initialDepth)
                 var followed: String? = null
                 var density = 0f
                 var expectedWeight: androidx.compose.ui.text.font.FontWeight? = null
                 fun value(): Entry {
-                    val heading = Block("heading", depth.value, if (plain) listOf(Span("text", label)) else spans, listPath = ":".repeat(depth.value), level = 4)
+                    val heading = Block("heading", depth.value,
+                        if (plain || styled) listOf(Span("text", label, italic = styled)) else spans,
+                        listPath = ":".repeat(depth.value), level = 4)
                     return Entry("templlar", emptyList(), "language", "Aragonese", "an",
                         listOf(Section(4, if (companion) label else "Conchugazión", listOf(heading,
                             Block("paragraph", 0, listOf(Span("text", "Following body")))))), emptyList())
@@ -792,8 +795,13 @@ class RendererDeviceTest {
                     val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
                     node.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
                     assertEquals(expectedWeight, layouts.single().layoutInput.style.fontWeight)
-                    if (plain) {
+                    if (plain || styled) {
                         assertTrue(text.getLinkAnnotations(0, text.length).isEmpty())
+                        if (styled) {
+                            assertTrue(text.spanStyles.any { it.start == 0 && it.end == text.length && it.item.fontStyle == androidx.compose.ui.text.font.FontStyle.Italic })
+                            node.performTouchInput { click(layouts.single().getBoundingBox(0).center) }
+                            compose.runOnIdle { assertEquals(null, followed) }
+                        }
                     } else {
                     val link = text.getLinkAnnotations(0, text.length).single()
                     assertEquals("templlar/conj.BEN", (link.item as androidx.compose.ui.text.LinkAnnotation.Clickable).tag)
@@ -813,7 +821,7 @@ class RendererDeviceTest {
                         compose.onNodeWithText("Following body", useUnmergedTree = true).assertIsDisplayed()
                     }
                     // addResults is emitted in the final raw instrumentation result bundle.
-                    // Six bounded values stay below the Binder transaction budget; never
+                    // Eight bounded values stay below the Binder transaction budget; never
                     // truncate a PNG payload into something that looks decodable.
                     val successEvidence = if (initialEvidence.length <= 56 * 1024) initialEvidence else
                         initialEvidence.substringBefore("\nOWNED_PNG_BEGIN").take(14000) +
@@ -2377,6 +2385,16 @@ class RendererDeviceTest {
         }
         try {
             compose.onNodeWithContentDescription("Dictionary").performClick()
+            assertField("")
+            compose.onNode(namedField).performTextInput("ca")
+            assertField("ca")
+            // Keyboard activation gives Clear its own focus before it removes itself.
+            compose.onNode(namedField).performKeyInput {
+                keyDown(androidx.compose.ui.input.key.Key.Tab); keyUp(androidx.compose.ui.input.key.Key.Tab)
+            }
+            compose.onNodeWithContentDescription("Clear search").assertIsFocused().performKeyInput {
+                keyDown(androidx.compose.ui.input.key.Key.Enter); keyUp(androidx.compose.ui.input.key.Key.Enter)
+            }
             assertField("")
             compose.onNode(namedField).performTextInput("ca")
             assertField("ca")

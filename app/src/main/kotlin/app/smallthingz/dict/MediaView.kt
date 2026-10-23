@@ -41,12 +41,12 @@ class MediaCache internal constructor(context:Context,
     suspend fun clear()=withContext(Dispatchers.IO){lock.withLock{cacheDirectory.listFiles()?.forEach{it.delete()};Unit}}
     suspend fun trim(mb:Int)=withContext(Dispatchers.IO){lock.withLock{trimLocked(mb.toLong()*1024*1024)}}
     private fun trimLocked(max:Long,keep:File?=null){val files=cacheDirectory.listFiles().orEmpty().filter{it.extension=="bin"};var total=files.sumOf{it.length()};for(f in files.sortedBy{it.lastModified()}){if(total<=max)break;if(f==keep)continue;total-=f.length();f.delete();File(cacheDirectory,f.nameWithoutExtension+".meta").delete()}}
-    suspend fun get(media:Media,mb:Int,edition:String=""):MediaFile=acquire(media,mb,edition) {}
-    internal suspend fun <T> withFile(media:Media,mb:Int,edition:String="",action:suspend (MediaFile)->T):T {
+    suspend fun get(media:Media,mb:Int,edition:String=""):MediaFile=acquire(media,mb,edition,false) {}
+    internal suspend fun <T> withFile(media:Media,mb:Int,edition:String="",forceRefresh:Boolean=false,action:suspend (MediaFile)->T):T {
         var owned:MediaFile?=null
         var failure:Throwable?=null
         try {
-            val loaded=acquire(media,mb,edition) { owned=it }
+            val loaded=acquire(media,mb,edition,forceRefresh) { owned=it }
             return action(loaded)
         } catch(e:Throwable) { failure=e;throw e }
         finally {
@@ -57,10 +57,10 @@ class MediaCache internal constructor(context:Context,
             } } catch(cleanup:Throwable) { if(failure!=null) failure.addSuppressed(cleanup) else throw cleanup }
         }
     }
-    private suspend fun acquire(media:Media,mb:Int,edition:String,acquired:(MediaFile)->Unit):MediaFile=withContext(Dispatchers.IO){lock.withLock{
+    private suspend fun acquire(media:Media,mb:Int,edition:String,forceRefresh:Boolean,acquired:(MediaFile)->Unit):MediaFile=withContext(Dispatchers.IO){lock.withLock{
         val key=mediaKey(media,edition)
         val file=File(cacheDirectory,"$key.bin");val meta=File(cacheDirectory,"$key.meta")
-        if(file.isFile&&meta.isFile){file.setLastModified(System.currentTimeMillis());val props=Properties().apply{meta.inputStream().use(::load)};return@withLock MediaFile(file,props.getProperty("source"),props.getProperty("credit","")).also(acquired)}
+        if(!forceRefresh&&file.isFile&&meta.isFile){file.setLastModified(System.currentTimeMillis());val props=Properties().apply{meta.inputStream().use(::load)};return@withLock MediaFile(file,props.getProperty("source"),props.getProperty("credit","")).also(acquired)}
         var info:JSONObject?=null
         var resolvedHost = "commons.wikimedia.org"
         for(host in mediaHosts(edition)) {
@@ -125,6 +125,7 @@ fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition
     var resource by remember(key){mutableStateOf<MediaFile?>(null)}
     var error by remember(key){mutableStateOf<String?>(null)}
     var retry by remember(key){mutableIntStateOf(0)}
+    var attemptedRetry by remember(key){mutableIntStateOf(0)}
     var busy by remember(key){mutableStateOf(false)}
     var bitmap by remember(key){mutableStateOf<android.graphics.Bitmap?>(null)}
     var audioJob by remember(key){mutableStateOf<Job?>(null)}
@@ -132,8 +133,11 @@ fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition
     val allowed=if(media.kind=="image")settings.allowImages else settings.allowAudio
     LaunchedEffect(key,allowed,settings.mediaCacheMb,retry){
         val request=++imageRequest
+        // A retry must bypass bytes that already failed image decoding.
+        val forceRefresh=retry!=attemptedRetry
+        attemptedRetry=retry
         if(!allowed){audioJob?.cancel();busy=false;return@LaunchedEffect}
-        if(media.kind=="image"&&allowed){busy=true;error=null;try{cache.withFile(media,settings.mediaCacheMb,edition){loaded->resource=loaded
+        if(media.kind=="image"&&allowed){busy=true;error=null;try{cache.withFile(media,settings.mediaCacheMb,edition,forceRefresh=forceRefresh){loaded->resource=loaded
             bitmap=withContext(Dispatchers.IO){val bounds=BitmapFactory.Options().apply{inJustDecodeBounds=true};BitmapFactory.decodeFile(loaded.file.absolutePath,bounds);require(bounds.outWidth>0&&bounds.outHeight>0){"Unsupported image"};val options=BitmapFactory.Options().apply{inSampleSize= maxOf(1,maxOf(bounds.outWidth,bounds.outHeight)/1600)};requireNotNull(BitmapFactory.decodeFile(loaded.file.absolutePath,options)){"Unsupported image"}}
         }}catch(e:CancellationException){throw e}catch(e:Exception){if(imageRequest==request)error=e.message}finally{if(imageRequest==request)busy=false}}
     }

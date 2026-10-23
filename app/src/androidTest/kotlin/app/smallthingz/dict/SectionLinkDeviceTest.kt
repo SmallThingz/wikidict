@@ -263,8 +263,10 @@ class SectionLinkDeviceTest {
         val previousWord = lastKeys.associateWith { prefs.getString(it, null) }
         val fixtureKeys = mutableListOf<String>()
         try {
-            library.importFile(name = { "section-navigation.wikblb" }) {
-                instrumentation.context.assets.open("section-navigation.wikblb")
+            val edition = "anchorwiktionary-20261001"
+            val english = "ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06"
+            library.importFile(name = { "$edition-$english.wikblb" }) {
+                instrumentation.context.assets.open("semantic-anchor-navigation.wikblb")
             }.join()
             assertNull(library.error)
             val dictionary = library.dictionaries.single { it.id !in before }
@@ -273,6 +275,22 @@ class SectionLinkDeviceTest {
             val destination = library.search("Anchor destination").single { it.dictionary == dictionary.id && it.title == "Anchor destination" }
             fixtureKeys += library.read(source).key
             fixtureKeys += library.read(destination).key
+            assertEquals(edition, dictionary.edition)
+            library.importFile(name = { "$edition-aliases.wikblb" }) {
+                instrumentation.context.assets.open("semantic-anchor-navigation-aliases.wikblb")
+            }.join()
+            assertNull(library.error)
+            val aliasDictionary = library.dictionaries.single { it.id !in before && it.id != dictionary.id }
+            val alias = library.search("Anchor alias").single {
+                it.dictionary == aliasDictionary.id && it.contextDictionary == dictionary.id && it.title == "Anchor alias"
+            }
+            val followed = library.read(alias)
+            assertEquals("Anchor destination", followed.title)
+            assertEquals(edition, followed.edition)
+            assertTrue(requireNotNull(followed.redirect).followed)
+            assertEquals("Noun_2", requireNotNull(followed.redirect).fragment)
+            fixtureKeys += alias.key
+            fixtureKeys += followed.key
             compose.runOnUiThread {
                 learning.updateSettings { it.copy(collapseEtymology = true, collapseOtherSections = true, allowImages = false, allowAudio = false) }
                 compose.activity.setContent { MaterialTheme { DictApp(library, learning, {}) } }
@@ -338,6 +356,58 @@ class SectionLinkDeviceTest {
             leaveAndReturn()
             compose.onNodeWithText("DESTINATION USAGE BODY").assertDoesNotExist()
             compose.onNodeWithText("This word is not in your installed dictionaries.").assertDoesNotExist()
+
+            // These assets come from the genuine Writer fixture, not hand-built EntryUi.
+            // Each request crosses the actual import/search/read/DictApp route.
+            fun touchSourceLink(label: String) {
+                compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText(label))
+                touchLink(label)
+            }
+            fun assertAnchorBody(body: String) {
+                compose.waitUntil(10000) { compose.onAllNodesWithText(body).fetchSemanticsNodes().isNotEmpty() }
+                // Do not scroll to the expected body: the fragment must perform the jump.
+                compose.onNodeWithText(body).assertIsDisplayed()
+            }
+            fun captureOwnedAnchorJourney(name: String, body: String) {
+                require(name in setOf("anchor-journey-samepage.png", "anchor-journey-crossentry.png",
+                    "anchor-journey-alias.png", "anchor-journey-unicode.png"))
+                // Only the owned app root displaying this imported public Writer fixture.
+                // No system screenshot, clipboard surface or unrelated application tree.
+                compose.onNodeWithText(body).assertIsDisplayed()
+                val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
+                try {
+                    val files = instrumentation.targetContext.filesDir
+                    val directory = java.io.File(files, "qa-copy-evidence")
+                    check(directory.mkdirs() || directory.isDirectory)
+                    check(directory.canonicalFile.parentFile == files.canonicalFile)
+                    val target = java.io.File(directory, name)
+                    check(target.canonicalFile.parentFile == directory.canonicalFile && !target.exists())
+                    target.outputStream().use {
+                        check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it))
+                    }
+                } finally { bitmap.recycle() }
+            }
+            backToSource()
+            compose.onNodeWithText("SOURCE SECOND NOUN BODY").assertIsNotDisplayed()
+            touchSourceLink("Read second local noun")
+            assertAnchorBody("SOURCE SECOND NOUN BODY")
+            assertEquals(source.key, library.lastWord()?.key)
+            captureOwnedAnchorJourney("anchor-journey-samepage.png", "SOURCE SECOND NOUN BODY")
+            touchSourceLink("Read destination second noun")
+            assertAnchorBody("DESTINATION SECOND NOUN BODY")
+            assertEquals(destination.key, library.lastWord()?.key)
+            captureOwnedAnchorJourney("anchor-journey-crossentry.png", "DESTINATION SECOND NOUN BODY")
+            backToSource()
+            touchSourceLink("Read alias second noun")
+            assertAnchorBody("DESTINATION SECOND NOUN BODY")
+            assertEquals(alias.key, library.lastWord()?.key)
+            captureOwnedAnchorJourney("anchor-journey-alias.png", "DESTINATION SECOND NOUN BODY")
+            backToSource()
+            touchSourceLink("Read legacy Unicode heading")
+            assertAnchorBody("UNICODE HEADING BODY")
+            compose.onNodeWithText("LITERAL DOT HEADING BODY").assertDoesNotExist()
+            assertEquals(source.key, library.lastWord()?.key)
+            captureOwnedAnchorJourney("anchor-journey-unicode.png", "UNICODE HEADING BODY")
         } finally {
             compose.runOnUiThread {
                 learning.updateSettings { previousSettings }

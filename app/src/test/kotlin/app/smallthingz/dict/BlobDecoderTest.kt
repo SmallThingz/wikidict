@@ -117,7 +117,7 @@ class BlobDecoderTest {
         for (length in listOf(0, 3, 8, bytes.size - 1)) assertThrows(Exception::class.java) {
             BlobDecoder.decode(bytes.copyOf(length), "Word", "language", "English", "en")
         }
-        val unknown = bytes.copyOf().also { it[3] = '5'.code.toByte() }
+        val unknown = bytes.copyOf().also { it[3] = '6'.code.toByte() }
         assertThrows(Exception::class.java) { BlobDecoder.decode(unknown, "Word", "language", "English", "en") }
         val marker = "Meaning &".toByteArray()
         val start = bytes.asList().windowed(marker.size).indexOfFirst { it == marker.asList() }

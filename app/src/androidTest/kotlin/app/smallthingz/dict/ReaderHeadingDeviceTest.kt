@@ -4,6 +4,8 @@ import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Rule
 import org.junit.Test
 
@@ -40,6 +42,7 @@ class ReaderHeadingDeviceTest {
             compose.onNodeWithText("Ordinary usage body").assertDoesNotExist()
             compose.onNodeWithText("Usage notes").performTouchInput { click(center) }
             compose.onNodeWithText("Ordinary usage body").assertIsDisplayed()
+            captureOwnedHeading("reader-heading-expanded.png")
             compose.onNodeWithText("Usage notes")
                 .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
                 .performTouchInput { click(center) }
@@ -47,5 +50,23 @@ class ReaderHeadingDeviceTest {
         } finally {
             compose.activityRule.scenario.onActivity { it.setContent {} }
         }
+    }
+
+    private fun captureOwnedHeading(name: String) {
+        require(name == "reader-heading-expanded.png")
+        compose.onNodeWithText("Ordinary usage body").assertIsDisplayed()
+        // Capture only the owned Compose fixture root after its public body assertions.
+        val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
+        try {
+            val files = InstrumentationRegistry.getInstrumentation().targetContext.filesDir
+            val directory = java.io.File(files, "qa-copy-evidence")
+            check(directory.mkdirs() || directory.isDirectory)
+            check(directory.canonicalFile.parentFile == files.canonicalFile)
+            val target = java.io.File(directory, name)
+            check(target.canonicalFile.parentFile == directory.canonicalFile && !target.exists())
+            target.outputStream().use {
+                check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it))
+            }
+        } finally { bitmap.recycle() }
     }
 }

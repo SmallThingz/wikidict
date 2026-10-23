@@ -311,7 +311,7 @@ private fun SearchDock(query: String, onQuery: (String) -> Unit, onClose: () -> 
             modifier = Modifier.weight(1f).focusRequester(focus).semantics { contentDescription = "Find a word" },
             decorationBox = { field -> Box { if (query.isEmpty()) Text("Find a word…", color = MaterialTheme.colorScheme.onSurfaceVariant); field() } },
         )
-        if (query.isNotEmpty()) IconButton(onClick = { onQuery("") }) { Icon(Icons.Filled.Close, "Clear search") }
+        if (query.isNotEmpty()) IconButton(onClick = { onQuery(""); focus.requestFocus() }) { Icon(Icons.Filled.Close, "Clear search") }
     }
 }
 

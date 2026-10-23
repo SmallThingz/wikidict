@@ -33,9 +33,11 @@ data class Block(
     val table: Table? = null,
     val feature: Feature? = null,
     val level: Int = 0,
+    val anchor: String = "",
+    val anchorFallback: String = "",
 )
 data class Feature(val kind: String, val language: String, val data: String, val tailKind: String, val tail: String)
-data class Section(val level: Int, val title: String, val blocks: List<Block>)
+data class Section(val level: Int, val title: String, val blocks: List<Block>, val anchor: String = "", val anchorFallback: String = "")
 data class Media(val file: String, val kind: String, val caption: String)
 data class Reference(val number: Int, val groupNumber: Int, val group: String, val spans: List<Span>)
 data class Entry(

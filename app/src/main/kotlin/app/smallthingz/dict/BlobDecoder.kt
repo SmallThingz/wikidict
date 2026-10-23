@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2/DPR3/DPR4 decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2/DPR3/DPR4/DPR5 decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
@@ -13,13 +13,16 @@ object BlobDecoder {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val version = r.byte()
-        require(version in 50..52) { "Unsupported presentation format" }
+        require(version in 50..53) { "Unsupported presentation format" }
         r.explanations = version >= 51
-        r.colors = version == 52
+        r.colors = version >= 52
+        r.anchors = version >= 53
         val display = r.spans()
-        val sections = List(r.count(9)) {
+        val sections = List(r.count(if (r.anchors) 17 else 9)) {
             val level = r.byte(); val name = r.string()
-            Section(level, name, List(r.count(17)) { r.block() })
+            val anchor = if (r.anchors) r.string() else ""
+            val fallback = if (r.anchors) r.string() else ""
+            Section(level, name, List(r.count(if (r.anchors) 25 else 17)) { r.block() }, anchor, fallback)
         }
         val preamble = r.spans()
         // Validate semantic organization even though this renderer preserves section order.
@@ -50,6 +53,7 @@ object BlobDecoder {
         private var remainingItems = 1_000_000
         var explanations = false
         var colors = false
+        var anchors = false
         fun byte(): Int { require(buffer.remaining() >= 1); return buffer.get().toInt() and 255 }
         fun u16(): Int { require(buffer.remaining() >= 2); return buffer.short.toInt() and 65535 }
         fun u32(): Long { require(buffer.remaining() >= 4); return buffer.int.toLong() and 0xffffffffL }
@@ -95,7 +99,10 @@ object BlobDecoder {
                     Cell(spans(), header, cols, rows, background)
                 } }).also { tableGrid(it) }
             }
-            return Block(kind, depth, spans, path, number, table, feature, level)
+            val anchor = if (anchors) string() else ""
+            val fallback = if (anchors) string() else ""
+            require(kind == "heading" || (anchor.isEmpty() && fallback.isEmpty())) { "Only headings may have a destination anchor" }
+            return Block(kind, depth, spans, path, number, table, feature, level, anchor, fallback)
         }
     }
 }

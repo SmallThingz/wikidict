@@ -100,7 +100,7 @@ internal fun poemParagraphs(text: String, spans: List<Pair<Span, IntRange>>): Li
 }
 
 
-/** The first typed heading may carry actions, self-link styling, or explicit nesting metadata. */
+/** The first typed heading may carry actions, span presentation, or explicit nesting metadata. */
 internal fun sectionHeadingCompanion(section: Section): Block? {
     val block = section.blocks.firstOrNull() ?: return null
     // Blank labels have no header affordance; leave their blocks in the visible body.
@@ -110,7 +110,9 @@ internal fun sectionHeadingCompanion(section: Section): Block? {
     if (!nestedHeading && block.spans.none { (it.explanation.isNotEmpty() ||
             (it.kind in setOf("link", "external_link") && it.target.isNotEmpty()) ||
             (it.kind == "text" && it.text.isNotEmpty() && it.target.isEmpty() &&
-                it.hasClassToken("mw-selflink") && it.hasClassToken("selflink"))) &&
+                (it.bold || it.italic || it.code || it.small || it.superscript || it.subscript ||
+                    it.strike || it.underline || it.foreground != null || it.classes.isNotEmpty() ||
+                    it.language.isNotEmpty() || it.direction.isNotEmpty() || it.role != "normal"))) &&
             (it.text.isNotEmpty() || it.trail.isNotEmpty()) }) return null
     val label = block.spans.joinToString("") { if (it.kind == "line_break") "\n" else it.text + it.trail }
         .trim(' ', '\t', '\r', '\n', '\u00a0')
@@ -215,11 +217,25 @@ internal fun blockPrefix(block: Block): String = when (block.kind) {
 internal fun blockIndentDp(block: Block): Int =
     (if (block.kind == "heading") block.depth else block.depth - 1).coerceIn(0, 8) * 7
 
-/** Same-entry section links match compiled headings, with the usual underscore spelling. */
-internal fun sectionScrollKey(entry: Entry, target: String): String? {
+/** Destination IDs come from the source page, before owner filtering or presentation ordering. */
+internal fun headingScrollKey(entry: Entry, target: String): String? {
     if (!target.startsWith("#") || target.length == 1) return null
-    val heading = target.substring(1).replace('_', ' ')
-    return entry.readingRows.firstOrNull { it.heading?.title == heading }?.key
+    val fragment = target.substring(1)
+    val headings = entry.readingRows.filter { it.heading != null || it.block?.kind == "heading" }
+    fun anchor(row: ReadingRow) = row.heading?.anchor ?: row.block?.anchor.orEmpty()
+    fun fallback(row: ReadingRow) = row.heading?.anchorFallback ?: row.block?.anchorFallback.orEmpty()
+    fun anchoredMatches(value: String) = headings.filter {
+        (anchor(it).isNotEmpty() && anchor(it) == value) || (fallback(it).isNotEmpty() && fallback(it) == value)
+    }
+    val exact = anchoredMatches(fragment)
+    if (exact.isNotEmpty()) return exact.singleOrNull()?.key
+    val spaced = anchoredMatches(fragment.replace(' ', '_'))
+    if (spaced.isNotEmpty()) return spaced.singleOrNull()?.key
+    // Legacy records contain no IDs. A label is usable only when it is unambiguous.
+    val label = fragment.replace('_', ' ')
+    val legacy = headings.filter { (it.heading?.title ?: textOf(checkNotNull(it.block).spans)) == label }
+        .singleOrNull()
+    return legacy?.takeIf { anchor(it).isEmpty() && fallback(it).isEmpty() }?.key
 }
 
 /** Match only actual compiled reference identities; no source or fragment interpretation. */

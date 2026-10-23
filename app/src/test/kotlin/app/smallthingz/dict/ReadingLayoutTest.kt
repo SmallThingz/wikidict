@@ -96,8 +96,18 @@ class ReadingLayoutTest {
         val companion = Block("heading", 0, listOf(self), level = 3)
         val body = Block("paragraph", 0, listOf(Span("text", "Visible body")))
         fun section(block: Block = companion, title: String = "Usage notes") = Section(3, title, listOf(block, body))
+        val plain = Span("text", "Usage notes")
+        val attributed = listOf(
+            plain.copy(bold = true), plain.copy(italic = true), plain.copy(code = true),
+            plain.copy(small = true), plain.copy(superscript = true), plain.copy(subscript = true),
+            plain.copy(strike = true), plain.copy(underline = true),
+            plain.copy(foreground = "#123456"), plain.copy(classes = "note"),
+            plain.copy(language = "de"), plain.copy(direction = "rtl"), plain.copy(role = "label"),
+        )
         for (span in listOf(self, self.copy(bold = false, italic = false),
-            self.copy(classes = "note\tmw-selflink\nselflink extra"))) {
+            self.copy(classes = "note\tmw-selflink\nselflink extra"),
+            self.copy(classes = ""), self.copy(classes = "mw-selflink"), self.copy(classes = "selflink"),
+            self.copy(classes = "not-mw-selflink selflink"), self.copy(classes = "mw-selflink selflink-suffix")) + attributed) {
             val heading = companion.copy(spans = listOf(span))
             val rows = readingRows(listOf(section(heading)))
             assertSame(heading, sectionHeadingCompanion(section(heading)))
@@ -110,9 +120,14 @@ class ReadingLayoutTest {
             assertEquals("", rows.first().headingBlock!!.spans.single().target)
             assertEquals(span, rows.first().headingBlock!!.spans.single())
         }
-        for (span in listOf(self.copy(classes = ""), self.copy(classes = "mw-selflink"),
-            self.copy(classes = "selflink"), self.copy(classes = "not-mw-selflink selflink"),
-            self.copy(classes = "mw-selflink selflink-suffix"), self.copy(target = "notes"),
+        val styled = companion.copy(spans = listOf(attributed.first()))
+        val definition = Block("definition", 1, listOf(Span("text", "A dictionary meaning")))
+        val meaningRows = readingRows(listOf(section(styled).copy(blocks = listOf(styled, definition, body))))
+        assertTrue(meaningRows.first().meaningSection)
+        assertSame(styled, meaningRows.first().headingBlock)
+        assertEquals(listOf(definition, body), meaningRows.mapNotNull { it.block })
+        assertEquals(listOf(definition), visibleReadingRows(meaningRows, setOf("heading-0-details")).mapNotNull { it.block })
+        for (span in listOf(plain, self.copy(target = "notes"),
             self.copy(kind = "link"), self.copy(text = "", trail = "Usage notes"))) {
             val heading = companion.copy(spans = listOf(span))
             assertNull(sectionHeadingCompanion(section(heading)))
@@ -123,7 +138,7 @@ class ReadingLayoutTest {
         assertNull(sectionHeadingCompanion(section(companion.copy(spans = listOf(self,
             Span("line_break", "\n", trail = "extra"))))))
         val entry = Entry("Fixture", emptyList(), "language", "English", "en", listOf(section()), emptyList())
-        assertEquals("heading-0", sectionScrollKey(entry, "#Usage_notes"))
+        assertEquals("heading-0", headingScrollKey(entry, "#Usage_notes"))
     }
 
     @Test fun richHeadingKeepsStableSectionKeysFoldsAndFragmentDestinations() {
@@ -145,8 +160,8 @@ class ReadingLayoutTest {
         assertEquals(listOf(body, definition), visibleReadingRows(rows, folded - "heading-0").mapNotNull { it.block })
         val entry = Entry("Rich fixture", emptyList(), "language", "English", "en", sections,
             listOf(Reference(1, 1, "", listOf(Span("text", "Reference")))))
-        assertEquals("heading-0", sectionScrollKey(entry, "#Etymology_1"))
-        assertEquals("heading-1", sectionScrollKey(entry, "#Noun"))
+        assertEquals("heading-0", headingScrollKey(entry, "#Etymology_1"))
+        assertEquals("heading-1", headingScrollKey(entry, "#Noun"))
         assertEquals(5, referenceScrollIndex(entry, "#reference-1", folded))
         val owner = Section(2, "English", listOf(heading.copy(level = 2,
             spans = listOf(Span("link", "English", target = "language"))), definition))
@@ -338,11 +353,11 @@ class ReadingLayoutTest {
             Section(3, "Usage notes", listOf(Block("paragraph", 0, listOf(Span("text", "Usage body"))))),
             Section(4, "日本語", emptyList())
         ), emptyList())
-        assertEquals("heading-1", sectionScrollKey(entry, "#Usage_notes"))
-        assertEquals("heading-1", sectionScrollKey(entry, "#Usage notes"))
-        assertEquals("heading-2", sectionScrollKey(entry, "#日本語"))
+        assertEquals("heading-1", headingScrollKey(entry, "#Usage_notes"))
+        assertEquals("heading-1", headingScrollKey(entry, "#Usage notes"))
+        assertEquals("heading-2", headingScrollKey(entry, "#日本語"))
         listOf("cat", "cat#Usage_notes", "#", "#Missing", "#usage_notes").forEach {
-            assertNull(sectionScrollKey(entry, it))
+            assertNull(headingScrollKey(entry, it))
         }
     }
 

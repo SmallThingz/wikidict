@@ -133,23 +133,30 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
         }
         val visibleRows = visibleReadingRows(entry.readingRows, folded.filterValues { it }.keys)
         fun jumpToAnchor(target: String): Boolean {
-            val referenceIndex = referenceScrollIndex(entry, target, folded.filterValues { it }.keys)
-            val sectionKey = if (referenceIndex == null) sectionScrollKey(entry, target) else null
+            val headingKey = headingScrollKey(entry, target)
+            val headingRow = entry.readingRows.firstOrNull { it.key == headingKey }
+            val compiledHeading = !(headingRow?.heading?.anchor ?: headingRow?.block?.anchor).isNullOrEmpty() ||
+                !(headingRow?.heading?.anchorFallback ?: headingRow?.block?.anchorFallback).isNullOrEmpty()
+            // Authored heading IDs share the page namespace; generated references are a fallback.
+            val referenceIndex = if (compiledHeading) null else referenceScrollIndex(entry, target, folded.filterValues { it }.keys)
             if (referenceIndex != null) {
                 folded["references"] = false
                 // Apply the destination in the next remeasure, after References opens.
                 scroll.requestScrollToItem(referenceIndex)
-            } else if (sectionKey != null) {
+            } else if (headingRow != null) {
+                val sectionKey = if (headingRow.heading != null) headingRow.key else headingRow.sectionKey
                 folded[sectionKey] = false
-                val sectionIndex = visibleReadingRows(entry.readingRows, folded.filterValues { it }.keys)
-                    .indexOfFirst { it.key == sectionKey }
-                scroll.requestScrollToItem(sectionIndex + entryReadingStartIndex(entry, folded.filterValues { it }.keys))
+                if (headingRow.heading == null && headingRow.meaningSection) folded[sectionKey + "-details"] = false
+                val headingIndex = visibleReadingRows(entry.readingRows, folded.filterValues { it }.keys)
+                    .indexOfFirst { it.key == headingRow.key }
+                if (headingIndex < 0) return false
+                scroll.requestScrollToItem(headingIndex + entryReadingStartIndex(entry, folded.filterValues { it }.keys))
             } else return false
             return true
         }
         val readerLink: (String) -> Unit = { target ->
             onNavigate()
-            if (!jumpToAnchor(target)) onLink(target)
+            if (!jumpToAnchor(target) && !target.startsWith("#")) onLink(target)
         }
         LaunchedEffect(entry.key, anchorRequest) {
             anchorRequest?.takeIf { it.entryKey == entry.key }?.let {
