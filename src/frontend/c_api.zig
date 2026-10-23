@@ -86,7 +86,7 @@ fn jsonBuffer(handle: *Handle, value: anytype, out: *Buffer) !void {
 }
 
 export fn dict_abi_version() callconv(.c) u32 {
-    return 2;
+    return 3;
 }
 
 fn openHandle(root: []const u8) !*Handle {

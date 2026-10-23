@@ -678,6 +678,14 @@ pub fn hasBodyContentWithReferencesAndPoemFragmentsAlloc(
     // final compile preserves and reports the existing render-limit diagnostic.
     if (work.fallbacks.render_limit) return true;
     const Has = struct {
+        fn table(value: compiler.Table) bool {
+            if (spans(value.caption)) return true;
+            for (value.rows) |row| for (row.cells) |cell| {
+                if (spans(cell.spans)) return true;
+                if (cell.nested_table) |child| if (table(child)) return true;
+            };
+            return false;
+        }
         fn spans(values: []const compiler.Span) bool {
             for (values) |span| if (std.mem.trim(u8, span.text, " \t\r\n").len != 0 or span.target.len != 0) return true;
             return false;
@@ -690,12 +698,19 @@ pub fn hasBodyContentWithReferencesAndPoemFragmentsAlloc(
         for (section.blocks) |block| {
             if (Has.spans(block.spans) or block.feature != null or block.kind == .rule) return true;
             if (block.table) |table| {
-                if (Has.spans(table.caption)) return true;
-                for (table.rows) |row| for (row.cells) |cell| if (Has.spans(cell.spans)) return true;
+                if (Has.table(table)) return true;
             }
         }
     }
     return false;
+}
+
+fn validateTableSpans(a: A, table: compiler.Table, fallbacks: ?*Fallbacks) anyerror!void {
+    try validateSpans(a, table.caption, fallbacks);
+    for (table.rows) |row| for (row.cells) |cell| {
+        try validateSpans(a, cell.spans, fallbacks);
+        if (cell.nested_table) |child| try validateTableSpans(a, child, fallbacks);
+    };
 }
 
 pub fn compileReportedWithReferencesAndPoemFragmentsAlloc(
@@ -774,8 +789,7 @@ pub fn compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(
         for (section.blocks) |block| {
             try validateSpans(a, block.spans, fallbacks);
             if (block.table) |table| {
-                try validateSpans(a, table.caption, fallbacks);
-                for (table.rows) |row| for (row.cells) |cell| try validateSpans(a, cell.spans, fallbacks);
+                try validateTableSpans(a, table, fallbacks);
             }
         }
     }
@@ -3438,4 +3452,235 @@ test "captured malformed quoted li preserves literal spelling dictionary text an
     // Apostrophes and malformed attributes are outside this finite token family.
     try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "<li'>word</li>", null));
     try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "<li\" attr=x>word</li>", null));
+}
+
+test "nested-only table cells participate in strict document span validation" {
+    const a = std.testing.allocator;
+    const child: compiler.Table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .kind = .link, .text = "child", .target = "{{uncompiled}}" }} }} }} };
+    const parent: compiler.Table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &.{}, .nested_table = child }} }} };
+    try std.testing.expectError(error.UncompiledTemplate, validateTableSpans(a, parent, null));
+}
+
+test "captured nested external link preserves literal protocol prefix and child action" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const captured = "== [[عربية]] ==\n=== المعاني ===\nفي علم النفس: يعد مرض ثنائى القطب حالة من التقلبات المزاجية التى يتعرض لها الشخص وتؤثر عليه بشكل عام.<blockquote>       ''فى معظم الحالات، يتم علاج الاضطراب ثنائي القطب بالأدوية و [http://[http://الاستشارات%20النفسية https://www.nosghy.com/] (العلاج النفسي).''<ref><nowiki>https://www.mayoclinic.org/ar/diseases-conditions/bipolar-disorder/symptoms-causes/syc-20355955</nowiki>\n\n</ref></blockquote><span dir=\"RTL\"></span>\n\n[[تصنيف:طب]]\n[[تصنيف:عربية]]";
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "اضطراب ثنائي القطب", .language, "العربية", "ar", captured, null, &report);
+    const decoded = try codec.decodeAlloc(a, bytes, "اضطراب ثنائي القطب", .language, .{ .code = "ar", .heading = "العربية" });
+    var visible: std.ArrayList(u8) = .empty;
+    var child_label: std.ArrayList(u8) = .empty;
+    var literal_bracket = false;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        if (span.kind == .external_link) {
+            try std.testing.expectEqualStrings("http://الاستشارات%20النفسية", span.target);
+            try std.testing.expect(span.italic);
+            try child_label.appendSlice(a, span.text);
+        }
+        if (std.mem.eql(u8, span.text, "[")) {
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+            literal_bracket = true;
+        }
+    };
+    try std.testing.expect(literal_bracket and report.literal_markup);
+    try std.testing.expectEqualStrings("https://www.nosghy.com/", child_label.items);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "[http://https://www.nosghy.com/ (العلاج النفسي).") != null);
+    // An ordinary neighboring child keeps its target, label and emphasis.
+    const valid = try compileAlloc(a, "entry", .language, "English", "en", "[https://example.org valid] ''[https://example.net next]''", null);
+    const control = try codec.decodeAlloc(a, valid, "entry", .language, .{ .code = "en", .heading = "English" });
+    var found_valid = false;
+    var found_next = false;
+    for (control.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (std.mem.eql(u8, span.target, "https://example.org")) found_valid = span.kind == .external_link and std.mem.eql(u8, span.text, "valid") and !span.italic;
+        if (std.mem.eql(u8, span.target, "https://example.net")) found_next = span.kind == .external_link and std.mem.eql(u8, span.text, "next") and span.italic;
+    };
+    try std.testing.expect(found_valid and found_next);
+    const raw = [_]compiler.Span{.{ .text = "[http://" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+}
+
+test "list-prefixed table closer remains literal through EOF and DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const prefix = "{|\n|-\n| bgcolor=\"#FFFFE0\" |\n* [[Keep]]\n* |} suffix [[After]]\n";
+    const cases = [_]struct { source: []const u8, rows: usize, malformed: bool }{
+        .{ .source = prefix, .rows = 1, .malformed = true },
+        .{ .source = prefix ++ "|-\n| [[Second]]\n|}\n", .rows = 2, .malformed = false },
+    };
+    for (cases) |case| {
+        var report: Fallbacks = .{};
+        const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", case.source, null, &report);
+        const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+        const blocks = decoded.entry.sections[0].blocks;
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        const table = blocks[0].table orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(case.rows, table.rows.len);
+        try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+        try std.testing.expectEqualStrings("#ffffe0", table.rows[0].cells[0].background.?);
+        var marker: usize = 0;
+        var keep = false;
+        var after = false;
+        var visible: std.ArrayList(u8) = .empty;
+        for (table.rows[0].cells[0].spans) |span| {
+            try visible.appendSlice(a, span.text);
+            if (std.mem.eql(u8, span.text, "|}")) marker += 1;
+            if (span.kind == .link and std.mem.eql(u8, span.target, "Keep")) keep = true;
+            if (span.kind == .link and std.mem.eql(u8, span.target, "After")) after = true;
+        }
+        try std.testing.expectEqual(@as(usize, 1), marker);
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, "|} suffix") != null);
+        try std.testing.expect(keep and after);
+        try std.testing.expectEqual(case.malformed, report.malformed_table);
+        if (!case.malformed) {
+            const cell = table.rows[1].cells[0];
+            try std.testing.expectEqual(@as(usize, 1), cell.spans.len);
+            try std.testing.expect(cell.spans[0].kind == .link);
+            try std.testing.expectEqualStrings("Second", cell.spans[0].target);
+        }
+    }
+    // A term/detail split consumes the same wiki-list phase before its body.
+    var term_report: Fallbacks = .{};
+    const term_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", "; |}: [[Detail]]", null, &term_report);
+    const term = try codec.decodeAlloc(a, term_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expect(term.entry.sections[0].blocks[0].kind == .term);
+    try std.testing.expectEqualStrings("|}", term.entry.sections[0].blocks[0].spans[0].text);
+    try std.testing.expect(term.entry.sections[0].blocks[1].kind == .list_detail);
+    try std.testing.expectEqualStrings("Detail", term.entry.sections[0].blocks[1].spans[0].target);
+    // No global parsed-text exemption: inline and later delimiters still fail.
+    for ([_][]const u8{ "before |} after", "* before |} after", "* |} suffix |}" }) |source| {
+        var report: Fallbacks = .{};
+        try std.testing.expectError(error.UncompiledPresentation, compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report));
+    }
+    // Exact source167 ordinal116548/page210773/revision1141827 expansion,
+    // SHA256 368e4abbcd7a83c94356b980ac141e10922f6d86d7715eefd7935809516a9d29.
+    // The authored bullet remains; the source parser closes the table at EOF.
+    const actual_source =
+        \\== عربية[[تصنيف:عربية]] ==
+        \\=== المعاني ===
+        \\[[اسْم]][[تصنيف:أسماء ]] [[اسم فاعل|اسْمُ فَاعِلٍ]] [[تصنيف:أسماء فاعل]]  [[مُؤَنَّث]]</span>.[[تصنيف:أسماء مؤنثة ]] يجمع جمع سالم [[سِفَارَات]]
+        \\# [[اسم فاعل|اسْمُ فَاعِلٍ]] مِنْ [[سَفَرَ]][[تصنيف:أسماء فاعل]]
+        \\# مَصْدَرٌ للفِعْلِ [[سَفَرَ]][[تصنيف:مصادر]]
+        \\# '''السِّفارةُ''' :[[مقام]] أو [[مَقَر]]ُّ '''السَّفِيرِ'''، وَهِيَ [[إِدَارَة|إدَارَةٌ]] [[دِبْلُومَاسِيَّة]]ٌ يُمَثِّلُ أعْضَاؤُهَا دَوْلَتَهُمْ فِي [[دَوْلَة]]ٍ أُخْرَى
+        \\# '''السِّفارةُ''' : عمل '''[[سَفِير|السفير]]''' ، تمثيل دبلوماسيّ لدولة لدى دولة أخرى
+        \\# ملحق '''السِّفارة''': مكان يضمّ مكاتب '''السِّفارة'''
+        \\# مُكَلَّفٌ بِالأَعْمَالِ فِي '''سِفَارَةٍ''' أَوْ قُنْصُلِيَّةٍ: نَائِبٌ مُفَوَّضٌ.
+        \\# '''سِفَارَةً''' : [[وَسَاطَة]] , [[إِقَامَة]]ُ [[صُلْح|الصُّلْح]]
+        \\
+        \\=== [[ملف:Gartoon actions contents replaced.svg|34px]] كَلِمَاتٌ ذَاتُ عَلَاقَة ===
+        \\
+        \\=== من الجذر نفسه ===
+        \\<div class="navbox-styles"><templatestyles src="Hlist/styles.css"/><templatestyles src="Module:Navbox/styles.css"/></div><div role="navigation" class="navbox" aria-labelledby="كلمات_من_الجذر_س_ف_ر" style="padding:1px"><table class="nowraplinks mw-collapsible expandCaption navbox-inner" style="border-spacing:0;background:transparent;color:inherit"><tr><th scope="col" class="navbox-title" colspan="2"><templatestyles src="Module:Navbar/styles.css"/><div class="navbar plainlinks hlist navbar-mini"><ul><li class="nv-اعرض">[[قالب:س ف ر|<abbr title="عرض هذا القالب">ع</abbr>]]</li><li class="nv-ناقش">[[نقاش القالب:س ف ر|<abbr title="ناقش هذا القالب">ن</abbr>]]</li><li class="nv-عدل">[//ar.wiktionary.org/w/index.php?title=%D9%82%D8%A7%D9%84%D8%A8:%D8%B3_%D9%81_%D8%B1&action=edit<abbr title="عدل هذا القالب">ت</abbr>]</li></ul></div><div id="كلمات_من_الجذر_س_ف_ر" style="font-size:114%;margin:0 4em">[[:تصنيف:س ف ر|كلمات من الجذر س ف ر]]</div></th></tr><tr><th scope="row" class="navbox-group" style="width:1%">[[:تصنيف:أفعال|أفعال]]</th><td class="navbox-list-with-group navbox-list navbox-odd" style="width:100%;padding:0"><div style="padding:0 0.25em">[[سَفَرَ]]، [[أَسْفَرَ]]، [[سَفَّرَ]]، [[اِسْتَفَرَ]]، [[تَسَفَّرَ]]، [[سَافَرَ]]، [[تَسَافَرَ]]، [[اِسْتَسْفَرَ]]، [[اِنْسَفَرَ]]</div></td></tr><tr><th scope="row" class="navbox-group" style="width:1%">أسماء [[:تصنيف:أسماء فاعل|فاعل]] [[:تصنيف:أسماء مفعول|ومفعول]]</th><td class="navbox-list-with-group navbox-list navbox-even" style="width:100%;padding:0"><div style="padding:0 0.25em">[[سَافِر]]، [[مَسْفُور]]، [[مُسْفَر]]، [[مِسْفَر]]، [[مُسْفِر]]، [[مُسَفِّر]]، [[مُسَفَّر]]، [[مُسْتَفِر]]، [[مُسْتَفَر]]، [[مُتَسَفِّر]]، [[مُتَسَفَّر]]، [[مُسَافِر]]، [[مُسَافَر]]، [[مُتَسَافِر]]، [[مُتَسَافَر]]، [[مُسْتَسْفَر]]، [[مُسْتَسْفِر]]، [[مُنْسَفِر]]، [[مُنْسَفَر]]</div></td></tr><tr><th scope="row" class="navbox-group" style="width:1%">[[:تصنيف:مصادر|مصادر]]</th><td class="navbox-list-with-group navbox-list navbox-odd" style="width:100%;padding:0"><div style="padding:0 0.25em">[[سَفْر]]، [[سَفَارَة]]، [[سِفَارَة]]، [[إِسْفَار]]، [[تَسْفِير]]، [[اِسْتِفَار]]، [[تَسَفُّر]]، [[مُسَافَرَة]]، [[تَسَافُر]]، [[اِسْتِسْفَار]]، [[اِنْسِفَار]]</div></td></tr><tr><th scope="row" class="navbox-group" style="width:1%">أخرى</th><td class="navbox-list-with-group navbox-list navbox-even" style="width:100%;padding:0"><div style="padding:0 0.25em">[[سَفَر]]،  [[سُفْر]]، [[سُفْرَة]]، [[سُفَر]]، [[سِفْر]]، [[سَفْر]]، [[سَفِير]]، [[سُفَارَة]]، [[سُفُور]]، [[سِفَار]]، [[سَفْرَة]]، [[سَفَرَة]]، [[سَفِيرَة]]، [[سَفَائِر]]، [[مَسْفِر]]، [[أَسْفَار]]، [[مَسَافِر]]</div></td></tr></table></div>
+        \\[[تصنيف:س ف ر]]
+        \\=== الترجمات ===
+        \\<div class="NavFrame" style="border:solid .01em; border-collapse:collapse;">
+        \\<div class="NavHead" style="min-height: 1.6em; font-weight: bold; font-size: 100%; background-color: #efefef; padding-right: 10px; text-align: right;">ترجمة </div>
+        \\<div class="NavContent">
+        \\{| border="0" width="100%" class="translations"
+        \\|-
+        \\| bgcolor="#FFFFE0" valign="top" width="48%" align="right" |[[تصنيف:رأس قالب الترجمة ليس مكتوب]]
+        \\
+        \\* بال[[إنجليزية]]: <span class="Latn" lang="en">[[:embassy#إنجليزية|embassy]]</span><span class="tpos">&nbsp;[[:en&#58;embassy|(en)]]</span>[[Category:كلمات مع ترجمة  إنجليزية|سِفَارَة]] <span class="Latn" lang="en">[[:conciliation#إنجليزية|conciliation]]</span><span class="tpos">&nbsp;[[:en&#58;conciliation|(en)]]</span>[[Category:كلمات مع ترجمة  إنجليزية|سِفَارَة]] <span class="Latn" lang="en">[[:mediation#إنجليزية|mediation]]</span><span class="tpos">&nbsp;[[:en&#58;mediation|(en)]]</span>[[Category:كلمات مع ترجمة  إنجليزية|سِفَارَة]] <span class="Latn" lang="en">[[:reconciliation#إنجليزية|reconciliation]]</span><span class="tpos">&nbsp;[[:en&#58;reconciliation|(en)]]</span>[[Category:كلمات مع ترجمة  إنجليزية|سِفَارَة]] <span class="Latn" lang="en">[[:peacemaking#إنجليزية|peacemaking]]</span><span class="tpos">&nbsp;[[:en&#58;peacemaking|(en)]]</span>[[Category:كلمات مع ترجمة  إنجليزية|سِفَارَة]]
+        \\* بال[[فرنسية]]: <span class="Latn" lang="fr">[[:ambassade#فرنسية|ambassade]]</span><span class="tpos">&nbsp;[[:fr&#58;ambassade|(fr)]]</span>[[Category:كلمات مع ترجمة  فرنسية|سِفَارَة]] <span class="Latn" lang="fr">[[:intercession#فرنسية|intercession]]</span><span class="tpos">&nbsp;[[:fr&#58;intercession|(fr)]]</span>[[Category:كلمات مع ترجمة  فرنسية|سِفَارَة]] <span class="Latn" lang="fr">[[:conciliation#فرنسية|conciliation]]</span><span class="tpos">&nbsp;[[:fr&#58;conciliation|(fr)]]</span>[[Category:كلمات مع ترجمة  فرنسية|سِفَارَة]] <span class="Latn" lang="fr">[[:médiation#فرنسية|médiation]]</span><span class="tpos">&nbsp;[[:fr&#58;médiation|(fr)]]</span>[[Category:كلمات مع ترجمة  فرنسية|سِفَارَة]]
+        \\* |}</div></div>
+        \\
+        \\[[تصنيف:فِعَالَة]]
+    ;
+    var actual_report: Fallbacks = .{};
+    const actual_bytes = try compileReportedAlloc(a, "سِفَارَة", .language, "عربية", "ar", actual_source, null, &actual_report);
+    const actual_decoded = try codec.decodeAlloc(a, actual_bytes, "سِفَارَة", .language, .{ .code = "ar", .heading = "عربية" });
+    var definitions: usize = 0;
+    var literal_markers: usize = 0;
+    var embassy = false;
+    for (actual_decoded.entry.sections) |section| for (section.blocks) |block| {
+        if (block.kind == .definition) definitions += 1;
+        for (block.spans) |span| if (std.mem.eql(u8, span.text, "|}")) {
+            literal_markers += 1;
+        };
+        if (block.table) |table| for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |span| {
+            if (std.mem.eql(u8, span.text, "|}")) literal_markers += 1;
+            if (span.kind == .link and std.mem.eql(u8, span.target, "embassy#إنجليزية")) embassy = true;
+        };
+    };
+    try std.testing.expectEqual(@as(usize, 7), definitions);
+    try std.testing.expectEqual(@as(usize, 1), literal_markers);
+    try std.testing.expect(embassy and actual_report.malformed_table);
+}
+
+test "captured incomplete name and orphan ref retain both literals and the dictionary link through DPR" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact announced167 record4 inputs, raw c6255337 and expanded1f1ead83.
+    const raw =
+        "{{شطب|صفحة تجربة و تخريب}}\n" ++
+        "\n" ++
+        "<reالميلاد [[التاريخ]] الميلاد197806o\n" ++
+        "</ref>\n" ++
+        "\n" ++
+        "[[تصنيف:عربية]]";
+    const expanded =
+        "<div class=\"boilerplate metadata\" id=\"vfd\">\n" ++
+        "{| style=\"background-color: #FFFCE6; margin: 0 2.5%; padding: 0 10px; border: 1px solid #aaa;\"\n" ++
+        "| [[ملف:Nuvola apps important.svg|80px|شطب]]\n" ++
+        "|'''لقد أدرجت هذه الصفحة للحذف السريع حسب [[ويكاموس:معايير الحذف السريع|سياسة الشطب]] لأنها: صفحة تجربة و تخريب\n" ++
+        "\n" ++
+        "سيقوم أحد [[ويكاموس:إداريون|الإداريين]] بمراجعة الصفحة للتأكد ومن ثم حذفها. رجاء لا تُزل هذا الإخطار إلا إذا قررت أن تعدل الصفحة لتدارك سبب الشطب.\n" ++
+        "\n" ++
+        "<small>'''للإداريين'''، افحص تاريخ الصفحة قبل الحذف بالضغط [//ar.wiktionary.org/w/index.php?title=%D8%A7%D9%84%D9%85%D9%8A%D9%84%D8%A7%D8%AF%D8%A7%D9%84%D8%AA%D8%A7%D8%B1%D9%8A%D8%AE_%D8%A7%D9%84%D9%85%D9%8A%D9%84%D8%A7%D8%AF197806o&action=delete&wpReason=%D8%B5%D9%81%D8%AD%D8%A9+%D8%AA%D8%AC%D8%B1%D8%A8%D8%A9+%D9%88+%D8%AA%D8%AE%D8%B1%D9%8A%D8%A8 هنا].</small>\n" ++
+        "|}</div>\n" ++
+        "[[تصنيف:صفحات للحذف السريع]]\n" ++
+        "\n" ++
+        "\n" ++
+        "<reالميلاد [[التاريخ]] الميلاد197806o\n" ++
+        "</ref>\n" ++
+        "\n" ++
+        "[[تصنيف:عربية]]";
+    for ([_][]const u8{ raw, expanded }) |source| {
+        var report: Fallbacks = .{};
+        const bytes = try compileReportedAlloc(a, "الميلادالتاريخ الميلاد197806o", .language, "العربية", "ar", source, null, &report);
+        const decoded = try codec.decodeAlloc(a, bytes, "الميلادالتاريخ الميلاد197806o", .language, .{ .code = "ar", .heading = "العربية" });
+        var visible: std.ArrayList(u8) = .empty;
+        var links: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            if (span.kind == .link and std.mem.eql(u8, span.target, "التاريخ")) {
+                links += 1;
+                try std.testing.expectEqualStrings("التاريخ", span.text);
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, visible.items, "<reالميلاد"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, visible.items, "</ref>"));
+        try std.testing.expectEqual(@as(usize, 1), links);
+        try std.testing.expectEqual(@as(usize, 0), decoded.entry.references.len);
+        try std.testing.expect(report.literal_markup);
+    }
+}
+
+test "literal malformed reference recovery leaves valid reference compilation and parsed guards strict" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "word<ref name=n>[[التاريخ]]</ref><references/>";
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report);
+    const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.references.len);
+    var reference_link = false;
+    for (decoded.entry.references[0].spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "التاريخ")) {
+        reference_link = true;
+    };
+    try std.testing.expect(reference_link and !report.literal_markup and !report.unclosed_formatting);
+    const direct = [_]compiler.Span{.{ .text = "<reالميلاد </ref>" }};
+    const split = [_]compiler.Span{ .{ .text = "<" }, .{ .text = "reالميلاد " }, .{ .text = "</ref>" } };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &direct, null));
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &split, null));
+    for ([_][]const u8{ "<unknown attr=x>word</unknown>", "<li'>word</li>", "<li\" attr=x>word</li>", "before |} after", "<reالميلاد>" }) |strict|
+        try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", strict, null));
+    const protected_bytes = try compileAlloc(a, "entry", .language, "English", "en", "<nowiki><reالميلاد [[التاريخ]]</ref></nowiki>", null);
+    const protected = try codec.decodeAlloc(a, protected_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    for (protected.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span|
+        try std.testing.expect(span.kind == .text and span.target.len == 0);
 }

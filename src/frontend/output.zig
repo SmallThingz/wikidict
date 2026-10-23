@@ -328,29 +328,67 @@ fn tableCellRows(a: std.mem.Allocator, text: []const u8, columns: usize) ![]term
 }
 // Cell fill owns its two padding spaces but never the neutral frame/borders.
 // Span resets restore the cell base without inheriting the previous span font.
-fn tableWrappedLine(w: *std.Io.Writer, line: terminal.RenderRow, width: usize, color: bool, background: ?[3]u8) !void {
+fn tableWrappedLine(w: *std.Io.Writer, line: terminal.RenderRow, width: usize, color: bool, background: ?[3]u8, padding: usize) !void {
     var base_buffer: [80]u8 = undefined;
     const base: []const u8 = if (color) if (background) |rgb| base: {
         const ink = contrastForeground(rgb);
         break :base try std.fmt.bufPrint(&base_buffer, "\x1b[0m\x1b[48;2;{d};{d};{d}m\x1b[38;2;{d};{d};{d}m", .{ rgb[0], rgb[1], rgb[2], ink[0], ink[1], ink[2] });
     } else "" else "";
     try w.writeAll(base);
-    try w.writeByte(' ');
+    try w.splatByteAll(' ', padding);
     if (color) try line.carry.write(w);
     if (base.len != 0) try terminal.writeStyled(w, line.bytes, base) else try w.writeAll(line.bytes);
     if (color) try w.writeAll("\x1b[0m");
     try w.writeAll(base);
     try w.splatByteAll(' ', width -| terminal.cellWidth(line.bytes));
-    try w.writeByte(' ');
+    try w.splatByteAll(' ', padding);
     if (base.len != 0) try w.writeAll("\x1b[0m");
 }
 
-fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*PoemProjection) !void {
+fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*PoemProjection) anyerror!void {
+    return tableTextWidth(w, table, color, projection, if (projection) |p| p.table_columns else null);
+}
+
+// Terminal geometry is a deterministic projection, not CSS layout: eight CSS
+// pixels per horizontal cell, positive borders one neutral rule. Percent widths
+// need an available terminal width; the unbounded CLI leaves those natural.
+fn tablePixels(value: u32) usize {
+    return (@as(usize, value) + 7) / 8;
+}
+
+fn tableCellText(w: *std.Io.Writer, cell: @import("blob_encoder").presentation_types.Cell, color: bool, columns: ?usize) anyerror!void {
+    if (color and cell.header) try w.writeAll("\x1b[1m");
+    try spansTextDisplayOnBackground(w, cell.spans, color, null, false, canonicalRgb(cell.background));
+    if (color) try w.writeAll("\x1b[0m");
+    if (cell.nested_table) |child| {
+        if (cell.spans.len != 0) try w.writeByte('\n');
+        var rendered: std.Io.Writer.Allocating = .init(std.heap.smp_allocator);
+        defer rendered.deinit();
+        try tableTextWidth(&rendered.writer, child, color, null, columns);
+        try w.writeAll(std.mem.trimEnd(u8, rendered.written(), "\n"));
+    }
+}
+
+fn tableTextWidth(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*PoemProjection, maximum: ?usize) anyerror!void {
     var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const a = arena.allocator();
     terminal.initLocale();
-    const Placed = struct { row: usize, column: usize, colspan: usize, rowspan: usize, text: []const u8, lines: []const []const u8, wrapped: ?[]terminal.RenderRow = null, background: ?[3]u8 = null };
+    const padding: usize = if (table.geometry) |g| if (g.cell_padding) |v| tablePixels(v) else 1 else 1;
+    const spacing: usize = if (table.geometry) |g| if (g.cell_spacing) |v| tablePixels(v) else 0 else 0;
+    const border = if (table.geometry) |g| if (g.border) |v| v != 0 else true else true;
+    const separator: usize = @intFromBool(border);
+    const overhead = 2 * padding + separator + spacing;
+    var columns_limit = maximum;
+    if (table.geometry) |g| if (g.width) |width| {
+        const requested: ?usize = switch (width.unit) {
+            .px => tablePixels(width.value),
+            .percent => if (maximum) |available| available * @as(usize, width.value) / 100 else null,
+        };
+        if (requested) |v| columns_limit = if (maximum) |available| @min(available, v) else v;
+    };
+    var has_nested = false;
+    const Placed = struct { source: @import("blob_encoder").presentation_types.Cell, row: usize, column: usize, colspan: usize, rowspan: usize, text: []const u8, lines: []const []const u8, wrapped: ?[]terminal.RenderRow = null, background: ?[3]u8 = null };
     var cells: std.ArrayList(Placed) = .empty;
     var occupied: std.ArrayList(usize) = .empty;
     var widths: std.ArrayList(usize) = .empty;
@@ -375,9 +413,8 @@ fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*P
             @memset(occupied.items[column..][0..colspan], r + rowspan);
             var text: std.Io.Writer.Allocating = .init(a);
             defer text.deinit();
-            if (color and cell.header) try text.writer.writeAll("\x1b[1m");
-            try spansTextDisplayOnBackground(&text.writer, cell.spans, color, null, false, canonicalRgb(cell.background));
-            if (color) try text.writer.writeAll("\x1b[0m");
+            has_nested = has_nested or cell.nested_table != null;
+            try tableCellText(&text.writer, cell, color, null);
             const owned = try a.dupe(u8, text.written());
             var lines: std.ArrayList([]const u8) = .empty;
             var split = std.mem.splitScalar(u8, owned, '\n');
@@ -386,10 +423,10 @@ fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*P
                 try lines.append(a, line);
                 needed = @max(needed, terminal.cellWidth(line));
             }
-            var available: usize = 3 * (colspan - 1);
+            var available: usize = overhead * (colspan - 1);
             for (widths.items[column..][0..colspan]) |width| available += width;
             if (needed > available) widths.items[column + colspan - 1] += needed - available;
-            try cells.append(a, .{ .row = r, .column = column, .colspan = colspan, .rowspan = rowspan, .text = owned, .lines = lines.items, .background = canonicalRgb(cell.background) });
+            try cells.append(a, .{ .source = cell, .row = r, .column = column, .colspan = colspan, .rowspan = rowspan, .text = owned, .lines = lines.items, .background = canonicalRgb(cell.background) });
             column += colspan;
         }
     }
@@ -397,15 +434,20 @@ fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*P
         try spansTextProjected(w, table.caption, color, projection);
         try w.writeByte('\n');
     }
+    if (table.geometry) |g| if (g.width != null and columns_limit != null and widths.items.len != 0) {
+        var natural = (overhead * widths.items.len + 2 + separator) -| spacing;
+        for (widths.items) |width| natural += width;
+        if (columns_limit.? > natural) widths.items[widths.items.len - 1] += columns_limit.? - natural;
+    };
     // The terminal body is at least 36 cells at its supported 40-column size.
     // Keep the natural grid byte-for-byte when it fits, and the CLI unbounded.
-    if (projection) |display| if (display.table_columns) |requested| {
+    if (columns_limit) |requested| {
         const columns = @max(requested, 8);
-        var natural: usize = 3 * widths.items.len + 3;
+        var natural: usize = (overhead * widths.items.len + 2 + separator) -| spacing;
         for (widths.items) |width| natural += width;
         if (natural > columns and widths.items.len != 0) {
-            const budget = columns -| (3 * widths.items.len + 3);
-            if (budget < 2 * widths.items.len) {
+            const budget = columns -| ((overhead * widths.items.len + 2 + separator) -| spacing);
+            if (budget < (if (has_nested) @as(usize, 8) else 2) * widths.items.len) {
                 // A grid cannot give every column one full wide glyph. Stack
                 // owned cells with explicit row/column/span identity instead.
                 const width = columns - 6;
@@ -413,10 +455,13 @@ fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*P
                     try w.print("  Row {d}, column {d}", .{ cell.row + 1, cell.column + 1 });
                     if (cell.colspan != 1 or cell.rowspan != 1) try w.print(" (span {d} x {d})", .{ cell.colspan, cell.rowspan });
                     try w.writeByte('\n');
-                    const wrapped = try tableCellRows(a, cell.text, width);
+                    var nested_text: std.Io.Writer.Allocating = .init(a);
+                    defer nested_text.deinit();
+                    try tableCellText(&nested_text.writer, cell.source, color, width);
+                    const wrapped = try tableCellRows(a, nested_text.written(), width);
                     for (wrapped) |line| {
                         try w.writeAll("  │");
-                        try tableWrappedLine(w, line, width, color, cell.background);
+                        try tableWrappedLine(w, line, width, color, cell.background, 1);
                         try w.writeAll("│\n");
                     }
                 }
@@ -436,11 +481,22 @@ fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*P
                 left -= extra;
             }
             for (cells.items) |*cell| {
-                var width: usize = 3 * (cell.colspan - 1);
+                var width: usize = overhead * (cell.colspan - 1);
                 for (widths.items[cell.column..][0..cell.colspan]) |part| width += part;
-                cell.wrapped = try tableCellRows(a, cell.text, width);
+                if (cell.source.nested_table == null) cell.wrapped = try tableCellRows(a, cell.text, width);
             }
         }
+    }
+    // A child percentage is relative to its owning cell even when the outer
+    // natural grid already fits. Render after final column allocation; never
+    // use the viewport as a substitute for the parent cell content budget.
+    for (cells.items) |*cell| if (cell.source.nested_table != null) {
+        var width = overhead * (cell.colspan - 1);
+        for (widths.items[cell.column..][0..cell.colspan]) |part| width += part;
+        var nested_text: std.Io.Writer.Allocating = .init(a);
+        defer nested_text.deinit();
+        try tableCellText(&nested_text.writer, cell.source, color, width);
+        cell.wrapped = try tableCellRows(a, nested_text.written(), width);
     };
     const active = try a.alloc(?usize, widths.items.len);
     @memset(active, null);
@@ -456,7 +512,7 @@ fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*P
             height = @max(height, if (cell.wrapped) |wrapped| wrapped.len else cell.lines.len);
         }
         for (0..height) |line_index| {
-            try w.writeAll("  │");
+            try w.writeAll(if (border) "  │" else "  ");
             var column: usize = 0;
             while (column < widths.items.len) {
                 var span: usize = 1;
@@ -473,11 +529,12 @@ fn tableText(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*P
                         } else if (line_index < cell.lines.len) line = cell.lines[line_index];
                     }
                 }
-                var width: usize = 3 * (span - 1);
+                var width: usize = overhead * (span - 1);
                 for (widths.items[column..][0..span]) |part| width += part;
-                try tableWrappedLine(w, wrapped_line orelse .{ .bytes = line, .carry = .{} }, width, color, background);
+                try tableWrappedLine(w, wrapped_line orelse .{ .bytes = line, .carry = .{} }, width, color, background, padding);
                 column += span;
-                try w.writeAll(if (column == widths.items.len) "│\n" else "│");
+                if (border) try w.writeAll("│");
+                if (column == widths.items.len) try w.writeByte('\n') else try w.splatByteAll(' ', spacing);
             }
         }
     }
@@ -764,13 +821,23 @@ const VisibleMediaCaptions = struct {
         }
         self.finish(current);
     }
+    fn observeTable(self: *VisibleMediaCaptions, table: model.Table) anyerror!void {
+        for (table.rows) |row| for (row.cells) |cell| {
+            try self.observeSpans(cell.spans);
+            if (cell.nested_table) |child| {
+                try self.observeSpans(child.caption);
+                try self.observeTable(child);
+            }
+        };
+    }
+
     fn observeBlocks(self: *VisibleMediaCaptions, blocks: []const model.Block) !void {
         if (!self.enabled) return;
         for (blocks) |block| {
             if (block.kind == .blank or block.kind == .rule) continue;
             if (block.table) |table| {
                 try self.observeSpans(table.caption);
-                for (table.rows) |row| for (row.cells) |cell| try self.observeSpans(cell.spans);
+                try self.observeTable(table);
             } else try self.observeSpans(block.spans);
         }
     }
@@ -912,6 +979,15 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
     if (details) try entryMetadataProjected(w, entry, color, projection, &captions);
 }
 
+fn visitTableSpanLists(table: model.Table, visitor: anytype) anyerror!bool {
+    if (try visitor.spans(table.caption)) return true;
+    for (table.rows) |row| for (row.cells) |cell| {
+        if (try visitor.spans(cell.spans)) return true;
+        if (cell.nested_table) |child| if (try visitTableSpanLists(child, visitor)) return true;
+    };
+    return false;
+}
+
 // The details view visits compiled span lists without changing body text or links.
 fn visitEntrySpanLists(entry: model.Entry, visitor: anytype) !bool {
     if (try visitor.spans(entry.display_title)) return true;
@@ -919,10 +995,7 @@ fn visitEntrySpanLists(entry: model.Entry, visitor: anytype) !bool {
     for (entry.sections) |section| for (section.blocks) |block| {
         if (try visitor.spans(block.spans)) return true;
         if (block.table) |table| {
-            if (try visitor.spans(table.caption)) return true;
-            for (table.rows) |row| for (row.cells) |cell| {
-                if (try visitor.spans(cell.spans)) return true;
-            };
+            if (try visitTableSpanLists(table, visitor)) return true;
         }
     };
     for (entry.references) |reference| if (try visitor.spans(reference.spans)) return true;
@@ -2697,4 +2770,84 @@ test "folded reader retains addressable empty parent headings around pronoun tab
         try std.testing.expectEqual(details, std.mem.indexOf(u8, rendered, "│ ic") != null);
         try std.testing.expectEqual(details, std.mem.indexOf(u8, rendered, "│ se") != null);
     };
+}
+
+test "nested tables remain inside four parent cells and traverse abbreviation metadata" {
+    const a = std.testing.allocator;
+    const T = @import("blob_encoder").presentation_types;
+    const child: T.Table = .{ .rows = &.{.{ .cells = &.{
+        .{ .spans = &.{}, .header = true },
+        .{ .spans = &.{.{ .kind = .link, .text = "child", .target = "destination", .explanation = "nested explanation" }} },
+    } }} };
+    const table: T.Table = .{ .rows = &.{.{ .cells = &.{
+        .{ .spans = &.{}, .nested_table = child },
+        .{ .spans = &.{}, .nested_table = child },
+        .{ .spans = &.{}, .nested_table = child },
+        .{ .spans = &.{}, .nested_table = child },
+    } }} };
+    const entry: model.Entry = .{ .title = "nested", .kind = .language, .sections = &.{.{ .level = 1, .title = "body", .blocks = &.{.{ .kind = .table, .table = table }} }} };
+    var out: std.Io.Writer.Allocating = .init(a);
+    defer out.deinit();
+    try tableText(&out.writer, table, false, null);
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, out.written(), "child"));
+    // Each child frame is enclosed by its parent cell, rather than emitted after
+    // a flattened/root-unwrapped grid. Empty child header is still a real cell.
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "│   │") != null);
+    try std.testing.expectEqual(@as(usize, 4), table.rows[0].cells.len);
+    try std.testing.expectEqual(@as(usize, 2), table.rows[0].cells[0].nested_table.?.rows[0].cells.len);
+    var narrow: std.Io.Writer.Allocating = .init(a);
+    defer narrow.deinit();
+    var metadata: std.ArrayList(terminal.PoemLine) = .empty;
+    defer metadata.deinit(a);
+    var projection: PoemProjection = .{ .frame = &narrow, .allocator = a, .lines = &metadata, .table_columns = 36 };
+    try tableText(&narrow.writer, table, false, &projection);
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, narrow.written(), "child"));
+    var lines = std.mem.splitScalar(u8, narrow.written(), '\n');
+    while (lines.next()) |line| try std.testing.expect(terminal.cellWidth(line) <= 36);
+    var abbreviations = try Abbreviations.init(a, entry);
+    defer abbreviations.deinit();
+    var details: std.Io.Writer.Allocating = .init(a);
+    defer details.deinit();
+    try abbreviations.write(&details.writer);
+    try std.testing.expect(std.mem.indexOf(u8, details.written(), "nested explanation") != null);
+}
+
+test "authored terminal geometry has explicit border padding and width projection" {
+    const a = std.testing.allocator;
+    const T = @import("blob_encoder").presentation_types;
+    var table: T.Table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .text = "x" }} }} }} };
+    var baseline: std.Io.Writer.Allocating = .init(a);
+    defer baseline.deinit();
+    try tableText(&baseline.writer, table, false, null);
+    try std.testing.expectEqualStrings("  │ x   │\n\n", baseline.written());
+    table.geometry = .{ .border = 0, .cell_padding = 0, .cell_spacing = 0, .width = .{ .unit = .px, .value = 80 } };
+    var projected: std.Io.Writer.Allocating = .init(a);
+    defer projected.deinit();
+    try tableText(&projected.writer, table, false, null);
+    try std.testing.expect(std.mem.indexOf(u8, projected.written(), "│") == null);
+    try std.testing.expectEqual(@as(usize, 10), terminal.cellWidth(std.mem.sliceTo(projected.written(), '\n')));
+}
+
+test "nested percent width uses expanded parent content budget without outer overflow" {
+    const a = std.testing.allocator;
+    const T = @import("blob_encoder").presentation_types;
+    const child: T.Table = .{
+        .geometry = .{ .width = .{ .unit = .percent, .value = 100 } },
+        .rows = &.{.{ .cells = &.{
+            .{ .spans = &.{.{ .text = "x" }} },
+            .{ .spans = &.{.{ .text = "y" }} },
+        } }},
+    };
+    const parent: T.Table = .{
+        .geometry = .{ .border = 0, .cell_padding = 0, .width = .{ .unit = .px, .value = 400 } },
+        .rows = &.{.{ .cells = &.{.{ .spans = &.{}, .nested_table = child }} }},
+    };
+    var out: std.Io.Writer.Allocating = .init(a);
+    defer out.deinit();
+    try tableText(&out.writer, parent, false, null);
+    const first_line = std.mem.sliceTo(out.written(), '\n');
+    // The child's closing rule reaches the parent content edge. Trailing parent
+    // fill cannot make a natural-width child satisfy this assertion.
+    try std.testing.expectEqual(@as(usize, 50), terminal.cellWidth(std.mem.trimEnd(u8, first_line, " ")));
+    try std.testing.expect(std.mem.endsWith(u8, first_line, "│"));
 }

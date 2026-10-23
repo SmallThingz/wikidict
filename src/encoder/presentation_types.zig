@@ -46,9 +46,56 @@ pub const Feature = struct {
     tail: []const u8 = "",
 };
 pub const BlockKind = enum { paragraph, blank, definition, example, quotation, list_item, list_detail, indent, term, heading, preformatted, rule, table };
-pub const Cell = struct { spans: []const Span = &.{}, header: bool = false, colspan: u16 = 1, rowspan: u16 = 1, background: ?[]const u8 = null };
+pub const max_table_depth: usize = 16;
+pub const TableWidthUnit = enum { px, percent };
+pub const TableWidth = struct { unit: TableWidthUnit, value: u32 };
+pub const TableGeometry = struct {
+    border: ?u16 = null,
+    cell_spacing: ?u16 = null,
+    cell_padding: ?u16 = null,
+    width: ?TableWidth = null,
+};
+pub const Cell = struct {
+    spans: []const Span = &.{},
+    header: bool = false,
+    colspan: u16 = 1,
+    rowspan: u16 = 1,
+    background: ?[]const u8 = null,
+    nested_table: ?Table = null,
+
+    pub fn jsonStringify(self: Cell, jw: anytype) !void {
+        try jw.beginObject();
+        inline for (@typeInfo(Cell).@"struct".field_names) |field_name| {
+            if (comptime !std.mem.eql(u8, field_name, "nested_table")) {
+                try jw.objectField(field_name);
+                try jw.write(@field(self, field_name));
+            } else if (self.nested_table != null) {
+                try jw.objectField(field_name);
+                try jw.write(self.nested_table);
+            }
+        }
+        try jw.endObject();
+    }
+};
 pub const Row = struct { cells: []const Cell = &.{} };
-pub const Table = struct { caption: []const Span = &.{}, rows: []const Row = &.{} };
+pub const Table = struct {
+    caption: []const Span = &.{},
+    rows: []const Row = &.{},
+    geometry: ?TableGeometry = null,
+
+    pub fn jsonStringify(self: Table, jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("caption");
+        try jw.write(self.caption);
+        try jw.objectField("rows");
+        try jw.write(self.rows);
+        if (self.geometry) |geometry| {
+            try jw.objectField("geometry");
+            try jw.write(geometry);
+        }
+        try jw.endObject();
+    }
+};
 pub const Block = struct {
     kind: BlockKind,
     depth: u8 = 0,
@@ -143,6 +190,26 @@ fn validateSpanColors(spans: []const Span) ValidationError!void {
     }
 }
 
+pub fn validTableGeometry(value: TableGeometry) bool {
+    if (value.border == null and value.cell_spacing == null and value.cell_padding == null and value.width == null) return false;
+    if (value.width) |width| if (width.unit == .percent and width.value > 100) return false;
+    return true;
+}
+
+fn validateTable(table: Table, depth: usize) ValidationError!void {
+    if (depth > max_table_depth) return error.InvalidPresentation;
+    if (table.geometry) |geometry| if (!validTableGeometry(geometry)) return error.InvalidPresentation;
+    try validateSpanColors(table.caption);
+    for (table.rows) |row| for (row.cells) |cell| {
+        try validateSpanColors(cell.spans);
+        if (cell.background) |background| if (!isCanonicalRgb(background)) return error.InvalidPresentation;
+        if (cell.nested_table) |child| {
+            if (cell.spans.len != 0) return error.InvalidPresentation;
+            try validateTable(child, depth + 1);
+        }
+    };
+}
+
 fn blockIndexValid(indices: []const usize, block_count: usize) bool {
     for (indices) |index| if (index >= block_count) return false;
     return true;
@@ -193,15 +260,7 @@ pub fn validateStored(
     for (entry.sections) |section| for (section.blocks) |block| {
         if ((block.anchor.len != 0 or block.anchor_fallback.len != 0) and block.kind != .heading) return error.InvalidPresentation;
         try validateSpanColors(block.spans);
-        if (block.table) |table| {
-            try validateSpanColors(table.caption);
-            for (table.rows) |row| for (row.cells) |cell| try validateSpanColors(cell.spans);
-        }
-    };
-    for (entry.sections) |section| for (section.blocks) |block| if (block.table) |table| {
-        for (table.rows) |row| for (row.cells) |cell| if (cell.background) |background| {
-            if (!isCanonicalRgb(background)) return error.InvalidPresentation;
-        };
+        if (block.table) |table| try validateTable(table, 1);
     };
 
     for (entry.references) |reference| {

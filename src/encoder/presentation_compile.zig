@@ -605,9 +605,10 @@ pub fn separateGeneratedDiagnosticBoundaries(a: A, spans: []Span) Error!void {
 pub const Feature = struct { kind: []const u8, language: []const u8 = "", data: []const u8 = "", tail_kind: []const u8 = "none", tail: []const u8 = "" };
 const SemanticHints = struct { relation_note: bool = false, ordinary_paragraph: bool = false };
 pub const Kind = enum { paragraph, blank, definition, example, quotation, list_item, list_detail, indent, term, heading, preformatted, rule, table };
-pub const Cell = struct { spans: []const Span, header: bool = false, colspan: u16 = 1, rowspan: u16 = 1, background: ?[]const u8 = null };
+pub const TableGeometry = @import("blob_encoder").presentation_types.TableGeometry;
+pub const Cell = struct { spans: []const Span, header: bool = false, colspan: u16 = 1, rowspan: u16 = 1, background: ?[]const u8 = null, nested_table: ?Table = null };
 pub const Row = struct { cells: []const Cell };
-pub const Table = struct { caption: []const Span = &.{}, rows: []const Row };
+pub const Table = struct { caption: []const Span = &.{}, rows: []const Row, geometry: ?TableGeometry = null };
 pub const Block = struct {
     kind: Kind,
     depth: u8 = 0,
@@ -2561,16 +2562,7 @@ pub const Renderer = struct {
             if (index != 0 and blocks[index - 1].kind == .rule and block_value.spans.len != 0 and
                 (block_value.spans[0].kind == .line_break or trim(block_value.spans[0].text).len == 0)) first = 1;
             try self.spans.appendSlice(self.a, block_value.spans[first..]);
-            if (block_value.table) |table| {
-                try self.spans.appendSlice(self.a, table.caption);
-                for (table.rows) |row| {
-                    try self.lineBreak(style);
-                    for (row.cells, 0..) |cell, ci| {
-                        if (ci != 0) try self.text(" · ", style);
-                        try self.spans.appendSlice(self.a, cell.spans);
-                    }
-                }
-            }
+            if (block_value.table) |table| try self.tableInline(table, style, true);
         }
         self.poem_boundary_pending = true;
     }
@@ -4592,10 +4584,10 @@ pub const Renderer = struct {
             const emitted_start = self.spans.items.len;
             var label_style = style;
             label_style.provenance = span.provenance;
-            label_style.background = span.background;
             // Authored captions retain visual semantics. Alt and filename
             // fallbacks keep their existing plain flattening and outer style.
             if (authored_caption) {
+                label_style.background = span.background;
                 label_style.bold = span.flags.bold;
                 label_style.italic = span.flags.italic;
                 label_style.code = span.flags.code;
@@ -5404,6 +5396,7 @@ pub const Renderer = struct {
 
     fn htmlInlineStyle(self: *Renderer, tag: syntax.Tag, style: Style) Error!Style {
         var s = style;
+        if (!tag.is("table")) s.background = (try self.authoredColor(tag, "background-color", null, style.background)).value;
         if (oneOf(tag.name, &.{ "b", "strong" })) s.bold = true;
         if (oneOf(tag.name, &.{ "i", "em", "cite", "var", "dfn" })) s.italic = true;
         if (tag.is("u") or tag.is("ins")) s.underline = true;
@@ -5872,12 +5865,26 @@ pub const Renderer = struct {
         }
         return null;
     }
+    // An incomplete, unregistered mixed-name opener is ordinary source text.
+    // Preserve only its opening angle; following wiki text keeps its own phases.
+    fn incompleteUnregisteredHtmlName(input: []const u8, at: usize) bool {
+        var cursor = at + 1;
+        const name_start = cursor;
+        if (cursor >= input.len or !std.ascii.isAlphabetic(input[cursor])) return false;
+        while (cursor < input.len and (std.ascii.isAlphanumeric(input[cursor]) or input[cursor] == '-')) : (cursor += 1) {}
+        if (cursor >= input.len or input[cursor] < 0x80) return false;
+        while (cursor < input.len and (input[cursor] >= 0x80 or std.ascii.isAlphanumeric(input[cursor]) or input[cursor] == '-')) : (cursor += 1) {}
+        if (syntax.isOpaqueTag(input[name_start..cursor])) return false;
+        if (cursor < input.len and !std.ascii.isWhitespace(input[cursor]) and input[cursor] != '<') return false;
+        const boundary = std.mem.indexOfAnyPos(u8, input, cursor, "<>\r\n") orelse return true;
+        return input[boundary] != '>';
+    }
     fn htmlTagWithMissing(self: *Renderer, tracked: MissingText, at: usize, style: Style, depth: usize, no_more_nowiki_close: ?*bool, opaque_scan: *syntax.OpaqueScan) Error!?usize {
         const input = tracked.bytes;
         if (starts(input[at..], "<!--")) return syntax.protectedEnd(input, at);
         const raw_tag = opaque_scan.tagAt(input, at, no_more_nowiki_close);
         const escaped_end: ?usize = if (raw_tag) |tag|
-            (if (oneOf(tag.name, &.{ "tbody", "thead", "tfoot" })) tag.end else null)
+            (if (oneOf(tag.name, &.{ "tbody", "thead", "tfoot" }) or (tag.closing and tag.is("ref"))) tag.end else null)
         else
             doubleQuotedHtmlNameEnd(input, at);
         if (escaped_end) |end| {
@@ -5971,6 +5978,9 @@ pub const Renderer = struct {
             }
             defer self.inline_table_boundaries = parent_table;
             var cell_style = style;
+            // Resolve the owning cell before parsing its children, so their
+            // explicit inline paint can still override this nearer backdrop.
+            if (cell_background) |background| cell_style.background = background;
             const parent_flags = self.block_formatting;
             const parent_poem_italic = self.poem_base_style.italic;
             defer self.block_formatting = parent_flags;
@@ -6420,6 +6430,12 @@ pub const Renderer = struct {
                     continue;
                 }
                 if (opaque_scan.tagAt(input, it.cursor, &no_more_nowiki_close) == null) {
+                    if (incompleteUnregisteredHtmlName(input, it.cursor)) {
+                        self.fallbacks.literal_markup = true;
+                        try self.protectedLiteral("<", s);
+                        it.cursor += 1;
+                        continue;
+                    }
                     try self.plain(input[it.cursor .. it.cursor + 1], s);
                     it.cursor += 1;
                     continue;
@@ -6498,6 +6514,30 @@ pub const Renderer = struct {
                 self.fallbacks.literal_markup = true;
                 it.cursor += 2;
                 continue;
+            }
+            // A protocol without an address cannot own a bracketed link.
+            // Preserve only its orphan opening bracket as literal; the child
+            // still traverses the ordinary validated external-link path.
+            if (s.provenance == .parsed and it.recognize_external_links and input[it.cursor] == '[' and
+                !starts(input[it.cursor..], "[["))
+            {
+                const rest = input[it.cursor + 1 ..];
+                if (std.mem.indexOfAny(u8, rest, "[] \t\r\n<>\"{}")) |boundary| {
+                    const prefix = rest[0..boundary];
+                    if (rest[boundary] == '[' and std.mem.endsWith(u8, prefix, "://") and
+                        ir.hasExternalProtocol(prefix) and !ir.validExternalUrl(prefix))
+                    {
+                        var child: ir.InlineIterator = .{ .input = rest[boundary..], .renderer_boundaries = true, .link_trail = self.context.link_trail };
+                        if (child.next()) |candidate| {
+                            if (candidate.kind == .external_link) {
+                                try self.protectedLiteral("[", s);
+                                self.fallbacks.literal_markup = true;
+                                it.cursor += 1;
+                                continue;
+                            }
+                        }
+                    }
+                }
             }
             const token_start = it.cursor;
             const token = it.next() orelse break;
@@ -7666,6 +7706,28 @@ pub const Renderer = struct {
         try self.block(blocks, kind, raw, path, number, level);
     }
 
+    // Table parsing precedes BlockLevelPass. After a wiki list prefix has
+    // been consumed, its leading |} is visible item text, not a table close.
+    // Isolate only that literal delimiter; the complete suffix stays strict.
+    fn literalWikiListTableClose(self: *Renderer, blocks: *std.ArrayList(Block), first_block: usize, raw: []const u8) Error!void {
+        if (!starts(raw, "|}") or blocks.items.len != first_block + 1) return;
+        const spans = blocks.items[first_block].spans;
+        if (spans.len == 0) return;
+        const first = spans[0];
+        if (first.kind != .text or first.provenance != .parsed or !starts(first.text, "|}")) return;
+        const extra: usize = @intFromBool(first.text.len > 2);
+        const literal_spans = try self.a.alloc(Span, spans.len + extra);
+        literal_spans[0] = first;
+        literal_spans[0].text = first.text[0..2];
+        literal_spans[0].provenance = .protected_literal;
+        if (extra != 0) {
+            literal_spans[1] = first;
+            literal_spans[1].text = first.text[2..];
+        }
+        @memcpy(literal_spans[1 + extra ..], spans[1..]);
+        blocks.items[first_block].spans = literal_spans;
+    }
+
     fn bodyParagraph(self: *Renderer, blocks: *std.ArrayList(Block), raw: []const u8, seed: ?QuoteSeed, pending_join: *?bool) Error!void {
         const first = blocks.items.len;
         try self.paragraphWithQuoteSeed(blocks, raw, seed);
@@ -8338,7 +8400,7 @@ pub const Renderer = struct {
                         try blocks.appendSlice(self.a, try self.renderBodyWithLanguageDirection(body.items, try self.htmlLanguageDirection(tag, self.body_language_direction orelse .{})));
                     } else {
                         var fostered: std.ArrayList(Block) = .empty;
-                        if (try self.htmlTable(wrapper_source[tag.end..pair.inner_end], &fostered, false, try self.htmlLanguageDirection(tag, self.body_language_direction orelse .{}), try self.tableCellBackground(tag, null))) |table_value| {
+                        if (try self.htmlTable(wrapper_source[tag.end..pair.inner_end], &fostered, false, try self.htmlLanguageDirection(tag, self.body_language_direction orelse .{}), try self.tableCellBackground(tag, null), htmlNestedGridAdmission(tag, wrapper_source[tag.end..pair.inner_end]))) |table_value| {
                             try blocks.appendSlice(self.a, fostered.items);
                             try self.appendBlockBudgeted(&blocks, .{ .kind = .table, .table = table_value, .feature = try self.htmlSwatchFeature(tag, wrapper_source[tag.end..pair.inner_end], table_value, fostered.items) });
                         } else try self.block(&blocks, .preformatted, wrapper_source[0..pair.end], "", "", 0);
@@ -8534,7 +8596,9 @@ pub const Renderer = struct {
                         detail_path[detail_path.len - 1] = ':';
                         // These slices already contain the one seeded quote pass.
                         // They do not claim coordinates in the raw source domain.
+                        const first_term_block = blocks.items.len;
                         try self.block(&blocks, .term, pair.term, path, "", 0);
+                        try self.literalWikiListTableClose(&blocks, first_term_block, pair.term);
                         try self.block(&blocks, .list_detail, pair.definition, detail_path, "", 0);
                         continue;
                     }
@@ -8588,7 +8652,9 @@ pub const Renderer = struct {
                         }
                     }
                 }
+                const first_list_block = blocks.items.len;
                 try self.bodyRawBlock(&blocks, input, body, &body_quotes, kind, path, number, 0);
+                try self.literalWikiListTableClose(&blocks, first_list_block, body);
             }
         }
         if (para) |p| {
@@ -9140,7 +9206,164 @@ pub const Renderer = struct {
         return true;
     }
 
-    fn htmlTable(self: *Renderer, input: []const u8, fostered: *std.ArrayList(Block), defer_zero_rowspans: bool, style: Style, table_background: ?[]const u8) Error!?Table {
+    const HtmlNestedGrid = struct { tag: syntax.Tag, depth: usize = 0 };
+    const HtmlNestedChild = struct { tag: syntax.Tag, body: []const u8 };
+
+    fn htmlNestedAttributes(attrs: []const u8, allowed: []const []const u8) bool {
+        var at: usize = 0;
+        var seen: u32 = 0;
+        while (at < attrs.len) {
+            while (at < attrs.len and std.ascii.isWhitespace(attrs[at])) : (at += 1) {}
+            if (at == attrs.len) break;
+            const start = at;
+            while (at < attrs.len and !std.ascii.isWhitespace(attrs[at]) and attrs[at] != '=') : (at += 1) {}
+            var field: ?u5 = null;
+            for (allowed, 0..) |name, i| {
+                if (std.ascii.eqlIgnoreCase(attrs[start..at], name)) field = @intCast(i);
+            }
+            const bit = @as(u32, 1) << (field orelse return false);
+            if (seen & bit != 0) return false;
+            seen |= bit;
+            while (at < attrs.len and std.ascii.isWhitespace(attrs[at])) : (at += 1) {}
+            if (at == attrs.len or attrs[at] != '=') return false;
+            at += 1;
+            while (at < attrs.len and std.ascii.isWhitespace(attrs[at])) : (at += 1) {}
+            if (at == attrs.len) return false;
+            if (attrs[at] == '\'' or attrs[at] == '"') {
+                const quote = attrs[at];
+                at += 1;
+                while (at < attrs.len and attrs[at] != quote) : (at += 1) {}
+                if (at == attrs.len) return false;
+                at += 1;
+                if (at < attrs.len and !std.ascii.isWhitespace(attrs[at])) return false;
+            } else {
+                while (at < attrs.len and !std.ascii.isWhitespace(attrs[at])) : (at += 1) {}
+            }
+        }
+        return true;
+    }
+    fn htmlNestedUnsigned(comptime T: type, raw: []const u8) ?T {
+        if (raw.len == 0) return null;
+        for (raw) |byte| if (!std.ascii.isDigit(byte)) return null;
+        return std.fmt.parseInt(T, raw, 10) catch null;
+    }
+    // Only typed, integral legacy geometry is admitted. Absence and authored
+    // zero remain different values; unrelated CSS stays on the existing path.
+    fn htmlNestedGeometry(tag: syntax.Tag) ?TableGeometry {
+        if (!htmlNestedAttributes(tag.attrs, &.{ "border", "cellspacing", "cellpadding", "width" })) return null;
+        var result: TableGeometry = .{};
+        if (tag.attr("border")) |raw| result.border = htmlNestedUnsigned(u16, raw) orelse return null;
+        if (tag.attr("cellspacing")) |raw| result.cell_spacing = htmlNestedUnsigned(u16, raw) orelse return null;
+        if (tag.attr("cellpadding")) |raw| result.cell_padding = htmlNestedUnsigned(u16, raw) orelse return null;
+        if (tag.attr("width")) |raw| {
+            const percent = std.mem.endsWith(u8, raw, "%");
+            const pixels = std.mem.endsWith(u8, raw, "px");
+            const digits = if (percent) raw[0 .. raw.len - 1] else if (pixels) raw[0 .. raw.len - 2] else raw;
+            const value = htmlNestedUnsigned(u32, digits) orelse return null;
+            if (percent and value > 100) return null;
+            result.width = .{ .unit = if (percent) .percent else .px, .value = value };
+        }
+        return result;
+    }
+    fn htmlNestedCellAttributes(tag: syntax.Tag) bool {
+        if (!htmlNestedAttributes(tag.attrs, &.{ "colspan", "rowspan", "style" })) return false;
+        inline for (.{ "colspan", "rowspan" }) |name| {
+            if (tag.attr(name)) |raw| {
+                const value = htmlNestedUnsigned(u16, raw) orelse return false;
+                if (value == 0 or value > 100) return false;
+            }
+        }
+        if (tag.attr("style")) |raw| {
+            var declaration = trim(raw);
+            if (std.mem.endsWith(u8, declaration, ";")) declaration = trim(declaration[0 .. declaration.len - 1]);
+            const colon = std.mem.indexOfScalar(u8, declaration, ':') orelse return false;
+            if (!std.ascii.eqlIgnoreCase(trim(declaration[0..colon]), "background")) return false;
+            if (!@import("blob_encoder").presentation_types.isCanonicalRgb(trim(declaration[colon + 1 ..]))) return false;
+        }
+        return true;
+    }
+    fn htmlNestedChild(input: []const u8) ?HtmlNestedChild {
+        const content = trim(input);
+        const tag = syntax.tagAt(content, 0) orelse return null;
+        if (!tag.is("table") or tag.closing or tag.self_closing) return null;
+        const pair = syntax.matchingTag(content, tag) orelse return null;
+        if (pair.end != content.len) return null;
+        return .{ .tag = tag, .body = content[tag.end..pair.inner_end] };
+    }
+    fn htmlNestedSpend(remaining: *usize) bool {
+        if (remaining.* == 0) return false;
+        remaining.* -= 1;
+        return true;
+    }
+    // Admission is read-only over the complete tree, before references, media,
+    // or other page-local effects can be registered by a rendered cell.
+    fn htmlNestedGridComplete(tag: syntax.Tag, input: []const u8, depth: usize, remaining: *usize, found_child: *bool) bool {
+        if (depth >= @import("blob_encoder").presentation_types.max_table_depth or !htmlNestedSpend(remaining)) return false;
+        _ = htmlNestedGeometry(tag) orelse return false;
+        var at: usize = 0;
+        var rows: usize = 0;
+        var caption_seen = false;
+        while (at < input.len) {
+            while (at < input.len and std.ascii.isWhitespace(input[at])) : (at += 1) {}
+            if (at == input.len) break;
+            const row = syntax.tagAt(input, at) orelse return false;
+            if (row.closing or row.self_closing or trim(row.attrs).len != 0) return false;
+            const row_pair = syntax.matchingTag(input, row) orelse return false;
+            if (row.is("caption")) {
+                if (caption_seen or rows != 0 or !htmlNestedSpend(remaining)) return false;
+                caption_seen = true;
+                if (!htmlNestedLeafComplete(input[row.end..row_pair.inner_end])) return false;
+                at = row_pair.end;
+                continue;
+            }
+            if (!row.is("tr") or !htmlNestedSpend(remaining)) return false;
+            var cell_at = row.end;
+            var cells: usize = 0;
+            while (cell_at < row_pair.inner_end) {
+                while (cell_at < row_pair.inner_end and std.ascii.isWhitespace(input[cell_at])) : (cell_at += 1) {}
+                if (cell_at == row_pair.inner_end) break;
+                const cell = syntax.tagAt(input[0..row_pair.inner_end], cell_at) orelse return false;
+                if (!(cell.is("td") or cell.is("th")) or cell.closing or cell.self_closing or !htmlNestedCellAttributes(cell) or !htmlNestedSpend(remaining)) return false;
+                const pair = syntax.matchingTag(input[0..row_pair.inner_end], cell) orelse return false;
+                const body = input[cell.end..pair.inner_end];
+                if (htmlNestedChild(body)) |child| {
+                    if (!htmlNestedGridComplete(child.tag, child.body, depth + 1, remaining, found_child)) return false;
+                    found_child.* = true;
+                } else if (!htmlNestedLeafComplete(body)) return false;
+                cells += 1;
+                cell_at = pair.end;
+            }
+            if (cells == 0) return false;
+            rows += 1;
+            at = row_pair.end;
+        }
+        return rows != 0;
+    }
+    fn htmlNestedLeafComplete(input: []const u8) bool {
+        if (std.mem.indexOf(u8, input, "{|") != null) return false;
+        var at: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, input, at, '<')) |open| {
+            if (syntax.protectedEnd(input, open)) |end| {
+                at = end;
+                continue;
+            }
+            const tag = syntax.tagAt(input, open) orelse {
+                at = open + 1;
+                continue;
+            };
+            if (oneOf(tag.name, &.{ "table", "tr", "td", "th", "caption" })) return false;
+            at = tag.end;
+        }
+        return true;
+    }
+    fn htmlNestedGridAdmission(tag: syntax.Tag, body: []const u8) ?HtmlNestedGrid {
+        var remaining: usize = 1 << 20;
+        var found_child = false;
+        if (!htmlNestedGridComplete(tag, body, 0, &remaining, &found_child) or !found_child) return null;
+        return .{ .tag = tag };
+    }
+
+    fn htmlTable(self: *Renderer, input: []const u8, fostered: *std.ArrayList(Block), defer_zero_rowspans: bool, style: Style, table_background: ?[]const u8, nested_grid: ?HtmlNestedGrid) Error!?Table {
         if (!htmlTableCaptionsComplete(input)) return null;
         var rows: std.ArrayList(Row) = .empty;
         var caption: std.ArrayList(Span) = .empty;
@@ -9203,6 +9426,7 @@ pub const Renderer = struct {
                 if (!self.spend()) continue;
                 const cell_rowspan = try self.tableSpanAttr(cell_tag, "rowspan");
                 const background_fallback = if (cell_rowspan == 1) row_background else null;
+                var nested_table: ?Table = null;
                 try cells.append(self.a, .{
                     .spans = scoped: {
                         const inherited_formatting = self.block_formatting;
@@ -9221,12 +9445,23 @@ pub const Renderer = struct {
                             self.block_formatting.italic = italic;
                             if (self.poem_depth != 0) self.poem_base_style.italic = italic;
                         }
-                        break :scoped try self.cellSpansWithLanguageDirection(input[cell_tag.end..cell_pair.inner_end], try self.htmlLanguageDirection(cell_tag, row_style));
+                        const cell_style = try self.htmlLanguageDirection(cell_tag, row_style);
+                        if (nested_grid) |grid| {
+                            if (htmlNestedChild(input[cell_tag.end..cell_pair.inner_end])) |child| {
+                                var child_fostered: std.ArrayList(Block) = .empty;
+                                defer child_fostered.deinit(self.a);
+                                nested_table = (try self.htmlTable(child.body, &child_fostered, false, cell_style, try self.tableCellBackground(cell_tag, background_fallback), .{ .tag = child.tag, .depth = grid.depth + 1 })) orelse unreachable;
+                                std.debug.assert(child_fostered.items.len == 0);
+                                break :scoped &.{};
+                            }
+                        }
+                        break :scoped try self.cellSpansWithLanguageDirection(input[cell_tag.end..cell_pair.inner_end], cell_style);
                     },
                     .background = try self.tableCellBackground(cell_tag, background_fallback),
                     .header = cell_tag.is("th"),
                     .colspan = try self.tableSpanAttr(cell_tag, "colspan"),
                     .rowspan = cell_rowspan,
+                    .nested_table = nested_table,
                 });
             }
             if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
@@ -9234,7 +9469,12 @@ pub const Renderer = struct {
         try self.htmlTableFostered(fostered, input[processed..], &foster_joinable, &foster_formatting);
         // Unsupported authored group tags do not split the actual table row group.
         if (!defer_zero_rowspans) try self.resolveZeroRowspans(rows.items, 0);
-        return .{ .caption = try caption.toOwnedSlice(self.a), .rows = try rows.toOwnedSlice(self.a) };
+        const geometry = if (nested_grid) |grid| htmlNestedGeometry(grid.tag).? else TableGeometry{};
+        return .{
+            .caption = try caption.toOwnedSlice(self.a),
+            .rows = try rows.toOwnedSlice(self.a),
+            .geometry = if (@import("blob_encoder").presentation_types.validTableGeometry(geometry)) geometry else null,
+        };
     }
     const TableResult = struct { table: Table, end: usize, body_end: usize, fostered: []const Block, has_caption: bool, feature: ?Feature = null };
     fn appendWikiTableFosteredCopy(self: *Renderer, output: *MissingBuffer, copies: *std.ArrayList(HeadingSourceCopy), tracked: MissingText, bytes: []const u8) Error!void {
@@ -9551,7 +9791,7 @@ pub const Renderer = struct {
                 try self.flushWikiTableFostered(&fostered, &outside_source, &outside_copies);
                 try self.finishCell(&cells, &cell_source, &current, cell_formatting);
                 if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
-                if (try self.htmlTable(line, &fostered, true, self.body_language_direction orelse .{}, row_background)) |table| {
+                if (try self.htmlTable(line, &fostered, true, self.body_language_direction orelse .{}, row_background, null)) |table| {
                     // Reuse the already-rendered caption, including its effects
                     // and scoped spans, in the same source order as wiki captions.
                     try self.appendTableCaption(&caption, table.caption);
@@ -9810,8 +10050,40 @@ pub const Renderer = struct {
         return .{ .text = trim(raw) };
     }
 
-    // DPR2 cells contain spans, not nested grids. Preserve nested table reading
-    // order with explicit row/cell boundaries, never embedded table source.
+    fn appendTableInlineSpans(self: *Renderer, spans: []const Span, background: ?[]const u8, remaining: *usize) Error!void {
+        if (spans.len > remaining.*) return error.RenderLimit;
+        remaining.* -= spans.len;
+        for (spans) |span| {
+            var painted = span;
+            if (painted.background == null) painted.background = background;
+            try self.spans.append(self.a, painted);
+        }
+    }
+    fn tableInlineWithBudget(self: *Renderer, table: Table, style: Style, leading_row_break: bool, background: ?[]const u8, depth: usize, remaining: *usize) Error!void {
+        if (depth >= @import("blob_encoder").presentation_types.max_table_depth or !htmlNestedSpend(remaining)) return error.RenderLimit;
+        // A child caption is inside its containing cell but outside its own
+        // cells. Structural separators never acquire a cell's paint.
+        try self.appendTableInlineSpans(table.caption, background, remaining);
+        for (table.rows, 0..) |row, ri| {
+            if (!htmlNestedSpend(remaining)) return error.RenderLimit;
+            if (leading_row_break or ri != 0 or table.caption.len != 0) try self.lineBreak(style);
+            for (row.cells, 0..) |cell, ci| {
+                if (!htmlNestedSpend(remaining)) return error.RenderLimit;
+                if (ci != 0) try self.text(" · ", style);
+                const cell_background = cell.background orelse background;
+                try self.appendTableInlineSpans(cell.spans, cell_background, remaining);
+                if (cell.nested_table) |child|
+                    try self.tableInlineWithBudget(child, style, false, cell_background, depth + 1, remaining);
+            }
+        }
+    }
+    fn tableInline(self: *Renderer, table: Table, style: Style, leading_row_break: bool) Error!void {
+        var remaining: usize = 1 << 20;
+        try self.tableInlineWithBudget(table, style, leading_row_break, null, 0, &remaining);
+    }
+
+    // Span-only containment keeps table reading order and explicit row/cell
+    // boundaries; its text projection does not recreate table geometry.
     fn blocksInline(self: *Renderer, blocks: []const Block, style: Style) Error!void {
         for (blocks, 0..) |b, index| {
             if (index != 0) try self.lineBreak(style);
@@ -9826,25 +10098,7 @@ pub const Renderer = struct {
                 else => {},
             };
             try self.spans.appendSlice(self.a, b.spans);
-            if (b.table) |table| {
-                try self.spans.appendSlice(self.a, table.caption);
-                for (table.rows, 0..) |row, ri| {
-                    if (ri != 0 or table.caption.len != 0) try self.lineBreak(style);
-                    for (row.cells, 0..) |cell, ci| {
-                        if (ci != 0) try self.text(" · ", style);
-                        // Composite this cell's opaque paint onto its own runs;
-                        // deeper explicit paint wins. Captions and separators
-                        // stay outside the cell; empty geometry adds no text.
-                        if (cell.background) |background| {
-                            for (cell.spans) |span| {
-                                var painted = span;
-                                if (painted.background == null) painted.background = background;
-                                try self.spans.append(self.a, painted);
-                            }
-                        } else try self.spans.appendSlice(self.a, cell.spans);
-                    }
-                }
-            }
+            if (b.table) |table| try self.tableInline(table, style, false);
         }
     }
 };
@@ -24799,12 +25053,14 @@ test "captured AF grammatical font style preserves italic link labels and plain 
             try std.testing.expectEqual(@as(@TypeOf(value.kind), .link), value.kind);
             try std.testing.expectEqualStrings("Wiktionary:Oorganklik en onoorganklik", value.target);
             try std.testing.expect(value.flags.italic and !value.flags.bold);
+            try std.testing.expectEqualStrings("#f8f9fa", value.background.?);
             label = true;
         }
         if (std.mem.eql(u8, value.text, ".")) {
             try std.testing.expectEqual(@as(@TypeOf(value.kind), .text), value.kind);
             try std.testing.expectEqualStrings("", value.target);
             try std.testing.expect(!value.flags.italic);
+            try std.testing.expect(value.background == null);
             punctuation = true;
         }
     }
@@ -27230,4 +27486,444 @@ test "double quoted HTML names escape angles while body formatting and actions c
     var entity: Renderer = .{ .a = a, .context = .{} };
     try std.testing.expectEqualStrings("<li\">word", try flattened(a, try entity.parseSpans("&lt;li\"&gt;'''word'''", .{})));
     try std.testing.expect(!entity.fallbacks.literal_markup);
+}
+
+test "exact retained geacen preserves outer grid nested geometry and empty painted headers through DPR7" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const blob = @import("blob_encoder");
+    // Retained page1374/r22446, ordinal609, source3294B SHA256b3a4307c.
+    const source = "=== Rihtstefn ===\n*[[w:SAMPA|SAMPA]]: /'/\n*[[w:IPA|IPA]]: /je'akən/\n\n=== Word ===\n\n'''geacen'''\n\n# forþgewiten dǣlnimend þæs wordes [[acan]]\n\n==== Fruma ====\n*Ofgangen of [[acan]]\n\n==== Gebīgednes swā Tōgeīecendlic ====\n\n<table border=\"0\" cellspacing=\"15\">\n<tr><td>\n\n<table border=\"1\" cellpadding=\"2\" width=\"100%\">\n<tr>\n<th style=\"background:#afefef;\" colspan=\"5\">'''Būtan Mīn/Se: Ānfeald'''</th>\n</tr>\n<tr>\n<th style=\"background:#efafef;\"></th>\n<th style=\"background:#efefef;\">Werlic</th>\n<th style=\"background:#efefef;\">Nāhwæðer</th>\n<th style=\"background:#efefef;\">Wīflic</th>\n</tr>\n<tr>\n<td>Nem.</td>\n<td>geacen</td>\n<td>geacen</td>\n<td>geacen</td>\n</tr>\n<tr>\n<td>Āgn.</td>\n<td>geacenes</td>\n<td>geacenes</td>\n<td>geacenre</td>\n</tr>\n<tr>\n<td>For.</td>\n<td>geacenum</td>\n<td>geacenum</td>\n<td>geacenre</td>\n</tr>\n<tr>\n<td>Tōl.</td>\n<td>geacene</td>\n<td>geacene</td>\n<td>geacenre</td>\n</tr>\n<tr>\n<td>Wrē.</td>\n<td>geacenne</td>\n<td>geacen</td>\n<td>geacene</td>\n</tr>\n</table>\n\n</td><td>\n\n<table border=\"1\" cellpadding=\"2\" width=\"100%\">\n<tr>\n<th style=\"background:#afefef;\" colspan=\"5\">'''Būtan Mīn/Se: Manigfealdlic'''</th>\n</tr>\n<tr>\n<th style=\"background:#efafef;\"></th>\n<th style=\"background:#efefef;\">Werlic</th>\n<th style=\"background:#efefef;\">Nāhwæðer</th>\n<th style=\"background:#efefef;\">Wīflic</th>\n</tr>\n<tr>\n<td>Nem.</td>\n<td>geacene</td>\n<td>geacen</td>\n<td>geacena</td>\n</tr>\n<tr>\n<td>Āgn.</td>\n<td>geacenra</td>\n<td>geacenra</td>\n<td>geacenra</td>\n</tr>\n<tr>\n<td>For.</td>\n<td>geacenum</td>\n<td>geacenum</td>\n<td>geacenum</td>\n</tr>\n<tr>\n<td>Tōl.</td>\n<td>geacenum</td>\n<td>geacenum</td>\n<td>geacenum</td>\n</tr>\n<tr>\n<td>Wrē.</td>\n<td>geacene</td>\n<td>geacen</td>\n<td>geacena</td>\n</tr>\n</table>\n\n</td><td>\n\n<table border=\"1\" cellpadding=\"2\" width=\"100%\">\n<tr>\n<th style=\"background:#afefef;\" colspan=\"5\">'''Mid Mīn/Se: Ānfeald'''</th>\n</tr>\n<tr>\n<th style=\"background:#efafef;\"></th>\n<th style=\"background:#efefef;\">Werlic</th>\n<th style=\"background:#efefef;\">Nāhwæðer</th>\n<th style=\"background:#efefef;\">Wīflic</th>\n</tr>\n<tr>\n<td>Nem.</td>\n<td>geacena</td>\n<td>geacene</td>\n<td>geacene</td>\n</tr>\n<tr>\n<td>Āgn.</td>\n<td>geacenan</td>\n<td>geacenan</td>\n<td>geacenan</td>\n</tr>\n<tr>\n<td>For.</td>\n<td>geacenan</td>\n<td>geacenan</td>\n<td>geacenan</td>\n</tr>\n<tr>\n<td>Tōl.</td>\n<td>geacenan</td>\n<td>geacenan</td>\n<td>geacenan</td>\n</tr>\n<tr>\n<td>Wrē.</td>\n<td>geacenan</td>\n<td>geacene</td>\n<td>geacenan</td>\n</tr>\n</table>\n\n</td><td>\n\n<table border=\"1\" cellpadding=\"2\" width=\"100%\">\n<tr>\n<th style=\"background:#afefef;\" colspan=\"5\">'''Mid Mīn/Se: Manigfeald'''</th>\n</tr>\n<tr>\n<th style=\"background:#efafef;\"></th>\n<th style=\"background:#efefef;\">Werlic</th>\n<th style=\"background:#efefef;\">Nāhwæðer</th>\n<th style=\"background:#efefef;\">Wīflic</th>\n</tr>\n<tr>\n<td>Nem.</td>\n<td>geacenan</td>\n<td>geacenan</td>\n<td>geacenan</td>\n</tr>\n<tr>\n<td>Āgn.</td>\n<td>geacenra</td>\n<td>geacenra</td>\n<td>geacenra</td>\n</tr>\n<tr>\n<td>For.</td>\n<td>geacenum</td>\n<td>geacenum</td>\n<td>geacenum</td>\n</tr>\n<tr>\n<td>Tōl.</td>\n<td>geacenum</td>\n<td>geacenum</td>\n<td>geacenum</td>\n</tr>\n<tr>\n<td>Wrē.</td>\n<td>geacenan</td>\n<td>geacenan</td>\n<td>geacenan</td>\n</tr>\n</table>\n\n</td></tr>\n</table>\n\n[[Category:Cynn 6 strang forþgewiten dǣlnimend]]";
+    const expected = [4][25][]const u8{
+        .{ "Būtan Mīn/Se: Ānfeald", "", "Werlic", "Nāhwæðer", "Wīflic", "Nem.", "geacen", "geacen", "geacen", "Āgn.", "geacenes", "geacenes", "geacenre", "For.", "geacenum", "geacenum", "geacenre", "Tōl.", "geacene", "geacene", "geacenre", "Wrē.", "geacenne", "geacen", "geacene" },
+        .{ "Būtan Mīn/Se: Manigfealdlic", "", "Werlic", "Nāhwæðer", "Wīflic", "Nem.", "geacene", "geacen", "geacena", "Āgn.", "geacenra", "geacenra", "geacenra", "For.", "geacenum", "geacenum", "geacenum", "Tōl.", "geacenum", "geacenum", "geacenum", "Wrē.", "geacene", "geacen", "geacena" },
+        .{ "Mid Mīn/Se: Ānfeald", "", "Werlic", "Nāhwæðer", "Wīflic", "Nem.", "geacena", "geacene", "geacene", "Āgn.", "geacenan", "geacenan", "geacenan", "For.", "geacenan", "geacenan", "geacenan", "Tōl.", "geacenan", "geacenan", "geacenan", "Wrē.", "geacenan", "geacene", "geacenan" },
+        .{ "Mid Mīn/Se: Manigfeald", "", "Werlic", "Nāhwæðer", "Wīflic", "Nem.", "geacenan", "geacenan", "geacenan", "Āgn.", "geacenra", "geacenra", "geacenra", "For.", "geacenum", "geacenum", "geacenum", "Tōl.", "geacenum", "geacenum", "geacenum", "Wrē.", "geacenan", "geacenan", "geacenan" },
+    };
+    const Check = struct {
+        fn table(a_: A, outer: anytype, cells: [4][25][]const u8) !void {
+            try std.testing.expectEqual(@as(usize, 1), outer.rows.len);
+            try std.testing.expectEqual(@as(usize, 4), outer.rows[0].cells.len);
+            const geometry = outer.geometry.?;
+            try std.testing.expectEqual(@as(?u16, 0), geometry.border);
+            try std.testing.expectEqual(@as(?u16, 15), geometry.cell_spacing);
+            try std.testing.expect(geometry.cell_padding == null and geometry.width == null);
+            for (outer.rows[0].cells, cells) |parent_cell, expected_cells| {
+                try std.testing.expect(parent_cell.spans.len == 0 and !parent_cell.header);
+                const child = parent_cell.nested_table.?;
+                const child_geometry = child.geometry.?;
+                try std.testing.expectEqual(@as(?u16, 1), child_geometry.border);
+                try std.testing.expectEqual(@as(?u16, 2), child_geometry.cell_padding);
+                try std.testing.expect(child_geometry.cell_spacing == null);
+                try std.testing.expect(child_geometry.width.?.unit == .percent);
+                try std.testing.expectEqual(@as(u32, 100), child_geometry.width.?.value);
+                try std.testing.expectEqual(@as(usize, 7), child.rows.len);
+                try std.testing.expectEqual(@as(usize, 1), child.rows[0].cells.len);
+                const title = child.rows[0].cells[0];
+                try std.testing.expect(title.header);
+                try std.testing.expect(title.spans.len != 0);
+                for (title.spans) |span| try std.testing.expect(if (comptime @hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold);
+                try std.testing.expectEqual(@as(u16, 5), title.colspan);
+                try std.testing.expectEqualStrings("#afefef", title.background.?);
+                for (child.rows[1..]) |row| try std.testing.expectEqual(@as(usize, 4), row.cells.len);
+                const empty = child.rows[1].cells[0];
+                try std.testing.expect(empty.header and empty.spans.len == 0 and empty.nested_table == null);
+                try std.testing.expectEqualStrings("#efafef", empty.background.?);
+                for (child.rows[1].cells[1..]) |gender| {
+                    try std.testing.expect(gender.header);
+                    try std.testing.expectEqualStrings("#efefef", gender.background.?);
+                }
+                var index: usize = 0;
+                for (child.rows, 0..) |row, row_index| for (row.cells) |cell| {
+                    try std.testing.expect(cell.nested_table == null);
+                    try std.testing.expectEqual(@as(u16, 1), cell.rowspan);
+                    if (row_index != 0) try std.testing.expectEqual(@as(u16, 1), cell.colspan);
+                    var text: std.ArrayList(u8) = .empty;
+                    for (cell.spans) |span| try text.appendSlice(a_, span.text);
+                    try std.testing.expectEqualStrings(expected_cells[index], text.items);
+                    index += 1;
+                };
+                try std.testing.expectEqual(@as(usize, 25), index);
+            }
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 3294), source.len);
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(source);
+    var outer_index: ?usize = null;
+    var actions = [_]usize{ 0, 0, 0 };
+    for (blocks, 0..) |block_value, index| {
+        if (block_value.table) |outer| {
+            try std.testing.expect(outer_index == null);
+            outer_index = index;
+            try Check.table(a, outer, expected);
+        }
+        for (block_value.spans) |span| {
+            inline for (.{ "acan", "w:SAMPA", "w:IPA" }, 0..) |target, action_index| {
+                if (std.mem.eql(u8, span.target, target)) actions[action_index] += 1;
+            }
+        }
+    }
+    try std.testing.expectEqualSlices(usize, &.{ 2, 1, 1 }, &actions);
+    const Section = struct { level: u8 = 2, title: []const u8 = "Englisc", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = blocks }};
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+    try std.testing.expectEqualStrings("DPR7", bytes[0..4]);
+    var metrics: blob.presentation_codec.DecodeMetrics = .{};
+    const decoded = try blob.presentation_codec.decodeWithMetricsAlloc(a, bytes, "geacen", .language, .{ .code = "ang", .heading = "Englisc" }, &metrics);
+    const decoded_blocks = decoded.entry.sections[0].blocks;
+    try std.testing.expectEqual(blocks.len, decoded_blocks.len);
+    const stored_outer = decoded_blocks[outer_index.?].table.?;
+    try Check.table(a, stored_outer, expected);
+    try std.testing.expectEqual(@as(usize, 5), metrics.tables);
+    try std.testing.expectEqual(@as(?usize, 5), metrics.table_columns_exact);
+    try std.testing.expectEqual(@as(?usize, 4), blob.presentation_codec.measureTableGrid(stored_outer).exact_compact_columns);
+    for (stored_outer.rows[0].cells) |cell| try std.testing.expectEqual(@as(?usize, 5), blob.presentation_codec.measureTableGrid(cell.nested_table.?).exact_compact_columns);
+    for (blocks, decoded_blocks) |before, after| {
+        try std.testing.expectEqualStrings(@tagName(before.kind), @tagName(after.kind));
+        try std.testing.expectEqual(before.spans.len, after.spans.len);
+        for (before.spans, after.spans) |left, right| {
+            try std.testing.expectEqualStrings(left.text, right.text);
+            try std.testing.expectEqualStrings(left.target, right.target);
+            try std.testing.expectEqualStrings(@tagName(left.kind), @tagName(right.kind));
+            try std.testing.expectEqualStrings(left.language, right.language);
+            try std.testing.expectEqualStrings(left.direction, right.direction);
+            try std.testing.expectEqualStrings(left.classes, right.classes);
+            try std.testing.expectEqualStrings(left.explanation, right.explanation);
+            inline for (.{ "bold", "italic", "code", "small", "superscript", "subscript", "strike", "underline" }) |field| {
+                try std.testing.expectEqual(@field(left.flags, field), @field(right, field));
+            }
+        }
+    }
+}
+
+test "nested HTML grid admission preserves typed zero units and refuses lossy cell shapes before effects" {
+    const child = "<table border=1 cellpadding=2 width=100%><tr><th style='background:#efafef;'></th><td>[[form]]</td></tr></table>";
+    const outer: syntax.Tag = .{ .name = "table", .attrs = " border=0 cellspacing=15", .end = 0, .closing = false, .self_closing = false };
+    try std.testing.expect(Renderer.htmlNestedGridAdmission(outer, "<tr><td>" ++ child ++ "</td></tr>") != null);
+    inline for (.{
+        "<tr><td>prefix" ++ child ++ "</td></tr>",
+        "<tr><td>" ++ child ++ "suffix</td></tr>",
+        "<tr><td>" ++ child ++ child ++ "</td></tr>",
+        "<tr><td width=20>" ++ child ++ "</td></tr>",
+        "<tr><td style='background:#efafef;text-align:center'>" ++ child ++ "</td></tr>",
+        "<tr><td><table border=1><tr><td align=center>x</td></tr></table></td></tr>",
+        "<tr><td><table border=1 width=101%><tr><td>x</td></tr></table></td></tr>",
+        "<tr><td><table border=1 border=0><tr><td>x</td></tr></table></td></tr>",
+        "<tr><td><table border=1><tr><td>x</td></tr></td></tr>",
+    }) |body| try std.testing.expect(Renderer.htmlNestedGridAdmission(outer, body) == null);
+    var pixel = outer;
+    pixel.attrs = " border=0 cellspacing=0 cellpadding=0 width=20px";
+    const geometry = Renderer.htmlNestedGeometry(pixel).?;
+    try std.testing.expectEqual(@as(?u16, 0), geometry.border);
+    try std.testing.expectEqual(@as(?u16, 0), geometry.cell_spacing);
+    try std.testing.expectEqual(@as(?u16, 0), geometry.cell_padding);
+    try std.testing.expect(geometry.width.?.unit == .px);
+    try std.testing.expectEqual(@as(u32, 20), geometry.width.?.value);
+    var absent = outer;
+    absent.attrs = "";
+    const empty_geometry = Renderer.htmlNestedGeometry(absent).?;
+    try std.testing.expect(!@import("blob_encoder").presentation_types.validTableGeometry(empty_geometry));
+    var remaining: usize = 1;
+    var found = false;
+    try std.testing.expect(!Renderer.htmlNestedGridComplete(outer, "<tr><td>" ++ child ++ "</td></tr>", 0, &remaining, &found));
+    remaining = 1 << 20;
+    try std.testing.expect(!Renderer.htmlNestedGridComplete(outer, "<tr><td>" ++ child ++ "</td></tr>", @import("blob_encoder").presentation_types.max_table_depth, &remaining, &found));
+}
+
+test "ordinary wiki cell block projection retains nested HTML child caption and action" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const source = "{|\n| prefix\n* item\n<table><tr><td><table><caption>child caption</caption><tr><td>[[Child|child]]</td></tr></table></td></tr></table>\n|}";
+    const blocks = try renderer.renderBody(source);
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const outer = blocks[0].table.?;
+    try std.testing.expectEqual(@as(usize, 1), outer.rows.len);
+    try std.testing.expectEqual(@as(usize, 1), outer.rows[0].cells.len);
+    const cell = outer.rows[0].cells[0];
+    try std.testing.expect(cell.nested_table == null);
+    const text = try flattened(a, cell.spans);
+    try std.testing.expect(std.mem.indexOf(u8, text, "prefix\n• item\nchild caption\nchild") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, "child caption"));
+    var actions: usize = 0;
+    for (cell.spans) |span| if (std.mem.eql(u8, span.target, "Child")) {
+        actions += 1;
+        try std.testing.expectEqualStrings("child", span.text);
+        try std.testing.expect(span.kind == .link);
+    };
+    try std.testing.expectEqual(@as(usize, 1), actions);
+}
+
+test "ordinary cell and poem projections recurse once with descendant styles paint and boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const html = "<table><tr><td style='background:#fffdd0;'><table><caption><i>child caption</i></caption><tr><td style='background:#ffe0e0;'>[[Child|child]] <b><span lang='ang' style='background:#abcdef;color:#123456'>[[Styled|styled]]</span></b><ref>descendant note</ref></td><td>peer</td></tr><tr><td>last</td></tr></table></td><td>tail</td></tr></table>";
+    const Check = struct {
+        fn spans(a_: A, values: []const Span) !void {
+            const text = try flattened(a_, values);
+            const caption = std.mem.indexOf(u8, text, "child caption") orelse return error.TestUnexpectedResult;
+            const child = std.mem.indexOfPos(u8, text, caption + "child caption".len, "child") orelse return error.TestUnexpectedResult;
+            const styled = std.mem.indexOfPos(u8, text, child + "child".len, "styled") orelse return error.TestUnexpectedResult;
+            const peer = std.mem.indexOfPos(u8, text, styled + "styled".len, "peer") orelse return error.TestUnexpectedResult;
+            const last = std.mem.indexOfPos(u8, text, peer + "peer".len, "last") orelse return error.TestUnexpectedResult;
+            _ = std.mem.indexOfPos(u8, text, last + "last".len, "tail") orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, "child caption"));
+            var child_actions: usize = 0;
+            var styled_actions: usize = 0;
+            var painted_caption = false;
+            var inherited_peer = false;
+            var inherited_last = false;
+            var unpainted_tail = false;
+            for (values) |span| {
+                if (std.mem.eql(u8, span.target, "Child")) {
+                    child_actions += 1;
+                    try std.testing.expectEqualStrings("#ffe0e0", span.background.?);
+                }
+                if (std.mem.eql(u8, span.target, "Styled")) {
+                    styled_actions += 1;
+                    try std.testing.expectEqualStrings("styled", span.text);
+                    try std.testing.expect(span.flags.bold);
+                    try std.testing.expectEqualStrings("ang", span.language);
+                    try std.testing.expectEqualStrings("#123456", span.foreground.?);
+                    try std.testing.expectEqualStrings("#abcdef", span.background.?);
+                }
+                if (std.mem.eql(u8, span.text, "child caption")) {
+                    painted_caption = true;
+                    try std.testing.expect(span.flags.italic);
+                    try std.testing.expectEqualStrings("#fffdd0", span.background.?);
+                }
+                if (std.mem.eql(u8, span.text, "peer")) {
+                    inherited_peer = true;
+                    try std.testing.expectEqualStrings("#fffdd0", span.background.?);
+                }
+                if (std.mem.eql(u8, span.text, "last")) {
+                    inherited_last = true;
+                    try std.testing.expectEqualStrings("#fffdd0", span.background.?);
+                }
+                if (std.mem.eql(u8, span.text, "tail")) {
+                    unpainted_tail = true;
+                    try std.testing.expect(span.background == null);
+                }
+                if (span.kind == .line_break or std.mem.eql(u8, span.text, " · "))
+                    try std.testing.expect(span.background == null);
+            }
+            try std.testing.expectEqual(@as(usize, 1), child_actions);
+            try std.testing.expectEqual(@as(usize, 1), styled_actions);
+            try std.testing.expect(painted_caption and inherited_peer and inherited_last and unpainted_tail);
+            try std.testing.expect(std.mem.indexOf(u8, text, "child caption\nchild") != null);
+            try std.testing.expect(std.mem.indexOf(u8, text, " · peer\nlast · tail") != null);
+        }
+    };
+    var cell_renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try cell_renderer.renderBody("{|\n| prefix\n* item\n" ++ html ++ "\n|}");
+    const spans = blocks[0].table.?.rows[0].cells[0].spans;
+    try Check.spans(a, spans);
+    try std.testing.expectEqual(@as(usize, 1), cell_renderer.refs.items.len);
+    var poem_renderer: Renderer = .{ .a = a, .context = .{} };
+    const poem_spans = try poem_renderer.parseSpans("<poem>" ++ html ++ "</poem>", .{});
+    try Check.spans(a, poem_spans);
+    try std.testing.expectEqual(@as(usize, 1), poem_renderer.refs.items.len);
+    try std.testing.expect(poem_renderer.fallbacks.unsupported_element);
+    try std.testing.expect(std.mem.startsWith(u8, try flattened(a, poem_spans), "\nchild caption\nchild"));
+    var flat_poem: Renderer = .{ .a = a, .context = .{} };
+    const flat = try flat_poem.parseSpans("<poem><table><tr><td>a</td><td>b</td></tr><tr><td>c</td></tr></table></poem>", .{});
+    try std.testing.expectEqualStrings("\na · b\nc", try flattened(a, flat));
+    try std.testing.expect(flat_poem.fallbacks.unsupported_element);
+}
+
+test "opaque inline backgrounds retain cascade scoped inheritance and existing unsupported reset through DPR6" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<span style='background:#abcdef'><span style='background-color:#123456 !important;background:#654321'>[[Inner|inner]]</span><span style='background:none'>[[Clear|clear]]</span><b>[[After|after]]</b></span><span>[[Tail|tail]]</span><span style='background:#abcdef;background:linear-gradient(red,blue)'>[[Dynamic|dynamic]]</span>";
+    const Expected = struct { target: []const u8, background: ?[]const u8 };
+    const expected = [_]Expected{
+        .{ .target = "Inner", .background = "#123456" },
+        .{ .target = "Clear", .background = "#abcdef" },
+        .{ .target = "After", .background = "#abcdef" },
+        .{ .target = "Tail", .background = null },
+        .{ .target = "Dynamic", .background = null },
+    };
+    const Check = struct {
+        fn spans(values: anytype, expected_values: []const Expected) !void {
+            var index: usize = 0;
+            for (values) |span| {
+                if (span.target.len == 0) continue;
+                try std.testing.expect(index < expected_values.len);
+                const wanted = expected_values[index];
+                try std.testing.expectEqualStrings(wanted.target, span.target);
+                if (wanted.background) |paint|
+                    try std.testing.expectEqualStrings(paint, span.background.?)
+                else
+                    try std.testing.expect(span.background == null);
+                index += 1;
+            }
+            try std.testing.expectEqual(expected_values.len, index);
+        }
+    };
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(source);
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try Check.spans(blocks[0].spans, &expected);
+    const blob = @import("blob_encoder");
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = blocks }};
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+    try std.testing.expectEqualStrings("DPR6", bytes[0..4]);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "inline background", .language, .{ .code = "en", .heading = "English" });
+    try Check.spans(decoded.entry.sections[0].blocks[0].spans, &expected);
+}
+
+test "inline table cells override table and enclosing span paint before explicit descendants" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cells = "<caption>caption</caption><tr><td style='background:#222222'>[[X|x]]<span style='background:#333333'>[[Y|y]]</span></td><td>[[Z|z]]</td></tr>";
+    inline for (.{
+        "<table style='background:#111111'>" ++ cells ++ "</table>[[Tail|tail]]",
+        "<span style='background:#111111'><table>" ++ cells ++ "</table></span>[[Tail|tail]]",
+    }, 0..) |source, source_index| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(source, .{});
+        var links: usize = 0;
+        var caption = false;
+        var separator = false;
+        for (spans) |span| {
+            if (span.target.len != 0) {
+                const targets = [_][]const u8{ "X", "Y", "Z", "Tail" };
+                const backgrounds = [_]?[]const u8{ "#222222", "#333333", "#111111", null };
+                try std.testing.expect(links < targets.len);
+                try std.testing.expectEqualStrings(targets[links], span.target);
+                try std.testing.expect(span.kind == .link);
+                if (backgrounds[links]) |background|
+                    try std.testing.expectEqualStrings(background, span.background.?)
+                else
+                    try std.testing.expect(span.background == null);
+                links += 1;
+            }
+            if (std.mem.eql(u8, span.text, "caption") or std.mem.eql(u8, span.text, " · ")) {
+                if (std.mem.eql(u8, span.text, "caption")) caption = true else separator = true;
+                if (source_index == 0)
+                    try std.testing.expect(span.background == null)
+                else
+                    try std.testing.expectEqualStrings("#111111", span.background.?);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 4), links);
+        try std.testing.expect(caption and separator);
+    }
+}
+
+test "incomplete unregistered names and orphan reference closers preserve independent wiki actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const source = "<reالميلاد [[التاريخ]] الميلاد197806o\n</ref>";
+    const spans = try renderer.parseSpans(source, .{});
+    var opening: usize = 0;
+    var closing_angles: usize = 0;
+    var links: usize = 0;
+    var ordinary_body = false;
+    for (spans) |span| {
+        if (std.mem.eql(u8, span.text, "<") and span.provenance == .protected_literal) {
+            opening += 1;
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+        }
+        if ((std.mem.eql(u8, span.text, "<") or std.mem.eql(u8, span.text, ">")) and span.provenance == .entity_literal) {
+            closing_angles += 1;
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+        }
+        if (span.kind == .link) {
+            links += 1;
+            try std.testing.expectEqualStrings("التاريخ", span.target);
+            try std.testing.expectEqualStrings("التاريخ", span.text);
+        }
+        if (std.mem.indexOf(u8, span.text, "الميلاد197806o") != null) {
+            ordinary_body = true;
+            try std.testing.expect(span.provenance == .parsed);
+        }
+    }
+    const visible = try flattened(a, spans);
+    try std.testing.expect(std.mem.startsWith(u8, visible, "<reالميلاد التاريخ الميلاد197806o"));
+    try std.testing.expect(std.mem.endsWith(u8, visible, "</ref>"));
+    try std.testing.expect(opening == 1 and closing_angles == 2 and links == 1 and ordinary_body);
+    try std.testing.expectEqual(@as(usize, 0), (try renderer.finishReferences()).len);
+    try std.testing.expect(renderer.fallbacks.literal_markup);
+}
+
+test "valid references and protected incomplete names retain their existing domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var valid: Renderer = .{ .a = a, .context = .{} };
+    _ = try valid.parseSpans("word<ref name=n>[[التاريخ]]</ref><ref name=n/>", .{});
+    const references = try valid.finishReferences();
+    try std.testing.expectEqual(@as(usize, 1), references.len);
+    try std.testing.expect(unclosedExternalRecoveryHasLink(references[0].spans, .link, "التاريخ"));
+    try std.testing.expect(!valid.fallbacks.literal_markup and !valid.fallbacks.unclosed_formatting);
+    var protected: Renderer = .{ .a = a, .context = .{} };
+    const literal = "<reالميلاد [[التاريخ]]</ref>";
+    const spans = try protected.parseSpans("<nowiki>" ++ literal ++ "</nowiki>", .{});
+    try std.testing.expectEqualStrings(literal, try flattened(a, spans));
+    for (spans) |span| try std.testing.expect(span.kind == .text and span.target.len == 0 and span.provenance == .protected_literal);
+    try std.testing.expect(!protected.fallbacks.literal_markup);
+    try std.testing.expect(!Renderer.incompleteUnregisteredHtmlName("<ref>note</ref>", 0));
+    try std.testing.expect(!Renderer.incompleteUnregisteredHtmlName("<reالميلاد>", 0));
+    try std.testing.expect(!Renderer.incompleteUnregisteredHtmlName("<unknown attr=x>", 0));
+    try std.testing.expect(!Renderer.incompleteUnregisteredHtmlName("<li'>word</li>", 0));
+}
+
+test "media filename and alt labels inherit opaque paint while authored caption paint and actions stay scoped" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { media: []const u8, file: []const u8, label: []const u8, target: []const u8, heading: bool = false, authored: bool = false }{
+        .{ .media = "[[File:Filename.png|frameless]]", .file = "Filename.png", .label = "Filename.png", .target = "File:Filename.png" },
+        .{ .media = "[[File:Alt.png|alt=alternative]]", .file = "Alt.png", .label = "alternative", .target = "File:Alt.png", .heading = true },
+        .{ .media = "[[File:Authored.png|<span style='background:#123456'><bdi>[[CaptionTarget|caption]]</bdi></span>]]", .file = "Authored.png", .label = "caption", .target = "CaptionTarget", .authored = true },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const source = try std.fmt.allocPrint(a, "<span style='background:#abcdef'>{s}[[Inside|inside]]</span>[[Outside|outside]]", .{case.media});
+        const spans = try renderer.parseSpans(source, .{ .heading = case.heading });
+        var label: std.ArrayList(u8) = .empty;
+        var inside = false;
+        var outside = false;
+        var boundaries: usize = 0;
+        for (spans) |span| {
+            if (span.generated_bidi_boundary) {
+                boundaries += 1;
+                try std.testing.expect(case.authored and span.kind == .text and span.target.len == 0);
+                try std.testing.expectEqualStrings("#123456", span.background.?);
+                continue;
+            }
+            if (std.mem.eql(u8, span.target, case.target)) {
+                try std.testing.expect(span.kind == .link);
+                try std.testing.expectEqualStrings(if (case.authored) "#123456" else "#abcdef", span.background.?);
+                try std.testing.expect(std.mem.indexOf(u8, span.classes, "wikidict-media") != null);
+                try label.appendSlice(a, span.text);
+            } else if (std.mem.eql(u8, span.target, "Inside")) {
+                inside = true;
+                try std.testing.expectEqualStrings("inside", span.text);
+                try std.testing.expectEqualStrings("#abcdef", span.background.?);
+            } else if (std.mem.eql(u8, span.target, "Outside")) {
+                outside = true;
+                try std.testing.expectEqualStrings("outside", span.text);
+                try std.testing.expect(span.background == null);
+            } else if (span.target.len != 0) {
+                return error.TestUnexpectedResult;
+            }
+        }
+        try std.testing.expectEqualStrings(case.label, label.items);
+        try std.testing.expect(inside and outside);
+        try std.testing.expectEqual(@as(usize, if (case.authored) 2 else 0), boundaries);
+        try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+        try std.testing.expectEqualStrings(case.file, renderer.media.items[0].file);
+        try std.testing.expectEqual(@as(usize, 1), renderer.media_caption_spans.items.len);
+    }
 }

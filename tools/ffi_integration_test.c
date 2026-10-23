@@ -65,7 +65,7 @@ int main(int argc, char **argv) {
     dict_handle *handle = NULL;
     dict_status status = dict_open(argv[1], strlen(argv[1]), &handle);
     if (!require(status == DICT_OK && handle != NULL, "open")) return 1;
-    if (!require(DICT_ABI_VERSION == 2u && dict_abi_version() == DICT_ABI_VERSION, "ABI version")) return 1;
+    if (!require(DICT_ABI_VERSION == 3u && dict_abi_version() == DICT_ABI_VERSION, "ABI version")) return 1;
     if (neutral) {
         int ok = require(dict_select(handle, NULL, 0, "language", 8) == DICT_OK, "neutral selection without language");
         dict_buffer result = {0};
