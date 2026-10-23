@@ -1,4 +1,5 @@
 const std = @import("std");
+const dependency = @import("missing_dependency");
 
 fn findCiPos(hay: []const u8, start: usize, needle: []const u8) ?usize {
     if (needle.len == 0) return @min(start, hay.len);
@@ -35,12 +36,15 @@ fn nowikiRegionEndCached(text: []const u8, start: usize, no_more_close: ?*bool) 
 }
 
 pub fn stripDecodedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
-    return stripDecodedCommentsPolicy(a, text, false);
+    return stripDecodedCommentsPolicy(a, text, false, false);
 }
 pub fn stripDecodedCommentsPreservingPoem(a: std.mem.Allocator, text: []const u8) ![]u8 {
-    return stripDecodedCommentsPolicy(a, text, true);
+    return stripDecodedCommentsPolicy(a, text, true, false);
 }
-fn stripDecodedCommentsPolicy(a: std.mem.Allocator, text: []const u8, preserve_poem: bool) ![]u8 {
+pub fn stripDecodedCommentsForParsingPreservingPoem(a: std.mem.Allocator, text: []const u8) ![]u8 {
+    return stripDecodedCommentsPolicy(a, text, true, true);
+}
+fn stripDecodedCommentsPolicy(a: std.mem.Allocator, text: []const u8, preserve_poem: bool, preserve_boundaries: bool) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
     var pos: usize = 0;
@@ -82,6 +86,7 @@ fn stripDecodedCommentsPolicy(a: std.mem.Allocator, text: []const u8, preserve_p
                 break;
             };
             pos = close + 3;
+            if (preserve_boundaries) try out.appendSlice(a, "<noinclude/>");
             // Remove only comment-only lines and their terminating newline.
             // Keep the preceding newline, authored blanks and protected bodies.
             if (!line_has_content) {
@@ -352,6 +357,7 @@ fn transcludeDecodedWithBoundariesAlloc(a: std.mem.Allocator, text: []const u8, 
         if (seeking_onlyinclude) {
             const open = std.mem.indexOfPos(u8, text, pos, "<onlyinclude>") orelse break;
             pos = open + "<onlyinclude>".len;
+            if (preserve_empty_noinclude) try out.appendSlice(a, "<noinclude/>");
             seeking_onlyinclude = false;
         }
         const lt = std.mem.indexOfScalarPos(u8, text, pos, '<') orelse {
@@ -360,12 +366,14 @@ fn transcludeDecodedWithBoundariesAlloc(a: std.mem.Allocator, text: []const u8, 
         };
         try out.appendSlice(a, text[pos..lt]);
         if (onlyinclude and std.mem.startsWith(u8, text[lt..], "</onlyinclude>")) {
+            if (preserve_empty_noinclude) try out.appendSlice(a, "<noinclude/>");
             pos = lt + "</onlyinclude>".len;
             seeking_onlyinclude = true;
             continue;
         }
         if (std.mem.startsWith(u8, text[lt..], "<!--")) {
             const close = std.mem.indexOfPos(u8, text, lt + 4, "-->") orelse break;
+            if (preserve_empty_noinclude) try out.appendSlice(a, "<noinclude/>");
             pos = close + 3;
             continue;
         }
@@ -382,6 +390,7 @@ fn transcludeDecodedWithBoundariesAlloc(a: std.mem.Allocator, text: []const u8, 
             continue;
         };
         if (tag.mode == .delimiter) {
+            if (preserve_empty_noinclude) try out.appendSlice(a, "<noinclude/>");
             pos = open_end;
             continue;
         }
@@ -395,7 +404,11 @@ fn transcludeDecodedWithBoundariesAlloc(a: std.mem.Allocator, text: []const u8, 
         // so repeated unclosed extension tags cannot cause quadratic scans.
         const close_end = if (no_more_close[tag.close_cache_slot]) null else inclusionCloseEnd(text, open_end, tag.name);
         if (close_end) |end| {
-            if (tag.mode == .preserved) try out.appendSlice(a, text[lt..end]);
+            if (tag.mode == .preserved) {
+                try out.appendSlice(a, text[lt..end]);
+            } else if (preserve_empty_noinclude) {
+                try out.appendSlice(a, "<noinclude/>");
+            }
             pos = end;
         } else {
             no_more_close[tag.close_cache_slot] = true;
@@ -409,6 +422,15 @@ fn transcludeDecodedWithBoundariesAlloc(a: std.mem.Allocator, text: []const u8, 
     return out.toOwnedSlice(a);
 }
 
+/// Match the empty excluded inclusion node accepted by parsing-text cleanup.
+pub fn parsingBoundaryEnd(text: []const u8, start: usize) ?usize {
+    if (start >= text.len or text[start] != '<') return null;
+    const tag = inclusionTagAt(text, start) orelse return null;
+    if (tag.mode != .excluded) return null;
+    const end = decodedTagEnd(text, start) orelse return null;
+    return if (end >= 2 and text[end - 2] == '/') end else null;
+}
+
 /// Append expanded plain text without leaking empty inclusion-node boundaries.
 /// Literal extension bodies keep their authored contents untouched.
 pub fn appendParsingText(a: std.mem.Allocator, out: *std.ArrayList(u8), text: []const u8) !void {
@@ -416,25 +438,132 @@ pub fn appendParsingText(a: std.mem.Allocator, out: *std.ArrayList(u8), text: []
     var copied: usize = 0;
     var opaque_scan: OpaqueParserScan = .{};
     while (std.mem.indexOfScalarPos(u8, text, pos, '<')) |lt| {
-        if (opaque_scan.end(text, lt)) |end| {
+        if (opaque_scan.literalEnd(text, lt)) |end| {
             pos = end;
             continue;
         }
-        if (inclusionTagAt(text, lt)) |tag| {
-            if (tag.mode == .excluded) {
-                if (decodedTagEnd(text, lt)) |end| {
-                    if (end >= 2 and text[end - 2] == '/') {
-                        try out.appendSlice(a, text[copied..lt]);
-                        copied = end;
-                        pos = end;
-                        continue;
-                    }
-                }
-            }
+        if (parsingBoundaryEnd(text, lt)) |end| {
+            try out.appendSlice(a, text[copied..lt]);
+            copied = end;
+            pos = end;
+            continue;
         }
         pos = lt + 1;
     }
     try out.appendSlice(a, text[copied..]);
+}
+
+// Only real parsing boundaries activate literal-brace provenance. Literal bodies
+// retain their original contents and existing protected-literal ownership.
+pub fn hasParsingBoundary(text: []const u8) bool {
+    var pos: usize = 0;
+    var opaque_scan: OpaqueParserScan = .{};
+    while (std.mem.indexOfScalarPos(u8, text, pos, '<')) |lt| {
+        if (opaque_scan.literalEnd(text, lt)) |end| {
+            pos = end;
+            continue;
+        }
+        if (parsingBoundaryEnd(text, lt) != null) return true;
+        pos = lt + 1;
+    }
+    return false;
+}
+
+fn appendParsingChunk(a: std.mem.Allocator, out: *dependency.Builder, text: []const u8, protect_literal_curly: bool, after_boundary: *bool, literal_balance: *usize, last_source_byte: *?u8) !void {
+    if (text.len == 0) return;
+    var copied: usize = 0;
+    if (protect_literal_curly and after_boundary.* and (text[0] == '{' or text[0] == '}') and
+        last_source_byte.* != null and last_source_byte.*.? == text[0] and
+        out.bytes.items.len != 0 and out.bytes.items[out.bytes.items.len - 1] == text[0])
+    {
+        const previous_owned = out.literal_curly_ranges.items.len != 0 and
+            out.literal_curly_ranges.items[out.literal_curly_ranges.items.len - 1].end == out.bytes.items.len;
+        try out.append(a, dependency.Text.untracked(text[0..1]));
+        try out.markLiteralCurly(a, out.bytes.items.len - 2, out.bytes.items.len);
+        const newly_owned: usize = 2 - @as(usize, @intFromBool(previous_owned));
+        if (text[0] == '{') {
+            literal_balance.* += newly_owned;
+        } else literal_balance.* -= @min(literal_balance.*, newly_owned);
+        copied = 1;
+    }
+    after_boundary.* = false;
+    // Match only the closes owned by an opener synthesized in this same literal
+    // source segment. Distant unmatched syntax acquires no provenance.
+    var at = copied;
+    while (literal_balance.* != 0 and at < text.len) {
+        if (text[at] != '}') {
+            at += 1;
+            continue;
+        }
+        const start = at;
+        while (at < text.len and text[at] == '}' and at - start < literal_balance.*) : (at += 1) {}
+        try out.append(a, dependency.Text.untracked(text[copied..start]));
+        try out.appendLiteralCurly(a, text[start..at]);
+        literal_balance.* -= at - start;
+        copied = at;
+    }
+    try out.append(a, dependency.Text.untracked(text[copied..]));
+    last_source_byte.* = text[text.len - 1];
+}
+
+pub const ParsingLiteralState = struct {
+    after_boundary: bool = false,
+    literal_balance: usize = 0,
+    last_source_byte: ?u8 = null,
+};
+
+pub fn appendParsingTextTracked(a: std.mem.Allocator, out: *dependency.Builder, text: []const u8, protect_literal_curly: bool) !void {
+    var state: ParsingLiteralState = .{};
+    try appendParsingTextTrackedState(a, out, text, protect_literal_curly, &state);
+}
+
+// One state belongs to one authoritative source scan. Active child output never
+// changes its balance; callers clear pending adjacency at each child callback.
+pub fn appendParsingTextTrackedState(a: std.mem.Allocator, out: *dependency.Builder, text: []const u8, protect_literal_curly: bool, state: *ParsingLiteralState) !void {
+    var pos: usize = 0;
+    var copied: usize = 0;
+    var opaque_scan: OpaqueParserScan = .{};
+    while (std.mem.indexOfScalarPos(u8, text, pos, '<')) |lt| {
+        if (opaque_scan.literalEnd(text, lt)) |end| {
+            try appendParsingChunk(a, out, text[copied..lt], protect_literal_curly, &state.after_boundary, &state.literal_balance, &state.last_source_byte);
+            try out.append(a, dependency.Text.untracked(text[lt..end]));
+            state.after_boundary = false;
+            state.last_source_byte = null;
+            copied = end;
+            pos = end;
+            continue;
+        }
+        if (parsingBoundaryEnd(text, lt)) |end| {
+            try appendParsingChunk(a, out, text[copied..lt], protect_literal_curly, &state.after_boundary, &state.literal_balance, &state.last_source_byte);
+            state.after_boundary = true;
+            copied = end;
+            pos = end;
+            continue;
+        }
+        pos = lt + 1;
+    }
+    try appendParsingChunk(a, out, text[copied..], protect_literal_curly, &state.after_boundary, &state.literal_balance, &state.last_source_byte);
+}
+
+// Residual source closers are unconditional, even when the default is unused.
+// Inspect its literal nodes without evaluating any template or parser function.
+pub fn parameterLiteralCloseCount(a: std.mem.Allocator, inside: []const u8) !usize {
+    const fallback = splitParameter(inside).default orelse return 0;
+    if (!hasParsingBoundary(fallback)) return 0;
+    var out: dependency.Builder = .{};
+    defer out.deinit(a);
+    var scan: ExpansionScan = .{};
+    var literal_state: ParsingLiteralState = .{};
+    var pos: usize = 0;
+    while (scan.next(fallback, pos, false)) |node| {
+        const construct = node.construct;
+        try appendParsingTextTrackedState(a, &out, fallback[pos..construct.open], true, &literal_state);
+        literal_state.after_boundary = false;
+        literal_state.last_source_byte = null;
+        pos = construct.close + if (construct.kind == .parameter) @as(usize, 3) else 2;
+    }
+    try appendParsingTextTrackedState(a, &out, fallback[pos..], true, &literal_state);
+    return dependency.unclosedLiteralCurly(.{ .bytes = out.bytes.items, .literal_curly_ranges = out.literal_curly_ranges.items });
 }
 
 pub const ConstructKind = enum { template, parameter };
@@ -1211,7 +1340,7 @@ test "poem preserving input policy bounds missing closer scans and retains trans
     try std.testing.expect(node.self_closing);
     const transcluded = try transcludeDecodedForParsingAlloc(std.testing.allocator, "<noinclude>excluded</noinclude><poem>A<!--kept-->\n{{T}}</poem>");
     defer std.testing.allocator.free(transcluded);
-    try std.testing.expectEqualStrings("<poem>A<!--kept-->\n{{T}}</poem>", transcluded);
+    try std.testing.expectEqualStrings("<noinclude/><poem>A<!--kept-->\n{{T}}</poem>", transcluded);
 }
 
 test "unmatched literal extension openers resume active body constructs" {
@@ -1343,4 +1472,82 @@ test "parameter splitting retains one extension scan across absolute delimiter p
     try std.testing.expectEqualStrings("<math>a|b</math>", pieces.items[1]);
     for (pieces.items[2..1026]) |piece| try std.testing.expectEqualStrings("<math>x", piece);
     try std.testing.expectEqualStrings("tail", pieces.items[1026]);
+}
+
+test "parsing node elision protects only synthesized literal template pairs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var out: dependency.Builder = .{};
+    const source = "{<noinclude/>{uc:cat}} [[cat|label]] {| table |}";
+    try appendParsingTextTracked(a, &out, source, hasParsingBoundary(source));
+    const raw = try out.finish(a);
+    try std.testing.expectEqualStrings("{{uc:cat}} [[cat|label]] {| table |}", raw.bytes);
+    const published = try dependency.escapeLiteralCurly(a, raw);
+    try std.testing.expectEqualStrings("&#123;&#123;uc:cat&#125;&#125; [[cat|label]] {| table |}", published.bytes);
+    for ([_][]const u8{ "A<noinclude/>B }} {{broken", "{<noinclude/>| table |}", "<nowiki>{<noinclude/>{uc:cat}}</nowiki>" }) |control| {
+        var plain: dependency.Builder = .{};
+        try appendParsingTextTracked(a, &plain, control, hasParsingBoundary(control));
+        const value = try plain.finish(a);
+        try std.testing.expectEqual(@as(usize, 0), value.literal_curly_ranges.len);
+    }
+    var generated_left: dependency.Builder = .{};
+    try generated_left.append(a, dependency.Text.untracked("{"));
+    try appendParsingTextTracked(a, &generated_left, "<noinclude/>{uc:cat}}", true);
+    const unproven = try generated_left.finish(a);
+    try std.testing.expectEqualStrings("{{uc:cat}}", unproven.bytes);
+    try std.testing.expectEqual(@as(usize, 0), unproven.literal_curly_ranges.len);
+}
+
+test "parsing inclusion boundaries preserve plain API and selected literal segments" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "<noinclude/>", "<NoInclude/>", "<noinclude />", "<noinclude attr=x/>" }) |boundary| {
+        try std.testing.expectEqual(@as(?usize, boundary.len), parsingBoundaryEnd(boundary, 0));
+        const source = try std.fmt.allocPrint(a, "<ref>A{s}B</ref>", .{boundary});
+        var plain: std.ArrayList(u8) = .empty;
+        try appendParsingText(a, &plain, source);
+        try std.testing.expectEqualStrings("<ref>AB</ref>", plain.items);
+        var tracked: dependency.Builder = .{};
+        try appendParsingTextTracked(a, &tracked, source, hasParsingBoundary(source));
+        try std.testing.expectEqualStrings("<ref>AB</ref>", (try tracked.finish(a)).bytes);
+    }
+    for ([_][]const u8{ "ref", "references" }) |tag| {
+        const source = try std.fmt.allocPrint(a, "<{s}>A<noinclude/>B</{s}>", .{ tag, tag });
+        const expected = try std.fmt.allocPrint(a, "<{s}>AB</{s}>", .{ tag, tag });
+        try std.testing.expect(hasParsingBoundary(source));
+        var plain: std.ArrayList(u8) = .empty;
+        try appendParsingText(a, &plain, source);
+        try std.testing.expectEqualStrings(expected, plain.items);
+        const braces = try std.fmt.allocPrint(a, "<{s}>{{<noinclude/>{{uc:cat}}}}</{s}>", .{ tag, tag });
+        var tracked: dependency.Builder = .{};
+        try appendParsingTextTracked(a, &tracked, braces, hasParsingBoundary(braces));
+        const published = try dependency.escapeLiteralCurly(a, try tracked.finish(a));
+        const escaped = try std.fmt.allocPrint(a, "<{s}>&#123;&#123;uc:cat&#125;&#125;</{s}>", .{ tag, tag });
+        try std.testing.expectEqualStrings(escaped, published.bytes);
+    }
+    for ([_][]const u8{ "nowiki", "pre", "math", "source" }) |tag| {
+        const source = try std.fmt.allocPrint(a, "<{s}>{{<noinclude/>{{uc:cat}}}}</{s}>", .{ tag, tag });
+        try std.testing.expect(!hasParsingBoundary(source));
+        var plain: std.ArrayList(u8) = .empty;
+        try appendParsingText(a, &plain, source);
+        try std.testing.expectEqualStrings(source, plain.items);
+        var tracked: dependency.Builder = .{};
+        try appendParsingTextTracked(a, &tracked, source, hasParsingBoundary(source));
+        const value = try tracked.finish(a);
+        try std.testing.expectEqualStrings(source, value.bytes);
+        try std.testing.expectEqual(@as(usize, 0), value.literal_curly_ranges.len);
+    }
+    const paired = "{{{missing|{<noinclude>x</noinclude>{uc:cat}}}}}";
+    try std.testing.expectEqualStrings("{{{missing|{{uc:cat}}}}}", try transcludeDecodedAlloc(a, paired));
+    try std.testing.expectEqualStrings("{{{missing|{<noinclude/>{uc:cat}}}}}", try transcludeDecodedForParsingAlloc(a, paired));
+    const selected = try transcludeDecodedForParsingAlloc(a, "<onlyinclude>{</onlyinclude><onlyinclude>{uc:cat}}</onlyinclude>");
+    var out: dependency.Builder = .{};
+    try appendParsingTextTracked(a, &out, selected, hasParsingBoundary(selected));
+    try std.testing.expectEqualStrings("&#123;&#123;uc:cat&#125;&#125;", (try dependency.escapeLiteralCurly(a, try out.finish(a))).bytes);
+    try std.testing.expectEqualStrings("# first\n# second", try stripDecodedCommentsForParsingPreservingPoem(a, "# first\n<!--x-->\n# second"));
+    try std.testing.expectEqual(@as(usize, 2), try parameterLiteralCloseCount(a, "missing|{<noinclude/>{uc:cat"));
+    try std.testing.expectEqual(@as(usize, 2), try parameterLiteralCloseCount(a, "missing|{<noinclude/>{uc:cat{{#expr:1/0}}"));
+    try std.testing.expectEqual(@as(usize, 0), try parameterLiteralCloseCount(a, "missing|A<noinclude/>B {{broken"));
 }

@@ -141,6 +141,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     lua_usage_mod.addImport("namespace_registry", namespace_registry_mod);
+    lua_usage_mod.addImport("missing_dependency", missing_dependency_mod);
     const module_extract_exe = addCliExecutable(b, "dict-module-extract", b.path("src/lua/module_extract_main.zig"), target, optimize, &.{
         .{ .name = "xml_decode", .module = shared_xml_decode_mod },
         .{ .name = "lua_usage", .module = lua_usage_mod },
@@ -191,6 +192,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     llvm_obj.root_module.addImport("namespace_registry", namespace_registry_mod);
+    llvm_obj.root_module.addImport("missing_dependency", missing_dependency_mod);
     const llvm_exe_mod = b.createModule(.{
         .target = target,
         .optimize = optimize,
@@ -420,6 +422,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = test_optimize,
     });
+    lua_wikitext_preprocess_test_mod.addImport("missing_dependency", missing_dependency_test_mod);
     const zig_runtime_test_mod = b.createModule(.{
         .root_source_file = b.path("src/lua/runtime/core.zig"),
         .target = target,
@@ -788,6 +791,7 @@ fn bundleWorkerObject(b: *std.Build) *std.Build.Step.Compile {
     const xml = workerModule(b, "src/shared/xml_decode.zig");
     const dump = workerModule(b, "src/shared/wikimedia_dump.zig");
     const missing_dependency = workerModule(b, "src/shared/missing_dependency.zig");
+    preprocess.addImport("missing_dependency", missing_dependency);
     const runtime = workerModule(b, "src/lua/runtime/core.zig");
     runtime.addImport("lua_static_fields", fields);
     runtime.addImport("namespace_registry", namespace);

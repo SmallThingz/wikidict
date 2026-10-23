@@ -525,11 +525,24 @@ pub const Expander = struct {
         defer self.releasePageModuleTemplates();
         if (work_stats.current()) |work| work.comment_bytes +|= source.len;
         const comments_start = work_stats.cpuNow();
-        const stripped = try preprocess.stripDecodedCommentsPreservingPoem(self.runtime.allocator, source);
+        const stripped = try preprocess.stripDecodedCommentsForParsingPreservingPoem(self.runtime.allocator, source);
         if (work_stats.current()) |work| work.comments_ns +|= work_stats.elapsed(comments_start);
         defer self.runtime.allocator.free(stripped);
         const params = try self.runtime.newTable();
         var output_text = try self.expandPageWikitextTracked(stripped, params, title);
+        // Native evaluation has finished. Escape only exact source-literal
+        // curly ranges before any final normalizer can discard copy metadata.
+        const evaluated_output = output_text.bytes;
+        output_text = try dependency.escapeLiteralCurly(self.runtime.allocator, output_text);
+        if (output_text.bytes.ptr != evaluated_output.ptr) self.runtime.allocator.free(evaluated_output);
+        if (self.display_title) |display| {
+            var tracked_title = self.dependency_display_title;
+            if (tracked_title.bytes.ptr != display.ptr or tracked_title.bytes.len != display.len)
+                tracked_title = dependency.Text.transformed(display);
+            tracked_title = try dependency.escapeLiteralCurly(self.runtime.allocator, tracked_title);
+            self.display_title = tracked_title.bytes;
+            self.dependency_display_title = tracked_title;
+        }
         var output = output_text.bytes;
         errdefer self.runtime.allocator.free(output);
         if (std.mem.indexOf(u8, output, "<!--") != null) {
@@ -660,6 +673,20 @@ pub const Expander = struct {
         return .normal;
     }
 
+    fn isUsageRecoveryWrapper(text: []const u8) bool {
+        var body = std.mem.trimStart(u8, text, " \t\r\n");
+        // Excluded documentation leaves inert edge nodes in parsing bodies.
+        // Interior nodes remain barriers and cannot synthesize the wrapper.
+        while (preprocess.parsingBoundaryEnd(body, 0)) |end|
+            body = std.mem.trimStart(u8, body[end..], " \t\r\n");
+        const wrapper = "{{#invoke:usex|display|short=1}}";
+        if (!std.mem.startsWith(u8, body, wrapper)) return false;
+        body = std.mem.trimStart(u8, body[wrapper.len..], " \t\r\n");
+        while (preprocess.parsingBoundaryEnd(body, 0)) |end|
+            body = std.mem.trimStart(u8, body[end..], " \t\r\n");
+        return body.len == 0;
+    }
+
     // Ordinary template frames participate in the same LST loopCheck ancestry.
     // The parser title remains unchanged; only child-frame title/args are replaced.
     fn expandTransclusionText(self: *Expander, title: []const u8, text: []const u8, args: *rt.Table, depth: usize) anyerror![]const u8 {
@@ -667,7 +694,7 @@ pub const Expander = struct {
         self.transclusion_frame = &frame;
         defer self.transclusion_frame = frame.parent;
         if (self.usage_recovery) |recovery| {
-            if (recovery.args == args and std.mem.eql(u8, std.mem.trim(u8, text, " \t\r\n"), "{{#invoke:usex|display|short=1}}"))
+            if (recovery.args == args and isUsageRecoveryWrapper(text))
                 recovery.exact_wrapper = true;
         }
         return self.expandWikitext(text, args, title, depth);
@@ -1004,6 +1031,87 @@ pub const Expander = struct {
         }
         try preprocess.appendParsingText(a, out, text[copied..]);
     }
+    fn appendPoemLiteralTracked(self: *Expander, out: *dependency.Builder, text: []const u8, prepared: bool, protect_literal_curly: bool, literal_state: *preprocess.ParsingLiteralState) anyerror!void {
+        const a = self.runtime.allocator;
+        if (self.poem_argument_depth == 0 and std.mem.indexOf(u8, text, poem_prefix) == null)
+            return preprocess.appendParsingTextTrackedState(a, out, text, protect_literal_curly, literal_state);
+        var no_more_close: [4]bool = @splat(false);
+        var no_more_gt = false;
+        var pos: usize = 0;
+        var copied: usize = 0;
+        while (pos < text.len) {
+            if (std.mem.startsWith(u8, text[pos..], poem_prefix)) {
+                if (prepared) if (self.nativePoemItemLen(text[pos..])) |len| {
+                    pos += len;
+                    continue;
+                };
+                try preprocess.appendParsingTextTrackedState(a, out, text[copied..pos], protect_literal_curly, literal_state);
+                const end = pos + poem_prefix.len;
+                try out.append(a, dependency.Text.untracked(try self.poemLiteral("text", text[pos..end])));
+                literal_state.after_boundary = false;
+                literal_state.last_source_byte = null;
+                pos = end;
+                copied = pos;
+                continue;
+            }
+            if (self.poem_argument_depth != 0 and text[pos] == '<') {
+                const before = pos;
+                for ([_][]const u8{ "nowiki", "pre", "source", "syntaxhighlight" }, 0..) |name, slot| {
+                    if (text.len - pos > name.len + 1 and std.ascii.eqlIgnoreCase(text[pos + 1 ..][0..name.len], name)) {
+                        const after = pos + 1 + name.len;
+                        if (text[after] != '>' and !std.ascii.isWhitespace(text[after]) and !(text[after] == '/' and after + 1 < text.len and text[after + 1] == '>')) continue;
+                        if (no_more_gt) continue;
+                        const open_end = if (std.mem.indexOfScalarPos(u8, text, after, '>')) |end| end + 1 else blk: {
+                            no_more_gt = true;
+                            break :blk @as(usize, 0);
+                        };
+                        if (open_end == 0) continue;
+                        const self_close = text[open_end - 2] == '/';
+                        var inner_end = open_end;
+                        var region_end = open_end;
+                        if (!self_close) {
+                            if (no_more_close[slot]) continue;
+                            var search = open_end;
+                            var found = false;
+                            while (std.mem.indexOfScalarPos(u8, text, search, '<')) |lt| {
+                                search = lt + 1;
+                                if (text.len - lt < name.len + 3 or text[lt + 1] != '/' or !std.ascii.eqlIgnoreCase(text[lt + 2 ..][0..name.len], name)) continue;
+                                var end = lt + 2 + name.len;
+                                while (end < text.len and std.ascii.isWhitespace(text[end])) : (end += 1) {}
+                                if (end == text.len or text[end] != '>') continue;
+                                inner_end = lt;
+                                region_end = end + 1;
+                                found = true;
+                                break;
+                            }
+                            if (!found) {
+                                no_more_close[slot] = true;
+                                continue;
+                            }
+                        }
+                        try preprocess.appendParsingTextTrackedState(a, out, text[copied..pos], protect_literal_curly, literal_state);
+                        // Sanitize authored prefix collisions inside this literal
+                        // body without recapturing its markup or losing prior
+                        // generated BR items inserted by the outer raw hook.
+                        var body: std.ArrayList(u8) = .empty;
+                        const argument_depth = self.poem_argument_depth;
+                        self.poem_argument_depth = 0;
+                        defer self.poem_argument_depth = argument_depth;
+                        try self.appendPoemLiteral(&body, if (self_close) "" else text[open_end..inner_end], prepared);
+                        try out.append(a, dependency.Text.untracked(try self.poemLiteral(name, body.items)));
+                        literal_state.after_boundary = false;
+                        literal_state.last_source_byte = null;
+                        pos = region_end;
+                        copied = pos;
+                        break;
+                    }
+                }
+                if (pos != before) continue;
+            }
+            pos += 1;
+        }
+        try preprocess.appendParsingTextTrackedState(a, out, text[copied..], protect_literal_curly, literal_state);
+    }
     // Raw source cannot confer instruction provenance by spelling a token
     // registered by an earlier extension. Only an outer projection or an
     // already-expanded #tag value may carry actual registered items through.
@@ -1043,7 +1151,7 @@ pub const Expander = struct {
         defer self.poem_hook_depth -= 1;
         const source = try self.poemSourceItemsAlloc(body, trusted_items);
         const projected = try self.poemProjection(source);
-        const stripped = try preprocess.stripDecodedCommentsPreservingPoem(self.runtime.allocator, projected);
+        const stripped = try preprocess.stripDecodedCommentsForParsingPreservingPoem(self.runtime.allocator, projected);
         self.poem_argument_depth += 1;
         defer self.poem_argument_depth -= 1;
         const expanded = try self.expandWikitextMode(stripped, params, title, depth + 1, true, true);
@@ -1078,12 +1186,16 @@ pub const Expander = struct {
         errdefer out.deinit(self.runtime.allocator);
         var pos: usize = 0;
         var expansion_scan: preprocess.ExpansionScan = .{};
+        const protect_literal_curly = preprocess.hasParsingBoundary(text);
+        var literal_state: preprocess.ParsingLiteralState = .{};
         while (expansion_scan.next(text, pos, allow_poem)) |node| {
             const open = switch (node) {
                 .construct => |v| v.open,
                 .poem => |v| v.open,
             };
-            try self.appendPoemLiteral(&out.bytes, text[pos..open], prepared);
+            try self.appendPoemLiteralTracked(&out, text[pos..open], prepared, protect_literal_curly, &literal_state);
+            literal_state.after_boundary = false;
+            literal_state.last_source_byte = null;
             if (work_stats.current()) |work| work.constructs +|= 1;
             switch (node) {
                 .poem => |region| {
@@ -1098,10 +1210,16 @@ pub const Expander = struct {
                     if (construct.kind == .template and implicitBlockNewline(text, construct.open, expanded.bytes)) try out.append(self.runtime.allocator, dependency.Text.untracked("\n"));
                     try out.append(self.runtime.allocator, expanded);
                     pos = construct.close + if (construct.kind == .parameter) @as(usize, 3) else 2;
+                    if (construct.kind == .parameter) {
+                        var remaining = try preprocess.parameterLiteralCloseCount(self.runtime.allocator, text[construct.open + 3 .. construct.close]);
+                        const trailing = pos;
+                        while (remaining != 0 and pos < text.len and text[pos] == '}') : (remaining -= 1) pos += 1;
+                        if (pos != trailing) try out.appendLiteralCurly(self.runtime.allocator, text[trailing..pos]);
+                    }
                 },
             }
         }
-        try self.appendPoemLiteral(&out.bytes, text[pos..], prepared);
+        try self.appendPoemLiteralTracked(&out, text[pos..], prepared, protect_literal_curly, &literal_state);
         return out.finish(self.runtime.allocator);
     }
 
@@ -1110,7 +1228,7 @@ pub const Expander = struct {
     }
     fn trimDependency(self: *Expander, value: dependency.Text, characters: []const u8) !dependency.Text {
         const trimmed = std.mem.trim(u8, value.bytes, characters);
-        if (value.ranges.len == 0) return .{ .bytes = trimmed, .unknown = value.unknown };
+        if (value.ranges.len == 0 and value.literal_curly_ranges.len == 0) return .{ .bytes = trimmed, .unknown = value.unknown };
         const left = value.bytes.len - std.mem.trimStart(u8, value.bytes, characters).len;
         return dependency.slice(self.page_allocator orelse self.runtime.allocator, value, left, left + trimmed.len);
     }
@@ -1128,7 +1246,7 @@ pub const Expander = struct {
         return null;
     }
     fn rememberDependencyArgument(self: *Expander, params: *rt.Table, key: Value, value: dependency.Text) !void {
-        if (self.dependency_native_arguments_disabled or value.ranges.len == 0) return;
+        if (self.dependency_native_arguments_disabled or (value.ranges.len == 0 and value.literal_curly_ranges.len == 0)) return;
         if (self.dependency_arguments.items.len >= dependency.max_metadata_bytes / @sizeOf(DependencyArgument)) {
             self.invalidateNativeDependencyArguments();
             self.dependency_page.metadata_unknown = true;
@@ -1148,6 +1266,8 @@ pub const Expander = struct {
         errdefer out.deinit(self.runtime.allocator);
         var pos: usize = 0;
         var expansion_scan: preprocess.ExpansionScan = .{};
+        const protect_literal_curly = preprocess.hasParsingBoundary(text);
+        var literal_state: preprocess.ParsingLiteralState = .{};
         while (expansion_scan.next(text, pos, true)) |node| {
             if (work_stats.current()) |work| work.constructs +|= 1;
             const open = switch (node) {
@@ -1156,7 +1276,9 @@ pub const Expander = struct {
             };
             const literal = text[pos..open];
             try self.observePageOutput(literal);
-            try self.appendPoemLiteral(&out.bytes, literal, false);
+            try self.appendPoemLiteralTracked(&out, literal, false, protect_literal_curly, &literal_state);
+            literal_state.after_boundary = false;
+            literal_state.last_source_byte = null;
             var template = false;
             const expanded = switch (node) {
                 .poem => |region| blk: {
@@ -1181,9 +1303,18 @@ pub const Expander = struct {
             }
             try self.observePageOutput(expanded.bytes);
             try out.append(self.runtime.allocator, expanded);
+            if (node == .construct and node.construct.kind == .parameter) {
+                var remaining = try preprocess.parameterLiteralCloseCount(self.runtime.allocator, text[node.construct.open + 3 .. node.construct.close]);
+                const trailing = pos;
+                while (remaining != 0 and pos < text.len and text[pos] == '}') : (remaining -= 1) pos += 1;
+                if (pos != trailing) {
+                    try self.observePageOutput(text[trailing..pos]);
+                    try out.appendLiteralCurly(self.runtime.allocator, text[trailing..pos]);
+                }
+            }
         }
         try self.observePageOutput(text[pos..]);
-        try self.appendPoemLiteral(&out.bytes, text[pos..], false);
+        try self.appendPoemLiteralTracked(&out, text[pos..], false, protect_literal_curly, &literal_state);
         return out.finish(self.runtime.allocator);
     }
 
@@ -1192,7 +1323,7 @@ pub const Expander = struct {
         self.transclusion_frame = &frame;
         defer self.transclusion_frame = frame.parent;
         if (self.usage_recovery) |recovery| {
-            if (recovery.args == args and std.mem.eql(u8, std.mem.trim(u8, text, " \t\r\n"), "{{#invoke:usex|display|short=1}}"))
+            if (recovery.args == args and isUsageRecoveryWrapper(text))
                 recovery.exact_wrapper = true;
         }
         return self.expandWikitextTracked(text, args, title, depth);
@@ -1328,6 +1459,14 @@ pub const Expander = struct {
         return dependency.Text.untracked(try std.fmt.allocPrint(self.runtime.allocator, "{{{{{{{s}}}}}}}", .{inside}));
     }
 
+    fn parserFunctionLookupName(self: *Expander, raw_name: []const u8) ![]const u8 {
+        if (!preprocess.hasParsingBoundary(raw_name)) return raw_name;
+        var plain: std.ArrayList(u8) = .empty;
+        errdefer plain.deinit(self.runtime.allocator);
+        try preprocess.appendParsingText(self.runtime.allocator, &plain, raw_name);
+        return plain.toOwnedSlice(self.runtime.allocator);
+    }
+
     fn expandParserHeadTracked(self: *Expander, head: []const u8, raw_args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror!?dependency.Text {
         if (raw_args.len == 0) {
             if (try self.resolveTitleMagic(head, .variable)) |name| {
@@ -1338,7 +1477,7 @@ pub const Expander = struct {
         if (try self.magicWord(head)) |value| return dependency.Text.transformed(value);
         if (preprocess.findTopParserColon(head)) |colon| {
             const raw_name = std.mem.trim(u8, head[0..colon.index], " \t\r\n");
-            if (try self.resolveParserFunction(raw_name)) |name| {
+            if (try self.resolveParserFunction(try self.parserFunctionLookupName(raw_name))) |name| {
                 const first = head[colon.index + colon.len ..];
                 if (std.ascii.eqlIgnoreCase(name, "#if")) {
                     const condition = try self.expandWikitext(first, params, host_title, depth + 1);
@@ -1357,7 +1496,7 @@ pub const Expander = struct {
                 if (std.ascii.eqlIgnoreCase(name, "DISPLAYTITLE")) {
                     const value = try self.expandWikitextTracked(first, params, host_title, depth + 1);
                     const warning = try self.recordDisplayTitle(value.bytes);
-                    self.dependency_display_title = .{ .bytes = self.display_title.?, .ranges = try (self.page_allocator orelse self.runtime.allocator).dupe(dependency.Range, value.ranges), .unknown = value.unknown };
+                    self.dependency_display_title = .{ .bytes = self.display_title.?, .ranges = try (self.page_allocator orelse self.runtime.allocator).dupe(dependency.Range, value.ranges), .literal_curly_ranges = try (self.page_allocator orelse self.runtime.allocator).dupe(dependency.LiteralRange, value.literal_curly_ranges), .unknown = value.unknown };
                     return dependency.Text.untracked(warning);
                 }
             }
@@ -2998,7 +3137,7 @@ pub const Expander = struct {
 
         if (preprocess.findTopParserColon(head)) |colon| {
             const raw_name = std.mem.trim(u8, head[0..colon.index], " \t\r\n");
-            const name = (try self.resolveParserFunction(raw_name)) orelse return null;
+            const name = (try self.resolveParserFunction(try self.parserFunctionLookupName(raw_name))) orelse return null;
             const first = head[colon.index + colon.len ..];
             if (self.provider.resolve_parser_function != null and rt.namespace_registry.magic_words.statisticsId(name) != null) {
                 const option = try self.expandWikitext(first, params, host_title, depth + 1);
@@ -3547,7 +3686,7 @@ pub const Expander = struct {
     fn hostFramePreprocess(raw: ?*anyopaque, a: std.mem.Allocator, source: []const u8, title: []const u8, args: *rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         self.invalidateNativeDependencyArguments();
-        const stripped = try preprocess.stripDecodedCommentsPreservingPoem(a, source);
+        const stripped = try preprocess.stripDecodedCommentsForParsingPreservingPoem(a, source);
         defer a.free(stripped);
         if (stripped.len >= 2 and stripped[0] == '=' and stripped[stripped.len - 1] == '=' and
             std.mem.indexOf(u8, stripped, nowiki_marker_prefix) != null)
@@ -7458,6 +7597,28 @@ test "typed missing usage export preserves six captured examples including neste
     defer runtime.deinit();
     var reads: usize = 0;
     var expander = try UsageRecoveryTest.setup(&runtime, &reads);
+    for ([_][]const u8{
+        "{{#invoke:usex|display|short=1}}",
+        "{{#invoke:usex|display|short=1}}<noinclude/>",
+        " \n<noinclude/> <noinclude/>{{#invoke:usex|display|short=1}} <noinclude/>\t<noinclude/>\n",
+        "<NoInclude/>{{#invoke:usex|display|short=1}}<noinclude />",
+        "<noinclude attr=x/>{{#invoke:usex|display|short=1}}<NOINCLUDE attr='x'/>",
+    }) |body| try std.testing.expect(Expander.isUsageRecoveryWrapper(body));
+    for ([_][]const u8{
+        "<noinclude/>",
+        "{<noinclude/>{#invoke:usex|display|short=1}}",
+        "{{#invoke:usex|display|short=<noinclude/>1}}",
+        "{{#invoke:usex|display|short=<NoInclude attr=x/>1}}",
+        "{{#invoke:usex|display|short=1}}<noinclude/>extra",
+        "extra<noinclude/>{{#invoke:usex|display|short=1}}",
+        "{{#invoke:other|display|short=1}}<noinclude/>",
+        "{{#invoke:usex|other|short=1}}<noinclude/>",
+        "{{#invoke:usex|display|short=2}}<noinclude/>",
+        "{{#invoke:usex|display|short=1|extra=1}}<noinclude/>",
+        "{{#invoke:usex|display|short=1}}<noinclude>extra</noinclude>",
+        "{{#invoke:usex|display|short=1}}<noinclude/ >",
+        "{{#invoke:usex|display|short=1}}</noinclude>",
+    }) |body| try std.testing.expect(!Expander.isUsageRecoveryWrapper(body));
     const cases = [_]struct { source: []const u8, expected: []const u8, recovered: bool = true }{
         .{ .source = "{{ux|en|Their '''encounter''' was a matter of chance.}}", .expected = "Their '''encounter''' was a matter of chance.", .recovered = true },
         .{ .source = "{{ux|de|Gibt es einen '''Zusammenhang''' zwischen Freiheit und Wohlstand| هل هناك '''علاقة''' بين الحرية والرفاه}}", .expected = "هل هناك '''علاقة''' بين الحرية والرفاه", .recovered = true },
@@ -7739,4 +7900,74 @@ test "native missing dependency title overrides and Lua argument exposure do not
     const returned = try expander.expandParameterTracked("value", params, "Page", 0);
     try std.testing.expectEqualStrings(generated.bytes, returned.bytes);
     try std.testing.expect(returned.unknown and returned.ranges.len == 0);
+}
+
+const LiteralCurlyBoundaryFixture = struct {
+    fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+        if (std.mem.eql(u8, title, "Template:LiteralPaired")) return "{{{missing|{<noinclude>x</noinclude>{uc:cat}}}}}";
+        if (std.mem.eql(u8, title, "Template:EmitOpen")) return "{";
+        if (std.mem.eql(u8, title, "Template:LiteralGeneratedLeft")) return "{{EmitOpen}}<noinclude/>{uc:cat}}";
+        if (std.mem.eql(u8, title, "Template:LiteralSelectedNested")) return "<onlyinclude>{</onlyinclude><onlyinclude>{uc:{{uc:cat}}}}</onlyinclude>";
+        if (std.mem.eql(u8, title, "Template:LiteralSelected")) return "<onlyinclude>{</onlyinclude><onlyinclude>{uc:cat}}</onlyinclude>";
+        if (std.mem.eql(u8, title, "Template:LiteralPairedLazy")) return "{{{missing|{<noinclude/>{uc:{{#expr:1/0}}}}}}}";
+        if (std.mem.eql(u8, title, "Template:LiteralIncluded")) return "{{{missing|{<includeonly></includeonly>{uc:cat}}}}}";
+        if (std.mem.eql(u8, title, "Template:LiteralComment")) return "{{{missing|{<!--x-->{uc:cat}}}}}";
+        if (std.mem.eql(u8, title, "Template:LiteralEmpty")) return "{{{missing|{<noinclude/>{uc:cat}}}}}";
+        if (std.mem.eql(u8, title, "Template:LiteralNested")) return "{{{missing|{{uc:cat}}}}}";
+        if (std.mem.eql(u8, title, "Template:LiteralChild")) return "{{{missing|{<noinclude>x</noinclude>{uc:cat}}}}} [[cat|label]]";
+        if (std.mem.eql(u8, title, "Template:LiteralProtected")) return "<nowiki>{<noinclude/>{uc:cat}}</nowiki>";
+        return null;
+    }
+    fn exists(_: ?*anyopaque, title: []const u8) !bool {
+        return (try get(null, std.testing.allocator, title)) != null;
+    }
+    fn body(_: ?*anyopaque, a: std.mem.Allocator, title: []const u8) !?Provider.TransclusionBody {
+        const raw = (try get(null, a, title)) orelse return null;
+        return .{ .text = try preprocess.transcludeDecodedForParsingAlloc(a, raw), .title = title, .borrowed = true };
+    }
+    fn check(source: []const u8, expected: []const u8) !void {
+        for ([_]bool{ false, true }) |borrowed| {
+            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer arena.deinit();
+            var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+            defer runtime.deinit();
+            try rt.bindGlobalTable(&runtime, null, 0);
+            try stdlib.install(&runtime);
+            try installTestHost(&runtime, 18, 23);
+            var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = get, .exists = exists }, .install_scribunto = installTestInvoke };
+            if (borrowed) expander.provider.get_transclusion_body = body;
+            const actual = try expander.expandFragment("Literal boundary fixture", source, 1_670_803_200);
+            try std.testing.expectEqualStrings(expected, actual);
+            try std.testing.expect(!expander.unsupported_parser_function);
+        }
+    }
+};
+
+test "inclusion and comment node boundaries preserve literal default braces through expansion" {
+    const literal = "&#123;&#123;uc:cat&#125;&#125;";
+    try LiteralCurlyBoundaryFixture.check("{{LiteralPaired}}", literal);
+    try LiteralCurlyBoundaryFixture.check("{{LiteralComment}}", literal);
+    try LiteralCurlyBoundaryFixture.check("{{LiteralIncluded}}", literal);
+    try LiteralCurlyBoundaryFixture.check("{{LiteralSelected}}", literal);
+    try LiteralCurlyBoundaryFixture.check("{{LiteralSelectedNested}}", "&#123;&#123;uc:CAT&#125;&#125;");
+    try LiteralCurlyBoundaryFixture.check("{{LiteralEmpty}}", literal);
+    try LiteralCurlyBoundaryFixture.check("{{{missing|{<!--x-->{uc:cat}}}}}", literal);
+    try LiteralCurlyBoundaryFixture.check("{{LiteralChild}}", literal ++ " [[cat|label]]");
+    try LiteralCurlyBoundaryFixture.check("{{LiteralNested}}", "CAT");
+    try LiteralCurlyBoundaryFixture.check("{{LiteralProtected}}", "<nowiki>{<noinclude/>{uc:cat}}</nowiki>");
+    try LiteralCurlyBoundaryFixture.check("{{LiteralGeneratedLeft}}", "{{uc:cat}}");
+}
+
+test "literal default provenance preserves native intermediate values and chosen arguments" {
+    try LiteralCurlyBoundaryFixture.check("{{#len:{{LiteralPaired}}}}", "10");
+    try LiteralCurlyBoundaryFixture.check("{{#len:{{LiteralComment}}}}", "10");
+    try LiteralCurlyBoundaryFixture.check("{{LiteralPaired|missing=[[cat|label]]}}", "[[cat|label]]&#125;&#125;");
+    try LiteralCurlyBoundaryFixture.check("{{LiteralPaired|missing={{uc:dog}}}}", "DOG&#125;&#125;");
+    try LiteralCurlyBoundaryFixture.check("{{LiteralPairedLazy|missing=provided}}", "provided&#125;&#125;");
+    try LiteralCurlyBoundaryFixture.check("A<!--x-->B {{{absent}}}", "AB {{{absent}}}");
+    try LiteralCurlyBoundaryFixture.check("A<!--x-->B {{Missing}}", "AB [[:Template:Missing]]");
+    try LiteralCurlyBoundaryFixture.check("{{#i<!--x-->f:x|yes|no}}", "yes");
+    try LiteralCurlyBoundaryFixture.check("safe<!--x--> body }} {{uc:cat}}", "safe body }} CAT");
+    try LiteralCurlyBoundaryFixture.check("safe<!--x--> body {{broken", "safe body {{broken");
+    try LiteralCurlyBoundaryFixture.check("safe<!--x--> body {|\n| cell\n|}", "safe body {|\n| cell\n|}");
 }

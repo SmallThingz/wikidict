@@ -2129,9 +2129,10 @@ test "provider owns paths and separates raw content from redirect-following tran
     try std.testing.expectEqualStrings(alias_raw, raw_alias);
     const template_content = (try Provider.getTransclusion(&provider, page_a, "Template:Alias")) orelse return error.TestExpectedEqual;
     try std.testing.expectEqualStrings(template_raw, template_content);
+    // Provider bodies retain preprocessing boundaries until the expander consumes them.
     const template_body = (try Provider.getTransclusionBody(&provider, page_a, "Template:Alias")) orelse return error.TestExpectedEqual;
     defer if (!template_body.borrowed) page_a.free(template_body.text);
-    try std.testing.expectEqualStrings("lazy body", template_body.text);
+    try std.testing.expectEqualStrings("lazy <noinclude/>body", template_body.text);
     try std.testing.expectEqualStrings("Template:Lazy", template_body.title);
     const persistent_a = provider.a;
     var cache_alloc = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
@@ -2140,15 +2141,15 @@ test "provider owns paths and separates raw content from redirect-following tran
     provider.a = persistent_a;
     defer if (!uncached_body.borrowed) page_a.free(uncached_body.text);
     try std.testing.expect(!uncached_body.borrowed);
-    try std.testing.expectEqualStrings("lazy body", uncached_body.text);
+    try std.testing.expectEqualStrings("lazy <noinclude/>body", uncached_body.text);
     try std.testing.expectEqualStrings("Template:Lazy", uncached_body.title);
     const admitted_body = (try Provider.getTransclusionBody(&provider, page_a, "Template:Lazy")) orelse return error.TestExpectedEqual;
     try std.testing.expect(admitted_body.borrowed);
-    try std.testing.expectEqualStrings("lazy body", admitted_body.text);
+    try std.testing.expectEqualStrings("lazy <noinclude/>body", admitted_body.text);
     var no_alloc = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
     const cached_body = (try Provider.getTransclusionBody(&provider, no_alloc.allocator(), "Template:Alias")) orelse return error.TestExpectedEqual;
     try std.testing.expect(cached_body.borrowed);
-    try std.testing.expectEqualStrings("lazy body", cached_body.text);
+    try std.testing.expectEqualStrings("lazy <noinclude/>body", cached_body.text);
     var borrowed_alloc = std.testing.FailingAllocator.init(a, .{ .fail_index = 1 });
     const borrowed_a = borrowed_alloc.allocator();
     const borrowed_template = (try provider.lookup(borrowed_a, "Template:Lazy", true)) orelse return error.TestExpectedEqual;

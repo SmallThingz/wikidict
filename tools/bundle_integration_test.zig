@@ -1583,6 +1583,71 @@ fn hasSemanticLink(value: std.json.Value, target: []const u8, label: []const u8)
     return false;
 }
 
+fn appendBoundarySemanticText(h: *Harness, value: std.json.Value, out: *std.ArrayList(u8)) !void {
+    switch (value) {
+        .object => |object| {
+            if (object.get("kind")) |kind| if (kind == .string)
+                try h.require(!std.mem.eql(u8, kind.string, "template"), "boundary literals publish without template instructions");
+            if (object.get("text")) |text| if (text == .string) try out.appendSlice(h.a, text.string);
+            for (object.values()) |child| try appendBoundarySemanticText(h, child, out);
+        },
+        .array => |array| for (array.items) |child| try appendBoundarySemanticText(h, child, out),
+        else => {},
+    }
+}
+
+fn preprocessingLiteralBoundaryProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
+    const dump = try std.fs.path.join(h.a, &.{ dir, "preprocessing-boundaries.xml" });
+    const root = try std.fs.path.join(h.a, &.{ dir, "preprocessing-boundaries-dictionary" });
+    const namespaces = try std.fs.path.join(h.a, &.{ dir, "preprocessing-boundaries-namespaces.tsv" });
+    const languages = try std.fs.path.join(h.a, &.{ dir, "preprocessing-boundaries-languages.tsv" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = namespaces, .data = "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n" ++
+        "828\tModule\tModule\tcase-sensitive\t1\t0\t0\tScribunto\tcompile_only\tmodules\n" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = languages, .data = "# wikidict-language-registry-v2\n# content-language\ten\n# mediawiki\nen\tEnglish\ten\teng\n# iso-639-3\n" });
+    const paired = "{{{missing|{<noinclude>x</noinclude>{uc:cat}}}}}";
+    const commented = "{{{missing|{<!--x-->{uc:cat}}}}}";
+    try writePages(h.io, h.a, dump, &.{
+        .{ .title = "Boundary entry", .ns = 0, .id = 1, .body = "==English==\n# paired: {{BoundaryPaired}}\n# comment: {{BoundaryComment}}\n# direct: " ++ commented ++ "\n# length: {{#len:{{BoundaryPaired}}}}\n# lua: {{#invoke:BoundaryLua|run|{{BoundaryPaired}}}}\n# supplied: {{BoundaryPaired|missing=provided}}\n# action: {{BoundaryAction}}\n# protected: {{BoundaryProtected}}\n# included: {{BoundaryIncluded}}\n# selected: {{BoundarySelected}}\n# nested: {{BoundarySelectedNested}}\n# parser-name: {{#i<!--x-->f:x|yes|no}}\n" },
+        .{ .title = "Template:BoundaryPaired", .ns = 10, .id = 2, .body = paired },
+        .{ .title = "Template:BoundaryComment", .ns = 10, .id = 3, .body = commented },
+        .{ .title = "Template:BoundaryAction", .ns = 10, .id = 4, .body = paired ++ " [[cat|label]] {{uc:dog}} {{PAGENAME}}" },
+        .{ .title = "Template:BoundaryProtected", .ns = 10, .id = 5, .body = "<nowiki>{<!--x-->{uc:cat}}</nowiki>" },
+        .{ .title = "Module:BoundaryLua", .ns = 828, .id = 6, .body = "return {run=function(frame) assert(frame.args[1] == '{{uc:cat}}'); assert(#frame.args[1] == 10); return 'raw argument bytes verified' end}" },
+        .{ .title = "Template:BoundaryIncluded", .ns = 10, .id = 7, .body = "{{{missing|{<includeonly></includeonly>{uc:cat}}}}}" },
+        .{ .title = "Template:BoundarySelected", .ns = 10, .id = 8, .body = "<onlyinclude>{</onlyinclude><onlyinclude>{uc:cat}}</onlyinclude>" },
+        .{ .title = "Template:BoundarySelectedNested", .ns = 10, .id = 9, .body = "<onlyinclude>{</onlyinclude><onlyinclude>{uc:{{uc:cat}}}}</onlyinclude>" },
+    });
+    _ = try h.run(&.{ pipeline, dump, root, "--namespace-registry-snapshot", namespaces, "--language-registry-snapshot", languages, "--llvm-workers", "1", "--page-workers", "1" }, 0);
+    _ = try verifyFixture(h, verifier, root, null);
+    const exported = try h.run(&.{ bin, "export", "Boundary entry", "--root", root, "--language", "English" }, 0);
+    var parsed = try std.json.parseFromSlice(std.json.Value, h.a, exported, .{});
+    defer parsed.deinit();
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(h.a);
+    try appendBoundarySemanticText(h, parsed.value, &text);
+    for ([_][]const u8{ "paired: {{uc:cat}}", "comment: {{uc:cat}}", "direct: {{uc:cat}}", "length: 10", "lua: raw argument bytes verified", "supplied: provided}}", "action: {{uc:cat}} label DOG Boundary entry", "protected: {<!--x-->{uc:cat}}", "included: {{uc:cat}}", "selected: {{uc:cat}}", "nested: {{uc:CAT}}", "parser-name: yes" }) |expected|
+        try h.require(std.mem.indexOf(u8, text.items, expected) != null, "real native expansion and Writer preserve exact literal defaults and independent actions");
+    try h.require(hasSemanticLink(parsed.value, "cat", "label"), "default-boundary protection preserves the independent semantic link action");
+    try h.require(std.mem.indexOf(u8, text.items, "<noinclude") == null and std.mem.indexOf(u8, text.items, "&#123;") == null, "published semantic text contains decoded literals and no preprocessing markers");
+    const fallbacks = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ root, "fallback-pages.jsonl" }), h.a, .limited(4096));
+    try h.require(std.mem.trim(u8, fallbacks, " \t\r\n").len == 0, "literal defaults publish without renderer/template fallback or strict-guard rejection");
+    for ([_][]const u8{"A<noinclude/>B }} {{uc:cat}}"}, 0..) |body, index| {
+        const refused_dump = try std.fmt.allocPrint(h.a, "{s}/preprocessing-refused-{d}.xml", .{ dir, index });
+        const refused_root = try std.fmt.allocPrint(h.a, "{s}/preprocessing-refused-{d}-dictionary", .{ dir, index });
+        try writePages(h.io, h.a, refused_dump, &.{.{ .title = "Unrelated unresolved source", .ns = 0, .id = 1, .body = try std.fmt.allocPrint(h.a, "==English==\n# {s}\n", .{body}) }});
+        const refused = try std.process.run(h.a, h.io, .{
+            .argv = &.{ pipeline, refused_dump, refused_root, "--namespace-registry-snapshot", namespaces, "--language-registry-snapshot", languages, "--llvm-workers", "1", "--page-workers", "1" },
+            .stdout_limit = .limited(4 * 1024 * 1024),
+            .stderr_limit = .limited(4 * 1024 * 1024),
+        });
+        try h.require(refused.term == .exited and refused.term.exited == 1, "distant uncompiled source remains refused despite an unrelated inclusion boundary");
+        try h.require(std.mem.indexOf(u8, refused.stderr, "UncompiledPresentation") != null or std.mem.indexOf(u8, refused.stderr, "UncompiledTemplate") != null, "negative control fails at the strict presentation guard");
+    }
+}
+
 fn contentLanguageCaseProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
     const case_module =
         \\return {run=function(frame)
@@ -2084,6 +2149,7 @@ pub fn main(init: std.process.Init) !void {
     try structuredWikibaseProbe(&h, pipeline, verifier, bin, dir);
     try japaneseParserAliasProbe(&h, pipeline, verifier, bin, dir);
     try contentLanguageCaseProbe(&h, pipeline, verifier, bin, dir);
+    try preprocessingLiteralBoundaryProbe(&h, pipeline, verifier, bin, dir);
     try loadDataCacheProbe(&h, pipeline, verifier, bin, dir);
     try scriptCpuBudgetProbe(&h, pipeline, verifier, bin, dir);
     try deadlineProbe(init.io, a, dir);

@@ -244,7 +244,7 @@ fn htmlListItemCount(input: []const u8) i32 {
     return count;
 }
 pub const media_types = @import("presentation_media.zig");
-pub const Error = A.Error || error{ RenderLimit, InvalidPreContext, UncompiledTemplate, InvalidMissingDependencyCopy };
+pub const Error = A.Error || error{ RenderLimit, InvalidPreContext, UncompiledTemplate, InvalidMissingDependencyCopy, InvalidLiteralProvenance, LiteralProvenanceLimit };
 
 // Build-only coordinates in an already page-TOC-prepared owner fragment.
 // The source owner map, rather than a new tag search here, proves these scopes.
