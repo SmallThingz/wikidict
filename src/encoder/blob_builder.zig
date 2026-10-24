@@ -1545,6 +1545,37 @@ fn unsectionedExpandedLanguage(codes: LanguageCodes, source: []const u8) ?Resolv
     return found;
 }
 
+// The pinned AF -af-dw- template has no language heading. It emits these
+// exact participle/verb-form categories with an explicit Afrikaans name.
+// This is category authority, never an edition or inline-lang default.
+fn unsectionedAfrikaansExpandedLanguage(codes: LanguageCodes, source: []const u8) ?ResolvedLanguage {
+    const namespaces = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, namespaces.content_language, "af")) return null;
+    var categories: language_source.CategoryIterator = .{ .source = source };
+    var found: ?ResolvedLanguage = null;
+    while (categories.next()) |target| {
+        const title = namespaces.ofTitle(target);
+        if (title.id != 14) continue;
+        const name = std.mem.trim(u8, title.text, " \t\r\n");
+        const prefix = for ([_][]const u8{
+            "Deelwoorde in ",
+            "Werkwoordvorme in ",
+            "Voltooide deelwoorde in ",
+            "Teenwoordige deelwoorde in ",
+        }) |candidate| {
+            if (std.mem.eql(u8, name, std.mem.trimEnd(u8, candidate, " "))) return null;
+            if (std.mem.startsWith(u8, name, candidate)) break candidate;
+        } else continue;
+        const label = std.mem.trim(u8, name[prefix.len..], " \t\r\n");
+        const language = codes.resolveStrong(label) orelse codes.resolveTrusted(label) orelse return null;
+        // Unlike the parameterized BG templates, this source convention fixes
+        // Afrikaans. A foreign or unknown recognized owner is not ignorable.
+        if (!std.mem.eql(u8, language.code, "af")) return null;
+        found = language;
+    }
+    return found;
+}
+
 const PageSourceFragment = struct {
     source: []const u8,
     original_start: ?usize = null,
@@ -2292,7 +2323,7 @@ fn processMain(
         const support = amharicSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items) orelse
             arabicMeaningsSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items);
         const explicit = if (page_sections.items.len == 0)
-            unsectionedLanguage(codes, raw_source orelse source) orelse unsectionedExpandedLanguage(codes, source)
+            unsectionedLanguage(codes, raw_source orelse source) orelse unsectionedExpandedLanguage(codes, source) orelse unsectionedAfrikaansExpandedLanguage(codes, source)
         else
             support;
         if (support != null) fallbacks.unresolved_language_heading = unresolved_before_sections;
@@ -3294,6 +3325,204 @@ test "Amharic support attribution refuses ambiguous absent and conflicting evide
     defer foreign_namespaces.deinit();
     codes.namespace_catalog = &foreign_namespaces;
     try std.testing.expect(try AmharicSupportCategoryFixture.resolve(a, codes, source, source) == null);
+}
+
+test "Afrikaans unsectioned POS categories preserve captured whole entry and citation through Writer" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Fixture = struct {
+        fn makeNamespaces(allocator: std.mem.Allocator, edition: []const u8) !@import("namespace_registry").Registry {
+            return @import("namespace_registry").Registry.init(allocator, try std.fmt.allocPrint(
+                allocator,
+                "# wikidict-namespace-registry-v1\n# wiki\t{s}wiktionary\n# dump-date\t20261001\n# content-language\t{s}\n" ++
+                    "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+                    "6\tLêer\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tfiles\n" ++
+                    "10\tSjabloon\tTemplate\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+                    "14\tKategorie\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tcategories\n",
+                .{ edition, edition },
+            ));
+        }
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Afrikaans")) return .{ .code = "af", .heading = "Afrikaans" };
+            if (std.mem.eql(u8, value, "Engels")) return .{ .code = "en", .heading = "Engels" };
+            return null;
+        }
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(ctx, value)) |language| language.code else null;
+        }
+        fn content(_: ?*const anyopaque) ?ResolvedLanguage {
+            return .{ .code = "af", .heading = "Afrikaans" };
+        }
+        fn languageCodes(catalog: *const @import("namespace_registry").Registry) LanguageCodes {
+            return .{ .namespace_catalog = catalog, .get_fn = get, .resolve_fn = resolve, .strong_fn = resolve, .trusted_fn = resolve, .content_fn = content };
+        }
+    };
+    var namespaces = try Fixture.makeNamespaces(a, "af");
+    defer namespaces.deinit();
+    const codes = Fixture.languageCodes(&namespaces);
+    // Complete retained page39556/rev230175: raw897/e16b381b, expanded1810/9fcc265b.
+    const raw = "{{-af-dw-|tipe=voltooid|ww=verbrand|w.dw=[[verbrand]]|b.v.dw=[[verbrand]], [[verbrande]]|neg=[[onverbrand]], [[onverbrande]]}}\n{{-woordafbreking-}}\n:on•ver•bran•de\n{{-dw-}}\n{{betekenisse}}\n:''Negatiewe naawoordelike verlede deelwoord''\n#{{attributief|onverbrand}}:  wat nie verbrand is of word nie\n{{voorbeeldsinne}}\n{{byv-1|Duidelike seleksie vir die verbrande (bv. rooibokke en vlakvarke) of '''onverbrande''' (bv. olifante en bosbokke) habitatte, wat nie verband gehou het met die beskikbaarheid van bogrondse kruidagtige biomassa nie, is ook onmiddelik na die brand getoon. <ref>[https://agris.fao.org/search/en/providers/124740/records/67053f82b1dfe472e1468352 FAO; Savanna-woodland fire regimes: ecology, management and conservation of African protected areas; Nieman, Willem Adriaan, Leslie, Alison J., Van Wilgen, Brian, Radloff, Frans, Tambling, Craig; \n2021]</ref>}}\n{{verwysings}}";
+    const expanded = "\n{| style=\"float:right; margin-left:0.5em; margin-bottom:0.5em; border: 1px solid #AAAAAA; border-collapse:collapse;\" cellpadding=\"3\" rules=\"all\"\n! width=\"140\" bgcolor=\"#F4F4F4\" colspan=\"2\"| Voltooide deelwoord\n|-\n| bgcolor=\"#F4F4F4\"  | Werkwoord ||[[verbrand]]\n|-\n| bgcolor=\"#FFFFE0\" | Werkwoordelik ||[[verbrand]] &nbsp;\n|-\n| bgcolor=\"#FFFFE0\" | Naamwoordelik ||[[verbrand]], [[verbrande]] &nbsp;\n|-\n| bgcolor=\"#FFFFE0\" | Negatief ||[[onverbrand]], [[onverbrande]]\n|-\n|}[[kategorie:Deelwoorde in Afrikaans|verbrand]] [[Kategorie:Werkwoordvorme in Afrikaans]] [[Kategorie:Voltooide deelwoorde in Afrikaans|verbrand]]\n===[[Lêer:OCR-A char Hyphen-Minus.svg|30px]] [[woordafbreking|Woordafbreking]]===\n:on•ver•bran•de\n=== [[Lêer:Open book 01.svg|35px]] [[deelwoord|Deelwoord]] ===\n\n\n====&nbsp;&nbsp;&nbsp;[[Lêer:Crystal Clear app kedit.svg|25px]] [[betekenis|Betekenisse]]====\n:''Negatiewe naawoordelike verlede deelwoord''\n#<span class=\"Latn\" lang=\"af\">[[attributief#Afrikaans|Attributiewe vorm]]</span> van [[onverbrand]]:  wat nie verbrand is of word nie\n====&nbsp;&nbsp;&nbsp;[[Lêer:Emojione 1F4DA.svg|25px]] [[voorbeeld|Voorbeeldsinne]] ====\n#''Duidelike seleksie vir die verbrande (bv. rooibokke en vlakvarke) of '''onverbrande''' (bv. olifante en bosbokke) habitatte, wat nie verband gehou het met die beskikbaarheid van bogrondse kruidagtige biomassa nie, is ook onmiddelik na die brand getoon. <ref>[https://agris.fao.org/search/en/providers/124740/records/67053f82b1dfe472e1468352 FAO; Savanna-woodland fire regimes: ecology, management and conservation of African protected areas; Nieman, Willem Adriaan, Leslie, Alison J., Van Wilgen, Brian, Radloff, Frans, Tambling, Craig; \n2021]</ref>''\n===[[Lêer:Symbol redirect arrow with gradient.svg|30px]] [[verwysing|Verwysings]]===\n<references />";
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "onverbrande", expanded, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    // The recovered newline citation still has its independent literal diagnostic.
+    try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
+    const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(4096));
+    try std.testing.expect(std.mem.indexOf(u8, report, "literal_markup") != null);
+    try std.testing.expect(std.mem.indexOf(u8, report, "missing_language_heading") == null);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "Afrikaans"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("af", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("onverbrande")).?;
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    try std.testing.expectEqualStrings("Afrikaans", decoded.entry.language.?);
+    try std.testing.expectEqualStrings("af", decoded.entry.language_code);
+    for ([_][]const u8{
+        "Voltooide deelwoord",                       "Werkwoordelik",     "Naamwoordelik",                   "Negatief",
+        "on•ver•bran•de",
+        "Negatiewe naawoordelike verlede deelwoord", "Attributiewe vorm", "wat nie verbrand is of word nie", "Duidelike seleksie",
+        "onverbrande",                               "habitatte",         "onmiddelik na die brand getoon.",
+    }) |text| try std.testing.expect(std.mem.indexOf(u8, record.payload, text) != null);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.references.len);
+    var reference_text: std.ArrayList(u8) = .empty;
+    var url_count: usize = 0;
+    const expected_url = "https://agris.fao.org/search/en/providers/124740/records/67053f82b1dfe472e1468352";
+    for (decoded.entry.references[0].spans) |span| {
+        try reference_text.appendSlice(a, span.text);
+        if (span.kind == .external_link) {
+            try std.testing.expectEqualStrings(expected_url, span.target);
+            url_count += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), url_count);
+    for ([_][]const u8{ "[", expected_url, "FAO; Savanna-woodland fire regimes", "Tambling, Craig;", "2021]" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, reference_text.items, text) != null);
+}
+
+test "Afrikaans unsectioned POS categories refuse absent protected ambiguous and root-bound evidence" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Fixture = struct {
+        fn makeNamespaces(allocator: std.mem.Allocator, edition: []const u8) !@import("namespace_registry").Registry {
+            return @import("namespace_registry").Registry.init(allocator, try std.fmt.allocPrint(
+                allocator,
+                "# wikidict-namespace-registry-v1\n# wiki\t{s}wiktionary\n# dump-date\t20261001\n# content-language\t{s}\n" ++
+                    "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+                    "6\tLêer\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tfiles\n" ++
+                    "10\tSjabloon\tTemplate\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+                    "14\tKategorie\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tcategories\n",
+                .{ edition, edition },
+            ));
+        }
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Afrikaans")) return .{ .code = "af", .heading = "Afrikaans" };
+            if (std.mem.eql(u8, value, "Engels")) return .{ .code = "en", .heading = "Engels" };
+            return null;
+        }
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(ctx, value)) |language| language.code else null;
+        }
+        fn content(_: ?*const anyopaque) ?ResolvedLanguage {
+            return .{ .code = "af", .heading = "Afrikaans" };
+        }
+        fn languageCodes(catalog: *const @import("namespace_registry").Registry) LanguageCodes {
+            return .{ .namespace_catalog = catalog, .get_fn = get, .resolve_fn = resolve, .strong_fn = resolve, .trusted_fn = resolve, .content_fn = content };
+        }
+    };
+    var namespaces = try Fixture.makeNamespaces(a, "af");
+    defer namespaces.deinit();
+    const codes = Fixture.languageCodes(&namespaces);
+    const Check = struct {
+        const Case = struct {
+            title: []const u8,
+            source: []const u8,
+            raw: ?[]const u8 = null,
+            heading: []const u8 = "Unclassified",
+            code: []const u8 = "",
+            text: []const u8 = "body",
+        };
+        fn write(a2: std.mem.Allocator, output_root: []const u8, languages: LanguageCodes, input_cases: []const Case) !void {
+            var writer = try Writer.init(std.testing.io, a2, output_root);
+            defer writer.deinit();
+            writer.language_codes = languages;
+            for (input_cases) |case| try writer.addExpandedPage(a2, .{ .id = 0, .kind = .language }, case.title, case.source, case.raw orelse case.source, null);
+            const stats = try writer.finish(languages);
+            try std.testing.expectEqual(input_cases.len, stats.language_records);
+            for (input_cases) |case| {
+                var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a2, output_root, case.heading));
+                defer mapped.deinit();
+                const blob = try blob_format.inspect(mapped.bytes);
+                const metadata = try blob.languageMetadata();
+                try std.testing.expectEqualStrings(case.code, metadata.code);
+                var index = try blob.buildTrustedIndexAlloc(a2);
+                defer index.deinit(a2);
+                const record = (try index.find(case.title)).?;
+                const decoded = try blobs.presentation_codec.decodeAlloc(a2, record.payload, record.title, .language, metadata);
+                try std.testing.expectEqualStrings(case.code, decoded.entry.language_code);
+                try std.testing.expect(std.mem.indexOf(u8, record.payload, case.text) != null);
+            }
+        }
+    };
+    const category = "[[Kategorie:Werkwoordvorme in Afrikaans]]";
+    const cases = [_]Check.Case{
+        .{ .title = "participle-prefix", .source = "body\n[[kategorie:Deelwoorde in Afrikaans|sort]]", .heading = "Afrikaans", .code = "af" },
+        .{ .title = "verbform-prefix", .source = "body\n" ++ category, .heading = "Afrikaans", .code = "af" },
+        .{ .title = "past-prefix", .source = "body\n[[Kategorie:Voltooide deelwoorde in Afrikaans|sort]]", .heading = "Afrikaans", .code = "af" },
+        .{ .title = "present-prefix", .source = "body\n[[Kategorie:Teenwoordige deelwoorde in Afrikaans|sort]]", .heading = "Afrikaans", .code = "af" },
+        .{ .title = "duplicate-same-owner", .source = "body\n" ++ category ++ category, .heading = "Afrikaans", .code = "af" },
+        .{ .title = "absent", .source = "body only" },
+        .{ .title = "comment", .source = "body\n<!--" ++ category ++ "-->" },
+        .{ .title = "nowiki", .source = "body\n<nowiki>" ++ category ++ "</nowiki>" },
+        .{ .title = "pre", .source = "body\n<pre>" ++ category ++ "</pre>" },
+        .{ .title = "includeonly", .source = "body\n<includeonly>" ++ category ++ "</includeonly>" },
+        .{ .title = "raw-template-argument", .source = "body\n", .raw = "{{unknown|" ++ category ++ "}}" },
+        .{ .title = "colon-escaped", .source = "body\n[[:Kategorie:Werkwoordvorme in Afrikaans]]" },
+        .{ .title = "bare-language-category", .source = "body\n[[Kategorie:Afrikaans]]" },
+        .{ .title = "template-category", .source = "body\n[[Kategorie:Afrikaanse sjablone]]" },
+        .{ .title = "unknown-owner", .source = "body\n[[Kategorie:Werkwoordvorme in unknown-language]]" },
+        .{ .title = "empty-owner", .source = "body\n[[Kategorie:Werkwoordvorme in]]" },
+        .{ .title = "mixed-empty-owner", .source = "body\n" ++ category ++ "[[Kategorie:Werkwoordvorme in]]" },
+        .{ .title = "foreign-owner", .source = "body\n[[Kategorie:Werkwoordvorme in Engels]]" },
+        .{ .title = "conflicting-owner", .source = "body\n" ++ category ++ "[[Kategorie:Deelwoorde in Engels]]" },
+        .{ .title = "mixed-unknown-owner", .source = "body\n" ++ category ++ "[[Kategorie:Deelwoorde in unknown-language]]" },
+        .{ .title = "leading-unknown-owner", .source = "body\n[[Kategorie:Deelwoorde in unknown-language]]" ++ category },
+        .{ .title = "unknown-root", .source = "==Unknown language==\n# body\n" ++ category },
+        .{ .title = "declared-root", .source = "==Engels==\n# declared body\n" ++ category, .heading = "Engels", .code = "en" },
+        .{ .title = "beginde", .source = "''Byvoeglike voltooide deelwoord'' van [[begin]].\n::wat mens begin het\n", .text = "wat mens begin het" },
+    };
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    try Check.write(a, root, codes, &cases);
+    var no_catalog = codes;
+    no_catalog.namespace_catalog = null;
+    try Check.write(a, try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/no-catalog", .{tmp.sub_path}), no_catalog, &.{.{ .title = "no-catalog", .source = "body\n" ++ category }});
+    var other_namespaces = try Fixture.makeNamespaces(a, "bg");
+    defer other_namespaces.deinit();
+    try Check.write(a, try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/other-edition", .{tmp.sub_path}), Fixture.languageCodes(&other_namespaces), &.{.{ .title = "other-edition", .source = "body\n" ++ category }});
+    const Untrusted = struct {
+        fn resolve(_: ?*const anyopaque, _: []const u8) ?ResolvedLanguage {
+            return null;
+        }
+    };
+    var untrusted = codes;
+    untrusted.strong_fn = Untrusted.resolve;
+    untrusted.trusted_fn = Untrusted.resolve;
+    try Check.write(a, try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/untrusted", .{tmp.sub_path}), untrusted, &.{.{ .title = "untrusted", .source = "body\n" ++ category }});
 }
 
 test "unsectioned Bulgarian POS categories retain English identity and their whole body" {
