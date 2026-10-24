@@ -356,19 +356,55 @@ fn tablePixels(value: u32) usize {
     return (@as(usize, value) + 7) / 8;
 }
 
-fn tableCellText(w: *std.Io.Writer, cell: @import("blob_encoder").presentation_types.Cell, color: bool, columns: ?usize) anyerror!void {
-    try spansTextDisplayOnBackground(w, cell.spans, color, null, false, canonicalRgb(cell.background), cell.header);
+const CellDisplayStyle = struct { background: ?[3]u8 = null, header: bool = false };
+const BlockDisplayContext = struct {
+    cell_style: ?CellDisplayStyle = null,
+    columns: ?usize = null,
+    table_depth: usize = 0,
+};
+
+fn cellHasTable(cell: @import("blob_encoder").presentation_types.Cell) bool {
+    if (cell.blocks) |blocks| {
+        for (blocks) |block| if (block.table != null) return true;
+        return false;
+    }
+    return cell.nested_table != null;
+}
+
+fn tableCellText(w: *std.Io.Writer, cell: @import("blob_encoder").presentation_types.Cell, color: bool, columns: ?usize, table_depth: usize, inherited: ?CellDisplayStyle) anyerror!void {
+    const style: CellDisplayStyle = .{
+        .background = canonicalRgb(cell.background) orelse if (inherited) |value| value.background else null,
+        .header = cell.header or if (inherited) |value| value.header else false,
+    };
+    if (cell.blocks) |blocks| {
+        if (cell.spans.len != 0 or cell.nested_table != null) return error.InvalidPresentation;
+        var rendered: std.Io.Writer.Allocating = .init(std.heap.smp_allocator);
+        defer rendered.deinit();
+        try blocksTextInContext(&rendered.writer, blocks, color, null, .{ .cell_style = style, .columns = columns, .table_depth = table_depth });
+        var end = rendered.written().len;
+        // Remove the block renderer's final terminator, not authored newlines.
+        if (end != 0 and rendered.written()[end - 1] == '\n') end -= 1;
+        try w.writeAll(rendered.written()[0..end]);
+        return;
+    }
+    try spansTextDisplayOnBackground(w, cell.spans, color, null, false, style.background, style.header);
     if (color) try w.writeAll("\x1b[0m");
     if (cell.nested_table) |child| {
         if (cell.spans.len != 0) try w.writeByte('\n');
         var rendered: std.Io.Writer.Allocating = .init(std.heap.smp_allocator);
         defer rendered.deinit();
-        try tableTextWidth(&rendered.writer, child, color, null, columns);
+        // Preserve legacy projection; ordered ancestry carries its cell style.
+        try tableTextWidthInContext(&rendered.writer, child, color, null, columns, table_depth, if (inherited != null) style else null);
         try w.writeAll(std.mem.trimEnd(u8, rendered.written(), "\n"));
     }
 }
 
 fn tableTextWidth(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*PoemProjection, maximum: ?usize) anyerror!void {
+    return tableTextWidthInContext(w, table, color, projection, maximum, 0, null);
+}
+fn tableTextWidthInContext(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*PoemProjection, maximum: ?usize, parent_depth: usize, inherited: ?CellDisplayStyle) anyerror!void {
+    if (parent_depth >= @import("blob_encoder").presentation_types.max_table_depth) return error.InvalidPresentation;
+    const table_depth = parent_depth + 1;
     var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -412,8 +448,8 @@ fn tableTextWidth(w: *std.Io.Writer, table: model.Table, color: bool, projection
             @memset(occupied.items[column..][0..colspan], r + rowspan);
             var text: std.Io.Writer.Allocating = .init(a);
             defer text.deinit();
-            has_nested = has_nested or cell.nested_table != null;
-            try tableCellText(&text.writer, cell, color, null);
+            has_nested = has_nested or cellHasTable(cell);
+            try tableCellText(&text.writer, cell, color, null, table_depth, inherited);
             const owned = try a.dupe(u8, text.written());
             var lines: std.ArrayList([]const u8) = .empty;
             var split = std.mem.splitScalar(u8, owned, '\n');
@@ -425,12 +461,12 @@ fn tableTextWidth(w: *std.Io.Writer, table: model.Table, color: bool, projection
             var available: usize = overhead * (colspan - 1);
             for (widths.items[column..][0..colspan]) |width| available += width;
             if (needed > available) widths.items[column + colspan - 1] += needed - available;
-            try cells.append(a, .{ .source = cell, .row = r, .column = column, .colspan = colspan, .rowspan = rowspan, .text = owned, .lines = lines.items, .background = canonicalRgb(cell.background) });
+            try cells.append(a, .{ .source = cell, .row = r, .column = column, .colspan = colspan, .rowspan = rowspan, .text = owned, .lines = lines.items, .background = canonicalRgb(cell.background) orelse if (inherited) |value| value.background else null });
             column += colspan;
         }
     }
     if (table.caption.len != 0) {
-        try spansTextProjected(w, table.caption, color, projection);
+        try spansTextDisplayOnBackground(w, table.caption, color, projection, false, if (inherited) |value| value.background else null, if (inherited) |value| value.header else false);
         try w.writeByte('\n');
     }
     if (table.geometry) |g| if (g.width != null and columns_limit != null and widths.items.len != 0) {
@@ -456,7 +492,7 @@ fn tableTextWidth(w: *std.Io.Writer, table: model.Table, color: bool, projection
                     try w.writeByte('\n');
                     var nested_text: std.Io.Writer.Allocating = .init(a);
                     defer nested_text.deinit();
-                    try tableCellText(&nested_text.writer, cell.source, color, width);
+                    try tableCellText(&nested_text.writer, cell.source, color, width, table_depth, inherited);
                     const wrapped = try tableCellRows(a, nested_text.written(), width);
                     for (wrapped) |line| {
                         try w.writeAll("  │");
@@ -482,19 +518,19 @@ fn tableTextWidth(w: *std.Io.Writer, table: model.Table, color: bool, projection
             for (cells.items) |*cell| {
                 var width: usize = overhead * (cell.colspan - 1);
                 for (widths.items[cell.column..][0..cell.colspan]) |part| width += part;
-                if (cell.source.nested_table == null) cell.wrapped = try tableCellRows(a, cell.text, width);
+                if (!cellHasTable(cell.source)) cell.wrapped = try tableCellRows(a, cell.text, width);
             }
         }
     }
     // A child percentage is relative to its owning cell even when the outer
     // natural grid already fits. Render after final column allocation; never
     // use the viewport as a substitute for the parent cell content budget.
-    for (cells.items) |*cell| if (cell.source.nested_table != null) {
+    for (cells.items) |*cell| if (cellHasTable(cell.source)) {
         var width = overhead * (cell.colspan - 1);
         for (widths.items[cell.column..][0..cell.colspan]) |part| width += part;
         var nested_text: std.Io.Writer.Allocating = .init(a);
         defer nested_text.deinit();
-        try tableCellText(&nested_text.writer, cell.source, color, width);
+        try tableCellText(&nested_text.writer, cell.source, color, width, table_depth, inherited);
         cell.wrapped = try tableCellRows(a, nested_text.written(), width);
     };
     const active = try a.alloc(?usize, widths.items.len);
@@ -551,22 +587,32 @@ fn colorSwatchRgb(block: model.Block) ?[3]u8 {
 fn blocksText(w: *std.Io.Writer, blocks: []const model.Block, color: bool) !void {
     return blocksTextProjected(w, blocks, color, null);
 }
-fn blocksTextProjected(w: *std.Io.Writer, blocks: []const model.Block, color: bool, projection: ?*PoemProjection) !void {
+fn blocksTextProjected(w: *std.Io.Writer, blocks: []const model.Block, color: bool, projection: ?*PoemProjection) anyerror!void {
+    return blocksTextInContext(w, blocks, color, projection, .{ .columns = if (projection) |value| value.table_columns else null });
+}
+fn blocksTextInContext(w: *std.Io.Writer, blocks: []const model.Block, color: bool, projection: ?*PoemProjection, context: BlockDisplayContext) anyerror!void {
     var ordinal: usize = 0;
     for (blocks) |block| {
         if (block.kind == .blank) continue;
         if (block.kind == .rule) {
+            const inherited_header = if (context.cell_style) |style| style.header else false;
+            if (color and inherited_header) try w.writeAll("\x1b[1m");
             try w.writeAll("────────────────────────\n");
+            if (color and inherited_header) try w.writeAll("\x1b[0m");
             continue;
         }
         if (block.table) |table| {
             if (colorSwatchRgb(block)) |rgb| {
                 try w.splatByteAll(' ', @as(usize, @min(block.depth, 12)) * 2);
                 if (color) try w.print("[\x1b[48;2;{d};{d};{d}m  \x1b[0m] ", .{ rgb[0], rgb[1], rgb[2] });
+                const inherited_header = if (context.cell_style) |style| style.header else false;
+                if (color and inherited_header) try w.writeAll("\x1b[1m");
                 try w.print("Color sample {s}\n\n", .{block.feature.?.data});
-            } else try tableText(w, table, color, projection);
+                if (color and inherited_header) try w.writeAll("\x1b[0m");
+            } else try tableTextWidthInContext(w, table, color, projection, context.columns, context.table_depth, context.cell_style);
             continue;
         }
+        if (color) if (context.cell_style) |style| if (style.header) try w.writeAll("\x1b[1m");
         try w.splatByteAll(' ', @as(usize, @min(block.depth, 12)) * 2);
         switch (block.kind) {
             .definition => {
@@ -584,11 +630,14 @@ fn blocksTextProjected(w: *std.Io.Writer, blocks: []const model.Block, color: bo
             .preformatted => try w.writeAll("    "),
             else => {},
         }
-        try spansTextDisplayProjected(w, block.spans, color, projection, block.kind == .paragraph or block.kind == .definition);
+        const style = context.cell_style orelse CellDisplayStyle{};
+        try spansTextDisplayOnBackground(w, block.spans, color, projection, block.kind == .paragraph or block.kind == .definition, style.background, style.header or (context.cell_style != null and block.kind == .heading));
         if (block.feature) |f| if (f.language.len != 0) {
+            if (color and style.header) try w.writeAll("\x1b[1m");
             try w.writeAll("  [");
             try terminalText(w, f.language);
             try w.writeByte(']');
+            if (color and style.header) try w.writeAll("\x1b[0m");
         };
         try w.writeByte('\n');
         if (block.kind == .paragraph or block.kind == .quotation) try w.writeByte('\n');
@@ -820,23 +869,29 @@ const VisibleMediaCaptions = struct {
         }
         self.finish(current);
     }
-    fn observeTable(self: *VisibleMediaCaptions, table: model.Table) anyerror!void {
+    fn observeTable(self: *VisibleMediaCaptions, table: model.Table, parent_depth: usize) anyerror!void {
+        if (parent_depth >= @import("blob_encoder").presentation_types.max_table_depth) return error.InvalidPresentation;
+        const depth = parent_depth + 1;
+        try self.observeSpans(table.caption);
         for (table.rows) |row| for (row.cells) |cell| {
-            try self.observeSpans(cell.spans);
-            if (cell.nested_table) |child| {
-                try self.observeSpans(child.caption);
-                try self.observeTable(child);
+            if (cell.blocks) |blocks| {
+                try self.observeBlocksAtDepth(blocks, depth);
+            } else {
+                try self.observeSpans(cell.spans);
+                if (cell.nested_table) |child| try self.observeTable(child, depth);
             }
         };
     }
 
-    fn observeBlocks(self: *VisibleMediaCaptions, blocks: []const model.Block) !void {
+    fn observeBlocks(self: *VisibleMediaCaptions, blocks: []const model.Block) anyerror!void {
+        return self.observeBlocksAtDepth(blocks, 0);
+    }
+    fn observeBlocksAtDepth(self: *VisibleMediaCaptions, blocks: []const model.Block, depth: usize) anyerror!void {
         if (!self.enabled) return;
         for (blocks) |block| {
             if (block.kind == .blank or block.kind == .rule) continue;
             if (block.table) |table| {
-                try self.observeSpans(table.caption);
-                try self.observeTable(table);
+                try self.observeTable(table, depth);
             } else try self.observeSpans(block.spans);
         }
     }
@@ -979,11 +1034,27 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
 }
 
 fn visitTableSpanLists(table: model.Table, visitor: anytype) anyerror!bool {
+    return visitTableSpanListsAtDepth(table, visitor, 0);
+}
+fn visitTableSpanListsAtDepth(table: model.Table, visitor: anytype, parent_depth: usize) anyerror!bool {
+    if (parent_depth >= @import("blob_encoder").presentation_types.max_table_depth) return error.InvalidPresentation;
+    const depth = parent_depth + 1;
     if (try visitor.spans(table.caption)) return true;
     for (table.rows) |row| for (row.cells) |cell| {
-        if (try visitor.spans(cell.spans)) return true;
-        if (cell.nested_table) |child| if (try visitTableSpanLists(child, visitor)) return true;
+        if (cell.blocks) |blocks| {
+            if (try visitBlockSpanLists(blocks, visitor, depth)) return true;
+        } else {
+            if (try visitor.spans(cell.spans)) return true;
+            if (cell.nested_table) |child| if (try visitTableSpanListsAtDepth(child, visitor, depth)) return true;
+        }
     };
+    return false;
+}
+fn visitBlockSpanLists(blocks: []const model.Block, visitor: anytype, depth: usize) anyerror!bool {
+    for (blocks) |block| {
+        if (try visitor.spans(block.spans)) return true;
+        if (block.table) |table| if (try visitTableSpanListsAtDepth(table, visitor, depth)) return true;
+    }
     return false;
 }
 
@@ -991,12 +1062,7 @@ fn visitTableSpanLists(table: model.Table, visitor: anytype) anyerror!bool {
 fn visitEntrySpanLists(entry: model.Entry, visitor: anytype) !bool {
     if (try visitor.spans(entry.display_title)) return true;
     if (try visitor.spans(entry.preamble_spans)) return true;
-    for (entry.sections) |section| for (section.blocks) |block| {
-        if (try visitor.spans(block.spans)) return true;
-        if (block.table) |table| {
-            if (try visitTableSpanLists(table, visitor)) return true;
-        }
-    };
+    for (entry.sections) |section| if (try visitBlockSpanLists(section.blocks, visitor, 0)) return true;
     for (entry.references) |reference| if (try visitor.spans(reference.spans)) return true;
     return false;
 }
@@ -2924,4 +2990,182 @@ test "table header emphasis survives span resets trails newlines and painted wra
     try std.testing.expect(!root_spans[1].bold and !linked_spans[1].bold);
     try std.testing.expectEqualStrings("فاعل", linked_spans[1].target);
     try std.testing.expectEqualStrings("TRAIL\nNEXT", linked_spans[1].trail);
+}
+
+const OrderedCellOutputTest = struct {
+    fn boldAt(text: []const u8, limit: usize) bool {
+        var bold = false;
+        var pos: usize = 0;
+        while (pos < limit) {
+            if (terminal.sgrLength(text[pos..])) |n| {
+                const atom = text[pos .. pos + n];
+                if (std.mem.eql(u8, atom, "\x1b[0m") or std.mem.eql(u8, atom, "\x1b[m") or std.mem.eql(u8, atom, "\x1b[22m")) bold = false;
+                if (std.mem.eql(u8, atom, "\x1b[1m")) bold = true;
+                pos += n;
+            } else pos += 1;
+        }
+        return bold;
+    }
+};
+
+test "ordered cell blocks retain heading identity order styles and metadata through codec" {
+    const a = std.testing.allocator;
+    const E = @import("blob_encoder");
+    const T = E.presentation_types;
+    const owner = "wikidict-media wikidict-media-file-c38963686f20f09f948a2e6f6767";
+    const child: T.Table = .{ .rows = &.{.{ .cells = &.{.{ .blocks = &.{
+        .{ .kind = .heading, .level = 4, .anchor = "child", .anchor_fallback = "child_legacy", .spans = &.{.{ .kind = .link, .text = "CHILD", .target = "deep" }} },
+    } }} }} };
+    const body = [_]T.Block{
+        .{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "BEFORE", .target = "before" }} },
+        .{ .kind = .heading, .level = 3, .anchor = "cell_heading", .anchor_fallback = "cell.20heading", .spans = &.{.{ .kind = .link, .text = "HEADING", .target = "middle", .explanation = "heading expansion" }} },
+        .{ .kind = .list_item, .depth = 1, .list_path = "*", .spans = &.{.{ .text = "LIST", .explanation = "list expansion" }}, .feature = .{ .kind = "native-test-language", .language = "ang" } },
+        .{ .kind = .rule },
+        .{ .kind = .table, .table = child },
+        .{ .kind = .paragraph, .spans = &.{ .{ .text = "AFTER " }, .{ .kind = .link, .text = "owned caption", .target = "caption-target", .classes = owner } } },
+    };
+    const table: T.Table = .{ .rows = &.{.{ .cells = &.{
+        .{ .blocks = &body, .header = true, .background = "#ffffe0" },
+        .{ .spans = &.{.{ .text = "control" }} },
+    } }} };
+    const entry: model.Entry = .{
+        .title = "ordered",
+        .kind = .language,
+        .language = "Unclassified",
+        .sections = &.{.{ .level = 2, .title = "Outer", .anchor = "Outer", .blocks = &.{.{ .kind = .table, .table = table }} }},
+        .media = &.{.{ .file = "Écho 🔊.ogg", .kind = .audio, .caption = "owned caption" }},
+    };
+    const bytes = try E.presentation_codec.encodeAlloc(a, .{ .entry = entry });
+    defer a.free(bytes);
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const stored = try E.presentation_codec.decodeAlloc(arena.allocator(), bytes, "ordered", .language, .{ .code = "", .heading = "Unclassified" });
+    const restored = stored.entry.sections[0].blocks[0].table.?;
+    const ordered = restored.rows[0].cells[0].blocks.?;
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.sections.len);
+    try std.testing.expectEqual(@as(u8, 3), ordered[1].level);
+    try std.testing.expectEqualStrings("cell_heading", ordered[1].anchor);
+    try std.testing.expectEqualStrings("cell.20heading", ordered[1].anchor_fallback);
+    try std.testing.expectEqual(@as(u8, 4), ordered[4].table.?.rows[0].cells[0].blocks.?[0].level);
+    var plain: std.Io.Writer.Allocating = .init(a);
+    defer plain.deinit();
+    try tableText(&plain.writer, restored, false, null);
+    var styled: std.Io.Writer.Allocating = .init(a);
+    defer styled.deinit();
+    try tableText(&styled.writer, restored, true, null);
+    const stripped = try NarrowTableTest.plain(a, styled.written());
+    defer a.free(stripped);
+    try std.testing.expectEqualStrings(plain.written(), stripped);
+    var previous: usize = 0;
+    for ([_][]const u8{ "BEFORE", "HEADING", "LIST", "CHILD", "AFTER", "owned caption" }) |label| {
+        const at = std.mem.indexOf(u8, plain.written(), label).?;
+        try std.testing.expect(at >= previous);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain.written(), label));
+        previous = at + label.len;
+        const styled_at = std.mem.indexOf(u8, styled.written(), label).?;
+        try std.testing.expect(OrderedCellOutputTest.boldAt(styled.written(), styled_at));
+        try std.testing.expectEqual([3]u8{ 0, 0, 0 }, TypedColorOutputTest.at(styled.written(), styled_at).foreground.?);
+    }
+    try std.testing.expect(OrderedCellOutputTest.boldAt(styled.written(), std.mem.indexOf(u8, styled.written(), "[ang]").?));
+    try std.testing.expect(OrderedCellOutputTest.boldAt(styled.written(), std.mem.indexOf(u8, styled.written(), "•").?));
+    try std.testing.expect(OrderedCellOutputTest.boldAt(styled.written(), std.mem.indexOf(u8, styled.written(), "────────────────────────").?));
+    try std.testing.expect(!OrderedCellOutputTest.boldAt(styled.written(), std.mem.indexOf(u8, styled.written(), "control").?));
+    const Links = struct {
+        targets: [4][]const u8 = undefined,
+        count: usize = 0,
+        fn spans(self: *@This(), values: []const model.Span) !bool {
+            for (values) |span| if (span.kind == .link or span.kind == .external_link) {
+                if (self.count >= self.targets.len) return error.TooManyLinks;
+                self.targets[self.count] = span.target;
+                self.count += 1;
+            };
+            return false;
+        }
+    };
+    var links: Links = .{};
+    _ = try visitEntrySpanLists(stored.entry, &links);
+    try std.testing.expectEqual(@as(usize, 4), links.count);
+    for ([_][]const u8{ "before", "middle", "deep", "caption-target" }, links.targets) |expected, actual| try std.testing.expectEqualStrings(expected, actual);
+    var abbreviations = try Abbreviations.init(a, stored.entry);
+    defer abbreviations.deinit();
+    try std.testing.expectEqual(@as(usize, 2), abbreviations.items.items.len);
+    try std.testing.expectEqualStrings("HEADING", abbreviations.items.items[0].label);
+    try std.testing.expectEqualStrings("LIST", abbreviations.items.items[1].label);
+    var captions = try VisibleMediaCaptions.init(arena.allocator(), stored.entry.media, true);
+    try captions.observeBlocks(stored.entry.sections[0].blocks);
+    try std.testing.expect(captions.seen[0]);
+    var folded: std.Io.Writer.Allocating = .init(a);
+    defer folded.deinit();
+    _ = try entryTextFolded(&folded, stored.entry, false, .{ .details = true }, &.{}, 0);
+    try std.testing.expect(std.mem.indexOf(u8, folded.written(), "> Outer\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, folded.written(), "> HEADING") == null);
+}
+
+test "ordered cell tables retain owning width and explicit empty authority" {
+    const a = std.testing.allocator;
+    const T = @import("blob_encoder").presentation_types;
+    const child: T.Table = .{ .geometry = .{ .width = .{ .unit = .percent, .value = 100 } }, .rows = &.{.{ .cells = &.{
+        .{ .spans = &.{.{ .text = "x" }} }, .{ .spans = &.{.{ .text = "y" }} },
+    } }} };
+    const parent: T.Table = .{
+        .geometry = .{ .border = 0, .cell_padding = 0, .width = .{ .unit = .px, .value = 400 } },
+        .rows = &.{.{ .cells = &.{.{ .blocks = &.{
+            .{ .kind = .heading, .level = 3, .anchor = "top", .spans = &.{.{ .text = "TOP" }} },
+            .{ .kind = .table, .table = child },
+            .{ .kind = .paragraph, .spans = &.{.{ .text = "TAIL" }} },
+        } }} }},
+    };
+    for ([_]?usize{ null, 36, 76, 116 }) |columns| {
+        var out: std.Io.Writer.Allocating = .init(a);
+        defer out.deinit();
+        try tableTextWidth(&out.writer, parent, false, null, columns);
+        const top = std.mem.indexOf(u8, out.written(), "TOP").?;
+        const child_at = std.mem.indexOfScalar(u8, out.written(), 'x').?;
+        const tail = std.mem.indexOf(u8, out.written(), "TAIL").?;
+        try std.testing.expect(top < child_at and child_at < tail);
+        var lines = std.mem.splitScalar(u8, out.written(), '\n');
+        while (lines.next()) |line| {
+            try std.testing.expect(terminal.cellWidth(line) <= (columns orelse 50));
+            if (std.mem.indexOfScalar(u8, line, 'x') != null) {
+                try std.testing.expectEqual(@min(columns orelse 50, 50), terminal.cellWidth(std.mem.trimEnd(u8, line, " ")));
+                try std.testing.expect(std.mem.endsWith(u8, line, "│"));
+            }
+        }
+    }
+    var out: std.Io.Writer.Allocating = .init(a);
+    defer out.deinit();
+    try tableCellText(&out.writer, .{ .blocks = &.{}, .header = true, .background = "#123456" }, false, 20, 1, null);
+    try std.testing.expectEqual(@as(usize, 0), out.written().len);
+    try tableCellText(&out.writer, .{ .spans = &.{.{ .text = "legacy" }} }, false, 20, 1, null);
+    try std.testing.expectEqualStrings("legacy", out.written());
+    try std.testing.expectError(error.InvalidPresentation, tableCellText(&out.writer, .{ .blocks = &.{}, .spans = &.{.{ .text = "mixed" }} }, false, 20, 1, null));
+}
+
+test "native ordered cell walks keep the enclosing table depth limit" {
+    const T = @import("blob_encoder").presentation_types;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var table: T.Table = .{ .rows = &.{} };
+    for (0..T.max_table_depth) |_| {
+        const blocks = try a.alloc(T.Block, 1);
+        blocks[0] = .{ .kind = .table, .table = table };
+        const cells = try a.alloc(T.Cell, 1);
+        cells[0] = .{ .blocks = blocks };
+        const rows = try a.alloc(T.Row, 1);
+        rows[0] = .{ .cells = cells };
+        table = .{ .rows = rows };
+    }
+    var out: std.Io.Writer.Allocating = .init(a);
+    defer out.deinit();
+    try std.testing.expectError(error.InvalidPresentation, tableText(&out.writer, table, false, null));
+    const Visitor = struct {
+        fn spans(_: *@This(), _: []const model.Span) error{}!bool {
+            return false;
+        }
+    };
+    var visitor: Visitor = .{};
+    try std.testing.expectError(error.InvalidPresentation, visitTableSpanLists(table, &visitor));
+    var captions = try VisibleMediaCaptions.init(a, &.{.{ .file = "depth-control.ogg", .kind = .audio, .caption = "" }}, true);
+    try std.testing.expectError(error.InvalidPresentation, captions.observeBlocks(&.{.{ .kind = .table, .table = table }}));
 }

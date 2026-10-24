@@ -62,11 +62,18 @@ pub const Cell = struct {
     rowspan: u16 = 1,
     background: ?[]const u8 = null,
     nested_table: ?Table = null,
+    /// Non-null is authoritative, including an explicitly empty block list.
+    blocks: ?[]const Block = null,
 
     pub fn jsonStringify(self: Cell, jw: anytype) !void {
         try jw.beginObject();
         inline for (@typeInfo(Cell).@"struct".field_names) |field_name| {
-            if (comptime !std.mem.eql(u8, field_name, "nested_table")) {
+            if (comptime std.mem.eql(u8, field_name, "blocks")) {
+                if (self.blocks) |blocks| {
+                    try jw.objectField(field_name);
+                    try jw.write(blocks);
+                }
+            } else if (comptime !std.mem.eql(u8, field_name, "nested_table")) {
                 try jw.objectField(field_name);
                 try jw.write(@field(self, field_name));
             } else if (self.nested_table != null) {
@@ -203,11 +210,21 @@ fn validateTable(table: Table, depth: usize) ValidationError!void {
     for (table.rows) |row| for (row.cells) |cell| {
         try validateSpanColors(cell.spans);
         if (cell.background) |background| if (!isCanonicalRgb(background)) return error.InvalidPresentation;
+        if (cell.blocks) |blocks| {
+            if (cell.spans.len != 0 or cell.nested_table != null) return error.InvalidPresentation;
+            for (blocks) |block| try validateBlock(block, depth);
+        }
         if (cell.nested_table) |child| {
             if (cell.spans.len != 0) return error.InvalidPresentation;
             try validateTable(child, depth + 1);
         }
     };
+}
+
+fn validateBlock(block: Block, table_depth: usize) ValidationError!void {
+    if ((block.anchor.len != 0 or block.anchor_fallback.len != 0) and block.kind != .heading) return error.InvalidPresentation;
+    try validateSpanColors(block.spans);
+    if (block.table) |table| try validateTable(table, table_depth + 1);
 }
 
 fn blockIndexValid(indices: []const usize, block_count: usize) bool {
@@ -257,11 +274,7 @@ pub fn validateStored(
     try validateSpanColors(entry.display_title);
     try validateSpanColors(entry.preamble_spans);
     for (entry.references) |reference| try validateSpanColors(reference.spans);
-    for (entry.sections) |section| for (section.blocks) |block| {
-        if ((block.anchor.len != 0 or block.anchor_fallback.len != 0) and block.kind != .heading) return error.InvalidPresentation;
-        try validateSpanColors(block.spans);
-        if (block.table) |table| try validateTable(table, 1);
-    };
+    for (entry.sections) |section| for (section.blocks) |block| try validateBlock(block, 0);
 
     for (entry.references) |reference| {
         if (reference.number == 0 or reference.group_number == 0) return error.InvalidPresentation;

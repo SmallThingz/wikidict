@@ -606,7 +606,7 @@ pub const Feature = struct { kind: []const u8, language: []const u8 = "", data: 
 const SemanticHints = struct { relation_note: bool = false, ordinary_paragraph: bool = false };
 pub const Kind = enum { paragraph, blank, definition, example, quotation, list_item, list_detail, indent, term, heading, preformatted, rule, table };
 pub const TableGeometry = @import("blob_encoder").presentation_types.TableGeometry;
-pub const Cell = struct { spans: []const Span, header: bool = false, colspan: u16 = 1, rowspan: u16 = 1, background: ?[]const u8 = null, nested_table: ?Table = null };
+pub const Cell = struct { spans: []const Span, header: bool = false, colspan: u16 = 1, rowspan: u16 = 1, background: ?[]const u8 = null, nested_table: ?Table = null, blocks: ?[]const Block = null };
 pub const Row = struct { cells: []const Cell };
 pub const Table = struct { caption: []const Span = &.{}, rows: []const Row, geometry: ?TableGeometry = null };
 pub const Block = struct {
@@ -4834,6 +4834,20 @@ pub const Renderer = struct {
             style.target = "";
             return style;
         }
+        // Native URL parser functions preserve an active missing title parameter
+        // rather than laundering it into percent escapes. Keep this occurrence's
+        // visible file label, but neither invent a File action nor retain a parent.
+        // Formatted/protected literals and authored percent-encoded URLs do not
+        // enter this narrow active-parameter path.
+        if (!formatted and std.mem.indexOf(u8, value, "{{{") != null) {
+            style.kind = .text;
+            style.target = "";
+            style.self_link_target = null;
+            self.fallbacks.rejected_external_target = true;
+            self.fallbacks.missing_template = true;
+            self.unresolved_templates += 1;
+            return style;
+        }
         if (ir.hasExternalProtocol(target)) {
             // Plain authored URLs retain the established escaping path. Parsed
             // display text is already entity-decoded: never decode it again.
@@ -8494,7 +8508,12 @@ pub const Renderer = struct {
                     previous_list_path = table_path;
                 }
                 const body_start = pos;
-                if (try self.singleCellLayoutTable(input, pos)) |layout| {
+                const table_open = std.mem.indexOf(u8, clean, "{|").?;
+                const table_tag: syntax.Tag = .{ .name = "table", .attrs = clean[table_open + 2 ..], .end = 0, .closing = false, .self_closing = false };
+                // Removing an attributed wrapper would discard its paint or
+                // formatting. Only an attribute-free layout is transparent.
+                const layout_body = if (trim(table_tag.attrs).len == 0) try self.singleCellLayoutTable(input, pos) else null;
+                if (layout_body) |layout| {
                     // Match the cell-local navigation boundary without flattening
                     // its real nested grid or registering its effects twice.
                     const previous_target = self.body_link_target;
@@ -8511,8 +8530,6 @@ pub const Renderer = struct {
                         inline_line_end = syntax.logicalEnd(input, pos);
                     continue;
                 }
-                const table_open = std.mem.indexOf(u8, clean, "{|").?;
-                const table_tag: syntax.Tag = .{ .name = "table", .attrs = clean[table_open + 2 ..], .end = 0, .closing = false, .self_closing = false };
                 const table = try self.parseTable(input, pos, try self.swatchCssHex(table_tag, "background-color"), try self.tableCellBackground(table_tag, null));
                 pos = table.end;
                 // A close-marker suffix remains on its authored physical line;
@@ -8709,11 +8726,11 @@ pub const Renderer = struct {
         defer self.body_language_direction = previous;
         return self.parseBodySpans(input, .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set });
     }
-    fn cellSpansWithLanguageDirection(self: *Renderer, input: []const u8, style: Style) Error![]const Span {
+    fn cellSpansWithLanguageDirection(self: *Renderer, input: []const u8, style: Style, blocks: *?[]const Block) Error![]const Span {
         const previous = self.body_language_direction;
         self.body_language_direction = .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set };
         defer self.body_language_direction = previous;
-        return self.cellSpans(input);
+        return self.cellContentSpans(input, blocks);
     }
     fn htmlLanguageDirection(self: *Renderer, tag: syntax.Tag, inherited: Style) Error!Style {
         var result = inherited;
@@ -9427,6 +9444,7 @@ pub const Renderer = struct {
                 const cell_rowspan = try self.tableSpanAttr(cell_tag, "rowspan");
                 const background_fallback = if (cell_rowspan == 1) row_background else null;
                 var nested_table: ?Table = null;
+                var cell_blocks: ?[]const Block = null;
                 try cells.append(self.a, .{
                     .spans = scoped: {
                         const inherited_formatting = self.block_formatting;
@@ -9455,13 +9473,14 @@ pub const Renderer = struct {
                                 break :scoped &.{};
                             }
                         }
-                        break :scoped try self.cellSpansWithLanguageDirection(input[cell_tag.end..cell_pair.inner_end], cell_style);
+                        break :scoped try self.cellSpansWithLanguageDirection(input[cell_tag.end..cell_pair.inner_end], cell_style, &cell_blocks);
                     },
                     .background = try self.tableCellBackground(cell_tag, background_fallback),
                     .header = cell_tag.is("th"),
                     .colspan = try self.tableSpanAttr(cell_tag, "colspan"),
                     .rowspan = cell_rowspan,
                     .nested_table = nested_table,
+                    .blocks = cell_blocks,
                 });
             }
             if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
@@ -9533,9 +9552,52 @@ pub const Renderer = struct {
     }
     const LayoutTableBody = struct { body: []const u8, end: usize };
 
-    // Cells cannot contain a DPR2 grid. A closed, single ordinary layout cell
-    // can instead expose its original body to the existing block renderer.
+    // Heading-free single-cell layout wrappers may expose their original
+    // grid body. Semantic cell headings must retain their containing cell.
     // Inspect shape before rendering: references/media must register only once.
+    fn layoutBodyHasHeading(self: *Renderer, body: []const u8) bool {
+        var opaque_scan: syntax.OpaqueScan = .{};
+        var no_more_nowiki_close = false;
+        var at: usize = 0;
+        while (at < body.len) {
+            if (opaque_scan.protectedEnd(body, at, &no_more_nowiki_close)) |end| {
+                at = end;
+                continue;
+            }
+            if (body[at] == '<') {
+                if (opaque_scan.tagAt(body, at, &no_more_nowiki_close)) |tag| {
+                    if (!tag.closing and tag.html_pre) {
+                        at = if (syntax.matchingTagWithOpaqueScan(body, tag, &opaque_scan)) |pair| pair.end else body.len;
+                        continue;
+                    }
+                    if (!tag.closing and !tag.self_closing and tag.name.len == 2 and
+                        std.ascii.toLower(tag.name[0]) == 'h' and tag.name[1] >= '1' and tag.name[1] <= '6' and
+                        syntax.matchingTagWithOpaqueScan(body, tag, &opaque_scan) != null) return true;
+                    at = tag.end;
+                    continue;
+                }
+            } else if (starts(body[at..], "{{") or starts(body[at..], "[[")) {
+                if (syntax.balancedWithOpaqueScan(body, at, &opaque_scan)) |pair| {
+                    at = pair.end;
+                    continue;
+                }
+            } else if (body[at] == '[') {
+                // Bracketed external labels are inline domains too.
+                var inline_scan: ir.InlineIterator = .{ .input = body[at..], .renderer_boundaries = true, .link_trail = self.context.link_trail };
+                if (inline_scan.next()) |token| if (token.kind == .external_link) {
+                    at += inline_scan.cursor;
+                    continue;
+                };
+            }
+            if (at == 0 or body[at - 1] == '\n') {
+                const end = std.mem.indexOfScalarPos(u8, body, at, '\n') orelse body.len;
+                if (self.tableCellHeading(std.mem.trimEnd(u8, body[at..end], "\r")) != null) return true;
+            }
+            at += 1;
+        }
+        return false;
+    }
+
     fn singleCellLayoutTable(self: *Renderer, input: []const u8, start: usize) Error!?LayoutTableBody {
         var opaque_scan: syntax.OpaqueScan = .{};
         var no_more_nowiki_close = false;
@@ -9561,6 +9623,7 @@ pub const Renderer = struct {
                 const first = body_start orelse return null;
                 const body = input[first..line_start];
                 if (!hasCompleteLayoutGrid(body)) return null;
+                if (self.layoutBodyHasHeading(body)) return null;
                 return .{
                     .body = body,
                     .end = if (line.len > 2) @intFromPtr(line.ptr) - @intFromPtr(input.ptr) + 2 else pos,
@@ -9577,13 +9640,7 @@ pub const Renderer = struct {
                 const physical_end = std.mem.indexOfAny(u8, raw, "\r\n") orelse raw.len;
                 if (syntax.delimiter(raw[0..physical_end], "||", 0) != null) return null;
                 if (cellAttributePipe(raw)) |pipe| {
-                    const tag: syntax.Tag = .{ .name = "td", .attrs = raw[0..pipe], .end = 0, .closing = false, .self_closing = false };
-                    inline for (.{ "colspan", "rowspan" }) |name| {
-                        if (try self.semanticAttribute(tag, name)) |value| {
-                            const span = std.fmt.parseInt(u16, value, 10) catch return null;
-                            if (span != 1) return null;
-                        }
-                    }
+                    if (trim(raw[0..pipe]).len != 0) return null;
                 }
                 const content = (try self.cellContent(raw)).text;
                 if (content.len != 0 and (std.mem.indexOfScalar(u8, "#*:;", content[0]) != null or
@@ -9661,6 +9718,8 @@ pub const Renderer = struct {
         var fostered: std.ArrayList(Block) = .empty;
         var cells: std.ArrayList(Cell) = .empty;
         var cell_source: MissingBuffer = .empty;
+        var cell_copies: std.ArrayList(HeadingSourceCopy) = .empty;
+        defer cell_copies.deinit(self.a);
         var outside_source: MissingBuffer = .empty;
         defer outside_source.deinit(self.a);
         var outside_copies: std.ArrayList(HeadingSourceCopy) = .empty;
@@ -9693,6 +9752,8 @@ pub const Renderer = struct {
                 if (nested_source.items.len != 0) try nested_source.append(self.a, '\n');
                 if (nested_source == &outside_source)
                     try self.appendWikiTableFosteredCopy(&outside_source, &outside_copies, tracked, raw_line)
+                else if (nested_source == &cell_source)
+                    try self.appendWikiTableFosteredCopy(&cell_source, &cell_copies, tracked, raw_line)
                 else
                     try nested_source.appendCopied(self.a, tracked, raw_line);
                 nested_tables += 1;
@@ -9703,6 +9764,8 @@ pub const Renderer = struct {
                 if (nested_source.items.len != 0) try nested_source.append(self.a, '\n');
                 if (nested_source == &outside_source)
                     try self.appendWikiTableFosteredCopy(&outside_source, &outside_copies, tracked, raw_line)
+                else if (nested_source == &cell_source)
+                    try self.appendWikiTableFosteredCopy(&cell_source, &cell_copies, tracked, raw_line)
                 else
                     try nested_source.appendCopied(self.a, tracked, raw_line);
                 if (starts(line, "|}")) nested_tables -= 1;
@@ -9711,7 +9774,7 @@ pub const Renderer = struct {
             if (starts(line, "|}") or starts(line, "|-")) {
                 if (starts(line, "|-") and trim(line[2..]).len != 0) swatch_allowed = false;
                 try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending, caption_style, caption_formatting);
-                try self.finishCell(&cells, &cell_source, &current, cell_formatting);
+                try self.finishCell(&cells, &cell_source, &cell_copies, &current, cell_formatting);
                 if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
                 if (starts(line, "|}")) {
                     body_end = line_start;
@@ -9726,7 +9789,7 @@ pub const Renderer = struct {
                 row_formatting = try self.wikiTableFontFormatting(line[2..], inherited_formatting);
             } else if (starts(line, "|+")) {
                 try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending, caption_style, caption_formatting);
-                try self.finishCell(&cells, &cell_source, &current, cell_formatting);
+                try self.finishCell(&cells, &cell_source, &cell_copies, &current, cell_formatting);
                 // Preceding outside text registers references before the caption.
                 try self.flushWikiTableFostered(&fostered, &outside_source, &outside_copies);
                 const raw_caption = line[2..];
@@ -9746,7 +9809,7 @@ pub const Renderer = struct {
                 const header = line[0] == '!';
                 var offset: usize = 1;
                 while (offset <= line.len) {
-                    try self.finishCell(&cells, &cell_source, &current, cell_formatting);
+                    try self.finishCell(&cells, &cell_source, &cell_copies, &current, cell_formatting);
                     // MediaWiki accepts both separators on a header line; both keep header cells.
                     const split_at = if (header)
                         @min(wikiCellDelimiter(line, "!!", offset) orelse line.len, wikiCellDelimiter(line, "||", offset) orelse line.len)
@@ -9763,7 +9826,7 @@ pub const Renderer = struct {
                     const background_fallback = if (content.rowspan == 1) row_background else null;
                     const background = if (cellAttributePipe(raw_cell)) |pipe| try self.tableCellBackground(.{ .name = "td", .attrs = raw_cell[0..pipe], .end = 0, .closing = false, .self_closing = false }, background_fallback) else background_fallback;
                     current = .{ .spans = &.{}, .header = header, .colspan = content.colspan, .rowspan = content.rowspan, .background = background };
-                    try cell_source.appendCopied(self.a, tracked, content.text);
+                    try self.appendWikiTableFosteredCopy(&cell_source, &cell_copies, tracked, content.text);
                     if (split_at == line.len) break;
                     offset = split_at + 2;
                 }
@@ -9783,13 +9846,13 @@ pub const Renderer = struct {
                     // No cells commit this row. Keep its source for the
                     // same later fostering or full-body rowless recovery,
                     // without registering references before recovery.
-                    try self.finishCell(&cells, &cell_source, &current, cell_formatting);
+                    try self.finishCell(&cells, &cell_source, &cell_copies, &current, cell_formatting);
                     if (outside_source.items.len != 0) try outside_source.append(self.a, '\n');
                     try self.appendWikiTableFosteredCopy(&outside_source, &outside_copies, tracked, raw_line);
                     continue;
                 }
                 try self.flushWikiTableFostered(&fostered, &outside_source, &outside_copies);
-                try self.finishCell(&cells, &cell_source, &current, cell_formatting);
+                try self.finishCell(&cells, &cell_source, &cell_copies, &current, cell_formatting);
                 if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
                 if (try self.htmlTable(line, &fostered, true, self.body_language_direction orelse .{}, row_background, null)) |table| {
                     // Reuse the already-rendered caption, including its effects
@@ -9807,7 +9870,7 @@ pub const Renderer = struct {
                 // the same marker on the opener's own line stays inline text.
                 if (cell_source.items.len != 0 or (raw_line.len != 0 and (raw_line[0] == ' ' or std.mem.indexOfScalar(u8, "#*:;", raw_line[0]) != null or self.tableCellHeading(raw_line) != null)))
                     try cell_source.append(self.a, '\n');
-                try cell_source.appendCopied(self.a, tracked, raw_line);
+                try self.appendWikiTableFosteredCopy(&cell_source, &cell_copies, tracked, raw_line);
             } else {
                 // Ordinary text outside a wiki cell is fostered before the
                 // table, just as the HTML-table path retains non-cell text.
@@ -9816,7 +9879,7 @@ pub const Renderer = struct {
             }
         }
         try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending, caption_style, caption_formatting);
-        try self.finishCell(&cells, &cell_source, &current, cell_formatting);
+        try self.finishCell(&cells, &cell_source, &cell_copies, &current, cell_formatting);
         // Rowless recovery already renders the full body; avoid rendering its
         // outside text twice (including reference-registration side effects).
         if (has_caption or rows.items.len != 0 or cells.items.len != 0)
@@ -9838,14 +9901,16 @@ pub const Renderer = struct {
         return result;
     }
 
-    fn finishCell(self: *Renderer, cells: *std.ArrayList(Cell), source: *MissingBuffer, current: *?Cell, formatting: SpanFlags) Error!void {
+    fn finishCell(self: *Renderer, cells: *std.ArrayList(Cell), source: *MissingBuffer, copies: *std.ArrayList(HeadingSourceCopy), current: *?Cell, formatting: SpanFlags) Error!void {
         if (current.*) |value| {
             if (!self.spend()) {
                 source.* = .empty;
+                copies.clearRetainingCapacity();
                 current.* = null;
                 return;
             }
             var cell = value;
+            try self.registerHeadingSourceCopies(source.items, copies.items);
             cell.spans = scoped: {
                 const inherited_formatting = self.block_formatting;
                 const inherited_poem_italic = self.poem_base_style.italic;
@@ -9853,10 +9918,11 @@ pub const Renderer = struct {
                 defer self.poem_base_style.italic = inherited_poem_italic;
                 self.block_formatting = formatting;
                 if (self.poem_depth != 0) self.poem_base_style.italic = formatting.italic;
-                break :scoped try self.cellSpansWithMissing(source.view());
+                break :scoped try self.cellContentSpansWithMissing(source.view(), &cell.blocks);
             };
             try cells.append(self.a, cell);
             source.* = .empty;
+            copies.clearRetainingCapacity();
             current.* = null;
         }
     }
@@ -9881,14 +9947,44 @@ pub const Renderer = struct {
     }
 
     fn cellSpansWithMissing(self: *Renderer, tracked: MissingText) Error![]const Span {
+        return self.cellContentSpansWithMissing(tracked, null);
+    }
+    fn cellContentSpansWithMissing(self: *Renderer, tracked: MissingText, blocks: ?*?[]const Block) Error![]const Span {
         const previous = self.body_missing;
         self.body_missing = tracked;
         defer self.body_missing = previous;
-        return self.cellSpans(tracked.bytes);
+        return self.cellContentSpans(tracked.bytes, blocks);
     }
     fn cellSpans(self: *Renderer, source: []const u8) Error![]const Span {
-        // Table cells and wiki captions form local inline domains. An outer
-        // multiline label resumes around the table, never inside these spans.
+        return self.cellContentSpans(source, null);
+    }
+    fn blocksNeedCellRetention(blocks: []const Block) bool {
+        for (blocks) |block_value| {
+            if (block_value.kind == .heading) return true;
+            if (block_value.table != null) return true;
+        }
+        return false;
+    }
+    fn hasCellHtmlHeading(source: []const u8) bool {
+        var at: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, source, at, '<')) |open| {
+            if (syntax.protectedEnd(source, open)) |end| {
+                at = end;
+                continue;
+            }
+            const tag = syntax.tagAt(source, open) orelse {
+                at = open + 1;
+                continue;
+            };
+            at = tag.end;
+            if (!tag.closing and !tag.self_closing and tag.name.len == 2 and
+                std.ascii.toLower(tag.name[0]) == 'h' and tag.name[1] >= '1' and tag.name[1] <= '6') return true;
+        }
+        return false;
+    }
+    fn cellContentSpans(self: *Renderer, source: []const u8, retained: ?*?[]const Block) Error![]const Span {
+        // Cells are local inline domains. Preserve ordinary cell-opener text,
+        // but retain real later heading blocks rather than flattening identity.
         const previous_target = self.body_link_target;
         self.body_link_target = "";
         defer self.body_link_target = previous_target;
@@ -9900,22 +9996,34 @@ pub const Renderer = struct {
             if (pos != 0 and end != pos and (source[pos] == ' ' or std.mem.indexOfScalar(u8, "#*:;", source[pos]) != null or self.tableCellHeading(source[pos..end]) != null)) has_blocks = true;
             pos = if (end < source.len) end + 1 else end;
         }
+        if (retained != null and hasCellHtmlHeading(source)) has_blocks = true;
         if (!has_blocks and std.mem.indexOf(u8, source, "{|") == null) return self.parseBodySpans(source, .{});
         const parent = self.spans;
         self.spans = .empty;
         defer self.spans = parent;
         var body = source;
-        // The first line belongs to the cell opener, so its marker is literal
-        // even when later lines contain a list or nested table.
+        var prefix: []const Span = &.{};
         const first_end = syntax.logicalEnd(source, 0);
         if (source.len != 0 and (std.mem.indexOfScalar(u8, "#*:;", source[0]) != null or self.tableCellHeading(source[0..first_end]) != null)) {
-            const end = first_end;
-            try self.spans.appendSlice(self.a, try self.parseBodySpans(source[0..end], .{}));
-            body = source[if (end < source.len) end + 1 else end..];
-            if (body.len != 0) try self.lineBreak(.{});
+            prefix = try self.parseBodySpans(source[0..first_end], .{});
+            body = source[if (first_end < source.len) first_end + 1 else first_end..];
         }
-        const tracked_body = if (self.body_missing) |missing_parent| try missingSlice(self.a, missing_parent, body) else MissingText.untracked(body);
-        try self.blocksInline(try self.renderBodyWithOrphanOrigin(tracked_body, body.ptr == source.ptr), .{});
+        const tracked_body = if (self.body_missing) |missing_parent| try self.missingSliceWithHeadingSource(missing_parent, body) else MissingText.untracked(body);
+        const blocks = try self.renderBodyWithOrphanOrigin(tracked_body, body.ptr == source.ptr);
+        if (retained) |output| if (blocksNeedCellRetention(blocks)) {
+            if (prefix.len == 0) {
+                output.* = blocks;
+            } else {
+                const ordered = try self.a.alloc(Block, blocks.len + 1);
+                ordered[0] = .{ .kind = .paragraph, .spans = prefix };
+                @memcpy(ordered[1..], blocks);
+                output.* = ordered;
+            }
+            return &.{};
+        };
+        try self.spans.appendSlice(self.a, prefix);
+        if (prefix.len != 0 and body.len != 0) try self.lineBreak(.{});
+        try self.blocksInline(blocks, .{});
         return self.spans.toOwnedSlice(self.a);
     }
 
@@ -10071,10 +10179,34 @@ pub const Renderer = struct {
                 if (!htmlNestedSpend(remaining)) return error.RenderLimit;
                 if (ci != 0) try self.text(" · ", style);
                 const cell_background = cell.background orelse background;
-                try self.appendTableInlineSpans(cell.spans, cell_background, remaining);
-                if (cell.nested_table) |child|
-                    try self.tableInlineWithBudget(child, style, false, cell_background, depth + 1, remaining);
+                if (cell.blocks) |blocks| {
+                    try self.cellBlocksInlineWithBudget(blocks, style, cell_background, depth, remaining);
+                } else {
+                    try self.appendTableInlineSpans(cell.spans, cell_background, remaining);
+                    if (cell.nested_table) |child|
+                        try self.tableInlineWithBudget(child, style, false, cell_background, depth + 1, remaining);
+                }
             }
+        }
+    }
+    fn cellBlocksInlineWithBudget(self: *Renderer, blocks: []const Block, style: Style, background: ?[]const u8, depth: usize, remaining: *usize) Error!void {
+        for (blocks, 0..) |block_value, index| {
+            if (!htmlNestedSpend(remaining)) return error.RenderLimit;
+            if (index != 0) try self.lineBreak(style);
+            const label_start = self.spans.items.len;
+            if (block_value.list_path.len != 0) switch (block_value.list_path[block_value.list_path.len - 1]) {
+                '*' => try self.text("• ", style),
+                '#' => if (block_value.number.len != 0) {
+                    try self.text(block_value.number, style);
+                    try self.text(". ", style);
+                },
+                else => {},
+            };
+            for (self.spans.items[label_start..]) |*span| if (span.background == null) {
+                span.background = background;
+            };
+            try self.appendTableInlineSpans(block_value.spans, background, remaining);
+            if (block_value.table) |child| try self.tableInlineWithBudget(child, style, false, background, depth + 1, remaining);
         }
     }
     fn tableInline(self: *Renderer, table: Table, style: Style, leading_row_break: bool) Error!void {
@@ -10626,7 +10758,12 @@ test "nested wiki tables do not close their parent table early" {
     try std.testing.expectEqual(@as(usize, 2), blocks.len);
     try std.testing.expectEqual(Kind.table, blocks[0].kind);
     try std.testing.expectEqual(@as(usize, 2), blocks[0].table.?.rows.len);
-    try std.testing.expectEqualStrings("outer\ninner", try flattened(a, blocks[0].table.?.rows[0].cells[0].spans));
+    const ordered = blocks[0].table.?.rows[0].cells[0].blocks.?;
+    try std.testing.expectEqual(Kind.paragraph, ordered[0].kind);
+    try std.testing.expectEqual(Kind.table, ordered[1].kind);
+    var projection: Renderer = .{ .a = a, .context = .{} };
+    try projection.blocksInline(ordered, .{});
+    try std.testing.expectEqualStrings("outer\ninner", try flattened(a, projection.spans.items));
     try std.testing.expectEqualStrings("final", try flattened(a, blocks[0].table.?.rows[1].cells[0].spans));
     try std.testing.expectEqual(Kind.definition, blocks[1].kind);
     try std.testing.expectEqualStrings("after", try flattened(a, blocks[1].spans));
@@ -14590,10 +14727,16 @@ test "wiki cell attributes stop before a nested Finnish NavFrame table" {
             "|-\n! genitive\n| [[YYA:n]]\n| &ndash;\n|-\n|}\n" ++
             "</div>\n</div>\n|}\n",
     );
-    try std.testing.expectEqual(@as(usize, 2), blocks.len);
-    try std.testing.expectEqualStrings("Inflection of YYA", try flattened(a, blocks[0].spans));
-    try std.testing.expectEqual(Kind.table, blocks[1].kind);
-    const table = blocks[1].table.?;
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expectEqual(Kind.table, blocks[0].kind);
+    const parent = blocks[0].table.?;
+    try std.testing.expectEqual(@as(usize, 1), parent.rows.len);
+    try std.testing.expectEqual(@as(usize, 1), parent.rows[0].cells.len);
+    const ordered = parent.rows[0].cells[0].blocks.?;
+    try std.testing.expectEqual(@as(usize, 2), ordered.len);
+    try std.testing.expectEqualStrings("Inflection of YYA", try flattened(a, ordered[0].spans));
+    try std.testing.expectEqual(Kind.table, ordered[1].kind);
+    const table = ordered[1].table.?;
     try std.testing.expectEqual(@as(usize, 3), table.rows.len);
     for (table.rows) |row| try std.testing.expectEqual(@as(usize, 3), row.cells.len);
     for (table.rows[0].cells) |cell| try std.testing.expect(cell.header);
@@ -16051,8 +16194,22 @@ test "wiki caption blocks do not steal later captions rows or ordinary nested ce
     try std.testing.expect(!unclosedExternalRecoveryHasLink(table.caption, .link, "C"));
     try std.testing.expectEqual(@as(usize, 1), table.rows.len);
     try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
-    try std.testing.expectEqualStrings("Outer before\nInner cell\nOuter after", try plainText(a, table.rows[0].cells[0].spans));
-    try std.testing.expect(unclosedExternalRecoveryHasLink(table.rows[0].cells[0].spans, .link, "C"));
+    const cell = table.rows[0].cells[0];
+    try std.testing.expect(cell.spans.len == 0 and cell.nested_table == null);
+    const ordered = cell.blocks.?;
+    try std.testing.expectEqual(@as(usize, 3), ordered.len);
+    try std.testing.expectEqual(Kind.paragraph, ordered[0].kind);
+    try std.testing.expectEqual(Kind.table, ordered[1].kind);
+    try std.testing.expectEqual(Kind.paragraph, ordered[2].kind);
+    const inner = ordered[1].table.?;
+    try std.testing.expectEqual(@as(usize, 1), inner.rows.len);
+    try std.testing.expectEqual(@as(usize, 1), inner.rows[0].cells.len);
+    try std.testing.expectEqualStrings("Inner cell", try plainText(a, inner.rows[0].cells[0].spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(inner.rows[0].cells[0].spans, .link, "C"));
+    var projection: Renderer = .{ .a = a, .context = .{} };
+    try projection.blocksInline(ordered, .{});
+    try std.testing.expectEqualStrings("Outer before\nInner cell\nOuter after", try plainText(a, projection.spans.items));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(projection.spans.items, .link, "C"));
     try std.testing.expect(!r.fallbacks.malformed_table);
 }
 
@@ -16806,7 +16963,11 @@ test "later cell headings retain visible text and exact lexical navigation in wi
         const rows = blocks[0].table.?.rows;
         try std.testing.expectEqual(@as(usize, 1), rows.len);
         try std.testing.expectEqual(@as(usize, 1), rows[0].cells.len);
-        const spans = rows[0].cells[0].spans;
+        const cell = rows[0].cells[0];
+        try std.testing.expect(cell.blocks != null and cell.spans.len == 0);
+        var projection: Renderer = .{ .a = a, .context = .{} };
+        try projection.blocksInline(cell.blocks.?, .{});
+        const spans = projection.spans.items;
         try std.testing.expectEqualStrings(if (index == 2) "Inside\nword" else "first\nInside\nword", try flattened(a, spans));
         var links: usize = 0;
         for (spans) |span| if (span.kind == .link) {
@@ -16820,7 +16981,7 @@ test "later cell headings retain visible text and exact lexical navigation in wi
     var styled: Renderer = .{ .a = a, .context = .{} };
     const blocks = try styled.renderBody("{|\n| first\n== \x27\x27\x27Inside\x27\x27\x27 ==\n[[cat|word]]\n|}");
     var saw_bold_heading = false;
-    for (blocks[0].table.?.rows[0].cells[0].spans) |span| {
+    for (blocks[0].table.?.rows[0].cells[0].blocks.?[1].spans) |span| {
         if (std.mem.eql(u8, span.text, "Inside")) saw_bold_heading = span.flags.bold;
     }
     try std.testing.expect(saw_bold_heading);
@@ -16839,7 +17000,12 @@ test "cell heading detection keeps first-line inline equals protected and unknow
     }) |fixture| {
         var renderer: Renderer = .{ .a = a, .context = .{} };
         const blocks = try renderer.renderBody(fixture.source);
-        const spans = blocks[0].table.?.rows[0].cells[0].spans;
+        const cell = blocks[0].table.?.rows[0].cells[0];
+        var projection: Renderer = .{ .a = a, .context = .{} };
+        const spans = if (cell.blocks) |ordered| projected: {
+            try projection.blocksInline(ordered, .{});
+            break :projected projection.spans.items;
+        } else cell.spans;
         const visible = try flattened(a, spans);
         try std.testing.expect(std.mem.indexOf(u8, visible, fixture.literal) != null);
         try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "cat"));
@@ -25958,7 +26124,12 @@ test "wiki table separators retain strip regions attribute armor and nested tabl
     const rows = blocks[0].table.?.rows;
     try std.testing.expectEqual(@as(usize, 1), rows.len);
     try std.testing.expectEqual(@as(usize, 2), rows[0].cells.len);
-    const nested = try flattened(a, rows[0].cells[0].spans);
+    const ordered = rows[0].cells[0].blocks.?;
+    try std.testing.expectEqual(Kind.table, ordered[1].kind);
+    try std.testing.expectEqual(@as(usize, 2), ordered[1].table.?.rows[0].cells.len);
+    var projection: Renderer = .{ .a = a, .context = .{} };
+    try projection.blocksInline(ordered, .{});
+    const nested = try flattened(a, projection.spans.items);
     try std.testing.expect(std.mem.indexOf(u8, nested, "nested one · nested two") != null);
     try std.testing.expectEqualStrings("after", try flattened(a, rows[0].cells[1].spans));
 }
@@ -26017,9 +26188,22 @@ test "wiki tables keep physical cell row caption and nested markers before links
     const nested_blocks = try nested_renderer.renderBody("{|\n| [[A\n{|\n| inner||second\n|}\n| B]]\n|}");
     const nested_cells = nested_blocks[0].table.?.rows[0].cells;
     try std.testing.expectEqual(@as(usize, 2), nested_cells.len);
-    try std.testing.expect(std.mem.indexOf(u8, try flattened(a, nested_cells[0].spans), "inner · second") != null);
+    try std.testing.expect(nested_cells[0].spans.len == 0 and nested_cells[0].nested_table == null);
+    const ordered = nested_cells[0].blocks.?;
+    try std.testing.expectEqual(@as(usize, 2), ordered.len);
+    try std.testing.expectEqual(Kind.paragraph, ordered[0].kind);
+    try std.testing.expectEqualStrings("[malformed link] A", std.mem.trim(u8, try flattened(a, ordered[0].spans), " \t\r\n"));
+    try std.testing.expectEqual(Kind.table, ordered[1].kind);
+    const inner = ordered[1].table.?;
+    try std.testing.expectEqual(@as(usize, 1), inner.rows.len);
+    try std.testing.expectEqual(@as(usize, 2), inner.rows[0].cells.len);
+    try std.testing.expectEqualStrings("inner", try flattened(a, inner.rows[0].cells[0].spans));
+    try std.testing.expectEqualStrings("second", try flattened(a, inner.rows[0].cells[1].spans));
+    var nested_projection: Renderer = .{ .a = a, .context = .{} };
+    try nested_projection.blocksInline(ordered, .{});
+    try std.testing.expect(std.mem.indexOf(u8, try flattened(a, nested_projection.spans.items), "inner · second") != null);
     try std.testing.expectEqualStrings("B [malformed link]", std.mem.trim(u8, try flattened(a, nested_cells[1].spans), " \t\r\n"));
-    for (nested_cells) |cell| for (cell.spans) |span| try std.testing.expect(!std.mem.eql(u8, span.target, "A"));
+    for ([_][]const Span{ nested_projection.spans.items, nested_cells[1].spans }) |spans| for (spans) |span| try std.testing.expect(!std.mem.eql(u8, span.target, "A"));
     var tail_renderer: Renderer = .{ .a = a, .context = .{} };
     const tail_blocks = try tail_renderer.renderBody("{|\n| [[A\n|} tail\n]]");
     try std.testing.expectEqualStrings("[malformed link] A", std.mem.trim(u8, try flattened(a, tail_blocks[0].table.?.rows[0].cells[0].spans), " \t\r\n"));
@@ -26175,8 +26359,13 @@ test "wiki row font scope preserves nested overrides and excludes fostered capti
                 caption = true;
                 try std.testing.expect(!value.flags.bold and !value.flags.italic);
             };
-            for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |value| {
-                for (cases, 0..) |case, i| if (std.mem.eql(u8, trim(value.text), case.text)) {
+            for (table.rows) |row| for (row.cells) |cell| {
+                var projection: Renderer = .{ .a = a, .context = .{} };
+                const values = if (cell.blocks) |ordered| projected: {
+                    try projection.blocksInline(ordered, .{});
+                    break :projected projection.spans.items;
+                } else cell.spans;
+                for (values) |value| for (cases, 0..) |case, i| if (std.mem.eql(u8, trim(value.text), case.text)) {
                     seen[i] = true;
                     try std.testing.expectEqual(case.bold, value.flags.bold);
                     try std.testing.expectEqual(case.italic, value.flags.italic);
@@ -27173,12 +27362,27 @@ test "allocated translation and fostered headings retain authored source offsets
         defer arena.deinit();
         var renderer: Renderer = .{ .a = arena.allocator(), .context = .{}, .heading_source = case.source };
         const blocks = try renderer.renderBody(case.source);
-        var found: usize = 0;
-        for (blocks) |block_value| if (block_value.kind == .heading) {
-            found += 1;
-            try std.testing.expectEqualStrings("Noun", try plainText(arena.allocator(), block_value.spans));
-            try std.testing.expectEqual(@as(?usize, std.mem.indexOf(u8, case.source, case.title_start)), block_value.heading_source_offset);
+        const Check = struct {
+            fn visit(a: A, values: []const Block, expected: usize, found: *usize) anyerror!void {
+                for (values) |block_value| {
+                    if (block_value.kind == .heading) {
+                        found.* += 1;
+                        try std.testing.expectEqualStrings("Noun", try plainText(a, block_value.spans));
+                        try std.testing.expectEqual(@as(?usize, expected), block_value.heading_source_offset);
+                    }
+                    if (block_value.table) |table| try visitTable(a, table, expected, found);
+                }
+            }
+            fn visitTable(a: A, table: Table, expected: usize, found: *usize) anyerror!void {
+                for (table.rows) |row| for (row.cells) |cell| {
+                    if (cell.blocks) |ordered| {
+                        try visit(a, ordered, expected, found);
+                    } else if (cell.nested_table) |child| try visitTable(a, child, expected, found);
+                };
+            }
         };
+        var found: usize = 0;
+        try Check.visit(arena.allocator(), blocks, std.mem.indexOf(u8, case.source, case.title_start).?, &found);
         try std.testing.expectEqual(@as(usize, 1), found);
     }
 }
@@ -27645,11 +27849,20 @@ test "ordinary wiki cell block projection retains nested HTML child caption and 
     try std.testing.expectEqual(@as(usize, 1), outer.rows[0].cells.len);
     const cell = outer.rows[0].cells[0];
     try std.testing.expect(cell.nested_table == null);
-    const text = try flattened(a, cell.spans);
+    try std.testing.expect(cell.spans.len == 0);
+    const ordered = cell.blocks.?;
+    try std.testing.expectEqual(@as(usize, 3), ordered.len);
+    try std.testing.expectEqual(Kind.paragraph, ordered[0].kind);
+    try std.testing.expectEqual(Kind.list_item, ordered[1].kind);
+    try std.testing.expectEqual(Kind.table, ordered[2].kind);
+    var projection: Renderer = .{ .a = a, .context = .{} };
+    try projection.blocksInline(ordered, .{});
+    const spans = projection.spans.items;
+    const text = try flattened(a, spans);
     try std.testing.expect(std.mem.indexOf(u8, text, "prefix\n• item\nchild caption\nchild") != null);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, "child caption"));
     var actions: usize = 0;
-    for (cell.spans) |span| if (std.mem.eql(u8, span.target, "Child")) {
+    for (spans) |span| if (std.mem.eql(u8, span.target, "Child")) {
         actions += 1;
         try std.testing.expectEqualStrings("child", span.text);
         try std.testing.expect(span.kind == .link);
@@ -27720,7 +27933,16 @@ test "ordinary cell and poem projections recurse once with descendant styles pai
     };
     var cell_renderer: Renderer = .{ .a = a, .context = .{} };
     const blocks = try cell_renderer.renderBody("{|\n| prefix\n* item\n" ++ html ++ "\n|}");
-    const spans = blocks[0].table.?.rows[0].cells[0].spans;
+    const cell = blocks[0].table.?.rows[0].cells[0];
+    try std.testing.expect(cell.spans.len == 0 and cell.nested_table == null);
+    const ordered = cell.blocks.?;
+    try std.testing.expectEqual(@as(usize, 3), ordered.len);
+    try std.testing.expectEqual(Kind.paragraph, ordered[0].kind);
+    try std.testing.expectEqual(Kind.list_item, ordered[1].kind);
+    try std.testing.expectEqual(Kind.table, ordered[2].kind);
+    var projection: Renderer = .{ .a = a, .context = .{} };
+    try projection.blocksInline(ordered, .{});
+    const spans = projection.spans.items;
     try Check.spans(a, spans);
     try std.testing.expectEqual(@as(usize, 1), cell_renderer.refs.items.len);
     var poem_renderer: Renderer = .{ .a = a, .context = .{} };
@@ -27925,5 +28147,248 @@ test "media filename and alt labels inherit opaque paint while authored caption 
         try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
         try std.testing.expectEqualStrings(case.file, renderer.media.items[0].file);
         try std.testing.expectEqual(@as(usize, 1), renderer.media_caption_spans.items.len);
+    }
+}
+
+test "table cells retain ordered heading blocks and authored source offsets" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "{|\n| bgcolor='#ffeecc' colspan='2' | lead\n== Same ==\nparagraph [[Target|label]]\n* item\n----\n{|\n| child || second\n|}\n=== Inner ===\ntail\n|}";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBodyWithHeadingOffsets(MissingText.untracked(source));
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const cell = blocks[0].table.?.rows[0].cells[0];
+    try std.testing.expectEqualStrings("#ffeecc", cell.background.?);
+    try std.testing.expectEqual(@as(u16, 2), cell.colspan);
+    try std.testing.expect(cell.spans.len == 0 and cell.nested_table == null);
+    const ordered = cell.blocks.?;
+    const expected = [_]Kind{ .paragraph, .heading, .paragraph, .list_item, .rule, .table, .heading, .paragraph };
+    try std.testing.expectEqual(expected.len, ordered.len);
+    for (ordered, expected) |block_value, kind| try std.testing.expectEqual(kind, block_value.kind);
+    try std.testing.expectEqualStrings("lead", try flattened(a, ordered[0].spans));
+    try std.testing.expectEqualStrings("Same", try flattened(a, ordered[1].spans));
+    try std.testing.expectEqual(@as(u8, 2), ordered[1].level);
+    try std.testing.expectEqual(@as(?usize, std.mem.indexOf(u8, source, "Same")), ordered[1].heading_source_offset);
+    try std.testing.expectEqualStrings("*", ordered[3].list_path);
+    try std.testing.expectEqual(@as(usize, 2), ordered[5].table.?.rows[0].cells.len);
+    try std.testing.expectEqual(@as(u8, 3), ordered[6].level);
+    try std.testing.expectEqual(@as(?usize, std.mem.indexOf(u8, source, "Inner")), ordered[6].heading_source_offset);
+    try std.testing.expectEqualStrings("tail", try flattened(a, ordered[7].spans));
+    var action = false;
+    for (ordered[2].spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "Target") and std.mem.eql(u8, span.text, "label")) {
+        action = true;
+    };
+    try std.testing.expect(action);
+}
+
+test "HTML cell headings retain blocks while inline and protected cells stay legacy" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<table><tr><td>before\n== Cell ==\nafter</td><td><h3 id='custom'>HTML</h3>tail</td></tr></table>";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBodyWithHeadingOffsets(MissingText.untracked(source));
+    const cells = blocks[0].table.?.rows[0].cells;
+    try std.testing.expectEqual(@as(usize, 2), cells.len);
+    try std.testing.expectEqual(Kind.heading, cells[0].blocks.?[1].kind);
+    try std.testing.expectEqual(@as(u8, 2), cells[0].blocks.?[1].level);
+    try std.testing.expectEqual(@as(?usize, std.mem.indexOf(u8, source, "Cell")), cells[0].blocks.?[1].heading_source_offset);
+    try std.testing.expectEqual(Kind.heading, cells[1].blocks.?[0].kind);
+    try std.testing.expectEqualStrings("custom", cells[1].blocks.?[0].heading_authored_id);
+    const controls = [_][]const u8{
+        "{|\n| == literal ==\n|}",
+        "{|\n| <nowiki>\n== protected ==\n</nowiki>\n|}",
+        "{|\n| prefix\nbefore == inline ==\n|}",
+        "{|\n| prefix\n&#61;&#61; entity &#61;&#61;\n|}",
+        "<table><tr><td><nowiki><h2>literal</h2></nowiki></td></tr></table>",
+    };
+    for (controls) |control| {
+        var plain: Renderer = .{ .a = a, .context = .{} };
+        const result = try plain.renderBodyWithHeadingOffsets(MissingText.untracked(control));
+        try std.testing.expect(result[0].table.?.rows[0].cells[0].blocks == null);
+    }
+}
+
+test "missing media URL title preserves visible filename style and removes only its action" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("<span style='background:#abcdef;color:#123456'>[[File:Abjad.svg|frameless|link={{{2}}}]]</span>[[Tail|tail]]", .{});
+    var filename = false;
+    var tail = false;
+    for (spans) |span| {
+        if (std.mem.eql(u8, span.text, "Abjad.svg")) {
+            filename = true;
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+            try std.testing.expectEqualStrings("#abcdef", span.background.?);
+            try std.testing.expectEqualStrings("#123456", span.foreground.?);
+            try std.testing.expect(std.mem.indexOf(u8, span.classes, "wikidict-media") != null);
+        } else if (std.mem.eql(u8, span.text, "tail")) {
+            tail = true;
+            try std.testing.expect(span.kind == .link);
+            try std.testing.expectEqualStrings("Tail", span.target);
+            try std.testing.expect(span.background == null and span.foreground == null);
+        } else try std.testing.expect(span.target.len == 0);
+    }
+    try std.testing.expect(filename and tail);
+    try std.testing.expect(r.fallbacks.rejected_external_target and r.fallbacks.missing_template);
+    try std.testing.expectEqual(@as(usize, 1), r.unresolved_templates);
+    try std.testing.expectEqual(@as(usize, 1), r.media.items.len);
+    try std.testing.expectEqualStrings("Abjad.svg", r.media.items[0].file);
+    var literal: Renderer = .{ .a = a, .context = .{} };
+    const literal_spans = try literal.parseSpans("[[File:Abjad.svg|frameless|link=https://example.test/?title=%7B%7B%7B2%7D%7D%7D]]", .{});
+    for (literal_spans) |span| {
+        try std.testing.expect(span.kind == .external_link);
+        try std.testing.expectEqualStrings("https://example.test/?title=%7B%7B%7B2%7D%7D%7D", span.target);
+    }
+    try std.testing.expect(!literal.fallbacks.rejected_external_target);
+    var entity_literal: Renderer = .{ .a = a, .context = .{} };
+    const entity_spans = try entity_literal.parseSpans("[[File:Abjad.svg|frameless|link=&#123;&#123;&#123;2&#125;&#125;&#125;]]", .{});
+    for (entity_spans) |span| {
+        try std.testing.expect(span.kind == .link);
+        try std.testing.expectEqualStrings("File:Abjad.svg", span.target);
+    }
+    try std.testing.expect(!entity_literal.fallbacks.rejected_external_target and !entity_literal.fallbacks.missing_template);
+    try std.testing.expectEqual(@as(usize, 0), entity_literal.unresolved_templates);
+}
+
+test "single cell layout wrappers retain wiki and HTML headings inside their cells" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const headings = [_][]const u8{ "== Cell ==", "<h3 id='cell-id'>Cell</h3>", "<div>\n== Cell ==\n</div>" };
+    for (headings) |heading| {
+        const source = try std.fmt.allocPrint(a, "{{|\n| intro<ref>note</ref>\n{s}\n{{|\n| [[Child|child]] || second\n|}}\n|}}\n== Outer ==\nlast", .{heading});
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBodyWithHeadingOffsets(MissingText.untracked(source));
+        try std.testing.expectEqual(Kind.table, blocks[0].kind);
+        const parent_cell = blocks[0].table.?.rows[0].cells[0];
+        try std.testing.expectEqual(@as(u16, 1), parent_cell.colspan);
+        try std.testing.expect(parent_cell.spans.len == 0 and parent_cell.nested_table == null);
+        var cell_headings: usize = 0;
+        var child_tables: usize = 0;
+        for (parent_cell.blocks.?) |block_value| {
+            if (block_value.kind == .heading) {
+                cell_headings += 1;
+                try std.testing.expectEqualStrings("Cell", try flattened(a, block_value.spans));
+                try std.testing.expect(block_value.heading_source_offset != null);
+            }
+            if (block_value.table) |child| {
+                child_tables += 1;
+                try std.testing.expectEqual(@as(usize, 2), child.rows[0].cells.len);
+            }
+        }
+        var outer_headings: usize = 0;
+        for (blocks) |block_value| if (block_value.kind == .heading) {
+            outer_headings += 1;
+            try std.testing.expectEqualStrings("Outer", try flattened(a, block_value.spans));
+        };
+        try std.testing.expectEqual(@as(usize, 1), cell_headings);
+        try std.testing.expectEqual(@as(usize, 1), child_tables);
+        try std.testing.expectEqual(@as(usize, 1), outer_headings);
+        try std.testing.expectEqual(@as(usize, 1), (try renderer.finishReferences()).len);
+    }
+}
+
+test "heading free layout wrappers preserve shortcut through opaque and inline heading text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const bodies = [_][]const u8{
+        "plain",
+        "<nowiki>\n== Literal ==\n<h2>literal</h2>\n</nowiki>",
+        "[[Target|one\n== Literal ==\n<h2>literal</h2>]]",
+        "[https://example.test <h2>label</h2>]",
+        "&lt;h2&gt;literal&lt;/h2&gt;",
+        "<span title='&lt;h2&gt;attribute&lt;/h2&gt;'>plain</span>",
+    };
+    for (bodies, 0..) |body, index| {
+        const source = try std.fmt.allocPrint(a, "{{|\n| intro\n{s}\n{{|\n| child || second\n|}}\n|}}", .{body});
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const layout = try renderer.singleCellLayoutTable(source, 3);
+        if (layout == null) {
+            const body_source = source["{|\n| ".len .. source.len - "|}".len];
+            std.debug.print("heading-free layout control {d}: grid={any} heading={any} body={s}\n", .{
+                index,
+                Renderer.hasCompleteLayoutGrid(body_source),
+                renderer.layoutBodyHasHeading(body_source),
+                try std.json.Stringify.valueAlloc(a, body, .{}),
+            });
+        }
+        try std.testing.expect(layout != null);
+    }
+    // Raw angles invalidate the outer tag even inside quotes. The existing
+    // body renderer resumes at the paired inner h2 after its literal prefix.
+    const raw_attribute = "<span title='<h2>attribute</h2>'>plain</span>";
+    try std.testing.expect(syntax.tagAt(raw_attribute, 0) == null);
+    const raw_source = try std.fmt.allocPrint(a, "{{|\n| intro\n{s}\n{{|\n| child || second\n|}}\n|}}", .{raw_attribute});
+    var raw_renderer: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expect(raw_renderer.layoutBodyHasHeading(raw_attribute));
+    const raw_layout = try raw_renderer.singleCellLayoutTable(raw_source, 3);
+    if (raw_layout != null) std.debug.print("raw-angle attribute control: unexpectedly admitted layout\n", .{});
+    try std.testing.expect(raw_layout == null);
+    const raw_blocks = try raw_renderer.renderBodyWithHeadingOffsets(MissingText.untracked(raw_source));
+    try std.testing.expectEqual(Kind.table, raw_blocks[0].kind);
+    const raw_cell = raw_blocks[0].table.?.rows[0].cells[0];
+    var raw_headings: usize = 0;
+    for (raw_cell.blocks.?) |block_value| if (block_value.kind == .heading) {
+        raw_headings += 1;
+        try std.testing.expectEqual(@as(u8, 2), block_value.level);
+        try std.testing.expectEqualStrings("attribute", try flattened(a, block_value.spans));
+        try std.testing.expect(block_value.heading_source_offset != null);
+    };
+    try std.testing.expectEqual(@as(usize, 1), raw_headings);
+    // The escaped spelling remains an actual attribute, not a body heading.
+    try std.testing.expect(syntax.tagAt("<span title='&lt;h2&gt;attribute&lt;/h2&gt;'>plain</span>", 0) != null);
+    // A pre domain never entered this shortcut under the existing grid rule.
+    const pre_body = "intro\n<pre>\n== Literal ==\n<h2>literal</h2>\n</pre>\n{|\n| child || second\n|}\n";
+    const pre_source = try std.fmt.allocPrint(a, "{{|\n| {s}|}}", .{pre_body});
+    var pre_renderer: Renderer = .{ .a = a, .context = .{} };
+    const pre_heading = pre_renderer.layoutBodyHasHeading(pre_body);
+    if (pre_heading) std.debug.print("heading-free layout pre control: unexpected heading=true\n", .{});
+    try std.testing.expect(!pre_heading);
+    const pre_layout = try pre_renderer.singleCellLayoutTable(pre_source, 3);
+    if (pre_layout != null) std.debug.print("heading-free layout pre control: unexpected shortcut admission\n", .{});
+    try std.testing.expect(pre_layout == null);
+}
+
+test "attributed singleton grids retain parent paint font scope and child geometry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { table_attrs: []const u8, row: []const u8 = "", cell_attrs: []const u8, color: []const u8, bold: bool = false }{
+        .{ .table_attrs = " bgcolor='#ff0000'", .cell_attrs = "", .color = "#ff0000" },
+        .{ .table_attrs = "", .cell_attrs = "bgcolor='#00ff00'", .color = "#00ff00" },
+        .{ .table_attrs = "", .row = "|- bgcolor='#ff0000'\n", .cell_attrs = "", .color = "#ff0000" },
+        .{ .table_attrs = "", .cell_attrs = "style='background-color:#00ff00;font-weight:bold'", .color = "#00ff00", .bold = true },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(a, "{{|{s}\n{s}| {s} | intro<ref>note</ref>\n{{|\n| bgcolor='#0000ff' | [[Child|child]] || second\n|}}\nafter\n|}}", .{ case.table_attrs, case.row, case.cell_attrs });
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBodyWithHeadingOffsets(MissingText.untracked(source));
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        const cell = blocks[0].table.?.rows[0].cells[0];
+        try std.testing.expectEqualStrings(case.color, cell.background.?);
+        try std.testing.expect(cell.spans.len == 0 and cell.nested_table == null);
+        const ordered = cell.blocks.?;
+        try std.testing.expectEqual(@as(usize, 3), ordered.len);
+        try std.testing.expectEqual(Kind.paragraph, ordered[0].kind);
+        try std.testing.expectEqual(Kind.table, ordered[1].kind);
+        try std.testing.expectEqual(Kind.paragraph, ordered[2].kind);
+        try std.testing.expectEqualStrings("after", try flattened(a, ordered[2].spans));
+        const children = ordered[1].table.?.rows[0].cells;
+        try std.testing.expectEqual(@as(usize, 2), children.len);
+        try std.testing.expectEqualStrings("#0000ff", children[0].background.?);
+        try std.testing.expect(children[1].background == null);
+        var actions: usize = 0;
+        for (children[0].spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "Child")) {
+            actions += 1;
+            try std.testing.expectEqualStrings("child", span.text);
+            try std.testing.expectEqual(case.bold, span.flags.bold);
+        };
+        try std.testing.expectEqual(@as(usize, 1), actions);
+        try std.testing.expectEqual(@as(usize, 1), (try renderer.finishReferences()).len);
     }
 }

@@ -2670,15 +2670,28 @@ fn checkLayoutGridRecord(h: *Harness, title: []const u8, value: encoder.presenta
                 try all.appendSlice(harness.a, span.trail);
             }
         }
+        fn block(harness: *Harness, value_block: encoder.presentation_types.Block, all: *std.ArrayList(u8), counts: *[6]usize, wanted: []const []const u8) anyerror!void {
+            try spans(harness, value_block.spans, all, counts, wanted);
+            if (value_block.table) |value_table| try table(harness, value_table, all, counts, wanted);
+        }
+        fn table(harness: *Harness, value_table: encoder.presentation_types.Table, all: *std.ArrayList(u8), counts: *[6]usize, wanted: []const []const u8) anyerror!void {
+            try spans(harness, value_table.caption, all, counts, wanted);
+            for (value_table.rows) |row| for (row.cells) |cell| {
+                if (cell.blocks) |ordered| {
+                    for (ordered) |value_block| try block(harness, value_block, all, counts, wanted);
+                } else {
+                    try spans(harness, cell.spans, all, counts, wanted);
+                    if (cell.nested_table) |nested| try table(harness, nested, all, counts, wanted);
+                }
+            };
+        }
     };
     for (value.sections[0].blocks) |block| {
-        try Observe.spans(h, block.spans, &body, &marks, &targets);
+        try Observe.block(h, block, &body, &marks, &targets);
         try ordinary.appendSlice(h.a, try layoutSpanText(h, block.spans));
         if (block.table) |table| {
             tables += 1;
             table_value = table;
-            try Observe.spans(h, table.caption, &body, &marks, &targets);
-            for (table.rows) |row| for (row.cells) |cell| try Observe.spans(h, cell.spans, &body, &marks, &targets);
         }
     }
     try h.require(tables == 1, "native wrapper publishes one actual grid or one retained ordinary outer table");
@@ -2697,8 +2710,34 @@ fn checkLayoutGridRecord(h: *Harness, title: []const u8, value: encoder.presenta
         try h.require(found == 1, "native layout reference action remains bound to its own note");
     }
     try h.require(value.media.len == 1 and std.mem.eql(u8, value.media[0].file, "Cat.jpg") and std.mem.eql(u8, value.media[0].caption, "image-caption"), "native layout media catalog is registered once with its actual caption");
-    const table = table_value.?;
+    const outer_table = table_value.?;
     if (positive) {
+        try h.require(outer_table.rows.len == 1 and outer_table.rows[0].cells.len == 1, "attributed native wrapper retains its exact outer row and cell");
+        const outer = outer_table.rows[0].cells[0];
+        try h.require(!outer.header and outer.colspan == 1 and outer.rowspan == 1 and outer.spans.len == 0 and outer.nested_table == null, "attributed native wrapper keeps authoritative ordered cell content");
+        const ordered = outer.blocks orelse return error.MissingLayoutCellBlocks;
+        var inner: ?encoder.presentation_types.Table = null;
+        var inner_index: usize = 0;
+        var inner_count: usize = 0;
+        for (ordered, 0..) |block, index| if (block.table) |nested| {
+            inner = nested;
+            inner_index = index;
+            inner_count += 1;
+        };
+        try h.require(inner_count == 1, "native wrapper cell retains exactly one direct inner grid");
+        var cell_ordinary: std.ArrayList(u8) = .empty;
+        var nav_before = false;
+        var before_before = false;
+        var after_after = false;
+        for (ordered, 0..) |block, index| {
+            try cell_ordinary.appendSlice(h.a, try layoutSpanText(h, block.spans));
+            for (block.spans) |span| {
+                if (std.mem.eql(u8, span.target, "nav")) nav_before = index < inner_index;
+                if (std.mem.eql(u8, span.target, "before")) before_before = index < inner_index;
+                if (std.mem.eql(u8, span.target, "after")) after_after = index > inner_index;
+            }
+        }
+        const table = inner.?;
         try h.require(table.rows.len == 3 and table.rows[0].cells.len == 1 and table.rows[1].cells.len == 2 and table.rows[2].cells.len == 1, "native inner grid retains exact header/rowspan row shape");
         const header = table.rows[0].cells[0];
         const left = table.rows[1].cells[0];
@@ -2711,8 +2750,10 @@ fn checkLayoutGridRecord(h: *Harness, title: []const u8, value: encoder.presenta
             };
             try h.require(found == 1, "native inner cells retain their authored independent targets");
         }
-        try h.require(std.mem.indexOf(u8, ordinary.items, "nav-caption") != null and std.mem.indexOf(u8, ordinary.items, "before") != null and std.mem.indexOf(u8, ordinary.items, "after") != null, "layout heading and prefix/suffix are root blocks beside the grid");
+        try h.require(std.mem.indexOf(u8, cell_ordinary.items, "nav-caption") != null and std.mem.indexOf(u8, cell_ordinary.items, "before") != null and std.mem.indexOf(u8, cell_ordinary.items, "after") != null and nav_before and before_before and after_after, "layout heading and prefix/suffix retain their ordered cell placement beside the inner grid");
+        try h.require(std.mem.count(u8, ordinary.items, "suffix") == 1 and std.mem.indexOf(u8, cell_ordinary.items, "suffix") == null, "outer close suffix remains a root block outside the retained wrapper");
     } else {
+        const table = outer_table;
         try h.require(table.caption.len == 0, "ineligible wrapper retains its normal outer table caption boundary");
         if (std.mem.eql(u8, title, "LayoutMultiRow")) {
             try h.require(table.rows.len == 2, "multiple outer rows are not discarded by grid promotion");

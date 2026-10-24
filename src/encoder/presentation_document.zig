@@ -312,6 +312,114 @@ const Work = struct {
     unresolved_templates: usize,
     fallbacks: Fallbacks,
 };
+
+// One authoritative cell branch, one shared collection budget and table depth
+// for each document pass. Cell headings remain Blocks throughout these visits.
+const CompilerWalk = struct {
+    remaining: usize = 1 << 20,
+
+    fn take(self: *CompilerWalk, count: usize) !void {
+        if (count > self.remaining) return error.InvalidPresentation;
+        self.remaining -= count;
+    }
+    fn spans(self: *CompilerWalk, context: anytype, values: []const compiler.Span) anyerror!void {
+        try self.take(values.len);
+        try context.spans(values);
+    }
+    fn blocks(self: *CompilerWalk, context: anytype, values: []const compiler.Block, table_depth: usize) anyerror!void {
+        try self.take(values.len);
+        for (@constCast(values)) |*block| {
+            try context.block(block);
+            try self.spans(context, block.spans);
+            if (block.table) |child_table| try self.table(context, child_table, table_depth + 1);
+        }
+    }
+    fn table(self: *CompilerWalk, context: anytype, value: compiler.Table, table_depth: usize) anyerror!void {
+        if (table_depth > types.max_table_depth) return error.InvalidPresentation;
+        try self.spans(context, value.caption);
+        try self.take(value.rows.len);
+        for (value.rows) |row| {
+            try self.take(row.cells.len);
+            for (row.cells) |cell| {
+                if (cell.blocks) |ordered_blocks| {
+                    if (cell.spans.len != 0 or cell.nested_table != null) return error.InvalidPresentation;
+                    try self.blocks(context, ordered_blocks, table_depth);
+                } else {
+                    try self.spans(context, cell.spans);
+                    if (cell.nested_table) |child| try self.table(context, child, table_depth + 1);
+                }
+            }
+        }
+    }
+};
+
+const RebaseHeadingOffsets = struct {
+    base: usize,
+    fn spans(_: *@This(), _: []const compiler.Span) anyerror!void {}
+    fn block(self: *@This(), value: *compiler.Block) anyerror!void {
+        if (value.heading_source_offset) |offset|
+            value.heading_source_offset = std.math.add(usize, self.base, offset) catch return error.InvalidHeadingProjection;
+    }
+};
+
+const ObserveHeadings = struct {
+    a: A,
+    registry: *heading_ids.Registry,
+    result: *std.ArrayList(HeadingAnchor),
+    fn spans(_: *@This(), _: []const compiler.Span) anyerror!void {}
+    fn add(self: *@This(), source_offset: ?usize, authored_id: []const u8, values: []const compiler.Span) !void {
+        const offset = source_offset orelse return error.InvalidHeadingProjection;
+        var report: Fallbacks = .{};
+        try validateSpans(self.a, values, &report);
+        const text = trimHeading(try compiler.plainText(self.a, values));
+        const identity = if (authored_id.len != 0) try self.registry.authoredIds(self.a, authored_id) else try self.registry.headingIds(self.a, text);
+        try self.result.append(self.a, .{ .source_offset = offset, .anchor = identity.anchor, .anchor_fallback = identity.anchor_fallback });
+    }
+    fn block(self: *@This(), value: *compiler.Block) anyerror!void {
+        if (value.kind == .heading) try self.add(value.heading_source_offset, value.heading_authored_id, value.spans);
+    }
+};
+
+const AssignHeadings = struct {
+    a: A,
+    registry: *heading_ids.Registry,
+    observation: ?*const HeadingObservation,
+    projection: []const HeadingSourceRange,
+    fn spans(_: *@This(), _: []const compiler.Span) anyerror!void {}
+    fn identity(self: *@This(), source_offset: ?usize, authored_id: []const u8, text: []const u8) !heading_ids.Ids {
+        if (self.observation) |observation| {
+            const local = source_offset orelse return error.InvalidHeadingProjection;
+            var page: ?usize = null;
+            for (self.projection) |range| {
+                if (local >= range.owner_start and local - range.owner_start < range.len) {
+                    page = std.math.add(usize, range.page_start, local - range.owner_start) catch return error.InvalidHeadingProjection;
+                    break;
+                }
+            }
+            const offset = page orelse return error.InvalidHeadingProjection;
+            for (observation.items) |item| if (item.source_offset == offset)
+                return .{ .anchor = item.anchor, .anchor_fallback = item.anchor_fallback };
+            return error.InvalidHeadingProjection;
+        }
+        return if (authored_id.len != 0) try self.registry.authoredIds(self.a, authored_id) else try self.registry.headingIds(self.a, text);
+    }
+    fn block(self: *@This(), value: *compiler.Block) anyerror!void {
+        if (value.kind != .heading) return;
+        const ids = try self.identity(value.heading_source_offset, value.heading_authored_id, trimHeading(try compiler.plainText(self.a, value.spans)));
+        value.anchor = ids.anchor;
+        value.anchor_fallback = ids.anchor_fallback;
+    }
+};
+
+const ValidateCompilerSpans = struct {
+    a: A,
+    fallbacks: ?*Fallbacks,
+    fn block(_: *@This(), _: *compiler.Block) anyerror!void {}
+    fn spans(self: *@This(), values: []const compiler.Span) anyerror!void {
+        try validateSpans(self.a, values, self.fallbacks);
+    }
+};
+
 const Builder = struct {
     is_heading: bool = false,
     heading_source_offset: ?usize = null,
@@ -432,15 +540,15 @@ fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, so
         var rendered: std.ArrayList(compiler.Block) = .empty;
         defer rendered.deinit(a);
         var owner_at: usize = 0;
+        var walk: CompilerWalk = .{};
         for (fragments) |fragment| {
             const tracked = fragment.missing orelse MissingText.untracked(fragment.source);
             renderer.heading_source = tracked.bytes;
             const blocks = try renderer.renderBodyWithFragmentPreAndMissing(tracked, fragment.pre);
-            for (@constCast(blocks)) |*block| if (block.heading_source_offset) |offset| {
-                block.heading_source_offset = owner_at + offset;
-            };
+            var rebase: RebaseHeadingOffsets = .{ .base = owner_at };
+            try walk.blocks(&rebase, blocks, 0);
             try rendered.appendSlice(a, blocks);
-            owner_at += fragment.source.len;
+            owner_at = std.math.add(usize, owner_at, fragment.source.len) catch return error.InvalidHeadingProjection;
         }
         renderer.heading_source = null;
         try builder.consume(try rendered.toOwnedSlice(a));
@@ -454,14 +562,11 @@ pub fn observeHeadingAnchorsAlloc(a: A, title: []const u8, source: MissingText, 
     defer registry.deinit(a);
     var result: std.ArrayList(HeadingAnchor) = .empty;
     defer result.deinit(a);
+    var observe: ObserveHeadings = .{ .a = a, .registry = &registry, .result = &result };
+    var walk: CompilerWalk = .{};
     for (work.sections) |section| {
-        if (!section.is_heading) continue;
-        const offset = section.heading_source_offset orelse return error.InvalidHeadingProjection;
-        var report: Fallbacks = .{};
-        try validateSpans(a, section.title_spans, &report);
-        const text = trimHeading(try compiler.plainText(a, section.title_spans));
-        const identity = if (section.heading_authored_id.len != 0) try registry.authoredIds(a, section.heading_authored_id) else try registry.headingIds(a, text);
-        try result.append(a, .{ .source_offset = offset, .anchor = identity.anchor, .anchor_fallback = identity.anchor_fallback });
+        if (section.is_heading) try observe.add(section.heading_source_offset, section.heading_authored_id, section.title_spans);
+        try walk.blocks(&observe, section.blocks, 0);
     }
     return .{ .items = try result.toOwnedSlice(a) };
 }
@@ -678,39 +783,30 @@ pub fn hasBodyContentWithReferencesAndPoemFragmentsAlloc(
     // final compile preserves and reports the existing render-limit diagnostic.
     if (work.fallbacks.render_limit) return true;
     const Has = struct {
-        fn table(value: compiler.Table) bool {
-            if (spans(value.caption)) return true;
-            for (value.rows) |row| for (row.cells) |cell| {
-                if (spans(cell.spans)) return true;
-                if (cell.nested_table) |child| if (table(child)) return true;
-            };
-            return false;
+        found: bool = false,
+        fn block(self: *@This(), value: *compiler.Block) anyerror!void {
+            if (value.feature != null or value.kind == .rule) self.found = true;
         }
-        fn spans(values: []const compiler.Span) bool {
-            for (values) |span| if (std.mem.trim(u8, span.text, " \t\r\n").len != 0 or span.target.len != 0) return true;
-            return false;
+        fn spans(self: *@This(), values: []const compiler.Span) anyerror!void {
+            for (values) |span| if (std.mem.trim(u8, span.text, " \t\r\n").len != 0 or span.target.len != 0) {
+                self.found = true;
+            };
         }
     };
-    if (work.media.len != 0) return true;
-    for (work.references) |reference| if (Has.spans(reference.spans)) return true;
+    var has: Has = .{ .found = work.media.len != 0 };
+    var walk: CompilerWalk = .{};
+    for (work.references) |reference| try walk.spans(&has, reference.spans);
     for (work.sections) |section| {
-        if (Has.spans(section.title_spans)) return true;
-        for (section.blocks) |block| {
-            if (Has.spans(block.spans) or block.feature != null or block.kind == .rule) return true;
-            if (block.table) |table| {
-                if (Has.table(table)) return true;
-            }
-        }
+        try walk.spans(&has, section.title_spans);
+        try walk.blocks(&has, section.blocks, 0);
     }
-    return false;
+    return has.found;
 }
 
 fn validateTableSpans(a: A, table: compiler.Table, fallbacks: ?*Fallbacks) anyerror!void {
-    try validateSpans(a, table.caption, fallbacks);
-    for (table.rows) |row| for (row.cells) |cell| {
-        try validateSpans(a, cell.spans, fallbacks);
-        if (cell.nested_table) |child| try validateTableSpans(a, child, fallbacks);
-    };
+    var validate: ValidateCompilerSpans = .{ .a = a, .fallbacks = fallbacks };
+    var walk: CompilerWalk = .{};
+    try walk.table(&validate, table, 1);
 }
 
 pub fn compileReportedWithReferencesAndPoemFragmentsAlloc(
@@ -781,17 +877,14 @@ pub fn compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(
     } else if (work.rendered_templates != 0 or work.unresolved_templates != 0) return error.UncompiledTemplate;
     const display_spans = try displayTitleSpansAlloc(a, display_title, language orelse "", link_trail, namespace_catalog, behavior_switches, image_options, fallbacks, poem_phase);
     try validateSpans(a, display_spans, fallbacks);
+    var validate: ValidateCompilerSpans = .{ .a = a, .fallbacks = fallbacks };
+    var validation_walk: CompilerWalk = .{};
     for (@constCast(work.sections)) |*section| {
         if (section.title_spans.len != 0) {
-            try validateSpans(a, section.title_spans, fallbacks);
+            try validation_walk.spans(&validate, section.title_spans);
             section.title = trimHeading(try compiler.plainText(a, section.title_spans));
         } else try validateText(section.title, fallbacks);
-        for (section.blocks) |block| {
-            try validateSpans(a, block.spans, fallbacks);
-            if (block.table) |table| {
-                try validateTableSpans(a, table, fallbacks);
-            }
-        }
+        try validation_walk.blocks(&validate, section.blocks, 0);
     }
     for (work.references) |reference| try validateSpans(a, reference.spans, fallbacks);
     for (work.media_caption_spans, 0..) |caption_spans, index| {
@@ -800,27 +893,16 @@ pub fn compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(
     }
     var heading_registry: heading_ids.Registry = .{};
     defer heading_registry.deinit(a);
+    var assign: AssignHeadings = .{ .a = a, .registry = &heading_registry, .observation = heading_observation, .projection = heading_projection };
+    var heading_walk: CompilerWalk = .{};
     for (@constCast(work.sections)) |*section| {
-        // A synthetic preamble section is a reader label, not a source heading.
-        if (!section.is_heading) continue;
-        const identity = if (heading_observation) |observation| blk: {
-            const local = section.heading_source_offset orelse return error.InvalidHeadingProjection;
-            var page: ?usize = null;
-            for (heading_projection) |range| {
-                if (local >= range.owner_start and local - range.owner_start < range.len) {
-                    page = range.page_start + (local - range.owner_start);
-                    break;
-                }
-            }
-            const offset = page orelse return error.InvalidHeadingProjection;
-            for (observation.items) |item| if (item.source_offset == offset) break :blk heading_ids.Ids{ .anchor = item.anchor, .anchor_fallback = item.anchor_fallback };
-            return error.InvalidHeadingProjection;
-        } else if (section.heading_authored_id.len != 0)
-            try heading_registry.authoredIds(a, section.heading_authored_id)
-        else
-            try heading_registry.headingIds(a, section.title);
-        section.anchor = identity.anchor;
-        section.anchor_fallback = identity.anchor_fallback;
+        // The shared registry follows section headings and cell blocks in source order.
+        if (section.is_heading) {
+            const identity = try assign.identity(section.heading_source_offset, section.heading_authored_id, section.title);
+            section.anchor = identity.anchor;
+            section.anchor_fallback = identity.anchor_fallback;
+        }
+        try heading_walk.blocks(&assign, section.blocks, 0);
     }
     // DPR2 section titles remain stable plain labels for TOC/folding. A linked
     // title includes self links whose styling survives without a navigation target.
@@ -3126,11 +3208,39 @@ test "orphan table recovery leaves inline protected entity and matched controls 
     const blocks = decoded.entry.sections[0].blocks;
     try std.testing.expect(blocks[0].table != null);
     try std.testing.expectEqual(@as(usize, 2), blocks[0].table.?.rows.len);
+    const outer_table = blocks[0].table.?;
+    try std.testing.expectEqual(@as(usize, 2), outer_table.rows[0].cells.len);
+    try std.testing.expectEqual(@as(usize, 1), outer_table.rows[1].cells.len);
+    const outer_cell = outer_table.rows[0].cells[0];
+    try std.testing.expect(outer_cell.spans.len == 0 and outer_cell.nested_table == null);
+    const ordered = outer_cell.blocks.?;
+    try std.testing.expectEqual(@as(usize, 2), ordered.len);
+    try std.testing.expectEqual(types.BlockKind.paragraph, ordered[0].kind);
+    try std.testing.expectEqual(types.BlockKind.table, ordered[1].kind);
+    const inner_table = ordered[1].table.?;
+    try std.testing.expectEqual(@as(usize, 1), inner_table.rows.len);
+    try std.testing.expectEqual(@as(usize, 1), inner_table.rows[0].cells.len);
     var cell_text: std.ArrayList(u8) = .empty;
-    for (blocks[0].table.?.rows[0].cells[0].spans) |span| {
-        if (span.kind == .line_break) try cell_text.append(a, '\n') else try cell_text.appendSlice(a, span.text);
+    const segments = [_][]const types.Span{ ordered[0].spans, inner_table.rows[0].cells[0].spans };
+    for (segments, 0..) |spans, index| {
+        if (index != 0) try cell_text.append(a, '\n');
+        for (spans) |span| {
+            if (span.kind == .line_break) try cell_text.append(a, '\n') else try cell_text.appendSlice(a, span.text);
+        }
     }
     try std.testing.expectEqualStrings("outer\ninner", cell_text.items);
+    cell_text.clearRetainingCapacity();
+    for (outer_table.rows[0].cells[1].spans) |span| try cell_text.appendSlice(a, span.text);
+    try std.testing.expectEqualStrings("sibling", cell_text.items);
+    cell_text.clearRetainingCapacity();
+    for (outer_table.rows[1].cells[0].spans) |span| try cell_text.appendSlice(a, span.text);
+    try std.testing.expectEqualStrings("final", cell_text.items);
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expect(blocks[1].table == null);
+    try std.testing.expectEqualStrings("#", blocks[1].list_path);
+    cell_text.clearRetainingCapacity();
+    for (blocks[1].spans) |span| try cell_text.appendSlice(a, span.text);
+    try std.testing.expectEqualStrings("after", cell_text.items);
     try std.testing.expect(!table_report.malformed_table and !table_report.literal_markup);
 }
 
@@ -3683,4 +3793,185 @@ test "literal malformed reference recovery leaves valid reference compilation an
     const protected = try codec.decodeAlloc(a, protected_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
     for (protected.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span|
         try std.testing.expect(span.kind == .text and span.target.len == 0);
+}
+
+test "ordered wiki cell blocks share page anchors without promoting sections through DPR8" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact shared ordinary fixture 11607303, not a captured dictionary page.
+    const source = "==English==\n{|\n| bgcolor='#ffeecc' colspan='2' | before [[Before|before action]]\n=== حرف ===\nparagraph ''[[Middle|middle action]]''\n* list [[Item|item action]]\n----\n{|\n| [[Child|child action]] || child second\n|}\nfollowing [[After|after action]]\n|}\n=== حرف ===\nouter tail\n";
+    const bytes = try compileAlloc(a, "cell-heading-regression", .language, "English", "en", source, null);
+    try std.testing.expect(std.mem.startsWith(u8, bytes, "DPR8"));
+    const decoded = try codec.decodeAlloc(a, bytes, "cell-heading-regression", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 2), decoded.entry.sections.len);
+    try std.testing.expectEqualStrings("English", decoded.entry.sections[0].anchor);
+    try std.testing.expectEqualStrings("حرف_2", decoded.entry.sections[1].anchor);
+    try std.testing.expectEqualStrings(".D8.AD.D8.B1.D9.81_2", decoded.entry.sections[1].anchor_fallback);
+    const cell = decoded.entry.sections[0].blocks[0].table.?.rows[0].cells[0];
+    try std.testing.expect(cell.spans.len == 0 and cell.nested_table == null and !cell.header);
+    try std.testing.expectEqual(@as(u16, 2), cell.colspan);
+    try std.testing.expectEqual(@as(u16, 1), cell.rowspan);
+    try std.testing.expectEqualStrings("#ffeecc", cell.background.?);
+    const blocks = cell.blocks.?;
+    const kinds = [_]types.BlockKind{ .paragraph, .heading, .paragraph, .list_item, .rule, .table, .paragraph };
+    try std.testing.expectEqual(kinds.len, blocks.len);
+    for (blocks, kinds) |block, kind| try std.testing.expectEqual(kind, block.kind);
+    try std.testing.expectEqual(@as(u8, 3), blocks[1].level);
+    try std.testing.expectEqualStrings("حرف", blocks[1].anchor);
+    try std.testing.expectEqualStrings(".D8.AD.D8.B1.D9.81", blocks[1].anchor_fallback);
+    try std.testing.expectEqualStrings("*", blocks[3].list_path);
+    try std.testing.expectEqual(@as(usize, 2), blocks[5].table.?.rows[0].cells.len);
+    const Check = struct {
+        index: usize = 0,
+        fn spans(self: *@This(), values: []const types.Span) !void {
+            const targets = [_][]const u8{ "Before", "Middle", "Item", "Child", "After" };
+            const labels = [_][]const u8{ "before action", "middle action", "item action", "child action", "after action" };
+            for (values) |span| if (span.kind == .link) {
+                try std.testing.expect(self.index < targets.len);
+                try std.testing.expectEqualStrings(targets[self.index], span.target);
+                try std.testing.expectEqualStrings(labels[self.index], span.text);
+                try std.testing.expectEqual(self.index == 1, span.italic);
+                self.index += 1;
+            };
+        }
+        fn visitBlocks(self: *@This(), values: []const types.Block) anyerror!void {
+            for (values) |block| {
+                try self.spans(block.spans);
+                if (block.table) |table| {
+                    try self.spans(table.caption);
+                    for (table.rows) |row| for (row.cells) |child| {
+                        if (child.blocks) |ordered| {
+                            try self.visitBlocks(ordered);
+                        } else {
+                            try self.spans(child.spans);
+                            if (child.nested_table) |nested| {
+                                try self.spans(nested.caption);
+                                for (nested.rows) |nested_row| for (nested_row.cells) |nested_cell| try self.spans(nested_cell.spans);
+                            }
+                        }
+                    };
+                }
+            }
+        }
+    };
+    var check: Check = .{};
+    try check.visitBlocks(blocks);
+    try std.testing.expectEqual(@as(usize, 5), check.index);
+    const reencoded = try codec.encodeBuildAlloc(a, decoded.entry.display_title, decoded.entry.sections, decoded.entry.organization, decoded.entry.references, decoded.entry.media);
+    try std.testing.expectEqualSlices(u8, bytes, reencoded);
+}
+
+test "allocated cell fragments project duplicate nested heading anchors into page history" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const previous = "=== Echo ===\nprior\n";
+    const heading = "==English==\n";
+    const body = "{|\n| intro\n=== Echo ===\none\n=== Echo ===\ntwo\n|}\n=== Echo ===\nlast\n";
+    const owner = heading ++ body;
+    const page = previous ++ owner;
+    const observation = try observeHeadingAnchorsAlloc(a, "entry", MissingText.untracked(page), .{}, null, null, null, .{}, null);
+    try std.testing.expectEqual(@as(usize, 5), observation.items.len);
+    for (observation.items[1..], observation.items[0 .. observation.items.len - 1]) |current, prior| try std.testing.expect(current.source_offset > prior.source_offset);
+    const fragments = [_]SourceFragment{
+        .{ .source = heading, .missing = try missing_dependency.slice(a, MissingText.untracked(page), previous.len, previous.len + heading.len) },
+        .{ .source = body, .missing = try missing_dependency.slice(a, MissingText.untracked(page), previous.len + heading.len, page.len) },
+    };
+    for (fragments) |fragment| {
+        try std.testing.expect(fragment.source.ptr != fragment.missing.?.bytes.ptr);
+        try std.testing.expectEqualStrings(fragment.source, fragment.missing.?.bytes);
+    }
+    const projection = [_]HeadingSourceRange{.{ .owner_start = 0, .page_start = previous.len, .len = owner.len }};
+    const bytes = try compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(a, "entry", .language, "English", "en", MissingText.untracked(owner), null, .{}, null, null, null, .{}, null, null, &fragments, &observation, &projection);
+    const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 2), decoded.entry.sections.len);
+    const blocks = decoded.entry.sections[0].blocks[0].table.?.rows[0].cells[0].blocks.?;
+    try std.testing.expectEqualStrings("Echo_2", blocks[1].anchor);
+    try std.testing.expectEqualStrings("Echo_3", blocks[3].anchor);
+    try std.testing.expectEqualStrings("Echo_4", decoded.entry.sections[1].anchor);
+    // Mapping the outer heading alone cannot authorize cell-local regeneration.
+    const missing_cell_range = [_]HeadingSourceRange{.{ .owner_start = 0, .page_start = previous.len, .len = heading.len }};
+    try std.testing.expectError(error.InvalidHeadingProjection, compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(a, "entry", .language, "English", "en", MissingText.untracked(owner), null, .{}, null, null, null, .{}, null, null, &fragments, &observation, &missing_cell_range));
+}
+
+test "HTML cell authored headings reserve shared anchors while remaining cell blocks" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "==English==\n<table><tr><th colspan='2' bgcolor='#ffeecc'>before\n<h3 id='custom'>حرف</h3>\nparagraph ''[[Target|label]]''</th></tr></table>\n=== custom ===\nlast";
+    const bytes = try compileAlloc(a, "entry", .language, "English", "en", source, null);
+    const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 2), decoded.entry.sections.len);
+    const cell = decoded.entry.sections[0].blocks[0].table.?.rows[0].cells[0];
+    try std.testing.expect(cell.header and cell.spans.len == 0 and cell.nested_table == null);
+    try std.testing.expectEqual(@as(u16, 2), cell.colspan);
+    try std.testing.expectEqualStrings("#ffeecc", cell.background.?);
+    const blocks = cell.blocks.?;
+    try std.testing.expectEqual(types.BlockKind.heading, blocks[1].kind);
+    try std.testing.expectEqual(@as(u8, 3), blocks[1].level);
+    try std.testing.expectEqualStrings("custom", blocks[1].anchor);
+    try std.testing.expectEqualStrings("custom_2", decoded.entry.sections[1].anchor);
+    var action = false;
+    for (blocks[2].spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "Target")) {
+        action = true;
+        try std.testing.expectEqualStrings("label", span.text);
+        try std.testing.expect(span.italic);
+    };
+    try std.testing.expect(action);
+}
+
+test "authoritative cell blocks preserve strict validation empty authority and shared traversal bounds" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const invalid: compiler.Table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &.{}, .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "bad", .target = "{{uncompiled}}" }} }} }} }} };
+    try std.testing.expectError(error.UncompiledTemplate, validateTableSpans(a, invalid, null));
+    const empty: compiler.Table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &.{}, .blocks = &.{} }} }} };
+    try validateTableSpans(a, empty, null);
+    const mixed_spans: compiler.Table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .text = "legacy" }}, .blocks = &.{} }} }} };
+    try std.testing.expectError(error.InvalidPresentation, validateTableSpans(a, mixed_spans, null));
+    const mixed_nested: compiler.Table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &.{}, .nested_table = empty, .blocks = &.{} }} }} };
+    try std.testing.expectError(error.InvalidPresentation, validateTableSpans(a, mixed_nested, null));
+    const Chain = struct {
+        fn wrap(alloc: A, child: compiler.Table) !compiler.Table {
+            const blocks = try alloc.alloc(compiler.Block, 1);
+            blocks[0] = .{ .kind = .table, .table = child };
+            const cells = try alloc.alloc(compiler.Cell, 1);
+            cells[0] = .{ .spans = &.{}, .blocks = blocks };
+            const rows = try alloc.alloc(compiler.Row, 1);
+            rows[0] = .{ .cells = cells };
+            return .{ .rows = rows };
+        }
+    };
+    var chain = empty;
+    for (1..types.max_table_depth) |_| chain = try Chain.wrap(a, chain);
+    try validateTableSpans(a, chain, null);
+    const too_deep = try Chain.wrap(a, chain);
+    try std.testing.expectError(error.InvalidPresentation, validateTableSpans(a, too_deep, null));
+    var validate: ValidateCompilerSpans = .{ .a = a, .fallbacks = null };
+    var budget: CompilerWalk = .{ .remaining = 1 };
+    try std.testing.expectError(error.InvalidPresentation, budget.table(&validate, empty, 1));
+}
+
+test "legacy null cell content keeps prior encoding and body probes see ordered content" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "{|\n| == literal ==\n|}",
+        "{|\n| <nowiki>\n== protected ==\n</nowiki>\n|}",
+        "{|\n| before\nbefore == inline ==\n|}",
+        "{|\n| before\n&#61;&#61; entity &#61;&#61;\n|}",
+    }) |source| {
+        const bytes = try compileAlloc(a, "entry", .language, "English", "en", source, null);
+        try std.testing.expect(!std.mem.startsWith(u8, bytes, "DPR8"));
+        const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections.len);
+        try std.testing.expect(decoded.entry.sections[0].blocks[0].table.?.rows[0].cells[0].blocks == null);
+        const reencoded = try codec.encodeBuildAlloc(a, decoded.entry.display_title, decoded.entry.sections, decoded.entry.organization, decoded.entry.references, decoded.entry.media);
+        try std.testing.expectEqualSlices(u8, bytes, reencoded);
+    }
+    const source = "{|\n| intro\n=== retained ===\nbody\n|}";
+    try std.testing.expect(try hasBodyContentWithReferencesAndPoemFragmentsAlloc(a, "entry", "English", source, .{}, null, null, null, .{}, null, &.{}));
 }

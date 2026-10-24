@@ -2465,8 +2465,24 @@ pub const Expander = struct {
     }
 
     fn expandUrlParser(self: *Expander, raw: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize, kind: uri_lib.WikiUrlKind, escaped: bool) anyerror![]const u8 {
-        const title = std.mem.trim(u8, try self.expandWikitext(raw, params, host_title, depth + 1), " \t\r\n");
+        const expanded_title = try self.expandWikitextTracked(raw, params, host_title, depth + 1);
+        const title = std.mem.trim(u8, expanded_title.bytes, " \t\r\n");
         const query: ?[]const u8 = if (args.len == 0) null else try self.expandWikitext(args[0], params, host_title, depth + 1);
+        // Do not turn an active missing parameter into a percent-encoded click
+        // destination. Inspect only after protecting proven literal curly atoms;
+        // authored percent escapes and protected/entity literals remain unchanged.
+        const inspected_title = try dependency.escapeLiteralCurly(self.runtime.allocator, expanded_title);
+        var title_scan: preprocess.ExpansionScan = .{};
+        var title_pos: usize = 0;
+        while (title_scan.next(inspected_title.bytes, title_pos, false)) |node| {
+            switch (node) {
+                .construct => |construct| {
+                    if (construct.kind == .parameter) return title;
+                    title_pos = construct.close + 2;
+                },
+                .poem => unreachable, // include_poem is false above.
+            }
+        }
         return uri_lib.buildSiteWikiUrlRawQuery(self.runtime.allocator, title, query, kind, escaped, null, try host_api.siteUrlConfig(self.runtime));
     }
 
@@ -7970,4 +7986,30 @@ test "literal default provenance preserves native intermediate values and chosen
     try LiteralCurlyBoundaryFixture.check("safe<!--x--> body }} {{uc:cat}}", "safe body }} CAT");
     try LiteralCurlyBoundaryFixture.check("safe<!--x--> body {{broken", "safe body {{broken");
     try LiteralCurlyBoundaryFixture.check("safe<!--x--> body {|\n| cell\n|}", "safe body {|\n| cell\n|}");
+}
+
+test "URL parser missing title parameters do not become encoded action destinations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .site_server = "//ar.wiktionary.org", .site_script = "/w/index.php", .site_article_path = "/wiki/$1" } };
+    const cases = [_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "{{fullurl:{{{2}}}|action=edit}}", .expected = "{{{2}}}" },
+        .{ .source = "{{fullurle:{{{2}}}|action=edit}}", .expected = "{{{2}}}" },
+        .{ .source = "{{localurl:Prefix {{{2}}}|action=edit}}", .expected = "Prefix {{{2}}}" },
+        .{ .source = "{{fullurl:{{{2|Known title}}}|action=edit}}", .expected = "//ar.wiktionary.org/w/index.php?title=Known_title&action=edit" },
+        .{ .source = "{{fullurl:%7B%7B%7B2%7D%7D%7D|action=edit}}", .expected = "//ar.wiktionary.org/w/index.php?title=%257B%257B%257B2%257D%257D%257D&action=edit" },
+    };
+    for (cases) |case| try std.testing.expectEqualStrings(case.expected, try expander.expandFragment("Page", case.source, 1_670_803_200));
+    for ([_][]const u8{
+        "{{fullurl:<nowiki>{{{2}}}</nowiki>|action=edit}}",
+        "{{fullurl:&#123;&#123;&#123;2&#125;&#125;&#125;|action=edit}}",
+    }) |literal_source| {
+        const literal_url = try expander.expandFragment("Page", literal_source, 1_670_803_200);
+        try std.testing.expect(std.mem.startsWith(u8, literal_url, "//ar.wiktionary.org/w/index.php?title="));
+    }
 }

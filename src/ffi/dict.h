@@ -23,7 +23,7 @@ typedef enum dict_status {
     DICT_INTERNAL_ERROR = 5
 } dict_status;
 
-#define DICT_ABI_VERSION 3u
+#define DICT_ABI_VERSION 4u
 
 uint32_t dict_abi_version(void);
 

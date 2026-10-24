@@ -8029,33 +8029,61 @@ test "normal Writer preserves nested cell paint without promoting it to the oute
     var index = try blob.buildTrustedIndexAlloc(a);
     defer index.deinit(a);
     const record = (try index.find("nested paint")).?;
-    try std.testing.expectEqualStrings(blobs.presentation_codec.background_magic, record.payload[0..4]);
+    try std.testing.expectEqualStrings(blobs.presentation_codec.cell_blocks_magic, record.payload[0..4]);
     const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
     var red = false;
     var blue = false;
     var tail = false;
     var outer_tables: usize = 0;
+    var actions: usize = 0;
     for (decoded.entry.sections) |section| for (section.blocks) |block| if (block.table) |table| {
         outer_tables += 1;
-        for (table.rows) |row| for (row.cells) |cell| {
-            try std.testing.expectEqualStrings("#aaaaaa", cell.background.?);
+        try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+        try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+        const outer = table.rows[0].cells[0];
+        try std.testing.expectEqualStrings("#aaaaaa", outer.background.?);
+        try std.testing.expect(outer.spans.len == 0 and outer.nested_table == null);
+        const ordered = outer.blocks.?;
+        try std.testing.expectEqual(@as(usize, 2), ordered.len);
+        try std.testing.expectEqual(blobs.presentation_types.BlockKind.table, ordered[0].kind);
+        try std.testing.expectEqual(blobs.presentation_types.BlockKind.paragraph, ordered[1].kind);
+        const child = ordered[0].table.?;
+        try std.testing.expectEqual(@as(usize, 1), child.rows.len);
+        try std.testing.expectEqual(@as(usize, 2), child.rows[0].cells.len);
+        const targets = [_][]const u8{ "Red", "Blue" };
+        const labels = [_][]const u8{ "red", "blue" };
+        const colors = [_][]const u8{ "#ff0000", "#0000ff" };
+        for (child.rows[0].cells, 0..) |cell, ci| {
+            try std.testing.expectEqualStrings(colors[ci], cell.background.?);
+            try std.testing.expect(!cell.header and cell.colspan == 1 and cell.rowspan == 1);
+            try std.testing.expect(cell.blocks == null and cell.nested_table == null);
             for (cell.spans) |span| {
-                if (span.kind == .link and std.mem.eql(u8, span.target, "Red")) {
-                    red = true;
-                    try std.testing.expectEqualStrings("red", span.text);
-                    try std.testing.expectEqualStrings("#ff0000", span.background.?);
-                } else if (span.kind == .link and std.mem.eql(u8, span.target, "Blue")) {
-                    blue = true;
-                    try std.testing.expectEqualStrings("blue", span.text);
-                    try std.testing.expectEqualStrings("#0000ff", span.background.?);
-                } else if (span.kind == .link and std.mem.eql(u8, span.target, "Tail")) {
-                    tail = true;
-                    try std.testing.expect(span.background == null);
-                } else if (std.mem.eql(u8, span.text, " · ")) try std.testing.expect(span.background == null);
+                try std.testing.expect(span.background == null);
+                if (span.kind == .link) {
+                    try std.testing.expectEqual(ci, actions);
+                    try std.testing.expectEqualStrings(targets[ci], span.target);
+                    try std.testing.expectEqualStrings(labels[ci], span.text);
+                    if (ci == 0) red = true else blue = true;
+                    actions += 1;
+                } else try std.testing.expect(span.target.len == 0);
             }
-        };
+        }
+        var outer_text: std.ArrayList(u8) = .empty;
+        for (ordered[1].spans) |span| {
+            try outer_text.appendSlice(a, span.text);
+            try std.testing.expect(span.background == null);
+            if (span.kind == .link) {
+                try std.testing.expectEqual(@as(usize, 2), actions);
+                try std.testing.expectEqualStrings("Tail", span.target);
+                try std.testing.expectEqualStrings("tail", span.text);
+                tail = true;
+                actions += 1;
+            } else try std.testing.expect(span.target.len == 0);
+        }
+        try std.testing.expectEqualStrings("outer tail", outer_text.items);
     };
     try std.testing.expectEqual(@as(usize, 1), outer_tables);
+    try std.testing.expectEqual(@as(usize, 3), actions);
     try std.testing.expect(red and blue and tail);
 }
 
@@ -8153,6 +8181,34 @@ test "captured Arabic translation table keeps language-like cell headings in the
     const record = (try index.find("الرميثية")).?;
     const page = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
     try std.testing.expectEqualStrings("ar", page.entry.language_code);
+    const TranslationActions = struct {
+        latin: usize = 0,
+        persian: usize = 0,
+        fn observeSpans(self: *@This(), values: []const blobs.presentation_types.Span) void {
+            for (values) |span| {
+                if (span.kind == .link and std.mem.eql(u8, span.target, "Rumaithiya")) self.latin += 1;
+                if (span.kind == .link and std.mem.eql(u8, span.target, "الرميثيه")) self.persian += 1;
+            }
+        }
+        fn observeBlocks(self: *@This(), values: []const blobs.presentation_types.Block) void {
+            for (values) |value| {
+                self.observeSpans(value.spans);
+                if (value.table) |table_value| self.observeTable(table_value);
+            }
+        }
+        fn observeTable(self: *@This(), value: blobs.presentation_types.Table) void {
+            self.observeSpans(value.caption);
+            for (value.rows) |row| for (row.cells) |cell| self.observeCell(cell);
+        }
+        fn observeCell(self: *@This(), value: blobs.presentation_types.Cell) void {
+            if (value.blocks) |ordered| {
+                self.observeBlocks(ordered);
+                return;
+            }
+            self.observeSpans(value.spans);
+            if (value.nested_table) |nested| self.observeTable(nested);
+        }
+    };
     var translations: usize = 0;
     var translation_cells: usize = 0;
     for (page.entry.sections) |section| {
@@ -8163,15 +8219,11 @@ test "captured Arabic translation table keeps language-like cell headings in the
         try std.testing.expect(std.mem.indexOf(u8, section.title, "فارسية") == null);
         for (section.blocks) |block| if (block.table) |table| {
             for (table.rows) |row| for (row.cells) |cell| {
-                var latin: usize = 0;
-                var persian: usize = 0;
-                for (cell.spans) |span| {
-                    if (span.kind == .link and std.mem.eql(u8, span.target, "Rumaithiya")) latin += 1;
-                    if (span.kind == .link and std.mem.eql(u8, span.target, "الرميثيه")) persian += 1;
-                }
-                if (latin != 0 or persian != 0) {
-                    try std.testing.expectEqual(@as(usize, 1), latin);
-                    try std.testing.expectEqual(@as(usize, 1), persian);
+                var actions: TranslationActions = .{};
+                actions.observeCell(cell);
+                if (actions.latin != 0 or actions.persian != 0) {
+                    try std.testing.expectEqual(@as(usize, 1), actions.latin);
+                    try std.testing.expectEqual(@as(usize, 1), actions.persian);
                     translation_cells += 1;
                 }
             };
