@@ -162,7 +162,7 @@ function destination(el, value, legacy = '') {
 }
 function legacyDestinations(entry) {
   const candidates = [], counts = new Map();
-  if (['DPR5','DPR6','DPR7'].includes(entry.presentation_version)) return new Map();
+  if (['DPR5','DPR6','DPR7','DPR8'].includes(entry.presentation_version)) return new Map();
   const add = (value, label) => {
     if (value.anchor || value.anchor_fallback) return;
     const id = label.replaceAll(' ','_');
@@ -192,12 +192,22 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
     if(border!==null)td.style.border=border+'px solid currentColor';if(padding!==null)td.style.padding=padding+'px';
     const effectiveBackground=canonicalRGB(cell.background)?cell.background:inheritedBackground;
     if(canonicalRGB(effectiveBackground))td.style.backgroundColor=effectiveBackground;
-    if(cell.nested_table!=null){if(typeof cell.nested_table!=='object'||Array.isArray(cell.nested_table)||cell.spans?.length)throw Error('Invalid nested table cell');td.append(tableView(cell.nested_table,onLink,explanations,depth+1,effectiveBackground));}
+    if(cell.blocks!=null){
+      if(!Array.isArray(cell.blocks)||cell.spans?.length||cell.nested_table!=null)throw Error('Invalid ordered table cell');
+      for(const block of cell.blocks)if(visibleBlock(block))td.append(blockView(block,onLink,explanations,'',{tableDepth:depth,background:effectiveBackground,header:!!cell.header}));
+    }else if(cell.nested_table!=null){if(typeof cell.nested_table!=='object'||Array.isArray(cell.nested_table)||cell.spans?.length)throw Error('Invalid nested table cell');td.append(tableView(cell.nested_table,onLink,explanations,depth+1,effectiveBackground));}
     else td.append(spans(cell.spans,onLink,false,explanations,false,effectiveBackground));
     tr.append(td);
   }table.append(tr);}return table;
 }
-function blockView(block, onLink, explanations, legacy = '') {
+function visibleBlock(block){
+  return block.kind!=='blank'&&(block.table||block.kind==='rule'||block.spans?.some(s=>s.text?.trim()||s.trail?.trim())||block.spans?.some(isPoem)||(block.kind==='heading'&&(block.anchor||block.anchor_fallback)));
+}
+function visitBlocks(values,visit){
+  const table=value=>{for(const row of value.rows||[])for(const cell of row.cells||[]){if(cell.blocks!=null)visitBlocks(cell.blocks,visit);else if(cell.nested_table)table(cell.nested_table);}};
+  for(const block of values||[]){visit(block);if(block.table)table(block.table);}
+}
+function blockView(block, onLink, explanations, legacy = '', context = {}) {
   const margin = `${Math.min(Math.max(block.depth || 0,0),8)*.45}rem`;
   if (block.table) {
     const feature = block.feature;
@@ -214,19 +224,22 @@ function blockView(block, onLink, explanations, legacy = '') {
       sample.append(chip, node('span', 'Color sample ' + feature.data));
       return sample;
     }
-    const wrap = node('div', null, 'table-scroll'), table = tableView(block.table,onLink,explanations); wrap.style.marginInlineStart = margin; wrap.tabIndex = 0; wrap.setAttribute('aria-label','Scrollable table');
+    const table = tableView(block.table,onLink,explanations,(context.tableDepth||0)+1,context.background);
+    if(context.tableDepth){table.style.marginInlineStart=margin;return table;}
+    const wrap = node('div', null, 'table-scroll'); wrap.style.marginInlineStart = margin; wrap.tabIndex = 0; wrap.setAttribute('aria-label','Scrollable table');
     wrap.append(table); return wrap;
   }
   if (block.kind === 'rule') return node('hr');
-  if (block.kind === 'preformatted') { const pre = node('pre'); pre.append(spans(block.spans,onLink,true,explanations)); return pre; }
+  if (block.kind === 'preformatted') { const pre = node('pre'); if(context.header)pre.style.fontWeight='inherit'; pre.append(spans(block.spans,onLink,true,explanations,false,context.background)); return pre; }
   const allowed = new Set(['paragraph','definition','example','quotation','list_item','list_detail','indent','term','heading']);
   const kind = allowed.has(block.kind) ? block.kind : 'paragraph';
-  const el = node(kind === 'heading'?'h4':'div',null,'block '+kind);
+  const el = node(kind === 'heading'?'h'+(Number.isInteger(block.level)&&block.level>=1&&block.level<=6?block.level:4):'div',null,'block '+kind);
   el.style.marginInlineStart = margin;
+  if(context.header)el.style.fontWeight='inherit';
   if (kind === 'heading') destination(el, block, legacy);
   const prefix = kind==='definition'?(block.number?`${block.number}.`:'•'):['example','quotation'].includes(kind)?'│':kind==='list_item'?(block.number?`${block.number}.`:'•'):kind==='list_detail'?'↳':'';
   if (prefix) el.append(node('span',prefix,'prefix'));
-  const body = node('span',null,'body'); if(block.spans?.some(isPoem))body.style.flex='1'; body.append(spans(block.spans,onLink,false,explanations)); el.append(body); return el;
+  const body = node('span',null,'body'); if(block.spans?.some(isPoem))body.style.flex='1'; body.append(spans(block.spans,onLink,false,explanations,false,context.background)); el.append(body); return el;
 }
 function sectionHeadingCompanion(section){
   const first=section.blocks?.[0];
@@ -247,8 +260,8 @@ function sectionHeadingCompanion(section){
 export function renderEntry(entry, onLink, settings = {}, mediaView = () => null) {
   const root = document.createDocumentFragment(), references = new Map(), legacy = legacyDestinations(entry);
   const headingDestinations = new Set();
-  for (const section of entry.sections) for (const value of [section,...section.blocks.filter(block=>block.kind==='heading')])
-    for (const id of [value.anchor,value.anchor_fallback,legacy.get(value)]) if (id) headingDestinations.add(id);
+  const observeHeading=value=>{for(const id of [value.anchor,value.anchor_fallback,legacy.get(value)])if(id)headingDestinations.add(id);};
+  for(const section of entry.sections){observeHeading(section);visitBlocks(section.blocks,block=>{if(block.kind==='heading')observeHeading(block);});}
   const explanationRows=[], explanationKeys=new Map();
   const explanations={add(label,explanation){
     const key=JSON.stringify([label,explanation]);
@@ -285,7 +298,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     el.classList.toggle('meaning',meaning);destination(el,section,legacy.get(section)||'');
     const notes=[];
     for (const block of section.blocks.slice(companion?1:0)) {
-      if(block.kind==='blank'||(!block.table&&block.kind!=='rule'&&!block.spans?.some(s=>s.text?.trim()||s.trail?.trim())&&!block.spans?.some(isPoem)&&!(block.kind==='heading'&&(block.anchor||block.anchor_fallback))))continue;
+      if(!visibleBlock(block))continue;
       const view=blockView(block,followLink,explanations,legacy.get(block)||'');
       if(meaning&&block.kind!=='definition')notes.push(view);else el.append(view);
     }

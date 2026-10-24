@@ -4490,6 +4490,164 @@ private slots:
         }
     }
 
+    void orderedCellBlocksKeepFlowHeadingContextAndChildGrid() {
+        MainWindow window{QString()};
+        window.resize(780, 480); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        const auto text = [](const QString &value) { return QJsonObject{
+            {QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), value}}; };
+        const auto block = [&](const QString &kind, const QString &value) { return QJsonObject{
+            {QStringLiteral("kind"), kind}, {QStringLiteral("spans"), QJsonArray{text(value)}}}; };
+        const auto table = [](const QJsonObject &cell) { return QJsonObject{{QStringLiteral("rows"), QJsonArray{
+            QJsonObject{{QStringLiteral("cells"), QJsonArray{cell}}}}}}; };
+        QJsonObject heading = block(QStringLiteral("heading"), QStringLiteral("Cell heading"));
+        heading.insert(QStringLiteral("level"), 4); heading.insert(QStringLiteral("anchor"), QStringLiteral("Cell_heading"));
+        heading.insert(QStringLiteral("anchor_fallback"), QStringLiteral("Cell.20heading"));
+        QJsonObject item = block(QStringLiteral("list_item"), QStringLiteral("Cell list body"));
+        item.insert(QStringLiteral("number"), QStringLiteral("2")); item.insert(QStringLiteral("depth"), 1);
+        item.insert(QStringLiteral("list_path"), QStringLiteral("#"));
+        QJsonObject child = table(QJsonObject{{QStringLiteral("spans"), QJsonArray{text(QStringLiteral("Child cell body"))}}});
+        child.insert(QStringLiteral("geometry"), QJsonObject{{QStringLiteral("cell_padding"), 2},
+            {QStringLiteral("width"), QJsonObject{{QStringLiteral("unit"), QStringLiteral("percent")}, {QStringLiteral("value"), 100}}}});
+        QJsonObject linked = text(QStringLiteral("Cell linked body")); linked.insert(QStringLiteral("kind"), QStringLiteral("link"));
+        linked.insert(QStringLiteral("target"), QStringLiteral("cat"));
+        QJsonObject explicitInk = text(QStringLiteral("Authored cell ink")); explicitInk.insert(QStringLiteral("foreground"), QStringLiteral("#ff0000"));
+        const QJsonArray contents{block(QStringLiteral("paragraph"), QStringLiteral("Before cell heading")), heading, item,
+            QJsonObject{{QStringLiteral("kind"), QStringLiteral("rule")}, {QStringLiteral("spans"), QJsonArray{}}},
+            QJsonObject{{QStringLiteral("kind"), QStringLiteral("table")}, {QStringLiteral("depth"), 1}, {QStringLiteral("table"), child}},
+            QJsonObject{{QStringLiteral("kind"), QStringLiteral("paragraph")}, {QStringLiteral("spans"), QJsonArray{linked, explicitInk}}},
+            block(QStringLiteral("paragraph"), QStringLiteral("After cell table"))};
+        const QJsonObject cell{{QStringLiteral("header"), true}, {QStringLiteral("background"), QStringLiteral("#000000")},
+            {QStringLiteral("spans"), QJsonArray{}}, {QStringLiteral("blocks"), contents}};
+        for (const QString &theme : {QStringLiteral("light"), QStringLiteral("dark")}) {
+            window.learning_.setTheme(theme); window.applyTheme();
+            window.reading_->setHtml(window.tableHtml(table(cell), 0, 1, {}, QStringLiteral("block-0-0")));
+            QTextDocument *document = window.reading_->document();
+            const QString body = document->toPlainText();
+            int previous = -1;
+            for (const QString &part : {QStringLiteral("Before cell heading"), QStringLiteral("Cell heading"),
+                     QStringLiteral("Cell list body"), QStringLiteral("Child cell body"), QStringLiteral("Cell linked body"),
+                     QStringLiteral("After cell table")}) {
+                QCOMPARE(body.count(part), 1); const int at = body.indexOf(part); QVERIFY(at > previous); previous = at;
+            }
+            QCOMPARE(document->find(QStringLiteral("Cell heading"), 0, QTextDocument::FindCaseSensitively).blockFormat().headingLevel(), 4);
+            QCOMPARE(document->find(QStringLiteral("2."), 0, QTextDocument::FindCaseSensitively).charFormat().foreground().color(), QColor(QStringLiteral("#ffffff")));
+            bool ruleFound = false;
+            for (QTextBlock part = document->begin(); part.isValid(); part = part.next()) {
+                if (!part.blockFormat().hasProperty(QTextFormat::BlockTrailingHorizontalRulerWidth)) continue;
+                ruleFound = true;
+                QVERIFY(part.blockFormat().hasProperty(QTextFormat::BackgroundBrush));
+                QCOMPARE(part.blockFormat().background().color(), QColor(QStringLiteral("#ffffff")));
+            }
+            QVERIFY(ruleFound);
+            QCOMPARE(document->find(QStringLiteral("Before cell heading")).charFormat().foreground().color(), QColor(QStringLiteral("#ffffff")));
+            QVERIFY(document->find(QStringLiteral("Before cell heading")).charFormat().fontWeight() >= QFont::Bold);
+            const QTextCursor link = document->find(QStringLiteral("Cell linked body"));
+            QCOMPARE(link.charFormat().anchorHref(), QStringLiteral("dict:cat"));
+            QCOMPARE(link.charFormat().foreground().color(), QColor(QStringLiteral("#ffffff")));
+            QCOMPARE(document->find(QStringLiteral("Authored cell ink")).charFormat().foreground().color(), QColor(QStringLiteral("#ff0000")));
+            QVERIFY(hasAnchor(document, QStringLiteral("block-0-0-row-0-cell-0-block-1")));
+            auto *outer = qobject_cast<QTextTable *>(document->rootFrame()->childFrames().first()); QVERIFY(outer);
+            QCOMPARE(outer->rows(), 1); QCOMPARE(outer->columns(), 1); QCOMPARE(outer->childFrames().size(), 1);
+            auto *inner = qobject_cast<QTextTable *>(outer->childFrames().first()); QVERIFY(inner);
+            QCOMPARE(inner->format().cellPadding(), qreal(2));
+            QCOMPARE(inner->format().width().type(), QTextLength::PercentageLength); QCOMPARE(inner->format().width().rawValue(), qreal(100));
+            QCOMPARE(inner->cellAt(0, 0).format().background().color(), QColor(QStringLiteral("#000000")));
+            QApplication::processEvents();
+            QCOMPARE(document->toPlainText(), body);
+            QDir().mkpath(QStringLiteral(".tmp/ui-screenshots"));
+            QVERIFY(window.reading_->grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-synthetic-cell-blocks-%1.png").arg(theme)));
+        }
+        QJsonObject paleCell = cell;
+        paleCell.insert(QStringLiteral("background"), QStringLiteral("#ffeecc"));
+        QTextDocument paleDocument;
+        paleDocument.setHtml(window.tableHtml(table(paleCell), 0));
+        QCOMPARE(paleDocument.find(QStringLiteral("2."), 0, QTextDocument::FindCaseSensitively).charFormat().foreground().color(), QColor(QStringLiteral("#000000")));
+        QCOMPARE(paleDocument.find(QStringLiteral("Authored cell ink")).charFormat().foreground().color(), QColor(QStringLiteral("#ff0000")));
+        bool paleRuleFound = false;
+        for (QTextBlock part = paleDocument.begin(); part.isValid(); part = part.next()) {
+            if (!part.blockFormat().hasProperty(QTextFormat::BlockTrailingHorizontalRulerWidth)) continue;
+            paleRuleFound = true;
+            QVERIFY(part.blockFormat().hasProperty(QTextFormat::BackgroundBrush));
+            QCOMPARE(part.blockFormat().background().color(), QColor(QStringLiteral("#000000")));
+        }
+        QVERIFY(paleRuleFound);
+        QCOMPARE(window.blockHtml(QJsonObject{{QStringLiteral("kind"), QStringLiteral("rule")}}), QStringLiteral("<hr>"));
+        QJsonObject caption = text(QStringLiteral("Inline cell caption"));
+        caption.insert(QStringLiteral("kind"), QStringLiteral("link")); caption.insert(QStringLiteral("target"), QStringLiteral("File:Sample.svg"));
+        caption.insert(QStringLiteral("classes"), QStringLiteral("wikidict-media"));
+        const QJsonObject captionCell{{QStringLiteral("spans"), QJsonArray{}}, {QStringLiteral("blocks"), QJsonArray{
+            QJsonObject{{QStringLiteral("kind"), QStringLiteral("paragraph")}, {QStringLiteral("spans"), QJsonArray{caption}}}}}};
+        const QJsonObject entry{{QStringLiteral("title"), QStringLiteral("Cell media")}, {QStringLiteral("kind"), QStringLiteral("supplemental")},
+            {QStringLiteral("sections"), QJsonArray{QJsonObject{{QStringLiteral("title"), QStringLiteral("Media owner")},
+                {QStringLiteral("blocks"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("table")}, {QStringLiteral("table"), table(captionCell)}}}}}}},
+            {QStringLiteral("media"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("image")}, {QStringLiteral("file"), QStringLiteral("Sample.svg")},
+                {QStringLiteral("caption"), QStringLiteral("Inline cell caption")}}}}};
+        QTextDocument media; media.setHtml(window.entryHtml(entry));
+        QCOMPARE(media.toPlainText().count(QStringLiteral("Inline cell caption")), 1);
+    }
+
+    void orderedCellHeadingFragmentsStayInsideOwningSection() {
+        MainWindow window(fixture_, QStringLiteral("cat")); window.resize(780, 480); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QJsonObject response = QJsonDocument::fromJson(window.api_->lookup(QStringLiteral("cat"))).object();
+        QJsonObject entry = response.value(QStringLiteral("entries")).toArray().first().toObject();
+        const auto text = [](const QString &value) { return QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), value}}; };
+        const auto paragraph = [&](const QString &value) { return QJsonObject{{QStringLiteral("kind"), QStringLiteral("paragraph")}, {QStringLiteral("spans"), QJsonArray{text(value)}}}; };
+        const QString unicode(QChar(0x00e4));
+        const QJsonObject heading{{QStringLiteral("kind"), QStringLiteral("heading")}, {QStringLiteral("level"), 2},
+            {QStringLiteral("anchor"), unicode}, {QStringLiteral("anchor_fallback"), QStringLiteral(".C3.A4")},
+            {QStringLiteral("spans"), QJsonArray{text(QStringLiteral("Cell destination"))}}};
+        const QJsonObject emptyHeading{{QStringLiteral("kind"), QStringLiteral("heading")}, {QStringLiteral("level"), 5},
+            {QStringLiteral("anchor"), QStringLiteral("Empty_cell_heading")}, {QStringLiteral("spans"), QJsonArray{}}};
+        const QJsonObject cell{{QStringLiteral("spans"), QJsonArray{}}, {QStringLiteral("blocks"), QJsonArray{
+            paragraph(QStringLiteral("Cell prefix")), heading, paragraph(QStringLiteral("CELL TARGET BODY")), emptyHeading}}};
+        const QJsonObject table{{QStringLiteral("rows"), QJsonArray{QJsonObject{{QStringLiteral("cells"), QJsonArray{cell}}}}}};
+        const QJsonObject tableBlock{{QStringLiteral("kind"), QStringLiteral("table")}, {QStringLiteral("table"), table}};
+        entry.insert(QStringLiteral("sections"), QJsonArray{
+            QJsonObject{{QStringLiteral("title"), QStringLiteral("Other")}, {QStringLiteral("level"), 2},
+                {QStringLiteral("anchor"), QStringLiteral("Other")}, {QStringLiteral("blocks"), QJsonArray{paragraph(QStringLiteral("OTHER BODY"))}}},
+            QJsonObject{{QStringLiteral("title"), QStringLiteral("Cell owner")}, {QStringLiteral("level"), 2},
+                {QStringLiteral("anchor"), QStringLiteral("Cell_owner")}, {QStringLiteral("blocks"), QJsonArray{tableBlock}}}});
+        QJsonObject localLink{{QStringLiteral("kind"), QStringLiteral("link")}, {QStringLiteral("target"), QStringLiteral("#") + unicode},
+            {QStringLiteral("text"), QStringLiteral("Read cell destination")}};
+        entry.insert(QStringLiteral("preamble_spans"), QJsonArray{localLink});
+        response.insert(QStringLiteral("entries"), QJsonArray{entry}); window.renderResponse(QJsonDocument(response).toJson(), true);
+        QCOMPARE(window.sections_->count(), 3); // Cell-local headings are not promoted to top-level navigation.
+        window.collapsedSections_ = {0, 1}; window.refreshReading(); window.jumpToFragment(unicode);
+        QVERIFY(window.collapsedSections_.contains(0)); QVERIFY(!window.collapsedSections_.contains(1));
+        QVERIFY(textIsVisible(window.reading_, QStringLiteral("CELL TARGET BODY")));
+        QVERIFY(hasAnchor(window.reading_->document(), QStringLiteral("block-1-0-row-0-cell-0-block-1")));
+        QCOMPARE(window.reading_->document()->find(QStringLiteral("Cell destination"), 0, QTextDocument::FindCaseSensitively).blockFormat().headingLevel(), 2);
+        window.collapsedSections_.insert(1); window.refreshReading(); window.jumpToFragment(QStringLiteral(".C3.A4"));
+        QVERIFY(!window.collapsedSections_.contains(1)); QVERIFY(textIsVisible(window.reading_, QStringLiteral("CELL TARGET BODY")));
+        window.collapsedSections_.insert(1); window.refreshReading(); window.jumpToFragment(QStringLiteral("Empty_cell_heading"));
+        QVERIFY(!window.collapsedSections_.contains(1));
+        QVERIFY(hasAnchor(window.reading_->document(), QStringLiteral("block-1-0-row-0-cell-0-block-3")));
+    }
+
+    void orderedCellAuthorityAndDepthAreValidated() {
+        MainWindow window{QString()};
+        const auto table = [](const QJsonObject &cell) { return QJsonObject{{QStringLiteral("rows"), QJsonArray{QJsonObject{{QStringLiteral("cells"), QJsonArray{cell}}}}}}; };
+        const QJsonObject empty{{QStringLiteral("spans"), QJsonArray{}}, {QStringLiteral("blocks"), QJsonArray{}}, {QStringLiteral("background"), QStringLiteral("#800080")}};
+        QJsonObject legacy = empty; legacy.remove(QStringLiteral("blocks"));
+        QCOMPARE(window.tableHtml(table(empty), 0), window.tableHtml(table(legacy), 0));
+        QJsonObject invalid = empty; invalid.insert(QStringLiteral("blocks"), QStringLiteral("not blocks"));
+        QVERIFY_EXCEPTION_THROWN(window.tableHtml(table(invalid), 0), DictApiError);
+        invalid = empty; invalid.insert(QStringLiteral("spans"), QJsonArray{QJsonObject{{QStringLiteral("text"), QStringLiteral("ambiguous")}}});
+        QVERIFY_EXCEPTION_THROWN(window.tableHtml(table(invalid), 0), DictApiError);
+        invalid = empty; invalid.insert(QStringLiteral("nested_table"), table(legacy));
+        QVERIFY_EXCEPTION_THROWN(window.tableHtml(table(invalid), 0), DictApiError);
+        invalid = empty; invalid.insert(QStringLiteral("blocks"), QJsonArray{QStringLiteral("not a block")});
+        QVERIFY_EXCEPTION_THROWN(window.tableHtml(table(invalid), 0), DictApiError);
+        QJsonObject nested = table(empty);
+        const auto wrap = [&](const QJsonObject &child) { return table(QJsonObject{{QStringLiteral("spans"), QJsonArray{}},
+            {QStringLiteral("blocks"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("table")}, {QStringLiteral("table"), child}}}}}); };
+        for (int i = 1; i < 16; ++i) nested = wrap(nested);
+        QVERIFY(!window.tableHtml(nested, 0).isEmpty());
+        QVERIFY_EXCEPTION_THROWN(window.tableHtml(wrap(nested), 0), DictApiError);
+    }
+
     void nestedSemanticTablesKeepOuterGridAndEmptyPaintedHeaders() {
         MainWindow window{QString()};
         QJsonArray outerCells;

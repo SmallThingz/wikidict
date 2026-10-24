@@ -37,10 +37,11 @@ function renderWord(){
  const actions=node('div',undefined,'word-actions'),saved=state.saved.some(x=>key(x)===key(currentHit));
  const bookmark=button(saved?'◆':'◇','Bookmark',async()=>{
   const previous=state.saved,exists=state.saved.some(x=>key(x)===key(currentHit));
-  state.saved=exists?state.saved.filter(x=>key(x)!==key(currentHit)):[{...currentHit,clue:clue(current)},...state.saved];
+  const updated=exists?state.saved.filter(x=>key(x)!==key(currentHit)):[{...currentHit,clue:clue(current)},...state.saved];
+  state.saved=updated;
   bookmark.disabled=true;
-  try{await flushSave();if(page==='reading')navigate('reading');}
-  catch(error){state.saved=previous;throw error;}
+  try{await flushSave();bookmark.textContent=exists?'◇':'◆';bookmark.setAttribute('aria-pressed',String(!exists));}
+  catch(error){if(state.saved===updated)state.saved=previous;throw error;}
   finally{bookmark.disabled=false;}
  });
  bookmark.setAttribute('aria-pressed',String(saved));
@@ -48,7 +49,7 @@ function renderWord(){
  entryView.append(actions,renderEntry(current,target=>performAction(()=>openLink(target)),state.settings,m=>mediaView(m,state.settings,current.source_edition)));
 }
 function search(){title('Find a word');const input=node('input');input.id='query';input.type='search';input.placeholder='Search your dictionaries';input.setAttribute('aria-label','Find a word');const matches=node('div',undefined,'word-list');matches.id='matches';panel.append(input,matches);input.focus();
- const update=async()=>{const version=++searchVersion;const hits=await readForView('search',{query:input.value.trim()},()=>page==='search'&&version===searchVersion);if(page!=='search'||version!==searchVersion)return;matches.replaceChildren(...hits.map(h=>wordButton(h)));status(hits.length?'':libraries.length?'No matches.':'Add a dictionary in Settings.');};input.oninput=()=>performAction(update);return update();
+ const update=async()=>{const version=++searchVersion;const hits=await readForView('search',{query:input.value.trim()},()=>page==='search'&&version===searchVersion);if(page!=='search'||version!==searchVersion)return;matches.replaceChildren(...hits.map(h=>wordButton(h)));status(hits.length?'':libraries.length?'No matches.':'Add a dictionary in Settings.');};input.oninput=()=>{renderVersion++;return performAction(update);};return update();
 }
 function sourceLabel(item){const edition=item.source_edition||libraries.find(d=>d.id===(item.context||item.dictionary))?.source_edition;return edition?' · '+edition.slice(0,-10).replaceAll('_','-')+'.wiktionary.org':'';}
 function wordButton(hit){const b=button(hit.title,'Open '+hit.title,()=>open(hit),'word');b.append(node('small',(hit.language||hit.kind)+sourceLabel(hit)));if(hit.clue)b.append(node('p',hit.clue));return b;}

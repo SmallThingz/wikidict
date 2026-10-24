@@ -529,39 +529,66 @@ struct MediaPanel::Impl {
         QSet<QString> seen;
         QGroupBox *group = nullptr;
         QVBoxLayout *layout = nullptr;
-        for (const QJsonValue &section : entry.value(QStringLiteral("sections")).toArray()) {
-            for (const QJsonValue &block : section.toObject().value(QStringLiteral("blocks")).toArray()) {
-                for (const QJsonValue &value : block.toObject().value(QStringLiteral("spans")).toArray()) {
-                    const QJsonObject span = value.toObject();
-                    const QString ipa = span.value(QStringLiteral("text")).toString();
-                    if (span.value(QStringLiteral("role")).toString() != QStringLiteral("pronunciation") || seen.contains(ipa)) continue;
-                    seen.insert(ipa);
-                    const QString ssml = pronunciationSsml(ipa, language);
-                    if (ssml.isEmpty()) continue;
-                    if (!group) {
-                        group = new QGroupBox(QStringLiteral("English transcriptions"), cardsBody);
-                        layout = new QVBoxLayout(group);
-                        cardsLayout->addWidget(group);
+        const auto collectSpans = [&](const QJsonArray &values) {
+            for (const QJsonValue &value : values) {
+                const QJsonObject span = value.toObject();
+                const QString ipa = span.value(QStringLiteral("text")).toString();
+                if (span.value(QStringLiteral("role")).toString() != QStringLiteral("pronunciation") || seen.contains(ipa)) continue;
+                seen.insert(ipa);
+                const QString ssml = pronunciationSsml(ipa, language);
+                if (ssml.isEmpty()) continue;
+                if (!group) {
+                    group = new QGroupBox(QStringLiteral("English transcriptions"), cardsBody);
+                    layout = new QVBoxLayout(group);
+                    cardsLayout->addWidget(group);
+                }
+                auto *row = new QHBoxLayout;
+                auto *label = new QLabel(ipa, group);
+                label->setTextFormat(Qt::PlainText);
+                label->setWordWrap(true);
+                label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+                auto *button = new QPushButton(QStringLiteral("Listen"), group);
+                button->setObjectName(QStringLiteral("mediaPronunciation"));
+                button->setAccessibleName(QStringLiteral("Listen to the transcription %1 offline").arg(ipa));
+                row->addWidget(label, 1);
+                row->addWidget(button);
+                layout->addLayout(row);
+                pronunciations.append({ipa, button});
+                QObject::connect(button, &QPushButton::clicked, q, [this, ipa, ssml] {
+                    if (speech && activeSpeechKey == ipa) stopSpeech();
+                    else say(title, language, ssml, ipa);
+                });
+            }
+        };
+        std::function<void(const QJsonArray &, int)> collectBlocks;
+        const auto collectTable = [&](auto &&visit, const QJsonObject &table, int depth) -> void {
+            if (depth > 16) return;
+            collectSpans(table.value(QStringLiteral("caption")).toArray());
+            for (const QJsonValue &row : table.value(QStringLiteral("rows")).toArray()) {
+                for (const QJsonValue &value : row.toObject().value(QStringLiteral("cells")).toArray()) {
+                    const QJsonObject cell = value.toObject();
+                    const QJsonValue blocks = cell.value(QStringLiteral("blocks"));
+                    if (!blocks.isUndefined() && !blocks.isNull()) {
+                        collectBlocks(blocks.toArray(), depth);
+                    } else if (cell.value(QStringLiteral("nested_table")).isObject()) {
+                        visit(visit, cell.value(QStringLiteral("nested_table")).toObject(), depth + 1);
+                    } else {
+                        collectSpans(cell.value(QStringLiteral("spans")).toArray());
                     }
-                    auto *row = new QHBoxLayout;
-                    auto *label = new QLabel(ipa, group);
-                    label->setTextFormat(Qt::PlainText);
-                    label->setWordWrap(true);
-                    label->setTextInteractionFlags(Qt::TextSelectableByMouse);
-                    auto *button = new QPushButton(QStringLiteral("Listen"), group);
-                    button->setObjectName(QStringLiteral("mediaPronunciation"));
-                    button->setAccessibleName(QStringLiteral("Listen to the transcription %1 offline").arg(ipa));
-                    row->addWidget(label, 1);
-                    row->addWidget(button);
-                    layout->addLayout(row);
-                    pronunciations.append({ipa, button});
-                    QObject::connect(button, &QPushButton::clicked, q, [this, ipa, ssml] {
-                        if (speech && activeSpeechKey == ipa) stopSpeech();
-                        else say(title, language, ssml, ipa);
-                    });
                 }
             }
-        }
+        };
+        collectBlocks = [&](const QJsonArray &blocks, int depth) {
+            for (const QJsonValue &value : blocks) {
+                const QJsonObject block = value.toObject();
+                if (block.value(QStringLiteral("table")).isObject())
+                    collectTable(collectTable, block.value(QStringLiteral("table")).toObject(), depth + 1);
+                else
+                    collectSpans(block.value(QStringLiteral("spans")).toArray());
+            }
+        };
+        for (const QJsonValue &section : entry.value(QStringLiteral("sections")).toArray())
+            collectBlocks(section.toObject().value(QStringLiteral("blocks")).toArray(), 0);
     }
 
     void fail(MediaCard *card, const QString &message) {

@@ -27,6 +27,7 @@
 #include <QScrollBar>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QStringList>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QThread>
@@ -516,6 +517,81 @@ private slots:
         panel.findChild<QComboBox *>(QStringLiteral("mediaCacheLimit"))->setCurrentIndex(1);
         QVERIFY(!old.exists());
         QCOMPARE(QDir(cacheRoot()).entryList(QDir::Files).size(), 2);
+    }
+
+    void pronunciationControlsTraverseOrderedAndLegacyTableContent() {
+        Network network;
+        MediaPanel panel(nullptr, &network);
+        const auto pronunciation = [](const QString &text) {
+            return QJsonObject{{QStringLiteral("role"), QStringLiteral("pronunciation")},
+                {QStringLiteral("text"), text}};
+        };
+        const auto paragraph = [&](const QString &text) {
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("paragraph")},
+                {QStringLiteral("spans"), QJsonArray{pronunciation(text)}}};
+        };
+        const auto table = [](const QJsonArray &cells) {
+            return QJsonObject{{QStringLiteral("rows"), QJsonArray{
+                QJsonObject{{QStringLiteral("cells"), cells}}}}};
+        };
+        const QString top = QStringLiteral("/k\u00e6t/");
+        const QJsonObject legacyChild = table(QJsonArray{QJsonObject{{QStringLiteral("spans"),
+            QJsonArray{pronunciation(QStringLiteral("/mi/")), pronunciation(top)}}}});
+        const QJsonObject orderedChild = table(QJsonArray{QJsonObject{{QStringLiteral("blocks"),
+            QJsonArray{paragraph(QStringLiteral("/si/"))}}}});
+        QJsonObject heading = paragraph(QStringLiteral("/fi/"));
+        heading.insert(QStringLiteral("kind"), QStringLiteral("heading"));
+        heading.insert(QStringLiteral("level"), 3);
+        const QJsonObject ordered{{QStringLiteral("blocks"), QJsonArray{paragraph(QStringLiteral("/ni/")),
+            heading, QJsonObject{{QStringLiteral("kind"), QStringLiteral("table")},
+                {QStringLiteral("table"), orderedChild}}}}};
+        const QJsonObject emptyOrdered{{QStringLiteral("blocks"), QJsonArray{}},
+            {QStringLiteral("spans"), QJsonArray{pronunciation(QStringLiteral("/vi/"))}},
+            {QStringLiteral("nested_table"), table(QJsonArray{QJsonObject{{QStringLiteral("spans"),
+                QJsonArray{pronunciation(QStringLiteral("/wi/"))}}}})}};
+        QJsonObject outer = table(QJsonArray{
+            QJsonObject{{QStringLiteral("spans"), QJsonArray{pronunciation(QStringLiteral("/ti/"))}}},
+            QJsonObject{{QStringLiteral("nested_table"), legacyChild}}, ordered, emptyOrdered});
+        outer.insert(QStringLiteral("caption"), QJsonArray{pronunciation(QStringLiteral("/pi/"))});
+        QJsonObject ipaEntry = entry();
+        ipaEntry.insert(QStringLiteral("media"), QJsonArray{});
+        ipaEntry.insert(QStringLiteral("sections"), QJsonArray{QJsonObject{{QStringLiteral("blocks"),
+            QJsonArray{paragraph(top), QJsonObject{{QStringLiteral("kind"), QStringLiteral("table")},
+                {QStringLiteral("table"), outer}}}}}});
+        panel.setEntry(ipaEntry);
+        QStringList names;
+        for (QPushButton *button : panel.findChildren<QPushButton *>(QStringLiteral("mediaPronunciation"))) {
+            QCOMPARE(button->text(), QStringLiteral("Listen"));
+            auto *accessible = QAccessible::queryAccessibleInterface(button);
+            QVERIFY(accessible);
+            names.append(accessible->text(QAccessible::Name));
+        }
+        QStringList expected;
+        for (const QString &ipa : {top, QStringLiteral("/pi/"), QStringLiteral("/ti/"), QStringLiteral("/mi/"),
+                QStringLiteral("/ni/"), QStringLiteral("/fi/"), QStringLiteral("/si/")})
+            expected.append(QStringLiteral("Listen to the transcription %1 offline").arg(ipa));
+        QCOMPARE(names, expected);
+        QVERIFY(network.urls.isEmpty());
+        QCOMPARE(panel.findChild<QPushButton *>(QStringLiteral("mediaListen"))->text(), QStringLiteral("Listen offline"));
+
+        QJsonObject deep = table(QJsonArray{QJsonObject{{QStringLiteral("spans"),
+            QJsonArray{pronunciation(QStringLiteral("/zi/"))}}}});
+        for (int depth = 1; depth < 16; ++depth)
+            deep = table(QJsonArray{QJsonObject{{QStringLiteral("nested_table"), deep}}});
+        const auto setTable = [&](const QJsonObject &value) {
+            ipaEntry.insert(QStringLiteral("sections"), QJsonArray{QJsonObject{{QStringLiteral("blocks"),
+                QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("table")},
+                    {QStringLiteral("table"), value}}}}}});
+            panel.setEntry(ipaEntry);
+        };
+        setTable(deep);
+        QCOMPARE(panel.findChildren<QPushButton *>(QStringLiteral("mediaPronunciation")).size(), 1);
+        setTable(table(QJsonArray{QJsonObject{{QStringLiteral("nested_table"), deep}}}));
+        QVERIFY(panel.findChildren<QPushButton *>(QStringLiteral("mediaPronunciation")).isEmpty());
+        ipaEntry.insert(QStringLiteral("language_code"), QStringLiteral("fr"));
+        setTable(outer);
+        QVERIFY(panel.findChildren<QPushButton *>(QStringLiteral("mediaPronunciation")).isEmpty());
+        QVERIFY(network.urls.isEmpty());
     }
 
     void installedVoiceUsesMatchingLanguageAndLiteralText() {

@@ -111,7 +111,33 @@ try {
  const name=`nested-grid-${theme}-${width}.png`;
  await page.screenshot({path:path.join(report,name),fullPage:true,animations:'disabled'});frames.push(name);
  }
+ const orderedResults=[];
+ for(const theme of ['light','dark'])for(const width of [360,768]){
+  await page.setViewportSize({width,height:640});
+  const ordered=await page.evaluate(theme=>{
+   document.documentElement.dataset.theme=theme;
+   const text=text=>[{kind:'text',text}];
+   const heading={kind:'heading',level:2,anchor:'reference-1',anchor_fallback:'Cell.20heading',spans:text('Cell heading')};
+   const child={kind:'table',table:{geometry:{width:{unit:'percent',value:100}},rows:[{cells:[{spans:text('child text')},{spans:text('child second')}]}]}};
+   const blocks=[{kind:'paragraph',spans:[{kind:'link',text:'before',target:'#reference-1',explanation:'cell explanation'}]},heading,{kind:'list_item',spans:text('item')},{kind:'rule'},child,{kind:'paragraph',spans:text('following text')},{kind:'heading',level:6,anchor:'empty-cell-heading',spans:[]}];
+   const entry={title:'Ordered cells',presentation_version:'DPR8',sections:[{title:'Owning fold',anchor:'Owner',blocks:[{kind:'table',table:{rows:[{cells:[{header:true,background:'#000000',spans:[],blocks},{spans:[],blocks:[]}]}]}}]},{title:'Unrelated',anchor:'Other',blocks:[{kind:'paragraph',spans:text('other')}]}],references:[{number:1,group_number:1,spans:text('citation')}]};
+   const before=JSON.stringify(entry),links=[];
+   const main=document.querySelector('main');main.replaceChildren(Renderer.renderEntry(entry,t=>links.push(t),{collapseOtherSections:true}));
+   const owner=document.getElementById('Owner'),other=document.getElementById('Other');
+   const revealed=Renderer.revealFragment(main,'Cell.20heading');
+   const headingNode=document.getElementById('reference-1'),td=headingNode.closest('th'),nested=td.querySelector('table');
+   td.querySelector('a').click();
+   const wrap=document.querySelector('.table-scroll');wrap.scrollLeft=wrap.scrollWidth;
+   const box=wrap.getBoundingClientRect(),last=nested.rows[0].cells[1].getBoundingClientRect();
+   return {unchanged:before===JSON.stringify(entry),order:[...td.children].map(el=>el.tagName==='TABLE'?'table':el.tagName==='HR'?'rule':el.textContent),heading:headingNode.tagName,empty:document.getElementById('empty-cell-heading').tagName,paint:getComputedStyle(td).backgroundColor,ink:getComputedStyle(headingNode.querySelector('.body span')).color,header:getComputedStyle(headingNode).fontWeight===getComputedStyle(td).fontWeight,childInk:getComputedStyle(nested.querySelector('span')).color,scrolls:main.querySelectorAll('.table-scroll').length,childWidth:nested.style.width,childFits:nested.getBoundingClientRect().width<=td.getBoundingClientRect().width+1,finalVisible:last.right<=box.right+1,links,revealed,owningOpen:owner.open,otherClosed:!other.open,focused:document.activeElement.id,uniqueIDs:new Set([...main.querySelectorAll('[id]')].map(el=>el.id)).size===main.querySelectorAll('[id]').length,explanation:!!main.querySelector('abbr[aria-describedby]'),foldCount:main.querySelectorAll('details').length};
+  },theme);
+  assert.deepEqual(ordered.order,['before','Cell heading','•item','rule','table','following text','']);
+  assert.equal(ordered.unchanged,true);assert.equal(ordered.heading,'H2');assert.equal(ordered.empty,'H6');assert.equal(ordered.paint,'rgb(0, 0, 0)');assert.equal(ordered.ink,'rgb(255, 255, 255)');assert.equal(ordered.childInk,'rgb(255, 255, 255)');assert.equal(ordered.header,true);assert.equal(ordered.scrolls,1);assert.equal(ordered.childWidth,'100%');assert.equal(ordered.childFits,true);assert.equal(ordered.finalVisible,true);assert.deepEqual(ordered.links,['#reference-1']);assert.equal(ordered.revealed,true);assert.equal(ordered.owningOpen,true);assert.equal(ordered.otherClosed,true);assert.equal(ordered.focused,'Cell.20heading');assert.equal(ordered.uniqueIDs,true);assert.equal(ordered.explanation,true);assert.equal(ordered.foldCount,4);
+  orderedResults.push({theme,width,...ordered});
+  const name=`ordered-cells-${theme}-${width}.png`;
+  await page.screenshot({path:path.join(report,name),fullPage:true,animations:'disabled'});frames.push(name);
+ }
  assert.deepEqual(errors,[]);
- await writeFile(path.join(report,'result.json'),JSON.stringify({passed:true,scope:'Focused compiled feature render, strict fallback, label accessibility, no focus stop, responsive bounds; synthetic typed input, not corpus import or public transport.',result,paintResult,contrastResults,nestedResults,accessibleSnapshot:snapshot,frames,errors},null,2)+'\n');
+ await writeFile(path.join(report,'result.json'),JSON.stringify({passed:true,scope:'Focused compiled feature render, strict fallback, label accessibility, no focus stop, responsive bounds; synthetic typed input, not corpus import or public transport.',result,paintResult,contrastResults,nestedResults,orderedResults,accessibleSnapshot:snapshot,frames,errors},null,2)+'\n');
  console.log('WEB_COLOR_SWATCH_PASS');
 } finally {await browser.close();}

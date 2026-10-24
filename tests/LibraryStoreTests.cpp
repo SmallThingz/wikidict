@@ -34,6 +34,44 @@ void rejects(const std::function<void()> &action, const char *message) {
 void appendLength(QByteArray &bytes, quint64 value);
 // Seven empty u32 lists: display, sections, preamble, two layout lists, references, media.
 QByteArray emptyPresentation() { return QByteArrayLiteral("DPR2") + QByteArray(28, '\0'); }
+void appendU32(QByteArray &bytes, quint32 value) {
+    for (int shift = 0; shift < 32; shift += 8) bytes.append(char((value >> shift) & 255));
+}
+void appendString(QByteArray &bytes, const QByteArray &value) {
+    appendU32(bytes, quint32(value.size())); bytes.append(value);
+}
+QByteArray cellBlock(unsigned char kind, const QByteArray &table = QByteArray(1, '\0'),
+                     const QByteArray &anchor = {}, const QByteArray &fallback = {}) {
+    QByteArray bytes; bytes.append(char(kind)); bytes.append(char(0)); bytes.append(char(kind == 9 ? 3 : 0));
+    appendU32(bytes, kind == 12 || kind == 11 ? 0 : 1);
+    if (kind != 12 && kind != 11) {
+        bytes.append(QByteArray(3, '\0')); // text span, ordinary role, no flags
+        appendString(bytes, kind == 9 ? QByteArray("Cell heading") : QByteArray("Cell body"));
+        for (int field = 0; field < 6; ++field) appendString(bytes, {});
+        bytes.append(QByteArray(2, '\0')); // inherited foreground and background
+    }
+    bytes.append(char(0)); // feature
+    appendString(bytes, {}); appendString(bytes, {}); bytes.append(table);
+    appendString(bytes, anchor); appendString(bytes, fallback);
+    return bytes;
+}
+QByteArray orderedCellTable(const QList<QByteArray> &blocks) {
+    QByteArray bytes = QByteArray::fromHex("0100"); // table present, default geometry
+    appendU32(bytes, 0); appendU32(bytes, 1); appendU32(bytes, 1); // caption, rows, cells
+    bytes.append(QByteArray::fromHex("0101000100010700000023666666666530")); // header, extents, background
+    appendU32(bytes, 0); bytes.append(char(0)); // legacy spans and child table
+    bytes.append(char(1)); appendU32(bytes, quint32(blocks.size()));
+    for (const auto &block : blocks) bytes.append(block);
+    return bytes;
+}
+QByteArray orderedPresentation(const QList<QByteArray> &blocks) {
+    QByteArray bytes("DPR8"); appendU32(bytes, 0); appendU32(bytes, 1); // display, sections
+    bytes.append(char(2)); appendString(bytes, "Noun");
+    appendString(bytes, {}); appendString(bytes, {}); // section anchors
+    appendU32(bytes, 1); bytes.append(cellBlock(12, orderedCellTable(blocks)));
+    bytes.append(QByteArray(20, '\0')); // preamble, layout, references, media
+    return bytes;
+}
 QByteArray blob(const QByteArray &heading, const QList<QByteArray> &titles, unsigned char kind = 1,
                 const QByteArray &presentation = emptyPresentation()) {
     QByteArray bytes("WIKBLB08", 8);
@@ -196,7 +234,7 @@ int main(int argc, char **argv) {
             LibraryStorage::recoverPendingMutation(first.path());
             require(!QFileInfo::exists(destination) && !QFileInfo::exists(first.filePath(QStringLiteral("languages.tsv"))), "interrupted first import restores genuinely empty root");
         }
-        // Both ordinary and DAL1 records use the same full native DPR2-7 decoder.
+        // Both ordinary and DAL1 records use the ABI4 full native DPR2-8 decoder.
         const QByteArray coloredPresentation = QByteArray::fromHex("445052340100000000000005000000636f6c6f72000000000000000000000000000000000000000000000000010700000023316333396262000000000000000000000000000000000000000000000000");
         QByteArray paintedPresentation = coloredPresentation;
         paintedPresentation.replace(0, 4, "DPR6");
@@ -210,6 +248,10 @@ int main(int argc, char **argv) {
             QByteArray("DPR5") + QByteArray(28, '\0'),
             QByteArray("DPR6") + QByteArray(28, '\0'),
             QByteArray("DPR7") + QByteArray(28, '\0'),
+            QByteArray("DPR8") + QByteArray(28, '\0'),
+            orderedPresentation({}),
+            orderedPresentation({cellBlock(0), cellBlock(9, QByteArray(1, '\0'), "Cell_heading", "cell-heading"),
+                                 cellBlock(5), cellBlock(11), cellBlock(12, orderedCellTable({cellBlock(0)})), cellBlock(0)}),
             coloredPresentation, paintedPresentation,
         };
         for (qsizetype version = 0; version < supportedPresentations.size(); ++version) {
@@ -218,7 +260,7 @@ int main(int argc, char **argv) {
             const QByteArray ordinary = blob("English", {"annotation"}, 1, presentation);
             write(source, ordinary);
             auto accepted = LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress);
-            require(accepted->dictionary.words == 1, "accept complete ordinary DPR2-7 including foreground and background spans");
+            require(accepted->dictionary.words == 1, "accept complete ordinary DPR2-8 including ordered painted cells and headings");
             LibraryStorage::commitImport(gateRoot, *accepted);
             auto installed = LibraryStorage::installed(gateRoot);
             require(installed.size() == 1 && read(installed.first().path) == ordinary,
@@ -228,7 +270,7 @@ int main(int argc, char **argv) {
             write(source, alias);
             accepted = LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress);
             require(accepted->dictionary.kind == QStringLiteral("alias") && accepted->dictionary.words == 1,
-                    "accept complete DPR2-7 DAL1 including foreground and background spans");
+                    "accept complete DPR2-8 DAL1 including ordered painted cells and headings");
             LibraryStorage::commitImport(gateRoot, *accepted);
             installed = LibraryStorage::installed(gateRoot);
             require(installed.size() == 1 && read(installed.first().path) == alias,
@@ -246,7 +288,7 @@ int main(int argc, char **argv) {
         QByteArray invalidBackgroundPresence = paintedPresentation;
         invalidBackgroundPresence[foregroundEnd] = char(2);
         for (const QByteArray &presentation : {
-                QByteArray("DPR8") + QByteArray(28, '\0'),
+                QByteArray("DPR9") + QByteArray(28, '\0'),
                 coloredPresentation.chopped(1), coloredPresentation + QByteArray(1, '\0'), invalidRgb,
                 invalidBackground, invalidBackgroundPresence}) {
             const QString gateRoot = temporary.filePath(QStringLiteral("invalid-version-gate"));

@@ -442,6 +442,8 @@ struct HeadingDestination {
     QString anchorFallback;
     int section;
     int block = -1;
+    QString destination{};
+    bool cellLocal = false;
 };
 
 QVector<HeadingDestination> headingDestinations(const QJsonObject &entry) {
@@ -452,18 +454,48 @@ QVector<HeadingDestination> headingDestinations(const QJsonObject &entry) {
         const QString title = section.value(QStringLiteral("title")).toString();
         if (!title.isEmpty()) result.append({title, section.value(QStringLiteral("anchor")).toString(), section.value(QStringLiteral("anchor_fallback")).toString(), int(i)});
         const bool companion = !sectionHeadingSpans(section).isEmpty();
+        const auto visitBlock = [&](auto &&visit, const QJsonObject &block, const QString &location, int rootBlock, bool cellLocal, int tableDepth) -> void {
+            if (block.value(QStringLiteral("kind")).toString() == QStringLiteral("heading")) {
+                QString label;
+                for (const QJsonValue &value : block.value(QStringLiteral("spans")).toArray()) {
+                    const QJsonObject span = value.toObject();
+                    label += span.value(QStringLiteral("kind")).toString() == QStringLiteral("line_break") ? QStringLiteral("\n")
+                        : span.value(QStringLiteral("text")).toString() + span.value(QStringLiteral("trail")).toString();
+                }
+                const QString anchor = block.value(QStringLiteral("anchor")).toString();
+                const QString fallback = block.value(QStringLiteral("anchor_fallback")).toString();
+                if (!label.isEmpty() || !anchor.isEmpty() || !fallback.isEmpty())
+                    result.append({label, anchor, fallback, int(i), rootBlock, location, cellLocal});
+            }
+            const auto visitTable = [&](auto &&tables, const QJsonObject &table, const QString &tableLocation, int depth) -> void {
+                if (depth > 16) throw DictApiError("nested table depth exceeds presentation limit");
+                const QJsonArray rows = table.value(QStringLiteral("rows")).toArray();
+                for (qsizetype r = 0; r < rows.size(); ++r) {
+                    const QJsonArray cells = rows[r].toObject().value(QStringLiteral("cells")).toArray();
+                    for (qsizetype c = 0; c < cells.size(); ++c) {
+                        const QJsonObject cell = cells[c].toObject();
+                        const QString cellLocation = tableLocation + QStringLiteral("-row-%1-cell-%2").arg(r).arg(c);
+                        const QJsonValue contents = cell.value(QStringLiteral("blocks"));
+                        if (!contents.isUndefined() && !contents.isNull()) {
+                            if (!contents.isArray() || !cell.value(QStringLiteral("spans")).toArray().isEmpty() ||
+                                (!cell.value(QStringLiteral("nested_table")).isUndefined() && !cell.value(QStringLiteral("nested_table")).isNull()))
+                                throw DictApiError("invalid ordered table cell");
+                            const QJsonArray blocks = contents.toArray();
+                            for (qsizetype n = 0; n < blocks.size(); ++n)
+                                visit(visit, blocks[n].toObject(), cellLocation + QStringLiteral("-block-%1").arg(n), rootBlock, true, depth + 1);
+                        } else if (cell.value(QStringLiteral("nested_table")).isObject()) {
+                            tables(tables, cell.value(QStringLiteral("nested_table")).toObject(), cellLocation + QStringLiteral("-table"), depth + 1);
+                        }
+                    }
+                }
+            };
+            if (block.value(QStringLiteral("table")).isObject())
+                visitTable(visitTable, block.value(QStringLiteral("table")).toObject(), location, tableDepth);
+        };
         const QJsonArray blocks = section.value(QStringLiteral("blocks")).toArray();
         for (qsizetype j = 0; j < blocks.size(); ++j) {
             if (j == 0 && companion) continue;
-            const QJsonObject block = blocks[j].toObject();
-            if (block.value(QStringLiteral("kind")).toString() != QStringLiteral("heading")) continue;
-            QString label;
-            for (const QJsonValue &value : block.value(QStringLiteral("spans")).toArray()) {
-                const QJsonObject span = value.toObject();
-                label += span.value(QStringLiteral("kind")).toString() == QStringLiteral("line_break") ? QStringLiteral("\n")
-                    : span.value(QStringLiteral("text")).toString() + span.value(QStringLiteral("trail")).toString();
-            }
-            if (!label.isEmpty()) result.append({label, block.value(QStringLiteral("anchor")).toString(), block.value(QStringLiteral("anchor_fallback")).toString(), int(i), int(j)});
+            visitBlock(visitBlock, blocks[j].toObject(), QStringLiteral("block-%1-%2").arg(i).arg(j), int(j), false, 1);
         }
     }
     return result;
@@ -576,6 +608,14 @@ struct LoadedDataset {
 
 bool titleLess(const QString &left, const QString &right) {
     return QString::compare(left, right, Qt::CaseInsensitive) < 0;
+}
+
+QString backgroundInk(const QString &background) {
+    const QColor paint(background);
+    const auto linear = [](double value) { return value <= 0.04045 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4); };
+    const double luminance = 0.2126 * linear(paint.redF()) + 0.7152 * linear(paint.greenF()) + 0.0722 * linear(paint.blueF());
+    return (luminance + 0.05) / 0.05 >= 1.05 / (luminance + 0.05)
+        ? QStringLiteral("#000000") : QStringLiteral("#ffffff");
 }
 
 QString readerFamily() {
@@ -1417,6 +1457,7 @@ void MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const st
     sections_->addItem(QStringLiteral("Jump to section"), -1);
     bool ownerLanguageListed = false;
     for (const auto &heading : headingDestinations(currentEntry_)) {
+        if (heading.cellLocal || heading.title.isEmpty()) continue;
         const QJsonObject section = sections[heading.section].toObject();
         const bool ownerLanguage = heading.block < 0 && kind == QStringLiteral("language") &&
             section.value(QStringLiteral("level")).toInt() == 2 && heading.title == language;
@@ -1581,7 +1622,8 @@ void MainWindow::jumpToFragment(const QString &fragment) {
     if (!destination) return;
     jumpToSection(destination->section);
     if (destination->block >= 0)
-        reading_->scrollToAnchor(QStringLiteral("block-%1-%2").arg(destination->section).arg(destination->block));
+        reading_->scrollToAnchor(destination->destination.isEmpty()
+            ? QStringLiteral("block-%1-%2").arg(destination->section).arg(destination->block) : destination->destination);
 }
 
 void MainWindow::jumpToSection(int section) {
@@ -1741,11 +1783,7 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                 text = QStringLiteral("<span style=\"background-color:%1;white-space:pre-wrap\">%2</span>").arg(background, text);
             const QString effectiveBackground = canonicalBackground ? background : cellBackground;
             if (!canonicalForeground && !effectiveBackground.isEmpty()) {
-                const QColor paint(effectiveBackground);
-                const auto linear = [](double value) { return value <= 0.04045 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4); };
-                const double luminance = 0.2126 * linear(paint.redF()) + 0.7152 * linear(paint.greenF()) + 0.0722 * linear(paint.blueF());
-                const QString ink = (luminance + 0.05) / 0.05 >= 1.05 / (luminance + 0.05)
-                    ? QStringLiteral("#000000") : QStringLiteral("#ffffff");
+                const QString ink = backgroundInk(effectiveBackground);
                 text = QStringLiteral("<span style=\"color:%1\">%2</span>").arg(ink, text);
                 if (kind == QStringLiteral("link") || kind == QStringLiteral("external_link"))
                     text = QStringLiteral("<u>%1</u>").arg(text);
@@ -1892,7 +1930,7 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
     return out;
 
 }
-QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDepth, const QString &inheritedBackground) const {
+QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDepth, const QString &inheritedBackground, const QString &location) const {
     if (tableDepth > 16) throw DictApiError("nested table depth exceeds presentation limit");
     const int indent = depth > 0 ? 30 + std::clamp(depth - 1, 0, 20) * 16 : 0;
     QString out = QStringLiteral("<table cellspacing='0' cellpadding='5' style='border-collapse:collapse;margin:8px 0;margin-left:%1px'>").arg(indent);
@@ -1926,12 +1964,14 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
         out = QStringLiteral("<table border='%1' cellspacing='%2' cellpadding='%3'%4 style='border-collapse:%5;margin:%6px 0;margin-left:%7px'>")
             .arg(border).arg(spacing).arg(padding).arg(width)
             .arg((!geometry.value(QStringLiteral("cell_spacing")).isUndefined() && !geometry.value(QStringLiteral("cell_spacing")).isNull()) ? QStringLiteral("separate") : QStringLiteral("collapse"))
-            .arg(tableDepth > 1 ? 0 : 8).arg(tableDepth > 1 ? 0 : indent);
+            .arg(tableDepth > 1 ? 0 : 8).arg(indent);
     }
     const QJsonArray caption = table.value(QStringLiteral("caption")).toArray();
     if (!caption.isEmpty()) out += QStringLiteral("<caption>%1</caption>").arg(spansHtml(caption, 0, {}, inheritedBackground));
+    qsizetype rowIndex = 0;
     for (const QJsonValue &rowValue : table.value(QStringLiteral("rows")).toArray()) {
         out += QStringLiteral("<tr>");
+        qsizetype cellIndex = 0;
         for (const QJsonValue &cellValue : rowValue.toObject().value(QStringLiteral("cells")).toArray()) {
             const QJsonObject cell = cellValue.toObject();
             const QString tag = cell.value(QStringLiteral("header")).toBool() ? QStringLiteral("th") : QStringLiteral("td");
@@ -1945,27 +1985,45 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
                 canonicalBackground = canonicalBackground && ((digit >= QChar('0') && digit <= QChar('9'))
                     || (digit >= QChar('a') && digit <= QChar('f')));
             const QString effectiveBackground = canonicalBackground ? background : inheritedBackground;
-            if (!effectiveBackground.isEmpty()) style += QStringLiteral(";background-color:") + effectiveBackground;
+            if (!effectiveBackground.isEmpty())
+                style += QStringLiteral(";background-color:") + effectiveBackground
+                    + QStringLiteral(";color:") + backgroundInk(effectiveBackground);
             const QJsonArray cellSpans = cell.value(QStringLiteral("spans")).toArray();
-            QString contents = spansHtml(cellSpans, 0, {}, effectiveBackground);
+            const QString cellLocation = location.isEmpty() ? QString() : location + QStringLiteral("-row-%1-cell-%2").arg(rowIndex).arg(cellIndex);
             const QJsonValue child = cell.value(QStringLiteral("nested_table"));
-            if (!child.isUndefined() && !child.isNull()) {
+            const QJsonValue blocks = cell.value(QStringLiteral("blocks"));
+            QString contents;
+            if (!blocks.isUndefined() && !blocks.isNull()) {
+                if (!blocks.isArray() || !cellSpans.isEmpty() || (!child.isUndefined() && !child.isNull()))
+                    throw DictApiError("invalid ordered table cell");
+                qsizetype blockIndex = 0;
+                for (const QJsonValue &value : blocks.toArray()) {
+                    if (!value.isObject()) throw DictApiError("invalid ordered table block");
+                    const QString blockLocation = cellLocation.isEmpty() ? QString() : cellLocation + QStringLiteral("-block-%1").arg(blockIndex++);
+                    contents += blockHtml(value.toObject(), effectiveBackground, tableDepth + 1, blockLocation);
+                }
+            } else if (!child.isUndefined() && !child.isNull()) {
                 if (!child.isObject() || !cellSpans.isEmpty()) throw DictApiError("invalid nested table cell");
-                contents = tableHtml(child.toObject(), 0, tableDepth + 1, effectiveBackground);
-            }
+                contents = tableHtml(child.toObject(), 0, tableDepth + 1, effectiveBackground,
+                    cellLocation.isEmpty() ? QString() : cellLocation + QStringLiteral("-table"));
+            } else contents = spansHtml(cellSpans, 0, {}, effectiveBackground);
+            ++cellIndex;
             out += QStringLiteral("<%1 colspan='%2' rowspan='%3' style='%4'>%5</%1>")
                 .arg(tag).arg(colspan).arg(rowspan).arg(style, contents);
         }
         out += QStringLiteral("</tr>");
+        ++rowIndex;
     }
     out += QStringLiteral("</table>");
     return out;
 }
 
-QString MainWindow::blockHtml(const QJsonObject &block) const {
+QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location) const {
     const QString kind = block.value(QStringLiteral("kind")).toString();
     if (kind == QStringLiteral("blank")) return {};
-    if (kind == QStringLiteral("rule")) return QStringLiteral("<hr>");
+    if (kind == QStringLiteral("rule"))
+        return cellBackground.isEmpty() ? QStringLiteral("<hr>")
+            : QStringLiteral("<hr style='background-color:%1'>").arg(backgroundInk(cellBackground));
     const QJsonValue table = block.value(QStringLiteral("table"));
     const QJsonObject feature = block.value(QStringLiteral("feature")).toObject();
     const QString color = feature.value(QStringLiteral("data")).toString();
@@ -1988,7 +2046,7 @@ QString MainWindow::blockHtml(const QJsonObject &block) const {
         return QStringLiteral("<table cellspacing='0' cellpadding='5' style='margin:8px 0;margin-left:%1px'>"
             "<tr><td width='40' bgcolor='%2'>&#160;</td><td>Color sample %2</td></tr></table>").arg(indent).arg(color);
     }
-    if (table.isObject()) return tableHtml(table.toObject(), block.value(QStringLiteral("depth")).toInt());
+    if (table.isObject()) return tableHtml(table.toObject(), block.value(QStringLiteral("depth")).toInt(), tableDepth, cellBackground, location);
     const QJsonArray spans = block.value(QStringLiteral("spans")).toArray();
     const bool poem = hasPoemSpans(spans);
     if (kind == QStringLiteral("paragraph") && block.value(QStringLiteral("depth")).toInt() == 0 &&
@@ -2016,7 +2074,9 @@ QString MainWindow::blockHtml(const QJsonObject &block) const {
     } else if (poem && kind == QStringLiteral("example")) {
         prefix = QStringLiteral("<i>Example:</i> ");
     }
-    const QString body = spansHtml(spans, poem ? outerIndent : 0, prefix);
+    const QString body = spansHtml(spans, poem ? outerIndent : 0, prefix, cellBackground);
+    const QString anchor = kind == QStringLiteral("heading") && !location.isEmpty()
+        ? QStringLiteral("<a name='%1'></a>").arg(location.toHtmlEscaped()) : QString();
     if (poem) {
         // Marked lines are paragraphs already. Prefixes belong to their first line.
         if (kind == QStringLiteral("quotation") || kind == QStringLiteral("example"))
@@ -2024,7 +2084,7 @@ QString MainWindow::blockHtml(const QJsonObject &block) const {
         const QString style = kind == QStringLiteral("term") ? QStringLiteral("font-weight:bold")
             : kind == QStringLiteral("heading") ? QStringLiteral("font-weight:bold;font-size:large")
             : kind == QStringLiteral("preformatted") ? QStringLiteral("font-family:monospace;white-space:pre") : QString();
-        return QStringLiteral("<div style='%1'>%2</div>").arg(style, body);
+        return anchor + QStringLiteral("<div style='%1'>%2</div>").arg(style, body);
     }
     if (kind == QStringLiteral("preformatted")) return QStringLiteral("<pre>%1</pre>").arg(body);
     if (kind == QStringLiteral("definition")) {
@@ -2045,7 +2105,7 @@ QString MainWindow::blockHtml(const QJsonObject &block) const {
         const int sourceLevel = block.value(QStringLiteral("level")).toInt();
         const int headingLevel = sourceLevel >= 1 && sourceLevel <= 6 ? sourceLevel : 3;
         // Preserve the existing h3-sized typography while retaining source semantics and depth.
-        return QStringLiteral("<h%1 style=\"font-family:&quot;%3&quot;;font-size:large;margin-left:%2px\">%4</h%1>")
+        return anchor + QStringLiteral("<h%1 style=\"font-family:&quot;%3&quot;;font-size:large;margin-left:%2px\">%4</h%1>")
             .arg(headingLevel).arg(outerIndent).arg(readerFamily().toHtmlEscaped(), body);
     }
     if (depth > 0)
@@ -2155,16 +2215,23 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
                         for (const QJsonValue &row : nested.value(QStringLiteral("rows")).toArray())
                             for (const QJsonValue &value : row.toObject().value(QStringLiteral("cells")).toArray()) {
                                 const QJsonObject cell = value.toObject();
-                                collectEmbeddedMedia(cell.value(QStringLiteral("spans")).toArray());
-                                if (cell.value(QStringLiteral("nested_table")).isObject()) visit(visit, cell.value(QStringLiteral("nested_table")).toObject(), tableDepth + 1);
+                                const QJsonValue contents = cell.value(QStringLiteral("blocks"));
+                                if (!contents.isUndefined() && !contents.isNull()) {
+                                    for (const QJsonValue &value : contents.toArray()) {
+                                        const QJsonObject block = value.toObject();
+                                        if (block.value(QStringLiteral("table")).isObject()) visit(visit, block.value(QStringLiteral("table")).toObject(), tableDepth + 1);
+                                        else collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
+                                    }
+                                } else {
+                                    collectEmbeddedMedia(cell.value(QStringLiteral("spans")).toArray());
+                                    if (cell.value(QStringLiteral("nested_table")).isObject()) visit(visit, cell.value(QStringLiteral("nested_table")).toObject(), tableDepth + 1);
+                                }
                             }
                     };
                     collectTableMedia(collectTableMedia, object, 1);
                 } else collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
             }
-            if (kind == QStringLiteral("heading"))
-                out += QStringLiteral("<a name='block-%1-%2'></a>").arg(index).arg(blockIndex);
-            out += blockHtml(block);
+            out += blockHtml(block, {}, 1, QStringLiteral("block-%1-%2").arg(index).arg(blockIndex));
         }
     }
     const QJsonArray references = entry.value(QStringLiteral("references")).toArray();

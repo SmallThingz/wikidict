@@ -68,10 +68,9 @@ function explanationProtocolFixture(magic,{explanation='meaning',invalidLength=f
 }
 function presentationSpanLists(entry){
  const values=[entry.display_title||[],entry.preamble_spans||[]];
- for(const section of entry.sections||[])for(const block of section.blocks||[]){
-  values.push(block.spans||[]);
-  if(block.table){values.push(block.table.caption||[]);for(const row of block.table.rows)for(const cell of row.cells)values.push(cell.spans||[]);}
- }
+ const table=value=>{values.push(value.caption||[]);for(const row of value.rows)for(const cell of row.cells){values.push(cell.spans||[]);if(cell.blocks!=null)blocks(cell.blocks);else if(cell.nested_table)table(cell.nested_table);}};
+ const blocks=items=>{for(const block of items){values.push(block.spans||[]);if(block.table)table(block.table);}};
+ for(const section of entry.sections||[])blocks(section.blocks||[]);
  for(const reference of entry.references||[])values.push(reference.spans||[]);
  return values;
 }
@@ -97,7 +96,7 @@ test('DPR2 and DPR3 use strict version framing in every serialized span containe
 });
 test('DPR3 refuses unknown versions incomplete strings UTF8 limits and trailing bytes',async()=>{
  const valid=explanationProtocolFixture('DPR3');
- for(const magic of ['DPR1','DPR8','XXXX']){
+ for(const magic of ['DPR1','DPR9','XXXX']){
   const invalid=Buffer.concat([Buffer.from(magic),valid.subarray(4)]);assert.throws(()=>decode(invalid,{}));
   await assert.rejects(()=>buildIndex(new RawSource(new Blob([dictionaryBlob(1,[['Bad',invalid]])]))));
  }
@@ -215,6 +214,22 @@ test('DPR7 nested cell preserves authored geometry and empty painted grid',async
  assert.throws(()=>decode(withTable(table(0,Buffer.alloc(0),[[cell(0,1,null,badWidth)]])),{}));
 });
 
+function semanticTableGraph(){
+ const spanKeys=['kind','role','text','target','trail','language','classes','direction','explanation','foreground','background','bold','italic','code','small','superscript','subscript','strike','underline'];
+ const spans=values=>values.map(span=>Object.fromEntries(spanKeys.map(key=>{
+  // Core JSON omits only a null Span.background; the web decoder materializes it.
+  if(key==='background'&&!Object.hasOwn(span,key))return [key,null];
+  assert.ok(Object.hasOwn(span,key),`Serialized span field missing: ${key}`);return [key,span[key]];
+ })));
+ const geometry=value=>({border:value?.border??null,cell_spacing:value?.cell_spacing??null,cell_padding:value?.cell_padding??null,width:value?.width??null});
+ const table=value=>value==null?null:{geometry:geometry(value.geometry),caption:spans(value.caption),rows:value.rows.map(row=>({cells:row.cells.map(cell=>({header:cell.header,colspan:cell.colspan,rowspan:cell.rowspan,background:cell.background,spans:spans(cell.spans),nested_table:table(cell.nested_table),blocks:cell.blocks==null?null:cell.blocks.map(block)}))}))};
+ const block=value=>({kind:value.kind,depth:value.depth,level:value.level,list_path:value.list_path??value.path,number:value.number,feature:value.feature??null,anchor:value.anchor,anchor_fallback:value.anchor_fallback,spans:spans(value.spans),table:table(value.table)});
+ return entry=>entry.sections.flatMap((section,section_index)=>section.blocks.flatMap((block,block_index)=>block.table?[{
+  section_index,block_index,section:{level:section.level,title:section.title,anchor:section.anchor,anchor_fallback:section.anchor_fallback},
+  block:{kind:block.kind,depth:block.depth,level:block.level,list_path:block.list_path??block.path,number:block.number,feature:block.feature??null,anchor:block.anchor,anchor_fallback:block.anchor_fallback,spans:spans(block.spans)},table:table(block.table)
+ }]:[]));
+}
+
 // Explicit genuine-product conformance target. No fixture fallback or synthetic credit.
 if(process.env.WIKBLB_GEACEN_INTEROP==='1')test('genuine native geacen DPR7 matches core full semantic table graph',async()=>{
  assert.ok(process.env.WIKBLB_FIXTURE,'WIKBLB_FIXTURE must name the genuine generated language blob');
@@ -229,18 +244,7 @@ if(process.env.WIKBLB_GEACEN_INTEROP==='1')test('genuine native geacen DPR7 matc
  assert.equal(new TextDecoder().decode(payload.subarray(0,4)),'DPR7');
  const actual=decode(payload,{...index.metadata,title:row.title});
  assert.equal(actual.language,expected.language);assert.equal(actual.language_code,expected.language_code);
- const spanKeys=['kind','role','text','target','trail','language','classes','direction','explanation','foreground','background','bold','italic','code','small','superscript','subscript','strike','underline'];
- const spans=values=>values.map(span=>Object.fromEntries(spanKeys.map(key=>{
-  // Core JSON omits only a null Span.background; the web decoder materializes it.
-  if(key==='background'&&!Object.hasOwn(span,key))return [key,null];
-  assert.ok(Object.hasOwn(span,key),`Serialized span field missing: ${key}`);return [key,span[key]];
- })));
- const geometry=value=>({border:value?.border??null,cell_spacing:value?.cell_spacing??null,cell_padding:value?.cell_padding??null,width:value?.width??null});
- const table=value=>value==null?null:{geometry:geometry(value.geometry),caption:spans(value.caption),rows:value.rows.map(row=>({cells:row.cells.map(cell=>({header:cell.header,colspan:cell.colspan,rowspan:cell.rowspan,background:cell.background,spans:spans(cell.spans),nested_table:table(cell.nested_table)}))}))};
- const graph=entry=>entry.sections.flatMap((section,section_index)=>section.blocks.flatMap((block,block_index)=>block.table?[{
-  section_index,block_index,section:{level:section.level,title:section.title,anchor:section.anchor,anchor_fallback:section.anchor_fallback},
-  block:{kind:block.kind,depth:block.depth,level:block.level,list_path:block.list_path??block.path,number:block.number,feature:block.feature??null,anchor:block.anchor,anchor_fallback:block.anchor_fallback,spans:spans(block.spans)},table:table(block.table)
- }]:[]));
+ const graph=semanticTableGraph();
  const actualGraph=graph(actual);assert.deepEqual(actualGraph,graph(expected));
  assert.equal(actualGraph.length,1);assert.deepEqual([actualGraph[0].section_index,actualGraph[0].block_index],[3,0]);
  const grid=actualGraph[0].table;assert.equal(grid.rows.length,1);assert.equal(grid.rows[0].cells.length,4);
@@ -257,4 +261,69 @@ if(process.env.WIKBLB_GEACEN_INTEROP==='1')test('genuine native geacen DPR7 matc
   }
  }
  assert.equal(authoredLeafCells,100);assert.equal(painted,20);assert.equal(emptyPainted,4);
+});
+
+// Hand-encoded DPR8 controls exercise wire boundaries, not compiler acceptance.
+test('DPR8 ordered cells retain complete blocks through raw and DAL1 import',async()=>{
+ const bytes=values=>Buffer.concat(values),zero=()=>testU32(0);
+ const span=text=>bytes([Buffer.from([0,0,0]),...[text,'','','','','',''].map(testString),Buffer.from([0,0])]);
+ const spans=text=>text==null?zero():bytes([testU32(1),span(text)]);
+ const cell=({items=null,text=null,child=null,presence=items==null?0:1}={})=>bytes([Buffer.from([1,1,0,1,0,0]),spans(text),child||Buffer.from([0]),Buffer.from([presence]),...(presence===1?[testU32(items.length),...items]:[])]);
+ const table=cells=>bytes([Buffer.from([1,0]),zero(),testU32(1),testU32(cells.length),...cells]);
+ const block=(kind,text=null,child=null,anchor='')=>bytes([Buffer.from([kind,2,3]),spans(text),Buffer.from([0]),testString('1'),testString('2'),child||Buffer.from([0]),testString(anchor),testString(anchor?'fallback-'+anchor:'')]);
+ const payload=grid=>bytes([Buffer.from('DPR8'),zero(),testU32(1),Buffer.from([2]),testString('Grid'),testString('Grid'),testString(''),testU32(1),block(12,null,grid),...Array.from({length:5},zero)]);
+ const items=[block(0,'before'),block(9,'Cell heading',null,'Cell_heading'),block(5,'item'),block(11),block(12,null,table([cell({text:'child'})])),block(0,'after')];
+ const valid=payload(table([cell({items}),cell({items:[]}),cell()]));
+ const entry=decode(valid,{}),cells=entry.sections[0].blocks[0].table.rows[0].cells;
+ assert.deepEqual(cells[0].blocks.map(b=>b.kind),['paragraph','heading','list_item','rule','table','paragraph']);
+ assert.deepEqual(cells[0].blocks[1],{kind:'heading',depth:2,level:3,spans:cells[0].blocks[1].spans,path:'1',number:'2',anchor:'Cell_heading',anchor_fallback:'fallback-Cell_heading'});
+ assert.equal(cells[0].blocks[1].spans[0].text,'Cell heading');assert.deepEqual(cells[1].blocks,[]);assert.equal(Object.hasOwn(cells[2],'blocks'),false);
+ assert.deepEqual(decodeAlias(aliasPayload({compiled:valid}),'1\tCats').entry.sections,entry.sections);
+ for(const [kind,rows] of [[1,[['Grid',valid]]],[8,[['1\tCats',aliasPayload({compiled:valid})]]]])assert.equal((await buildIndex(new RawSource(new Blob([dictionaryBlob(kind,rows)])))).rows.length,1);
+ for(const invalid of [payload(table([cell({presence:2})])),payload(table([cell({items:[],text:'mixed'})])),payload(table([cell({items:[],child:table([])})])),payload(table([bytes([Buffer.from([0,1,0,1,0,0]),zero(),Buffer.from([0,1]),testU32(1),Buffer.alloc(24)])]))])assert.throws(()=>decode(invalid,{}));
+ // Enough physical bytes for every declared block: failure must use the shared collection budget.
+ const exhausted=bytes([Buffer.from([0,1,0,1,0,0]),zero(),Buffer.from([0,1]),testU32(1<<20),Buffer.alloc(25*(1<<20))]);
+ assert.throws(()=>decode(payload(table([exhausted])),{}));
+ for(let end=0;end<valid.length;end++)assert.throws(()=>decode(valid.subarray(0,end),{}));
+ let deep=table([]);for(let i=0;i<15;i++)deep=table([cell({items:[block(12,null,deep)]})]);
+ assert.doesNotThrow(()=>decode(payload(deep),{}));deep=table([cell({items:[block(12,null,deep)]})]);assert.throws(()=>decode(payload(deep),{}));
+});
+
+// Separately opted-in genuine Writer output: synthetic protocol controls earn no credit here.
+if(process.env.WIKBLB_CELL_BLOCKS_INTEROP==='1')test('genuine Writer DPR8 ordered cells match normal CLI recursive semantic graph',async()=>{
+ assert.ok(process.env.WIKBLB_CELL_BLOCKS_FIXTURE,'WIKBLB_CELL_BLOCKS_FIXTURE must name the genuine generated language blob');
+ assert.ok(process.env.WIKBLB_CELL_BLOCKS_EXPORT,'WIKBLB_CELL_BLOCKS_EXPORT must name its qualified normal CLI JSON');
+ const exported=JSON.parse(await readFile(process.env.WIKBLB_CELL_BLOCKS_EXPORT,'utf8'));
+ assert.equal(exported.schema,'dict.results.v1');assert.equal(exported.entries.length,1);
+ const expected=exported.entries[0];assert.equal(expected.title,'cell-heading-regression');
+ const fixture=new Uint8Array(await readFile(process.env.WIKBLB_CELL_BLOCKS_FIXTURE));
+ const source=new RawSource(new Blob([fixture])),index=await buildIndex(source);
+ assert.equal(index.metadata.kind,'language');
+ const row=index.rows.find(value=>value.title===expected.title);assert.ok(row,'genuine ordered-cell record missing');
+ const payload=await source.read(row.offset,row.length);
+ assert.equal(new TextDecoder().decode(payload.subarray(0,4)),'DPR8');
+ const actual=decode(payload,{...index.metadata,title:row.title});
+ assert.equal(actual.language,expected.language);assert.equal(actual.language_code,expected.language_code);
+ const graph=semanticTableGraph(),actualGraph=graph(actual);
+ assert.deepEqual(actualGraph,graph(expected));
+ assert.equal(actualGraph.length,1);
+ let orderedCells=0,orderedBlocks=0;const ordered=[];
+ const visitTable=value=>{for(const row of value.rows)for(const cell of row.cells){
+  if(cell.blocks!=null){assert.equal(cell.spans.length,0);assert.equal(cell.nested_table,null);orderedCells++;orderedBlocks+=cell.blocks.length;ordered.push(cell);for(const block of cell.blocks)if(block.table)visitTable(block.table);}
+  else if(cell.nested_table)visitTable(cell.nested_table);
+ }};
+ for(const item of actualGraph)visitTable(item.table);
+ assert.equal(orderedCells,1,'genuine fixture must contain exactly one authored ordered cell');
+ assert.equal(orderedBlocks,7,'genuine fixture must contain the seven authored ordered blocks exactly once');
+ const cell=ordered.find(cell=>cell.blocks.some(block=>block.kind==='heading'));assert.ok(cell);
+ assert.deepEqual(cell.blocks.map(block=>block.kind),['paragraph','heading','paragraph','list_item','rule','table','paragraph']);
+ assert.deepEqual([cell.background,cell.colspan,cell.rowspan],['#ffeecc',2,1]);
+ assert.deepEqual([cell.blocks[1].level,cell.blocks[1].anchor,cell.blocks[1].anchor_fallback],[3,'حرف','.D8.AD.D8.B1.D9.81']);
+ assert.deepEqual(cell.blocks[5].table.rows.map(row=>row.cells.length),[2]);
+ assert.equal(actual.sections.some(section=>section.anchor==='حرف'),false,'cell heading must not become a Section');
+ const outside=[...actual.sections,...actual.sections.flatMap(section=>section.blocks)].find(value=>value.anchor==='حرف_2');assert.ok(outside);
+ assert.deepEqual([outside.level,outside.anchor_fallback],[3,'.D8.AD.D8.B1.D9.81_2']);
+ const actions=[];const visitBlocks=blocks=>{for(const block of blocks){for(const span of block.spans)if(span.kind==='link')actions.push(span.target);if(block.table)for(const row of block.table.rows)for(const cell of row.cells){for(const span of cell.spans)if(span.kind==='link')actions.push(span.target);if(cell.blocks)visitBlocks(cell.blocks);}}};
+ visitBlocks(cell.blocks);assert.deepEqual(actions,['Before','Middle','Item','Child','After']);
+ assert.equal(cell.blocks[2].spans.find(span=>span.target==='Middle')?.italic,true);
 });
