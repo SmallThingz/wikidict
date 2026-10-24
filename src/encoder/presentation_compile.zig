@@ -8555,7 +8555,10 @@ pub const Renderer = struct {
                         inline_line_end = syntax.logicalEnd(input, pos);
                     continue;
                 }
-                const table = try self.parseTable(input, pos, try self.swatchCssHex(table_tag, "background-color"), try self.tableCellBackground(table_tag, null), try self.wikiTableForeground(table_tag, self.bodyFormattingStyle(.{})));
+                var table = try self.parseTable(input, pos, try self.swatchCssHex(table_tag, "background-color"), try self.tableCellBackground(table_tag, null), try self.wikiTableForeground(table_tag, self.bodyFormattingStyle(.{})));
+                if (legacyTableGeometry(table_tag)) |geometry| {
+                    if (@import("blob_encoder").presentation_types.validTableGeometry(geometry)) table.table.geometry = geometry;
+                }
                 pos = table.end;
                 // A close-marker suffix remains on its authored physical line;
                 // it cannot introduce a new wiki list, heading or leading-space block.
@@ -9312,6 +9315,11 @@ pub const Renderer = struct {
     // zero remain different values; unrelated CSS stays on the existing path.
     fn htmlNestedGeometry(tag: syntax.Tag) ?TableGeometry {
         if (!htmlNestedAttributes(tag.attrs, &.{ "border", "cellspacing", "cellpadding", "width" })) return null;
+        return legacyTableGeometry(tag);
+    }
+    // Wiki openers can carry unrelated style/class/rules attributes. Project
+    // only the existing typed legacy fields; do not infer geometry from CSS.
+    fn legacyTableGeometry(tag: syntax.Tag) ?TableGeometry {
         var result: TableGeometry = .{};
         if (tag.attr("border")) |raw| result.border = htmlNestedUnsigned(u16, raw) orelse return null;
         if (tag.attr("cellspacing")) |raw| result.cell_spacing = htmlNestedUnsigned(u16, raw) orelse return null;
@@ -28897,4 +28905,86 @@ test "matched inline HTML preserves source-isolated closing bracket provenance" 
     try fragments.inlineText("]", .{}, 0);
     try std.testing.expectEqualStrings("]]", try flattened(a, fragments.spans.items));
     for (fragments.spans.items) |span| try std.testing.expectEqual(Provenance.parsed, span.provenance);
+}
+
+test "captured dottir wiki tables retain authored cellpadding beside CSS through codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const fragments = [_][]const u8{ "{| style=\"float:right; margin-left:0.5em; margin-bottom:0.5em; border: 1px solid #AAAAAA; border-collapse:collapse;\" cellpadding=\"3\" rules=\"all\"\n! width=\"65\" bgcolor=\"#F4F4F4\" | [[hulp:naamval|Naamval]]\n! bgcolor=\"#FFFFE0\" colspan=\"2\" | [[hulp:enkelvoud|Enkelvoud]]\n! bgcolor=\"#FFFFE0\" colspan=\"2\" | [[hulp:meervoud|Meervoud]]\n|- align=\"center\"\n!\n! bgcolor=\"#FFFFE0\" | [[hulp:onbepaald|Onbepaald]]\n! bgcolor=\"#FFFFE0\" | [[hulp:bepaald|Bepaald]]\n! bgcolor=\"#FFFFE0\" | [[hulp:onbepaald|Onbepaald]]\n! bgcolor=\"#FFFFE0\" | [[hulp:bepaald|Bepaald]]\n|- align=\"center\"\n| bgcolor=\"#F4F4F4\" | '''[[hulp:nominatief|Nominatief]]'''\n| dóttir [[vroulik|<abbr title=\"Vroulik\" style=\"background-color: #f8f9fa;border-radius: 2px;border: 1px solid #c8ccd1;padding: 0 0.2em 0 0.1em;font-style: italic\">v</abbr>]] || dóttirin || døtur || døturnar\n|- align=\"center\"\n| bgcolor=\"#F4F4F4\" | '''[[hulp:genitief|Genitief]]'''\n| dóttur || dótturinnar || døtra || døtranna\n|- align=\"center\"\n| bgcolor=\"#F4F4F4\" | '''[[Hulp:datief|Datief]]'''\n| dóttur || dóttrini || døtrum || døtrunum\n|- align=\"center\"\n| bgcolor=\"#F4F4F4\" | '''[[hulp:akkusatief|Akkusatief]]'''\n| dóttur || dóttrina || døtur || døturnar\n|}\n", "{| style=\"float:right; margin-left:0.5em; margin-bottom:0.5em; border: 1px solid #AAAAAA; border-collapse:collapse;\" cellpadding=\"3\" rules=\"all\"\n! width=\"65\" bgcolor=\"#F4F4F4\" | [[hulp:naamval|Naamval]]\n! bgcolor=\"#FFFFE0\" colspan=\"2\" | [[hulp:enkelvoud|Enkelvoud]]\n! bgcolor=\"#FFFFE0\" colspan=\"2\" | [[hulp:meervoud|Meervoud]]\n|-\n!\n! bgcolor=\"#FFFFE0\" | [[hulp:onbepaald|Onbepaald]]\n! bgcolor=\"#FFFFE0\" | [[hulp:bepaald|Bepaald]]\n! bgcolor=\"#FFFFE0\" | [[hulp:onbepaald|Onbepaald]]\n! bgcolor=\"#FFFFE0\" | [[hulp:bepaald|Bepaald]]\n|- \n| bgcolor=\"#F4F4F4\" | '''[[hulp:nominatief|Nominatief]]'''\n| dóttir [[vroulik|<abbr title=\"Vroulik\" style=\"background-color: #f8f9fa;border-radius: 2px;border: 1px solid #c8ccd1;padding: 0 0.2em 0 0.1em;font-style: italic\">v</abbr>]] || dóttirin || dœtr || dœtrnar\n|-\n| bgcolor=\"#F4F4F4\" | '''[[hulp:genitief|Genitief]]'''\n| dóttur || dótturinnar || dœtra || dœtranna\n|-\n| bgcolor=\"#F4F4F4\" | '''[[Hulp:datief|Datief]]'''\n| dóttur || dótturinni || dœtrum || dœtrunum\n|-\n| bgcolor=\"#F4F4F4\" | '''[[hulp:akkusatief|Akkusatief]]'''\n| dóttur || dótturina || dœtr || dœtrnar\n|}\n", "{| style=\"float:right; margin-left:0.5em; margin-bottom:0.5em; border: 1px solid #AAAAAA; border-collapse:collapse;\" cellpadding=\"3\" rules=\"all\"\n! width=\"65\" bgcolor=\"#F4F4F4\" | [[hulp:naamval|Naamval]]\n! bgcolor=\"#FFFFE0\" colspan=\"2\" | [[hulp:enkelvoud|Enkelvoud]]\n! bgcolor=\"#FFFFE0\" colspan=\"2\" | [[hulp:meervoud|Meervoud]]\n|-\n!\n! bgcolor=\"#FFFFE0\" | [[hulp:onbepaald|Onbepaald]]\n! bgcolor=\"#FFFFE0\" | [[hulp:bepaald|Bepaald]]\n! bgcolor=\"#FFFFE0\" | [[hulp:onbepaald|Onbepaald]]\n! bgcolor=\"#FFFFE0\" | [[hulp:bepaald|Bepaald]]\n|- \n| bgcolor=\"#F4F4F4\" | '''[[hulp:nominatief|Nominatief]]'''\n| dóttir [[vroulik|<abbr title=\"Vroulik\" style=\"background-color: #f8f9fa;border-radius: 2px;border: 1px solid #c8ccd1;padding: 0 0.2em 0 0.1em;font-style: italic\">v</abbr>]] || dóttirin || dætur || dæturnar\n|-\n| bgcolor=\"#F4F4F4\" | '''[[hulp:genitief|Genitief]]'''\n| dóttur || dótturinnar || dætra || dætranna\n|-\n| bgcolor=\"#F4F4F4\" | '''[[Hulp:datief|Datief]]'''\n| dóttur || dótturinni || dætrum || dætrunum\n|-\n| bgcolor=\"#F4F4F4\" | '''[[hulp:akkusatief|Akkusatief]]'''\n| dóttur || dótturina || dætur || dæturnar\n|}\n" };
+    const blob = @import("blob_encoder");
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    for (fragments) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{ .title = "dóttir" } };
+        const blocks = try renderer.renderBody(source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        const table_value = blocks[0].table.?;
+        try std.testing.expect(table_value.geometry != null);
+        const geometry = table_value.geometry.?;
+        try std.testing.expectEqual(@as(?u16, 3), geometry.cell_padding);
+        // The authored CSS border/float is not a legacy border/width value.
+        try std.testing.expect(geometry.border == null and geometry.cell_spacing == null and geometry.width == null);
+        try std.testing.expectEqual(@as(usize, 6), table_value.rows.len);
+        try std.testing.expectEqual(@as(usize, 3), table_value.rows[0].cells.len);
+        try std.testing.expectEqual(@as(u16, 2), table_value.rows[0].cells[1].colspan);
+        try std.testing.expectEqualStrings("Naamval", table_value.rows[0].cells[0].spans[0].text);
+        try std.testing.expect(table_value.rows[0].cells[0].spans[0].kind == .link);
+        const encoded = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &[_]Section{.{ .blocks = blocks }}, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+        const stored = try blob.presentation_codec.decodeAlloc(a, encoded, "dóttir", .language, .{ .code = "af", .heading = "Afrikaans" });
+        const saved_table = stored.entry.sections[0].blocks[0].table.?;
+        try std.testing.expect(saved_table.geometry != null);
+        try std.testing.expectEqual(@as(?u16, 3), saved_table.geometry.?.cell_padding);
+        try std.testing.expect(saved_table.geometry.?.border == null and saved_table.geometry.?.cell_spacing == null and saved_table.geometry.?.width == null);
+        try std.testing.expectEqual(table_value.rows.len, saved_table.rows.len);
+        try std.testing.expectEqualStrings(table_value.rows[0].cells[0].spans[0].target, saved_table.rows[0].cells[0].spans[0].target);
+        try std.testing.expectEqualStrings("Naamval", saved_table.rows[0].cells[0].spans[0].text);
+    }
+}
+
+test "wiki opener geometry preserves zero units nesting and absent or invalid controls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { attrs: []const u8, present: bool }{
+        .{ .attrs = "", .present = false },
+        .{ .attrs = " class='ordinary' style='border:1px solid red' rules='all'", .present = false },
+        .{ .attrs = " cellpadding='-1'", .present = false },
+        .{ .attrs = " cellpadding='1.5'", .present = false },
+        .{ .attrs = " cellpadding='3px'", .present = false },
+        .{ .attrs = " cellpadding='65536'", .present = false },
+        .{ .attrs = " cellpadding=' 3 '", .present = false },
+        .{ .attrs = " width='101%'", .present = false },
+        .{ .attrs = " border='0' cellspacing='0' cellpadding='0' width='50%' class='ordinary'", .present = true },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(a, "{{|{s}\n| [[X|body]] || second\n|}}", .{case.attrs});
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        const table_value = blocks[0].table.?;
+        try std.testing.expectEqual(@as(usize, 2), table_value.rows[0].cells.len);
+        try std.testing.expectEqual(case.present, table_value.geometry != null);
+        try std.testing.expectEqualStrings("body", table_value.rows[0].cells[0].spans[0].text);
+        try std.testing.expectEqualStrings("X", table_value.rows[0].cells[0].spans[0].target);
+        if (table_value.geometry) |geometry| {
+            try std.testing.expectEqual(@as(?u16, 0), geometry.border);
+            try std.testing.expectEqual(@as(?u16, 0), geometry.cell_spacing);
+            try std.testing.expectEqual(@as(?u16, 0), geometry.cell_padding);
+            try std.testing.expect(geometry.width.?.unit == .percent);
+            try std.testing.expectEqual(@as(u32, 50), geometry.width.?.value);
+        }
+    }
+    var nested: Renderer = .{ .a = a, .context = .{} };
+    const nested_blocks = try nested.renderBody("{| cellpadding=3\n| lead\n{| cellpadding=0 width=20px\n| inner || second\n|}\n|}suffix");
+    const parent_table = nested_blocks[0].table.?;
+    try std.testing.expect(parent_table.geometry != null);
+    try std.testing.expectEqual(@as(?u16, 3), parent_table.geometry.?.cell_padding);
+    const child_table = parent_table.rows[0].cells[0].blocks.?[1].table.?;
+    try std.testing.expect(child_table.geometry != null);
+    try std.testing.expectEqual(@as(?u16, 0), child_table.geometry.?.cell_padding);
+    try std.testing.expect(child_table.geometry.?.width.?.unit == .px);
+    try std.testing.expectEqual(@as(u32, 20), child_table.geometry.?.width.?.value);
+    try std.testing.expectEqualStrings("suffix", try flattened(a, nested_blocks[1].spans));
+    // HTML nested-grid admission keeps its original unrelated-attribute refusal.
+    const strict_html: syntax.Tag = .{ .name = "table", .attrs = " cellpadding=3 class=ordinary", .end = 0, .closing = false, .self_closing = false };
+    try std.testing.expect(Renderer.htmlNestedGeometry(strict_html) == null);
 }
