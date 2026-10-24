@@ -1545,33 +1545,78 @@ fn unsectionedExpandedLanguage(codes: LanguageCodes, source: []const u8) ?Resolv
     return found;
 }
 
-// The pinned AF -af-dw- template has no language heading. It emits these
-// exact participle/verb-form categories with an explicit Afrikaans name.
-// This is category authority, never an edition or inline-lang default.
+// AF source templates and reviewed authored categories provide a finite owner
+// convention. The edition scopes this evidence; it never supplies the owner.
 fn unsectionedAfrikaansExpandedLanguage(codes: LanguageCodes, source: []const u8) ?ResolvedLanguage {
     const namespaces = codes.namespace_catalog orelse return null;
     if (!std.mem.eql(u8, namespaces.content_language, "af")) return null;
+    const Rule = struct { category: []const u8, label: []const u8, code: []const u8 };
+    const rules = [_]Rule{
+        .{ .category = "Woorde in Japannees", .label = "Japannees", .code = "ja" },
+        .{ .category = "Voornaamwoorde in Japannees", .label = "Japannees", .code = "ja" },
+        .{ .category = "Selfstandige naamwoorde in Japannees", .label = "Japannees", .code = "ja" },
+        .{ .category = "Werkwoorde in Japannees", .label = "Japannees", .code = "ja" },
+        .{ .category = "Byvoeglike naamwoorde in Japannees", .label = "Japannees", .code = "ja" },
+        .{ .category = "Woorde in Duits", .label = "Duits", .code = "de" },
+        .{ .category = "Woorde in Nederlands", .label = "Nederlands", .code = "nl" },
+        .{ .category = "Vervoeging in Nederlands", .label = "Nederlands", .code = "nl" },
+        .{ .category = "Selfstandige naamwoorde in Afrikaans", .label = "Afrikaans", .code = "af" },
+        .{ .category = "Selfstandige naamwoordvorme in Afrikaans", .label = "Afrikaans", .code = "af" },
+        .{ .category = "Werkwoorde in Afrikaans", .label = "Afrikaans", .code = "af" },
+    };
     var categories: language_source.CategoryIterator = .{ .source = source };
     var found: ?ResolvedLanguage = null;
+    var constrained: ?ResolvedLanguage = null;
     while (categories.next()) |target| {
         const title = namespaces.ofTitle(target);
         if (title.id != 14) continue;
         const name = std.mem.trim(u8, title.text, " \t\r\n");
-        const prefix = for ([_][]const u8{
-            "Deelwoorde in ",
-            "Werkwoordvorme in ",
-            "Voltooide deelwoorde in ",
-            "Teenwoordige deelwoorde in ",
-        }) |candidate| {
-            if (std.mem.eql(u8, name, std.mem.trimEnd(u8, candidate, " "))) return null;
-            if (std.mem.startsWith(u8, name, candidate)) break candidate;
-        } else continue;
-        const label = std.mem.trim(u8, name[prefix.len..], " \t\r\n");
-        const language = codes.resolveStrong(label) orelse codes.resolveTrusted(label) orelse return null;
-        // Unlike the parameterized BG templates, this source convention fixes
-        // Afrikaans. A foreign or unknown recognized owner is not ignorable.
-        if (!std.mem.eql(u8, language.code, "af")) return null;
-        found = language;
+        var label: ?[]const u8 = null;
+        var required_code: ?[]const u8 = null;
+        // Preserve the source178 AF-only participle convention and its trust
+        // rules, including its exact registered same-owner aliases.
+        for ([_][]const u8{
+            "Deelwoorde in ",           "Werkwoordvorme in ",
+            "Voltooide deelwoorde in ", "Teenwoordige deelwoorde in ",
+        }) |prefix| {
+            if (std.mem.eql(u8, name, std.mem.trimEnd(u8, prefix, " "))) return null;
+            if (std.mem.startsWith(u8, name, prefix)) {
+                label = std.mem.trim(u8, name[prefix.len..], " \t\r\n");
+                required_code = "af";
+                break;
+            }
+        }
+        if (label == null) {
+            for (rules) |rule| {
+                if (std.mem.eql(u8, name, rule.category)) {
+                    label = rule.label;
+                    required_code = rule.code;
+                    break;
+                }
+            }
+            if (label == null) {
+                // An unsupported wrapper cannot supply positive authority.
+                // Its trusted owner still constrains compatibility with a
+                // separately proved owner; unknown/conflicting labels refuse.
+                for ([_][]const u8{
+                    "Woorde in ",                      "Voornaamwoorde in ",        "Selfstandige naamwoorde in ",
+                    "Werkwoorde in ",                  "Byvoeglike naamwoorde in ", "Vervoeging in ",
+                    "Selfstandige naamwoordvorme in ",
+                }) |prefix| {
+                    if (std.mem.eql(u8, name, std.mem.trimEnd(u8, prefix, " "))) return null;
+                    if (std.mem.startsWith(u8, name, prefix)) {
+                        label = std.mem.trim(u8, name[prefix.len..], " \t\r\n");
+                        break;
+                    }
+                }
+                if (label == null) continue;
+            }
+        }
+        const language = codes.resolveStrong(label.?) orelse codes.resolveTrusted(label.?) orelse return null;
+        if (required_code) |expected| if (!std.mem.eql(u8, language.code, expected)) return null;
+        if (constrained) |previous| if (!std.mem.eql(u8, previous.code, language.code)) return null;
+        constrained = language;
+        if (required_code != null) found = language;
     }
     return found;
 }
@@ -8460,4 +8505,321 @@ test "captured Arabic translation table keeps language-like cell headings in the
     }
     try std.testing.expectEqual(@as(usize, 1), translations);
     try std.testing.expectEqual(@as(usize, 1), translation_cells);
+}
+
+test "AF source category whitelist preserves supported owners and typed bodies through Writer" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocation = arena.allocator();
+    const Fixture = struct {
+        const body = "# keep [[Target|label]]\n{| cellpadding=3\n| left || [[Cell|right]]\n|}\nword<ref>[https://example.test citation\ncontinued]</ref>\n<references />\n";
+        fn makeCatalog(allocator: std.mem.Allocator, edition: []const u8) !@import("namespace_registry").Registry {
+            return @import("namespace_registry").Registry.init(allocator, try std.fmt.allocPrint(
+                allocator,
+                "# wikidict-namespace-registry-v1\n# wiki\t{s}wiktionary\n# dump-date\t20261001\n# content-language\t{s}\n" ++
+                    "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+                    "6\tLêer\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tfiles\n" ++
+                    "10\tSjabloon\tTemplate\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+                    "14\tKategorie\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tcategories\n",
+                .{ edition, edition },
+            ));
+        }
+        fn resolve(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+            for ([_]struct { label: []const u8, code: []const u8, heading: []const u8 }{
+                .{ .label = "Afrikaans", .code = "af", .heading = "Afrikaans" },
+                .{ .label = "Japannees", .code = "ja", .heading = "Japanese" },
+                .{ .label = "Duits", .code = "de", .heading = "German" },
+                .{ .label = "Nederlands", .code = "nl", .heading = "Dutch" },
+                .{ .label = "Engels", .code = "en", .heading = "English" },
+            }) |candidate| if (std.mem.eql(u8, name, candidate.label) or std.mem.eql(u8, name, candidate.heading)) return .{ .code = candidate.code, .heading = candidate.heading };
+            if (std.mem.eql(u8, name, "AF alias")) return .{ .code = "af", .heading = "Afrikaans" };
+            return null;
+        }
+        fn get(raw_context: ?*const anyopaque, name: []const u8) ?[]const u8 {
+            return if (resolve(raw_context, name)) |language| language.code else null;
+        }
+        fn deny(_: ?*const anyopaque, _: []const u8) ?ResolvedLanguage {
+            return null;
+        }
+        fn content(_: ?*const anyopaque) ?ResolvedLanguage {
+            return .{ .code = "af", .heading = "Afrikaans" };
+        }
+        fn languageCodes(namespace_catalog: *const @import("namespace_registry").Registry) LanguageCodes {
+            return .{ .namespace_catalog = namespace_catalog, .get_fn = get, .resolve_fn = resolve, .strong_fn = resolve, .trusted_fn = resolve, .content_fn = content };
+        }
+        fn check(allocator: std.mem.Allocator, output_root: []const u8, codes: LanguageCodes, page_title: []const u8, input_source: []const u8, raw_source: ?[]const u8, expected_owner: []const u8, expected_code: []const u8) !void {
+            var writer = try Writer.init(std.testing.io, allocator, output_root);
+            defer writer.deinit();
+            writer.language_codes = codes;
+            try writer.addExpandedPage(allocator, .{ .id = 0, .kind = .language }, page_title, input_source, raw_source orelse input_source, null);
+            const stats = try writer.finish(codes);
+            try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+            try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+            try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
+            const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(allocator, &.{ output_root, "fallback-pages.jsonl" }), allocator, .limited(4096));
+            try std.testing.expect(std.mem.indexOf(u8, report, "literal_markup") != null);
+            if (expected_code.len != 0) try std.testing.expect(std.mem.indexOf(u8, report, "missing_language_heading") == null);
+            var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(allocator, output_root, expected_owner));
+            defer mapped.deinit();
+            const blob = try blob_format.inspect(mapped.bytes);
+            const metadata = try blob.languageMetadata();
+            try std.testing.expectEqualStrings(expected_code, metadata.code);
+            var index = try blob.buildTrustedIndexAlloc(allocator);
+            defer index.deinit(allocator);
+            const record = (try index.find(page_title)).?;
+            const decoded = try blobs.presentation_codec.decodeAlloc(allocator, record.payload, record.title, .language, metadata);
+            try std.testing.expectEqualStrings(expected_owner, decoded.entry.language.?);
+            try std.testing.expectEqualStrings(expected_code, decoded.entry.language_code);
+            try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(allocator, decoded));
+            var targets: usize = 0;
+            var cells: usize = 0;
+            var markers: usize = 0;
+            var tables: usize = 0;
+            for (decoded.entry.sections) |section| for (section.blocks) |block| {
+                for (block.spans) |span| {
+                    if (span.kind == .link and std.mem.eql(u8, span.target, "Target")) {
+                        targets += 1;
+                        try std.testing.expectEqualStrings("label", span.text);
+                    }
+                    if (span.role == .reference) {
+                        markers += 1;
+                        try std.testing.expectEqualStrings("[1]", span.text);
+                        try std.testing.expectEqualStrings("#reference-1", span.target);
+                        try std.testing.expect(span.superscript);
+                    }
+                }
+                if (block.table) |table| {
+                    tables += 1;
+                    try std.testing.expect(table.geometry != null);
+                    try std.testing.expectEqual(@as(?u16, 3), table.geometry.?.cell_padding);
+                    for (table.rows) |row| for (row.cells) |cell| {
+                        cells += 1;
+                        for (cell.spans) |span| if (span.kind == .link) {
+                            try std.testing.expectEqualStrings("Cell", span.target);
+                            try std.testing.expectEqualStrings("right", span.text);
+                        };
+                    };
+                }
+            };
+            try std.testing.expectEqual(@as(usize, 1), targets);
+            try std.testing.expectEqual(@as(usize, 1), markers);
+            try std.testing.expectEqual(@as(usize, 1), tables);
+            try std.testing.expectEqual(@as(usize, 2), cells);
+            try std.testing.expectEqual(@as(usize, 1), decoded.entry.references.len);
+            var reference_text: std.ArrayList(u8) = .empty;
+            var urls: usize = 0;
+            for (decoded.entry.references[0].spans) |span| {
+                try reference_text.appendSlice(allocator, span.text);
+                if (span.kind == .external_link) {
+                    urls += 1;
+                    try std.testing.expectEqualStrings("https://example.test", span.text);
+                    try std.testing.expectEqualStrings("https://example.test", span.target);
+                } else try std.testing.expect(span.kind == .text and span.target.len == 0);
+            }
+            try std.testing.expectEqual(@as(usize, 1), urls);
+            try std.testing.expectEqualStrings("[https://example.test citation continued]", reference_text.items);
+        }
+    };
+
+    var catalog = try Fixture.makeCatalog(allocation, "af");
+    defer catalog.deinit();
+    const code_table = Fixture.languageCodes(&catalog);
+    const cases = [_]struct { category: []const u8, owner: []const u8, code: []const u8 }{
+        .{ .category = "Woorde in Japannees", .owner = "Japanese", .code = "ja" },
+        .{ .category = "Voornaamwoorde in Japannees", .owner = "Japanese", .code = "ja" },
+        .{ .category = "Selfstandige naamwoorde in Japannees", .owner = "Japanese", .code = "ja" },
+        .{ .category = "Werkwoorde in Japannees", .owner = "Japanese", .code = "ja" },
+        .{ .category = "Byvoeglike naamwoorde in Japannees", .owner = "Japanese", .code = "ja" },
+        .{ .category = "Woorde in Duits", .owner = "German", .code = "de" },
+        .{ .category = "Woorde in Nederlands", .owner = "Dutch", .code = "nl" },
+        .{ .category = "Vervoeging in Nederlands", .owner = "Dutch", .code = "nl" },
+        .{ .category = "Selfstandige naamwoorde in Afrikaans", .owner = "Afrikaans", .code = "af" },
+        .{ .category = "Selfstandige naamwoordvorme in Afrikaans", .owner = "Afrikaans", .code = "af" },
+        .{ .category = "Werkwoorde in Afrikaans", .owner = "Afrikaans", .code = "af" },
+        .{ .category = "Deelwoorde in Afrikaans", .owner = "Afrikaans", .code = "af" },
+        .{ .category = "Werkwoordvorme in Afrikaans", .owner = "Afrikaans", .code = "af" },
+        .{ .category = "Voltooide deelwoorde in Afrikaans", .owner = "Afrikaans", .code = "af" },
+        .{ .category = "Teenwoordige deelwoorde in Afrikaans", .owner = "Afrikaans", .code = "af" },
+    };
+    for (cases, 0..) |case, case_index| {
+        const test_source = try std.fmt.allocPrint(allocation, "{s}[[Kategorie:{s}]]", .{ Fixture.body, case.category });
+        try Fixture.check(allocation, try std.fmt.allocPrint(allocation, ".zig-cache/tmp/{s}/positive-{d}", .{ tmp.sub_path, case_index }), code_table, "entry", test_source, null, case.owner, case.code);
+    }
+}
+
+test "AF source category whitelist preserves active evidence conflicts and root priority" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocation = arena.allocator();
+    const Fixture = struct {
+        const body = "# keep [[Target|label]]\n{| cellpadding=3\n| left || [[Cell|right]]\n|}\nword<ref>[https://example.test citation\ncontinued]</ref>\n<references />\n";
+        fn makeCatalog(allocator: std.mem.Allocator, edition: []const u8) !@import("namespace_registry").Registry {
+            return @import("namespace_registry").Registry.init(allocator, try std.fmt.allocPrint(
+                allocator,
+                "# wikidict-namespace-registry-v1\n# wiki\t{s}wiktionary\n# dump-date\t20261001\n# content-language\t{s}\n" ++
+                    "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+                    "6\tLêer\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tfiles\n" ++
+                    "10\tSjabloon\tTemplate\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+                    "14\tKategorie\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tcategories\n",
+                .{ edition, edition },
+            ));
+        }
+        fn resolve(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+            for ([_]struct { label: []const u8, code: []const u8, heading: []const u8 }{
+                .{ .label = "Afrikaans", .code = "af", .heading = "Afrikaans" },
+                .{ .label = "Japannees", .code = "ja", .heading = "Japanese" },
+                .{ .label = "Duits", .code = "de", .heading = "German" },
+                .{ .label = "Nederlands", .code = "nl", .heading = "Dutch" },
+                .{ .label = "Engels", .code = "en", .heading = "English" },
+            }) |candidate| if (std.mem.eql(u8, name, candidate.label) or std.mem.eql(u8, name, candidate.heading)) return .{ .code = candidate.code, .heading = candidate.heading };
+            if (std.mem.eql(u8, name, "AF alias")) return .{ .code = "af", .heading = "Afrikaans" };
+            return null;
+        }
+        fn get(raw_context: ?*const anyopaque, name: []const u8) ?[]const u8 {
+            return if (resolve(raw_context, name)) |language| language.code else null;
+        }
+        fn deny(_: ?*const anyopaque, _: []const u8) ?ResolvedLanguage {
+            return null;
+        }
+        fn content(_: ?*const anyopaque) ?ResolvedLanguage {
+            return .{ .code = "af", .heading = "Afrikaans" };
+        }
+        fn languageCodes(namespace_catalog: *const @import("namespace_registry").Registry) LanguageCodes {
+            return .{ .namespace_catalog = namespace_catalog, .get_fn = get, .resolve_fn = resolve, .strong_fn = resolve, .trusted_fn = resolve, .content_fn = content };
+        }
+        fn check(allocator: std.mem.Allocator, output_root: []const u8, codes: LanguageCodes, page_title: []const u8, input_source: []const u8, raw_source: ?[]const u8, expected_owner: []const u8, expected_code: []const u8) !void {
+            var writer = try Writer.init(std.testing.io, allocator, output_root);
+            defer writer.deinit();
+            writer.language_codes = codes;
+            try writer.addExpandedPage(allocator, .{ .id = 0, .kind = .language }, page_title, input_source, raw_source orelse input_source, null);
+            const stats = try writer.finish(codes);
+            try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+            try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+            try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
+            const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(allocator, &.{ output_root, "fallback-pages.jsonl" }), allocator, .limited(4096));
+            try std.testing.expect(std.mem.indexOf(u8, report, "literal_markup") != null);
+            if (expected_code.len != 0) try std.testing.expect(std.mem.indexOf(u8, report, "missing_language_heading") == null);
+            var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(allocator, output_root, expected_owner));
+            defer mapped.deinit();
+            const blob = try blob_format.inspect(mapped.bytes);
+            const metadata = try blob.languageMetadata();
+            try std.testing.expectEqualStrings(expected_code, metadata.code);
+            var index = try blob.buildTrustedIndexAlloc(allocator);
+            defer index.deinit(allocator);
+            const record = (try index.find(page_title)).?;
+            const decoded = try blobs.presentation_codec.decodeAlloc(allocator, record.payload, record.title, .language, metadata);
+            try std.testing.expectEqualStrings(expected_owner, decoded.entry.language.?);
+            try std.testing.expectEqualStrings(expected_code, decoded.entry.language_code);
+            try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(allocator, decoded));
+            var targets: usize = 0;
+            var cells: usize = 0;
+            var markers: usize = 0;
+            var tables: usize = 0;
+            for (decoded.entry.sections) |section| for (section.blocks) |block| {
+                for (block.spans) |span| {
+                    if (span.kind == .link and std.mem.eql(u8, span.target, "Target")) {
+                        targets += 1;
+                        try std.testing.expectEqualStrings("label", span.text);
+                    }
+                    if (span.role == .reference) {
+                        markers += 1;
+                        try std.testing.expectEqualStrings("[1]", span.text);
+                        try std.testing.expectEqualStrings("#reference-1", span.target);
+                        try std.testing.expect(span.superscript);
+                    }
+                }
+                if (block.table) |table| {
+                    tables += 1;
+                    try std.testing.expect(table.geometry != null);
+                    try std.testing.expectEqual(@as(?u16, 3), table.geometry.?.cell_padding);
+                    for (table.rows) |row| for (row.cells) |cell| {
+                        cells += 1;
+                        for (cell.spans) |span| if (span.kind == .link) {
+                            try std.testing.expectEqualStrings("Cell", span.target);
+                            try std.testing.expectEqualStrings("right", span.text);
+                        };
+                    };
+                }
+            };
+            try std.testing.expectEqual(@as(usize, 1), targets);
+            try std.testing.expectEqual(@as(usize, 1), markers);
+            try std.testing.expectEqual(@as(usize, 1), tables);
+            try std.testing.expectEqual(@as(usize, 2), cells);
+            try std.testing.expectEqual(@as(usize, 1), decoded.entry.references.len);
+            var reference_text: std.ArrayList(u8) = .empty;
+            var urls: usize = 0;
+            for (decoded.entry.references[0].spans) |span| {
+                try reference_text.appendSlice(allocator, span.text);
+                if (span.kind == .external_link) {
+                    urls += 1;
+                    try std.testing.expectEqualStrings("https://example.test", span.text);
+                    try std.testing.expectEqualStrings("https://example.test", span.target);
+                } else try std.testing.expect(span.kind == .text and span.target.len == 0);
+            }
+            try std.testing.expectEqual(@as(usize, 1), urls);
+            try std.testing.expectEqualStrings("[https://example.test citation continued]", reference_text.items);
+        }
+    };
+
+    var catalog = try Fixture.makeCatalog(allocation, "af");
+    defer catalog.deinit();
+    const code_table = Fixture.languageCodes(&catalog);
+    const cases = [_]struct { tail: []const u8, prefix: []const u8 = "", raw: ?[]const u8 = null, title: []const u8 = "entry", owner: []const u8 = "Unclassified", code: []const u8 = "" }{
+        .{ .tail = "" },
+        .{ .tail = "", .title = "Japannees" },
+        .{ .tail = "漢字 <span lang=ja>Japanese script</span>" },
+        .{ .tail = "[[Kategorie:Japannees]]" },
+        .{ .tail = "[[Kategorie:Afrikaans]]" },
+        .{ .tail = "[[Kategorie:Gotiese alfabet]]" },
+        .{ .tail = "[[:Kategorie:Woorde in Japannees]]" },
+        .{ .tail = "<!--[[Kategorie:Woorde in Japannees]]-->" },
+        .{ .tail = "<nowiki>[[Kategorie:Woorde in Japannees]]</nowiki>" },
+        .{ .tail = "<pre>[[Kategorie:Woorde in Japannees]]</pre>" },
+        .{ .tail = "<includeonly>[[Kategorie:Woorde in Japannees]]</includeonly>" },
+        .{ .tail = "", .raw = "{{outer|[[Kategorie:Woorde in Japannees]]}}" },
+        .{ .tail = "[[Kategorie:Woorde in]]" },
+        .{ .tail = "[[Kategorie:Woorde in unknown-language]]" },
+        .{ .tail = "[[Kategorie:Vervoeging in Duits]]" },
+        .{ .tail = "[[Kategorie:Woorde in Engels]]" },
+        .{ .tail = "[[Kategorie:Woorde in Afrikaans]][[Kategorie:Voornaamwoorde in AF alias]]" },
+        .{ .tail = "[[Kategorie:Woorde in Japannees]][[Kategorie:Woorde in Nederlands]]" },
+        .{ .tail = "[[Kategorie:Woorde in Nederlands]][[Kategorie:Woorde in Japannees]]" },
+        .{ .tail = "[[Kategorie:Woorde in Japannees]][[Kategorie:Woorde in unknown-language]]" },
+        .{ .tail = "[[Kategorie:Woorde in unknown-language]][[Kategorie:Woorde in Japannees]]" },
+        .{ .tail = "[[Kategorie:Woorde in Japannees]][[Kategorie:Woorde in Engels]]" },
+        .{ .tail = "[[Kategorie:Woorde in Engels]][[Kategorie:Woorde in Japannees]]" },
+        .{ .tail = "[[Kategorie:Deelwoorde in Afrikaans]][[Kategorie:Woorde in Japannees]]" },
+        .{ .tail = "[[Kategorie:Woorde in Japannees]][[Kategorie:Deelwoorde in Afrikaans]]" },
+        .{ .tail = "[[Kategorie:Woorde in Japannees]][[Kategorie:Woorde in Japannees]]", .owner = "Japanese", .code = "ja" },
+        .{ .tail = "[[Kategorie:Woorde in Japannees]][[Kategorie:Werkwoorde in Japannees]]", .owner = "Japanese", .code = "ja" },
+        // Unsupported-only categories never admit; compatible ones cannot erase
+        // the independently supported source178 participle attribution.
+        .{ .tail = "[[Kategorie:Deelwoorde in Afrikaans]][[Kategorie:Woorde in Afrikaans]]", .owner = "Afrikaans", .code = "af" },
+        .{ .tail = "[[Kategorie:Woorde in Afrikaans]][[Kategorie:Deelwoorde in Afrikaans]]", .owner = "Afrikaans", .code = "af" },
+        .{ .tail = "[[Kategorie:Deelwoorde in Afrikaans]][[Kategorie:Selfstandige naamwoorde in AF alias]]", .owner = "Afrikaans", .code = "af" },
+        .{ .tail = "[[Kategorie:Selfstandige naamwoorde in AF alias]][[Kategorie:Deelwoorde in Afrikaans]]", .owner = "Afrikaans", .code = "af" },
+        .{ .tail = "[[Kategorie:Deelwoorde in AF alias]]", .owner = "Afrikaans", .code = "af" },
+        .{ .tail = "[[Kategorie:Woorde in Japannees]]", .prefix = "==Engels==\n", .owner = "English", .code = "en" },
+        .{ .tail = "[[Kategorie:Woorde in Japannees]]", .prefix = "==Unknown root==\n" },
+        .{ .tail = "[[Kategorie:Woorde in Japannees]]", .prefix = "==Internasionaal==\n" },
+    };
+    for (cases, 0..) |case, case_index| {
+        const test_source = try std.fmt.allocPrint(allocation, "{s}{s}{s}", .{ case.prefix, Fixture.body, case.tail });
+        try Fixture.check(allocation, try std.fmt.allocPrint(allocation, ".zig-cache/tmp/{s}/negative-{d}", .{ tmp.sub_path, case_index }), code_table, case.title, test_source, case.raw, case.owner, case.code);
+    }
+    const active_source = Fixture.body ++ "[[Kategorie:Woorde in Japannees]]";
+    var untrusted_codes = code_table;
+    untrusted_codes.strong_fn = Fixture.deny;
+    untrusted_codes.trusted_fn = Fixture.deny;
+    try Fixture.check(allocation, try std.fmt.allocPrint(allocation, ".zig-cache/tmp/{s}/untrusted", .{tmp.sub_path}), untrusted_codes, "entry", active_source, null, "Unclassified", "");
+    var absent_catalog_codes = code_table;
+    absent_catalog_codes.namespace_catalog = null;
+    try Fixture.check(allocation, try std.fmt.allocPrint(allocation, ".zig-cache/tmp/{s}/no-catalog", .{tmp.sub_path}), absent_catalog_codes, "entry", active_source, null, "Unclassified", "");
+    var foreign_catalog = try Fixture.makeCatalog(allocation, "bg");
+    defer foreign_catalog.deinit();
+    try Fixture.check(allocation, try std.fmt.allocPrint(allocation, ".zig-cache/tmp/{s}/foreign-edition", .{tmp.sub_path}), Fixture.languageCodes(&foreign_catalog), "entry", active_source, null, "Unclassified", "");
 }

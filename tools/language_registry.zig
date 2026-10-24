@@ -542,6 +542,11 @@ pub const Registry = struct {
             // exact canonical code is unproven; never inherit preceding Icelandic.
             try self.language_boundaries.put(owned, try owned.dupe(u8, "Faroisc"), {});
         }
+        // The retained AF Sjabloon:se names this exact Northern Sami heading.
+        // Keep canonical names and all existing local/ordinary conflict rules.
+        if (std.mem.eql(u8, self.content_code orelse "", "af")) {
+            try self.addLocalAlias("Samies (Noord-)", "se");
+        }
         if (self.content_code) |code_value| {
             if (self.resolve(code_value) == null) return error.InvalidLanguageRegistry;
         }
@@ -1848,4 +1853,57 @@ test "exact ANG Faroisc remains an ownerless language boundary beside registered
     try std.testing.expect(missing.isLanguageBoundary("Faroisc"));
     try std.testing.expect(missing.resolve("Faroisc") == null);
     try std.testing.expect(missing.resolveTrusted("Faroisc") == null);
+}
+
+test "AF Northern Sami source heading resolves through ordinary TSV initialization" {
+    var registry = Registry.empty(std.testing.allocator);
+    defer registry.deinit();
+    try registry.addTsv(
+        "# content-language\taf\n# mediawiki\naf\tAfrikaans\nse\tNoord-Sami\nmul\tMeertalig\n" ++
+            "# local-language-boundary\tInternasionaal\n",
+    );
+    const resolved = registry.resolveTrusted("Samies (Noord-)");
+    try std.testing.expect(resolved != null);
+    try std.testing.expectEqualStrings("se", resolved.?.code);
+    try std.testing.expectEqualStrings("Noord-Sami", resolved.?.heading);
+    try std.testing.expectEqualStrings("Noord-Sami", registry.resolve("se").?.heading);
+    try std.testing.expect(registry.resolveStrong("Samies (Noord-)") == null);
+    try std.testing.expect(registry.resolveTrusted("Samies") == null);
+    try std.testing.expect(registry.resolveTrusted("Samies (Noord)") == null);
+    try std.testing.expect(registry.resolveTrusted("Internasionaal") == null);
+    try std.testing.expect(registry.isLanguageBoundary("Internasionaal"));
+}
+
+test "AF Northern Sami curated alias preserves captured trust conflicts and edition boundaries" {
+    const cases = [_]struct { source: []const u8, trusted: ?[]const u8, ordinary: ?[]const u8 }{
+        .{ .source = "# content-language\ten\n# mediawiki\nen\tEngels\naf\tAfrikaans\nse\tNoord-Sami\n", .trusted = null, .ordinary = null },
+        .{ .source = "# mediawiki\naf\tAfrikaans\nse\tNoord-Sami\n", .trusted = null, .ordinary = null },
+        .{ .source = "# content-language\taf\n# mediawiki\naf\tAfrikaans\nsme\tNorthern Sami\n", .trusted = null, .ordinary = null },
+        // A literal preferred name for another owner keeps its captured authority.
+        .{ .source = "# content-language\taf\n# mediawiki\naf\tAfrikaans\nse\tNoord-Sami\nfr\tSamies (Noord-)\n", .trusted = "fr", .ordinary = "fr" },
+        // Ordinary aliases must not become trusted merely due to the curated alias.
+        .{ .source = "# content-language\taf\n# mediawiki\naf\tAfrikaans\nse\tNoord-Sami\nfr\tFrans\tSamies (Noord-)\n", .trusted = null, .ordinary = "fr" },
+        .{ .source = "# content-language\taf\n# mediawiki\naf\tAfrikaans\nse\tNoord-Sami\tSamies (Noord-)\n", .trusted = null, .ordinary = "se" },
+        .{ .source = "# content-language\taf\n# mediawiki\naf\tAfrikaans\nse\tNoord-Sami\nfr\tFrans\tSamies (Noord-)\nen\tEngels\tSamies (Noord-)\n", .trusted = null, .ordinary = null },
+        .{ .source = "# content-language\taf\n# mediawiki\naf\tAfrikaans\nse\tNoord-Sami\nfr\tFrans\n# local-alias\tfr\tSamies (Noord-)\n", .trusted = null, .ordinary = null },
+        .{ .source = "# content-language\taf\n# mediawiki\naf\tAfrikaans\nse\tNoord-Sami\n# local-alias\tse\tSamies (Noord-)\n", .trusted = "se", .ordinary = "se" },
+    };
+    for (cases) |case| {
+        var registry = Registry.empty(std.testing.allocator);
+        defer registry.deinit();
+        try registry.addTsv(case.source);
+        const trusted = registry.resolveTrusted("Samies (Noord-)");
+        if (case.trusted) |code_value| {
+            try std.testing.expect(trusted != null);
+            try std.testing.expectEqualStrings(code_value, trusted.?.code);
+        } else try std.testing.expect(trusted == null);
+        const ordinary = registry.resolve("Samies (Noord-)");
+        if (case.ordinary) |code_value| {
+            try std.testing.expect(ordinary != null);
+            try std.testing.expectEqualStrings(code_value, ordinary.?.code);
+        } else try std.testing.expect(ordinary == null);
+        if (registry.resolve("se")) |canonical| try std.testing.expectEqualStrings("Noord-Sami", canonical.heading);
+        try std.testing.expect(registry.resolveTrusted("Samies") == null);
+        try std.testing.expect(registry.resolveTrusted("Internasionaal") == null);
+    }
 }
