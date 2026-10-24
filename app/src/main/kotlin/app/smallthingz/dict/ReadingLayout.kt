@@ -135,7 +135,7 @@ fun readingRows(sections: List<Section>, media: List<Media> = emptyList()): List
             val key = "block-$sectionIndex-$blockIndex"
             val authoredList = block.listPath.isNotEmpty() && block.kind in
                 setOf("definition", "example", "quotation", "list_item", "list_detail", "term", "indent")
-            if (block.kind == "blank" || (block.table == null && block.kind != "rule" && block.spans.isEmpty() && !authoredList)) return@forEachIndexed
+            if (block.kind == "blank" || (block.table == null && block.kind != "rule" && block.spans.isEmpty() && !authoredList && !(block.kind == "heading" && (block.anchor.isNotEmpty() || block.anchorFallback.isNotEmpty())))) return@forEachIndexed
             // A caption owns one inline media control across all of its typed lines.
             // Splitting its paragraph would append that control to every resulting row.
             if (block.kind != "paragraph" || block.spans.size < 80 || block.spans.none { it.kind == "line_break" } || block.spans.any {
@@ -205,7 +205,7 @@ private fun compactBlock(block: Block): Block {
     val spans = compactSpans(block.spans)
     fun compactTable(table: Table): Table = table.copy(caption = compactSpans(table.caption),
         rows = table.rows.map { row -> row.map { cell -> cell.copy(spans = compactSpans(cell.spans),
-            nestedTable = cell.nestedTable?.let(::compactTable)) } })
+            nestedTable = cell.nestedTable?.let(::compactTable), blocks = cell.blocks?.map(::compactBlock)) } })
     val table = block.table?.let(::compactTable)
     return if (spans === block.spans && table == null) block else block.copy(spans = spans, table = table)
 }
@@ -223,26 +223,43 @@ internal fun blockPrefix(block: Block): String = when (block.kind) {
 internal fun blockIndentDp(block: Block): Int =
     (if (block.kind == "heading") block.depth else block.depth - 1).coerceIn(0, 8) * 7
 
-/** Destination IDs come from the source page, before owner filtering or presentation ordering. */
-internal fun headingScrollKey(entry: Entry, target: String): String? {
+/** A nested destination is owned by one lazy row and an authored-index path, never pixels. */
+internal data class HeadingDestination(val rowKey: String, val path: String?, val compiledId: Boolean)
+private data class HeadingCandidate(val destination: HeadingDestination, val anchor: String, val fallback: String, val label: String)
+internal fun headingDestination(entry: Entry, target: String): HeadingDestination? {
     if (!target.startsWith("#") || target.length == 1) return null
-    val fragment = target.substring(1)
-    val headings = entry.readingRows.filter { it.heading != null || it.block?.kind == "heading" }
-    fun anchor(row: ReadingRow) = row.heading?.anchor ?: row.block?.anchor.orEmpty()
-    fun fallback(row: ReadingRow) = row.heading?.anchorFallback ?: row.block?.anchorFallback.orEmpty()
-    fun anchoredMatches(value: String) = headings.filter {
-        (anchor(it).isNotEmpty() && anchor(it) == value) || (fallback(it).isNotEmpty() && fallback(it) == value)
+    val headings = mutableListOf<HeadingCandidate>()
+    entry.readingRows.forEach { row ->
+        row.heading?.let { heading -> headings.add(HeadingCandidate(HeadingDestination(row.key, null,
+            heading.anchor.isNotEmpty() || heading.anchorFallback.isNotEmpty()), heading.anchor, heading.anchorFallback, heading.title)) }
+        lateinit var includeBlock: (Block, String, Boolean) -> Unit
+        fun includeTable(table: Table, path: String) {
+            var index = 0
+            table.rows.forEach { cells -> cells.forEach { cell ->
+                val cellPath = "$path/cell-${index++}"
+                val blocks = cell.blocks
+                if (blocks != null) blocks.forEachIndexed { blockIndex, block -> includeBlock(block, "$cellPath/block-$blockIndex", true) }
+                else cell.nestedTable?.let { includeTable(it, "$cellPath/nested") }
+            } }
+        }
+        includeBlock = { block, path, nested ->
+            if (block.kind == "heading") headings.add(HeadingCandidate(HeadingDestination(row.key, path.takeIf { nested },
+                block.anchor.isNotEmpty() || block.anchorFallback.isNotEmpty()), block.anchor, block.anchorFallback, textOf(block.spans)))
+            block.table?.let { includeTable(it, "$path/table") }
+        }
+        row.block?.let { includeBlock(it, row.key, false) }
     }
-    val exact = anchoredMatches(fragment)
-    if (exact.isNotEmpty()) return exact.singleOrNull()?.key
-    val spaced = anchoredMatches(fragment.replace(' ', '_'))
-    if (spaced.isNotEmpty()) return spaced.singleOrNull()?.key
-    // Legacy records contain no IDs. A label is usable only when it is unambiguous.
-    val label = fragment.replace('_', ' ')
-    val legacy = headings.filter { (it.heading?.title ?: textOf(checkNotNull(it.block).spans)) == label }
-        .singleOrNull()
-    return legacy?.takeIf { anchor(it).isEmpty() && fallback(it).isEmpty() }?.key
+    val fragment = target.substring(1)
+    fun matches(value: String) = headings.filter { (it.anchor.isNotEmpty() && it.anchor == value) || (it.fallback.isNotEmpty() && it.fallback == value) }
+    val exact = matches(fragment)
+    if (exact.isNotEmpty()) return exact.singleOrNull()?.destination
+    val spaced = matches(fragment.replace(' ', '_'))
+    if (spaced.isNotEmpty()) return spaced.singleOrNull()?.destination
+    return headings.filter { it.label == fragment.replace('_', ' ') }.singleOrNull()
+        ?.takeIf { it.anchor.isEmpty() && it.fallback.isEmpty() }?.destination
 }
+/** Compatibility for callers interested only in the owning lazy row. */
+internal fun headingScrollKey(entry: Entry, target: String): String? = headingDestination(entry, target)?.rowKey
 
 /** Match only actual compiled reference identities; no source or fragment interpretation. */
 /** Items before the section rows: title/actions, visible explanations and preamble. */

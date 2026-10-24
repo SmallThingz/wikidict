@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2-DPR7 decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2-DPR8 decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
@@ -13,12 +13,13 @@ object BlobDecoder {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val version = r.byte()
-        require(version in 50..55) { "Unsupported presentation format" }
+        require(version in 50..56) { "Unsupported presentation format" }
         r.explanations = version >= 51
         r.colors = version >= 52
         r.anchors = version >= 53
         r.spanBackgrounds = version >= 54
         r.nestedTables = version >= 55
+        r.cellBlocks = version >= 56
         if (r.nestedTables) r.remainingItems = 1 shl 20
         val display = r.spans()
         val sections = List(r.count(if (r.anchors) 17 else 9)) {
@@ -59,6 +60,7 @@ object BlobDecoder {
         var anchors = false
         var spanBackgrounds = false
         var nestedTables = false
+        var cellBlocks = false
         fun byte(): Int { require(buffer.remaining() >= 1); return buffer.get().toInt() and 255 }
         fun u16(): Int { require(buffer.remaining() >= 2); return buffer.short.toInt() and 65535 }
         fun u32(): Long { require(buffer.remaining() >= 4); return buffer.int.toLong() and 0xffffffffL }
@@ -109,7 +111,7 @@ object BlobDecoder {
                 if (flags == 0) null else TableGeometry(border, spacing, padding, width)
             }
             val caption = spans()
-            val rows = List(count(4)) { List(count(if (nestedTables) 11 else if (colors) 10 else 9)) {
+            val rows = List(count(4)) { List(count(if (cellBlocks) 12 else if (nestedTables) 11 else if (colors) 10 else 9)) {
                 val header = presence(); val cols = u16(); val rowspan = u16()
                 require(cols in 1..100 && rowspan in 1..100) { "Invalid table span" }
                 val background = if (colors && presence()) string().also {
@@ -117,16 +119,17 @@ object BlobDecoder {
                 } else null
                 val content = spans()
                 val child = if (nestedTables) table(depth + 1) else null
-                Cell(content, header, cols, rowspan, background, child)
+                val blocks = if (cellBlocks && presence()) List(count(25)) { block(depth) } else null
+                Cell(content, header, cols, rowspan, background, child, blocks)
             } }
             return Table(caption, rows, geometry).also { tableGrid(it) }
         }
-        fun block(): Block {
+        fun block(tableDepth: Int = 0): Block {
             val kind = enum(kinds); val depth = byte(); val level = byte()
             val spans = spans()
             val feature = if (presence()) Feature(string(), string(), string(), string(), string()) else null
             val path = string(); val number = string()
-            val table = table(1)
+            val table = table(tableDepth + 1)
             val anchor = if (anchors) string() else ""
             val fallback = if (anchors) string() else ""
             require(kind == "heading" || (anchor.isEmpty() && fallback.isEmpty())) { "Only headings may have a destination anchor" }

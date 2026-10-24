@@ -30,19 +30,28 @@ data class TableWidth(val unit: TableWidthUnit, val value: Long)
 data class TableGeometry(val border: Int? = null, val cellSpacing: Int? = null,
                          val cellPadding: Int? = null, val width: TableWidth? = null)
 data class Cell(val spans: List<Span>, val header: Boolean, val colspan: Int, val rowspan: Int,
-                val background: String? = null, val nestedTable: Table? = null) {
-    init { require(nestedTable == null || spans.isEmpty()) { "A nested table cell cannot also contain spans" } }
+                val background: String? = null, val nestedTable: Table? = null, val blocks: List<Block>? = null) {
+    init {
+        require(nestedTable == null || spans.isEmpty()) { "A nested table cell cannot also contain spans" }
+        require(blocks == null || (spans.isEmpty() && nestedTable == null)) { "Ordered cell blocks cannot also contain legacy content" }
+    }
 }
 data class Table(val caption: List<Span>, val rows: List<List<Cell>>, val geometry: TableGeometry? = null)
 
-/** Ordered traversal of the compiled table tree; no textual substitute for a grid. */
-internal fun Table.visitSpans(visit: (List<Span>) -> Unit) {
-    visit(caption)
+/** Visit authoritative content exactly once, retaining literal block whitespace policy. */
+internal fun Block.visitSpanRuns(visit: (List<Span>, Boolean) -> Unit) {
+    if (table != null) table.visitSpanRuns(visit)
+    else if (kind != "rule") visit(spans, kind == "preformatted")
+}
+internal fun Table.visitSpanRuns(visit: (List<Span>, Boolean) -> Unit) {
+    visit(caption, false)
     rows.forEach { row -> row.forEach { cell ->
-        visit(cell.spans)
-        cell.nestedTable?.visitSpans(visit)
+        val blocks = cell.blocks
+        if (blocks != null) blocks.forEach { it.visitSpanRuns(visit) }
+        else { visit(cell.spans, false); cell.nestedTable?.visitSpanRuns(visit) }
     } }
 }
+internal fun Table.visitSpans(visit: (List<Span>) -> Unit) = visitSpanRuns { spans, _ -> visit(spans) }
 data class Block(
     val kind: String,
     val depth: Int,
@@ -148,19 +157,23 @@ internal fun entryAbbreviations(entry: Entry): List<Abbreviation> {
     include(entry.preamble, "About this entry")
     entry.sections.forEach { section ->
         val location = section.title.ifBlank { entry.title }
-        section.blocks.forEach { block ->
-            include(block.spans, location)
-            fun includeTable(table: Table, tableLocation: String) {
-                include(table.caption, "$tableLocation · Table")
-                table.rows.forEachIndexed { row, cells -> cells.forEachIndexed { column, cell ->
-                    val cellLocation = "$tableLocation · Table ${row + 1}, ${column + 1}"
-                    include(cell.spans, cellLocation)
-                    cell.nestedTable?.let { includeTable(it, cellLocation) }
-                } }
-            }
-            block.table?.let { includeTable(it, location) }
+        lateinit var includeBlock: (Block, String) -> Unit
+        fun includeTable(table: Table, tableLocation: String) {
+            include(table.caption, "$tableLocation · Table")
+            table.rows.forEachIndexed { row, cells -> cells.forEachIndexed { column, cell ->
+                val cellLocation = "$tableLocation · Table ${row + 1}, ${column + 1}"
+                val blocks = cell.blocks
+                if (blocks != null) blocks.forEachIndexed { index, block -> includeBlock(block, "$cellLocation · Block ${index + 1}") }
+                else { include(cell.spans, cellLocation); cell.nestedTable?.let { includeTable(it, cellLocation) } }
+            } }
         }
+        includeBlock = { block, blockLocation ->
+            include(block.spans, blockLocation)
+            block.table?.let { includeTable(it, blockLocation) }
+        }
+        section.blocks.forEach { includeBlock(it, location) }
     }
+
     entry.references.forEach { include(it.spans, "References ${it.number}") }
     return result.toList()
 }

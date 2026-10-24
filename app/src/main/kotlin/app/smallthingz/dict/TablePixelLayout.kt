@@ -93,14 +93,18 @@ internal fun tableRenderMetrics(table: Table, preferredColumnWidth: Int, default
         column = maxOf(column, 2 * (padding + border) + 1)
     }
     for (placed in grid.cells) {
-        val child = placed.cell.nestedTable ?: continue
-        if (placed.cell.spans.isNotEmpty()) return null
-        val childMetrics = tableRenderMetrics(child, preferredColumnWidth, defaultPadding,
-            defaultMinRowHeight, cssPixelScale, depth + 1) ?: return null
-        val needed = childMetrics.width.toLong() + 2L * (padding + border) - (placed.colspan - 1L) * spacing
-        val perColumn = ((needed.coerceAtLeast(0) + placed.colspan - 1) / placed.colspan)
-        if (perColumn > Int.MAX_VALUE) return null
-        column = maxOf(column, perColumn.toInt())
+        val cell = placed.cell
+        val children = if (cell.blocks != null) cell.blocks.mapNotNull { block -> block.table?.let { it to blockIndentDp(block) } }
+            else listOfNotNull(cell.nestedTable?.let { it to 0 })
+        for ((child, indent) in children) {
+            val childMetrics = tableRenderMetrics(child, preferredColumnWidth, defaultPadding,
+                defaultMinRowHeight, cssPixelScale, depth + 1) ?: return null
+            val indentation = pixels(indent.toLong()) ?: return null
+            val needed = childMetrics.width.toLong() + indentation + 2L * (padding + border) - (placed.colspan - 1L) * spacing
+            val perColumn = ((needed.coerceAtLeast(0) + placed.colspan - 1) / placed.colspan)
+            if (perColumn > Int.MAX_VALUE) return null
+            column = maxOf(column, perColumn.toInt())
+        }
     }
     var width = edgeWidth + grid.columns.toLong() * column
     var extraColumns = 0

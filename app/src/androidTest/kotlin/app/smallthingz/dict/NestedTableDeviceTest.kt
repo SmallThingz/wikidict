@@ -120,4 +120,100 @@ class NestedTableDeviceTest {
             }
         } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
     }
+
+    @Test fun orderedCellBlocksRevealRealHeadingsAndRetainPaintActionsAndEmptyCells() {
+        val headingLabel = "Cell heading العربية Ω"
+        val inner = Table(listOf(Span("text", "Inner caption")), listOf(listOf(
+            Cell(listOf(Span("text", "\uD80C\uDC00", classes = "Egyp", direction = "ltr")), false, 1, 1))),
+            TableGeometry(border = 1, width = TableWidth(TableWidthUnit.Percent, 100)))
+        val table = Table(emptyList(), listOf(listOf(
+            Cell(emptyList(), true, 1, 1, "#800080", blocks = emptyList()),
+            Cell(emptyList(), false, 1, 1, blocks = listOf(Block("paragraph", 0, listOf(Span("text", "before 1"))))),
+            Cell(emptyList(), false, 1, 1, blocks = listOf(Block("table", 1, emptyList(), table = inner))),
+            Cell(emptyList(), true, 1, 1, "#000000", blocks = listOf(
+                Block("paragraph", 0, listOf(Span("text", "before target"))),
+                Block("heading", 1, listOf(Span("text", headingLabel)), level = 4, anchor = "reference-1", anchorFallback = "Cell_ID"),
+                Block("list_item", 1, listOf(Span("link", "Follow ordered", target = "ordered-target")), listPath = "ul"),
+                Block("rule", 0, emptyList()),
+                Block("paragraph", 0, listOf(Span("text", "after target", background = "#ffff00"))))))),
+            TableGeometry(border = 1, cellPadding = 2))
+        val entry = Entry("ordered", listOf(Span("link", "Jump to cell", target = "#reference-1")), "language", "English", "en",
+            listOf(Section(1, "Meaning", listOf(Block("definition", 1, listOf(Span("text", "definition"))),
+                Block("table", 0, emptyList(), table = table)), "Meaning")),
+            listOf(Reference(1, 1, "", listOf(Span("text", "Reference fallback")))))
+        val direction = mutableStateOf(LayoutDirection.Ltr)
+        val mode = mutableStateOf("light")
+        val request = mutableStateOf<EntryAnchorRequest?>(null)
+        var consumed = 0
+        var followed: String? = null
+        fun tapLink(node: SemanticsNodeInteraction, target: String) {
+            val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+            node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            val layout = layouts.single()
+            val annotation = layout.layoutInput.text.getLinkAnnotations(0, layout.layoutInput.text.length).single()
+            assertEquals(target, (annotation.item as androidx.compose.ui.text.LinkAnnotation.Clickable).tag)
+            node.performTouchInput { click(layout.getBoundingBox(annotation.start).center) }
+        }
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                androidx.compose.runtime.key(mode.value, direction.value) {
+                    CompositionLocalProvider(LocalLayoutDirection provides direction.value) {
+                        DictTheme(mode.value) { androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+                            EntryView(entry, false, {}, onLink = { followed = it }, settings = AppSettings(collapseDetails = true),
+                                anchorRequest = request.value, onAnchorConsumed = { consumed++; request.value = null })
+                        } }
+                    }
+                }
+            } }
+            for (theme in listOf("light", "dark")) for (layoutDirection in listOf(LayoutDirection.Ltr, LayoutDirection.Rtl)) {
+                compose.runOnIdle { mode.value = theme; direction.value = layoutDirection; request.value = null; followed = null }
+                compose.waitForIdle()
+                compose.onNodeWithText(headingLabel, useUnmergedTree = true).assertDoesNotExist()
+                tapLink(compose.onNodeWithText("Jump to cell", useUnmergedTree = true), "#reference-1")
+                val heading = compose.onNodeWithText(headingLabel, useUnmergedTree = true)
+                heading.assertIsDisplayed().assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
+                compose.onNodeWithText("Table is too large to display.").assertDoesNotExist()
+                val horizontal = SemanticsMatcher("one parent grid scroll") { it.config.getOrNull(SemanticsProperties.HorizontalScrollAxisRange) != null }
+                compose.onAllNodes(horizontal, useUnmergedTree = true).assertCountEquals(1)
+                val headingText = heading.fetchSemanticsNode().config[SemanticsProperties.Text].single()
+                assertTrue(headingText.spanStyles.any { it.item.color == androidx.compose.ui.graphics.Color.White })
+                assertTrue(headingText.spanStyles.any { it.item.fontWeight == androidx.compose.ui.text.font.FontWeight.SemiBold })
+                val before = compose.onNodeWithText("before target", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+                val afterNode = compose.onNodeWithText("after target", useUnmergedTree = true)
+                val after = afterNode.fetchSemanticsNode().boundsInRoot
+                assertTrue(before.top < heading.fetchSemanticsNode().boundsInRoot.top)
+                assertTrue(heading.fetchSemanticsNode().boundsInRoot.bottom <= after.top)
+                val afterText = afterNode.fetchSemanticsNode().config[SemanticsProperties.Text].single()
+                assertTrue(afterText.spanStyles.any { it.item.background == androidx.compose.ui.graphics.Color.Yellow })
+                assertTrue(afterText.spanStyles.any { it.item.color == androidx.compose.ui.graphics.Color.Black })
+                val action = compose.onNodeWithText("Follow ordered", useUnmergedTree = true)
+                action.performScrollTo().assertIsDisplayed()
+                tapLink(action, "ordered-target")
+                compose.runOnIdle { assertEquals("ordered-target", followed) }
+                val empty = compose.onNodeWithTag("compiled-table-cell-root-0", useUnmergedTree = true)
+                empty.performScrollTo().assertIsDisplayed().assertHasNoClickAction()
+                assertNull(empty.fetchSemanticsNode().config.getOrNull(SemanticsProperties.Text))
+                val paint = empty.captureToImage().asAndroidBitmap()
+                try { assertEquals(0xff800080.toInt(), paint.getPixel(paint.width / 2, paint.height / 2)) }
+                finally { paint.recycle() }
+                val prior = consumed
+                compose.runOnIdle { request.value = EntryAnchorRequest("other-owner", "#Cell_ID") }
+                compose.waitForIdle()
+                compose.runOnIdle { assertEquals(prior, consumed); request.value = EntryAnchorRequest(entry.key, "#Cell_ID") }
+                heading.assertIsDisplayed()
+                compose.runOnIdle { assertEquals(prior + 1, consumed) }
+                empty.performScrollTo().assertIsDisplayed()
+                compose.runOnIdle { request.value = EntryAnchorRequest(entry.key, "#Cell_ID") }
+                heading.assertIsDisplayed()
+                compose.runOnIdle { assertEquals(prior + 2, consumed) }
+                val signs = if (android.os.Build.VERSION.SDK_INT >= 31)
+                    SemanticsMatcher.expectValue(EgyptianShapedRunCount, 1) and hasAnyAncestor(hasTestTag("compiled-table-grid-root/2/block-0"))
+                else hasText("\u2066\uD80C\uDC00\u2069")
+                if (android.os.Build.VERSION.SDK_INT >= 31) compose.waitUntil(10000) {
+                    compose.onAllNodes(signs, useUnmergedTree = true).fetchSemanticsNodes().size == 1
+                }
+                compose.onNode(signs, useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+            }
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+    }
 }
