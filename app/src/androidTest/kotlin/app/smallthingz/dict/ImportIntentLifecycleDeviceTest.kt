@@ -304,6 +304,8 @@ class ImportIntentLifecycleDeviceTest {
         fun join(jobs: List<Job>) = runBlocking { withTimeout(10_000) { jobs.joinAll() } }
         join(children())
         assertFalse(library.hasRetainedDownload)
+        val operationsField = LibraryStore::class.java.getDeclaredField("operations").apply { isAccessible = true }
+        val operations = operationsField.get(library) as LibraryOperationOwner
         val before = library.dictionaries.toList()
         val directory = java.io.File(context.filesDir, "dictionaries")
         fun parts() = directory.listFiles().orEmpty().filter { it.extension == "part" }.map { it.name }.toSet()
@@ -316,77 +318,97 @@ class ImportIntentLifecycleDeviceTest {
             ComponentName(instrumentation.context, ImportLifecycleProvider::class.java), 0)
         val base = Uri.parse("content://${provider.authority}")
         val resolver = context.contentResolver
-        val token = UUID.randomUUID().toString()
-        fun call(method: String) = requireNotNull(resolver.call(base, method, token, null))
-        val uri = base.buildUpon().appendPath(token).build()
-        val secondReadEntered = java.util.concurrent.CountDownLatch(1)
-        val firstReadBytes = java.util.concurrent.atomic.AtomicInteger(-1)
-        val secondReadReturned = java.util.concurrent.atomic.AtomicBoolean(false)
-        val closeCalls = java.util.concurrent.atomic.AtomicInteger(0)
-        val closeOnMain = java.util.concurrent.atomic.AtomicBoolean(false)
-        var accepted: Job? = null
-        call("prepare")
-        try {
-            accepted = library.importFile {
-                val source = requireNotNull(resolver.openInputStream(uri))
-                object : java.io.FilterInputStream(source) {
-                    private var reads = 0
-                    override fun read(buffer: ByteArray): Int = read(buffer, 0, buffer.size)
-                    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-                        val number = ++reads
-                        // The real provider supplies one byte then holds its pipe open.
-                        // Signal after the loop's ensureActive, then delegate unconditionally:
-                        // the old implementation cannot skip this pending read on cancellation.
-                        if (number == 2) secondReadEntered.countDown()
-                        return try {
-                            super.read(buffer, offset, length).also {
-                                if (number == 1) firstReadBytes.set(it)
-                            }
-                        } finally { if (number == 2) secondReadReturned.set(true) }
-                    }
-                    override fun close() {
-                        closeCalls.incrementAndGet()
-                        if (Thread.currentThread() === android.os.Looper.getMainLooper().thread) closeOnMain.set(true)
-                        super.close()
+        for (failedRetainedCleanup in listOf(false, true)) {
+            val token = UUID.randomUUID().toString()
+            fun call(method: String) = requireNotNull(resolver.call(base, method, token, null))
+            val uri = base.buildUpon().appendPath(token).build()
+            val secondReadEntered = java.util.concurrent.CountDownLatch(1)
+            val firstReadBytes = java.util.concurrent.atomic.AtomicInteger(-1)
+            val secondReadReturned = java.util.concurrent.atomic.AtomicBoolean(false)
+            val closeCalls = java.util.concurrent.atomic.AtomicInteger(0)
+            val closeOnMain = java.util.concurrent.atomic.AtomicBoolean(false)
+            var accepted: Job? = null
+            call("prepare")
+            try {
+                accepted = library.importFile {
+                    val source = requireNotNull(resolver.openInputStream(uri))
+                    object : java.io.FilterInputStream(source) {
+                        private var reads = 0
+                        override fun read(buffer: ByteArray): Int = read(buffer, 0, buffer.size)
+                        override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+                            val number = ++reads
+                            // The real provider supplies one byte then holds its pipe open.
+                            // Signal after the loop's ensureActive, then delegate unconditionally:
+                            // the old implementation cannot skip this pending read on cancellation.
+                            if (number == 2) secondReadEntered.countDown()
+                            return try {
+                                super.read(buffer, offset, length).also {
+                                    if (number == 1) firstReadBytes.set(it)
+                                }
+                            } finally { if (number == 2) secondReadReturned.set(true) }
+                        }
+                        override fun close() {
+                            closeCalls.incrementAndGet()
+                            if (Thread.currentThread() === android.os.Looper.getMainLooper().thread) closeOnMain.set(true)
+                            super.close()
+                        }
                     }
                 }
+                assertTrue("Import must enter the second real provider read",
+                    secondReadEntered.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                assertEquals(1, firstReadBytes.get())
+                assertFalse("The provider still holds the read open", secondReadReturned.get())
+                assertEquals(1, call("state").getInt("heldWriters"))
+
+                if (failedRetainedCleanup) {
+                    // Supply a retryable metadata-clear failure at the same cancellation
+                    // boundary; the operation and blocked provider FD remain production-owned.
+                    val saved: Map<String, Any?> = mapOf("downloadId" to 7L, "downloadUrl" to "https://example.test/retained.wikblb",
+                        "downloadLabel" to "Retained", "downloadBytes" to 123L, "downloadHash" to "a".repeat(64))
+                    var record = saved
+                    var retained = true
+                    val clear = DownloadClearOwner()
+                    val captured = operations.capture()
+                    assertSame(accepted, captured.job)
+                    val failure = operations.cancelCaptured(captured, 7L) {
+                        clear.clear(7L, Any(), { record["downloadId"] as? Long ?: -1L }, { record.toMap() },
+                            { retained = it }, { record = emptyMap(); false }, { record = it; true })
+                    }
+                    assertTrue(failure is java.io.IOException)
+                    assertEquals(saved, record)
+                    assertTrue(retained)
+                    assertEquals(7L, clear.id(record["downloadId"] as? Long ?: -1L))
+                } else library.cancel()
+                join(listOf(checkNotNull(accepted)) + children())
+                assertTrue(checkNotNull(accepted).isCancelled)
+                assertTrue("The read child must finish before import cleanup returns", secondReadReturned.get())
+                assertEquals("Close the exact owned stream once", 1, closeCalls.get())
+                assertFalse("Do not close provider I/O on the UI thread", closeOnMain.get())
+                assertNull(library.busy)
+                assertNull("A close-induced I/O error must remain cancellation", library.error)
+                assertEquals(partsBefore, parts())
+                assertEquals(before, library.dictionaries)
+                assertEquals("Cancellation must not depend on releasing the provider writer",
+                    1, call("state").getInt("heldWriters"))
+
+                // This real mutex-owned transaction must complete while the original pipe
+                // writer remains held. Its fresh absent ID cannot remove user content.
+                val next = library.remove(absentId)
+                join(listOf(next) + children())
+                assertFalse(next.isCancelled)
+                assertNull(library.busy)
+                assertNull(library.error)
+                assertEquals(before, library.dictionaries)
+                assertEquals(partsBefore, parts())
+                assertFalse(java.io.File(directory, "$absentId.wikblb").exists())
+                assertEquals(1, call("state").getInt("heldWriters"))
+            } finally {
+                try {
+                    library.cancel()
+                    try { call("release") }
+                    finally { join(listOfNotNull(accepted) + children()) }
+                } finally { call("remove") }
             }
-            assertTrue("Import must enter the second real provider read",
-                secondReadEntered.await(10, java.util.concurrent.TimeUnit.SECONDS))
-            assertEquals(1, firstReadBytes.get())
-            assertFalse("The provider still holds the read open", secondReadReturned.get())
-            assertEquals(1, call("state").getInt("heldWriters"))
-
-            library.cancel()
-            join(listOf(checkNotNull(accepted)) + children())
-            assertTrue(checkNotNull(accepted).isCancelled)
-            assertTrue("The read child must finish before import cleanup returns", secondReadReturned.get())
-            assertEquals("Close the exact owned stream once", 1, closeCalls.get())
-            assertFalse("Do not close provider I/O on the UI thread", closeOnMain.get())
-            assertNull(library.busy)
-            assertNull("A close-induced I/O error must remain cancellation", library.error)
-            assertEquals(partsBefore, parts())
-            assertEquals(before, library.dictionaries)
-            assertEquals("Cancellation must not depend on releasing the provider writer",
-                1, call("state").getInt("heldWriters"))
-
-            // This real mutex-owned transaction must complete while the original pipe
-            // writer remains held. Its fresh absent ID cannot remove user content.
-            val next = library.remove(absentId)
-            join(listOf(next) + children())
-            assertFalse(next.isCancelled)
-            assertNull(library.busy)
-            assertNull(library.error)
-            assertEquals(before, library.dictionaries)
-            assertEquals(partsBefore, parts())
-            assertFalse(java.io.File(directory, "$absentId.wikblb").exists())
-            assertEquals(1, call("state").getInt("heldWriters"))
-        } finally {
-            try {
-                library.cancel()
-                try { call("release") }
-                finally { join(listOfNotNull(accepted) + children()) }
-            } finally { call("remove") }
         }
     }
 

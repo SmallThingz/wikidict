@@ -101,12 +101,22 @@ internal fun failOwnedDownload(failure: Exception, cleanup: () -> Unit): Nothing
     throw failure
 }
 
-internal fun cancelOwnedDownload(remove: () -> Unit, cancelOperation: () -> Unit): Exception? = try {
-    remove()
-    cancelOperation()
-    null
-} catch (cancelled: CancellationException) { throw cancelled }
-catch (failure: Exception) { failure }
+internal fun cancelOwnedDownload(remove: () -> Unit, cancelOperation: () -> Unit,
+    cancelOnRemovalFailure: Boolean = false): Exception? {
+    var failure: Exception? = null
+    try { remove() }
+    catch (cancelled: CancellationException) { throw cancelled }
+    catch (removalFailure: Exception) { failure = removalFailure }
+    if (failure == null || cancelOnRemovalFailure) {
+        try { cancelOperation() }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (cancelFailure: Exception) {
+            if (failure == null) failure = cancelFailure
+            else if (failure !== cancelFailure) failure.addSuppressed(cancelFailure)
+        }
+    }
+    return failure
+}
 
 // A failed disk commit still leaves SharedPreferences ownership in memory.
 // Compensate the exact new ID; a failed removal must keep Cancel available.
@@ -202,31 +212,52 @@ internal inline fun finishDictionaryRemoval(
 }
 
 // Queued operations must not replace the job that currently owns the library.
-internal class LibraryOperationOwner(private val mutex: Mutex) {
+internal class LibraryOperationOwner(private val mutex: Mutex, private val ownershipLock: Any = Any()) {
     // One coherent capture owns both the job and its operation epoch. Keep the
     // epoch after completion so an old Cancel cannot overwrite a newer result.
-    internal class Snapshot internal constructor(val job: Job?, internal val epoch: Any)
+    internal class Snapshot internal constructor(val job: Job?, internal val epoch: Any,
+        val ownedDownloadId: Long? = null, val cancellationRequested: Boolean = false)
     @Volatile private var state = Snapshot(null, Any())
     val active: Job? get() = state.job
     fun capture(): Snapshot = state
-    fun publishIfCurrent(captured: Snapshot, publish: () -> Unit): Unit = synchronized(this) {
+    // Record intent while the caller captures the persisted ID under this same lock.
+    // Cleanup remains asynchronous; an action must not enqueue behind that request.
+    fun requestCancellation(): Snapshot = synchronized(ownershipLock) {
+        Snapshot(state.job, state.epoch, state.ownedDownloadId, true).also { state = it }
+    }
+    fun checkEnqueue(owner: Snapshot) = synchronized(ownershipLock) {
+        val job = owner.job ?: throw CancellationException("No active download operation")
+        if (state.job !== job || state.epoch !== owner.epoch || state.cancellationRequested)
+            throw CancellationException("Download operation no longer accepts enqueue")
+        job.ensureActive()
+    }
+    // Enqueue publishes its ID under the same lock as persisted download ownership.
+    // A late callback from a previous job cannot tag the current operation.
+    fun claimDownload(owner: Snapshot, id: Long) = synchronized(ownershipLock) {
+        if (id >= 0 && owner.job != null && state.job === owner.job && state.epoch === owner.epoch)
+            state = Snapshot(owner.job, owner.epoch, id, state.cancellationRequested)
+    }
+    fun cancelCaptured(captured: Snapshot, id: Long, remove: () -> Unit): Exception? =
+        cancelOwnedDownload(remove, { captured.job?.cancel() }, captured.ownedDownloadId != id)
+    fun publishIfCurrent(captured: Snapshot, publish: () -> Unit): Unit = synchronized(ownershipLock) {
         if (state.epoch === captured.epoch) publish()
     }
 
     suspend fun run(
         start: suspend () -> Unit = {},
         finish: suspend () -> Unit = {},
+        ownedDownloadId: () -> Long? = { null },
         action: suspend () -> Unit,
     ) = mutex.withLock {
         val owner = currentCoroutineContext().job
-        val owned = synchronized(this) { Snapshot(owner, Any()).also { state = it } }
+        val owned = synchronized(ownershipLock) { Snapshot(owner, Any(), ownedDownloadId()).also { state = it } }
         try {
             // Publication can complete before cancellation wins its return dispatch.
             // Own cleanup before entering that first cancellable boundary.
             try { start(); action() }
             finally { finish() }
-        } finally { synchronized(this) {
-            if (state === owned) state = Snapshot(null, owned.epoch)
+        } finally { synchronized(ownershipLock) {
+            if (state.epoch === owned.epoch) state = Snapshot(null, owned.epoch)
         } }
     }
 }
@@ -248,7 +279,8 @@ class LibraryStore private constructor(private val context: Context) {
     private val directory = File(context.filesDir, "dictionaries").apply { mkdirs() }
     private val helper = LibraryDatabase(context).apply { setWriteAheadLoggingEnabled(true) }
     private val mutex = Mutex()
-    private val operations = LibraryOperationOwner(mutex)
+    private val downloadLock = Any()
+    private val operations = LibraryOperationOwner(mutex, downloadLock)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     var dictionaries by mutableStateOf<List<DictionaryInfo>>(emptyList()); private set
     var busy by mutableStateOf<String?>(null); private set
@@ -262,7 +294,6 @@ class LibraryStore private constructor(private val context: Context) {
     var revision by mutableIntStateOf(0); private set
     var catalog by mutableStateOf<List<CatalogItem>>(emptyList()); private set
     private val prefs = context.getSharedPreferences("library", Context.MODE_PRIVATE)
-    private val downloadLock = Any()
     private val downloadRecordKeys = listOf("downloadId", "downloadUrl", "downloadLabel", "downloadBytes", "downloadHash")
     private val downloadClear = DownloadClearOwner()
     var hasRetainedDownload by mutableStateOf(downloadId() >= 0); private set
@@ -286,10 +317,9 @@ class LibraryStore private constructor(private val context: Context) {
     }
     fun removeSource(url: String) { sources = sources - url; prefs.edit().putStringSet("sources", sources.toSet()).apply(); refreshCatalogs() }
     fun cancel() {
-        val id = downloadId()
-        val operation = operations.capture()
+        val (id, operation) = synchronized(downloadLock) { downloadId() to operations.requestCancellation() }
         scope.launch {
-            val failure = cancelOwnedDownload({ if (id >= 0) removeDownload(id) }, { operation.job?.cancel() })
+            val failure = operations.cancelCaptured(operation, id) { if (id >= 0) removeDownload(id) }
             withContext(Dispatchers.Main) { operations.publishIfCurrent(operation) {
                 error = failure?.let { "Could not cancel download: ${it.message ?: "Try again"}" }
             } }
@@ -326,7 +356,7 @@ class LibraryStore private constructor(private val context: Context) {
         if (downloadId() >= 0) {
             val item = CatalogItem(prefs.getString("downloadUrl", "")!!, prefs.getString("downloadLabel", "Dictionary")!!,
                 prefs.getLong("downloadBytes", -1).takeIf { it > 0 }, prefs.getString("downloadHash", null))
-            operation("Downloading ${item.label}") { watchDownload(item) }
+            operation("Downloading ${item.label}", ownsDownload = true) { watchDownload(item) }
         }
     }
     private suspend fun watchDownload(item: CatalogItem) {
@@ -379,10 +409,11 @@ class LibraryStore private constructor(private val context: Context) {
         } } catch (e: CancellationException) { throw e }
         catch (e: Exception) { failOwnedDownload(e) { removeDownload(id) } }
     }
-    private fun operation(label: String, action: suspend () -> Unit): Job = scope.launch {
+    private fun operation(label: String, ownsDownload: Boolean = false, action: suspend () -> Unit): Job = scope.launch {
         operations.run(
             start = { withContext(Dispatchers.Main) { busy = label; error = null; progress = 0f; transferDetail = null } },
             finish = { withContext(NonCancellable + Dispatchers.Main) { busy = null; transferDetail = null } },
+            ownedDownloadId = { if (ownsDownload) downloadId().takeIf { it >= 0 } else null },
         ) {
             try { action() } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 withContext(Dispatchers.Main) { error = e.message ?: "Could not complete this operation" }
@@ -405,7 +436,7 @@ class LibraryStore private constructor(private val context: Context) {
             error=failures.takeIf{it.isNotEmpty()}?.joinToString("\n")
         }
     }
-    fun download(item: CatalogItem) = operation("Downloading ${item.label}") {
+    fun download(item: CatalogItem) = operation("Downloading ${item.label}", ownsDownload = !item.url.startsWith("asset://")) {
         if (!item.url.startsWith("asset://")) {
             require(URI(item.url).let { it.scheme == "https" && it.host != null && it.userInfo == null })
             require(item.bytes == null || item.bytes in 1..32L*1024*1024*1024) { "Dictionary is too large" }
@@ -418,7 +449,12 @@ class LibraryStore private constructor(private val context: Context) {
                     .setDescription("Wikidict dictionary")
                     .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                     .setDestinationInExternalFilesDir(context, "downloads", "${UUID.randomUUID()}.wikblb")
-                enqueueOwnedDownload(downloadLock, { manager.enqueue(request) }, { id ->
+                val owner = operations.capture()
+                enqueueOwnedDownload(downloadLock, {
+                    operations.checkEnqueue(owner)
+                    manager.enqueue(request)
+                }, { id ->
+                    operations.claimDownload(owner, id)
                     val committed = prefs.edit().putLong("downloadId",id).putString("downloadUrl",item.url).putString("downloadLabel",item.label)
                         .putLong("downloadBytes",item.bytes ?: -1).putString("downloadHash",item.sha256).commit()
                     hasRetainedDownload = true

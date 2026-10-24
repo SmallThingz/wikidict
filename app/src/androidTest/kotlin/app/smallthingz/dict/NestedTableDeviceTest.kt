@@ -6,6 +6,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -213,6 +214,110 @@ class NestedTableDeviceTest {
                     compose.onAllNodes(signs, useUnmergedTree = true).fetchSemanticsNodes().size == 1
                 }
                 compose.onNode(signs, useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+            }
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+    }
+
+    @Test fun nestedHeightFailureLabelRemainsReadableOnAuthoredParentPaint() {
+        // Empty authored rows exceed the paired height capacity without composing thousands of cells.
+        val child = Table(emptyList(), List(2000) { emptyList<Cell>() },
+            TableGeometry(width = TableWidth(TableWidthUnit.Px, 10000)))
+        val childMetrics = checkNotNull(tableRenderMetrics(child, 136, 10, 40, 1f))
+        assertTrue(childMetrics.width in 1..TablePixelLimit)
+        assertTrue(child.rows.size.toLong() * childMetrics.minRowHeight > checkNotNull(tableHeightLimit(childMetrics.width)))
+        val mode = mutableStateOf("light")
+        val background = mutableStateOf<String?>("#000000")
+        var themeForeground = androidx.compose.ui.graphics.Color.Unspecified
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(1f, 1f)) {
+                    DictTheme(mode.value) { androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+                        themeForeground = androidx.compose.material3.MaterialTheme.colorScheme.onSurface
+                        val parent = Table(emptyList(), listOf(listOf(
+                            Cell(emptyList(), false, 1, 1, background = background.value, nestedTable = child))))
+                        CompiledTableView(parent, null) {}
+                    } }
+                }
+            } }
+            for (theme in listOf("light", "dark")) for (paint in listOf("#000000", "#ffffff", null)) {
+                compose.runOnIdle { mode.value = theme; background.value = paint }
+                compose.waitForIdle()
+                compose.onNodeWithTag("compiled-table-grid", useUnmergedTree = true).assertExists()
+                compose.onNodeWithTag("compiled-table-grid-root/0", useUnmergedTree = true).assertDoesNotExist()
+                val error = compose.onNodeWithText("Table is too large to display.", useUnmergedTree = true)
+                error.assertIsDisplayed().assertHasNoClickAction()
+                    .assert(hasAnyAncestor(hasTestTag("compiled-table-cell-root-0")))
+                val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                error.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                val expected = when (paint) {
+                    "#000000" -> androidx.compose.ui.graphics.Color.White
+                    "#ffffff" -> androidx.compose.ui.graphics.Color.Black
+                    else -> themeForeground
+                }
+                assertEquals(expected, layouts.single().layoutInput.style.color)
+                if (paint != null) {
+                    val image = error.captureToImage().asAndroidBitmap()
+                    try {
+                        val expectedPaint = if (paint == "#000000") android.graphics.Color.BLACK else android.graphics.Color.WHITE
+                        var parentPaintVisible = false
+                        for (y in 0 until image.height) for (x in 0 until image.width) {
+                            if (image.getPixel(x, y) == expectedPaint) parentPaintVisible = true
+                        }
+                        assertTrue("Unavailable child must remain inside the authored parent paint", parentPaintVisible)
+                    } finally { image.recycle() }
+                }
+            }
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+    }
+
+    @Test fun orderedCellRulesKeepContrastAndPreserveThemeAndDeeperPaint() {
+        val mode = mutableStateOf("light")
+        val scenario = mutableStateOf("authored")
+        val blocks = listOf(
+            Block("paragraph", 0, listOf(Span("text", "Before rule"))),
+            Block("rule", 0, emptyList()),
+            Block("paragraph", 0, listOf(Span("text", "After rule"))))
+        var expectedRule = androidx.compose.ui.graphics.Color.Unspecified
+        var expectedBackground = androidx.compose.ui.graphics.Color.Unspecified
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(1f, 1f)) {
+                    DictTheme(mode.value) { androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+                        val colors = androidx.compose.material3.MaterialTheme.colorScheme
+                        val authored = if (mode.value == "light") "#cbcdbf" else "#465348"
+                        val deeperPaint = if (mode.value == "light") "#000000" else "#ffffff"
+                        val background = when (scenario.value) { "theme" -> null; "override" -> deeperPaint; else -> authored }
+                        expectedBackground = background?.let { androidx.compose.ui.graphics.Color(checkNotNull(canonicalColorArgb(it))) } ?: colors.surface
+                        expectedRule = when {
+                            scenario.value == "theme" -> colors.outlineVariant
+                            scenario.value == "override" -> if (mode.value == "light") androidx.compose.ui.graphics.Color.White else androidx.compose.ui.graphics.Color.Black
+                            else -> if (mode.value == "light") androidx.compose.ui.graphics.Color.Black else androidx.compose.ui.graphics.Color.White
+                        }
+                        val content = Cell(emptyList(), false, 1, 1, background = background, blocks = blocks)
+                        val cell = if (scenario.value == "override") Cell(emptyList(), false, 1, 1, background = authored,
+                            nestedTable = Table(emptyList(), listOf(listOf(content)))) else content
+                        CompiledTableView(Table(emptyList(), listOf(listOf(cell))), null) {}
+                    } }
+                }
+            } }
+            for (theme in listOf("light", "dark")) for (case in listOf("authored", "theme", "override")) {
+                compose.runOnIdle { mode.value = theme; scenario.value = case }
+                compose.waitForIdle()
+                compose.onNodeWithText("Table is too large to display.").assertDoesNotExist()
+                val tag = if (case == "override") "compiled-table-cell-root/0-0" else "compiled-table-cell-root-0"
+                val cell = compose.onNodeWithTag(tag, useUnmergedTree = true).assertIsDisplayed()
+                val bounds = cell.fetchSemanticsNode().boundsInRoot
+                val before = compose.onNodeWithText("Before rule", useUnmergedTree = true).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+                val after = compose.onNodeWithText("After rule", useUnmergedTree = true).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+                val image = cell.captureToImage().asAndroidBitmap()
+                try {
+                    val top = kotlin.math.ceil(before.bottom - bounds.top).toInt().coerceIn(0, image.height)
+                    val bottom = kotlin.math.floor(after.top - bounds.top).toInt().coerceIn(0, image.height)
+                    assertTrue("Rule must remain between its ordered neighboring blocks", bottom > top)
+                    val pixels = (top until bottom).map { image.getPixel(image.width / 2, it) }
+                    assertTrue("Rule must remain visible on its effective cell paint", expectedRule.toArgb() in pixels)
+                    assertTrue("Neighboring gap must retain the effective cell paint", expectedBackground.toArgb() in pixels)
+                } finally { image.recycle() }
             }
         } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
     }

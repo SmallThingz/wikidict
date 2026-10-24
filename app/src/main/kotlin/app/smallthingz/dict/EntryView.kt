@@ -331,7 +331,8 @@ private fun BlockView(block: Block, onLink: (String) -> Unit, path: String? = nu
     when {
         block.table != null -> Box(Modifier.padding(start = blockIndentDp(block).dp)) { RenderCompiledTable(block.table, block.feature, gridPath, inCell, path?.let { "$it/table" }.orEmpty(), onLink) }
         block.kind == "heading" -> CellHeading(block, path, onLink)
-        block.kind == "rule" -> HorizontalDivider()
+        block.kind == "rule" -> HorizontalDivider(color =
+            authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)?.let { Color(it) } ?: DividerDefaults.color)
         block.kind == "preformatted" -> Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).horizontalScroll(rememberScrollState()).padding(12.dp)) {
             CompositionLocalProvider(LocalAuthoredBackground provides null) {
                 StyledText(block.spans, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), onLink = onLink, preserveWhitespace = true)
@@ -407,7 +408,8 @@ private fun TableGridView(table: Table, onLink: (String) -> Unit, path: String, 
         LaunchedEffect(request, semanticPath) {
             if (request != null && semanticPath.isNotEmpty() && request.path.startsWith("$semanticPath/")) reached(request)
         }
-        Text("Table is too large to display.")
+        Text("Table is too large to display.",
+            color = authoredSpanForegroundArgb(null, inheritedBackground)?.let { Color(it) } ?: Color.Unspecified)
         return
     }
     Layout(modifier = Modifier.testTag(if (path == "root") "compiled-table-grid" else "compiled-table-grid-$path")

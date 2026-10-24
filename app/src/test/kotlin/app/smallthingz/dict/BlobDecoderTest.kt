@@ -52,9 +52,10 @@ class BlobDecoderTest {
         "geometry" to table.geometry?.let { geometry -> linkedMapOf(
             "border" to geometry.border, "cell_spacing" to geometry.cellSpacing, "cell_padding" to geometry.cellPadding,
             "width" to geometry.width?.let { linkedMapOf("unit" to if (it.unit == TableWidthUnit.Px) "px" else "percent", "value" to it.value) }) },
-        "rows" to table.rows.map { row -> linkedMapOf("cells" to row.map { cell -> linkedMapOf(
+        "rows" to table.rows.map { row -> linkedMapOf("cells" to row.map { cell -> linkedMapOf<String, Any?>(
             "spans" to cell.spans.map(::producerSpan), "header" to cell.header, "colspan" to cell.colspan,
-            "rowspan" to cell.rowspan, "background" to cell.background, "nested_table" to cell.nestedTable?.let(::producerTable)) }) })
+            "rowspan" to cell.rowspan, "background" to cell.background, "nested_table" to cell.nestedTable?.let(::producerTable))
+                .also { fields -> cell.blocks?.let { blocks -> fields["blocks"] = blocks.map(::producerBlock) } } }) })
     private fun producerBlock(block: Block): Map<String, Any?> = linkedMapOf(
         "kind" to block.kind, "depth" to block.depth, "spans" to block.spans.map(::producerSpan),
         "feature" to block.feature?.let { linkedMapOf("kind" to it.kind, "language" to it.language,
@@ -71,17 +72,21 @@ class BlobDecoderTest {
         "media" to entry.media.map { linkedMapOf("file" to it.file, "kind" to it.kind, "caption" to it.caption) })
 
     /** Configured producer case is a separate required run of the existing conformance target. */
-    private fun requiredProducerConformance() {
-        require(producerEnvironment("WIKBLB_DPR7_REQUIRED") == "1")
-        val blob = producerInput("WIKBLB_DPR7_BLOB")
-        val headerFile = producerInput("WIKBLB_DPR7_HEADER")
-        val payloadFile = producerInput("WIKBLB_DPR7_PAYLOAD")
-        val titleFile = producerInput("WIKBLB_DPR7_TITLE")
-        producerInput("WIKBLB_DPR7_CORE")
-        producerInput("WIKBLB_DPR7_SOURCE_FACTS")
-        producerInput("WIKBLB_DPR7_CASE")
+    private fun requiredProducerConformance(version: Int) {
+        require(version in 7..8)
+        val prefix = "WIKBLB_DPR$version"
+        fun name(suffix: String) = "${prefix}_$suffix"
+        val fixtureTitle = if (version == 7) "geacen" else "cell-heading-regression"
+        require(producerEnvironment(name("REQUIRED")) == "1")
+        val blob = producerInput(name("BLOB"))
+        val headerFile = producerInput(name("HEADER"))
+        val payloadFile = producerInput(name("PAYLOAD"))
+        val titleFile = producerInput(name("TITLE"))
+        producerInput(name("CORE"))
+        producerInput(name("SOURCE_FACTS"))
+        producerInput(name("CASE"))
         val wantedTitle = titleFile.readBytes().decodeToString(throwOnInvalidSequence = true)
-        require(wantedTitle == "geacen")
+        require(wantedTitle == fixtureTitle)
         var selected: Entry? = null
         var selectedOffset = -1L
         var selectedLength = -1
@@ -118,24 +123,24 @@ class BlobDecoderTest {
                 if (title == wantedTitle) {
                     require(selected == null) { "Producer fixture title is duplicated" }
                     val payload = ByteArray(length); input.readFully(payload)
-                    require(payload.copyOfRange(0, 4).decodeToString() == "DPR7")
+                    require(payload.copyOfRange(0, 4).decodeToString() == "DPR$version")
                     require(payload.contentEquals(payloadFile.readBytes()))
                     selected = BlobDecoder.decode(payload, title, kind, language, code)
                     selectedOffset = offset; selectedLength = length
                 } else input.seek(offset + length)
             }
-            require(recordCount == 1 && selected != null) { "Genuine geacen Writer fixture must contain its one record" }
+            require(recordCount == 1 && selected != null) { "Genuine Writer fixture must contain its one selected record" }
         }
-        val output = File(producerEnvironment("WIKBLB_DPR7_ACTUAL")).canonicalFile
+        val output = File(producerEnvironment(name("ACTUAL"))).canonicalFile
         require(output.parentFile.isDirectory && output.createNewFile()) { "Use a fresh owned output path" }
         output.writeText(producerJson(linkedMapOf(
-            "schema" to "wikidict.android.dpr7-producer-actual.v1",
-            "case_sha256" to producerEnvironment("WIKBLB_DPR7_CASE_SHA256"),
-            "blob_sha256" to producerEnvironment("WIKBLB_DPR7_BLOB_SHA256"),
+            "schema" to "wikidict.android.dpr$version-producer-actual.v1",
+            "case_sha256" to producerEnvironment(name("CASE_SHA256")),
+            "blob_sha256" to producerEnvironment(name("BLOB_SHA256")),
             "header_sha256" to producerDigest(headerFile.readBytes()),
             "payload_sha256" to producerDigest(payloadFile.readBytes()),
-            "core_sha256" to producerEnvironment("WIKBLB_DPR7_CORE_SHA256"),
-            "source_facts_sha256" to producerEnvironment("WIKBLB_DPR7_SOURCE_FACTS_SHA256"),
+            "core_sha256" to producerEnvironment(name("CORE_SHA256")),
+            "source_facts_sha256" to producerEnvironment(name("SOURCE_FACTS_SHA256")),
             "record_offset" to selectedOffset, "record_length" to selectedLength,
             "header" to actualHeader, "entry" to producerEntry(checkNotNull(selected)))), Charsets.UTF_8)
     }
@@ -168,8 +173,10 @@ class BlobDecoderTest {
     }
 
     @Test fun everyRealCorpusRecordDecodesDirectly() {
-        if (System.getenv("WIKBLB_DPR7_REQUIRED") != null) {
-            requiredProducerConformance()
+        val requiredVersions = listOf(7, 8).filter { System.getenv("WIKBLB_DPR${it}_REQUIRED") != null }
+        if (requiredVersions.isNotEmpty()) {
+            require(requiredVersions.size == 1) { "Select exactly one required producer case" }
+            requiredProducerConformance(requiredVersions.single())
             return
         }
         val records=records();assertTrue(records.size>20)

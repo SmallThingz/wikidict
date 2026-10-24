@@ -5,6 +5,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -109,13 +110,16 @@ class DownloadLifecycleTest {
             assertSame(importing, operations.active)
             assertFalse(refreshStarted.isCompleted)
 
-            val captured = operations.active
-            assertNull(cancelOwnedDownload({}, { captured?.cancel() }))
+            val captured = operations.requestCancellation()
+            val retainedCleanupFailure = IOException("Unrelated retained download could not be removed")
+            assertSame(retainedCleanupFailure, operations.cancelCaptured(captured, 7L) { throw retainedCleanupFailure })
             importing.join()
             refreshStarted.await()
             assertTrue(importing.isCancelled)
             assertTrue(refreshing.isActive)
             assertSame(refreshing, operations.active)
+            operations.claimDownload(captured, 7L) // A late old owner cannot tag the queued refresh.
+            assertNull(operations.capture().ownedDownloadId)
             assertEquals(listOf("import started", "import cleaned", "refresh started"), events)
 
             finishRefresh.complete(Unit)
@@ -216,14 +220,14 @@ class DownloadLifecycleTest {
                         owned += launch(worker) { operations.run { releaseFirst.await() } }
                         worker.drain()
                     }
-                    val captured = operations.capture()
+                    val captured = operations.requestCancellation()
                     val capturedId = currentDownload
                     val cancellation = launch(cancelWorker) {
-                        val failure = cancelOwnedDownload({
+                        val failure = operations.cancelCaptured(captured, capturedId) {
                             removed += capturedId
                             if (removeFails) throw IOException("Old removal failed")
                             removeOwnedDownload(capturedId, Any(), { currentDownload }, {}, { currentDownload = -1 })
-                        }, { captured.job?.cancel() })
+                        }
                         kotlinx.coroutines.withContext(ui) { operations.publishIfCurrent(captured) {
                             message = failure?.message
                         } }
@@ -257,23 +261,39 @@ class DownloadLifecycleTest {
 
     @Test fun currentEpochCancelStillReportsSuccessAndFailureWithOrWithoutActiveJob() = runBlocking {
         withTimeout(5_000) {
-            for (captureActive in listOf(true, false)) for (removeFails in listOf(true, false)) {
+            for (captureActive in listOf(true, false)) for (removeFails in listOf(true, false))
+                for (downloadOwner in if (captureActive) listOf("none", "existing", "enqueued", "different") else listOf("none")) {
                 val worker = CancellationQueueDispatcher()
                 val ui = CancellationQueueDispatcher()
-                val operations = LibraryOperationOwner(Mutex())
+                val ownershipLock = Any()
+                val operations = LibraryOperationOwner(Mutex(), ownershipLock)
                 val owned = mutableListOf<kotlinx.coroutines.Job>()
                 var message: String? = "Previous error"
                 var removed = false
+                var retained = true
                 try {
-                    val active = if (captureActive) launch(worker) { operations.run { awaitCancellation() } }
-                        .also { owned += it; worker.drain() } else null
-                    val captured = operations.capture()
+                    val active = if (captureActive) launch(worker) {
+                        operations.run(ownedDownloadId = {
+                            assertTrue(Thread.holdsLock(ownershipLock))
+                            when (downloadOwner) { "existing" -> 7L; "different" -> 9L; else -> null }
+                        }) {
+                            if (downloadOwner == "enqueued") {
+                                val owner = operations.capture()
+                                synchronized(ownershipLock) { operations.claimDownload(owner, 7L) }
+                            }
+                            awaitCancellation()
+                        }
+                    }.also { owned += it; worker.drain() } else null
+                    val captured = operations.requestCancellation()
                     assertSame(active, captured.job)
+                    val sameDownload = downloadOwner in listOf("existing", "enqueued")
+                    assertEquals(when (downloadOwner) { "existing", "enqueued" -> 7L; "different" -> 9L; else -> null }, captured.ownedDownloadId)
                     val cancellation = launch(worker) {
-                        val failure = cancelOwnedDownload({
+                        val failure = operations.cancelCaptured(captured, 7L) {
                             removed = true
                             if (removeFails) throw IOException("Removal failed")
-                        }, { captured.job?.cancel() })
+                            retained = false
+                        }
                         kotlinx.coroutines.withContext(ui) { operations.publishIfCurrent(captured) {
                             message = failure?.message
                         } }
@@ -281,10 +301,11 @@ class DownloadLifecycleTest {
                     owned += cancellation
                     worker.drain(); ui.drain(); worker.drain()
                     assertTrue(removed)
+                    assertEquals(removeFails, retained)
                     assertTrue(cancellation.isCompleted && !cancellation.isCancelled)
                     assertEquals(if (removeFails) "Removal failed" else null, message)
                     if (active != null) {
-                        if (removeFails) { assertTrue(active.isActive); assertSame(active, operations.active) }
+                        if (removeFails && sameDownload) { assertTrue(active.isActive); assertSame(active, operations.active) }
                         else { assertTrue(active.isCancelled); assertNull(operations.active) }
                     } else assertNull(operations.active)
                 } finally {
@@ -439,7 +460,7 @@ class DownloadLifecycleTest {
         current(); assertTrue(newCancelled)
     }
 
-    @Test fun successfulOwnershipCommitKeepsTheNewDownload() {
+    @Test fun successfulOwnershipCommitKeepsTheNewDownload() = runBlocking {
         val state = Record(); state.values = emptyMap(); val calls = mutableListOf<String>()
         val record = mapOf<String, Any>("downloadId" to 42L, "downloadUrl" to "https://example.test/new.wikblb", "downloadBytes" to 456L, "downloadHash" to "b".repeat(64))
         val id = enqueueOwnedDownload(state.lock, { calls += "enqueue"; 42L }, {
@@ -447,6 +468,83 @@ class DownloadLifecycleTest {
             calls += "commit"; state.values = record; true
         }, { fail("A successful ownership commit must not remove its download") })
         assertEquals(42L, id); assertEquals(listOf("enqueue", "commit"), calls); assertEquals(record, state.values)
+
+        withTimeout(5_000) {
+            for (requestBeforeEnqueue in listOf(true, false)) for (cancelInline in listOf(true, false)) {
+                val pending = Record(); pending.values = emptyMap()
+                val worker = CancellationQueueDispatcher()
+                val cancelWorker = CancellationQueueDispatcher()
+                val operations = LibraryOperationOwner(Mutex(), pending.lock)
+                val owned = mutableListOf<kotlinx.coroutines.Job>()
+                var enqueued = 0
+                var committed = 0
+                val removed = mutableListOf<Long>()
+                var followingRan = false
+                try {
+                    val downloading = launch(worker) {
+                        operations.run {
+                            val owner = operations.capture() // Deliberately predates the cancellation intent.
+                            fun requestCancel() {
+                                val (capturedId, captured) = synchronized(pending.lock) {
+                                    pending.id() to operations.requestCancellation()
+                                }
+                                assertEquals(if (requestBeforeEnqueue) -1L else 42L, capturedId)
+                                val cleanup = {
+                                    assertFalse(Thread.holdsLock(pending.lock))
+                                    assertNull(operations.cancelCaptured(captured, capturedId) {
+                                        if (capturedId >= 0) pending.remove(capturedId) {
+                                            assertFalse(Thread.holdsLock(pending.lock)); removed += it
+                                        }
+                                    })
+                                }
+                                if (cancelInline) cleanup()
+                                else owned += launch(cancelWorker) { cleanup() }
+                            }
+                            // No suspension separates this ordinary callback from enqueue.
+                            // Inline cancellation cannot stop synchronous action code by itself;
+                            // delayed cleanup leaves the job active, so intent must suffice too.
+                            if (requestBeforeEnqueue) requestCancel()
+                            enqueueOwnedDownload(pending.lock, {
+                                operations.checkEnqueue(owner)
+                                enqueued++
+                                42L
+                            }, { nextId ->
+                                operations.claimDownload(owner, nextId)
+                                pending.values = record
+                                committed++
+                                true
+                            }, { nextId -> pending.remove(nextId) { removed += it } })
+                            if (!requestBeforeEnqueue) requestCancel()
+                            currentCoroutineContext().ensureActive()
+                        }
+                    }
+                    owned += downloading
+                    worker.drain() // Continue the entire synchronous enqueue action before delayed cleanup.
+                    if (requestBeforeEnqueue) {
+                        assertTrue(downloading.isCancelled)
+                        assertEquals(0, enqueued); assertEquals(0, committed)
+                        assertTrue(pending.values.isEmpty())
+                    } else {
+                        assertEquals(1, enqueued); assertEquals(1, committed)
+                    }
+                    cancelWorker.drain(); worker.drain()
+                    assertTrue(downloading.isCompleted)
+                    assertEquals(if (requestBeforeEnqueue) emptyList<Long>() else listOf(42L), removed)
+                    assertEquals(-1L, pending.id())
+                    assertTrue(pending.values.isEmpty())
+                    val following = launch(worker) { operations.run { followingRan = true } }
+                    owned += following
+                    worker.drain()
+                    assertTrue(followingRan)
+                    assertTrue(following.isCompleted && !following.isCancelled)
+                    assertNull(operations.active)
+                } finally {
+                    owned.forEach { it.cancel() }
+                    repeat(8) { worker.drain(); cancelWorker.drain() }
+                    check(owned.all { it.isCompleted })
+                }
+            }
+        }
     }
 
     @Test fun failedOwnershipCommitRemovesOnlyTheNewDownload() {
