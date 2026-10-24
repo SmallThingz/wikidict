@@ -2591,9 +2591,19 @@ void MainWindow::showLearningDialog(int tab) {
 
     SavedWord scrambleWord;
     bool scrambleAnswered = false;
+    const auto graphemes = [](const QString &text) {
+        QStringList characters;
+        QTextBoundaryFinder boundaries(QTextBoundaryFinder::Grapheme, text);
+        int start = 0;
+        for (int end = boundaries.toNextBoundary(); end >= 0; end = boundaries.toNextBoundary()) {
+            characters.append(text.mid(start, end - start));
+            start = end;
+        }
+        return characters;
+    };
     auto nextScramble = [&] {
         QVector<SavedWord> words;
-        for (const SavedWord &word : pool) if (word.title.size() > 2) words.push_back(word);
+        for (const SavedWord &word : pool) if (graphemes(word.title).size() > 2) words.push_back(word);
         if (words.isEmpty()) {
             scrambleWord = {};
             scrambleAnswered = false;
@@ -2608,13 +2618,7 @@ void MainWindow::showLearningDialog(int tab) {
             return;
         }
         scrambleWord = words.at(QRandomGenerator::global()->bounded(words.size()));
-        QStringList characters;
-        QTextBoundaryFinder boundaries(QTextBoundaryFinder::Grapheme, scrambleWord.title);
-        int start = 0;
-        for (int end = boundaries.toNextBoundary(); end >= 0; end = boundaries.toNextBoundary()) {
-            characters.append(scrambleWord.title.mid(start, end - start));
-            start = end;
-        }
+        QStringList characters = graphemes(scrambleWord.title);
         for (qsizetype i = characters.size() - 1; i > 0; --i) characters.swapItemsAt(i, QRandomGenerator::global()->bounded(static_cast<int>(i + 1)));
         QString letters = characters.join(QString());
         if (letters == scrambleWord.title && characters.size() > 1) {

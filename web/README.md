@@ -98,3 +98,17 @@ WIKIDICT_SELF_HEADING_REPORT=/absolute/fresh/report npm run test:self-heading
 ```
 
 The report directory must not exist. `CHROMIUM` may select the installed Chromium-compatible executable; qualification pins its exact executable separately. This test covers matching self-only heading consumption, styles, nonactionable self text, adjacent-link activation, folding, keyboard focus and 360/768px layouts; it does not import a corpus publication.
+
+### Learn accessibility and Unicode regression
+
+```sh
+WIKIDICT_LEARN_REPORT=/absolute/fresh/report npm run test:learn
+```
+
+This focused browser check uses controlled semantic entries at 360/768px. It checks
+flashcard accessible names and expanded state, keyboard reveal/hide without lost
+focus, combining marks and joined emoji in Scramble, and saves rendered evidence.
+Scramble uses `Intl.Segmenter`; when unavailable, it offers Quiz or Cards instead
+of splitting the word incorrectly. The test does not qualify corpus imports or
+screen-reader software. Use a fresh report directory and the same isolated browser
+setup as the other focused checks.

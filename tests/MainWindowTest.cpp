@@ -5216,6 +5216,73 @@ private slots:
         QVERIFY(exercised);
     }
 
+    void scrambleRequiresThreeGraphemes_data() {
+        QTest::addColumn<QStringList>("clusters");
+        QTest::newRow("one-combining") << QStringList{QStringLiteral("e\u0301\u0323")};
+        QTest::newRow("two-combining") << QStringList{QStringLiteral("e\u0301"), QStringLiteral("t")};
+        QTest::newRow("one-joined-emoji") << QStringList{QString::fromUtf8("\U0001f469\u200d\U0001f52c")};
+        QTest::newRow("two-joined-emoji") << QStringList{QString::fromUtf8("\U0001f469\u200d\U0001f52c"), QStringLiteral("a")};
+        QTest::newRow("three-combining") << QStringList{QStringLiteral("e\u0301"), QStringLiteral("a\u0308"), QStringLiteral("t")};
+        QTest::newRow("three-joined-emoji") << QStringList{QString::fromUtf8("\U0001f469\u200d\U0001f52c"), QStringLiteral("a"), QStringLiteral("b")};
+    }
+
+    void scrambleRequiresThreeGraphemes() {
+        QFETCH(QStringList, clusters);
+        MainWindow window(fixture_, QStringLiteral("dog"));
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("dog"));
+        SavedWord word = window.savedWord(window.currentEntry_);
+        word.title = clusters.join(QString());
+        word.clue = QStringLiteral("Controlled grapheme practice word");
+        window.learning_.toggleBookmark(word);
+        window.learning_.setRandomPool(QStringLiteral("bookmarks"));
+        bool exercised = false;
+        QTimer::singleShot(0, &window, [&] {
+            exercised = true;
+            const auto close = qScopeGuard([&] { for (auto *dialog : window.findChildren<QDialog *>()) dialog->reject(); });
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog);
+            auto *tabs = dialog->findChild<QTabWidget *>();
+            QVERIFY(tabs);
+            auto *games = tabs->widget(2)->findChild<QStackedWidget *>();
+            auto *picker = tabs->widget(2)->findChild<QComboBox *>();
+            QVERIFY(games && picker);
+            picker->setCurrentIndex(picker->findText(QStringLiteral("Unscramble")));
+            QWidget *practice = games->currentWidget();
+            auto *input = practice->findChild<QLineEdit *>();
+            auto *check = buttonWithText(practice, QStringLiteral("Check"));
+            QVERIFY(input && check);
+            const bool eligible = clusters.size() >= 3;
+            QCOMPARE(input->isEnabled(), eligible);
+            QCOMPARE(check->isEnabled(), eligible);
+            if (!eligible) {
+                QVERIFY(hasLabel(practice, QStringLiteral("No longer words yet")));
+                QTest::keyClick(input, Qt::Key_Return);
+                QCOMPARE(window.learning_.answerCount(), 0);
+            } else {
+                QStringList permutations;
+                for (int first = 0; first < 3; ++first)
+                    for (int second = 0; second < 3; ++second)
+                        if (first != second) permutations.append(clusters[first] + clusters[second] + clusters[3 - first - second]);
+                bool intactPrompt = false;
+                for (auto *label : practice->findChildren<QLabel *>())
+                    intactPrompt |= label->text() != word.title && permutations.contains(label->text());
+                QVERIFY(intactPrompt);
+            }
+            QCoreApplication::processEvents();
+            QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+            QVERIFY(dialog->grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-scramble-%1.png").arg(QString::fromLatin1(QTest::currentDataTag()))));
+            if (eligible) {
+                input->setText(word.title);
+                QTest::keyClick(input, Qt::Key_Return);
+                QCOMPARE(window.learning_.study().value(word.key).right, 1);
+            }
+        });
+        window.showLearningDialog(2);
+        QVERIFY(exercised);
+    }
+
     void compactWindowFitsRequestedSize() {
         MainWindow window(fixture_, QStringLiteral("cat"));
         window.resize(780, 480);
