@@ -6414,6 +6414,33 @@ pub const Renderer = struct {
             try self.text(trail, nonaction);
         }
     }
+    // A newline ends a bracketed external label. Prove its later literal
+    // closer in the same plain run before giving only the orphan '[' origin.
+    // Stop at the next opener/domain, so failed candidates never rescan it.
+    fn closedNewlineExternalOpener(input: []const u8, start: usize) bool {
+        if (start >= input.len or input[start] != '[' or start + 1 == input.len or input[start + 1] == '[') return false;
+        const rest = input[start + 1 ..];
+        if (!ir.hasExternalProtocol(rest) or starts(rest, "//")) return false;
+        const prefix_end = std.mem.indexOfAny(u8, rest, "[]{}<>\" \t\r\n") orelse rest.len;
+        if (prefix_end == 0) return false;
+        var child: ir.InlineIterator = .{ .input = rest[0..prefix_end], .renderer_boundaries = true };
+        const candidate = child.next() orelse return false;
+        if (candidate.kind != .external_link or candidate.target.len == 0 or !std.mem.eql(u8, candidate.text, candidate.target)) return false;
+        var cursor = start + 1 + child.cursor;
+        var line_ended = false;
+        while (cursor < input.len) : (cursor += 1) {
+            switch (input[cursor]) {
+                '\r', '\n' => line_ended = true,
+                ']' => return line_ended,
+                '[', '{', '}' => return false,
+                '<' => if (cursor + 1 < input.len and
+                    (std.ascii.isAlphabetic(input[cursor + 1]) or std.mem.indexOfScalar(u8, "/!?", input[cursor + 1]) != null)) return false,
+                else => {},
+            }
+        }
+        return false;
+    }
+
     pub fn inlineText(self: *Renderer, source: []const u8, inherited: Style, depth: usize) Error!void {
         return self.inlineTextWithMissing(MissingText.untracked(source), inherited, depth);
     }
@@ -6583,6 +6610,12 @@ pub const Renderer = struct {
                 try self.generatedDiagnostic("[malformed link] ", diagnostic);
                 self.fallbacks.literal_markup = true;
                 it.cursor += 2;
+                continue;
+            }
+            if (s.provenance == .parsed and it.recognize_external_links and closedNewlineExternalOpener(input, it.cursor)) {
+                try self.protectedLiteral("[", s);
+                self.fallbacks.literal_markup = true;
+                it.cursor += 1;
                 continue;
             }
             // A protocol without an address cannot own a bracketed link.

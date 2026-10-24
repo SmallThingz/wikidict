@@ -4039,3 +4039,215 @@ test "generated reference markers preserve bracket adjacency and validate author
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &split, &split_report));
     try std.testing.expect(split_report.literal_markup);
 }
+
+test "closed newline external citations preserve literal punctuation and bare URL actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Check = struct {
+        fn value(allocator: A, body: []const u8, target: []const u8, exact_visible: ?[]const u8) !void {
+            const source = try std.fmt.allocPrint(allocator, "''word<ref>{s}</ref>'' tail [[Target|label]]\n<references />", .{body});
+            var report: Fallbacks = .{};
+            const bytes = try compileReportedAlloc(allocator, "entry", .language, "English", "en", source, null, &report);
+            try std.testing.expect(report.literal_markup);
+            var renderer: compiler.Renderer = .{ .a = allocator, .context = .{}, .in_reference = true };
+            const parsed = try renderer.parseSpans(body, .{});
+            try std.testing.expect(renderer.fallbacks.literal_markup);
+            try std.testing.expectEqualStrings("[", parsed[0].text);
+            try std.testing.expectEqual(compiler.Provenance.protected_literal, parsed[0].provenance);
+            const stored = try codec.decodeAlloc(allocator, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+            try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(allocator, stored));
+            try std.testing.expectEqual(@as(usize, 1), stored.entry.references.len);
+            const reference = stored.entry.references[0];
+            try std.testing.expectEqual(@as(usize, 1), reference.number);
+            var visible: std.ArrayList(u8) = .empty;
+            defer visible.deinit(allocator);
+            var urls: usize = 0;
+            for (reference.spans) |span| {
+                try std.testing.expect(span.kind != .line_break);
+                try visible.appendSlice(allocator, span.text);
+                if (span.kind == .external_link) {
+                    urls += 1;
+                    try std.testing.expectEqualStrings(target, span.target);
+                    try std.testing.expectEqualStrings(target, span.text);
+                } else {
+                    try std.testing.expectEqual(types.InlineKind.text, span.kind);
+                    try std.testing.expectEqualStrings("", span.target);
+                }
+            }
+            try std.testing.expectEqual(@as(usize, 1), urls);
+            try std.testing.expect(std.mem.startsWith(u8, visible.items, "["));
+            try std.testing.expect(std.mem.endsWith(u8, visible.items, "]"));
+            if (exact_visible) |expected| try std.testing.expectEqualStrings(expected, visible.items);
+            // The exact captured citation words and punctuation remain ordered;
+            // this projection does not assert a browser whitespace/pixel model.
+            var authored = std.mem.tokenizeAny(u8, body, " \t\r\n");
+            var displayed = std.mem.tokenizeAny(u8, visible.items, " \t\r\n");
+            while (authored.next()) |word| {
+                const observed = displayed.next();
+                try std.testing.expect(observed != null);
+                try std.testing.expectEqualStrings(word, observed.?);
+            }
+            try std.testing.expect(displayed.next() == null);
+            var markers: usize = 0;
+            var ordinary_links: usize = 0;
+            for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+                if (span.role == .reference) {
+                    markers += 1;
+                    try std.testing.expectEqualStrings("[1]", span.text);
+                    try std.testing.expectEqualStrings("#reference-1", span.target);
+                    try std.testing.expect(span.superscript and span.italic);
+                } else if (span.kind == .link) {
+                    ordinary_links += 1;
+                    try std.testing.expectEqualStrings("Target", span.target);
+                    try std.testing.expectEqualStrings("label", span.text);
+                    try std.testing.expect(!span.italic);
+                }
+            };
+            try std.testing.expectEqual(@as(usize, 1), markers);
+            try std.testing.expectEqual(@as(usize, 1), ordinary_links);
+        }
+    };
+    const cases = [_]struct { source: []const u8, visible: []const u8 }{
+        .{ .source = "[https://example.test Alpha\nBeta]", .visible = "[https://example.test Alpha Beta]" },
+        .{ .source = "[https://example.test Alpha\n Beta]", .visible = "[https://example.test Alpha  Beta]" },
+        .{ .source = "[https://example.test Alpha \nBeta]", .visible = "[https://example.test Alpha Beta]" },
+        .{ .source = "[https://example.test Alpha\r\nBeta]", .visible = "[https://example.test Alpha Beta]" },
+        .{ .source = "[https://example.test Alpha\rBeta]", .visible = "[https://example.test Alpha Beta]" },
+        .{ .source = "[https://example.test Alpha\n<2026]", .visible = "[https://example.test Alpha <2026]" },
+    };
+    for (cases) |case| try Check.value(a, case.source, "https://example.test", case.visible);
+    // Exact isolated LF-bearing reference bodies from all 24 retained AF pages.
+    // Whole-page secondary failures remain the post-fix full-index audit's job.
+    const captured = [_]struct { title: []const u8, source: []const u8, target: []const u8 }{
+        .{ .title = "soeke", .source = "[https://www.litnet.co.za/stilgebed-en-skone-skeppendheid-om-uit-die-stilte-te-skep/ LitNet Akademies (Godsdienswetenskappe):\n Stilgebed en skone skeppendheid: Om uit die stilte te skep; Johann Rossouw; 2018]", .target = "https://www.litnet.co.za/stilgebed-en-skone-skeppendheid-om-uit-die-stilte-te-skep/" },
+        .{ .title = "seehond", .source = "[https://scholar.sun.ac.za/server/api/core/bitstreams/766cef1a-9e73-4d9f-bc9d-d2daff2be021/content DIE GESKIEDENIS VAN DIE VISSERY AAN DIE KAAP TOT AAN DIE MIDDEL VAN DIE AGTIENDE EEU.; C. F. J. MUJ:;-LER, M.A..\n(M.A.-tesis, Universiteit van Stellenbosch, 1938).]", .target = "https://scholar.sun.ac.za/server/api/core/bitstreams/766cef1a-9e73-4d9f-bc9d-d2daff2be021/content" },
+        .{ .title = "grendel", .source = "[https://www.dbnl.org/tekst/_pas002200101_01/_pas002200101_01_0040.php Passionate; Henning Jonathan Pieterse;\ndrie gedichten; 2010]", .target = "https://www.dbnl.org/tekst/_pas002200101_01/_pas002200101_01_0040.php" },
+        .{ .title = "ewewig", .source = "[https://wisa.org.za/wp-content/uploads/2018/12/WISA1989-020P.pdf WISA; \nKristallisasie van kalsiumfosfaat in 'n sweefbedreaktor; W.A. Pretorius, M.A.A. Coetzee; 1989]", .target = "https://wisa.org.za/wp-content/uploads/2018/12/WISA1989-020P.pdf" },
+        .{ .title = "edik", .source = "[https://journals.co.za/doi/pdf/10.17159/tvl.v.54i2.2989 Hitler, Verwoerd, Mandela and Me.\nMarianne Thamm; TYDSKRIF VIR LETTERKUNDE • 54 (2); 2017]", .target = "https://journals.co.za/doi/pdf/10.17159/tvl.v.54i2.2989" },
+        .{ .title = "protes", .source = "[https://journals.co.za/doi/pdf/10.10520/ejc-litnet-v18-n3-a8 LitNet; Akademies 18(3); Houdings in verband met protesaksie in Suid-Afrika;\nJohan Zaaiman; 2021]", .target = "https://journals.co.za/doi/pdf/10.10520/ejc-litnet-v18-n3-a8" },
+        .{ .title = "onverbrande", .source = "[https://agris.fao.org/search/en/providers/124740/records/67053f82b1dfe472e1468352 FAO; Savanna-woodland fire regimes: ecology, management and conservation of African protected areas; Nieman, Willem Adriaan, Leslie, Alison J., Van Wilgen, Brian, Radloff, Frans, Tambling, Craig; \n2021]", .target = "https://agris.fao.org/search/en/providers/124740/records/67053f82b1dfe472e1468352" },
+        .{ .title = "neerlê", .source = "[https://core.ac.uk/download/pdf/335037622.pdf Christelike hoër onderwys en die teologie; Du Toit; <2025\n]", .target = "https://core.ac.uk/download/pdf/335037622.pdf" },
+        .{ .title = "gekondenseer", .source = "[https://www.litnet.co.za/vir-brianvds-panda-angus-en-cornelius/ Litnet; Brianvds;\n2012]", .target = "https://www.litnet.co.za/vir-brianvds-panda-angus-en-cornelius/" },
+        .{ .title = "verwantskap", .source = "[https://journals.co.za/doi/pdf/10.10520/AJA02580144_608 Verwantskap as bron van finansiele hulpverlening in Soshanguve;\nH.P. Steyn; S.Afr.J.Ethno1. 13(4); 1990]", .target = "https://journals.co.za/doi/pdf/10.10520/AJA02580144_608" },
+        .{ .title = "verbergend", .source = "[https://repository.up.ac.za/server/api/core/bitstreams/6dbd5647-0386-494a-8c9c-1dbaed1929f8/content \nUniversiteit van Pretoria; Die neerslag van die metafoor. ’n Voorlopige besinning; Vos, CJA; 2007]", .target = "https://repository.up.ac.za/server/api/core/bitstreams/6dbd5647-0386-494a-8c9c-1dbaed1929f8/content" },
+        .{ .title = "handwoordeboek", .source = "[https://journals.co.za/doi/pdf/10.10520/AJA16844904_406 Voorbeeldmateriaal in\nwoordeboeke; F.J. Lombard; 1992]", .target = "https://journals.co.za/doi/pdf/10.10520/AJA16844904_406" },
+        .{ .title = "gefel", .source = "[https://journals.co.za/doi/pdf/10.10520/EJC109930 Geskiedenis, narratiwiteit en\ntweedegenerasie-trauma: Die problematiek van traumarepresentasie in La place de la Bastille deur Leon de Winter; Hennie van Coller en Cilliers van den Berg; STILET — Jg. XXI:1 — maart 2010]", .target = "https://journals.co.za/doi/pdf/10.10520/EJC109930" },
+        .{ .title = "gehoopte", .source = "[https://repository.up.ac.za/bitstreams/30fee768-c1df-4d6d-83cb-6e02eda985a1/download HERDENKINGS TYDENS DIE ANGLO-BOEREOORLOG\n(1899 TOT 1901); A. Bailey; <2026]", .target = "https://repository.up.ac.za/bitstreams/30fee768-c1df-4d6d-83cb-6e02eda985a1/download" },
+        .{ .title = "waansinnig", .source = "[https://journals.co.za/doi/pdf/10.10520/AJA00651141_789 DIE FIGUUR VAN ODUSSEUS BY\nGERHART HAUPTMANN; P. J. Conradie; 2009]", .target = "https://journals.co.za/doi/pdf/10.10520/AJA00651141_789" },
+        .{ .title = "nesosilikaat", .source = "[https://opentran.net/af/kroaties-afrikaans/cirkonu.html \nCirkonu - vertaling na afrikaans, sinonieme, luister, definisie, antonieme, voorbeelde; <2026]", .target = "https://opentran.net/af/kroaties-afrikaans/cirkonu.html" },
+        .{ .title = "posisiewerkwoord", .source = "[https://journals.co.za/doi/pdf/10.5774/52-0-709 Adri Breed; Stellenbosch Papers in Linguistics, 52, 23-43; 2017\n]", .target = "https://journals.co.za/doi/pdf/10.5774/52-0-709" },
+        .{ .title = "vervange", .source = "[https://repository.up.ac.za/items/ff608612-4643-498f-96c6-7f5489043cc2 U. Pretoria; Mashiane, Ernest George; 2018\n]", .target = "https://repository.up.ac.za/items/ff608612-4643-498f-96c6-7f5489043cc2" },
+        .{ .title = "gepak", .source = "[https://novanews.co.za/bloemnewsexpress/net-een-kan-suid-afrika-red-20240523-2/ Nova news; Net Een kan Suid-Afrika red; \nErica Pretorius; 2024]", .target = "https://novanews.co.za/bloemnewsexpress/net-een-kan-suid-afrika-red-20240523-2/" },
+        .{ .title = "nefrologies", .source = "[https://journals.co.za/doi/pdf/10.10520/AJA20785135_26857 Geneeskundige Onderrig en Spesialisasie\nF. P. RETIEF; SA MEDIESE TYDSKRIF; 1975]", .target = "https://journals.co.za/doi/pdf/10.10520/AJA20785135_26857" },
+        .{ .title = "gekoaguleerde", .source = "[https://www.netwerk24.com/land-van-te-veel-melk-en-te-min-heuning-20151021 Netwerk24; Land van te veel melk en te min heuning;\nErrieda du Toit; 2015]", .target = "https://www.netwerk24.com/land-van-te-veel-melk-en-te-min-heuning-20151021" },
+        .{ .title = "onafgebreekte", .source = "[https://www.sasas.co.za/wp-content/uploads/2012/09/Brand18Issue3_0.pdf Sasas; Die benutting van ureumaangevulde en verskillende tipes geammoniseerde\ngarsstrooi by skape; A.A. Brand en S.W.P. Cloete; S-Afr. Tydskr. Veekunde 18(3); 1988]", .target = "https://www.sasas.co.za/wp-content/uploads/2012/09/Brand18Issue3_0.pdf" },
+        .{ .title = "afgebyt", .source = "[https://argief.litnet.co.za/article.php?news_id=83595 Litnet; \nBlitsfiksie-kompetisie: Kuikenmoord; Lewies; 2010]", .target = "https://argief.litnet.co.za/article.php?news_id=83595" },
+        .{ .title = "zetapotensiaal", .source = "[https://journals.co.za/doi/pdf/10.10520/AJA10212019_24099 \n'n Eenvoudige teoretiese model vir die versnelling van infiltrasie deur onversadigde klei met behulp van elektroosnlose; M de Wet; SAlCE-joernaal, 40(3): 17-20; 1998]", .target = "https://journals.co.za/doi/pdf/10.10520/AJA10212019_24099" },
+    };
+    for (captured) |case| {
+        _ = case.title;
+        try Check.value(a, case.source, case.target, null);
+    }
+    var direct_report: Fallbacks = .{};
+    const direct_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", "prefix [https://example.test Alpha\nBeta] suffix [[Target|label]]", null, &direct_report);
+    try std.testing.expect(direct_report.literal_markup);
+    const direct = try codec.decodeAlloc(a, direct_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    var direct_text: std.ArrayList(u8) = .empty;
+    defer direct_text.deinit(a);
+    for (direct.entry.sections[0].blocks[0].spans) |span| try direct_text.appendSlice(a, span.text);
+    try std.testing.expectEqualStrings("prefix [https://example.test Alpha Beta] suffix label", direct_text.items);
+}
+
+test "closed newline external recovery cannot borrow closure across source domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "word<ref>[https://example.test Alpha\nBeta</ref>",
+        "word [https://example.test Alpha\nBeta",
+        "word<ref>[https:// Alpha\nBeta]</ref>",
+        "word<ref>[https://outer.test Alpha\n[https://inner.test Beta]</ref>",
+        "word<ref>[https://example.test Alpha\n<nowiki>]</nowiki></ref>",
+        "word<ref>[https://example.test Alpha\n<span title=']'>Beta</span></ref>",
+        "word<ref>[https://example.test Alpha\n&#93;</ref>",
+    }) |source| {
+        var report: Fallbacks = .{};
+        try std.testing.expectError(error.UncompiledPresentation, compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report));
+        try std.testing.expect(report.literal_markup);
+    }
+    // Valid single-line labels still own their whole label; LF after their
+    // already consumed closer is ordinary following reference prose.
+    var valid_report: Fallbacks = .{};
+    const valid_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", "word<ref>[https://example.test Label]\ncontinued</ref>", null, &valid_report);
+    try std.testing.expect(!valid_report.literal_markup);
+    const valid = try codec.decodeAlloc(a, valid_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualStrings("Label", valid.entry.references[0].spans[0].text);
+    try std.testing.expectEqualStrings("https://example.test", valid.entry.references[0].spans[0].target);
+    var valid_text: std.ArrayList(u8) = .empty;
+    defer valid_text.deinit(a);
+    for (valid.entry.references[0].spans) |span| try valid_text.appendSlice(a, span.text);
+    try std.testing.expectEqualStrings("Label continued", valid_text.items);
+    // Separate inline calls cannot lend each other a literal closer.
+    var split: compiler.Renderer = .{ .a = a, .context = .{}, .in_reference = true };
+    try split.inlineText("[https://example.test Alpha\n", .{}, 0);
+    try split.inlineText("Beta]", .{}, 0);
+    var split_report: Fallbacks = .{};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, split.spans.items, &split_report));
+    try std.testing.expect(split_report.literal_markup);
+    // The next opener bounds each failed scan; only the last root closes.
+    var repeated: std.ArrayList(u8) = .empty;
+    defer repeated.deinit(a);
+    for (0..128) |_| try repeated.appendSlice(a, "[https://example.test Alpha\n");
+    try repeated.append(a, ']');
+    var repeated_renderer: compiler.Renderer = .{ .a = a, .context = .{}, .in_reference = true };
+    const repeated_spans = try repeated_renderer.parseSpans(repeated.items, .{});
+    var proved: usize = 0;
+    for (repeated_spans) |span| if (span.provenance == .protected_literal and std.mem.eql(u8, span.text, "[")) {
+        proved += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), proved);
+    var repeated_report: Fallbacks = .{};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, repeated_spans, &repeated_report));
+    // Source case19 empty [] references and a bare URL plus authored ] remain
+    // separate from the one diagnosed closed-newline citation.
+    var extras_report: Fallbacks = .{};
+    const extras_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", "word<ref>[]</ref><ref>[]</ref><ref>[]</ref><ref>[https://example.test Alpha\nBeta]</ref><ref>https://other.test prose]</ref>", null, &extras_report);
+    try std.testing.expect(extras_report.literal_markup);
+    const extras = try codec.decodeAlloc(a, extras_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 5), extras.entry.references.len);
+    for (extras.entry.references[0..3]) |reference| {
+        var empty_text: std.ArrayList(u8) = .empty;
+        defer empty_text.deinit(a);
+        for (reference.spans) |span| {
+            try std.testing.expectEqual(types.InlineKind.text, span.kind);
+            try empty_text.appendSlice(a, span.text);
+        }
+        try std.testing.expectEqualStrings("[]", empty_text.items);
+    }
+    try std.testing.expectEqualStrings("https://other.test", extras.entry.references[4].spans[0].target);
+    var bare_text: std.ArrayList(u8) = .empty;
+    defer bare_text.deinit(a);
+    for (extras.entry.references[4].spans) |span| try bare_text.appendSlice(a, span.text);
+    try std.testing.expectEqualStrings("https://other.test prose]", bare_text.items);
+    var sic_report: Fallbacks = .{};
+    const sic_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", "<small><sup>[sic]</sup></small><ref>soos dit aangehaal word</ref>''word<ref>[https://example.test Alpha\nBeta]</ref>''", null, &sic_report);
+    try std.testing.expect(sic_report.literal_markup);
+    const sic = try codec.decodeAlloc(a, sic_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 2), sic.entry.references.len);
+    var first_note: std.ArrayList(u8) = .empty;
+    defer first_note.deinit(a);
+    for (sic.entry.references[0].spans) |span| try first_note.appendSlice(a, span.text);
+    try std.testing.expectEqualStrings("soos dit aangehaal word", first_note.items);
+    var sic_text: std.ArrayList(u8) = .empty;
+    defer sic_text.deinit(a);
+    var sic_markers: usize = 0;
+    for (sic.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (span.role == .reference) {
+            sic_markers += 1;
+            try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "#reference-{d}", .{sic_markers}), span.target);
+        } else if (span.small and span.superscript) try sic_text.appendSlice(a, span.text);
+    };
+    try std.testing.expectEqual(@as(usize, 2), sic_markers);
+    try std.testing.expectEqualStrings("[sic]", sic_text.items);
+}
