@@ -8597,7 +8597,7 @@ pub const Renderer = struct {
                 const previous_seed = self.next_quote_seed;
                 self.next_quote_seed = try self.rawBodyQuoteSeed(input, line[1..], &body_quotes);
                 defer self.next_quote_seed = previous_seed;
-                try self.appendBlockBudgeted(&blocks, .{ .kind = .preformatted, .spans = try self.parseBodySpans(line[1..], .{ .code = true }) });
+                try self.appendBlockBudgeted(&blocks, .{ .kind = .preformatted, .spans = try self.parseBodySpans(line[1..], .{ .code = true, .preserve_whitespace = true }) });
                 continue;
             }
             if (prefix != 0) {
@@ -9888,7 +9888,10 @@ pub const Renderer = struct {
                     try rows.appendSlice(self.a, table.rows);
                 }
             } else if (caption_pending) {
-                if (caption_source.items.len != 0) try caption_source.append(self.a, '\n');
+                // As with an empty cell opener, a later physical marker starts
+                // a block while a marker on the caption opener remains inline.
+                if (caption_source.items.len != 0 or (raw_line.len != 0 and (raw_line[0] == ' ' or std.mem.indexOfScalar(u8, "#*:;", raw_line[0]) != null or self.tableCellHeading(raw_line) != null)))
+                    try caption_source.append(self.a, '\n');
                 try caption_source.appendCopied(self.a, tracked, raw_line);
             } else if (current != null) {
                 if (!try self.swatchCellSourceAllowed(raw_line)) swatch_allowed = false;
@@ -28643,4 +28646,151 @@ test "media link options remove only registered raw behavior controls before tex
     const empty = try protected.mediaActionStyle(.{ .kind = .link, .target = "Parent", .background = "#abcdef" }, "Pic.png", "__NOEDITSECTION__");
     try std.testing.expect(empty.kind == .text and empty.target.len == 0);
     try std.testing.expectEqualStrings("#abcdef", empty.background.?);
+}
+
+test "leading space preformatted blocks preserve decoded tabs and newlines without changing inline code" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, visible: []const u8 }{
+        .{ .source = " a&#9;b", .visible = "a\tb" },
+        .{ .source = " a&#x9;b", .visible = "a\tb" },
+        .{ .source = " a&#10;b", .visible = "a\nb" },
+        .{ .source = " a&#xA;b", .visible = "a\nb" },
+        .{ .source = "<div>\n a&#9;b\n</div>", .visible = "a\tb" },
+        .{ .source = "<div>\n a&#10;b\n</div>", .visible = "a\nb" },
+        .{ .source = " a&#9;b [[Target|label]]", .visible = "a\tb label" },
+    };
+    for (cases, 0..) |case, index| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(case.source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        try std.testing.expectEqual(Kind.preformatted, blocks[0].kind);
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, blocks[0].spans));
+        for (blocks[0].spans) |span| try std.testing.expect(span.flags.code);
+        if (index == cases.len - 1) {
+            var label_actions: usize = 0;
+            for (blocks[0].spans) |span| {
+                if (span.target.len == 0) continue;
+                label_actions += 1;
+                try std.testing.expectEqual(ir.InlineKind.link, span.kind);
+                try std.testing.expectEqualStrings("label", span.text);
+                try std.testing.expectEqualStrings("Target", span.target);
+            }
+            try std.testing.expectEqual(@as(usize, 1), label_actions);
+        }
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const blob = @import("blob_encoder");
+        const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &[_]Section{.{ .blocks = blocks }}, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "leading space numeric whitespace", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqualSlices(u8, bytes, try blob.presentation_codec.encodeAlloc(a, decoded));
+        const decoded_blocks = decoded.entry.sections[0].blocks;
+        try std.testing.expectEqual(@as(usize, 1), decoded_blocks.len);
+        try std.testing.expectEqual(blob.presentation_types.BlockKind.preformatted, decoded_blocks[0].kind);
+        var visible: std.ArrayList(u8) = .empty;
+        defer visible.deinit(a);
+        for (decoded_blocks[0].spans) |span| {
+            try visible.appendSlice(a, span.text);
+            try std.testing.expect(span.code);
+        }
+        try std.testing.expectEqualStrings(case.visible, visible.items);
+        if (index == cases.len - 1) {
+            var label_actions: usize = 0;
+            for (decoded_blocks[0].spans) |span| {
+                if (span.target.len == 0) continue;
+                label_actions += 1;
+                try std.testing.expectEqual(blob.presentation_types.InlineKind.link, span.kind);
+                try std.testing.expectEqualStrings("label", span.text);
+                try std.testing.expectEqualStrings("Target", span.target);
+            }
+            try std.testing.expectEqual(@as(usize, 1), label_actions);
+        }
+        try std.testing.expect(!renderer.fallbacks.literal_markup);
+    }
+    var ordinary: Renderer = .{ .a = a, .context = .{} };
+    const prose = try ordinary.renderBody("a&#9;b a&#10;b");
+    try std.testing.expectEqual(Kind.paragraph, prose[0].kind);
+    try std.testing.expectEqualStrings("a b a b", try flattened(a, prose[0].spans));
+    for (prose[0].spans) |span| try std.testing.expect(!span.flags.code);
+    const inline_code = try ordinary.parseSpans("a&#9;b a&#10;b", .{ .code = true });
+    try std.testing.expectEqualStrings("a b a b", try flattened(a, inline_code));
+    for (inline_code) |span| try std.testing.expect(span.flags.code);
+}
+
+test "empty wiki caption openers retain physical list boundaries and opener line literals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, visible: []const u8, linked: bool = false, italic: bool = false }{
+        .{ .source = "{|\n|+\n# one\n# two\n|}", .visible = "1. one\n2. two" },
+        .{ .source = "{|\n|+\n# [[A|one]]\n# [[B|two]]\n|}", .visible = "1. one\n2. two", .linked = true },
+        .{ .source = "{|\n|+ style='font-style:italic' |\n# [[A|one]]\n# [[B|two]]\n|}", .visible = "1. one\n2. two", .linked = true, .italic = true },
+        .{ .source = "{|\n|+ # [[A|one]]\n# [[B|two]]\n|}", .visible = "# one\n1. two", .linked = true },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(case.source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        try std.testing.expectEqual(Kind.table, blocks[0].kind);
+        const table = blocks[0].table.?;
+        try std.testing.expectEqual(@as(usize, 0), table.rows.len);
+        try std.testing.expectEqualStrings(case.visible, try plainText(a, table.caption));
+        var one_links: usize = 0;
+        var two_links: usize = 0;
+        for (table.caption) |span| {
+            if (span.kind != .link) {
+                try std.testing.expectEqualStrings("", span.target);
+                continue;
+            }
+            try std.testing.expect(case.linked);
+            try std.testing.expectEqual(case.italic, span.flags.italic);
+            if (std.mem.eql(u8, span.target, "A")) {
+                try std.testing.expectEqualStrings("one", span.text);
+                try std.testing.expect(two_links == 0);
+                one_links += 1;
+            } else {
+                try std.testing.expectEqualStrings("B", span.target);
+                try std.testing.expectEqualStrings("two", span.text);
+                two_links += 1;
+            }
+        }
+        try std.testing.expectEqual(@as(usize, if (case.linked) 1 else 0), one_links);
+        try std.testing.expectEqual(@as(usize, if (case.linked) 1 else 0), two_links);
+        try std.testing.expect(!renderer.fallbacks.malformed_table and !renderer.fallbacks.literal_markup);
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+        const blob = @import("blob_encoder");
+        const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &[_]Section{.{ .blocks = blocks }}, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+        const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "empty caption list boundary", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqualSlices(u8, bytes, try blob.presentation_codec.encodeAlloc(a, decoded));
+        const decoded_blocks = decoded.entry.sections[0].blocks;
+        try std.testing.expectEqual(@as(usize, 1), decoded_blocks.len);
+        try std.testing.expectEqual(blob.presentation_types.BlockKind.table, decoded_blocks[0].kind);
+        const decoded_table = decoded_blocks[0].table.?;
+        try std.testing.expectEqual(@as(usize, 0), decoded_table.rows.len);
+        var visible: std.ArrayList(u8) = .empty;
+        defer visible.deinit(a);
+        one_links = 0;
+        two_links = 0;
+        for (decoded_table.caption) |span| {
+            if (span.kind == .line_break) try visible.append(a, '\n') else try visible.appendSlice(a, span.text);
+            if (span.kind != .link) {
+                try std.testing.expectEqualStrings("", span.target);
+                continue;
+            }
+            try std.testing.expect(case.linked);
+            try std.testing.expectEqual(case.italic, span.italic);
+            if (std.mem.eql(u8, span.target, "A")) {
+                try std.testing.expectEqualStrings("one", span.text);
+                try std.testing.expect(two_links == 0);
+                one_links += 1;
+            } else {
+                try std.testing.expectEqualStrings("B", span.target);
+                try std.testing.expectEqualStrings("two", span.text);
+                two_links += 1;
+            }
+        }
+        try std.testing.expectEqualStrings(case.visible, visible.items);
+        try std.testing.expectEqual(@as(usize, if (case.linked) 1 else 0), one_links);
+        try std.testing.expectEqual(@as(usize, if (case.linked) 1 else 0), two_links);
+    }
 }
