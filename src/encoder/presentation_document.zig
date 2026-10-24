@@ -208,26 +208,7 @@ pub const preparePageExternalLinksWithMissingAlloc = compiler.preparePageExterna
 pub const preparePageExternalLinksAlloc = compiler.preparePageExternalLinksAlloc;
 
 fn requireCompiledText(text: []const u8) !void {
-    for ([_][]const u8{ "[[", "]]", "{{", "}}", "{|", "|}" }) |token| {
-        if (std.mem.indexOf(u8, text, token) != null) {
-            return error.UncompiledPresentation;
-        }
-    }
-    var at: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, text, at, '<')) |start| {
-        var name = start + 1;
-        if (name < text.len and text[name] == '/') name += 1;
-        if (name < text.len and std.ascii.isAlphabetic(text[name]) and std.mem.indexOfScalarPos(u8, text, name, '>') != null) {
-            return error.UncompiledPresentation;
-        }
-        at = start + 1;
-    }
-    at = 0;
-    while (std.mem.indexOfScalarPos(u8, text, at, '[')) |start| {
-        if (start + 1 < text.len and text[start + 1] != '[' and ir.hasExternalProtocol(text[start + 1 ..]))
-            return error.UncompiledPresentation;
-        at = start + 1;
-    }
+    return compiler.requireCompiledText(text);
 }
 
 fn requireCompiledSpans(a: A, spans: []const compiler.Span) !void {
@@ -3974,4 +3955,87 @@ test "legacy null cell content keeps prior encoding and body probes see ordered 
     }
     const source = "{|\n| intro\n=== retained ===\nbody\n|}";
     try std.testing.expect(try hasBodyContentWithReferencesAndPoemFragmentsAlloc(a, "entry", "English", source, .{}, null, null, null, .{}, null, &.{}));
+}
+
+test "generated reference markers preserve bracket adjacency and validate authored groups" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, visible: []const u8, marker: []const u8, group: []const u8 = "" }{
+        .{ .source = "''word<ref>citation</ref>]'' tail [[Target|label]]", .visible = "word[1]] tail label", .marker = "[1]" },
+        .{ .source = "''word<ref group='note'>citation</ref>]'' tail [[Target|label]]", .visible = "word[note 1]] tail label", .marker = "[note 1]", .group = "note" },
+        .{ .source = "''[<ref>citation</ref>'' tail [[Target|label]]", .visible = "[[1] tail label", .marker = "[1]" },
+        .{ .source = "''[<ref group='note'>citation</ref>'' tail [[Target|label]]", .visible = "[[note 1] tail label", .marker = "[note 1]", .group = "note" },
+        .{ .source = "''word<ref group='n&amp;o'>citation</ref>]'' tail [[Target|label]]", .visible = "word[n&o 1]] tail label", .marker = "[n&o 1]", .group = "n&o" },
+    };
+    for (cases) |case| {
+        var report: Fallbacks = .{};
+        const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", case.source, null, &report);
+        try std.testing.expect(!report.literal_markup);
+        const stored = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+        try std.testing.expectEqual(@as(usize, 1), stored.entry.sections[0].blocks.len);
+        var visible: std.ArrayList(u8) = .empty;
+        defer visible.deinit(a);
+        var marker_count: usize = 0;
+        var ordinary_actions: usize = 0;
+        for (stored.entry.sections[0].blocks[0].spans) |span| {
+            try visible.appendSlice(a, span.text);
+            if (span.role == .reference) {
+                marker_count += 1;
+                try std.testing.expectEqual(types.InlineKind.link, span.kind);
+                try std.testing.expectEqualStrings(case.marker, span.text);
+                try std.testing.expectEqualStrings("#reference-1", span.target);
+                try std.testing.expect(span.superscript and span.italic);
+            } else if (span.kind == .link) {
+                ordinary_actions += 1;
+                try std.testing.expectEqualStrings("label", span.text);
+                try std.testing.expectEqualStrings("Target", span.target);
+                try std.testing.expect(!span.superscript and !span.italic);
+            } else {
+                try std.testing.expectEqualStrings("", span.target);
+            }
+        }
+        try std.testing.expectEqualStrings(case.visible, visible.items);
+        try std.testing.expectEqual(@as(usize, 1), marker_count);
+        try std.testing.expectEqual(@as(usize, 1), ordinary_actions);
+        try std.testing.expectEqual(@as(usize, 1), stored.entry.references.len);
+        try std.testing.expectEqualStrings(case.group, stored.entry.references[0].group);
+        var citation: std.ArrayList(u8) = .empty;
+        defer citation.deinit(a);
+        for (stored.entry.references[0].spans) |span| try citation.appendSlice(a, span.text);
+        try std.testing.expectEqualStrings("citation", citation.items);
+    }
+    // Authored raw closers are consumed by the existing malformed-link
+    // recovery. Their diagnosed presentation is data, not an uncompiled pair.
+    for ([_]bool{ false, true }) |reference_body| {
+        var report: Fallbacks = .{};
+        const source = if (reference_body) "word<ref>bad]]body</ref>]" else "word]]tail";
+        const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report);
+        try std.testing.expect(report.literal_markup);
+        const stored = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+        const values = if (reference_body) stored.entry.references[0].spans else stored.entry.sections[0].blocks[0].spans;
+        var diagnosed: std.ArrayList(u8) = .empty;
+        defer diagnosed.deinit(a);
+        for (values) |span| {
+            try diagnosed.appendSlice(a, span.text);
+            try std.testing.expectEqual(types.InlineKind.text, span.kind);
+            try std.testing.expectEqualStrings("", span.target);
+            try std.testing.expect(std.mem.indexOf(u8, span.text, "]]") == null);
+        }
+        try std.testing.expectEqualStrings(if (reference_body) "bad [malformed link]body" else "word [malformed link]tail", diagnosed.items);
+    }
+    for ([_][]const u8{
+        "word]__NOTOC__]tail",
+        "word<ref group='bad]]name'>citation</ref>]",
+        "word<ref group='bad[[name'>citation</ref>]",
+    }) |source| {
+        var report: Fallbacks = .{};
+        try std.testing.expectError(error.UncompiledPresentation, compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report));
+        try std.testing.expect(report.literal_markup);
+    }
+    const split = [_]compiler.Span{ .{ .text = "word]" }, .{ .text = "]tail" } };
+    var split_report: Fallbacks = .{};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &split, &split_report));
+    try std.testing.expect(split_report.literal_markup);
 }

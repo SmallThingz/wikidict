@@ -486,6 +486,30 @@ pub const Context = struct {
 };
 pub const Role = enum { normal, label, pronunciation, headword, example, quotation, citation, reference };
 pub const Provenance = enum { parsed, protected_literal, entity_literal };
+
+pub fn requireCompiledText(text: []const u8) !void {
+    for ([_][]const u8{ "[[", "]]", "{{", "}}", "{|", "|}" }) |token| {
+        if (std.mem.indexOf(u8, text, token) != null) {
+            return error.UncompiledPresentation;
+        }
+    }
+    var at: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, text, at, '<')) |start| {
+        var name = start + 1;
+        if (name < text.len and text[name] == '/') name += 1;
+        if (name < text.len and std.ascii.isAlphabetic(text[name]) and std.mem.indexOfScalarPos(u8, text, name, '>') != null) {
+            return error.UncompiledPresentation;
+        }
+        at = start + 1;
+    }
+    at = 0;
+    while (std.mem.indexOfScalarPos(u8, text, at, '[')) |start| {
+        if (start + 1 < text.len and text[start + 1] != '[' and ir.hasExternalProtocol(text[start + 1 ..]))
+            return error.UncompiledPresentation;
+        at = start + 1;
+    }
+}
+
 pub const Style = struct {
     provenance: Provenance = .parsed,
     kind: ir.InlineKind = .text,
@@ -3834,6 +3858,13 @@ pub const Renderer = struct {
             try std.fmt.allocPrint(self.a, "[{d}]", .{ref.group_number})
         else
             try std.fmt.allocPrint(self.a, "[{s} {d}]", .{ group, ref.group_number });
+        // Only the wrapper and number are synthesized. Preserve ordinary
+        // validation for authored group text without splitting one action span.
+        requireCompiledText(group) catch {
+            try self.text(marker, s);
+            return;
+        };
+        s.provenance = .protected_literal;
         try self.text(marker, s);
     }
     fn referenceDefinitions(self: *Renderer, content: []const u8, default_group: []const u8) Error!void {
