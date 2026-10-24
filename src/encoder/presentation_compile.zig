@@ -5815,7 +5815,7 @@ pub const Renderer = struct {
     }
 
     fn htmlTag(self: *Renderer, input: []const u8, at: usize, style: Style, depth: usize, no_more_nowiki_close: ?*bool, opaque_scan: *syntax.OpaqueScan) Error!?usize {
-        return self.htmlTagWithMissing(MissingText.untracked(input), at, style, depth, no_more_nowiki_close, opaque_scan);
+        return self.htmlTagWithMissing(MissingText.untracked(input), at, style, depth, no_more_nowiki_close, opaque_scan, null);
     }
     // Normalize rejected nowiki angles in the complete tracked inline stream.
     // Keep link/quote context continuous across the visible tag boundary.
@@ -5893,7 +5893,7 @@ pub const Renderer = struct {
         const boundary = std.mem.indexOfAnyPos(u8, input, cursor, "<>\r\n") orelse return true;
         return input[boundary] != '>';
     }
-    fn htmlTagWithMissing(self: *Renderer, tracked: MissingText, at: usize, style: Style, depth: usize, no_more_nowiki_close: ?*bool, opaque_scan: *syntax.OpaqueScan) Error!?usize {
+    fn htmlTagWithMissing(self: *Renderer, tracked: MissingText, at: usize, style: Style, depth: usize, no_more_nowiki_close: ?*bool, opaque_scan: *syntax.OpaqueScan, matched_inline_end: ?*bool) Error!?usize {
         const input = tracked.bytes;
         if (starts(input[at..], "<!--")) return syntax.protectedEnd(input, at);
         const raw_tag = opaque_scan.tagAt(input, at, no_more_nowiki_close);
@@ -6239,6 +6239,7 @@ pub const Renderer = struct {
                 span.bidi_auto_excluded = true;
             };
         if (block_boundary) try self.lineBreak(style);
+        if (matched_inline_end) |proved| proved.* = matched != null and !block_boundary;
         return pair.end;
     }
     fn entityText(self: *Renderer, value: []const u8) Error![]const u8 {
@@ -6439,8 +6440,32 @@ pub const Renderer = struct {
                         }
                     }
                 }
-                if (try self.htmlTagWithMissing(prepared_missing, it.cursor, s, depth, &no_more_nowiki_close, &opaque_scan)) |end| {
+                var matched_inline_end = false;
+                if (try self.htmlTagWithMissing(prepared_missing, it.cursor, s, depth, &no_more_nowiki_close, &opaque_scan, &matched_inline_end)) |end| {
                     it.cursor = end;
+                    if (matched_inline_end and s.provenance == .parsed and end < input.len and input[end] == ']') {
+                        // A matched HTML close separates this authored single
+                        // bracket from the child's text. Do not reinterpret a
+                        // visible pair formed only after consuming that close.
+                        // Raw pairs, including pairs joined by switch removal,
+                        // stay on the ordinary malformed-source path.
+                        var following = end + 1;
+                        while (following < input.len) {
+                            if (starts(input[following..], "<!--")) {
+                                following = syntax.protectedEnd(input, following) orelse input.len;
+                                continue;
+                            }
+                            const control_end = (if (self.context.behavior_switches) |registry|
+                                try registry.matchAt(self.a, input, following)
+                            else
+                                syntax.behaviorSwitchEnd(input, following)) orelse break;
+                            following = control_end;
+                        }
+                        if (following == input.len or input[following] != ']') {
+                            try self.protectedLiteral("]", s);
+                            it.cursor += 1;
+                        }
+                    }
                     continue;
                 }
                 if (opaque_scan.tagAt(input, it.cursor, &no_more_nowiki_close) == null) {
@@ -28793,4 +28818,83 @@ test "empty wiki caption openers retain physical list boundaries and opener line
         try std.testing.expectEqual(@as(usize, if (case.linked) 1 else 0), one_links);
         try std.testing.expectEqual(@as(usize, if (case.linked) 1 else 0), two_links);
     }
+}
+
+test "matched inline HTML preserves source-isolated closing bracket provenance" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const document = @import("presentation_document.zig");
+    const codec = @import("blob_encoder").presentation_codec;
+    const source = "[<span style='font-style:italic'>IPA]</span>] tail [[Target|label]]";
+    var report: document.Fallbacks = .{};
+    const encoded = try document.compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report);
+    try std.testing.expect(!report.literal_markup);
+    const stored = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.sections[0].blocks.len);
+    var visible: std.ArrayList(u8) = .empty;
+    defer visible.deinit(a);
+    var actions: usize = 0;
+    var ipa_italic = false;
+    var outer_bracket = false;
+    for (stored.entry.sections[0].blocks[0].spans) |span| {
+        try visible.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.text, "IPA]")) ipa_italic = span.italic and span.target.len == 0;
+        if (std.mem.eql(u8, span.text, "]")) outer_bracket = !span.italic and span.target.len == 0;
+        if (span.kind == .link) {
+            actions += 1;
+            try std.testing.expectEqualStrings("Target", span.target);
+            try std.testing.expectEqualStrings("label", span.text);
+        }
+    }
+    try std.testing.expectEqualStrings("[IPA]] tail label", visible.items);
+    try std.testing.expect(ipa_italic and outer_bracket);
+    try std.testing.expectEqual(@as(usize, 1), actions);
+    var linked: Renderer = .{ .a = a, .context = .{} };
+    const link_spans = try linked.parseSpans("[[A|<span>x]</span>]]", .{});
+    try std.testing.expectEqualStrings("x]", try flattened(a, link_spans));
+    try std.testing.expect(!linked.fallbacks.literal_markup);
+    for (link_spans) |span| {
+        try std.testing.expectEqual(ir.InlineKind.link, span.kind);
+        try std.testing.expectEqualStrings("A", span.target);
+    }
+    var terminal: Renderer = .{ .a = a, .context = .{} };
+    const terminal_spans = try terminal.parseSpans("[<span>x]</span>]", .{});
+    try std.testing.expectEqualStrings("[x]]", try flattened(a, terminal_spans));
+    try std.testing.expect(!terminal.fallbacks.literal_markup);
+    try std.testing.expectEqual(Provenance.protected_literal, terminal_spans[terminal_spans.len - 1].provenance);
+    for ([_][]const u8{ "word]]tail", "<span>x</span>]]", "<span>x</span>]__NOTOC__]" }) |raw| {
+        var negative: Renderer = .{ .a = a, .context = .{} };
+        const spans = try negative.parseSpans(raw, .{});
+        for (spans) |span| if (std.mem.indexOfScalar(u8, span.text, ']') != null)
+            try std.testing.expect(span.provenance == .parsed);
+        if (std.mem.indexOf(u8, raw, "__NOTOC__") == null) {
+            try std.testing.expect(negative.fallbacks.literal_markup);
+        } else {
+            var raw_report: document.Fallbacks = .{};
+            try std.testing.expectError(error.UncompiledPresentation, document.compileReportedAlloc(a, "entry", .language, "English", "en", raw, null, &raw_report));
+            try std.testing.expect(raw_report.literal_markup);
+        }
+    }
+    // Comments are removed in the expansion phase. Direct compiler callers
+    // must not acquire a literal exemption across that same empty boundary.
+    for ([_][]const u8{ "<span>x</span>]<!--comment-->]", "<span>x</span>]<!--comment-->__NOTOC__]" }) |raw| {
+        var raw_report: document.Fallbacks = .{};
+        try std.testing.expectError(error.UncompiledPresentation, document.compileReportedAlloc(a, "entry", .language, "English", "en", raw, null, &raw_report));
+        try std.testing.expect(raw_report.literal_markup);
+    }
+    var linked_pair: Renderer = .{ .a = a, .context = .{} };
+    const linked_pair_spans = try linked_pair.parseSpans("[[A|[<span>x]</span>] tail]]", .{});
+    try std.testing.expectEqualStrings("[x]] tail", try flattened(a, linked_pair_spans));
+    try std.testing.expect(!linked_pair.fallbacks.literal_markup);
+    for (linked_pair_spans) |span| {
+        try std.testing.expectEqual(ir.InlineKind.link, span.kind);
+        try std.testing.expectEqualStrings("A", span.target);
+    }
+    // An arbitrary fragment boundary has no matched HTML proof.
+    var fragments: Renderer = .{ .a = a, .context = .{} };
+    try fragments.inlineText("]", .{}, 0);
+    try fragments.inlineText("]", .{}, 0);
+    try std.testing.expectEqualStrings("]]", try flattened(a, fragments.spans.items));
+    for (fragments.spans.items) |span| try std.testing.expectEqual(Provenance.parsed, span.provenance);
 }
