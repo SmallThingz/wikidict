@@ -12,12 +12,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun LibraryScreen(library: LibraryStore, onImport: ()->Unit) {
+fun LibraryScreen(library: LibraryStore, autoRefresh: Boolean = true, onImport: ()->Unit) {
     var add by remember { mutableStateOf(false) }
     var address by remember { mutableStateOf("") }
     var message by remember { mutableStateOf<String?>(null) }
     var remove by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) { if(library.catalog.isEmpty() && library.busy==null) library.refreshCatalogs() }
+    LaunchedEffect(Unit) {
+        if(autoRefresh && library.catalog.isEmpty() && library.busy==null && library.error==null)
+            library.refreshCatalogs()
+    }
     LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(12.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
         item { Row(verticalAlignment=Alignment.CenterVertically) {
             Text("Dictionaries",Modifier.weight(1f),style=MaterialTheme.typography.headlineMedium)

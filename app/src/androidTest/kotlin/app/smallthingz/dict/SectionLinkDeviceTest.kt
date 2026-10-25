@@ -294,7 +294,7 @@ class SectionLinkDeviceTest {
             fixtureKeys += followed.key
             compose.runOnUiThread {
                 learning.updateSettings { it.copy(collapseEtymology = true, collapseOtherSections = true, allowImages = false, allowAudio = false) }
-                compose.activity.setContent { MaterialTheme { DictApp(library, learning, {}) } }
+                compose.activity.setContent { MaterialTheme { DictApp(library, learning, onImport = {}) } }
             }
             fun paragraphStarting(marker: String) = SemanticsMatcher("paragraph starts with $marker") { node ->
                 node.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Text)?.any {

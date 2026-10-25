@@ -103,7 +103,7 @@ class BookSourcesDeviceTest {
                 compose.activity.setContent { MaterialTheme {
                     CompositionLocalProvider(LocalUriHandler provides object : UriHandler {
                         override fun openUri(uri: String) { opened.add(uri) }
-                    }) { DictApp(library, learning, {}) }
+                    }) { DictApp(library, learning, onImport = {}) }
                 } }
             }
             compose.waitUntil(10000) { compose.onAllNodes(hasTestTag("entry-title") and hasText(sourceTitle))

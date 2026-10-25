@@ -1933,6 +1933,37 @@ class RendererDeviceTest {
         compose.runOnIdle { assertEquals(listOf(oldWord.key to false, newWord.key to true), answers) }
     }
 
+    @Test fun scrambleAcceptsCanonicalSpellingsAndReportsMissingAccentsAgainstTheOriginalKey() {
+        val words = listOf(
+            SavedWord("nfc-composed", "caf\u00e9", "French", "language", "Composed accent clue"),
+            SavedWord("nfc-decomposed", "cafe\u0301", "French", "language", "Decomposed accent clue"),
+        )
+        val pool = mutableStateOf(listOf(words.first()))
+        val answers = mutableListOf<Pair<String, Boolean>>()
+        val expected = mutableListOf<Pair<String, Boolean>>()
+        compose.activityRule.scenario.onActivity { activity ->
+            activity.setContent { androidx.compose.material3.MaterialTheme {
+                ScrambleGame(pool.value, onAnswer = { key, right -> answers += key to right })
+            } }
+        }
+        for ((index, word) in words.withIndex()) {
+            compose.runOnIdle { pool.value = listOf(word) }
+            compose.onNodeWithText(word.clue).assertIsDisplayed()
+            val equivalent = if (index == 0) "  CAFE\u0301  " else "CAF\u00c9"
+            for ((guess, correct) in listOf(equivalent to true, "cafe" to false)) {
+                compose.onNode(hasSetTextAction()).performTextInput(guess)
+                compose.onNodeWithText("Check").performClick()
+                compose.onNodeWithText(if (correct) "Correct." else "Answer: ${word.title}").assertIsDisplayed()
+                expected += word.key to correct
+                compose.runOnIdle {
+                    assertEquals(expected, answers)
+                    assertEquals(word, pool.value.single())
+                }
+                compose.onNodeWithText("Next").performClick()
+            }
+        }
+    }
+
     @Test fun quizNeedsDistinctVisibleWordsAndRecoversWhenPoolChanges() {
         val sameTitle = listOf(
             SavedWord("cat-en", "cat", "English", "language", "English cat clue", dictionary = "en-dictionary", edition = "enwiktionary"),

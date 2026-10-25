@@ -38,6 +38,8 @@ class ReaderStartup internal constructor(
 
     internal var stores by mutableStateOf<ReaderStores?>(null); private set
     internal var failed by mutableStateOf(false); private set
+    private var importNavigationSequence = savedState.get<Long>("importNavigationSequence") ?: 0L
+    internal var importNavigationRequest by mutableStateOf(savedState.get<Long>("importNavigationRequest") ?: 0L); private set
     private var opening: Job? = null
     private val resolver = application.contentResolver
 
@@ -55,10 +57,22 @@ class ReaderStartup internal constructor(
         }
     }
 
-    internal fun import(uri: Uri) {
+    internal fun import(uri: Uri, showLibrary: Boolean = false) {
+        if (showLibrary) {
+            importNavigationSequence++
+            savedState["importNavigationSequence"] = importNavigationSequence
+            savedState["importNavigationRequest"] = importNavigationSequence
+            importNavigationRequest = importNavigationSequence
+        }
         val pending = savedState.get<ArrayList<Uri>>("pendingImports").orEmpty()
         savedState["pendingImports"] = ArrayList(pending + uri)
         drainImports()
+    }
+
+    internal fun consumeImportNavigation(request: Long) {
+        if (request != importNavigationRequest) return
+        savedState["importNavigationRequest"] = 0L
+        importNavigationRequest = 0L
     }
 
     private fun drainImports() {
@@ -86,7 +100,10 @@ class MainActivity : ComponentActivity() {
             val stores = startup.stores
             DictTheme(stores?.learning?.data?.settings?.darkMode ?: "system") {
                 if (stores != null) {
-                    DictApp(stores.library, stores.learning) { picker.launch(arrayOf("application/octet-stream", "application/x-wikblb", "*/*")) }
+                    DictApp(stores.library, stores.learning,
+                        importNavigationRequest = startup.importNavigationRequest,
+                        onImportNavigationHandled = startup::consumeImportNavigation,
+                    ) { picker.launch(arrayOf("application/octet-stream", "application/x-wikblb", "*/*")) }
                 } else {
                     Surface(Modifier.fillMaxSize()) {
                         Column(
@@ -115,7 +132,7 @@ class MainActivity : ComponentActivity() {
     override fun onStop() { SpeechPlayback.stop(); MediaPlayback.stop(); super.onStop() }
     override fun onDestroy() { SpeechPlayback.close(); super.onDestroy() }
     private fun handle(intent: Intent) {
-        if (intent.action == Intent.ACTION_VIEW) intent.data?.let { startup.import(it) }
-        if (intent.action == Intent.ACTION_SEND) intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let { startup.import(it) }
+        if (intent.action == Intent.ACTION_VIEW) intent.data?.let { startup.import(it, showLibrary = true) }
+        if (intent.action == Intent.ACTION_SEND) intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let { startup.import(it, showLibrary = true) }
     }
 }

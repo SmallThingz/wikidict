@@ -60,8 +60,11 @@ internal class ReaderSession : ViewModel() {
 }
 
 @Composable
-fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit) {
+fun DictApp(library: LibraryStore, learning: LearningStore,
+    importNavigationRequest: Long = 0L, onImportNavigationHandled: (Long) -> Unit = {},
+    onImport: () -> Unit) {
     var screen by rememberSaveable { mutableStateOf(AppScreen.Dictionary) }
+    var importLibraryVisit by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
     var dockHidden by remember { mutableStateOf(false) }
     var searching by rememberSaveable { mutableStateOf(false) }
@@ -85,7 +88,7 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
             else entry.redirect?.takeIf { it.followed }?.fragment.orEmpty()
         anchorRequest = fragment.takeIf { it.isNotEmpty() }?.let { EntryAnchorRequest(entry.key, "#$it") }
         library.rememberWord(hit); learning.record(entry)
-        query = ""; searching = false; screen = AppScreen.Dictionary; keyboard?.hide()
+        query = ""; searching = false; screen = AppScreen.Dictionary; importLibraryVisit = false; keyboard?.hide()
     }
     val currentLibrary by rememberUpdatedState(library)
     val currentShowEntry by rememberUpdatedState<(WordHit, Entry, String, Boolean) -> Unit> { hit, entry, target, returning ->
@@ -154,11 +157,22 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
         navigation.interrupt {
             searching = false; query = ""
             screen = destination
+            importLibraryVisit = false
             keyboard?.hide()
         }
         // A recreated search/screen retains its intent, but the decoded entry is not saveable.
         if (screen == AppScreen.Dictionary && !searching && selected == null &&
             library.revision > 0 && library.dictionaries.isNotEmpty()) navigation.openInitial()
+    }
+    LaunchedEffect(importNavigationRequest) {
+        if (importNavigationRequest != 0L) navigation.interrupt {
+            searching = false; query = ""
+            screen = AppScreen.Library
+            // An automatic refresh queued behind the import would erase its error.
+            importLibraryVisit = true
+            keyboard?.hide()
+            onImportNavigationHandled(importNavigationRequest)
+        }
     }
     androidx.activity.compose.BackHandler(searching || screen != AppScreen.Dictionary || visits.canGoBack) {
         if (searching || screen != AppScreen.Dictionary)
@@ -184,6 +198,7 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
                                     navigation.interrupt {
                                         if (target == AppScreen.Dictionary) searching = library.dictionaries.isNotEmpty()
                                         screen = target
+                                        importLibraryVisit = false
                                     }
                                 }
                             }
@@ -203,7 +218,8 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
         Box(Modifier.fillMaxSize().padding(contentPadding)) {
             androidx.compose.animation.Crossfade(screen, animationSpec = androidx.compose.animation.core.tween(140), label = "page") { destination ->
                 when(destination) {
-                    AppScreen.Library -> LibraryScreen(library, onImport)
+                    AppScreen.Library -> LibraryScreen(library,
+                        autoRefresh = !importLibraryVisit && importNavigationRequest == 0L, onImport = onImport)
                     AppScreen.Dictionary -> {
                         if (searching) {
                             SearchResults(query, library.revision, { library.search(it) }, ::open)
@@ -218,7 +234,7 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
                                     } else navigation.openLink(target, entry)
                                 })
                             }
-                        } ?: LibraryScreen(library,onImport)
+                        } ?: LibraryScreen(library, autoRefresh = importNavigationRequest == 0L, onImport = onImport)
                     }
                     AppScreen.Saved -> SavedScreen(learning, false, ::openWord)
                     AppScreen.History -> SavedScreen(learning, true, ::openWord)
@@ -231,7 +247,9 @@ fun DictApp(library: LibraryStore, learning: LearningStore, onImport: () -> Unit
                             LearnScreen(learning, study, ::openWord, ::randomWord, pending, failed, retry)
                         }
                     }
-                    AppScreen.Settings -> SettingsScreen(learning) { navigation.interrupt { screen = AppScreen.Library } }
+                    AppScreen.Settings -> SettingsScreen(learning) { navigation.interrupt {
+                        importLibraryVisit = false; screen = AppScreen.Library
+                    } }
                 }
             }
             if(loading) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))

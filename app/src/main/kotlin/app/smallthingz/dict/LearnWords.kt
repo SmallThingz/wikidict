@@ -1,8 +1,13 @@
 package app.smallthingz.dict
 
 import android.icu.text.BreakIterator
+import java.text.Normalizer
 import java.util.Locale
 import kotlin.random.Random
+
+internal fun scrambleAnswerMatches(guess: String, title: String): Boolean =
+    Normalizer.normalize(guess.trim(), Normalizer.Form.NFC)
+        .equals(Normalizer.normalize(title, Normalizer.Form.NFC), ignoreCase = true)
 
 internal fun scrambleLetters(value: String, boundaries: BreakIterator = BreakIterator.getCharacterInstance(Locale.ROOT)): List<String> {
     boundaries.setText(value)

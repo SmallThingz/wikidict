@@ -127,7 +127,7 @@ internal fun ScrambleGame(pool: List<SavedWord>, onAnswer: (String, Boolean) -> 
             Text(current.clue, color = MaterialTheme.colorScheme.onSurfaceVariant)
             OutlinedTextField(value = guess, onValueChange = { guess = it; status = null }, singleLine = true, label = { Text("Word") }, modifier = Modifier.fillMaxWidth())
             Button(onClick = {
-                val correct = guess.trim().equals(current.title, ignoreCase = true)
+                val correct = scrambleAnswerMatches(guess, current.title)
                 onAnswer(current.key, correct); status = correct
             }, enabled = status == null && guess.isNotBlank()) { Text("Check") }
             status?.let { correct -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {

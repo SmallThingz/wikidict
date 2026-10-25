@@ -88,7 +88,7 @@ class AliasSectionDeviceTest {
             library.rememberWord(source)
             compose.runOnUiThread {
                 learning.updateSettings { it.copy(collapseEtymology = true, collapseOtherSections = true, allowImages = false, allowAudio = false) }
-                compose.activity.setContent { MaterialTheme { DictApp(library, learning, {}) } }
+                compose.activity.setContent { MaterialTheme { DictApp(library, learning, onImport = {}) } }
             }
             compose.waitUntil(10000) { compose.onAllNodes(hasTestTag("entry-title") and hasText("Anchor source")).fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
             fun search(title: String) {
