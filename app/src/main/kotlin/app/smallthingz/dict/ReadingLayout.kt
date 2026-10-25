@@ -267,11 +267,29 @@ internal fun entryReadingStartIndex(entry: Entry, folded: Set<String>): Int =
     1 + (if ("abbreviations" in folded) 0 else entry.abbreviations.size) +
         if (entry.preamble.isEmpty()) 0 else 1
 
+/** An empty leaf duplicating the generated references group has no separate body. */
+internal fun metadataReferenceHeadingKey(entry: Entry): String? {
+    if (entry.references.isEmpty()) return null
+    val index = entry.sections.indices.singleOrNull { index ->
+        val section = entry.sections[index]
+        section.title == "References" && section.blocks.isEmpty() &&
+            (entry.sections.getOrNull(index + 1)?.level ?: 0) <= section.level
+    }
+    return index?.let { "heading-$it" }
+}
+
+internal fun visibleEntryReadingRows(entry: Entry, folded: Set<String>): List<ReadingRow> {
+    val placeholder = metadataReferenceHeadingKey(entry)
+    return visibleReadingRows(entry.readingRows, folded).filterNot { it.key == placeholder }
+}
+
+internal fun metadataReferencesStartIndex(entry: Entry, folded: Set<String>): Int =
+    entryReadingStartIndex(entry, folded) + visibleEntryReadingRows(entry, folded).size
+
 internal fun referenceScrollIndex(entry: Entry, target: String, folded: Set<String>): Int? {
     val referenceIndex = entry.references.indexOfFirst { target == "#reference-${it.number}" }
     if (referenceIndex < 0) return null
-    return entryReadingStartIndex(entry, folded) +
-        visibleReadingRows(entry.readingRows, folded).size + 1 + referenceIndex
+    return metadataReferencesStartIndex(entry, folded) + 1 + referenceIndex
 }
 
 internal fun referenceLabel(reference: Reference): String =

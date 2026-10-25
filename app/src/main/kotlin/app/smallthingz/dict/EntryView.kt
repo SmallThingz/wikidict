@@ -158,7 +158,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 this["abbreviations"] = settings.collapseDetails
             }.also { readingState?.foldKey = foldKey; readingState?.folds = it }
         }
-        val visibleRows = visibleReadingRows(entry.readingRows, folded.filterValues { it }.keys)
+        val visibleRows = visibleEntryReadingRows(entry, folded.filterValues { it }.keys)
         var cellHeadingRequest by remember { mutableStateOf<CellHeadingRequest?>(null) }
         fun jumpToAnchor(target: String): Boolean {
             val destination = headingDestination(entry, target)
@@ -166,7 +166,12 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             val compiledHeading = destination?.compiledId == true
             cellHeadingRequest = null
             // Authored heading IDs share the page namespace; generated references are a fallback.
-            val referenceIndex = if (compiledHeading) null else referenceScrollIndex(entry, target, folded.filterValues { it }.keys)
+            val referenceIndex = when {
+                headingRow?.key == metadataReferenceHeadingKey(entry) && headingRow != null ->
+                    metadataReferencesStartIndex(entry, folded.filterValues { it }.keys)
+                compiledHeading -> null
+                else -> referenceScrollIndex(entry, target, folded.filterValues { it }.keys)
+            }
             if (referenceIndex != null) {
                 folded["references"] = false
                 // Apply the destination in the next remeasure, after References opens.
@@ -175,7 +180,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 val sectionKey = if (headingRow.heading != null) headingRow.key else headingRow.sectionKey
                 folded[sectionKey] = false
                 if (headingRow.heading == null && headingRow.meaningSection) folded[sectionKey + "-details"] = false
-                val headingIndex = visibleReadingRows(entry.readingRows, folded.filterValues { it }.keys)
+                val headingIndex = visibleEntryReadingRows(entry, folded.filterValues { it }.keys)
                     .indexOfFirst { it.key == headingRow.key }
                 if (headingIndex < 0) return false
                 cellHeadingRequest = destination?.path?.let(::CellHeadingRequest)
@@ -215,11 +220,17 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                                     if (section.title.isNotBlank() && section.title != entry.language) DropdownMenuItem(text = { Text(section.title) }, onClick = {
                                         onNavigate()
                                         contents = false
-                                        folded[row.key] = false
-                                        val targetIndex = visibleReadingRows(entry.readingRows, folded.filterValues { it }.keys).indexOfFirst { it.key == row.key }
+                                        val referenceHeading = row.key == metadataReferenceHeadingKey(entry)
+                                        folded[if (referenceHeading) "references" else row.key] = false
+                                        val targetIndex = if (referenceHeading) {
+                                            metadataReferencesStartIndex(entry, folded.filterValues { it }.keys)
+                                        } else {
+                                            visibleEntryReadingRows(entry, folded.filterValues { it }.keys).indexOfFirst { it.key == row.key } +
+                                                entryReadingStartIndex(entry, folded.filterValues { it }.keys)
+                                        }
                                         scope.launch {
                                             androidx.compose.runtime.withFrameNanos { }
-                                            scroll.animateScrollToItem(targetIndex + entryReadingStartIndex(entry, folded.filterValues { it }.keys))
+                                            scroll.animateScrollToItem(targetIndex)
                                         }
                                     })
                                 } }

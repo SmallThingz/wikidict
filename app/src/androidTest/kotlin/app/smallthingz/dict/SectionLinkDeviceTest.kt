@@ -231,6 +231,39 @@ class SectionLinkDeviceTest {
         compose.onAllNodesWithText("Usage notes", useUnmergedTree = true).assertCountEquals(1)
     }
 
+    @Test fun emptyReferencesLeafMenuAndLinksReachTheActualCitationFooter() {
+        val entry = Entry("qichwa reference navigation", emptyList(), "language", "Quechua", "qu", listOf(
+            Section(3, "Noun", listOf(
+                Block("definition", 1, listOf(Span("link", "Read references", target = "#References"))),
+                Block("definition", 1, listOf(Span("link", "Read second citation", target = "#reference-2"))))),
+            Section(3, "References", emptyList(), anchor = "References"),
+            Section(3, "Further reading", List(30) {
+                Block("paragraph", 0, listOf(Span("text", "Further reading item $it"))) })
+        ), listOf(Reference(1, 1, "", listOf(Span("text", "FIRST ACTUAL CITATION"))),
+            Reference(2, 2, "", listOf(Span("text", "SECOND ACTUAL CITATION")))),
+            preamble = listOf(Span("text", "Preamble keeps a separate row")))
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                MaterialTheme { EntryView(entry, false, {}, onLink = { forwarded.add(it) },
+                    settings = AppSettings(collapseOtherSections = false, collapseDetails = false)) }
+            }
+        }
+        compose.onNodeWithContentDescription("Sections").performClick()
+        compose.onNode(hasText("References") and hasAnyAncestor(isPopup())).performClick()
+        compose.onNodeWithText("FIRST ACTUAL CITATION").assertIsDisplayed()
+        compose.onAllNodesWithText("References", useUnmergedTree = true).assertCountEquals(1)
+        for (label in listOf("Read references", "Read second citation")) {
+            compose.onNodeWithTag("entry-scroll").performScrollToNode(hasContentDescription("Collapse References"))
+            compose.onNodeWithContentDescription("Collapse References").performClick()
+            compose.onNodeWithText("FIRST ACTUAL CITATION").assertDoesNotExist()
+            compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText(label))
+            touchLink(label)
+            compose.onNodeWithText(if (label == "Read references") "FIRST ACTUAL CITATION" else "SECOND ACTUAL CITATION")
+                .assertIsDisplayed()
+        }
+        compose.runOnIdle { assertTrue(forwarded.isEmpty()) }
+    }
+
     @Test fun sameEntrySectionLinkOpensFoldedHeadingAndShowsItsBody() {
         show("#Usage_notes", "Read usage notes", "Usage notes")
         compose.onNodeWithText("SECTION DESTINATION BODY").assertDoesNotExist()

@@ -374,6 +374,69 @@ class ReadingLayoutTest {
         }
     }
 
+    @Test fun qichwaReferencesPlaceholderUsesOneFooterWithStableFoldedReferenceOffsets() {
+        // The emitted qichwa shape has an empty References leaf before Further reading,
+        // with its two citations carried separately in entry metadata.
+        val example = Block("example", 1, listOf(
+            Span("text", "Ñuqanchik qhichwa simita rimachkanchik.", italic = true),
+            Span("line_break", ""), Span("text", "We are speaking Quechua (language).")))
+        val entry = Entry("qichwa", emptyList(), "language", "Quechua", "qu", listOf(
+            Section(2, "Quechua", emptyList()),
+            Section(3, "Alternative forms", emptyList()),
+            Section(3, "Etymology", emptyList()),
+            Section(3, "Pronunciation", emptyList()),
+            Section(3, "Noun", listOf(Block("definition", 1, listOf(Span("text", "Quechua"))), example)),
+            Section(4, "Declension", emptyList()),
+            Section(4, "See also", emptyList()),
+            Section(3, "References", emptyList(), anchor = "References"),
+            Section(3, "Further reading", List(5) { Block("list_item", 1, listOf(Span("text", "Bibliography $it"))) })
+        ), listOf(Reference(1, 1, "", listOf(Span("text", "First citation"))),
+            Reference(2, 2, "", listOf(Span("text", "Second citation")))),
+            preamble = listOf(Span("text", "Entry preamble")))
+        assertEquals("heading-7", metadataReferenceHeadingKey(entry))
+        assertEquals("heading-7", headingDestination(entry, "#References")!!.rowKey)
+        assertTrue(headingDestination(entry, "#References")!!.compiledId)
+        assertEquals(listOf(example), visibleEntryReadingRows(entry, emptySet()).mapNotNull { it.block }.filter { it.kind == "example" })
+        assertEquals(15, visibleEntryReadingRows(entry, emptySet()).size)
+        assertFalse(visibleEntryReadingRows(entry, emptySet()).any { it.key == "heading-7" })
+        assertEquals(17, metadataReferencesStartIndex(entry, emptySet()))
+        assertEquals(18, referenceScrollIndex(entry, "#reference-1", emptySet()))
+        assertEquals(19, referenceScrollIndex(entry, "#reference-2", emptySet()))
+        val folded = setOf("heading-4", "heading-8", "references", "preamble")
+        assertEquals(10, metadataReferencesStartIndex(entry, folded))
+        assertEquals(11, referenceScrollIndex(entry, "#reference-1", folded))
+        assertEquals(12, referenceScrollIndex(entry, "#reference-2", folded))
+        assertEquals(11, referenceScrollIndex(entry.copy(preamble = emptyList()), "#reference-2", folded))
+        assertNull(referenceScrollIndex(entry, "#reference-3", folded))
+    }
+
+    @Test fun referencesSuppressionPreservesAuthoredBodiesParentsAmbiguityAndCompiledIds() {
+        val placeholder = Section(3, "References", emptyList(), anchor = "References")
+        val following = Section(3, "Further reading", emptyList())
+        val body = Block("paragraph", 0, listOf(Span("text", "Authored reference prose")))
+        val base = Entry("word", emptyList(), "language", "English", "en", listOf(placeholder, following),
+            listOf(Reference(1, 1, "", listOf(Span("text", "Metadata citation")))))
+        val controls = listOf(
+            base.copy(references = emptyList()),
+            base.copy(sections = listOf(placeholder.copy(blocks = listOf(body)), following)),
+            base.copy(sections = listOf(placeholder, Section(4, "Child references", listOf(body)), following)),
+            base.copy(sections = listOf(following)),
+            base.copy(sections = listOf(placeholder, following, placeholder.copy(anchor = "References_2"))),
+            base.copy(sections = listOf(placeholder.copy(title = "Sources"), following)))
+        for (entry in controls) {
+            assertNull(metadataReferenceHeadingKey(entry))
+            assertEquals(visibleReadingRows(entry.readingRows, emptySet()), visibleEntryReadingRows(entry, emptySet()))
+        }
+        // A real authored ID still wins the page namespace over a generated citation ID.
+        val collision = base.copy(sections = listOf(placeholder, following,
+            Section(3, "Authored citation heading", listOf(body), anchor = "reference-1")))
+        val destination = headingDestination(collision, "#reference-1")!!
+        assertTrue(destination.compiledId)
+        assertEquals("heading-2", destination.rowKey)
+        assertTrue(visibleEntryReadingRows(collision, emptySet()).any { it.key == destination.rowKey })
+        assertEquals("heading-0", metadataReferenceHeadingKey(collision))
+    }
+
     @Test fun compiledReferenceTargetsUseGlobalIdentityAndGroupedDisplayLabels() {
         val references = listOf(
             Reference(1, 1, "notes", listOf(Span("text", "Grouped note"))),
