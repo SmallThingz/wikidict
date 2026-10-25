@@ -8,15 +8,30 @@ import assert from 'node:assert/strict';
 
 const web=fileURLToPath(new URL('./',import.meta.url));
 const report=process.env.WIKIDICT_LEARN_REPORT;
+const selectedScope=process.env.WIKIDICT_LEARN_SCOPE||'all';
+assert.ok(['all','normalization'].includes(selectedScope),'Unknown Learn test scope');
 assert.ok(report&&path.isAbsolute(report),'WIKIDICT_LEARN_REPORT must be a fresh absolute directory');
 await mkdir(report,{recursive:false});
 execFileSync(process.execPath,['build.mjs'],{cwd:web,stdio:'inherit'});
 const root=fileURLToPath(new URL('../build/web/',import.meta.url));
-const fixtures=[
+const graphemeFixtures=[
   {id:'combining',title:'e\u0301t',scrambled:'te\u0301'},
   {id:'joined-emoji',title:'a\u{1f469}\u200d\u{1f52c}b',scrambled:'b\u{1f469}\u200d\u{1f52c}a'},
   {id:'flag',title:'ab\u{1f1f3}\u{1f1ff}',scrambled:'\u{1f1f3}\u{1f1ff}ba'},
 ];
+const normalizationFixtures=[
+  {id:'nfc',title:'caf\u00e9',scrambled:'\u00e9fac'},
+  {id:'nfd',title:'cafe\u0301',scrambled:'e\u0301fac'},
+  {id:'fullwidth',title:'\uff43\uff41\uff46\uff45',scrambled:'\uff45\uff46\uff41\uff43'},
+];
+const normalizationCases=[
+  {id:'nfc-title-nfd-answer',fixture:'nfc',answer:' CAFE\u0301 ',correct:true},
+  {id:'nfd-title-nfc-answer',fixture:'nfd',answer:'CAF\u00c9',correct:true},
+  {id:'missing-accent',fixture:'nfc',answer:'cafe',correct:false},
+  {id:'different-accent',fixture:'nfc',answer:'caf\u00e8',correct:false},
+  {id:'compatibility-not-canonical',fixture:'fullwidth',answer:'cafe',correct:false},
+];
+const fixtures=[...graphemeFixtures,...normalizationFixtures];
 const meaning='A controlled practice definition';
 const fixtureWorker=fixture=>`
 const title=${JSON.stringify(fixture.title)},meaning=${JSON.stringify(meaning)};
@@ -51,6 +66,15 @@ try{
   browser=await chromium.launch({executablePath:process.env.CHROMIUM||'/opt/brave-bin/brave',headless:true,args:['--no-sandbox']});
   const open=async(fixture,width,noSegmenter=false)=>{
     const context=await browser.newContext({viewport:{width,height:720},colorScheme:'light'});
+    await context.addInitScript(()=>{
+      const OriginalWorker=window.Worker;
+      window.Worker=class extends OriginalWorker{
+        postMessage(message,...rest){
+          if(message.type==='saveState')window.practiceSavedState=structuredClone(message.args);
+          return super.postMessage(message,...rest);
+        }
+      };
+    });
     await context.route('**/*',route=>{
       if(new URL(route.request().url()).origin===origin)return route.continue();
       externalRequests.push(route.request().url());return route.abort();
@@ -67,7 +91,8 @@ try{
     await page.screenshot({path:path.join(report,name),fullPage:true,animations:'disabled'});
     frames.push(name);
   };
-  for(const width of [360,768])for(const fixture of fixtures){
+  if(selectedScope==='all'){
+  for(const width of [360,768])for(const fixture of graphemeFixtures){
     const {context,page}=await open(fixture,width);
     const hiddenName=fixture.title+'. Reveal meaning';
     const visibleName=fixture.title+'. '+meaning+'. Hide meaning';
@@ -126,9 +151,37 @@ try{
   assert.equal(await page.locator('#status').textContent(),'');
   cases.push({fixture:'segmenter-unavailable',width:360,passed:true});
   await context.close();
+  }
+  for(const test of normalizationCases){
+    const fixture=normalizationFixtures.find(item=>item.id===test.fixture);
+    const {context,page}=await open(fixture,360);
+    await page.getByRole('button',{name:fixture.title+'. Reveal meaning',exact:true}).waitFor();
+    await page.getByRole('button',{name:'Scramble',exact:true}).click();
+    const heading=page.locator('.practice h2');
+    await heading.waitFor();
+    assert.equal(await heading.textContent(),fixture.scrambled,'The original title graphemes remain unchanged');
+    const input=page.getByRole('textbox',{name:'Your answer',exact:true});
+    await input.fill(test.answer);
+    await input.press('Tab');
+    const check=page.getByRole('button',{name:'Check',exact:true});
+    assert.equal(await check.evaluate(element=>document.activeElement===element),true);
+    await page.keyboard.press('Enter');
+    await page.getByText(test.correct?'Correct.':'Answer: '+fixture.title,{exact:true}).waitFor();
+    await page.waitForFunction(()=>window.practiceSavedState&&Object.keys(window.practiceSavedState.scores).length===1);
+    const saved=await page.evaluate(()=>window.practiceSavedState);
+    const scoreKeys=Object.keys(saved.scores);
+    assert.deepEqual(JSON.parse(scoreKeys[0]),['practice-fixture','practice-fixture',fixture.title]);
+    assert.deepEqual(saved.scores[scoreKeys[0]],test.correct?{right:1,wrong:0}:{right:0,wrong:1});
+    assert.equal(saved.history[0].title,fixture.title,'Answer normalization must not rewrite stored titles');
+    assert.equal(await heading.textContent(),fixture.scrambled);
+    assert.equal(await page.locator('#status').textContent(),'');
+    await frame(page,'canonical-answer-'+test.id+'.png');
+    cases.push({fixture:test.id,width:360,passed:true,correct:test.correct,storedTitle:saved.history[0].title,score:saved.scores[scoreKeys[0]]});
+    await context.close();
+  }
   assert.deepEqual(errors,[]);
   assert.deepEqual(externalRequests,[]);
-  await writeFile(path.join(report,'result.json'),JSON.stringify({passed:true,cases,frames,errors,externalRequests,scope:'Built browser Learn UI with controlled semantic worker entries; accessible flashcard content/state, keyboard reveal/hide and focus, grapheme-preserving scramble, narrow/wide layout and unavailable-segmentation recovery. Not corpus import, physical-device or assistive-technology qualification.'},null,2)+'\n');
+  await writeFile(path.join(report,'result.json'),JSON.stringify({passed:true,selectedScope,cases,frames,errors,externalRequests,scope:'Built browser Learn UI with controlled semantic worker entries. Canonical answer equivalence preserves accents, compatibility distinctions, stored titles and score identities. The all scope also checks flashcard accessibility, keyboard focus, graphemes, responsive layout and unavailable segmentation. Not corpus import, physical-device or assistive-technology qualification.'},null,2)+'\n');
   console.log('LEARN_BROWSER_PASS');
 }finally{
   await browser?.close();

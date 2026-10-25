@@ -112,3 +112,8 @@ Scramble uses `Intl.Segmenter`; when unavailable, it offers Quiz or Cards instea
 of splitting the word incorrectly. The test does not qualify corpus imports or
 screen-reader software. Use a fresh report directory and the same isolated browser
 setup as the other focused checks.
+
+Set `WIKIDICT_LEARN_SCOPE=normalization` to run only the five Scramble answer
+checks: NFC/NFD equivalence, existing trim/case handling, accent distinctions and
+no compatibility folding. They also verify the original stored titles and score
+identities. The default `all` scope includes these checks.

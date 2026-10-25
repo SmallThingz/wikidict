@@ -5216,6 +5216,61 @@ private slots:
         QVERIFY(exercised);
     }
 
+    void scrambleAcceptsCanonicalAnswers_data() {
+        QTest::addColumn<QString>("wordTitle");
+        QTest::addColumn<QString>("answer");
+        QTest::addColumn<bool>("correct");
+        QTest::newRow("nfc-title-nfd-answer") << QStringLiteral("caf\u00e9") << QStringLiteral(" CAFE\u0301 ") << true;
+        QTest::newRow("nfd-title-nfc-answer") << QStringLiteral("cafe\u0301") << QStringLiteral("CAF\u00c9") << true;
+        QTest::newRow("missing-accent") << QStringLiteral("caf\u00e9") << QStringLiteral("cafe") << false;
+        QTest::newRow("different-accent") << QStringLiteral("caf\u00e9") << QStringLiteral("caf\u00e8") << false;
+        QTest::newRow("compatibility-not-canonical") << QStringLiteral("\uff43\uff41\uff46\uff45") << QStringLiteral("cafe") << false;
+    }
+
+    void scrambleAcceptsCanonicalAnswers() {
+        QFETCH(QString, wordTitle);
+        QFETCH(QString, answer);
+        QFETCH(bool, correct);
+        MainWindow window(fixture_, QStringLiteral("dog"));
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("dog"));
+        SavedWord word = window.savedWord(window.currentEntry_);
+        word.title = wordTitle;
+        word.clue = QStringLiteral("Controlled canonical-equivalence practice word");
+        window.learning_.toggleBookmark(word);
+        window.learning_.setRandomPool(QStringLiteral("bookmarks"));
+        bool exercised = false;
+        QTimer::singleShot(0, &window, [&] {
+            const auto close = qScopeGuard([&] { for (auto *dialog : window.findChildren<QDialog *>()) dialog->reject(); });
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog);
+            auto *tabs = dialog->findChild<QTabWidget *>();
+            QVERIFY(tabs);
+            auto *games = tabs->widget(2)->findChild<QStackedWidget *>();
+            auto *picker = tabs->widget(2)->findChild<QComboBox *>();
+            QVERIFY(games && picker);
+            picker->setCurrentIndex(picker->findText(QStringLiteral("Unscramble")));
+            QWidget *practice = games->currentWidget();
+            auto *input = practice->findChild<QLineEdit *>();
+            QVERIFY(input && input->isEnabled());
+            input->setText(answer);
+            QTest::keyClick(input, Qt::Key_Return);
+            QVERIFY(hasLabel(practice, correct ? QStringLiteral("Correct.") : QStringLiteral("Answer: %1").arg(wordTitle)));
+            QCOMPARE(window.learning_.answerCount(), 1);
+            QCOMPARE(window.learning_.study().value(word.key).right, correct ? 1 : 0);
+            QCOMPARE(window.learning_.study().value(word.key).wrong, correct ? 0 : 1);
+            QCOMPARE(window.learning_.bookmarks().first().title, wordTitle);
+            QCOMPARE(window.learning_.bookmarks().first().key, word.key);
+            QCoreApplication::processEvents();
+            QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+            QVERIFY(dialog->grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-canonical-answer-%1.png").arg(QString::fromLatin1(QTest::currentDataTag()))));
+            exercised = true;
+        });
+        window.showLearningDialog(2);
+        QVERIFY(exercised);
+    }
+
     void scrambleRequiresThreeGraphemes_data() {
         QTest::addColumn<QStringList>("clusters");
         QTest::newRow("one-combining") << QStringList{QStringLiteral("e\u0301\u0323")};

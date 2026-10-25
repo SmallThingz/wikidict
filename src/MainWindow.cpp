@@ -2633,7 +2633,8 @@ void MainWindow::showLearningDialog(int tab) {
     auto checkScramble = [&] {
         if (scrambleWord.key.isEmpty() || scrambleAnswered) return;
         scrambleAnswered = true;
-        const bool correct = scrambleInput->text().trimmed().compare(scrambleWord.title, Qt::CaseInsensitive) == 0;
+        const bool correct = scrambleInput->text().trimmed().normalized(QString::NormalizationForm_C)
+            .compare(scrambleWord.title.normalized(QString::NormalizationForm_C), Qt::CaseInsensitive) == 0;
         learning_.answer(scrambleWord.key, correct);
         scrambleResult->setText(correct ? QStringLiteral("Correct.") : QStringLiteral("Answer: %1").arg(scrambleWord.title));
         scrambleCheck->hide(); scrambleNext->show();
