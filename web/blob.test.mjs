@@ -96,7 +96,7 @@ test('DPR2 and DPR3 use strict version framing in every serialized span containe
 });
 test('DPR3 refuses unknown versions incomplete strings UTF8 limits and trailing bytes',async()=>{
  const valid=explanationProtocolFixture('DPR3');
- for(const magic of ['DPR1','DPR9','XXXX']){
+ for(const magic of ['DPR1','DPR0','XXXX']){
   const invalid=Buffer.concat([Buffer.from(magic),valid.subarray(4)]);assert.throws(()=>decode(invalid,{}));
   await assert.rejects(()=>buildIndex(new RawSource(new Blob([dictionaryBlob(1,[['Bad',invalid]])]))));
  }
@@ -264,14 +264,14 @@ if(process.env.WIKBLB_GEACEN_INTEROP==='1')test('genuine native geacen DPR7 matc
 });
 
 // Hand-encoded DPR8 controls exercise wire boundaries, not compiler acceptance.
-test('DPR8 ordered cells retain complete blocks through raw and DAL1 import',async()=>{
+for(const magic of ['DPR8','DPR9'])test(`${magic} ordered cells retain complete blocks through raw and DAL1 import`,async()=>{
  const bytes=values=>Buffer.concat(values),zero=()=>testU32(0);
  const span=text=>bytes([Buffer.from([0,0,0]),...[text,'','','','','',''].map(testString),Buffer.from([0,0])]);
  const spans=text=>text==null?zero():bytes([testU32(1),span(text)]);
  const cell=({items=null,text=null,child=null,presence=items==null?0:1}={})=>bytes([Buffer.from([1,1,0,1,0,0]),spans(text),child||Buffer.from([0]),Buffer.from([presence]),...(presence===1?[testU32(items.length),...items]:[])]);
  const table=cells=>bytes([Buffer.from([1,0]),zero(),testU32(1),testU32(cells.length),...cells]);
  const block=(kind,text=null,child=null,anchor='')=>bytes([Buffer.from([kind,2,3]),spans(text),Buffer.from([0]),testString('1'),testString('2'),child||Buffer.from([0]),testString(anchor),testString(anchor?'fallback-'+anchor:'')]);
- const payload=grid=>bytes([Buffer.from('DPR8'),zero(),testU32(1),Buffer.from([2]),testString('Grid'),testString('Grid'),testString(''),testU32(1),block(12,null,grid),...Array.from({length:5},zero)]);
+ const payload=grid=>bytes([Buffer.from(magic),zero(),testU32(1),Buffer.from([2]),testString('Grid'),testString('Grid'),testString(''),testU32(1),block(12,null,grid),...Array.from({length:5},zero)]);
  const items=[block(0,'before'),block(9,'Cell heading',null,'Cell_heading'),block(5,'item'),block(11),block(12,null,table([cell({text:'child'})])),block(0,'after')];
  const valid=payload(table([cell({items}),cell({items:[]}),cell()]));
  const entry=decode(valid,{}),cells=entry.sections[0].blocks[0].table.rows[0].cells;
@@ -326,4 +326,83 @@ if(process.env.WIKBLB_CELL_BLOCKS_INTEROP==='1')test('genuine Writer DPR8 ordere
  const actions=[];const visitBlocks=blocks=>{for(const block of blocks){for(const span of block.spans)if(span.kind==='link')actions.push(span.target);if(block.table)for(const row of block.table.rows)for(const cell of row.cells){for(const span of cell.spans)if(span.kind==='link')actions.push(span.target);if(cell.blocks)visitBlocks(cell.blocks);}}};
  visitBlocks(cell.blocks);assert.deepEqual(actions,['Before','Middle','Item','Child','After']);
  assert.equal(cell.blocks[2].spans.find(span=>span.target==='Middle')?.italic,true);
+});
+
+// DPR9 fixtures are deliberately hand encoded; genuine producer interoperability
+// remains a separate qualification input when that producer is available.
+function referenceItemsPayload(items,{magic='DPR9',tagOverride=null,ordinalOverride=null}={}){
+ const cat=Buffer.concat,zero=()=>testU32(0);
+ const spans=text=>cat([testU32(1),Buffer.from([0,0,2]),...[text,'','','','h-usage-example',''].map(testString),
+  ...(magic!=='DPR2'?[testString('')]:[]),...(['DPR4','DPR5','DPR6','DPR7','DPR8','DPR9'].includes(magic)?[Buffer.from([0])]:[]),
+  ...(['DPR6','DPR7','DPR8','DPR9'].includes(magic)?[Buffer.from([0])]:[])]);
+ const reference=item=>cat([
+  ...(magic==='DPR9'?[Buffer.from([tagOverride??(item.kind==='fragment'?1:0)])]:[]),testU32(item.number),
+  ...(item.kind==='fragment'?[]:[testU32(ordinalOverride??item.group_number),testString(item.name||'')]),
+  testString(item.group||''),spans(item.text)]);
+ return cat([Buffer.from(magic),...Array.from({length:5},zero),testU32(items.length),...items.map(reference),zero()]);
+}
+test('DPR9 mixed reference items retain stable IDs nullable ordinals and body order',async()=>{
+ const items=[{kind:'fragment',number:2,group:'note <one>',text:'Fragment café'},
+  {number:1,group_number:1,name:'named',group:'note <one>',text:'First note'},
+  {number:3,group_number:2,group:'note <one>',text:'Later note'}];
+ const payload=referenceItemsPayload(items),entry=decode(payload,{}),refs=entry.references;
+ assert.deepEqual(refs.map(({kind='note',number,group_number,name,group})=>({kind,number,group_number,name,group})),[
+  {kind:'fragment',number:2,group_number:null,name:'',group:'note <one>'},
+  {kind:'note',number:1,group_number:1,name:'named',group:'note <one>'},
+  {kind:'note',number:3,group_number:2,name:'',group:'note <one>'}]);
+ assert.deepEqual(refs.map(r=>r.spans[0].text),['Fragment café','First note','Later note']);
+ assert.ok(refs.every(r=>r.spans[0].italic&&r.spans[0].classes==='h-usage-example'));
+ assert.equal(Object.hasOwn(refs[1],'kind'),false);
+ assert.deepEqual(decodeAlias(aliasPayload({compiled:payload}),'1\tCats').entry.references,refs);
+ const source=new RawSource(new Blob([dictionaryBlob(1,[['References',payload]])]));
+ const index=await buildIndex(source);assert.equal(index.rows.length,1);
+ assert.deepEqual(decode(await source.read(index.rows[0].offset,index.rows[0].length),{}).references,refs);
+ const notes=items.slice(1);
+ assert.deepEqual(decode(referenceItemsPayload(notes),{}).references,decode(referenceItemsPayload(notes,{magic:'DPR8'}),{}).references);
+ const upper=decode(referenceItemsPayload([{number:0xfffffffe,group_number:0xfffffffe,text:'Upper valid bound'}]),{}).references[0];
+ assert.equal(upper.number,0xfffffffe);assert.equal(upper.group_number,0xfffffffe);
+ for(const number of [0,0xffffffff])for(const kind of ['note','fragment'])
+  assert.throws(()=>decode(referenceItemsPayload([{kind,number,group_number:1,text:'Invalid ID'}]),{}));
+ for(const ordinalOverride of [0,0xffffffff])assert.throws(()=>decode(referenceItemsPayload(notes,{ordinalOverride}),{}));
+ for(const tagOverride of [2,255])assert.throws(()=>decode(referenceItemsPayload(items,{tagOverride}),{}));
+ for(let end=0;end<payload.length;end++)assert.throws(()=>decode(payload.subarray(0,end),{}));
+ assert.throws(()=>decode(Buffer.concat([payload,Buffer.from([0])]),{}));
+});
+
+test('DPR9 reference contract retains valid legacy notes and rejects reserved legacy indices',()=>{
+ for(const magic of ['DPR2','DPR3','DPR4','DPR5','DPR6','DPR7','DPR8']){
+  const note={number:0xfffffffe,group_number:0xfffffffe,name:'legacy',group:'g',text:'Legacy boundary'};
+  const ref=decode(referenceItemsPayload([note],{magic}),{}).references[0];
+  assert.equal(ref.number,0xfffffffe);assert.equal(ref.group_number,0xfffffffe);
+  assert.equal(ref.spans[0].text,'Legacy boundary');assert.equal(Object.hasOwn(ref,'kind'),false);
+  for(const key of ['number','group_number'])for(const invalid of [0,0xffffffff])
+   assert.throws(()=>decode(referenceItemsPayload([{...note,[key]:invalid}],{magic}),{}));
+ }
+});
+
+if(process.env.WIKBLB_REFERENCE_ITEMS_INTEROP==='1')test('genuine Writer DPR9 reference items match normal CLI and decoded producer bodies',async()=>{
+ for(const key of ['WIKBLB_REFERENCE_ITEMS_FIXTURE','WIKBLB_REFERENCE_ITEMS_EXPORT','WIKBLB_REFERENCE_ITEMS_DECODED'])assert.ok(process.env[key],key+' is required');
+ const exported=JSON.parse(await readFile(process.env.WIKBLB_REFERENCE_ITEMS_EXPORT,'utf8'));
+ const producer=JSON.parse(await readFile(process.env.WIKBLB_REFERENCE_ITEMS_DECODED,'utf8')).entry;
+ assert.equal(exported.schema,'dict.results.v1');assert.equal(exported.entries.length,1);
+ const expected=exported.entries[0];assert.equal(expected.title,'DPR9 reference fragments');
+ const source=new RawSource(new Blob([await readFile(process.env.WIKBLB_REFERENCE_ITEMS_FIXTURE)])),index=await buildIndex(source);
+ assert.equal(index.rows.length,1);assert.equal(index.metadata.language,'English');assert.equal(index.metadata.language_code,'en');
+ const row=index.rows[0];assert.equal(row.title,expected.title);
+ const payload=await source.read(row.offset,row.length);assert.equal(new TextDecoder().decode(payload.subarray(0,4)),'DPR9');
+ const actual=decode(payload,{...index.metadata,title:row.title});
+ const span=value=>Object.fromEntries([
+  ...['kind','role','text','target','trail','language','classes','direction','explanation'].map(k=>[k,value[k]??(k==='role'?'normal':k==='kind'?'text':'')]),
+  ...['foreground','background'].map(k=>[k,value[k]??null]),
+  ...['bold','italic','code','small','superscript','subscript','strike','underline'].map(k=>[k,!!value[k]])]);
+ const refs=entry=>entry.references.map(r=>({kind:r.kind??'note',number:r.number,group_number:r.group_number??null,name:r.name??'',group:r.group??'',spans:r.spans.map(span)}));
+ assert.deepEqual(refs(actual),refs(expected));assert.deepEqual(refs(actual),refs(producer));
+ assert.deepEqual(actual.media,expected.media);assert.deepEqual(actual.media,producer.media);
+ assert.deepEqual(refs(actual).map(r=>[r.kind,r.number,r.group_number,r.name,r.group]),[
+  ['fragment',2,null,'','notes'],['note',1,1,'first','notes'],['note',3,2,'later','notes']]);
+ assert.ok(actual.references[0].spans.some(s=>s.bold&&s.text.includes('Orphan fragment')));
+ assert.ok(actual.references[0].spans.some(s=>s.kind==='link'&&s.target==='Target'&&s.text==='linked label'));
+ assert.deepEqual(actual.media.map(m=>[m.file,m.caption]),[['Reference fragment.svg','Fragment media caption']]);
+ const targets=actual.sections.flatMap(s=>s.blocks.flatMap(b=>b.spans)).filter(s=>s.kind==='link').map(s=>s.target);
+ assert.ok(targets.includes('#reference-1')&&targets.includes('#reference-3'));assert.ok(!targets.includes('#reference-2'));
 });

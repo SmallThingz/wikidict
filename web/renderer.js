@@ -162,7 +162,7 @@ function destination(el, value, legacy = '') {
 }
 function legacyDestinations(entry) {
   const candidates = [], counts = new Map();
-  if (['DPR5','DPR6','DPR7','DPR8'].includes(entry.presentation_version)) return new Map();
+  if (['DPR5','DPR6','DPR7','DPR8','DPR9'].includes(entry.presentation_version)) return new Map();
   const add = (value, label) => {
     if (value.anchor || value.anchor_fallback) return;
     const id = label.replaceAll(' ','_');
@@ -280,7 +280,13 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     reference.scrollIntoView({block:'center'});
     reference.focus({preventScroll:true});
   };
-  root.append(node('p',entry.language || entry.kind,'entry-language'));
+  const language=node('p',entry.language || entry.kind,'entry-language');
+  const ownerSections=entry.kind==='language'&&entry.language?
+    entry.sections.filter(section=>section.level===2&&section.title===entry.language):[];
+  const emptyOwner=ownerSections.length===1&&ownerSections[0].blocks.length===0?ownerSections[0]:null;
+  // Keep the compiled language destination on its visible label, without an empty disclosure.
+  if(emptyOwner)destination(language,emptyOwner,legacy.get(emptyOwner)||'');
+  root.append(language);
   const title = node('h1'); title.append(entry.display_title?.length?spans(entry.display_title,followLink,false,explanations):document.createTextNode(entry.title)); root.append(title);
   if(entry.redirect){const r=entry.redirect;root.append(node('p',(r.followed?'Redirected from '+r.source_title+' to ':'Redirect to ')+r.target_title+(r.fragment?'#'+r.fragment:''),'entry-redirect'));}
   if(entry.alias&&entry.redirect?.followed){const a=entry.alias;root.append(node('p','Redirect to '+a.target_title+(a.fragment?'#'+a.fragment:''),'entry-alias'));}
@@ -291,6 +297,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
   }
   if (entry.preamble_spans?.length) { const preamble=fold('About this entry',entry.kind==='alias'||!settings.collapseOtherSections);preamble.append(spans(entry.preamble_spans,followLink,false,explanations));root.append(preamble); }
   for (const section of entry.sections) {
+    if(section===emptyOwner)continue;
     const meaning=section.blocks.some(b=>b.kind==='definition');
     const expanded=meaning || (section.title.startsWith('Pronunciation')?!settings.collapsePronunciation:section.title.startsWith('Etymology')?!settings.collapseEtymology:!settings.collapseOtherSections);
     const companion=sectionHeadingCompanion(section);
@@ -308,7 +315,17 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
   if (entry.references?.length) {
     const section=fold('References',!settings.collapseOtherSections);
     const referenceIDs=new Set(headingDestinations);
-    for (const ref of entry.references) { const p=node('p',null,'reference'),target=`reference-${ref.number}`;let id=target;while(referenceIDs.has(id))id='citation-'+id;referenceIDs.add(id);p.id=id;p.tabIndex=-1;references.set(`#${target}`,p); p.append(node('span',`[${ref.group?ref.group+' ':''}${ref.group_number}]`)); const body=node('span'); body.append(spans(ref.spans,followLink,false,explanations)); p.append(body); section.append(p); } root.append(section);
+    for (const ref of entry.references) {
+      const p=node('p',null,'reference'),kind=ref.kind??'note';
+      if(kind==='note'){
+        const target=`reference-${ref.number}`;let id=target;
+        while(referenceIDs.has(id))id='citation-'+id;
+        referenceIDs.add(id);p.id=id;p.tabIndex=-1;references.set(`#${target}`,p);
+        p.append(node('span',`[${ref.group?ref.group+' ':''}${ref.group_number}]`));
+      }else if(kind!=='fragment')throw Error('Invalid compiled reference kind');
+      const body=node('span');body.append(spans(ref.spans,followLink,false,explanations));p.append(body);section.append(p);
+    }
+    root.append(section);
   }
   if (entry.media?.length) { const section=fold('Images & sound',!settings.collapseOtherSections);for(const media of entry.media){const view=mediaView(media);if(view)section.append(view);}root.append(section); }
   if(explanationRows.length){

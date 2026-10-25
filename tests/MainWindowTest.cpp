@@ -172,6 +172,52 @@ private:
         return true;
     }
 
+    static QJsonObject qichwaReferenceShape() {
+        // Synthetic control with the retained qichwa section order, empty leaf,
+        // multiline example and separately stored references. Not a corpus fixture.
+        return QJsonDocument::fromJson(
+            "{\n"
+            "          \"title\":\"qichwa\", \"kind\":\"language\", \"language\":\"Quechua\",\n"
+            "          \"preamble_spans\":[\n"
+            "            {\"kind\":\"link\",\"text\":\"Go to list\",\"target\":\"#References\"},\n"
+            "            {\"kind\":\"text\",\"text\":\" | \"},\n"
+            "            {\"kind\":\"link\",\"text\":\"Go to second source\",\"target\":\"#reference-2\"}\n"
+            "          ],\n"
+            "          \"sections\":[\n"
+            "            {\"level\":2,\"title\":\"Quechua\",\"anchor\":\"Quechua\",\"blocks\":[]},\n"
+            "            {\"level\":3,\"title\":\"Alternative forms\",\"blocks\":[]},\n"
+            "            {\"level\":3,\"title\":\"Etymology\",\"blocks\":[]},\n"
+            "            {\"level\":3,\"title\":\"Pronunciation\",\"blocks\":[]},\n"
+            "            {\"level\":3,\"title\":\"Noun\",\"blocks\":[\n"
+            "              {\"kind\":\"example\",\"depth\":2,\"spans\":[\n"
+            "                {\"kind\":\"link\",\"text\":\"Ñuqanchik\",\"target\":\"ñuqanchik#Quechua\",\"italic\":true},\n"
+            "                {\"kind\":\"text\",\"text\":\" \",\"italic\":true},\n"
+            "                {\"kind\":\"text\",\"text\":\"qhichwa\",\"bold\":true,\"italic\":true},\n"
+            "                {\"kind\":\"text\",\"text\":\" simita rimachkanchik.\",\"italic\":true},\n"
+            "                {\"kind\":\"line_break\",\"text\":\"\\n\"},\n"
+            "                {\"kind\":\"text\",\"text\":\"We are speaking \"},\n"
+            "                {\"kind\":\"text\",\"text\":\"Quechua (language)\",\"bold\":true},\n"
+            "                {\"kind\":\"text\",\"text\":\".\"},\n"
+            "                {\"kind\":\"line_break\",\"text\":\"\\n\"},\n"
+            "                {\"kind\":\"line_break\",\"text\":\"\\n\"}\n"
+            "              ]}\n"
+            "            ]},\n"
+            "            {\"level\":4,\"title\":\"Declension\",\"blocks\":[]},\n"
+            "            {\"level\":4,\"title\":\"See also\",\"blocks\":[]},\n"
+            "            {\"level\":3,\"title\":\"References\",\"anchor\":\"References\",\"blocks\":[]},\n"
+            "            {\"level\":3,\"title\":\"Further reading\",\"blocks\":[\n"
+            "              {\"kind\":\"paragraph\",\"spans\":[{\"kind\":\"text\",\"text\":\"Further reading before the reference list.\"}]},\n"
+            "              {\"kind\":\"paragraph\",\"spans\":[{\"kind\":\"text\",\"text\":\"Further reading continues here.\"}]},\n"
+            "              {\"kind\":\"paragraph\",\"spans\":[{\"kind\":\"text\",\"text\":\"Last further-reading marker.\"}]}\n"
+            "            ]}\n"
+            "          ],\n"
+            "          \"references\":[\n"
+            "            {\"number\":1,\"group_number\":1,\"group\":\"\",\"spans\":[{\"kind\":\"text\",\"text\":\"Reference one proof.\"}]},\n"
+            "            {\"number\":2,\"group_number\":2,\"group\":\"\",\"spans\":[{\"kind\":\"text\",\"text\":\"Reference two proof.\"}]}\n"
+            "          ]\n"
+            "        }").object();
+    }
+
 private slots:
     void sectionHeadingLayoutWhitespaceDoesNotCreateEmptyReadingBlocks() {
         MainWindow window(QString{});
@@ -2893,6 +2939,186 @@ private slots:
         QVERIFY(textIsVisible(window.reading_, QStringLiteral("Reference content.")));
     }
 
+    void emptyReferenceLeafUsesMetadataHeadingAndLinks() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.resize(780, 480);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QJsonObject response = QJsonDocument::fromJson(window.api_->lookup(QStringLiteral("cat"))).object();
+        const QJsonObject entry = qichwaReferenceShape();
+        QVERIFY(!entry.isEmpty());
+        response.insert(QStringLiteral("entries"), QJsonArray{entry});
+        window.renderResponse(QJsonDocument(response).toJson());
+        const QString html = window.entryHtml(entry);
+        const QString plain = window.reading_->toPlainText();
+        QCOMPARE(plain.count(QStringLiteral("References")), 1);
+        QCOMPARE(plain.count(QStringLiteral("Reference one proof.")), 1);
+        QCOMPARE(plain.count(QStringLiteral("Reference two proof.")), 1);
+        QVERIFY(!html.contains(QStringLiteral("href='section:7'"))); // No empty fold control.
+        QVERIFY(hasAnchor(window.reading_->document(), QStringLiteral("section-7")));
+        QVERIFY(hasAnchor(window.reading_->document(), QStringLiteral("reference-1")));
+        QVERIFY(hasAnchor(window.reading_->document(), QStringLiteral("reference-2")));
+        int sectionPosition = -1;
+        for (QTextBlock block = window.reading_->document()->begin(); block.isValid(); block = block.next()) {
+            if (block.charFormat().anchorNames().contains(QStringLiteral("section-7"))) sectionPosition = block.position();
+            for (auto it = block.begin(); !it.atEnd(); ++it) {
+                const QTextFragment fragment = it.fragment();
+                if (fragment.isValid() && fragment.charFormat().anchorNames().contains(QStringLiteral("section-7")))
+                    sectionPosition = fragment.position();
+            }
+        }
+        const QTextCursor lastFurther = window.reading_->document()->find(QStringLiteral("Last further-reading marker."));
+        const QTextCursor firstReference = window.reading_->document()->find(QStringLiteral("Reference one proof."));
+        QVERIFY(!lastFurther.isNull() && !firstReference.isNull());
+        QVERIFY(sectionPosition >= lastFurther.selectionEnd());
+        QVERIFY(sectionPosition <= firstReference.selectionStart());
+
+        const QJsonObject example = entry.value(QStringLiteral("sections")).toArray()[4].toObject()
+            .value(QStringLiteral("blocks")).toArray().first().toObject();
+        const QString exampleHtml = window.blockHtml(example);
+        QCOMPARE(exampleHtml.count(QStringLiteral("<blockquote>")), 1);
+        QCOMPARE(exampleHtml.count(QStringLiteral("<br>")), 1); // Keep only the authored translation break.
+        QVERIFY(exampleHtml.indexOf(QStringLiteral("We are speaking ")) > exampleHtml.indexOf(QStringLiteral("<br>")));
+        QVERIFY(exampleHtml.indexOf(QStringLiteral("We are speaking ")) < exampleHtml.indexOf(QStringLiteral("</blockquote>")));
+        QVERIFY(exampleHtml.contains(QStringLiteral("<i><b>qhichwa</b></i>")));
+        QVERIFY(exampleHtml.contains(QStringLiteral("dict:%C3%B1uqanchik%23Quechua")));
+
+        // The old empty leaf could have been saved as collapsed. Metadata stays
+        // available, and both heading/menu navigation and numbered links reach it.
+        window.collapsedSections_.insert(7);
+        window.refreshReading();
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("Reference two proof.")));
+        const int row = window.sections_->findData(7);
+        QVERIFY(row >= 0);
+        QVERIFY(QMetaObject::invokeMethod(window.sections_, "activated", Qt::DirectConnection, Q_ARG(int, row)));
+        QVERIFY(!window.collapsedSections_.contains(7));
+        QVERIFY(textIsVisible(window.reading_, QStringLiteral("Reference one proof.")));
+        window.collapsedSections_.insert(7);
+        window.refreshReading();
+        QVERIFY(clickAnchor(window.reading_, QStringLiteral("dict:%23References")));
+        QVERIFY(!window.collapsedSections_.contains(7));
+        QVERIFY(textIsVisible(window.reading_, QStringLiteral("Reference one proof.")));
+        window.collapsedSections_.insert(7);
+        window.refreshReading();
+        QVERIFY(clickAnchor(window.reading_, QStringLiteral("dict:%23reference-2")));
+        QVERIFY(textIsVisible(window.reading_, QStringLiteral("Reference two proof.")));
+        QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+        QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-reference-placeholder-footer.png")));
+    }
+
+    void detailTrailingBreaksPreserveSemanticWhitespace_data() {
+        QTest::addColumn<QString>("kind");
+        QTest::addColumn<QJsonObject>("tail");
+        QTest::addColumn<int>("breaks");
+        const QJsonObject plain{{QStringLiteral("kind"), QStringLiteral("line_break")},
+            {QStringLiteral("text"), QStringLiteral("\n")}};
+        QTest::newRow("example-padding") << QStringLiteral("example") << plain << 1;
+        QTest::newRow("quotation-padding") << QStringLiteral("quotation") << plain << 1;
+        QTest::newRow("paragraph-boundary") << QStringLiteral("paragraph") << plain << 2;
+        QTest::newRow("preformatted-boundary") << QStringLiteral("preformatted") << plain << 2;
+        const auto protectedTail = [&](const char *name, const QString &key, const QJsonValue &value) {
+            QJsonObject tail = plain;
+            tail.insert(key, value);
+            QTest::newRow(name) << QStringLiteral("quotation") << tail << 2;
+        };
+        QJsonObject annotated = plain;
+        annotated.insert(QStringLiteral("classes"), QStringLiteral("h-usage-example"));
+        QTest::newRow("usage-example-padding") << QStringLiteral("example") << annotated << 1;
+        protectedTail("unknown-class", QStringLiteral("classes"), QStringLiteral("authored-whitespace"));
+        protectedTail("painted", QStringLiteral("background"), QStringLiteral("#ff0000"));
+        protectedTail("literal-code", QStringLiteral("code"), true);
+        protectedTail("styled", QStringLiteral("italic"), true);
+        protectedTail("trail", QStringLiteral("trail"), QStringLiteral("Retained tail"));
+        protectedTail("target", QStringLiteral("target"), QStringLiteral("#References"));
+        protectedTail("nonbreaking-space", QStringLiteral("text"), QStringLiteral("\u00a0"));
+        QJsonObject literal{{QStringLiteral("kind"), QStringLiteral("text")},
+            {QStringLiteral("text"), QStringLiteral(" \n")}};
+        QTest::newRow("literal-text-whitespace") << QStringLiteral("example") << literal << 1;
+    }
+
+    void detailTrailingBreaksPreserveSemanticWhitespace() {
+        QFETCH(QString, kind);
+        QFETCH(QJsonObject, tail);
+        QFETCH(int, breaks);
+        MainWindow window(QString{});
+        const QJsonObject source{{QStringLiteral("kind"), QStringLiteral("link")},
+            {QStringLiteral("text"), QStringLiteral("Source")}, {QStringLiteral("target"), QStringLiteral("source#Quechua")},
+            {QStringLiteral("italic"), true}};
+        const QJsonObject internal{{QStringLiteral("kind"), QStringLiteral("line_break")}};
+        const QJsonObject translation{{QStringLiteral("kind"), QStringLiteral("text")},
+            {QStringLiteral("text"), QStringLiteral("Translation")}};
+        const QJsonObject block{{QStringLiteral("kind"), kind},
+            {QStringLiteral("spans"), QJsonArray{source, internal, translation, tail}}};
+        const QByteArray stored = QJsonDocument(block).toJson(QJsonDocument::Compact);
+        const QString html = window.blockHtml(block);
+        QCOMPARE(html.count(QStringLiteral("<br>")), breaks);
+        QVERIFY(html.contains(QStringLiteral("dict:source%23Quechua")));
+        QVERIFY(html.contains(QStringLiteral("<i><a href='dict:source%23Quechua'>Source</a></i>")));
+        QVERIFY(html.indexOf(QStringLiteral("<br>")) < html.indexOf(QStringLiteral("Translation")));
+        if (tail.value(QStringLiteral("kind")) == QStringLiteral("text"))
+            QVERIFY(html.contains(QStringLiteral("Translation \n")));
+        if (!tail.value(QStringLiteral("trail")).toString().isEmpty())
+            QVERIFY(html.contains(QStringLiteral("Retained tail")));
+        QCOMPARE(QJsonDocument(block).toJson(QJsonDocument::Compact), stored);
+
+        // A poem elsewhere in the block protects even an ordinary terminal break.
+        QJsonObject poemSource = source;
+        poemSource.insert(QStringLiteral("classes"), QStringLiteral("wikidict-poem"));
+        const QJsonArray poemSpans{poemSource, internal, translation, internal};
+        const QJsonObject poem{{QStringLiteral("kind"), QStringLiteral("quotation")},
+            {QStringLiteral("spans"), poemSpans}};
+        QCOMPARE(window.blockHtml(poem), QStringLiteral("<blockquote>%1</blockquote>").arg(window.spansHtml(poemSpans)));
+    }
+
+    void authoredReferenceSectionsAreNotDiscarded_data() {
+        QTest::addColumn<QString>("control");
+        QTest::newRow("nonempty") << QStringLiteral("nonempty");
+        QTest::newRow("parent") << QStringLiteral("parent");
+        QTest::newRow("ambiguous") << QStringLiteral("ambiguous");
+        QTest::newRow("no-metadata") << QStringLiteral("no-metadata");
+    }
+
+    void authoredReferenceSectionsAreNotDiscarded() {
+        QFETCH(QString, control);
+        MainWindow window(QString{});
+        QJsonObject entry = qichwaReferenceShape();
+        QJsonArray sections = entry.value(QStringLiteral("sections")).toArray();
+        QJsonObject referenceSection = sections[7].toObject();
+        const QJsonObject body{{QStringLiteral("kind"), QStringLiteral("paragraph")},
+            {QStringLiteral("spans"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")},
+                {QStringLiteral("text"), QStringLiteral("Authored reference section content.")}}}}};
+        if (control == QStringLiteral("nonempty")) {
+            referenceSection.insert(QStringLiteral("blocks"), QJsonArray{body});
+            sections[7] = referenceSection;
+        } else if (control == QStringLiteral("parent")) {
+            sections.insert(8, QJsonObject{{QStringLiteral("level"), 4}, {QStringLiteral("title"), QStringLiteral("Source details")},
+                {QStringLiteral("blocks"), QJsonArray{body}}});
+        } else if (control == QStringLiteral("ambiguous")) {
+            referenceSection.insert(QStringLiteral("anchor"), QStringLiteral("References_2"));
+            sections.append(referenceSection);
+        } else {
+            QCOMPARE(control, QStringLiteral("no-metadata"));
+            entry.insert(QStringLiteral("references"), QJsonArray{});
+        }
+        entry.insert(QStringLiteral("sections"), sections);
+        const QString html = window.entryHtml(entry);
+        QVERIFY(html.contains(QStringLiteral("href='section:7'")));
+        QVERIFY(html.indexOf(QStringLiteral("name='section-7'")) < html.indexOf(QStringLiteral("Last further-reading marker.")));
+        QTextDocument document;
+        document.setHtml(html);
+        const QString plain = document.toPlainText();
+        QCOMPARE(plain.count(QStringLiteral("References")), control == QStringLiteral("ambiguous") ? 3
+            : control == QStringLiteral("no-metadata") ? 1 : 2);
+        if (control == QStringLiteral("nonempty") || control == QStringLiteral("parent"))
+            QVERIFY(plain.contains(QStringLiteral("Authored reference section content.")));
+        if (control == QStringLiteral("no-metadata")) {
+            QVERIFY(!hasAnchor(&document, QStringLiteral("reference-1")));
+        } else {
+            QCOMPARE(plain.count(QStringLiteral("Reference one proof.")), 1);
+            QCOMPARE(plain.count(QStringLiteral("Reference two proof.")), 1);
+        }
+    }
+
     void bookmarksSurviveLargeLibrariesAndSubsequentSaves() {
         QJsonArray rows;
         QVector<SavedWord> expected;
@@ -3703,6 +3929,77 @@ private slots:
         QVERIFY(text.contains(QStringLiteral("[2] Later ordinary citation")));
         QVERIFY(hasAnchor(&document, QStringLiteral("reference-2")));
         QVERIFY(hasAnchor(&document, QStringLiteral("reference-3")));
+    }
+
+    void referenceFragmentsKeepBodiesWithoutNoteDestinations() {
+        MainWindow window{QString()};
+        window.resize(780, 480);
+        const auto text = [](const QString &value) {
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), value}};
+        };
+        const auto note = [&](qint64 number, int ordinal, const QString &body) {
+            return QJsonObject{{QStringLiteral("number"), number}, {QStringLiteral("group_number"), ordinal},
+                {QStringLiteral("group"), QStringLiteral("note <one>")}, {QStringLiteral("spans"), QJsonArray{text(body)}}};
+        };
+        QJsonObject styled = text(QStringLiteral("Fragment café "));
+        styled.insert(QStringLiteral("italic"), true);
+        const QJsonObject media{{QStringLiteral("kind"), QStringLiteral("link")},
+            {QStringLiteral("text"), QStringLiteral("Fragment image")},
+            {QStringLiteral("target"), QStringLiteral("File:Fragment_image.svg")},
+            {QStringLiteral("classes"), QStringLiteral("wikidict-media")}, {QStringLiteral("bold"), true}};
+        const QJsonObject fragment{{QStringLiteral("kind"), QStringLiteral("fragment")},
+            {QStringLiteral("number"), 2}, {QStringLiteral("group_number"), QJsonValue::Null},
+            {QStringLiteral("name"), QString()}, {QStringLiteral("group"), QStringLiteral("note <one>")},
+            {QStringLiteral("spans"), QJsonArray{styled, media}}};
+        QJsonObject later = note(3, 2, QStringLiteral("Later numbered body"));
+        later.insert(QStringLiteral("kind"), QStringLiteral("note"));
+        const QJsonObject entry{{QStringLiteral("title"), QStringLiteral("Reference items")},
+            {QStringLiteral("kind"), QStringLiteral("supplemental")},
+            {QStringLiteral("sections"), QJsonArray{QJsonObject{{QStringLiteral("title"), QStringLiteral("Body")},
+                {QStringLiteral("blocks"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("paragraph")},
+                    {QStringLiteral("spans"), QJsonArray{text(QStringLiteral("Padding body ").repeated(500))}}}}}}}},
+            {QStringLiteral("references"), QJsonArray{fragment, note(1, 1, QStringLiteral("First numbered body")), later,
+                note(4294967294LL, 3, QStringLiteral("Large stable identity"))}},
+            {QStringLiteral("media"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("image")},
+                {QStringLiteral("file"), QStringLiteral("Fragment image.svg")}, {QStringLiteral("caption"), QStringLiteral("Fragment image")}}}}};
+        const QByteArray stored = QJsonDocument(entry).toJson(QJsonDocument::Compact);
+        const QString html = window.entryHtml(entry);
+        QTextDocument document;
+        document.setHtml(html);
+        const QString plain = document.toPlainText();
+        QVERIFY(plain.contains(QStringLiteral("Fragment café Fragment image")));
+        QVERIFY(plain.contains(QStringLiteral("[note <one> 1] First numbered body")));
+        QVERIFY(plain.contains(QStringLiteral("[note <one> 2] Later numbered body")));
+        QVERIFY(!plain.contains(QStringLiteral("[note <one> 0]")));
+        QVERIFY(plain.indexOf(QStringLiteral("Fragment café")) < plain.indexOf(QStringLiteral("First numbered body")));
+        QVERIFY(plain.indexOf(QStringLiteral("First numbered body")) < plain.indexOf(QStringLiteral("Later numbered body")));
+        QVERIFY(document.find(QStringLiteral("Fragment café")).charFormat().fontItalic());
+        QVERIFY(html.contains(QStringLiteral("dict:File%3AFragment_image.svg")));
+        QVERIFY(!hasAnchor(&document, QStringLiteral("reference-2")));
+        for (const QString &id : {QStringLiteral("reference-1"), QStringLiteral("reference-3"), QStringLiteral("reference-4294967294")})
+            QVERIFY(hasAnchor(&document, id));
+        QCOMPARE(QJsonDocument(entry).toJson(QJsonDocument::Compact), stored);
+
+        // Only note IDs are citation destinations, independently of footer position.
+        window.currentEntry_ = entry;
+        window.reading_->setHtml(html);
+        window.show();
+        QTRY_VERIFY(window.reading_->verticalScrollBar()->maximum() > 0);
+        window.jumpToFragment(QStringLiteral("reference-3"));
+        QVERIFY(textIsVisible(window.reading_, QStringLiteral("Later numbered body")));
+        const int before = window.reading_->verticalScrollBar()->value();
+        window.jumpToFragment(QStringLiteral("reference-2"));
+        QCOMPARE(window.reading_->verticalScrollBar()->value(), before);
+        QJsonObject legacy = entry;
+        legacy.insert(QStringLiteral("references"), QJsonArray{note(7, 4, QStringLiteral("Legacy body"))});
+        QJsonObject explicitNote = note(7, 4, QStringLiteral("Legacy body"));
+        explicitNote.insert(QStringLiteral("kind"), QStringLiteral("note"));
+        QJsonObject explicitEntry = legacy;
+        explicitEntry.insert(QStringLiteral("references"), QJsonArray{explicitNote});
+        QCOMPARE(window.entryHtml(legacy), window.entryHtml(explicitEntry));
+        QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+        window.show();
+        QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-reference-fragments.png")));
     }
 
     void embeddedMediaCaptionKeepsTypedPresentationWithoutPlainDuplicate() {

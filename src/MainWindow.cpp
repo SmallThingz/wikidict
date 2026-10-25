@@ -1593,7 +1593,14 @@ void MainWindow::jumpToFragment(const QString &fragment) {
         if (destination) break;
     }
     if (!destination && fragment.startsWith(QStringLiteral("reference-"))) {
-        reading_->scrollToAnchor(fragment);
+        for (const QJsonValue &value : currentEntry_.value(QStringLiteral("references")).toArray()) {
+            const QJsonObject reference = value.toObject();
+            if (reference.value(QStringLiteral("kind")).toString(QStringLiteral("note")) == QStringLiteral("note") &&
+                fragment == QStringLiteral("reference-%1").arg(reference.value(QStringLiteral("number")).toInteger())) {
+                reading_->scrollToAnchor(fragment);
+                break;
+            }
+        }
         return;
     }
     if (!destination) {
@@ -2074,7 +2081,21 @@ QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackg
     } else if (poem && kind == QStringLiteral("example")) {
         prefix = QStringLiteral("<i>Example:</i> ");
     }
-    const QString body = spansHtml(spans, poem ? outerIndent : 0, prefix, cellBackground);
+    QJsonArray displaySpans = spans;
+    if (!poem && (kind == QStringLiteral("example") || kind == QStringLiteral("quotation"))) {
+        // Detail blocks already supply their boundary spacing. Only discard inert
+        // terminal breaks; retain authored text, internal breaks and protected spans.
+        while (!displaySpans.isEmpty()) {
+            QJsonObject tail = displaySpans.last().toObject();
+            if (tail.value(QStringLiteral("kind")).toString() != QStringLiteral("line_break")) break;
+            // The compiler's usage-example annotation does not paint or preserve whitespace.
+            if (tail.value(QStringLiteral("classes")).toString() == QStringLiteral("h-usage-example"))
+                tail.remove(QStringLiteral("classes"));
+            if (!ordinaryLayoutWhitespaceSpan(tail, true)) break;
+            displaySpans.removeLast();
+        }
+    }
+    const QString body = spansHtml(displaySpans, poem ? outerIndent : 0, prefix, cellBackground);
     const QString anchor = kind == QStringLiteral("heading") && !location.isEmpty()
         ? QStringLiteral("<a name='%1'></a>").arg(location.toHtmlEscaped()) : QString();
     if (poem) {
@@ -2173,9 +2194,28 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
         const QString tag = hasPoemSpans(preamble) ? QStringLiteral("div") : QStringLiteral("p");
         out += QStringLiteral("<%1>%2</%1>").arg(tag, spansHtml(preamble));
     }
+    const QJsonArray sections = entry.value(QStringLiteral("sections")).toArray();
+    const QJsonArray references = entry.value(QStringLiteral("references")).toArray();
+    int metadataReferencesSection = -1;
+    if (!references.isEmpty()) {
+        for (qsizetype i = 0; i < sections.size(); ++i) {
+            const QJsonObject section = sections[i].toObject();
+            const int level = section.value(QStringLiteral("level")).toInt();
+            const bool leaf = i + 1 == sections.size()
+                || sections[i + 1].toObject().value(QStringLiteral("level")).toInt() <= level;
+            if (level < 1 || level > 6 || !leaf
+                || section.value(QStringLiteral("title")).toString() != QStringLiteral("References")
+                || !section.value(QStringLiteral("blocks")).toArray().isEmpty()) continue;
+            // Ambiguous placeholders keep their existing authored headings.
+            if (metadataReferencesSection >= 0) { metadataReferencesSection = -1; break; }
+            metadataReferencesSection = int(i);
+        }
+    }
     int index = -1;
-    for (const QJsonValue &sectionValue : entry.value(QStringLiteral("sections")).toArray()) {
+    for (const QJsonValue &sectionValue : sections) {
         ++index;
+        // Metadata supplies this empty leaf's body at the existing reference list.
+        if (index == metadataReferencesSection) continue;
         const QJsonObject section = sectionValue.toObject();
         const QString title = section.value(QStringLiteral("title")).toString();
         const int level = section.value(QStringLiteral("level")).toInt();
@@ -2234,19 +2274,26 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
             out += blockHtml(block, {}, 1, QStringLiteral("block-%1-%2").arg(index).arg(blockIndex));
         }
     }
-    const QJsonArray references = entry.value(QStringLiteral("references")).toArray();
     if (!references.isEmpty()) {
+        if (metadataReferencesSection >= 0)
+            out += QStringLiteral("<a name='section-%1'></a>").arg(metadataReferencesSection);
         out += QStringLiteral("<h2>References</h2>");
         for (const QJsonValue &reference : references) {
             const QJsonObject ref = reference.toObject();
             collectEmbeddedMedia(ref.value(QStringLiteral("spans")).toArray());
-            const QString group = ref.value(QStringLiteral("group")).toString();
-            const int groupNumber = ref.value(QStringLiteral("group_number")).toInt();
-            const QString label = group.isEmpty() ? QStringLiteral("[%1]").arg(groupNumber)
-                : QStringLiteral("[%1 %2]").arg(group, QString::number(groupNumber));
+            const QString referenceKind = ref.value(QStringLiteral("kind")).toString(QStringLiteral("note"));
+            QString prefix;
+            if (referenceKind == QStringLiteral("note")) {
+                const QString group = ref.value(QStringLiteral("group")).toString();
+                const qint64 groupNumber = ref.value(QStringLiteral("group_number")).toInteger();
+                const QString label = group.isEmpty() ? QStringLiteral("[%1]").arg(groupNumber)
+                    : QStringLiteral("[%1 %2]").arg(group, QString::number(groupNumber));
+                prefix = QStringLiteral("<a name='reference-%1'></a>%2 ")
+                    .arg(ref.value(QStringLiteral("number")).toInteger()).arg(label.toHtmlEscaped());
+            } else if (referenceKind != QStringLiteral("fragment")) {
+                throw DictApiError("invalid compiled reference kind");
+            }
             const QJsonArray spans = ref.value(QStringLiteral("spans")).toArray();
-            const QString prefix = QStringLiteral("<a name='reference-%1'></a>%2 ")
-                .arg(ref.value(QStringLiteral("number")).toInt()).arg(label.toHtmlEscaped());
             if (hasPoemSpans(spans))
                 out += QStringLiteral("<div>%1</div>").arg(spansHtml(spans, 0, prefix));
             else

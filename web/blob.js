@@ -1,4 +1,4 @@
-// WIKBLB08 contains compiled DPR2/DPR3/DPR4/DPR5/DPR6/DPR7/DPR8 pages or typed DAL1 redirect envelopes.
+// WIKBLB08 contains compiled DPR2/DPR3/DPR4/DPR5/DPR6/DPR7/DPR8/DPR9 pages or typed DAL1 redirect envelopes.
 // A leading U+FEFF belongs to a compiled title or field, not a file BOM.
 const utf8 = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true});
 const kinds = ['language','thesaurus','citations','reconstruction','rhymes','sign_gloss','supplemental','alias'];
@@ -51,15 +51,21 @@ export function decode(bytes, metadata) {
     return value;
   };
   const magic=utf8.decode(take(4));
-  require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8','Dictionary contains uncompiled records');
-  ordered=magic==='DPR8';nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
+  require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9','Dictionary contains uncompiled records');
+  ordered=magic==='DPR8'||magic==='DPR9';nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
   const entry={...metadata,presentation_version:magic,display_title:spans(),sections:list(anchored?17:9,()=>({level:byte(),title:string(),anchor:anchored?string():'',anchor_fallback:anchored?string():'',blocks:list(anchored?25:17,()=>block())})),preamble_spans:spans()};
   list(29,()=>{string();string();const s=index(entry.sections.length);optional(entry.sections.length);const n=entry.sections[s].blocks.length;
     list(18,(_,sense)=>{index(n);optional(sense);indices(n);indices(n);indices(n);if(presence()){string();string();string();}});
     indices(n);indices(n);indices(entry.sections.length);
   });
   indices(entry.sections.length);
-  entry.references=list(20,()=>{const number=u32(),group_number=u32();require(number>0&&group_number>0);const name=string(),group=string();return {number,group_number,name,group,spans:spans()};});
+  entry.references=list(magic==='DPR9'?13:20,()=>{
+    const kind=magic==='DPR9'?tag(['note','fragment']):'note',number=u32();
+    require(number>0&&number<0xffffffff);
+    if(kind==='fragment')return {kind,number,group_number:null,name:'',group:string(),spans:spans()};
+    const group_number=u32();require(group_number>0&&group_number<0xffffffff);
+    const name=string(),group=string();return {number,group_number,name,group,spans:spans()};
+  });
   entry.media=list(9,()=>({file:string(),kind:tag(['image','audio']),caption:string()}));
   require(p===bytes.length,'Trailing presentation data');return entry;
 }
@@ -116,7 +122,7 @@ export async function buildIndex(source) {
       rows.push({title:alias.source_key,raw_key:title,source_kind:alias.source_kind,source_title:alias.source_title,offset:p,length});
     }else{
       const magic=utf8.decode(await source.read(p,4));
-      require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8');
+      require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9');
       rows.push({title,offset:p,length});
     }
     require(rows.length<=10000000);p+=length;

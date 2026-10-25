@@ -42,6 +42,13 @@ set_target_properties(dict-qt PROPERTIES
 if(BUILD_TESTING)
     find_package(Qt6 6.5 REQUIRED COMPONENTS Test)
     add_executable(dict-qt-tests ../tests/MainWindowTest.cpp DictApi.cpp LearningStore.cpp MainWindow.cpp LibraryDialog.cpp LibraryStore.cpp MediaPanel.cpp)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$" AND NOT CMAKE_GENERATOR STREQUAL "Xcode")
+        # Avoid optimizing the large test driver; all product translation units
+        # and the shipped application retain their normal Release options.
+        # Xcode does not support configuration-dependent per-source options.
+        set_property(SOURCE ../tests/MainWindowTest.cpp APPEND PROPERTY
+            COMPILE_OPTIONS "$<$<CONFIG:Release>:-O0>")
+    endif()
     qt_add_resources(dict-qt-tests test_egyptian_font PREFIX "/fonts"
         BASE "${CMAKE_CURRENT_SOURCE_DIR}/fonts"
         FILES "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NewGardinerOmni2d4.ttf")

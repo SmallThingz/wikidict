@@ -10,14 +10,167 @@ import assert from 'node:assert/strict';
 import {aliasCases,aliasPayload,dictionaryBlob,presentation} from './alias-fixtures.mjs';
 const root=fileURLToPath(new URL('../build/web/',import.meta.url)),report=fileURLToPath(new URL('../artifacts/web/',import.meta.url));
 await mkdir(report,{recursive:true});
-const nativeOnly=process.argv.includes('--native-only');
+const nativeOnly=process.argv.includes('--native-only'),referenceOnly=process.argv.includes('--references-only');
+assert.ok(!(nativeOnly&&referenceOnly),'Choose only one focused browser mode');
 const fixture=process.env.WIKBLB_FIXTURE||fileURLToPath(new URL('../tests/fixtures/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb',import.meta.url));
-const raw=nativeOnly?null:await readFile(fixture),xz=nativeOnly?null:execFileSync('xz',['-1','--block-size=64KiB','-c'],{input:raw});
+const raw=(nativeOnly||referenceOnly)?null:await readFile(fixture),xz=(nativeOnly||referenceOnly)?null:execFileSync('xz',['-1','--block-size=64KiB','-c'],{input:raw});
 const server=createServer(async(req,res)=>{try{const name=decodeURIComponent(new URL(req.url,'http://localhost').pathname),file=path.resolve(root,'.'+(name==='/'?'/index.html':name));if(!file.startsWith(root))throw Error('path');const bytes=await readFile(file);res.setHeader('Content-Type',file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':file.endsWith('.ttf')?'font/ttf':'text/html');res.end(bytes);}catch{res.writeHead(404);res.end();}});
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const browser=await chromium.launch({executablePath:process.env.CHROMIUM||'/opt/brave-bin/brave',headless:true,args:['--no-sandbox']});
 const errors=[];
 try{
+ if(!nativeOnly){
+  const bundle=await buildRendererTestBundle({entryPoints:[fileURLToPath(new URL('./renderer.js',import.meta.url))],bundle:true,format:'iife',globalName:'WikidictRendererQA',write:false});
+  const page=await browser.newPage({viewport:{width:360,height:640}});page.on('pageerror',e=>errors.push(e.message));
+  await page.setContent('<main id="reference-items"></main>');await page.addScriptTag({content:bundle.outputFiles[0].text});
+  // Exercise the production layout and font, including reference flex rows.
+  const productionStyle=await readFile(new URL('./style.css',import.meta.url)),readerFont=await readFile(new URL('./reader.ttf',import.meta.url));
+  const styleOrigin=`http://127.0.0.1:${server.address().port}`;
+  await page.route(styleOrigin+'/style.css',route=>route.fulfill({contentType:'text/css',body:productionStyle}));
+  await page.route(styleOrigin+'/reader.ttf',route=>route.fulfill({contentType:'font/ttf',headers:{'access-control-allow-origin':'*'},body:readerFont}));
+  await page.addStyleTag({url:styleOrigin+'/style.css'});
+  const initial=await page.evaluate(()=>{
+   const text=value=>({kind:'text',text:value}),host=document.getElementById('reference-items');window.fragmentLinks=[];window.fragmentMedia=[];
+   const entry={title:'Reference items',presentation_version:'DPR9',sections:[{title:'Links',anchor:'Links',blocks:[{kind:'paragraph',spans:[
+    {kind:'link',text:'First citation',target:'#reference-1'},text(' '),{kind:'link',text:'Later citation',target:'#reference-3'},text(' '),
+    {kind:'link',text:'Unnumbered item is not a citation',target:'#reference-2'}]}]},
+    {title:'Unanchored footer context',blocks:[{kind:'paragraph',spans:[text('Context body')]}]}],references:[
+     {kind:'fragment',number:2,group_number:null,name:'',group:'note <one>',spans:[{...text('Fragment café '),italic:true},{kind:'link',text:'Fragment link',target:'Fragment target',bold:true}]},
+     {number:1,group_number:1,name:'named',group:'note <one>',spans:[text('First numbered body')]},
+     {kind:'note',number:3,group_number:2,name:'',group:'note <one>',spans:[text('Later numbered body')]}],
+    media:[{kind:'image',file:'Fragment.svg',caption:'Fragment media'}]};
+   const stored=JSON.stringify(entry);
+   host.replaceChildren(WikidictRendererQA.renderEntry(entry,target=>window.fragmentLinks.push(target),{collapseOtherSections:false},media=>{
+    window.fragmentMedia.push(media);const element=document.createElement('span');element.textContent=media.caption;return element;
+   }));
+   const rows=[...host.querySelectorAll('.reference')];
+   return {unchanged:stored===JSON.stringify(entry),ids:rows.map(p=>p.id),tabStops:rows.map(p=>p.getAttribute('tabindex')),
+    text:rows.map(p=>p.textContent),italic:!!rows[0].querySelector('em'),bold:!!rows[0].querySelector('strong'),media:window.fragmentMedia,
+    noLegacyHeading:!host.querySelector('#Unanchored_footer_context'),fragmentAbsent:!host.querySelector('#reference-2')};
+  });
+  assert.equal(initial.unchanged,true);assert.deepEqual(initial.ids,['','reference-1','reference-3']);
+  assert.deepEqual(initial.tabStops,[null,'-1','-1']);
+  assert.deepEqual(initial.text,['Fragment café Fragment link','[note <one> 1]First numbered body','[note <one> 2]Later numbered body']);
+  assert.equal(initial.italic,true);assert.equal(initial.bold,true);assert.equal(initial.fragmentAbsent,true);assert.equal(initial.noLegacyHeading,true);
+  assert.deepEqual(initial.media,[{kind:'image',file:'Fragment.svg',caption:'Fragment media'}]);
+  await page.evaluate(()=>document.fonts.ready);
+  const productionStyles=await page.evaluate(()=>({referenceDisplay:getComputedStyle(document.querySelector('.reference')).display,
+   mainMaxWidth:getComputedStyle(document.querySelector('main')).maxWidth,readerFontLoaded:document.fonts.check('16px Reader')}));
+  assert.equal(productionStyles.referenceDisplay,'flex');assert.equal(productionStyles.mainMaxWidth,'850px');assert.equal(productionStyles.readerFontLoaded,true);
+  await page.getByRole('link',{name:'Later citation',exact:true}).focus();await page.keyboard.press('Enter');
+  assert.equal(await page.evaluate(()=>document.activeElement.id),'reference-3');
+  await page.getByRole('link',{name:'First citation',exact:true}).focus();await page.keyboard.press('Enter');
+  assert.equal(await page.evaluate(()=>document.activeElement.id),'reference-1');
+  await page.getByRole('link',{name:'Unnumbered item is not a citation',exact:true}).click();
+  await page.getByRole('link',{name:'Fragment link',exact:true}).click();
+  assert.deepEqual(await page.evaluate(()=>window.fragmentLinks),['#reference-2','Fragment target']);
+  const frames=['reference-fragments-360.png'];
+  await page.screenshot({path:path.join(report,frames[0]),fullPage:true});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await page.setViewportSize({width:768,height:640});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  frames.push('reference-fragments-768.png');await page.screenshot({path:path.join(report,frames.at(-1)),fullPage:true});
+  const ownerWrappers=await page.evaluate(()=>{
+   const host=document.getElementById('reference-items'),text=value=>({kind:'text',text:value});
+   const owner={level:2,title:'English',anchor:'English',anchor_fallback:'English_alias',blocks:[]};
+   const base={kind:'language',language:'English',title:'Owner wrapper',presentation_version:'DPR9',sections:[owner]};
+   const render=entry=>host.replaceChildren(WikidictRendererQA.renderEntry(entry,()=>{}, {collapseOtherSections:false}));
+   render(base);
+   const omitted=host.querySelectorAll('details').length===0;
+   const primary=WikidictRendererQA.revealFragment(host,'English')&&document.activeElement===host.querySelector('.entry-language');
+   const fallback=WikidictRendererQA.revealFragment(host,'English_alias')&&document.activeElement.id==='English_alias';
+   const cases=[
+    {...base,sections:[{...owner,blocks:[{kind:'paragraph',spans:[text('Authored owner content')]}]}]},
+    {...base,sections:[{...owner,blocks:[{kind:'heading',level:2,spans:[{...text('English'),bold:true}]}]}]},
+    {...base,sections:[{...owner,title:'Other'}]},
+    {...base,sections:[owner,{...owner,anchor:'English_duplicate',anchor_fallback:''}]},
+    {...base,kind:'supplemental'},
+    {...base,sections:[{...owner,level:3}]}
+   ];
+   const controls=cases.map(entry=>{render(entry);return {details:host.querySelectorAll('details').length,text:host.textContent};});
+   return {omitted,primary,fallback,controls};
+  });
+  assert.equal(ownerWrappers.omitted,true);assert.equal(ownerWrappers.primary,true);assert.equal(ownerWrappers.fallback,true);
+  assert.deepEqual(ownerWrappers.controls.map(row=>row.details),[1,1,1,2,1,1]);
+  assert.ok(ownerWrappers.controls[0].text.includes('Authored owner content'));
+  let genuine={performed:false};
+  if(process.env.WIKBLB_REFERENCE_ITEMS_INTEROP==='1'){
+   for(const key of ['WIKBLB_REFERENCE_ITEMS_FIXTURE','WIKBLB_REFERENCE_ITEMS_EXPORT'])assert.ok(process.env[key],key+' is required');
+   const fixtureBytes=[...await readFile(process.env.WIKBLB_REFERENCE_ITEMS_FIXTURE)];
+   const expected=JSON.parse(await readFile(process.env.WIKBLB_REFERENCE_ITEMS_EXPORT,'utf8'));
+   assert.equal(expected.schema,'dict.results.v1');assert.equal(expected.entries.length,1);
+   const blobBundle=await buildRendererTestBundle({entryPoints:[fileURLToPath(new URL('./blob.js',import.meta.url))],bundle:true,format:'iife',globalName:'WikidictBlobQA',write:false});
+   await page.addScriptTag({content:blobBundle.outputFiles[0].text});
+   const observed=await page.evaluate(async bytes=>{
+    const source=new WikidictBlobQA.RawSource(new Blob([new Uint8Array(bytes)])),index=await WikidictBlobQA.buildIndex(source);
+    if(index.rows.length!==1)throw Error('Expected the single genuine fixture record');
+    const row=index.rows[0],entry=WikidictBlobQA.decode(await source.read(row.offset,row.length),{...index.metadata,title:row.title});
+    window.genuineReferenceEntry=entry;window.genuineMedia=[];
+    const host=document.getElementById('reference-items');
+    host.replaceChildren(WikidictRendererQA.renderEntry(entry,target=>WikidictRendererQA.revealFragment(host,target.slice(1)), {collapseOtherSections:false},media=>{
+     window.genuineMedia.push(media);const element=document.createElement('span');element.textContent=media.caption;return element;
+    }));
+    const rows=[...document.querySelectorAll('#reference-items .reference')];
+    return {version:entry.presentation_version,title:entry.title,referenceIDs:entry.references.map(r=>r.number),
+     kinds:entry.references.map(r=>r.kind??'note'),ordinals:entry.references.map(r=>r.group_number),
+     body:rows.map(r=>r.textContent),ids:rows.map(r=>r.id),fragmentBold:!!rows[0].querySelector('strong'),
+     fragmentLink:rows[0].querySelector('a')?.getAttribute('href'),media:window.genuineMedia,
+     absentFragmentAnchor:!document.getElementById('reference-2'),
+     emptyOwnerDisclosure:[...host.querySelectorAll('details > summary')].some(el=>el.textContent==='Overview'),
+     ownerAnchorOnLabel:host.querySelector('.entry-language')?.id==='English'};
+   },fixtureBytes);
+   assert.equal(observed.version,'DPR9');assert.equal(observed.title,'DPR9 reference fragments');
+   assert.deepEqual(observed.referenceIDs,[2,1,3]);assert.deepEqual(observed.kinds,['fragment','note','note']);
+   assert.deepEqual(observed.ordinals,[null,1,2]);assert.deepEqual(observed.ids,['','reference-1','reference-3']);
+   assert.ok(observed.body[0].includes('Orphan fragment')&&observed.body[0].includes('linked label'));
+   assert.ok(!observed.body[0].includes('[notes '));assert.equal(observed.fragmentBold,true);assert.equal(observed.fragmentLink,'#Target');
+   assert.ok(observed.body[1].startsWith('[notes 1]')&&observed.body[1].includes('First numbered note.'));
+   assert.ok(observed.body[2].startsWith('[notes 2]')&&observed.body[2].includes('Later numbered note.'));
+   assert.equal(observed.absentFragmentAnchor,true);assert.deepEqual(observed.media,expected.entries[0].media);
+   assert.equal(observed.emptyOwnerDisclosure,false);assert.equal(observed.ownerAnchorOnLabel,true);
+   for(const width of [360,768]){
+    await page.setViewportSize({width,height:640});
+    const ownerNavigation=await page.evaluate(()=>{const host=document.getElementById('reference-items');return {
+     found:WikidictRendererQA.revealFragment(host,'English'),focused:document.activeElement===host.querySelector('.entry-language'),
+     visible:host.querySelector('.entry-language').getBoundingClientRect().height>0};});
+    assert.deepEqual(ownerNavigation,{found:true,focused:true,visible:true});
+    const footer=page.locator('details').filter({has:page.locator('#reference-3')});
+    if(await footer.evaluate(el=>el.open))await footer.locator(':scope > summary').click();
+    await page.getByRole('link',{name:'[notes 2]',exact:true}).focus();await page.keyboard.press('Enter');
+    assert.equal(await footer.evaluate(el=>el.open),true);assert.equal(await page.evaluate(()=>document.activeElement.id),'reference-3');
+    await page.getByRole('link',{name:'[notes 1]',exact:true}).focus();await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(()=>document.activeElement.id),'reference-1');
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    const name=`reference-fragments-genuine-${width}.png`;frames.push(name);await page.screenshot({path:path.join(report,name),fullPage:true});
+   }
+   genuine={performed:true,observed,widths:[360,768],actualImageBytesFetched:false};
+  }
+  // Plain unbroken text must remain readable without widening the whole page.
+  // Save both actual layouts before asserting, so a failure retains useful evidence.
+  const longToken='Abcdefghijklmnopqrstuvwxyz'.repeat(8),longFragment=[];
+  await page.evaluate(token=>{
+   const entry={title:'Long reference fragment',presentation_version:'DPR9',sections:[],references:[
+    {kind:'fragment',number:2,group_number:null,name:'',group:'',spans:[{kind:'text',text:token}]}]};
+   document.getElementById('reference-items').replaceChildren(WikidictRendererQA.renderEntry(entry,()=>{}, {collapseOtherSections:false}));
+  },longToken);
+  await page.evaluate(()=>document.fonts.ready);
+  for(const width of [360,768]){
+   await page.setViewportSize({width,height:640});
+   const observed=await page.evaluate(()=>{const row=document.querySelector('.reference');return {
+    viewport:innerWidth,documentWidth:document.documentElement.scrollWidth,text:row.textContent,
+    generatedId:row.id,tabindex:row.getAttribute('tabindex'),rowWidth:row.getBoundingClientRect().width,
+    bodyWidth:row.firstElementChild.getBoundingClientRect().width,referenceDisplay:getComputedStyle(row).display};});
+   const frame=`reference-fragments-long-${width}.png`;frames.push(frame);
+   await page.screenshot({path:path.join(report,frame),fullPage:true});longFragment.push({width,observed,frame});
+  }
+  const styleProof={cssSha256:createHash('sha256').update(productionStyle).digest('hex'),fontSha256:createHash('sha256').update(readerFont).digest('hex'),...productionStyles};
+  await writeFile(path.join(report,'reference-fragments-layout.json'),JSON.stringify({styleProof,longFragment,errors},null,2)+'\n');
+  for(const row of longFragment){assert.equal(row.observed.text,longToken);assert.equal(row.observed.generatedId,'');assert.equal(row.observed.tabindex,null);assert.ok(row.observed.documentWidth<=row.observed.viewport,`Long fragment overflows at ${row.width}px`);}
+  assert.deepEqual(errors,[]);
+  await writeFile(path.join(report,'reference-fragments.json'),JSON.stringify({status:'passed',scope:'reference-fragment-renderer-only',initial,ownerWrappers,genuine,styleProof,longFragment,frames,errors},null,2)+'\n');
+  await page.close();
+ }
+ if(!referenceOnly){
  if(!nativeOnly){
  const rendererBundle=await buildRendererTestBundle({entryPoints:[fileURLToPath(new URL('./renderer.js',import.meta.url))],bundle:true,format:'iife',globalName:'WikidictRendererQA',write:false});
  const rendererPage=await browser.newPage();rendererPage.on('pageerror',e=>errors.push(e.message));
@@ -560,4 +713,6 @@ try{
  await delivery.getByRole('button',{name:'Search',exact:true}).click();await delivery.getByRole('searchbox').fill('cat');await delivery.getByRole('button',{name:'Open cat',exact:true}).click();await delivery.locator('#entry h1').filter({hasText:/^cat$/}).waitFor();assert.ok((await delivery.locator('#entry').innerText()).includes('English target definition'));
  assert.deepEqual(errors,[]);await writeFile(path.join(report,'report.json'),JSON.stringify({status:'passed',rawBytes:raw.length,xzBytes:xz.length,aliasCases:8,aliasRawAndXZ:true,savedAliasContext:true,mediaRequests,mediaDownloads,errors},null,2));console.log('WEB_BINARY_PARITY_AND_ALIAS_PASS');
  }
+ }
+ assert.deepEqual(errors,[]);
 }finally{await browser.close();server.close();}
