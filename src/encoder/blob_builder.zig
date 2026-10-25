@@ -2137,7 +2137,8 @@ fn processMain(
     }
     var page_sections: std.ArrayList(language_source.Section) = .empty;
     defer page_sections.deinit(page_allocator);
-    const reference_context = try presentation_document.referenceDefinitionsWithMissingAlloc(page_allocator, source_missing);
+    var reference_context = try presentation_document.referenceDefinitionsWithMissingAlloc(page_allocator, source_missing);
+    reference_context.citations = numbered.citations;
     // Ordinary navigation admission is established by the actual renderer,
     // before ownership cuts. The same raw-domain map later carries rendering.
     const early_observation: presentation_document.PreObservation = if (may_cross_link)
@@ -2550,20 +2551,32 @@ fn processNamespace(
     // Supplemental namespaces share one file, so keep their full localized
     // names to avoid collisions between identically named namespace suffixes.
     const local_title = if (kind == .supplemental) title else localNamespaceTitle(title);
-    const payload = try presentation_document.compileReportedWithOptionsAndPhasesAlloc(
+    const numbered = try presentation_document.preparePageExternalLinksWithMissingAlloc(page_allocator, if (missing_phase) |phase| phase.output() else MissingText.untracked(source), .{
+        .title = local_title,
+        .link_trail = link_trail,
+        .namespace_catalog = namespace_catalog,
+        .behavior_switches = behavior_switches,
+        .image_options = image_options,
+        .poem_phase = poem_phase,
+    });
+    var reference_context = try presentation_document.referenceDefinitionsWithMissingAlloc(page_allocator, numbered.missing);
+    reference_context.citations = numbered.citations;
+    const payload = try presentation_document.compileReportedWithReferencesAndPhasesFragmentsAlloc(
         page_allocator,
         local_title,
         kind,
         null,
         "",
-        if (missing_phase) |phase| phase.output() else MissingText.untracked(source),
+        numbered.missing,
         if (display_title) |value| .{ .source = value, .page_title = title, .missing = if (missing_phase) |phase| phase.displayTitle() else null } else null,
         link_trail,
         namespace_catalog,
         behavior_switches,
         image_options,
+        reference_context,
         fallbacks,
-        poem_phase,
+        numbered.poem_phase,
+        &.{},
     );
     switch (kind) {
         .thesaurus => {
@@ -8822,4 +8835,158 @@ test "AF source category whitelist preserves active evidence conflicts and root 
     var foreign_catalog = try Fixture.makeCatalog(allocation, "bg");
     defer foreign_catalog.deinit();
     try Fixture.check(allocation, try std.fmt.allocPrint(allocation, ".zig-cache/tmp/{s}/foreign-edition", .{tmp.sub_path}), Fixture.languageCodes(&foreign_catalog), "entry", active_source, null, "Unclassified", "");
+}
+
+test "Writer citation plans retain orphan prefixes and cross owner temporal epochs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    const codes = TestLanguages.codes();
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const source = "<ref follow=missing>prefix orphan</ref>\n==English==\n===Noun===\n# first<ref name=n>first body</ref>\n==French==\n===Noun===\n# other<ref follow=n>later tail</ref><ref name=n/>\n<references/>\n==English==\n===Verb===\n# next<ref name=n>new epoch</ref>\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "citation owners", source, source, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 3), stats.language_records);
+    const cases = [_]struct { owner: []const u8, bodies: []const []const u8, fragment: bool }{
+        .{ .owner = "Unclassified", .bodies = &.{"prefix orphan"}, .fragment = true },
+        .{ .owner = "English", .bodies = &.{ "first body later tail", "new epoch" }, .fragment = false },
+        .{ .owner = "French", .bodies = &.{"first body later tail"}, .fragment = false },
+    };
+    for (cases) |case| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, case.owner));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("citation owners")).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        try std.testing.expectEqual(case.bodies.len, decoded.entry.references.len);
+        for (decoded.entry.references, case.bodies, 0..) |reference, expected, i| {
+            try std.testing.expectEqualStrings(if (case.fragment) "fragment" else "note", @tagName(reference.kind));
+            try std.testing.expectEqual(i + 1, reference.number);
+            try std.testing.expectEqual(if (case.fragment) @as(?u32, null) else @as(?u32, @intCast(i + 1)), reference.group_number);
+            var text: std.ArrayList(u8) = .empty;
+            for (reference.spans) |span| try text.appendSlice(a, span.text);
+            try std.testing.expectEqualStrings(expected, text.items);
+        }
+        var markers: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (std.mem.startsWith(u8, span.target, "#reference-")) markers += 1;
+        };
+        try std.testing.expectEqual(if (case.fragment) @as(usize, 0) else case.bodies.len, markers);
+    }
+}
+
+test "Writer supplemental namespace citation plan preserves unnumbered fragments and joined notes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    const source = "lead<ref name=n>parent</ref><ref follow=n>tail</ref><ref follow=absent>orphan</ref><references/>";
+    try writer.addExpandedPage(a, .{ .id = 116, .kind = .supplemental }, "Appendix:citation", source, source, null);
+    try std.testing.expectEqual(@as(usize, 1), (try writer.finish(.{})).supplemental_records);
+    var mapped = try mmapPath(std.testing.io, try std.fs.path.join(a, &.{ root, "supplemental.wikblb" }));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    var iterator = blob.iterator();
+    const record = (try iterator.next()).?;
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .supplemental, null);
+    try std.testing.expectEqualStrings("Appendix:citation", decoded.entry.title);
+    try std.testing.expectEqual(@as(usize, 2), decoded.entry.references.len);
+    for (decoded.entry.references, [_][]const u8{ "orphan", "parent tail" }, 0..) |reference, expected, i| {
+        try std.testing.expectEqualStrings(if (i == 0) "fragment" else "note", @tagName(reference.kind));
+        try std.testing.expectEqual(@as(usize, if (i == 0) 2 else 1), reference.number);
+        var text: std.ArrayList(u8) = .empty;
+        for (reference.spans) |span| try text.appendSlice(a, span.text);
+        try std.testing.expectEqualStrings(expected, text.items);
+    }
+}
+
+test "ordinary Writer publishes authored citation diagnostics without losing surrounding notes or next page" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    const codes = TestLanguages.codes();
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const invalid = [_][]const u8{
+        "<ref/>",
+        "<ref></ref>",
+        "<ref follow=missing/>",
+        "<ref name=bad follow=good>Rejected body</ref>",
+        "<references><ref>Rejected body</ref><ref name=after>Second note.</ref></references>",
+        "<references><ref name=after follow=good>Rejected body</ref></references>",
+    };
+    for (invalid, 0..) |source_error, i| {
+        const title = try std.fmt.allocPrint(a, "invalid-ref-{d}", .{i});
+        const source = try std.fmt.allocPrint(a, "==English==\n===Noun===\n# word<ref name=good>First note.</ref>{s}tail<ref name=after>Second note.</ref>\n", .{source_error});
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, title, source, source, null);
+    }
+    const clean = "==English==\n===Noun===\n# clean<ref>Clean note.</ref>\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "valid-next-page", clean, clean, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(invalid.len + 1, stats.language_records);
+    try std.testing.expectEqual(invalid.len, stats.fallback_pages);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "English"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    for (invalid, 0..) |_, i| {
+        const title = try std.fmt.allocPrint(a, "invalid-ref-{d}", .{i});
+        const record = (try index.find(title)).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        try std.testing.expectEqual(@as(usize, 2), decoded.entry.references.len);
+        for (decoded.entry.references, [_][]const u8{ "First note.", "Second note." }, 0..) |reference, body, j| {
+            try std.testing.expect(reference.kind == .note);
+            try std.testing.expectEqual(j + 1, reference.number);
+            var text: std.ArrayList(u8) = .empty;
+            for (reference.spans) |span| try text.appendSlice(a, span.text);
+            try std.testing.expectEqualStrings(body, text.items);
+        }
+        var errors: usize = 0;
+        var markers: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try std.testing.expect(std.mem.indexOf(u8, span.text, "Rejected body") == null);
+            if (std.mem.indexOf(u8, span.text, "Reference error: invalid citation") != null) errors += 1;
+            if (span.role == .reference) {
+                try std.testing.expectEqualStrings(if (markers == 0) "#reference-1" else "#reference-2", span.target);
+                markers += 1;
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), errors);
+        try std.testing.expectEqual(@as(usize, 2), markers);
+    }
+    const next = (try index.find("valid-next-page")).?;
+    const decoded_next = try blobs.presentation_codec.decodeAlloc(a, next.payload, next.title, .language, try blob.languageMetadata());
+    try std.testing.expectEqual(@as(usize, 1), decoded_next.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 1), decoded_next.entry.references[0].number);
+    const diagnostics = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(1024 * 1024));
+    var lines = std.mem.splitScalar(u8, diagnostics, '\n');
+    var rows: usize = 0;
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        const parsed = try std.json.parseFromSlice(std.json.Value, a, line, .{});
+        defer parsed.deinit();
+        const title = parsed.value.object.get("title").?.string;
+        try std.testing.expect(std.mem.startsWith(u8, title, "invalid-ref-"));
+        const reasons = parsed.value.object.get("reasons").?.array.items;
+        try std.testing.expectEqual(@as(usize, 1), reasons.len);
+        try std.testing.expectEqualStrings("rendered_extension_error", reasons[0].string);
+        rows += 1;
+    }
+    try std.testing.expectEqual(invalid.len, rows);
 }

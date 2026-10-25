@@ -10,18 +10,22 @@ pub const anchor_magic = "DPR5";
 pub const background_magic = "DPR6";
 pub const nested_magic = "DPR7";
 pub const cell_blocks_magic = "DPR8";
-const Version = enum { plain, explained, colored, anchored, span_background, nested_tables, cell_blocks };
+pub const reference_items_magic = "DPR9";
+const Version = enum { plain, explained, colored, anchored, span_background, nested_tables, cell_blocks, reference_items };
 fn hasRgb(version: Version) bool {
-    return version == .colored or version == .anchored or version == .span_background or version == .nested_tables or version == .cell_blocks;
+    return version == .colored or version == .anchored or version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items;
 }
 fn hasAnchorFields(version: Version) bool {
-    return version == .anchored or version == .span_background or version == .nested_tables or version == .cell_blocks;
+    return version == .anchored or version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items;
 }
 fn hasSpanBackgroundFields(version: Version) bool {
-    return version == .span_background or version == .nested_tables or version == .cell_blocks;
+    return version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items;
 }
 fn hasNestedFields(version: Version) bool {
-    return version == .nested_tables or version == .cell_blocks;
+    return version == .nested_tables or version == .cell_blocks or version == .reference_items;
+}
+fn hasCellBlockFields(version: Version) bool {
+    return version == .cell_blocks or version == .reference_items;
 }
 const max_items: usize = 1 << 20;
 const max_string_bytes: usize = 32 * 1024 * 1024;
@@ -191,7 +195,7 @@ const Encoder = struct {
                 try self.table(value.nested_table);
             } else try self.byte(0);
         }
-        if (self.version == .cell_blocks) {
+        if (hasCellBlockFields(self.version)) {
             if (comptime @hasField(@TypeOf(value), "blocks")) {
                 try self.byte(@intFromBool(value.blocks != null));
                 if (value.blocks) |blocks| {
@@ -303,9 +307,21 @@ const Encoder = struct {
     fn references(self: *Encoder, values: anytype) !void {
         try self.count(values.len);
         for (values) |reference| {
-            try self.index(reference.number);
-            try self.index(reference.group_number);
-            try self.string(reference.name);
+            const kind = try enumByteValue(types.ReferenceKind, reference.kind);
+            if (reference.number == 0) return error.InvalidPresentation;
+            if (kind == @backingInt(types.ReferenceKind.note)) {
+                const ordinal = reference.group_number orelse return error.InvalidPresentation;
+                if (ordinal == 0) return error.InvalidPresentation;
+                if (self.version == .reference_items) try self.byte(kind);
+                try self.index(reference.number);
+                try self.index(ordinal);
+                try self.string(reference.name);
+            } else {
+                if (self.version != .reference_items or reference.group_number != null or reference.name.len != 0)
+                    return error.InvalidPresentation;
+                try self.byte(kind);
+                try self.index(reference.number);
+            }
             try self.string(reference.group);
             try self.spans(reference.spans);
         }
@@ -618,7 +634,7 @@ const Reader = struct {
         };
         if (hasNestedFields(self.version)) value.nested_table = try self.table();
         if (value.nested_table != null and value.spans.len != 0) return error.InvalidPresentation;
-        if (self.version == .cell_blocks and try self.presence()) {
+        if (hasCellBlockFields(self.version) and try self.presence()) {
             if (value.spans.len != 0 or value.nested_table != null) return error.InvalidPresentation;
             const len = try self.count(25);
             const blocks = try self.a.alloc(types.Block, len);
@@ -628,7 +644,7 @@ const Reader = struct {
         return value;
     }
     fn row(self: *Reader) !types.Row {
-        const len = try self.count(if (self.version == .cell_blocks) 12 else if (hasNestedFields(self.version)) 11 else if (hasRgb(self.version)) 10 else 9);
+        const len = try self.count(if (hasCellBlockFields(self.version)) 12 else if (hasNestedFields(self.version)) 11 else if (hasRgb(self.version)) 10 else 9);
         const out = try self.a.alloc(types.Cell, len);
         for (out) |*cell_value| cell_value.* = try self.cell();
         return .{ .cells = out };
@@ -722,15 +738,19 @@ const Reader = struct {
         return .{ .lexemes = lexemes, .other_sections = try self.indices() };
     }
     fn references(self: *Reader) ![]const types.Reference {
-        const len = try self.count(20);
+        const len = try self.count(if (self.version == .reference_items) 13 else 20);
         const out = try self.a.alloc(types.Reference, len);
-        for (out) |*reference| reference.* = .{
-            .number = try self.index(),
-            .group_number = try self.index(),
-            .name = try self.string(),
-            .group = try self.string(),
-            .spans = try self.spans(),
-        };
+        for (out) |*reference| {
+            const kind = if (self.version == .reference_items) try self.enumValue(types.ReferenceKind) else types.ReferenceKind.note;
+            reference.* = .{
+                .kind = kind,
+                .number = try self.index(),
+                .group_number = if (kind == .note) @as(u32, @intCast(try self.index())) else null,
+                .name = if (kind == .note) try self.string() else "",
+                .group = try self.string(),
+                .spans = try self.spans(),
+            };
+        }
         return out;
     }
     fn media(self: *Reader) ![]const types.Media {
@@ -860,6 +880,11 @@ fn hasAnchors(sections: anytype) bool {
     return false;
 }
 
+fn hasReferenceFragments(references: anytype) bool {
+    for (references) |reference| if (reference.kind == .fragment) return true;
+    return false;
+}
+
 fn versionMagic(version: Version) []const u8 {
     return switch (version) {
         .plain => magic,
@@ -869,12 +894,13 @@ fn versionMagic(version: Version) []const u8 {
         .span_background => background_magic,
         .nested_tables => nested_magic,
         .cell_blocks => cell_blocks_magic,
+        .reference_items => reference_items_magic,
     };
 }
 
 pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     if (!std.mem.eql(u8, stored.schema, types.schema)) return error.InvalidPresentation;
-    const version: Version = if (hasCellBlocks(stored.entry.sections)) .cell_blocks else if (hasNestedTables(stored.entry.sections)) .nested_tables else if (hasSpanBackground(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .span_background else if (hasAnchors(stored.entry.sections)) .anchored else if (hasColor(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .colored else if (hasExplanation(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .explained else .plain;
+    const version: Version = if (hasReferenceFragments(stored.entry.references)) .reference_items else if (hasCellBlocks(stored.entry.sections)) .cell_blocks else if (hasNestedTables(stored.entry.sections)) .nested_tables else if (hasSpanBackground(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .span_background else if (hasAnchors(stored.entry.sections)) .anchored else if (hasColor(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .colored else if (hasExplanation(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .explained else .plain;
     var encoder: Encoder = .{ .a = a, .version = version };
     defer encoder.deinit();
     try encoder.out.appendSlice(a, versionMagic(version));
@@ -897,7 +923,7 @@ pub fn encodeBuildAlloc(
     references_value: anytype,
     media_value: anytype,
 ) ![]u8 {
-    const version: Version = if (hasCellBlocks(sections)) .cell_blocks else if (hasNestedTables(sections)) .nested_tables else if (hasSpanBackground(display_title, sections, @as([]const types.Span, &.{}), references_value)) .span_background else if (hasAnchors(sections)) .anchored else if (hasColor(display_title, sections, @as([]const types.Span, &.{}), references_value)) .colored else if (hasExplanation(display_title, sections, @as([]const types.Span, &.{}), references_value)) .explained else .plain;
+    const version: Version = if (hasReferenceFragments(references_value)) .reference_items else if (hasCellBlocks(sections)) .cell_blocks else if (hasNestedTables(sections)) .nested_tables else if (hasSpanBackground(display_title, sections, @as([]const types.Span, &.{}), references_value)) .span_background else if (hasAnchors(sections)) .anchored else if (hasColor(display_title, sections, @as([]const types.Span, &.{}), references_value)) .colored else if (hasExplanation(display_title, sections, @as([]const types.Span, &.{}), references_value)) .explained else .plain;
     var encoder: Encoder = .{ .a = a, .version = version };
     defer encoder.deinit();
     try encoder.out.appendSlice(a, versionMagic(version));
@@ -946,7 +972,7 @@ fn decodeImpl(
     metrics: ?*DecodeMetrics,
 ) !types.Stored {
     if (payload.len < magic.len) return error.InvalidPresentation;
-    const version: Version = if (std.mem.eql(u8, payload[0..magic.len], magic)) .plain else if (std.mem.eql(u8, payload[0..explained_magic.len], explained_magic)) .explained else if (std.mem.eql(u8, payload[0..color_magic.len], color_magic)) .colored else if (std.mem.eql(u8, payload[0..anchor_magic.len], anchor_magic)) .anchored else if (std.mem.eql(u8, payload[0..background_magic.len], background_magic)) .span_background else if (std.mem.eql(u8, payload[0..nested_magic.len], nested_magic)) .nested_tables else if (std.mem.eql(u8, payload[0..cell_blocks_magic.len], cell_blocks_magic)) .cell_blocks else return error.InvalidPresentation;
+    const version: Version = if (std.mem.eql(u8, payload[0..magic.len], magic)) .plain else if (std.mem.eql(u8, payload[0..explained_magic.len], explained_magic)) .explained else if (std.mem.eql(u8, payload[0..color_magic.len], color_magic)) .colored else if (std.mem.eql(u8, payload[0..anchor_magic.len], anchor_magic)) .anchored else if (std.mem.eql(u8, payload[0..background_magic.len], background_magic)) .span_background else if (std.mem.eql(u8, payload[0..nested_magic.len], nested_magic)) .nested_tables else if (std.mem.eql(u8, payload[0..cell_blocks_magic.len], cell_blocks_magic)) .cell_blocks else if (std.mem.eql(u8, payload[0..reference_items_magic.len], reference_items_magic)) .reference_items else return error.InvalidPresentation;
     var reader: Reader = .{ .a = a, .version = version, .bytes = payload, .pos = magic.len, .metrics = metrics };
     const display_title = try reader.spans();
     const sections = try reader.sections();
@@ -1135,7 +1161,7 @@ test "binary presentation codec preserves composite semantic fields" {
     try std.testing.expectEqualStrings("audio", decoded.entry.sections[1].blocks[0].feature.?.kind);
     try std.testing.expectEqual(@as(u16, 2), decoded.entry.sections[1].blocks[0].table.?.rows[0].cells[0].colspan);
     try std.testing.expectEqualStrings("cats", decoded.entry.organization.lexemes[0].definitions[0].form.?.target);
-    try std.testing.expectEqual(@as(usize, 2), decoded.entry.references[0].group_number);
+    try std.testing.expectEqual(@as(?u32, 2), decoded.entry.references[0].group_number);
     try std.testing.expectEqual(types.MediaKind.audio, decoded.entry.media[1].kind);
     const caption_only = decoded.entry.sections[1].blocks[2];
     try std.testing.expectEqual(types.BlockKind.table, caption_only.kind);
@@ -1812,4 +1838,102 @@ test "DPR8 cell block tables retain depth and shared collection limits" {
     std.mem.writeInt(u32, &length, max_string_bytes + 1, .little);
     reader = .{ .a = a, .version = .cell_blocks, .bytes = &length };
     try std.testing.expectError(error.InvalidPresentation, reader.string());
+}
+
+test "DPR9 reference fragments preserve footer order identities groups and rich bodies" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const rich = [_]types.Span{.{ .kind = .external_link, .text = "orphan", .target = "https://example.test/fragment", .bold = true, .explanation = "source note", .foreground = "#123456", .background = "#abcdef" }};
+    const refs = [_]types.Reference{
+        .{ .kind = .fragment, .number = 8, .group_number = null, .group = "notes", .spans = &rich },
+        .{ .number = 2, .group_number = 1, .name = "parent", .group = "notes", .spans = &.{.{ .text = "numbered" }} },
+    };
+    const child = [_]types.Block{.{ .kind = .heading, .level = 3, .anchor = "child", .spans = &.{.{ .text = "Child" }} }};
+    const cells = [_]types.Cell{.{ .blocks = &child }};
+    const rows = [_]types.Row{.{ .cells = &cells }};
+    const blocks = [_]types.Block{.{ .kind = .table, .table = .{ .rows = &rows } }};
+    const sections = [_]types.Section{.{ .level = 2, .title = "Body", .anchor = "body", .blocks = &blocks }};
+    const media = [_]types.Media{.{ .file = "Example.svg", .kind = .image, .caption = "caption" }};
+    const stored: types.Stored = .{ .entry = .{ .title = "entry", .kind = .supplemental, .sections = &sections, .references = &refs, .media = &media } };
+    const bytes = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings("DPR9", bytes[0..4]);
+    const decoded = try decodeAlloc(a, bytes, "entry", .supplemental, null);
+    try std.testing.expectEqual(types.ReferenceKind.fragment, decoded.entry.references[0].kind);
+    try std.testing.expectEqual(@as(usize, 8), decoded.entry.references[0].number);
+    try std.testing.expectEqual(@as(?u32, null), decoded.entry.references[0].group_number);
+    try std.testing.expectEqualStrings("", decoded.entry.references[0].name);
+    try std.testing.expectEqualStrings("notes", decoded.entry.references[0].group);
+    try std.testing.expectEqual(@as(usize, 2), decoded.entry.references[1].number);
+    try std.testing.expectEqual(@as(?u32, 1), decoded.entry.references[1].group_number);
+    try std.testing.expectEqualStrings(try std.json.Stringify.valueAlloc(a, stored, .{}), try std.json.Stringify.valueAlloc(a, decoded, .{}));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    // The compiler path uses a distinct enum type with the same semantic names.
+    const BuildKind = enum { note, fragment };
+    const BuildReference = struct { kind: BuildKind = .note, number: usize, group_number: ?u32, name: []const u8 = "", group: []const u8 = "", spans: []const types.Span = &.{} };
+    const build_refs = [_]BuildReference{.{ .kind = .fragment, .number = 7, .group_number = null, .spans = &rich }};
+    const built = try encodeBuildAlloc(a, @as([]const types.Span, &.{}), @as([]const types.Section, &.{}), types.Layout{}, &build_refs, @as([]const types.Media, &.{}));
+    const build_decoded = try decodeAlloc(a, built, "entry", .supplemental, null);
+    try std.testing.expectEqual(@as(usize, 7), build_decoded.entry.references[0].number);
+    try std.testing.expectEqualStrings("https://example.test/fragment", build_decoded.entry.references[0].spans[0].target);
+}
+
+test "legacy note reference bytes and JSON stay unchanged without fragments" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const refs = [_]types.Reference{.{ .number = 9, .group_number = 2 }};
+    const stored: types.Stored = .{ .entry = .{ .title = "entry", .kind = .supplemental, .references = &refs } };
+    // Independent legacy framing: five empty collections, one note, empty media.
+    const legacy = "DPR2" ++
+        "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00" ++
+        "\x01\x00\x00\x00\x09\x00\x00\x00\x02\x00\x00\x00" ++
+        "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+    try std.testing.expectEqualSlices(u8, legacy, try encodeAlloc(a, stored));
+    const decoded = try decodeAlloc(a, legacy, "entry", .supplemental, null);
+    try std.testing.expectEqual(types.ReferenceKind.note, decoded.entry.references[0].kind);
+    try std.testing.expectEqualStrings("{\"number\":9,\"group_number\":2,\"name\":\"\",\"group\":\"\",\"spans\":[]}", try std.json.Stringify.valueAlloc(a, decoded.entry.references[0], .{}));
+    try std.testing.expectEqualSlices(u8, legacy, try encodeAlloc(a, decoded));
+}
+
+test "DPR9 reference tags and semantic invariants reject malformed input" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const refs = [_]types.Reference{.{ .kind = .fragment, .number = 1, .group_number = null }};
+    const stored: types.Stored = .{ .entry = .{ .title = "entry", .kind = .supplemental, .references = &refs } };
+    const valid = try encodeAlloc(a, stored);
+    // The first item follows magic, five empty collection counts and ref count.
+    const tag_at = 28;
+    try std.testing.expectEqual(@as(u8, 1), valid[tag_at]);
+    const unknown = try a.dupe(u8, valid);
+    unknown[tag_at] = 2;
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, unknown, "entry", .supplemental, null));
+    const zero_id = try a.dupe(u8, valid);
+    @memset(zero_id[tag_at + 1 .. tag_at + 5], 0);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, zero_id, "entry", .supplemental, null));
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, valid[0 .. valid.len - 1], "entry", .supplemental, null));
+    const invalid = [_]types.Reference{
+        .{ .number = 1, .group_number = null },
+        .{ .number = 1, .group_number = 0 },
+        .{ .kind = .fragment, .number = 0, .group_number = null },
+        .{ .kind = .fragment, .number = 1, .group_number = 1 },
+        .{ .kind = .fragment, .number = 1, .group_number = null, .name = "named" },
+    };
+    for (invalid) |reference| {
+        var bad = stored;
+        bad.entry.references = &.{reference};
+        try std.testing.expectError(error.InvalidPresentation, types.validateStored(bad, "entry", .supplemental, null));
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, bad));
+    }
+    // Encoder selection is canonical, but a valid note-only DPR9 remains readable.
+    var encoder: Encoder = .{ .a = a, .version = .reference_items };
+    defer encoder.deinit();
+    try encoder.out.appendSlice(a, reference_items_magic);
+    for (0..5) |_| try encoder.count(0);
+    try encoder.references(&[_]types.Reference{.{ .number = 4, .group_number = 2 }});
+    try encoder.media(@as([]const types.Media, &.{}));
+    const notes = try decodeAlloc(a, encoder.out.items, "entry", .supplemental, null);
+    try std.testing.expectEqual(types.ReferenceKind.note, notes.entry.references[0].kind);
+    try std.testing.expectEqual(@as(usize, 4), notes.entry.references[0].number);
 }

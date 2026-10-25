@@ -1225,10 +1225,13 @@ fn entryMetadataProjected(w: *std.Io.Writer, entry: model.Entry, color: bool, pr
     if (entry.references.len != 0) {
         try w.writeAll("\nReferences\n");
         for (entry.references) |ref| {
-            if (ref.group.len == 0) try w.print("[{d}] ", .{ref.group_number}) else {
-                try w.writeByte('[');
-                try terminalText(w, ref.group);
-                try w.print(" {d}] ", .{ref.group_number});
+            if (ref.kind == .note) {
+                const ordinal = ref.group_number orelse return error.InvalidPresentation;
+                if (ref.group.len == 0) try w.print("[{d}] ", .{ordinal}) else {
+                    try w.writeByte('[');
+                    try terminalText(w, ref.group);
+                    try w.print(" {d}] ", .{ordinal});
+                }
             }
             try spansTextDisplayProjected(w, ref.spans, color, projection, true);
             try w.writeByte('\n');
@@ -3345,4 +3348,28 @@ test "detail blank rows stay unprefixed and poem blocks retain their layout" {
         const expected_verse = if (kind == .quotation) "  │   VERSE_A\n\n  VERSE_B\n\n\n" else "  │   VERSE_A\n\n  VERSE_B\n\n";
         try std.testing.expectEqualStrings(expected_verse, out.written());
     }
+}
+
+test "reference fragments retain rich footer content without a synthesized label" {
+    const fragments = [_]model.Span{.{ .kind = .link, .text = "ORPHAN", .target = "Destination", .bold = true }};
+    const refs = [_]model.Reference{
+        .{ .kind = .fragment, .number = 8, .group_number = null, .group = "notes", .spans = &fragments },
+        .{ .number = 2, .group_number = 1, .group = "notes", .spans = &.{.{ .text = "NUMBERED" }} },
+    };
+    const entry: model.Entry = .{ .title = "entry", .kind = .supplemental, .references = &refs };
+    var plain: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer plain.deinit();
+    var ansi: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer ansi.deinit();
+    try entryText(&plain.writer, entry, false);
+    try entryText(&ansi.writer, entry, true);
+    try std.testing.expect(std.mem.indexOf(u8, plain.written(), "\nReferences\nORPHAN\n[notes 1] NUMBERED\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plain.written(), "[notes 8]") == null);
+    try std.testing.expect(std.mem.indexOf(u8, plain.written(), "null") == null);
+    const visible = try NarrowTableTest.plain(std.testing.allocator, ansi.written());
+    defer std.testing.allocator.free(visible);
+    try std.testing.expectEqualStrings(plain.written(), visible);
+    try std.testing.expect(std.mem.indexOf(u8, ansi.written(), "\x1b[1m\x1b[36mORPHAN\x1b[0m") != null);
+    try std.testing.expectEqualStrings("Destination", entry.references[0].spans[0].target);
+    try std.testing.expectEqual(@as(usize, 8), entry.references[0].number);
 }

@@ -142,12 +142,28 @@ pub const Lexeme = struct {
     related_sections: []const usize = &.{},
 };
 pub const Layout = struct { lexemes: []const Lexeme = &.{}, other_sections: []const usize = &.{} };
+pub const ReferenceKind = enum { note, fragment };
 pub const Reference = struct {
+    kind: ReferenceKind = .note,
+    // Stable item identity, independent of the footer array position.
     number: usize,
-    group_number: usize,
+    group_number: ?u32,
     name: []const u8 = "",
     group: []const u8 = "",
     spans: []const Span = &.{},
+
+    pub fn jsonStringify(self: Reference, jw: anytype) !void {
+        try jw.beginObject();
+        inline for (@typeInfo(Reference).@"struct".field_names) |field_name| {
+            // Keep legacy note JSON unchanged; absence of kind means note.
+            const kind_field = comptime std.mem.eql(u8, field_name, "kind");
+            if (!kind_field or self.kind != .note) {
+                try jw.objectField(field_name);
+                try jw.write(@field(self, field_name));
+            }
+        }
+        try jw.endObject();
+    }
 };
 pub const MediaKind = enum { image, audio };
 pub const Media = struct { file: []const u8, kind: MediaKind, caption: []const u8 };
@@ -277,7 +293,11 @@ pub fn validateStored(
     for (entry.sections) |section| for (section.blocks) |block| try validateBlock(block, 0);
 
     for (entry.references) |reference| {
-        if (reference.number == 0 or reference.group_number == 0) return error.InvalidPresentation;
+        if (reference.number == 0 or reference.number >= std.math.maxInt(u32)) return error.InvalidPresentation;
+        switch (reference.kind) {
+            .note => if (reference.group_number == null or reference.group_number.? == 0 or reference.group_number.? == std.math.maxInt(u32)) return error.InvalidPresentation,
+            .fragment => if (reference.group_number != null or reference.name.len != 0) return error.InvalidPresentation,
+        }
     }
 }
 

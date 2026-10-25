@@ -174,6 +174,8 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
             .behavior_switches = behavior_switches,
             .image_options = image_options,
             .poem_phase = poem_phase,
+            .citations = reference_context.citations,
+            .external_links_prepared = reference_context.citations != null,
         },
     };
     renderer.page_reference_definitions = reference_context.items;
@@ -489,6 +491,8 @@ fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, 
             .behavior_switches = behavior_switches,
             .image_options = image_options,
             .poem_phase = poem_phase,
+            .citations = reference_context.citations,
+            .external_links_prepared = reference_context.citations != null,
         },
     };
     renderer.page_reference_definitions = reference_context.items;
@@ -512,6 +516,8 @@ fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, 
 
 fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment) !Work {
     var renderer: compiler.Renderer = .{ .a = a, .context = .{ .title = title, .language = if (language.len == 0) "English" else language, .link_trail = link_trail, .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .image_options = image_options, .poem_phase = poem_phase } };
+    renderer.context.citations = reference_context.citations;
+    renderer.context.external_links_prepared = reference_context.citations != null;
     renderer.page_reference_definitions = reference_context.items;
     renderer.fallbacks.merge(reference_context.fallbacks);
     var builder: Builder = .{ .a = a, .renderer = &renderer, .title = if (language.len == 0) title else language };
@@ -4280,4 +4286,41 @@ test "closed newline external recovery cannot borrow closure across source domai
     };
     try std.testing.expectEqual(@as(usize, 2), sic_markers);
     try std.testing.expectEqualStrings("[sic]", sic_text.items);
+}
+
+test "prepared citation owner copies share temporal bodies and body probes retain orphan fragments" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const raw = "<ref follow=absent>prefix orphan</ref>\n==English==\n===Noun===\n# first<ref name=shared>parent</ref>\n==French==\n===Noun===\n# second<ref follow=shared>tail</ref><ref name=shared/>\n";
+    const prepared = try preparePageExternalLinksAlloc(a, raw, .{ .title = "entry" });
+    try std.testing.expect(prepared.citations != null);
+    var definitions = try referenceDefinitionsWithMissingAlloc(a, prepared.missing);
+    definitions.citations = prepared.citations;
+    const english = std.mem.indexOf(u8, prepared.source, "==English==").?;
+    const french = std.mem.indexOf(u8, prepared.source, "==French==").?;
+    const prefix = try a.dupe(u8, prepared.source[0..english]);
+    try std.testing.expect(try hasBodyContentWithReferencesAndPoemFragmentsAlloc(a, "entry", "", prefix, .{}, null, null, null, definitions, prepared.poem_phase, &.{}));
+    const prefix_work = try workAllocWithPoem(a, "entry", "", prefix, .{}, null, null, null, definitions, prepared.poem_phase);
+    try std.testing.expectEqual(@as(usize, 1), prefix_work.references.len);
+    try std.testing.expectEqualStrings("fragment", @tagName(prefix_work.references[0].kind));
+    var prefix_text: std.ArrayList(u8) = .empty;
+    for (prefix_work.references[0].spans) |span| try prefix_text.appendSlice(a, span.text);
+    try std.testing.expectEqualStrings("prefix orphan", prefix_text.items);
+    // Copies intentionally have no pointer or byte-offset relationship to the page.
+    for ([_][]const u8{ prepared.source[english..french], prepared.source[french..] }) |slice| {
+        const copy = try a.dupe(u8, slice);
+        const fragments = [_]SourceFragment{.{ .source = copy }};
+        const plain = try workAllocWithPoemFragments(a, "entry", "", copy, .{}, null, null, null, definitions, prepared.poem_phase, &fragments);
+        const headings = try workWithHeadingOffsetsAlloc(a, "entry", "", MissingText.untracked(copy), .{}, null, null, null, definitions, prepared.poem_phase, &fragments);
+        for ([_]Work{ plain, headings }) |work| {
+            try std.testing.expectEqual(@as(usize, 1), work.references.len);
+            try std.testing.expectEqualStrings("note", @tagName(work.references[0].kind));
+            try std.testing.expectEqual(@as(usize, 1), work.references[0].number);
+            var text: std.ArrayList(u8) = .empty;
+            for (work.references[0].spans) |span| try text.appendSlice(a, span.text);
+            try std.testing.expectEqualStrings("parent tail", text.items);
+        }
+        _ = try observePreScopesAlloc(a, "entry", copy, .{}, null, null, null, definitions, prepared.poem_phase);
+    }
 }
