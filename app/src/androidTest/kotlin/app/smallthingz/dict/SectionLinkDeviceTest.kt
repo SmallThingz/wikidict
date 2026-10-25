@@ -231,6 +231,38 @@ class SectionLinkDeviceTest {
         compose.onAllNodesWithText("Usage notes", useUnmergedTree = true).assertCountEquals(1)
     }
 
+    @Test fun referenceFragmentsKeepBodyAndMediaWithoutLabelsOrGeneratedCitationTargets() {
+        val entry = Entry("Reference fragment display", emptyList(), "language", "English", "en", listOf(
+            Section(3, "Noun", listOf(
+                Block("definition", 1, listOf(Span("link", "Try fragment identity", target = "#reference-2"))),
+                Block("definition", 1, listOf(Span("link", "Read numbered note", target = "#reference-1")))))
+        ), listOf(
+            Reference(2, null, "notes", listOf(Span("link", "FRAGMENT BODY", target = "fragment-word"),
+                Span("text", " Fragment audio", target = "File:Tone.ogg", classes = "wikidict-media")), ReferenceKind.Fragment),
+            Reference(1, 1, "notes", listOf(Span("text", "NUMBERED NOTE BODY"))),
+            Reference(3, 2, "notes", listOf(Span("text", "LATER NOTE BODY")))),
+            media = listOf(Media("Tone.ogg", "audio", "Fragment audio")))
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                MaterialTheme { EntryView(entry, false, {}, onLink = { forwarded.add(it) },
+                    settings = AppSettings(allowImages = false, allowAudio = false)) }
+            }
+        }
+        touchLink("Try fragment identity")
+        compose.onNodeWithText("NUMBERED NOTE BODY").assertDoesNotExist()
+        touchLink("Read numbered note")
+        compose.onNodeWithText("NUMBERED NOTE BODY").assertIsDisplayed()
+        compose.onNodeWithText("[notes 1]").assertIsDisplayed()
+        compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText("FRAGMENT BODY Fragment audio"))
+        compose.onNodeWithText("FRAGMENT BODY Fragment audio", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("[notes null]").assertDoesNotExist()
+        compose.onNodeWithText("[null]").assertDoesNotExist()
+        compose.onAllNodesWithContentDescription("Play pronunciation").assertCountEquals(1)
+        compose.onNodeWithContentDescription("Play pronunciation").assertIsNotEnabled()
+        touchLink("FRAGMENT BODY Fragment audio")
+        compose.runOnIdle { assertEquals(listOf("fragment-word"), forwarded) }
+    }
+
     @Test fun emptyReferencesLeafMenuAndLinksReachTheActualCitationFooter() {
         val entry = Entry("qichwa reference navigation", emptyList(), "language", "Quechua", "qu", listOf(
             Section(3, "Noun", listOf(

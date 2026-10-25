@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2-DPR8 decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2-DPR9 decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
@@ -13,7 +13,7 @@ object BlobDecoder {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val version = r.byte()
-        require(version in 50..56) { "Unsupported presentation format" }
+        require(version in 50..57) { "Unsupported presentation format" }
         r.explanations = version >= 51
         r.colors = version >= 52
         r.anchors = version >= 53
@@ -42,11 +42,22 @@ object BlobDecoder {
             r.indices(blocks); r.indices(blocks); r.indices(sections.size)
         }
         r.indices(sections.size)
-        val references = List(r.count(20)) {
-            val number = r.u32(); val groupNumber = r.u32()
-            require(number in 1..Int.MAX_VALUE && groupNumber in 1..Int.MAX_VALUE)
-            r.string(); val group = r.string()
-            Reference(number.toInt(), groupNumber.toInt(), group, r.spans())
+        val references = List(r.count(if (version >= 57) 13 else 20)) {
+            val referenceKind = if (version < 57) ReferenceKind.Note else when (r.byte()) {
+                0 -> ReferenceKind.Note
+                1 -> ReferenceKind.Fragment
+                else -> error("Unknown reference item kind")
+            }
+            val number = r.u32()
+            require(number in 1L..0xffff_fffeL)
+            val groupNumber = if (referenceKind == ReferenceKind.Note) {
+                val ordinal = r.u32()
+                require(ordinal in 1L..0xffff_fffeL)
+                r.string() // Authored note name; navigation uses its stable item identity.
+                ordinal
+            } else null
+            val group = r.string()
+            Reference(number, groupNumber, group, r.spans(), referenceKind)
         }
         val media = List(r.count(9)) { Media(r.string(), r.enum(listOf("image", "audio")), r.string()) }
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }

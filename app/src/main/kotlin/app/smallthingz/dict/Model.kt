@@ -67,7 +67,16 @@ data class Block(
 data class Feature(val kind: String, val language: String, val data: String, val tailKind: String, val tail: String)
 data class Section(val level: Int, val title: String, val blocks: List<Block>, val anchor: String = "", val anchorFallback: String = "")
 data class Media(val file: String, val kind: String, val caption: String)
-data class Reference(val number: Int, val groupNumber: Int, val group: String, val spans: List<Span>)
+enum class ReferenceKind { Note, Fragment }
+data class Reference(val number: Long, val groupNumber: Long?, val group: String, val spans: List<Span>,
+    val kind: ReferenceKind = ReferenceKind.Note) {
+    init {
+        require(number in 1L..0xffff_fffeL) { "Reference item identity is outside the wire range" }
+        require(if (kind == ReferenceKind.Note) groupNumber != null && groupNumber in 1L..0xffff_fffeL else groupNumber == null) {
+            "Only numbered notes have a valid wire group ordinal"
+        }
+    }
+}
 data class Entry(
     val title: String,
     val displayTitle: List<Span>,
@@ -174,6 +183,6 @@ internal fun entryAbbreviations(entry: Entry): List<Abbreviation> {
         section.blocks.forEach { includeBlock(it, location) }
     }
 
-    entry.references.forEach { include(it.spans, "References ${it.number}") }
+    entry.references.forEach { include(it.spans, if (it.kind == ReferenceKind.Note) "References ${it.number}" else "References") }
     return result.toList()
 }

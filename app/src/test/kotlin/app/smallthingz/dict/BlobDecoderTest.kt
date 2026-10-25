@@ -67,16 +67,22 @@ class BlobDecoderTest {
         "display_title" to entry.displayTitle.map(::producerSpan), "preamble_spans" to entry.preamble.map(::producerSpan),
         "sections" to entry.sections.map { linkedMapOf("level" to it.level, "title" to it.title,
             "anchor" to it.anchor, "anchor_fallback" to it.anchorFallback, "blocks" to it.blocks.map(::producerBlock)) },
-        "references" to entry.references.map { linkedMapOf("number" to it.number, "group_number" to it.groupNumber,
-            "group" to it.group, "spans" to it.spans.map(::producerSpan)) },
+        "references" to entry.references.map { linkedMapOf<String, Any?>("number" to it.number, "group_number" to it.groupNumber,
+            "group" to it.group, "spans" to it.spans.map(::producerSpan)).also { fields ->
+                if (it.kind == ReferenceKind.Fragment) fields["kind"] = "fragment"
+            } },
         "media" to entry.media.map { linkedMapOf("file" to it.file, "kind" to it.kind, "caption" to it.caption) })
 
     /** Configured producer case is a separate required run of the existing conformance target. */
     private fun requiredProducerConformance(version: Int) {
-        require(version in 7..8)
+        require(version in 7..9)
         val prefix = "WIKBLB_DPR$version"
         fun name(suffix: String) = "${prefix}_$suffix"
-        val fixtureTitle = if (version == 7) "geacen" else "cell-heading-regression"
+        val fixtureTitle = when (version) {
+            7 -> "geacen"
+            8 -> "cell-heading-regression"
+            else -> "DPR9 reference fragments"
+        }
         require(producerEnvironment(name("REQUIRED")) == "1")
         val blob = producerInput(name("BLOB"))
         val headerFile = producerInput(name("HEADER"))
@@ -131,6 +137,14 @@ class BlobDecoderTest {
             }
             require(recordCount == 1 && selected != null) { "Genuine Writer fixture must contain its one selected record" }
         }
+        if (version == 9) {
+            // This required Writer case exercises fragment-first footer order; the
+            // general decoder separately accepts otherwise valid all-note DPR9.
+            val items = checkNotNull(selected).references
+            require(items.map { it.kind } == listOf(ReferenceKind.Fragment, ReferenceKind.Note, ReferenceKind.Note))
+            require(items.map { it.number } == listOf(2L, 1L, 3L))
+            require(items.map { it.groupNumber } == listOf(null, 1L, 2L))
+        }
         val output = File(producerEnvironment(name("ACTUAL"))).canonicalFile
         require(output.parentFile.isDirectory && output.createNewFile()) { "Use a fresh owned output path" }
         output.writeText(producerJson(linkedMapOf(
@@ -173,7 +187,7 @@ class BlobDecoderTest {
     }
 
     @Test fun everyRealCorpusRecordDecodesDirectly() {
-        val requiredVersions = listOf(7, 8).filter { System.getenv("WIKBLB_DPR${it}_REQUIRED") != null }
+        val requiredVersions = listOf(7, 8, 9).filter { System.getenv("WIKBLB_DPR${it}_REQUIRED") != null }
         if (requiredVersions.isNotEmpty()) {
             require(requiredVersions.size == 1) { "Select exactly one required producer case" }
             requiredProducerConformance(requiredVersions.single())

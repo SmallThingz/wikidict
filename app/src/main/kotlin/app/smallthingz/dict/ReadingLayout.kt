@@ -287,13 +287,16 @@ internal fun metadataReferencesStartIndex(entry: Entry, folded: Set<String>): In
     entryReadingStartIndex(entry, folded) + visibleEntryReadingRows(entry, folded).size
 
 internal fun referenceScrollIndex(entry: Entry, target: String, folded: Set<String>): Int? {
-    val referenceIndex = entry.references.indexOfFirst { target == "#reference-${it.number}" }
+    val referenceIndex = entry.references.indexOfFirst { it.kind == ReferenceKind.Note && target == "#reference-${it.number}" }
     if (referenceIndex < 0) return null
     return metadataReferencesStartIndex(entry, folded) + 1 + referenceIndex
 }
 
-internal fun referenceLabel(reference: Reference): String =
-    if (reference.group.isBlank()) "[${reference.groupNumber}]" else "[${reference.group} ${reference.groupNumber}]"
+internal fun referenceLabel(reference: Reference): String? = when {
+    reference.kind == ReferenceKind.Fragment -> null
+    reference.group.isBlank() -> "[${reference.groupNumber}]"
+    else -> "[${reference.group} ${reference.groupNumber}]"
+}
 
 /** Apply only an explicit, well-formed language tag; never infer a device locale. */
 internal fun spanLanguageTag(language: String): String? {

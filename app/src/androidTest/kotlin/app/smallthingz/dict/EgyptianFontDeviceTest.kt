@@ -1287,7 +1287,7 @@ class EgyptianFontDeviceTest {
         return Entry(j.getString("title"), spans(j.getJSONArray("display_title")), j.getString("kind"),
             if (j.isNull("language")) null else j.getString("language"), j.getString("language_code"),
             list(j.getJSONArray("sections")) { s -> Section(s.getInt("level"), s.getString("title"), list(s.getJSONArray("blocks"), ::block)) },
-            list(j.getJSONArray("references")) { r -> Reference(r.getInt("number"), r.getInt("group_number"), r.getString("group"), spans(r.getJSONArray("spans"))) },
+            list(j.getJSONArray("references")) { r -> Reference(r.getLong("number"), r.getLong("group_number"), r.getString("group"), spans(r.getJSONArray("spans"))) },
             spans(j.getJSONArray("preamble_spans")),
             list(j.getJSONArray("media")) { m -> Media(m.getString("file"), m.getString("kind"), m.getString("caption")) })
     }
