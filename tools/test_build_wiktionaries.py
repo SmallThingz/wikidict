@@ -3523,3 +3523,59 @@ class LoopMessageSelectionTests(unittest.TestCase):
                 self.rebind(new)
                 with self.assertRaisesRegex(ValueError,'Rendered TSV|accepted API receipt'):
                     self.resolve()
+
+
+class ExplicitExtractionCacheTests(unittest.TestCase):
+    def test_fresh_expander_command_uses_external_cache_and_new_input_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);workspace=root/'fresh-work';(workspace/'input').mkdir(parents=True)
+            cache=root/'old-cache';cache.mkdir()
+            (workspace/'input/.complete.json').write_text(json.dumps({'dump_sha256':'c'*64,'index_sha256':'d'*64}))
+            for selected,expected in [(cache,cache),(None,workspace/'input/extraction-cache')]:
+                with patch.object(b,'expander_ready',return_value=False), \
+                     patch.object(b,'pipeline_snapshot_args',return_value=[]), \
+                     patch.object(b,'timed_run',side_effect=RuntimeError('stop before native execution')) as run:
+                    with self.assertRaisesRegex(RuntimeError,'stop before native execution'):
+                        b.build_sharded(root/'new-dump',root/'fresh-staging',workspace,root/'registry','zig',1,
+                            [{'wiki':'testwiktionary','date':'20261001'}],123,extraction_cache_root=selected)
+                command=run.call_args.args[0]
+                self.assertEqual(command[command.index('--')+1:command.index('--')+3],
+                                 [str(root/'new-dump'),str(workspace/'expander')])
+                self.assertEqual(command[command.index('--extraction-cache-root')+1],str(expected))
+                self.assertEqual(command[command.index('--verified-dump-sha256')+1],'c'*64)
+                self.assertEqual(command[command.index('--verified-index-sha256')+1],'d'*64)
+                self.assertIn('--expander-only',command)
+
+    def test_cache_command_uses_current_staged_digests_and_rejects_symlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);cache=root/'cache';cache.mkdir()
+            staged={'dump_sha256':'a'*64,'index_sha256':'b'*64}
+            self.assertEqual(b.extraction_cache_args(None,{}),[])
+            self.assertEqual(b.extraction_cache_args(cache,staged),[
+                '--extraction-cache-root',str(cache),
+                '--verified-dump-sha256','a'*64,'--verified-index-sha256','b'*64])
+            link=root/'link';link.symlink_to(cache,target_is_directory=True)
+            with self.assertRaisesRegex(ValueError,'regular directory'):
+                b.extraction_cache_args(link,staged)
+
+    def test_cli_and_scheduler_forward_cache_without_adopting_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);cache=root/'old-cache';cache.mkdir();output=root/'fresh-output'
+            argv=['build_wiktionaries.py','--resource-mode=watchdog','--output',str(output),
+                  '--extraction-cache-root',str(cache),'--downloads',str(root),'--threads','1','--jobs','1']
+            write_test_manifest(root,{'files':[dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',
+                url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)]})
+            with patch.object(b,'PROJECT',root),patch.object(sys,'argv',argv), \
+                 patch.object(b,'safe_worker_budget',return_value=1),patch.object(b,'build_groups',return_value=[]) as groups:
+                b.main()
+            self.assertEqual(groups.call_args.kwargs['extraction_cache_root'],cache)
+            self.assertEqual(groups.call_args.args[2],output)
+            with patch.object(b,'safe_worker_budget',return_value=1),patch.object(b,'build',return_value='built') as build:
+                b.build_groups({('testwiktionary','20261001'):['item']},root,output,'zig',1,1,extraction_cache_root=cache)
+            self.assertEqual(build.call_args.kwargs['extraction_cache_root'],cache)
+            self.assertEqual(build.call_args.args[2],output)
+            with patch.object(b,'PROJECT',root),patch.object(sys,'argv',argv), \
+                 patch.object(limits,'inside_watchdog',return_value=False),patch.object(limits,'supervise_watchdog',return_value=0) as watchdog:
+                with self.assertRaises(SystemExit) as done:b.cli()
+                self.assertEqual(done.exception.code,0)
+            watchdog.assert_called_once_with(wall_seconds=7200,disk_paths=(root/'.tmp',output,cache))

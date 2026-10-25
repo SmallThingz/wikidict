@@ -3416,9 +3416,8 @@ test "angle URL classification leaves HTML and unresolved delimiters strict" {
     defer arena.deinit();
     const a = arena.allocator();
     for ([_][]const u8{
-        "<http:broken>",                                          "<http://>",                             "<http://example.test attribute=bad>",
-        "<unknown href=\"https://example.test\">label</unknown>", "<script>https://example.test</script>", "<https://example.test/a{|b>",
-        "<https://example.test/a[[b]]>",
+        "<http:broken>",                         "<http://>",                   "<http://example.test attribute=bad>",
+        "<script>https://example.test</script>", "<https://example.test/a{|b>", "<https://example.test/a[[b]]>",
     }) |source| try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", source, null));
     try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "entry", .language, "English", "en", "<https://example.test/{{missing}}>", null));
     // A rejected bracketed destination retains only its independent authored label.
@@ -3543,6 +3542,37 @@ test "captured malformed quoted li preserves literal spelling dictionary text an
     // Apostrophes and malformed attributes are outside this finite token family.
     try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "<li'>word</li>", null));
     try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "<li\" attr=x>word</li>", null));
+}
+
+test "qichwa citation language names remain visible through reference compilation and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Reduced from the actual 51,501-byte English qichwa expansion. Both raw
+    // unknown names belong to the citation title, not to executable markup.
+    const source = "==Quechua==\n===Etymology===\ntext<ref><span class=\"citation-whole\"><span class=\"cited-source\">Otra vuelta de tuerca: la etimología de <quechua> en quechua y aimara &#91;<span class=\"e-translation\">Another turn of the screw: The etymology of <Quechua> in Quechua and Aymara</span>&#93;</span></span></ref>\n===References===\n<references/>";
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "qichwa", .language, "Quechua", "qu", source, null, &report);
+    const decoded = try codec.decodeAlloc(a, bytes, "qichwa", .language, .{ .code = "qu", .heading = "Quechua" });
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.references.len);
+    var visible: std.ArrayList(u8) = .empty;
+    for (decoded.entry.references[0].spans) |span| {
+        try visible.appendSlice(a, span.text);
+        try visible.appendSlice(a, span.trail);
+    }
+    try std.testing.expectEqualStrings("Otra vuelta de tuerca: la etimología de <quechua> en quechua y aimara [Another turn of the screw: The etymology of <Quechua> in Quechua and Aymara]", visible.items);
+    try std.testing.expect(report.literal_markup);
+    // Former unknown-tag rejection controls now exercise the same sanitizer.
+    for ([_][]const u8{ "<unknown attr=x>word</unknown>", "<unknown href=\"https://example.test\">label</unknown>" }) |unknown| {
+        var unknown_report: Fallbacks = .{};
+        const unknown_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", unknown, null, &unknown_report);
+        _ = try codec.decodeAlloc(a, unknown_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expect(unknown_report.literal_markup);
+    }
+    // Only the proven sanitizer emission receives literal provenance.
+    const raw = [_]compiler.Span{.{ .text = "<quechua>" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "<li'>word</li>", null));
 }
 
 test "nested-only table cells participate in strict document span validation" {
@@ -3768,7 +3798,7 @@ test "literal malformed reference recovery leaves valid reference compilation an
     const split = [_]compiler.Span{ .{ .text = "<" }, .{ .text = "reالميلاد " }, .{ .text = "</ref>" } };
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &direct, null));
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &split, null));
-    for ([_][]const u8{ "<unknown attr=x>word</unknown>", "<li'>word</li>", "<li\" attr=x>word</li>", "before |} after", "<reالميلاد>" }) |strict|
+    for ([_][]const u8{ "<li'>word</li>", "<li\" attr=x>word</li>", "before |} after", "<reالميلاد>" }) |strict|
         try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", strict, null));
     const protected_bytes = try compileAlloc(a, "entry", .language, "English", "en", "<nowiki><reالميلاد [[التاريخ]]</ref></nowiki>", null);
     const protected = try codec.decodeAlloc(a, protected_bytes, "entry", .language, .{ .code = "en", .heading = "English" });

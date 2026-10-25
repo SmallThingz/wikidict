@@ -1584,7 +1584,17 @@ def compress_verified_shard(shard):
         sync_shard_directory(target.parent)
 
 
-def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None, raw_shards_path=None, compress_shards=False):
+def extraction_cache_args(cache_root, staged):
+    if cache_root is None:return []
+    cache_root=Path(cache_root).absolute()
+    if cache_root.is_symlink() or (cache_root.exists() and not cache_root.is_dir()):
+        raise ValueError('Extraction cache root must be a regular directory')
+    return ['--extraction-cache-root',str(cache_root),
+            '--verified-dump-sha256',staged['dump_sha256'],
+            '--verified-index-sha256',staged['index_sha256']]
+
+
+def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None, raw_shards_path=None, compress_shards=False, extraction_cache_root=None):
     if type(compress_shards) is not bool: raise ValueError('Invalid compressed shard mode')
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     if raw_shards_path is not None:
@@ -1604,15 +1614,13 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     if not expander_ready(expander_build,auxiliary_hashes,interwiki_sha,page_links_sha,page_redirects_sha):
         if expander_build.exists(): remove_artifact_tree(expander_build)
         staged=json.loads((workspace/'input/.complete.json').read_text())
-        extraction_cache=workspace/'input'/'extraction-cache'
+        extraction_cache=Path(extraction_cache_root) if extraction_cache_root is not None else workspace/'input'/'extraction-cache'
         timed_run([zig,'build','-j1','-Doptimize=fast','build-dictionary','--',str(dump),str(expander_build),
                      *(['--interwiki-map-snapshot',str(interwiki_snapshot)] if interwiki_snapshot else []),
                      *pipeline_snapshot_args(registry,auxiliary_snapshots,page_links_snapshot,page_redirects_snapshot),
                      '--llvm-workers',str(workers),
                      '--parse-workers',str(min(workers,64)),'--page-workers',str(min(workers,16)),'--expander-only',
-                     '--extraction-cache-root',str(extraction_cache),
-                     '--verified-dump-sha256',staged['dump_sha256'],
-                     '--verified-index-sha256',staged['index_sha256']],
+                     *extraction_cache_args(extraction_cache,staged)],
                   edition,date,'expander_build')
     expander=expander_build/'.bundle-expander'
     with build_phase(edition,date,'page_index_count') as result:
@@ -1783,7 +1791,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     cleanup_shard_workspace(workspace)
 
 
-def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False):
+def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None):
     artifact_path(output)
     if raw_shard_root is not None: artifact_path(raw_shard_root)
     validate_now_unix(now_unix)
@@ -1805,7 +1813,7 @@ def build(items, downloads, output, zig, compression_workers=None, expansion_wor
             # Legitimate producers share this edition lock; success still overrides.
             if (parent / date / 'complete.json').exists():
                 result['execution_mode']='existing_output'
-            mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}), **({'raw_shard_root':raw_shard_root} if raw_shard_root is not None else {}), **({'compress_shards':True} if compress_shards else {}))
+            mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}), **({'raw_shard_root':raw_shard_root} if raw_shard_root is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}))
             result['execution_mode']=mode
             return mode
 
@@ -2151,8 +2159,11 @@ def publish_verified_staging(staging, target, edition, date, compression_workers
         blobs,fallback_pages=_publish_verified_staging(staging,target,edition,date,compression_workers,interwiki_sha,auxiliary_hashes,build_identity,namespace_snapshot,site_info_snapshot)
         result.update(blobs=blobs,fallback_pages=fallback_pages)
 
-def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False):
+def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None):
     validate_now_unix(now_unix)
+    if extraction_cache_root is not None:
+        if not Path(extraction_cache_root).is_dir():raise ValueError('Explicit extraction cache root must exist')
+        extraction_cache_args(extraction_cache_root,{'dump_sha256':'','index_sha256':''})
     for item in items:validate_item(item)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     phase_edition,phase_date=phase_identity(items)
@@ -2273,13 +2284,14 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     # Reuse the verified repack for either path, retaining it after failures.
     if source_pages>SHARD_PAGES:
         print(f'Sharding {edition}: {source_pages:,} verified source pages in {SHARD_PAGES:,}-page chunks',flush=True)
-        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}), **({'compress_shards':True} if compress_shards else {}))
+        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}))
     else:
         timed_run([zig,'build','-j1','-Doptimize=fast','build-dictionary','--',str(dump),str(staging),
                      *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
                      *pipeline_snapshot_args(registry,aux_pinned,page_links_snapshot,page_redirects_snapshot),
                      '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
-                     '--page-workers',str(min(workers,16)),'--now-unix',str(now_unix),*timeout_args],edition,date,'dictionary_build')
+                     '--page-workers',str(min(workers,16)),'--now-unix',str(now_unix),*timeout_args,
+                     *extraction_cache_args(extraction_cache_root,source_metadata)],edition,date,'dictionary_build')
         coverage=validate_page_coverage(staging,source_pages=source_pages)
         coverage['expected_input_pages']=source_pages
         (staging/'page-coverage.json').write_text(json.dumps(coverage,sort_keys=True)+'\n')
@@ -2308,7 +2320,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     cleanup_shard_workspace(workspace)
     return 'pipeline_run_may_reuse_verified_inputs_or_shards'
 
-def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS, cpu_admission='load', raw_shard_root=None, adaptive_workers=False, compress_shards=False):
+def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS, cpu_admission='load', raw_shard_root=None, adaptive_workers=False, compress_shards=False, extraction_cache_root=None):
     from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS
     validate_now_unix(now_unix)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
@@ -2345,6 +2357,7 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
                 if now_unix is not None: options['now_unix']=now_unix
                 if raw_shard_root is not None: options['raw_shard_root']=raw_shard_root
                 if compress_shards: options['compress_shards']=True
+                if extraction_cache_root is not None: options['extraction_cache_root']=extraction_cache_root
                 if interwiki_snapshot is not None: options['interwiki_snapshot']=interwiki_snapshot
                 if auxiliary_snapshots: options['auxiliary_snapshots']=auxiliary_snapshots
                 if edition_options is not None:
@@ -2395,6 +2408,7 @@ def main():
     p.add_argument('--downloads','--in',type=Path,default=PROJECT/'data/dumps',metavar='DIR')
     p.add_argument('--output','--out',type=Path,default=PROJECT/'data/dictionaries',metavar='DIR')
     p.add_argument('--compress-shards',action='store_true',help='Verify and compress each temporary shard before building the next; merged output remains raw until verified')
+    p.add_argument('--extraction-cache-root',type=Path,metavar='DIR',help='Existing verified native extraction/object cache for one edition; cache identities are checked against fresh build inputs')
     p.add_argument('--raw-shard-root',type=Path,metavar='DIR',help='Optional raw shard volume; input/native caches and merged publication remain under --output')
     p.add_argument('--zig',default=shutil.which('zig') or 'zig')
     p.add_argument('--resource-mode',choices=('cgroup','watchdog'),default='cgroup',
@@ -2479,6 +2493,8 @@ def main():
                if getattr(a,name.replace('-','_')+'_snapshot') is not None}
     if (a.interwiki_map_snapshot is not None or auxiliary) and len(groups)!=1:
         p.error('Auxiliary snapshots require exactly one edition')
+    if a.extraction_cache_root is not None and len(groups)!=1:
+        p.error('An explicit extraction cache requires exactly one edition')
     print(f'Building {len(groups)} editions with up to {a.jobs} concurrent jobs and {a.threads} workers per edition',flush=True)
     options={}
     if a.cpu_admission!='load':options['cpu_admission']=a.cpu_admission
@@ -2492,6 +2508,7 @@ def main():
     if a.now_unix is not None: options['now_unix']=a.now_unix
     if a.raw_shard_root is not None: options['raw_shard_root']=a.raw_shard_root.absolute()
     if a.compress_shards: options['compress_shards']=True
+    if a.extraction_cache_root is not None: options['extraction_cache_root']=a.extraction_cache_root.absolute()
     if a.interwiki_map_snapshot: options['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()
     try: options['edition_options']=resolve_edition_snapshot_options(manifest,groups,a.downloads.resolve(),auxiliary)
     except (ValueError,OSError) as error:p.error(str(error))
@@ -2515,6 +2532,7 @@ def cli():
         route.add_argument('--build-timeout-seconds',type=int)
         route.add_argument('--output','--out',type=Path,default=PROJECT/'data/dictionaries')
         route.add_argument('--raw-shard-root',type=Path)
+        route.add_argument('--extraction-cache-root',type=Path)
         routing=route.parse_known_args()[0]
         configure_artifact_root(json.loads(routing.artifact_root_spec) if routing.artifact_root_spec is not None else None, routing.output, routing.raw_shard_root)
         mode=routing.resource_mode
@@ -2551,6 +2569,7 @@ def cli():
                         if requested_memory is not None: options['memory_limit_bytes']=requested_memory
                         if routing.watchdog_address_space=='unlimited': options['address_space_limit_bytes']='unlimited'
                         if routing.raw_shard_root is not None: options['disk_paths']+=(routing.raw_shard_root,)
+                        if routing.extraction_cache_root is not None: options['disk_paths']+=(routing.extraction_cache_root,)
                         if routing.expansion_workers is not None and routing.expansion_workers>MAX_PIPELINE_WORKERS:
                             options['max_cpus']=8
                         raise SystemExit(supervise_watchdog(**options))

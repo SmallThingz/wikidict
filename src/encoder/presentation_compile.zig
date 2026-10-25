@@ -727,6 +727,61 @@ const QuoteState = enum { none, b, i, bi, ib, both };
 pub const QuoteSeed = struct { state: QuoteState, correction: ?usize, line_end: usize, boundaries: QuoteBoundaries, label_scope: bool = false };
 pub const LinkQuoteObservation = struct { entry: QuoteSeed, resume_quote: QuoteSeed };
 
+const PreparedQuoteSource = struct {
+    source: MissingText,
+    angles: []const usize,
+
+    // Public cuts/seeds remain in raw source coordinates. Only quote scanning
+    // and emission use the entity-expanded domain; heading origins never move.
+    fn forward(self: PreparedQuoteSource, raw: usize) usize {
+        var low: usize = 0;
+        var high = self.angles.len;
+        while (low < high) {
+            const middle = low + (high - low) / 2;
+            if (self.angles[middle] < raw) low = middle + 1 else high = middle;
+        }
+        return raw + low * 3;
+    }
+    fn backward(self: PreparedQuoteSource, prepared: usize) usize {
+        var low: usize = 0;
+        var high = self.angles.len;
+        while (low < high) {
+            const middle = low + (high - low) / 2;
+            const end = self.angles[middle] + middle * 3 + 4;
+            if (end <= prepared) low = middle + 1 else high = middle;
+        }
+        if (low < self.angles.len and prepared > self.angles[low] + low * 3) return self.angles[low];
+        return prepared - low * 3;
+    }
+    fn forwardSeed(self: PreparedQuoteSource, seed: QuoteSeed) QuoteSeed {
+        var result = seed;
+        result.line_end = self.forward(seed.line_end);
+        if (seed.correction) |value| result.correction = self.forward(value);
+        if (seed.boundaries.link_close) |value| result.boundaries.link_close = self.forward(value);
+        if (seed.boundaries.template_close) |value| result.boundaries.template_close = self.forward(value);
+        return result;
+    }
+    fn rawSeed(self: PreparedQuoteSource, seed: QuoteSeed, raw_cut: usize, prepared_cut: usize) QuoteSeed {
+        var result = seed;
+        result.line_end = self.backward(prepared_cut + seed.line_end) - raw_cut;
+        if (seed.correction) |value| result.correction = self.backward(prepared_cut + value) - raw_cut;
+        if (seed.boundaries.link_close) |value| result.boundaries.link_close = self.backward(prepared_cut + value) - raw_cut;
+        if (seed.boundaries.template_close) |value| result.boundaries.template_close = self.backward(prepared_cut + value) - raw_cut;
+        return result;
+    }
+    fn release(self: PreparedQuoteSource, a: A, original: MissingText, retained: MissingText) void {
+        a.free(self.angles);
+        if (self.source.bytes.ptr != original.bytes.ptr and self.source.bytes.ptr != retained.bytes.ptr) a.free(self.source.bytes);
+        if (self.source.ranges.ptr != original.ranges.ptr and self.source.ranges.ptr != retained.ranges.ptr) a.free(self.source.ranges);
+        if (self.source.literal_curly_ranges.ptr != original.literal_curly_ranges.ptr and self.source.literal_curly_ranges.ptr != retained.literal_curly_ranges.ptr) a.free(self.source.literal_curly_ranges);
+    }
+};
+
+fn prepareQuoteSource(a: A, source: MissingText) Error!PreparedQuoteSource {
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    return renderer.prepareQuoteSource(source);
+}
+
 const QuoteTransition = struct { prefix: []const u8, suffix: []const u8 = "", state: QuoteState };
 fn quoteTransitionValue(state: QuoteState, run: usize) QuoteTransition {
     const transitions = [6][3]QuoteTransition{
@@ -847,6 +902,10 @@ fn quoteLineInfo(a: A, input: []const u8, start: usize, label_scope: bool, bound
 const QuoteBoundaryScan = struct {
     input: []const u8,
     boundaries: QuoteBoundaries,
+    raw_input_len: usize,
+    initial: ?QuoteSeed,
+    scratch: ?std.heap.ArenaAllocator = null,
+    prepared: ?PreparedQuoteSource = null,
     cursor: usize = 0,
     line: ?QuoteLineInfo = null,
     state: QuoteState = .none,
@@ -856,7 +915,7 @@ const QuoteBoundaryScan = struct {
     context: Context = .{},
 
     fn init(input: []const u8, seed: ?QuoteSeed) QuoteBoundaryScan {
-        return .{ .input = input, .boundaries = if (seed) |value| value.boundaries else QuoteBoundaries.init(input), .state = if (seed) |value| value.state else .none, .label_scope = if (seed) |value| value.label_scope else false, .line = if (seed) |value| .{ .end = @min(value.line_end, input.len), .correction = value.correction } else null };
+        return .{ .input = input, .raw_input_len = input.len, .initial = seed, .boundaries = if (seed) |value| value.boundaries else QuoteBoundaries.init(input), .state = if (seed) |value| value.state else .none, .label_scope = if (seed) |value| value.label_scope else false, .line = if (seed) |value| .{ .end = @min(value.line_end, input.len), .correction = value.correction } else null };
     }
     fn initWithContext(input: []const u8, seed: ?QuoteSeed, context: Context) QuoteBoundaryScan {
         var scan = init(input, seed);
@@ -866,12 +925,28 @@ const QuoteBoundaryScan = struct {
     fn shifted(boundary: ?usize, offset: usize) ?usize {
         return if (boundary) |end| (if (end >= offset) end - offset else null) else null;
     }
-    fn at(self: *QuoteBoundaryScan, a: A, position: usize, registry: ?*const QuoteBehaviorRegistry) Error!QuoteSeed {
+    fn deinit(self: *QuoteBoundaryScan) void {
+        if (self.scratch) |*scratch| scratch.deinit();
+        self.scratch = null;
+    }
+    fn at(self: *QuoteBoundaryScan, a: A, raw_position: usize, registry: ?*const QuoteBehaviorRegistry) Error!QuoteSeed {
+        if (raw_position > self.raw_input_len) return error.InvalidPreContext;
+        if (self.prepared == null) {
+            self.scratch = std.heap.ArenaAllocator.init(a);
+            self.prepared = try prepareQuoteSource(self.scratch.?.allocator(), MissingText.untracked(self.input));
+            self.input = self.prepared.?.source.bytes;
+            if (self.initial) |raw_seed| {
+                const seed = self.prepared.?.forwardSeed(raw_seed);
+                self.boundaries = seed.boundaries;
+                self.line = .{ .end = @min(seed.line_end, self.input.len), .correction = seed.correction };
+            } else self.boundaries = QuoteBoundaries.init(self.input);
+        }
+        const position = self.prepared.?.forward(raw_position);
         if (position < self.cursor or position > self.input.len) return error.InvalidPreContext;
         while (true) {
             if (self.line == null) self.line = try quoteLineInfo(a, self.input, self.cursor, self.label_scope, self.boundaries, registry, &self.count_opaque, self.context);
             const line = self.line.?;
-            if (self.cursor == position) return .{ .state = self.state, .correction = shifted(line.correction, position), .line_end = line.end - position, .boundaries = .{ .link_close = shifted(self.boundaries.link_close, position), .template_close = shifted(self.boundaries.template_close, position) }, .label_scope = self.label_scope };
+            if (self.cursor == position) return self.prepared.?.rawSeed(.{ .state = self.state, .correction = shifted(line.correction, position), .line_end = line.end - position, .boundaries = .{ .link_close = shifted(self.boundaries.link_close, position), .template_close = shifted(self.boundaries.template_close, position) }, .label_scope = self.label_scope }, raw_position, position);
             if (self.cursor == line.end) {
                 self.cursor += 1;
                 self.line = null;
@@ -904,10 +979,10 @@ fn labelQuoteSeed(a: A, input: []const u8, registry: ?*const QuoteBehaviorRegist
     return labelQuoteSeedWithContext(a, input, .{ .behavior_switches = registry });
 }
 fn labelQuoteSeedWithContext(a: A, input: []const u8, context: Context) Error!QuoteSeed {
-    var opaque_scan: syntax.OpaqueScan = .{};
-    const boundaries = QuoteBoundaries.init(input);
-    const info = try quoteLineInfo(a, input, 0, true, boundaries, context.behavior_switches, &opaque_scan, context);
-    return .{ .state = .none, .correction = info.correction, .line_end = info.end, .boundaries = boundaries, .label_scope = true };
+    var scan = QuoteBoundaryScan.initWithContext(input, null, context);
+    defer scan.deinit();
+    scan.label_scope = true;
+    return scan.at(a, 0, context.behavior_switches);
 }
 
 // A single forward walk over one admitted raw label supplies all owner cuts.
@@ -929,6 +1004,7 @@ fn quoteCutSeedsAlloc(a: A, input: []const u8, cuts: []const usize, entry: ?Quot
     const result = try a.alloc(QuoteSeed, cuts.len);
     errdefer a.free(result);
     var scan = QuoteBoundaryScan.initWithContext(input, entry, context);
+    defer scan.deinit();
     var previous: ?usize = null;
     for (cuts, result) |cut, *seed| {
         if (cut > input.len or (previous != null and cut <= previous.?)) return error.InvalidPreContext;
@@ -957,6 +1033,20 @@ fn normalizeWikiQuotesSeeded(a: A, input: []const u8, depth: usize, label_scope:
     return normalizeWikiQuotesSeededWithContext(a, input, depth, label_scope, .{ .behavior_switches = registry }, initial);
 }
 fn normalizeWikiQuotesSeededWithContext(a: A, input: []const u8, depth: usize, label_scope: bool, context: Context, initial: ?QuoteSeed) Error![]const u8 {
+    const raw = MissingText.untracked(input);
+    const prepared = try prepareQuoteSource(a, raw);
+    errdefer prepared.release(a, raw, raw);
+    // This quote-only helper preserves its borrowed source when no active
+    // quotes exist. Renderer sanitation has its own explicit preparation.
+    if (initial == null and !try hasWikiQuoteMarkers(a, prepared.source.bytes, depth, QuoteBoundaries.init(prepared.source.bytes), context.behavior_switches, context)) {
+        prepared.release(a, raw, raw);
+        return input;
+    }
+    const output = try normalizeWikiQuotesPreparedWithContext(a, prepared.source.bytes, depth, label_scope, context, if (initial) |seed| prepared.forwardSeed(seed) else null);
+    prepared.release(a, raw, MissingText.untracked(output));
+    return output;
+}
+fn normalizeWikiQuotesPreparedWithContext(a: A, input: []const u8, depth: usize, label_scope: bool, context: Context, initial: ?QuoteSeed) Error![]const u8 {
     const registry = context.behavior_switches;
     const boundaries = if (initial) |seed| seed.boundaries else QuoteBoundaries.init(input);
     if (initial == null and !try hasWikiQuoteMarkers(a, input, depth, boundaries, registry, context)) return input;
@@ -1056,6 +1146,17 @@ fn normalizeHtmlWithMissing(a: A, source: MissingText, depth: usize, recognize_e
     return normalizeMisnestedHtmlWithMissing(a, source, depth, recognize_external_links);
 }
 fn normalizeWikiQuotesWithMissing(a: A, source: MissingText, depth: usize, label_scope: bool, context: Context, initial: ?QuoteSeed) Error!MissingText {
+    const prepared = try prepareQuoteSource(a, source);
+    errdefer prepared.release(a, source, source);
+    if (initial == null and !try hasWikiQuoteMarkers(a, prepared.source.bytes, depth, QuoteBoundaries.init(prepared.source.bytes), context.behavior_switches, context)) {
+        prepared.release(a, source, source);
+        return source;
+    }
+    const output = try normalizeWikiQuotesPreparedWithMissing(a, prepared.source, depth, label_scope, context, if (initial) |seed| prepared.forwardSeed(seed) else null);
+    prepared.release(a, source, output);
+    return output;
+}
+fn normalizeWikiQuotesPreparedWithMissing(a: A, source: MissingText, depth: usize, label_scope: bool, context: Context, initial: ?QuoteSeed) Error!MissingText {
     const input = source.bytes;
     const registry = context.behavior_switches;
     const boundaries = if (initial) |seed| seed.boundaries else QuoteBoundaries.init(input);
@@ -1851,7 +1952,12 @@ pub fn preparePageTocSourceWithMissingAlloc(a: A, source: MissingText, registry:
                 continue;
             }
             if (tag) |opening| {
-                scan = opening.end;
+                // Hidden includeonly bodies cannot consume the page's first TOC.
+                // Match the renderer's complete, self-closing and unclosed scopes.
+                scan = if (opening.is("includeonly") and !opening.closing and !opening.self_closing)
+                    if (syntax.matchingTag(input, opening)) |pair| pair.end else input.len
+                else
+                    opening.end;
                 continue;
             }
         }
@@ -3605,7 +3711,20 @@ pub const Renderer = struct {
     const DecodedEntity = struct { bytes: []const u8, consumed: usize, scratch: bool = false };
 
     fn decodeEntity(input: []const u8, buf: *[4]u8, visible_text: bool) ?DecodedEntity {
-        const end = std.mem.indexOfScalar(u8, input[0..@min(input.len, 64)], ';') orelse return null;
+        // Keep the established bounded attribute/URL decoding contract.
+        const end = if (visible_text and starts(input, "&#")) numeric: {
+            const hex = input.len > 2 and (input[2] == 'x' or input[2] == 'X');
+            var cursor: usize = if (hex) 3 else 2;
+            // Numeric references may have arbitrarily many leading zeroes.
+            // Stop on the first non-digit, so malformed adjacent references
+            // never cause repeated searches across the remaining source.
+            while (cursor < input.len) : (cursor += 1) {
+                const digit = input[cursor];
+                if (digit == ';') break :numeric cursor;
+                if (!(if (hex) std.ascii.isHex(digit) else std.ascii.isDigit(digit))) return null;
+            }
+            return null;
+        } else std.mem.indexOfScalar(u8, input[0..@min(input.len, 64)], ';') orelse return null;
         if (end < 2) return null;
         const name = input[1..end];
         if (name[0] == '#') {
@@ -5848,9 +5967,51 @@ pub const Renderer = struct {
     fn htmlTag(self: *Renderer, input: []const u8, at: usize, style: Style, depth: usize, no_more_nowiki_close: ?*bool, opaque_scan: *syntax.OpaqueScan) Error!?usize {
         return self.htmlTagWithMissing(MissingText.untracked(input), at, style, depth, no_more_nowiki_close, opaque_scan, null);
     }
-    // Normalize rejected nowiki angles in the complete tracked inline stream.
+    fn knownInlineHtmlName(name: []const u8) bool {
+        return oneOf(name, &.{
+            "b",         "strong", "i",    "em", "u",          "s",      "del", "strike", "ins", "sup",  "sub", "small", "big",
+            "span",      "font",   "code", "tt", "kbd",        "samp",   "var", "cite",   "dfn", "abbr", "q",   "time",  "mark",
+            "bdi",       "bdo",    "ruby", "rb", "rt",         "rtc",    "rp",  "data",   "wbr", "h1",   "h2",  "h3",    "h4",
+            "h5",        "h6",     "div",  "p",  "blockquote", "center", "ul",  "ol",     "li",  "dl",   "dt",  "dd",    "onlyinclude",
+            "noinclude", "table",
+        });
+    }
+    fn recognizedInlineHtmlName(name: []const u8) bool {
+        return knownInlineHtmlName(name) or syntax.isOpaqueTag(name) or oneOf(name, &.{
+            "br",     "meta",  "link",     "includeonly", "tr",     "td",    "th", "caption", "hr",
+            "script", "style", "textarea", "iframe",      "object", "embed",
+        });
+    }
+    fn ordinaryHtmlName(name: []const u8) bool {
+        if (name.len == 0 or !std.ascii.isAlphabetic(name[0])) return false;
+        for (name[1..]) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '-') return false;
+        return true;
+    }
+    // Normalize escaped angles in the complete tracked inline stream.
     // Keep link/quote context continuous across the visible tag boundary.
-    fn literalNowikiAnglesSourceWithMissing(self: *Renderer, tracked: MissingText) Error!MissingText {
+    fn literalHtmlAnglesSourceWithMissing(self: *Renderer, tracked: MissingText) Error!MissingText {
+        return self.literalHtmlAnglesSourceMapped(tracked, null);
+    }
+    fn prepareQuoteSource(self: *Renderer, tracked: MissingText) Error!PreparedQuoteSource {
+        var angles: std.ArrayList(usize) = .empty;
+        errdefer angles.deinit(self.a);
+        const source = try self.literalHtmlAnglesSourceMapped(tracked, &angles);
+        errdefer {
+            if (source.bytes.ptr != tracked.bytes.ptr) self.a.free(source.bytes);
+            if (source.ranges.ptr != tracked.ranges.ptr) self.a.free(source.ranges);
+            if (source.literal_curly_ranges.ptr != tracked.literal_curly_ranges.ptr) self.a.free(source.literal_curly_ranges);
+        }
+        return .{ .source = source, .angles = try angles.toOwnedSlice(self.a) };
+    }
+    fn normalizeBodyWikiQuotes(self: *Renderer, input: []const u8, seed: ?QuoteSeed) Error![]const u8 {
+        const raw = MissingText.untracked(input);
+        const prepared = try self.prepareQuoteSource(raw);
+        errdefer prepared.release(self.a, raw, raw);
+        const output = try normalizeWikiQuotesPreparedWithContext(self.a, prepared.source.bytes, 0, false, self.context, if (seed) |value| prepared.forwardSeed(value) else null);
+        prepared.release(self.a, raw, MissingText.untracked(output));
+        return output;
+    }
+    fn literalHtmlAnglesSourceMapped(self: *Renderer, tracked: MissingText, angles: ?*std.ArrayList(usize)) Error!MissingText {
         const input = tracked.bytes;
         var out: missing_dependency.Builder = .{};
         errdefer out.deinit(self.a);
@@ -5864,11 +6025,25 @@ pub const Renderer = struct {
             }
             var literal_end: ?usize = null;
             if (opaque_scan.tagAt(input, at, null)) |tag| {
+                if (tag.is("includeonly") and !tag.closing and !tag.self_closing) {
+                    scan = if (syntax.matchingTag(input, tag)) |pair| pair.end else input.len;
+                    continue;
+                }
                 if (tag.is("nowiki") and tag.closing) literal_end = tag.end;
+                if (oneOf(tag.name, &.{ "tbody", "thead", "tfoot" }) or (tag.closing and tag.is("ref")) or
+                    (ordinaryHtmlName(tag.name) and !recognizedInlineHtmlName(tag.name)))
+                {
+                    literal_end = tag.end;
+                    self.fallbacks.literal_markup = true;
+                }
                 // Never reinterpret a tag's attributes as independent source.
                 scan = tag.end;
             } else {
                 scan = at + 1;
+                if (doubleQuotedHtmlNameEnd(input, at)) |end| {
+                    literal_end = end;
+                    self.fallbacks.literal_markup = true;
+                }
                 const rest = input[at..];
                 // Exactly the adjacent-slash boundary refused by the scanner.
                 if (rest.len > "<nowiki/".len and std.ascii.startsWithIgnoreCase(rest, "<nowiki/") and rest["<nowiki/".len] != '>') {
@@ -5879,6 +6054,10 @@ pub const Renderer = struct {
                 }
             }
             if (literal_end) |end| {
+                if (angles) |positions| {
+                    try positions.append(self.a, at);
+                    try positions.append(self.a, end - 1);
+                }
                 try out.appendSlice(self.a, tracked, emitted, at);
                 try out.append(self.a, missingEdit(tracked, at, at + 1, "&lt;"));
                 try out.appendSlice(self.a, tracked, at + 1, end - 1);
@@ -5924,30 +6103,34 @@ pub const Renderer = struct {
         const boundary = std.mem.indexOfAnyPos(u8, input, cursor, "<>\r\n") orelse return true;
         return input[boundary] != '>';
     }
+    fn listSwitcherEditEnd(self: *Renderer, input: []const u8, tag: syntax.Tag) Error!?usize {
+        if (!tag.is("span") or tag.closing or tag.self_closing) return null;
+        const classes = (try self.semanticAttribute(tag, "class")) orelse return null;
+        var tokens = std.mem.tokenizeAny(u8, classes, " \t\r\n\x0b\x0c");
+        var edit_control = false;
+        while (tokens.next()) |name| if (std.mem.eql(u8, name, "list-switcher-edit")) {
+            edit_control = true;
+            break;
+        };
+        if (!edit_control) return null;
+        const pair = syntax.matchingTag(input, tag) orelse return null;
+        const body = trim(input[tag.end..pair.inner_end]);
+        var iterator: ir.InlineIterator = .{ .input = body, .renderer_boundaries = true, .link_trail = self.context.link_trail };
+        const token = iterator.next() orelse return null;
+        const target_prefix = "Special:Edit/Template:list:";
+        if (token.kind != .link or !token.link_has_pipe or token.trail.len != 0 or iterator.cursor != body.len or
+            !starts(token.target, target_prefix) or token.target.len == target_prefix.len or
+            !safeInternalTarget(token.target) or unresolvedActionTarget(token.target)) return null;
+        // This complete list-template editing control is authoring chrome.
+        // Its neighboring heading text and dictionary links remain ordinary data.
+        return pair.end;
+    }
     fn htmlTagWithMissing(self: *Renderer, tracked: MissingText, at: usize, style: Style, depth: usize, no_more_nowiki_close: ?*bool, opaque_scan: *syntax.OpaqueScan, matched_inline_end: ?*bool) Error!?usize {
         const input = tracked.bytes;
         if (starts(input[at..], "<!--")) return syntax.protectedEnd(input, at);
         const raw_tag = opaque_scan.tagAt(input, at, no_more_nowiki_close);
-        const escaped_end: ?usize = if (raw_tag) |tag|
-            (if (oneOf(tag.name, &.{ "tbody", "thead", "tfoot" }) or (tag.closing and tag.is("ref"))) tag.end else null)
-        else
-            doubleQuotedHtmlNameEnd(input, at);
-        if (escaped_end) |end| {
-            self.fallbacks.literal_markup = true;
-            // MediaWiki's unknown-tag sanitizer escapes angles, not the
-            // token's wiki markup. Only those emitted angles are literals;
-            // attributes still pass through ordinary links/templates below.
-            var escaped: missing_dependency.Builder = .{};
-            errdefer escaped.deinit(self.a);
-            // The tag scanner rejects nested raw angles but permits actual
-            // nowiki regions in attributes. Keep those protected extents intact.
-            try escaped.append(self.a, missingEdit(tracked, at, at + 1, "&lt;"));
-            try escaped.appendSlice(self.a, tracked, at + 1, end - 1);
-            try escaped.append(self.a, missingEdit(tracked, end - 1, end, "&gt;"));
-            try self.inlineTextWithMissing(try escaped.finish(self.a), style, depth + 1);
-            return end;
-        }
         const tag = try self.normalizedTag(raw_tag orelse return null);
+        if (try self.listSwitcherEditEnd(input, tag)) |end| return end;
         if (self.bidi_scope_depth != 0 and !tag.closing and !tag.self_closing and
             oneOf(tag.name, &.{ "script", "style", "textarea" }))
         {
@@ -6127,14 +6310,7 @@ pub const Renderer = struct {
         // Sanitizer recognizes closing pre as HTML even without an opening
         // scope in this local domain. Protected/opaque bodies returned above.
         if (tag.closing and tag.is("pre")) return tag.end;
-        const known = oneOf(tag.name, &.{
-            "b",         "strong", "i",    "em", "u",          "s",      "del", "strike", "ins", "sup",  "sub", "small", "big",
-            "span",      "font",   "code", "tt", "kbd",        "samp",   "var", "cite",   "dfn", "abbr", "q",   "time",  "mark",
-            "bdi",       "bdo",    "ruby", "rb", "rt",         "rtc",    "rp",  "data",   "wbr", "h1",   "h2",  "h3",    "h4",
-            "h5",        "h6",     "div",  "p",  "blockquote", "center", "ul",  "ol",     "li",  "dl",   "dt",  "dd",    "onlyinclude",
-            "noinclude", "table",
-        });
-        if (!known) return null;
+        if (!knownInlineHtmlName(tag.name)) return null;
         if (tag.closing or tag.self_closing) return tag.end;
         // Wiktionary's senseid emits an intentionally unclosed li inside a
         // wikitext list item. The block parser already owns that item's extent.
@@ -6454,7 +6630,7 @@ pub const Renderer = struct {
         const numbering_before = self.context.external_links_prepared;
         self.context.external_links_prepared = true;
         defer self.context.external_links_prepared = numbering_before;
-        const prepared_missing = try self.literalNowikiAnglesSourceWithMissing(if (self.navigation_target_probe != null) numbered else try self.externalSourceControlsWithMissing(try self.prepareUnmatchedOpaqueWithMissing(numbered)));
+        const prepared_missing = try self.literalHtmlAnglesSourceWithMissing(if (self.navigation_target_probe != null) numbered else try self.externalSourceControlsWithMissing(try self.prepareUnmatchedOpaqueWithMissing(numbered)));
         const input = prepared_missing.bytes;
         const previous_missing = self.inline_missing;
         self.inline_missing = prepared_missing;
@@ -7117,7 +7293,15 @@ pub const Renderer = struct {
             inherited.strike = inherited.strike or outer.strike;
             inherited.underline = inherited.underline or outer.underline;
         }
-        try self.inlineTextWithMissing(try normalizeHtmlWithMissing(self.a, try normalizeWikiQuotesWithMissing(self.a, try self.prepareUnmatchedOpaqueWithMissing(numbered_missing), 0, false, self.context, quote_seed), 0, inherited.kind != .link or inherited.poem_independent_parse), inherited, 0);
+        const unmatched = try self.prepareUnmatchedOpaqueWithMissing(numbered_missing);
+        const quoted = quoted: {
+            const prepared = try self.prepareQuoteSource(unmatched);
+            errdefer prepared.release(self.a, unmatched, unmatched);
+            const output = try normalizeWikiQuotesPreparedWithMissing(self.a, prepared.source, 0, false, self.context, if (quote_seed) |seed| prepared.forwardSeed(seed) else null);
+            prepared.release(self.a, unmatched, output);
+            break :quoted output;
+        };
+        try self.inlineTextWithMissing(try normalizeHtmlWithMissing(self.a, quoted, 0, inherited.kind != .link or inherited.poem_independent_parse), inherited, 0);
         try separateGeneratedDiagnosticBoundaries(self.a, self.spans.items);
         return try self.spans.toOwnedSlice(self.a);
     }
@@ -7441,6 +7625,7 @@ pub const Renderer = struct {
         };
         var quote_base: usize = 0;
         var quotes = QuoteBoundaryScan.initWithContext(input, active_quote, self.context);
+        defer quotes.deinit();
         var blocks: std.ArrayList(Block) = .empty;
         var cursor: usize = 0;
         var initial_at: usize = 0;
@@ -7470,6 +7655,7 @@ pub const Renderer = struct {
                     };
                     // The label's apostrophes cannot alter the surrounding line.
                     quote_base = scope.resume_at;
+                    quotes.deinit();
                     quotes = QuoteBoundaryScan.initWithContext(input[quote_base..], scope.resume_quote, self.context);
                 }
                 if (scope.kind == .pre) {
@@ -7485,6 +7671,7 @@ pub const Renderer = struct {
                     self.body_link_target = scope.target;
                     quote_base = scope.body_start;
                     const entry = scope.quote orelse try labelQuoteSeedWithContext(self.a, input[quote_base..], self.context);
+                    quotes.deinit();
                     quotes = QuoteBoundaryScan.initWithContext(input[quote_base..], entry, self.context);
                 }
                 if (scope.kind == .pre) {
@@ -8025,6 +8212,7 @@ pub const Renderer = struct {
         var line_opaque: syntax.OpaqueScan = .{};
         var body_pre_opaque: syntax.OpaqueScan = .{};
         var body_quotes: ?QuoteBoundaryScan = if (initial_quote != null) QuoteBoundaryScan.initWithContext(input, initial_quote, self.context) else null;
+        defer if (body_quotes) |*quotes| quotes.deinit();
         // The later block pass sees a complete admitted label inside its anchor.
         // Wiki list markers and leading spaces stay literal in that raw domain.
         const link_label_scope = if (initial_quote) |seed| seed.label_scope else false;
@@ -8293,7 +8481,7 @@ pub const Renderer = struct {
                     const prefix_start = para orelse start;
                     if (body_quotes == null) body_quotes = QuoteBoundaryScan.initWithContext(input, initial_quote, self.context);
                     const prefix_seed = try body_quotes.?.at(self.a, prefix_start, self.context.behavior_switches);
-                    const prefix_text = try normalizeWikiQuotesSeededWithContext(self.a, input[prefix_start..pre.opening_start], 0, false, self.context, prefix_seed);
+                    const prefix_text = try self.normalizeBodyWikiQuotes(input[prefix_start..pre.opening_start], prefix_seed);
                     const body_seed = try body_quotes.?.at(self.a, pre.tag.end, self.context.behavior_switches);
                     if (prefix_text.len != 0) {
                         if (self.parsed_pre)
@@ -8350,7 +8538,7 @@ pub const Renderer = struct {
                     const prefix_start = para orelse start;
                     if (body_quotes == null) body_quotes = QuoteBoundaryScan.initWithContext(input, initial_quote, self.context);
                     const prefix_seed = try body_quotes.?.at(self.a, prefix_start, self.context.behavior_switches);
-                    const prefix_text = try normalizeWikiQuotesSeededWithContext(self.a, input[prefix_start..link_scope.opening_start], 0, false, self.context, prefix_seed);
+                    const prefix_text = try self.normalizeBodyWikiQuotes(input[prefix_start..link_scope.opening_start], prefix_seed);
                     // The outer quote walker skips this complete root. Its label
                     // has an independent whole-label scope and cannot be entered
                     // through the outer walker's opaque-boundary API.
@@ -8699,7 +8887,7 @@ pub const Renderer = struct {
                 const body = wikiListLineBody(list_line[list_prefix.body_start..]);
                 if (path[path.len - 1] == ';') {
                     const seed = try self.rawBodyQuoteSeed(input, body, &body_quotes);
-                    const normalized_body = try normalizeWikiQuotesSeededWithContext(self.a, body, 0, false, self.context, seed);
+                    const normalized_body = try self.normalizeBodyWikiQuotes(body, seed);
                     if (inlineDefinitionSplit(normalized_body)) |pair| {
                         const detail_path = try self.a.dupe(u8, path);
                         detail_path[detail_path.len - 1] = ':';
@@ -11509,6 +11697,34 @@ test "Scribunto error words in protected source and near-match classes do not re
         try std.testing.expect(!r.fallbacks.rendered_lua_error);
         try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
     }
+}
+
+test "long numeric references decode once beside Unicode in prose and preformatted text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const zeros = "0000000000000000" ++ "0000000000000000" ++ "0000000000000000" ++ "0000000000000000";
+    const decimal = "&#" ++ zeros ++ "65;";
+    const hexadecimal = "&#x" ++ zeros ++ "1F642;";
+    const uppercase = "&#X" ++ zeros ++ "41;";
+    const malformed = "&#" ++ zeros ++ "65z;";
+    const out_of_range = "&#" ++ zeros ++ "1114112;";
+    const surrogate = "&#x" ++ zeros ++ "D800;";
+    const zero = "&#" ++ zeros ++ ";";
+    const unterminated = "&#" ++ zeros ++ "65";
+    const once = "&amp;#" ++ zeros ++ "65;";
+    const source = "é" ++ decimal ++ "漢" ++ hexadecimal ++ "e\u{301}" ++ uppercase ++
+        " &amp; &NotGreaterFullEqual; & literal | " ++ malformed ++ " | " ++ out_of_range ++
+        " | " ++ surrogate ++ " | " ++ zero ++ " | " ++ unterminated ++ " | " ++ once;
+    const visible = "éA漢🙂e\u{301}A & \u{2267}\u{338} & literal | " ++ malformed ++ " | " ++ out_of_range ++
+        " | " ++ surrogate ++ " | " ++ zero ++ " | " ++ unterminated ++ " | &#" ++ zeros ++ "65;";
+    var prose: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings(visible, try flattened(a, try prose.parseSpans(source, .{})));
+    var pre: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try pre.renderBody(" " ++ source);
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expectEqual(Kind.preformatted, blocks[0].kind);
+    try std.testing.expectEqualStrings(visible, try flattened(a, blocks[0].spans));
 }
 
 test "malformed and invalid numeric wikitext entities stay literal" {
@@ -17448,7 +17664,7 @@ test "page-body first TOC keeps its boundary and later TOCs join ISBN source" {
         };
         try std.testing.expectEqual(@as(usize, 1), links);
     }
-    for ([_][]const u8{ "ISBN 97803__TOC__06406157", "ISBN __TOC____TOC__9780306406157" }) |source| {
+    for ([_][]const u8{ "ISBN 97803__TOC__06406157", "ISBN __TOC____TOC__9780306406157", "<includeonly>__TOC__</includeonly>ISBN 97803__TOC__06406157" }) |source| {
         var renderer: Renderer = .{ .a = a, .context = .{} };
         for (try renderer.renderBody(source)) |block_value| for (block_value.spans) |span| {
             try std.testing.expect(span.kind != .link and span.kind != .external_link);
@@ -17466,13 +17682,18 @@ test "page-body TOC prepass preserves protected attributes entities and deferred
         "<!--__TOC__-->",                               "<nowiki></ref>__TOC__</nowiki>",
         "&#95;&#95;TOC__",                              "<span title='__TOC__'>body</span>",
         "<ref>__TOC__ ISBN 97803__TOC__06406157</ref>", "<references><ref name='x'>__TOC__</ref></references>",
-        "<ref name='__TOC__'/>",
+        "<ref name='__TOC__'/>",                        "<includeonly>__TOC__</includeonly>",
     };
     for (prefixes) |prefix| {
         const source = try std.fmt.allocPrint(a, "{s} __TOC__ ISBN 97803__TOC__06406157", .{prefix});
         const expected = try std.fmt.allocPrint(a, "{s} __TOC__ ISBN 9780306406157", .{prefix});
         try std.testing.expectEqualStrings(expected, try preparePageTocSourceAlloc(a, source, null));
     }
+    // Self-closing includeonly consumes no following bytes; an unclosed body
+    // remains hidden through end of input, matching ordinary rendering.
+    try std.testing.expectEqualStrings("<includeonly/>__TOC__ ISBN 9780306406157", try preparePageTocSourceAlloc(a, "<includeonly/>__TOC__ ISBN 97803__TOC__06406157", null));
+    const unclosed = "<includeonly>__TOC__ ISBN 97803__TOC__06406157";
+    try std.testing.expectEqualStrings(unclosed, try preparePageTocSourceAlloc(a, unclosed, null));
     // Unmatched ref/list openers must not shield all subsequent page controls.
     for ([_][]const u8{ "<ref>", "<references>" }) |prefix| {
         const source = try std.fmt.allocPrint(a, "{s}__TOC__ ISBN 97803__TOC__06406157", .{prefix});
@@ -27829,6 +28050,7 @@ test "synthetic list formatting prefixes preserve seeded quote coordinates" {
     var ordinary: Renderer = .{ .a = a, .context = .{} };
     const baseline = try ordinary.renderBodySlice(source, false, false, null, null);
     var scan = QuoteBoundaryScan.initWithContext(source, null, .{});
+    defer scan.deinit();
     const initial = try scan.at(a, 0, null);
     var seeded: Renderer = .{ .a = a, .context = .{} };
     const actual = try seeded.renderBodySlice(source, false, false, null, initial);
@@ -27866,6 +28088,252 @@ test "synthetic list formatting prefixes preserve seeded quote coordinates" {
         }
     }
     try std.testing.expect(mimes and next and literal and tail);
+}
+
+test "list switcher edit chrome is omitted while heading and dictionary links round trip" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<div class=\"list-switcher-header\">Peruvian ecoregions: <b class=\"Latn\" lang=\"qu\">[[:Piruw#Quechua|Piruw]]pi [[:allpa#Quechua|allpa]] [[:suyu#Quechua|suyu]]kuna</b><span class=\"extra list-switcher-edit\">[[Special:Edit/Template:list:Peruvian ecoregions/qu|edit]]</span></div>\n* [[challa#Quechua|challa]]";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(source);
+    const Check = struct {
+        fn shape(alloc: A, values: anytype) !void {
+            try std.testing.expectEqual(@as(usize, 2), values.len);
+            try std.testing.expectEqualStrings("Peruvian ecoregions: Piruwpi allpa suyukuna", try FormattingScopeTest.text(alloc, values[0].spans));
+            try std.testing.expect(values[1].kind == .list_item);
+            try std.testing.expectEqualStrings("challa", try FormattingScopeTest.text(alloc, values[1].spans));
+            var actions: std.ArrayList(u8) = .empty;
+            var previous_target: []const u8 = "";
+            var piruw = false;
+            for (values) |block| for (block.spans) |span| {
+                try std.testing.expect(!starts(span.target, "Special:Edit/"));
+                if (span.kind == .link) {
+                    if (!std.mem.eql(u8, previous_target, span.target)) {
+                        if (actions.items.len != 0) try actions.append(alloc, '|');
+                        try actions.appendSlice(alloc, span.target);
+                        try actions.append(alloc, '=');
+                        previous_target = span.target;
+                    }
+                    try actions.appendSlice(alloc, span.text);
+                }
+                if (span.kind == .link and std.mem.eql(u8, span.target, "Piruw#Quechua")) {
+                    try std.testing.expect(if (@hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold);
+                    try std.testing.expectEqualStrings("qu", span.language);
+                    piruw = true;
+                }
+            };
+            try std.testing.expectEqualStrings("Piruw#Quechua=Piruwpi|allpa#Quechua=allpa|suyu#Quechua=suyukuna|challa#Quechua=challa", actions.items);
+            try std.testing.expect(piruw);
+        }
+    };
+    try Check.shape(a, blocks);
+    const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+    try Check.shape(a, stored.entry.sections[0].blocks);
+    try std.testing.expect(!renderer.fallbacks.any());
+}
+
+test "edit chrome recognition preserves ordinary edit words actions and protected or unclosed spans" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const action = "[[Special:Edit/Template:list:Peruvian ecoregions/qu|edit]]";
+    const edit_target = "Special:Edit/Template:list:Peruvian ecoregions/qu";
+    const cases = [_]struct { source: []const u8, visible: []const u8, target: []const u8, linked_text: []const u8 }{
+        .{ .source = "plain edit [[edit|edit]]", .visible = "plain edit edit", .target = "edit", .linked_text = "edit" },
+        .{ .source = "<span class=\"list-switcher-edit\">[[edit|edit]]</span>", .visible = "edit", .target = "edit", .linked_text = "edit" },
+        .{ .source = "<span class=\"other-list-switcher-edit\">" ++ action ++ "</span>", .visible = "edit", .target = edit_target, .linked_text = "edit" },
+        .{ .source = "<span class=\"list-switcher-edit\">prefix " ++ action ++ "</span>", .visible = "prefix edit", .target = edit_target, .linked_text = "edit" },
+        .{ .source = action, .visible = "edit", .target = edit_target, .linked_text = "edit" },
+        .{ .source = "<span class=\"list-switcher-edit\">" ++ action ++ "tail", .visible = "edittail", .target = edit_target, .linked_text = "edittail" },
+        .{ .source = "<span class=\"list-switcher-edit\">" ++ action ++ "tail</span>", .visible = "edittail", .target = edit_target, .linked_text = "edittail" },
+        .{ .source = "<nowiki><span class=\"list-switcher-edit\">" ++ action ++ "</span></nowiki>", .visible = "<span class=\"list-switcher-edit\">" ++ action ++ "</span>", .target = "", .linked_text = "" },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
+        var linked_text: std.ArrayList(u8) = .empty;
+        for (spans) |span| if (span.kind == .link) {
+            try std.testing.expectEqualStrings(case.target, span.target);
+            try linked_text.appendSlice(a, span.text);
+        };
+        try std.testing.expectEqualStrings(case.linked_text, linked_text.items);
+    }
+}
+
+test "complete unknown HTML names escape only angles and retain independent wiki actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans("<qichwa data-note=\"[[Target|label]] '''bold'''\">tail</qichwa><Quechua/>", .{});
+    try std.testing.expectEqualStrings("<qichwa data-note=\"label bold\">tail</qichwa><Quechua/>", try flattened(a, spans));
+    var link = false;
+    var bold = false;
+    var angles: usize = 0;
+    for (spans) |span| {
+        if (span.kind == .link and std.mem.eql(u8, span.target, "Target") and std.mem.eql(u8, span.text, "label")) link = true;
+        if (std.mem.eql(u8, span.text, "bold") and span.flags.bold) bold = true;
+        if (std.mem.eql(u8, span.text, "<") or std.mem.eql(u8, span.text, ">")) {
+            angles += 1;
+            try std.testing.expect(span.kind == .text and span.target.len == 0 and span.provenance == .entity_literal);
+        }
+    }
+    try std.testing.expect(link and bold and angles == 6 and renderer.fallbacks.literal_markup);
+    var known: Renderer = .{ .a = a, .context = .{} };
+    const known_spans = try known.parseSpans("<b>word</b>", .{});
+    try std.testing.expectEqualStrings("word", try flattened(a, known_spans));
+    try std.testing.expect(known_spans[0].flags.bold and !known.fallbacks.literal_markup);
+    var literal: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings("<quechua>[[Target|label]]</quechua>", try flattened(a, try literal.parseSpans("<nowiki><quechua>[[Target|label]]</quechua></nowiki>", .{})));
+    try std.testing.expect(!literal.fallbacks.literal_markup);
+}
+
+test "escaped unknown tags preserve whole inline quote and link domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Check = struct {
+        fn atByte(spans: []const Span, offset: usize) !Span {
+            var position: usize = 0;
+            for (spans) |span| {
+                if (offset >= position and offset - position < span.text.len) return span;
+                position += span.text.len;
+            }
+            return error.TestUnexpectedResult;
+        }
+        fn sameRuns(actual: []const Span, expected: []const Span, visible: []const u8) !void {
+            // Compare semantic runs per visible byte, without requiring identical
+            // coalescing of adjacent spans in the two independently parsed inputs.
+            for (visible, 0..) |byte, offset| {
+                const got = try atByte(actual, offset);
+                const want = try atByte(expected, offset);
+                try std.testing.expectEqual(want.kind, got.kind);
+                try std.testing.expectEqual(want.flags, got.flags);
+                try std.testing.expectEqual(want.provenance, got.provenance);
+                try std.testing.expectEqualStrings(want.target, got.target);
+                if (byte == '<' or byte == '>') try std.testing.expect(got.provenance == .entity_literal);
+            }
+        }
+    };
+    const quote_cases = [_]struct { source: []const u8, escaped: []const u8, visible: []const u8 }{
+        .{ .source = "<term note=\"''\">word'' tail", .escaped = "&lt;term note=\"''\"&gt;word'' tail", .visible = "<term note=\"\">word tail" },
+        .{ .source = "<tbody note=\"''\">word'' tail", .escaped = "&lt;tbody note=\"''\"&gt;word'' tail", .visible = "<tbody note=\"\">word tail" },
+        .{ .source = "''word<li\">'' tail", .escaped = "''word&lt;li\"&gt;'' tail", .visible = "word<li\"> tail" },
+    };
+    for (quote_cases) |case| {
+        var actual: Renderer = .{ .a = a, .context = .{} };
+        var oracle: Renderer = .{ .a = a, .context = .{} };
+        const spans = try actual.parseSpans(case.source, .{});
+        const controls = try oracle.parseSpans(case.escaped, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, controls));
+        try Check.sameRuns(spans, controls, case.visible);
+        const word = try Check.atByte(spans, std.mem.indexOf(u8, case.visible, "word").?);
+        const tail = try Check.atByte(spans, case.visible.len - "tail".len);
+        try std.testing.expect(word.flags.italic and !word.flags.bold);
+        try std.testing.expect(!tail.flags.italic and !tail.flags.bold and tail.target.len == 0);
+        try std.testing.expect(actual.fallbacks.literal_markup and !oracle.fallbacks.literal_markup);
+    }
+    var actual_link: Renderer = .{ .a = a, .context = .{} };
+    var oracle_link: Renderer = .{ .a = a, .context = .{} };
+    const linked = try actual_link.parseSpans("<term note=\"[[Target|\">label]] tail", .{});
+    const control_linked = try oracle_link.parseSpans("&lt;term note=\"[[Target|\"&gt;label]] tail", .{});
+    const visible = "<term note=\"\">label tail";
+    try std.testing.expectEqualStrings(visible, try flattened(a, linked));
+    try std.testing.expectEqualStrings(visible, try flattened(a, control_linked));
+    try Check.sameRuns(linked, control_linked, visible);
+    var label: std.ArrayList(u8) = .empty;
+    for (linked) |span| {
+        if (span.kind == .link) {
+            try std.testing.expectEqualStrings("Target", span.target);
+            try label.appendSlice(a, span.text);
+        } else try std.testing.expect(span.target.len == 0);
+    }
+    try std.testing.expectEqualStrings("\">label", label.items);
+    const tail = try Check.atByte(linked, visible.len - "tail".len);
+    try std.testing.expect(tail.kind == .text and tail.target.len == 0);
+    try std.testing.expect(actual_link.fallbacks.literal_markup and !oracle_link.fallbacks.literal_markup);
+}
+
+test "escaped angle quote seeds retain raw cuts correction boundaries and heading origins" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<term note=\"''\">word'' tail";
+    const cut = std.mem.indexOf(u8, source, "word").?;
+    const seeds = try bodyQuoteCutSeedsWithContextAlloc(a, source, &.{cut}, .{});
+    try std.testing.expect(seeds[0].state == .i and seeds[0].correction == null);
+    try std.testing.expectEqual(source.len - cut, seeds[0].line_end);
+    var renderer: Renderer = .{ .a = a, .context = .{}, .next_quote_seed = seeds[0] };
+    const spans = try renderer.parseSpans(source[cut..], .{});
+    try std.testing.expectEqualStrings("word tail", try flattened(a, spans));
+    var word = false;
+    var tail = false;
+    for (spans) |span| {
+        if (std.mem.indexOf(u8, span.text, "word") != null) word = span.flags.italic;
+        if (std.mem.indexOf(u8, span.text, "tail") != null) tail = !span.flags.italic;
+    }
+    try std.testing.expect(word and tail);
+
+    const whole_seeds = try bodyQuoteCutSeedsWithContextAlloc(a, source, &.{0}, .{});
+    var whole: Renderer = .{ .a = a, .context = .{}, .next_quote_seed = whole_seeds[0] };
+    const whole_spans = try whole.parseSpans(source, .{});
+    try std.testing.expectEqualStrings("<term note=\"\">word tail", try flattened(a, whole_spans));
+    for (whole_spans) |span| {
+        if (std.mem.indexOf(u8, span.text, "word") != null) try std.testing.expect(span.flags.italic);
+        if (std.mem.indexOf(u8, span.text, "tail") != null) try std.testing.expect(!span.flags.italic);
+    }
+
+    const corrected = "<term note=\"''\">a '''word";
+    const correction_cut = std.mem.indexOf(u8, corrected, "a '''").?;
+    const corrected_seeds = try bodyQuoteCutSeedsWithContextAlloc(a, corrected, &.{correction_cut}, .{});
+    try std.testing.expect(corrected_seeds[0].state == .i);
+    try std.testing.expectEqual(std.mem.indexOf(u8, corrected, "'''").? - correction_cut, corrected_seeds[0].correction.?);
+    const actions = "<term note=\"''\">word'' [[Target|label]] {{Missing}} tail";
+    const action_cut = std.mem.indexOf(u8, actions, "word").?;
+    const action_seeds = try bodyQuoteCutSeedsWithContextAlloc(a, actions, &.{action_cut}, .{});
+    try std.testing.expectEqual(std.mem.lastIndexOf(u8, actions, "]]").? - action_cut, action_seeds[0].boundaries.link_close.?);
+    try std.testing.expectEqual(std.mem.lastIndexOf(u8, actions, "}}").? - action_cut, action_seeds[0].boundaries.template_close.?);
+
+    const body = source ++ "\n==After==\nbody";
+    var headings: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try headings.renderBodyWithHeadingOffsets(MissingText.untracked(body));
+    var seen = false;
+    for (blocks) |value| if (value.kind == .heading) {
+        try std.testing.expectEqualStrings("After", try flattened(a, value.spans));
+        // Heading origins identify the raw title, after its opening delimiters.
+        try std.testing.expectEqual(std.mem.indexOf(u8, body, "After").?, value.heading_source_offset.?);
+        try std.testing.expectEqualStrings("After", body[value.heading_source_offset.?..][0.."After".len]);
+        seen = true;
+    };
+    try std.testing.expect(seen);
+}
+
+test "unknown angle normalization preserves known HTML and protected extension bodies" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var known: Renderer = .{ .a = a, .context = .{} };
+    const known_spans = try known.parseSpans("<i>word</i> tail", .{});
+    try std.testing.expectEqualStrings("word tail", try flattened(a, known_spans));
+    try std.testing.expect(known_spans[0].flags.italic and !known.fallbacks.literal_markup);
+    const body = "<term note=\"''\">word''";
+    var nowiki: Renderer = .{ .a = a, .context = .{} };
+    const literal = try nowiki.parseSpans("<nowiki>" ++ body ++ "</nowiki> tail", .{});
+    try std.testing.expectEqualStrings(body ++ " tail", try flattened(a, literal));
+    for (literal) |span| try std.testing.expect(!span.flags.italic and span.target.len == 0);
+    try std.testing.expect(!nowiki.fallbacks.literal_markup);
+    var extension: Renderer = .{ .a = a, .context = .{} };
+    const protected = try extension.parseSpans("<syntaxhighlight lang=\"text\">" ++ body ++ "</syntaxhighlight> tail", .{});
+    var code: std.ArrayList(u8) = .empty;
+    for (protected) |span| {
+        try std.testing.expect(!span.flags.italic and span.target.len == 0);
+        if (span.flags.code) try code.appendSlice(a, span.text);
+    }
+    try std.testing.expectEqualStrings(body, code.items);
+    try std.testing.expect(!extension.fallbacks.literal_markup);
 }
 
 test "double quoted HTML names escape angles while body formatting and actions continue" {

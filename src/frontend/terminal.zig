@@ -12,7 +12,19 @@ pub fn width(cp: u21) usize {
     const cells = wcwidth(@intCast(cp));
     return if (cells < 0) 1 else @intCast(cells);
 }
+// Editing clusters can contain spacing marks with positive terminal width.
+// Sum the original width segments so boundary grouping does not change cells.
 fn clusterWidth(text: []const u8, start: usize, end: usize) usize {
+    var pos = start;
+    var result: usize = 0;
+    while (pos < end) {
+        const next = @min(end, clusterEnd(text, pos, false));
+        result += segmentWidth(text, pos, next);
+        pos = next;
+    }
+    return result;
+}
+fn segmentWidth(text: []const u8, start: usize, end: usize) usize {
     var pos = start;
     var result: usize = 0;
     var regional: usize = 0;
@@ -75,6 +87,10 @@ fn codepointAt(text: []const u8, start: usize) u21 {
     return std.unicode.utf8Decode(text[start..][0..n]) catch 0xfffd;
 }
 fn isClusterExtend(cp: u21) bool {
+    if (cp == 0x200d) return false;
+    return cellClusterExtend(cp) or @import("unicode_grapheme_data.zig").isExtendOrSpacingMark(cp);
+}
+fn cellClusterExtend(cp: u21) bool {
     if (cp == 0x200d) return false; // ZWJ joins two bases; it is handled explicitly.
     if (cp >= 0x1f3fb and cp <= 0x1f3ff) return true; // emoji skin-tone modifiers
     if ((cp >= 0xfe00 and cp <= 0xfe0f) or (cp >= 0xe0100 and cp <= 0xe01ef)) return true;
@@ -113,6 +129,9 @@ pub fn previousClusterStart(text: []const u8, end: usize) usize {
     return start;
 }
 pub fn nextClusterEnd(text: []const u8, start: usize) usize {
+    return clusterEnd(text, start, true);
+}
+fn clusterEnd(text: []const u8, start: usize, editing_marks: bool) usize {
     if (start >= text.len) return text.len;
     const first_n: usize = std.unicode.utf8ByteSequenceLength(text[start]) catch return @min(start + 1, text.len);
     var end = @min(text.len, start + first_n);
@@ -122,7 +141,7 @@ pub fn nextClusterEnd(text: []const u8, start: usize) usize {
     }
     while (end < text.len) {
         const cp = codepointAt(text, end);
-        if (isClusterExtend(cp)) {
+        if (if (editing_marks) isClusterExtend(cp) else cellClusterExtend(cp)) {
             end += std.unicode.utf8ByteSequenceLength(text[end]) catch 1;
             continue;
         }
@@ -132,6 +151,22 @@ pub fn nextClusterEnd(text: []const u8, start: usize) usize {
         end += std.unicode.utf8ByteSequenceLength(text[end]) catch 1;
     }
     return @min(end, text.len);
+}
+// Consume an indivisible first visible cluster, including leading SGR atoms,
+// when it exceeds the row budget. Never emit a styling-only overflow row.
+fn overflowPrefixEnd(text: []const u8) usize {
+    var pos: usize = 0;
+    while (pos < text.len) {
+        if (sgrLength(text[pos..])) |n| {
+            pos += n;
+            continue;
+        }
+        const end = nextClusterEnd(text, pos);
+        const cells = clusterWidth(text, pos, end);
+        pos = end;
+        if (cells != 0) break;
+    }
+    return pos;
 }
 pub fn wrap(a: std.mem.Allocator, text: []const u8, columns: usize) ![][]const u8 {
     var rows: std.ArrayList([]const u8) = .empty;
@@ -145,15 +180,15 @@ pub fn wrap(a: std.mem.Allocator, text: []const u8, columns: usize) ![][]const u
         var rest = line;
         while (rest.len != 0) {
             var end = prefixBytes(rest, @max(columns, 2));
-            if (end == 0) end = @min(rest.len, std.unicode.utf8ByteSequenceLength(rest[0]) catch 1);
+            if (end == 0 or (end < rest.len and cellWidth(rest[0..end]) == 0)) end = overflowPrefixEnd(rest);
             if (end < rest.len) {
                 if (std.mem.lastIndexOfScalar(u8, rest[0..end], ' ')) |space| {
-                    if (space > end / 2) end = space;
+                    if (space > end / 2 and nextClusterEnd(rest, space) == space + 1) end = space;
                 }
             }
             try rows.append(a, rest[0..end]);
             rest = rest[end..];
-            if (rest.len != 0 and rest[0] == ' ') rest = rest[1..];
+            if (rest.len != 0 and rest[0] == ' ' and nextClusterEnd(rest, 0) == 1) rest = rest[1..];
         }
     }
     return rows.toOwnedSlice(a);
@@ -266,14 +301,44 @@ var interrupted = std.atomic.Value(bool).init(false);
 fn onSignal(_: L.SIG) callconv(.c) void {
     interrupted.store(true, .monotonic);
 }
+// Use Linux ioctls with Linux's termios layout as one matched ABI. The pinned
+// toolchain's libc tcgetattr binding shares this type, but glibc writes a larger
+// structure; passing it this buffer corrupts adjacent stack storage.
+fn getAttributes(fd: L.fd_t) std.posix.TermiosGetError!L.termios {
+    while (true) {
+        // TCGETS does not populate the extra speed slots on every architecture.
+        var attributes = std.mem.zeroes(L.termios);
+        switch (L.errno(L.tcgetattr(fd, &attributes))) {
+            .SUCCESS => return attributes,
+            .INTR => continue,
+            .BADF => unreachable,
+            .NOTTY => return error.NotATerminal,
+            else => |err| return std.posix.unexpectedErrno(err),
+        }
+    }
+}
+fn setAttributes(fd: L.fd_t, action: L.TCSA, attributes: L.termios) std.posix.TermiosSetError!void {
+    while (true) {
+        switch (L.errno(L.tcsetattr(fd, action, &attributes))) {
+            .SUCCESS => return,
+            .BADF => unreachable,
+            .INTR => continue,
+            .INVAL => unreachable,
+            .NOTTY => return error.NotATerminal,
+            .IO => return error.ProcessOrphaned,
+            else => |err| return std.posix.unexpectedErrno(err),
+        }
+    }
+}
+
 pub const Session = struct {
-    original: std.posix.termios,
+    original: L.termios,
     old: [3]std.posix.Sigaction,
     const signals = [_]L.SIG{ .INT, .TERM, .HUP };
     pub fn enter() !Session {
         initLocale();
         interrupted.store(false, .monotonic);
-        var session: Session = .{ .original = try std.posix.tcgetattr(0), .old = undefined };
+        var session: Session = .{ .original = try getAttributes(0), .old = undefined };
         var term = session.original;
         term.lflag.ECHO = false;
         term.lflag.ICANON = false;
@@ -288,14 +353,14 @@ pub const Session = struct {
         const action: std.posix.Sigaction = .{ .handler = .{ .handler = onSignal }, .mask = std.mem.zeroes(std.posix.sigset_t), .flags = 0 };
         for (signals, 0..) |sig, i| std.posix.sigaction(sig, &action, &session.old[i]);
         errdefer for (signals, 0..) |sig, i| std.posix.sigaction(sig, &session.old[i], null);
-        try std.posix.tcsetattr(0, .NOW, term);
-        errdefer std.posix.tcsetattr(0, .NOW, session.original) catch {};
+        try setAttributes(0, .NOW, term);
+        errdefer setAttributes(0, .NOW, session.original) catch {};
         try writeAll("\x1b[?1049h\x1b[?25l\x1b[?2004h");
         return session;
     }
     pub fn leave(self: *Session) void {
         writeAll("\x1b[?2026l\x1b[0m\x1b[?2004l\x1b[?25h\x1b[?1049l") catch {};
-        std.posix.tcsetattr(0, .NOW, self.original) catch {};
+        setAttributes(0, .NOW, self.original) catch {};
         for (signals, 0..) |sig, i| std.posix.sigaction(sig, &self.old[i], null);
     }
     pub fn shouldQuit() bool {
@@ -497,16 +562,16 @@ pub fn wrapStyledProjected(a: std.mem.Allocator, text: []const u8, columns: usiz
             const right = @min(if (poem) |p| p.right else 0, columns -| (left + lead_cells + 2));
             const available = @max(columns -| (left + right), 2);
             var end = prefixBytes(rest, available);
-            if (rest.len != 0 and end == 0) end = @min(rest.len, std.unicode.utf8ByteSequenceLength(rest[0]) catch 1);
+            if (rest.len != 0 and (end == 0 or (end < rest.len and cellWidth(rest[0..end]) == 0))) end = overflowPrefixEnd(rest);
             if (end < rest.len) if (std.mem.lastIndexOfScalar(u8, rest[0..end], ' ')) |space| {
                 const lead_bytes = if (poem) |p| if (first) p.lead_bytes else 0 else 0;
-                if (textByteCount(rest[0..space]) > textByteCount(rest[0..end]) / 2 and (poem == null or space > lead_bytes)) end = space;
+                if (textByteCount(rest[0..space]) > textByteCount(rest[0..end]) / 2 and (poem == null or space > lead_bytes) and nextClusterEnd(rest, space) == space + 1) end = space;
             };
             const slice = rest[0..end];
             try rows.append(a, .{ .bytes = slice, .carry = style, .left = left, .right = right });
             style.scan(slice);
             rest = rest[end..];
-            if (poem == null and rest.len != 0 and rest[0] == ' ') rest = rest[1..];
+            if (poem == null and rest.len != 0 and rest[0] == ' ' and nextClusterEnd(rest, 0) == 1) rest = rest[1..];
             if (rest.len == 0) break;
             first = false;
         }
@@ -631,4 +696,71 @@ test "truecolor SGR atoms preserve independent channels styles and wrap carry" {
     style.scan("\x1b[38;5;1m");
     try std.testing.expect(!style.bold and style.foreground == null);
     for (rows) |row| try std.testing.expect(cellWidth(row.bytes) <= 4);
+}
+
+test "spacing marks preserve editing boundaries and terminal cells" {
+    initLocale();
+    // Devanagari and Tamil SpacingMark; Bengali Extend despite category Mc.
+    for ([_][]const u8{ "\u{915}\u{93e}", "\u{b95}\u{bbf}", "\u{995}\u{9be}" }) |cluster| {
+        try std.testing.expectEqual(cluster.len, nextClusterEnd(cluster, 0));
+        try std.testing.expectEqual(@as(usize, 0), previousClusterStart(cluster, cluster.len));
+        const base_end: usize = try std.unicode.utf8ByteSequenceLength(cluster[0]);
+        const expected_cells = width(codepointAt(cluster, 0)) + width(codepointAt(cluster, base_end));
+        try std.testing.expectEqual(expected_cells, cellWidth(cluster));
+        try std.testing.expectEqual(@as(usize, 0), prefixBytes(cluster, expected_cells - 1));
+        try std.testing.expectEqual(cluster.len, prefixBytes(cluster, expected_cells));
+    }
+    try std.testing.expectEqual(@as(usize, 2), cellWidth("👍🏽"));
+    try std.testing.expectEqual(@as(usize, 2), cellWidth("👩‍💻"));
+    try std.testing.expectEqual(@as(usize, 2), cellWidth("🇦🇺"));
+}
+
+test "overwide spacing mark clusters survive plain and styled wrapping" {
+    initLocale();
+    const cluster = "\u{915}\u{93e}\u{93e}\u{93e}";
+    try std.testing.expect(cellWidth(cluster) > 2);
+    const text = cluster ++ "x";
+    const plain = try wrap(std.testing.allocator, text, 2);
+    defer std.testing.allocator.free(plain);
+    try std.testing.expectEqual(@as(usize, 2), plain.len);
+    try std.testing.expectEqualStrings(cluster, plain[0]);
+    try std.testing.expectEqualStrings("x", plain[1]);
+    const styled = try wrapStyled(std.testing.allocator, text, 2);
+    defer std.testing.allocator.free(styled);
+    try std.testing.expectEqual(@as(usize, 2), styled.len);
+    try std.testing.expectEqualStrings(cluster, styled[0].bytes);
+    try std.testing.expectEqualStrings("x", styled[1].bytes);
+}
+
+test "SGR overflow and soft spaces retain complete spacing mark clusters" {
+    initLocale();
+    const cluster = "\u{915}\u{93e}\u{93e}\u{93e}";
+    const colored = "\x1b[31m" ++ cluster ++ "x\x1b[0m";
+    const plain = try wrap(std.testing.allocator, colored, 2);
+    defer std.testing.allocator.free(plain);
+    try std.testing.expectEqual(@as(usize, 2), plain.len);
+    try std.testing.expectEqualStrings("\x1b[31m" ++ cluster, plain[0]);
+    const styled = try wrapStyled(std.testing.allocator, colored, 2);
+    defer std.testing.allocator.free(styled);
+    try std.testing.expectEqual(@as(usize, 2), styled.len);
+    try std.testing.expectEqualStrings("\x1b[31m" ++ cluster, styled[0].bytes);
+    try std.testing.expectEqualStrings("x\x1b[0m", styled[1].bytes);
+    var expected_style: TextStyle = .{};
+    expected_style.scan("\x1b[31m");
+    try std.testing.expectEqualDeep(expected_style, styled[1].carry);
+    const spaced = "abcdef \u{93e}x";
+    for ([_]usize{ 6, 8 }) |columns| {
+        const rows = try wrap(std.testing.allocator, spaced, columns);
+        defer std.testing.allocator.free(rows);
+        const rendered = try wrapStyled(std.testing.allocator, spaced, columns);
+        defer std.testing.allocator.free(rendered);
+        try std.testing.expectEqual(@as(usize, 2), rows.len);
+        try std.testing.expectEqual(@as(usize, 2), rendered.len);
+        const first = if (columns == 6) "abcdef" else "abcdef \u{93e}";
+        const second = if (columns == 6) " \u{93e}x" else "x";
+        try std.testing.expectEqualStrings(first, rows[0]);
+        try std.testing.expectEqualStrings(second, rows[1]);
+        try std.testing.expectEqualStrings(first, rendered[0].bytes);
+        try std.testing.expectEqualStrings(second, rendered[1].bytes);
+    }
 }

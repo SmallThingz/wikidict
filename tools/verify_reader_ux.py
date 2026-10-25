@@ -373,9 +373,189 @@ def exercise(reader: ReaderPty, initial_width: int) -> None:
                           "history clear confirmation respected"])
 
 
+def latest_rendered_query_frame(raw: bytes | bytearray, after_frame: int = -1) -> tuple[bytes, str] | None:
+    """Read the exact UTF-8 search field from the last complete Reader frame."""
+    raw = bytes(raw)
+    if raw.count(FRAME_END) <= after_frame:
+        return None
+    end = raw.rfind(FRAME_END)
+    if end < 0:
+        return None
+    start = raw.rfind(b"\x1b[?2026h", 0, end)
+    if start < 0:
+        return None
+    frame = raw[start:end + len(FRAME_END)]
+    if FRAME_END in frame[:-len(FRAME_END)]:
+        return None
+    field = b"\x1b[4;13H"
+    at = frame.find(field)
+    if at < 0:
+        return None
+    # State.draw writes this field once via put(): cursor, base/style SGR, UTF-8.
+    # The later caret placement may reuse the same coordinates; use the first.
+    match = re.match(rb"(?:\x1b\[[0-9;:]*m)*([^\x1b]*)", frame[at + len(field):])
+    if match is None:
+        return None
+    try:
+        query = match[1].decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return None
+    return frame, query
+
+
+def exercise_spacing_mark_editing(reader: ReaderPty) -> None:
+    """Use raw query frames because pinned pyte drops zero-cell Mc characters."""
+    initial_width = reader.width
+    cluster = "\u0915\u093e"
+    last_watermark = -1
+
+    def query_is(expected: str, after_frame: int) -> bool:
+        captured = latest_rendered_query_frame(reader.raw, after_frame)
+        return (captured is not None and captured[1] == expected
+                and reader.page_is("search") and "Searching..." not in reader.text()
+                and (not expected.isascii() or reader.query() == expected))
+
+    def action(keys: bytes | str, expected: str, label: str, all_results: bool = False) -> None:
+        nonlocal last_watermark
+        last_watermark = reader.send(keys)
+        reader.wait(lambda: query_is(expected, last_watermark)
+                    and (not all_results or reader.page_is("search", 1, len(TITLES))),
+                    label, after=last_watermark)
+
+    def snapshot(label: str, expected: str) -> None:
+        captured = latest_rendered_query_frame(reader.raw, last_watermark)
+        require(captured is not None and captured[1] == expected, "raw query spelling changed before capture")
+        prefix = f"{len(reader.snapshots):02d}-{label}"
+        frame_file, query_file = prefix + ".query-frame.ansi", prefix + ".query.txt"
+        (reader.output / frame_file).write_bytes(captured[0])
+        (reader.output / query_file).write_text(captured[1] + "\n", encoding="utf-8")
+        reader.snapshot(label)
+        reader.snapshots[-1].update(query_frame=frame_file, query_text=query_file,
+                                   after_frame=last_watermark,
+                                   completed_frame_count=bytes(reader.raw).count(FRAME_END),
+                                   query_oracle="exact UTF-8 from completed raw PTY frame",
+                                   pyte_query_projection_authoritative=False)
+
+    for width in (80, 40, 120):
+        if width != reader.width:
+            before = reader.resize(width)
+            reader.wait(lambda: query_is("", before) and reader.page_is("search", 1, len(TITLES)),
+                        f"empty query survives resize to {width}", after=before)
+        action(cluster + "x", cluster + "x",
+               "enter Devanagari spacing-mark cluster with exact raw query spelling")
+        action(b"\x1b[H\x1b[CQ", cluster + "Qx",
+               "Home Right inserts after the complete spacing-mark cluster")
+        snapshot(f"spacing-mark-right-insert-{width}", cluster + "Qx")
+        action(b"\x15" + (cluster + "x").encode("utf-8"), cluster + "x",
+               "reset spacing-mark delete query")
+        action(b"\x1b[H" + DELETE, "x",
+               "Home Delete removes the complete spacing-mark cluster")
+        snapshot(f"spacing-mark-delete-{width}", "x")
+        action(b"\x15" + cluster.encode("utf-8"), cluster,
+               "reset spacing-mark backspace query")
+        action(b"\x1b[F\x7f", "",
+               "End Backspace removes the complete cluster and restores all results", all_results=True)
+        snapshot(f"spacing-mark-backspace-{width}", "")
+    if reader.width != initial_width:
+        before = reader.resize(initial_width)
+        reader.wait(lambda: query_is("", before) and reader.page_is("search", 1, len(TITLES)),
+                    "restore initial width after spacing-mark editing", after=before)
+
+
+def latest_query_projection(raw: bytes | bytearray, after_frame: int = -1) -> tuple[bytes, str, int] | None:
+    """Bind exact safe query spelling and the visible caret to one fresh frame."""
+    captured = latest_rendered_query_frame(raw, after_frame)
+    if captured is None:
+        return None
+    frame, query = captured
+    # Search draw terminates with its explicit caret placement and frame end.
+    caret = re.search(rb"\x1b\[4;([0-9]+)H\x1b\[\?25h\x1b\[\?2026l$", frame)
+    if caret is None:
+        return None
+    return frame, query, int(caret[1])
+
+
+def exercise_escaped_query_editing(reader: ReaderPty) -> None:
+    """Edit original UTF-8 controls while observing their safe display projection."""
+    initial_width = reader.width
+    control = "\u009b"
+    escaped = r"\u{9b}"
+    accent = "\u0301"
+    last_watermark = -1
+
+    def query_is(expected: str, column: int, after_frame: int) -> bool:
+        captured = latest_query_projection(reader.raw, after_frame)
+        return (captured is not None and captured[1:] == (expected, column)
+                and reader.page_is("search") and "Searching..." not in reader.text()
+                and not reader.screen.cursor.hidden
+                and (reader.screen.cursor.y, reader.screen.cursor.x) == (3, column - 1))
+
+    def action(keys: bytes | str, expected: str, column: int, label: str,
+               all_results: bool = False) -> None:
+        nonlocal last_watermark
+        last_watermark = reader.send(keys)
+        reader.wait(lambda: query_is(expected, column, last_watermark)
+                    and (not all_results or reader.page_is("search", 1, len(TITLES))),
+                    label, after=last_watermark)
+
+    def snapshot(label: str, expected: str, column: int, source_query: str) -> None:
+        captured = latest_query_projection(reader.raw, last_watermark)
+        require(captured is not None and captured[1:] == (expected, column),
+                "query projection or caret changed before capture")
+        prefix = f"{len(reader.snapshots):02d}-{label}"
+        frame_file, query_file = prefix + ".query-frame.ansi", prefix + ".query.txt"
+        input_file = prefix + ".expected-source-query.utf8"
+        (reader.output / frame_file).write_bytes(captured[0])
+        (reader.output / query_file).write_text(captured[1] + "\n", encoding="utf-8")
+        (reader.output / input_file).write_bytes(source_query.encode("utf-8"))
+        reader.snapshot(label)
+        reader.snapshots[-1].update(query_frame=frame_file, query_text=query_file,
+                                   expected_source_query=input_file, caret_row=4,
+                                   caret_column=column, after_frame=last_watermark,
+                                   completed_frame_count=bytes(reader.raw).count(FRAME_END),
+                                   query_oracle="exact safe UTF-8 and caret from same completed raw PTY frame",
+                                   source_query_oracle="expected test input; original-byte editing checked by actions",
+                                   pyte_query_projection_authoritative=False)
+
+    for width, count, visible_count, caret in ((80, 12, 10, 74), (40, 4, 3, 32)):
+        if width != reader.width:
+            before = reader.resize(width)
+            reader.wait(lambda: query_is("", 13, before)
+                        and reader.page_is("search", 1, len(TITLES)),
+                        f"empty query survives escaped-query resize to {width}", after=before)
+        query = "a" + control + "b"
+        action(query, "a" + escaped + "b", 21,
+               "escaped C1 query caret follows its safe display cells")
+        snapshot(f"escaped-query-caret-{width}", "a" + escaped + "b", 21, query)
+        action(b"\x1b[H\x1b[C\x1b[CQ", "a" + escaped + "Qb", 21,
+               "Home Right Right inserts after one original C1 scalar")
+        action(b"\x1b[H\x1b[C" + DELETE, "aQb", 14,
+               "Delete removes the original C1 scalar, not an escape spelling character")
+        snapshot(f"escaped-query-source-delete-{width}", "aQb", 14, "aQb")
+        query = control * count + "x"
+        action(b"\x15" + query.encode("utf-8"), escaped * visible_count + "x", caret,
+               "escaped query viewport clips only complete original clusters")
+        snapshot(f"escaped-query-viewport-{width}", escaped * visible_count + "x", caret, query)
+        query = control + accent + "x"
+        action(b"\x15" + query.encode("utf-8"), escaped + accent + "x", 20,
+               "escaped control and combining mark share a complete display cluster")
+        snapshot(f"escaped-query-combining-{width}", escaped + accent + "x", 20, query)
+        action(b"\x1b[F\x7f", escaped + accent, 19,
+               "End Backspace removes following ASCII without changing escaped cluster")
+        action(b"\x7f", "", 13,
+               "Backspace removes the original control plus combining mark together", all_results=True)
+        snapshot(f"escaped-query-combining-backspace-{width}", "", 13, "")
+    if reader.width != initial_width:
+        before = reader.resize(initial_width)
+        reader.wait(lambda: query_is("", 13, before) and reader.page_is("search", 1, len(TITLES)),
+                    "restore initial width after escaped-query editing", after=before)
+
+
 def exercise_swatch(reader: ReaderPty, initial_width: int) -> None:
     """One actual typed-fixture PTY route; historical UX workflow is not replayed."""
     reader.wait(lambda: reader.page_is("search", 1, len(TITLES)), "swatch fixture startup")
+    exercise_spacing_mark_editing(reader)
+    exercise_escaped_query_editing(reader)
     reader.search("CAT", 2, "catfish")
     reader.action(DOWN, lambda: reader.screen.cursor.hidden, "focus first swatch fixture result")
     reader.action(ENTER, lambda: reader.entry_focused(), "read swatch fixture cat")

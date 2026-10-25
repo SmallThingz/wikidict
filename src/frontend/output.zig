@@ -283,6 +283,9 @@ fn spansTextDisplayProjected(w: *std.Io.Writer, spans: []const model.Span, color
     return spansTextDisplayOnBackground(w, spans, color, projection, ordinary, null, false);
 }
 fn spansTextDisplayOnBackground(w: *std.Io.Writer, spans: []const model.Span, color: bool, projection: ?*PoemProjection, ordinary: bool, cell_background: ?[3]u8, inherited_header: bool) !void {
+    return spansTextDisplayWithContinuation(w, spans, color, projection, ordinary, cell_background, inherited_header, null);
+}
+fn spansTextDisplayWithContinuation(w: *std.Io.Writer, spans: []const model.Span, color: bool, projection: ?*PoemProjection, ordinary: bool, cell_background: ?[3]u8, inherited_header: bool, detail_depth: ?u8) !void {
     var collapse = ordinary;
     if (collapse) for (spans) |span| {
         if (PoemInfo.parse(span.classes).marked) {
@@ -293,24 +296,44 @@ fn spansTextDisplayOnBackground(w: *std.Io.Writer, spans: []const model.Span, co
     var whitespace: OrdinaryDisplayWhitespace = .{};
     var scripts: ScriptDisplayRuns = .{};
     var cursor: SpanCursor = .{ .spans = spans };
+    var detail_line = false;
+    var pending_breaks: usize = 0;
     while (true) {
         var scan = cursor;
         const first = scan.next() orelse break;
         var info = first.info;
         var count: usize = 1;
         var newline = first.ends_line;
+        var content = first.bytes.len != 0;
         while (!newline) {
             const piece = scan.next() orelse break;
             // An ordinary boundary break ends the marked line without changing its layout.
             if (!(piece.span.kind == .line_break and piece.ends_line and !piece.info.marked)) info.merge(piece.info);
             count += 1;
+            content = content or piece.bytes.len != 0;
             newline = piece.ends_line;
+        }
+        if (detail_depth) |depth| {
+            // Defer hard breaks until another content line appears. The block
+            // owns its final newline; source trailing breaks add no blank rows.
+            if (!content) {
+                cursor = scan;
+                if (newline) pending_breaks += 1;
+                continue;
+            }
+            try w.splatByteAll('\n', pending_breaks);
+            pending_breaks = 0;
+            if (detail_line) {
+                try w.splatByteAll(' ', @as(usize, @min(depth, 12)) * 2);
+                try w.writeAll("│ ");
+            }
+            detail_line = true;
         }
         if (projection) |p| try p.record(info) else if (info.marked and !info.rtl) try w.splatByteAll(' ', info.depth);
         for (0..count) |_| try spanPieceText(w, cursor.next().?, color, if (collapse) &whitespace else null, &scripts, cell_background, inherited_header);
         if (projection == null and info.marked and info.rtl) try w.splatByteAll(' ', info.depth);
         if (newline) {
-            try w.writeByte('\n');
+            if (detail_depth != null) pending_breaks += 1 else try w.writeByte('\n');
             whitespace.space = false;
             scripts = .{};
         }
@@ -631,7 +654,15 @@ fn blocksTextInContext(w: *std.Io.Writer, blocks: []const model.Block, color: bo
             else => {},
         }
         const style = context.cell_style orelse CellDisplayStyle{};
-        try spansTextDisplayOnBackground(w, block.spans, color, projection, block.kind == .paragraph or block.kind == .definition, style.background, style.header or (context.cell_style != null and block.kind == .heading));
+        var detail_depth: ?u8 = if (block.kind == .example or block.kind == .quotation) block.depth else null;
+        // Poem layout owns its source line spacing and projection metadata.
+        if (detail_depth != null) for (block.spans) |span| {
+            if (PoemInfo.parse(span.classes).marked) {
+                detail_depth = null;
+                break;
+            }
+        };
+        try spansTextDisplayWithContinuation(w, block.spans, color, projection, block.kind == .paragraph or block.kind == .definition, style.background, style.header or (context.cell_style != null and block.kind == .heading), detail_depth);
         if (block.feature) |f| if (f.language.len != 0) {
             if (color and style.header) try w.writeAll("\x1b[1m");
             try w.writeAll("  [");
@@ -914,6 +945,14 @@ const VisibleMediaCaptions = struct {
     }
 };
 
+// Reference bodies are emitted once by entryMetadataProjected. Suppress only
+// an empty leaf placeholder when those bodies exist; retain parent headings.
+fn emptyReferencePlaceholder(entry: model.Entry, index: usize) bool {
+    const section = entry.sections[index];
+    if (entry.references.len == 0 or section.blocks.len != 0 or !std.mem.eql(u8, section.title, "References")) return false;
+    return index + 1 == entry.sections.len or entry.sections[index + 1].level <= section.level;
+}
+
 pub fn entryText(w: *std.Io.Writer, entry: model.Entry, color: bool) !void {
     return entryTextWithDetails(w, entry, color, true);
 }
@@ -940,7 +979,8 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
     }
     const organization = entry.organization;
     if (organization.lexemes.len == 0) {
-        for (entry.sections) |section| {
+        for (entry.sections, 0..) |section, index| {
+            if (details and emptyReferencePlaceholder(entry, index)) continue;
             if (!details) {
                 var heading = false;
                 for (section.blocks) |block| if (block.kind == .definition) {
@@ -1013,10 +1053,22 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
                 };
                 for (part.definitions) |sense| {
                     try captions.emitBlocks(w, section.blocks[sense.block..][0..1], color, projection);
-                    if (details) for (sense.examples) |i| try captions.emitBlocks(w, section.blocks[i..][0..1], color, projection);
                     if (details) {
-                        for (sense.notes) |i| try captions.emitBlocks(w, section.blocks[i..][0..1], color, projection);
-                        for (sense.quotations) |i| try captions.emitBlocks(w, section.blocks[i..][0..1], color, projection);
+                        // Each detail stream follows source order. Merge them so
+                        // nested list children stay after their containing item.
+                        const streams = [_][]const usize{ sense.examples, sense.notes, sense.quotations };
+                        var positions = [_]usize{ 0, 0, 0 };
+                        while (true) {
+                            var selected: ?usize = null;
+                            for (streams, 0..) |stream, stream_index| {
+                                if (positions[stream_index] == stream.len) continue;
+                                if (selected == null or stream[positions[stream_index]] < streams[selected.?][positions[selected.?]]) selected = stream_index;
+                            }
+                            const stream_index = selected orelse break;
+                            const i = streams[stream_index][positions[stream_index]];
+                            positions[stream_index] += 1;
+                            try captions.emitBlocks(w, section.blocks[i..][0..1], color, projection);
+                        }
                     }
                 }
                 if (details) {
@@ -1024,11 +1076,15 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
                         if (rendered_companion and i == 0) continue;
                         try captions.emitBlocks(w, section.blocks[i..][0..1], color, projection);
                     }
-                    for (part.related_sections) |i| try captions.emitSection(w, entry.sections[i], color, projection);
+                    for (part.related_sections) |i| {
+                        if (!emptyReferencePlaceholder(entry, i)) try captions.emitSection(w, entry.sections[i], color, projection);
+                    }
                 }
             }
         }
-        if (details) for (organization.other_sections) |i| try captions.emitSection(w, entry.sections[i], color, projection);
+        if (details) for (organization.other_sections) |i| {
+            if (!emptyReferencePlaceholder(entry, i)) try captions.emitSection(w, entry.sections[i], color, projection);
+        };
     }
     if (details) try entryMetadataProjected(w, entry, color, projection, &captions);
 }
@@ -1217,6 +1273,46 @@ test "human renderer consumes compiled spans only" {
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "A small feline.") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "{{") == null);
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "[[") == null);
+}
+
+test "detailed CLI keeps nested quotation children after their parent across detail streams" {
+    const blocks = [_]model.Block{
+        .{ .kind = .paragraph, .spans = &.{.{ .text = "INTRO" }} },
+        .{ .kind = .definition, .depth = 1, .list_path = "#", .number = "1", .spans = &.{.{ .text = "SENSE_ONE" }} },
+        .{ .kind = .quotation, .depth = 2, .list_path = "#*", .spans = &.{.{ .text = "QUOTE_PARENT", .italic = true }} },
+        .{ .kind = .list_item, .depth = 3, .list_path = "#*#", .number = "1.1", .spans = &.{.{ .text = "NUMBERED_CHILD" }} },
+        .{ .kind = .example, .depth = 2, .list_path = "#:", .spans = &.{.{ .text = "EXAMPLE_AFTER" }} },
+        .{ .kind = .quotation, .depth = 2, .list_path = "#*", .spans = &.{.{ .text = "QUOTE_AFTER" }} },
+        .{ .kind = .definition, .depth = 1, .list_path = "#", .number = "2", .spans = &.{.{ .text = "SENSE_TWO" }} },
+        .{ .kind = .example, .depth = 2, .list_path = "#:", .spans = &.{.{ .text = "SECOND_EXAMPLE" }} },
+        .{ .kind = .paragraph, .spans = &.{.{ .text = "OTHER_BLOCK" }} },
+    };
+    const sections = [_]model.Section{.{ .level = 3, .title = "Noun", .blocks = &blocks }};
+    const senses = [_]model.Sense{
+        .{ .block = 1, .examples = &.{4}, .notes = &.{3}, .quotations = &.{ 2, 5 } },
+        .{ .block = 6, .examples = &.{7} },
+    };
+    const lexemes = [_]model.Lexeme{.{ .language = "English", .kind = "Noun", .section = 0, .definitions = &senses, .introduction = &.{0}, .other_blocks = &.{8} }};
+    const entry: model.Entry = .{ .title = "nested", .kind = .language, .language = "English", .sections = &sections, .organization = .{ .lexemes = &lexemes } };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    for ([_]bool{ false, true }) |color| {
+        out.clearRetainingCapacity();
+        try entryTextWithDetails(&out.writer, entry, color, true);
+        var position: usize = 0;
+        for ([_][]const u8{ "INTRO", "SENSE_ONE", "QUOTE_PARENT", "NUMBERED_CHILD", "EXAMPLE_AFTER", "QUOTE_AFTER", "SENSE_TWO", "SECOND_EXAMPLE", "OTHER_BLOCK" }) |text| {
+            const found = std.mem.indexOfPos(u8, out.written(), position, text);
+            try std.testing.expect(found != null);
+            position = found.? + text.len;
+        }
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "      1.1. NUMBERED_CHILD") != null);
+        if (color) try std.testing.expect(std.mem.indexOf(u8, out.written(), "\x1b[3m") != null);
+        out.clearRetainingCapacity();
+        try entryTextWithDetails(&out.writer, entry, color, false);
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "SENSE_ONE") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "SENSE_TWO") != null);
+        for ([_][]const u8{ "INTRO", "QUOTE_PARENT", "NUMBERED_CHILD", "EXAMPLE_AFTER", "QUOTE_AFTER", "SECOND_EXAMPLE", "OTHER_BLOCK" }) |text| try std.testing.expect(std.mem.indexOf(u8, out.written(), text) == null);
+    }
 }
 
 test "compact terminal output retains the displayed alias destination" {
@@ -3168,4 +3264,85 @@ test "native ordered cell walks keep the enclosing table depth limit" {
     try std.testing.expectError(error.InvalidPresentation, visitTableSpanLists(table, &visitor));
     var captions = try VisibleMediaCaptions.init(a, &.{.{ .file = "depth-control.ogg", .kind = .audio, .caption = "" }}, true);
     try std.testing.expectError(error.InvalidPresentation, captions.observeBlocks(&.{.{ .kind = .table, .table = table }}));
+}
+
+test "detail continuation lines retain quotation rails and terminate once" {
+    const example = [_]model.Span{
+        .{ .text = "ORIGINAL", .italic = true },
+        .{ .kind = .line_break },
+        .{ .text = "TRANSLATION", .bold = true },
+        .{ .kind = .line_break },
+        .{ .kind = .line_break },
+    };
+    const quotation = [_]model.Span{.{ .text = "QUOTE_ONE\nQUOTE_TWO\n", .italic = true }};
+    const blocks = [_]model.Block{
+        .{ .kind = .example, .depth = 2, .spans = &example },
+        .{ .kind = .quotation, .depth = 1, .spans = &quotation },
+    };
+    const expected = "    │ ORIGINAL\n    │ TRANSLATION\n  │ QUOTE_ONE\n  │ QUOTE_TWO\n\n";
+    var plain: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer plain.deinit();
+    try blocksText(&plain.writer, &blocks, false);
+    try std.testing.expectEqualStrings(expected, plain.written());
+    var ansi: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer ansi.deinit();
+    try blocksText(&ansi.writer, &blocks, true);
+    const visible = try NarrowTableTest.plain(std.testing.allocator, ansi.written());
+    defer std.testing.allocator.free(visible);
+    try std.testing.expectEqualStrings(expected, visible);
+    try std.testing.expect(std.mem.indexOf(u8, ansi.written(), "ORIGINAL\x1b[0m\n    │ \x1b[1mTRANSLATION\x1b[0m\n") != null);
+    try std.testing.expect(std.mem.endsWith(u8, ansi.written(), "QUOTE_TWO\x1b[0m\n\n"));
+}
+
+test "only empty leaf reference placeholders with actual references are omitted" {
+    const sections = [_]model.Section{
+        .{ .level = 3, .title = "References" },
+        .{ .level = 3, .title = "Further reading" },
+    };
+    const refs = [_]model.Reference{.{ .number = 1, .group_number = 1, .spans = &.{.{ .text = "REFERENCE_BODY" }} }};
+    var entry: model.Entry = .{ .title = "test", .kind = .language, .language = "English", .sections = &sections, .references = &refs };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    for ([_]bool{ false, true }) |organized| {
+        entry.organization = if (organized) .{ .lexemes = &.{.{ .kind = "Noun", .section = 1 }}, .other_sections = &.{0} } else .{};
+        out.clearRetainingCapacity();
+        try entryTextWithDetails(&out.writer, entry, false, true);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "\nReferences\n"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "REFERENCE_BODY"));
+    }
+    entry.organization = .{};
+    entry.sections = &.{ .{ .level = 3, .title = "References" }, .{ .level = 4, .title = "Child" }, .{ .level = 3, .title = "Other empty heading" } };
+    out.clearRetainingCapacity();
+    try entryTextWithDetails(&out.writer, entry, false, true);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, out.written(), "\nReferences\n"));
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "Other empty heading") != null);
+    entry.sections = &sections;
+    entry.references = &.{};
+    out.clearRetainingCapacity();
+    try entryTextWithDetails(&out.writer, entry, false, true);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "\nReferences\n"));
+}
+
+test "detail blank rows stay unprefixed and poem blocks retain their layout" {
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    const prose = [_]model.Span{.{ .text = "ORIGINAL\n\nTRANSLATION\n" }};
+    const verse = [_]model.Span{
+        .{ .text = "VERSE_A", .classes = "wikidict-poem wikidict-poem-indent-2" },
+        .{ .kind = .line_break, .classes = "wikidict-poem wikidict-poem-indent-2" },
+        .{ .kind = .line_break, .classes = "wikidict-poem" },
+        .{ .text = "VERSE_B", .classes = "wikidict-poem wikidict-poem-indent-2" },
+        .{ .kind = .line_break, .classes = "wikidict-poem wikidict-poem-indent-2" },
+    };
+    for ([_]model.Block{ .{ .kind = .example }, .{ .kind = .quotation } }) |sample| {
+        const kind = sample.kind;
+        out.clearRetainingCapacity();
+        try blocksText(&out.writer, &.{.{ .kind = kind, .depth = 1, .spans = &prose }}, false);
+        const expected = if (kind == .quotation) "  │ ORIGINAL\n\n  │ TRANSLATION\n\n" else "  │ ORIGINAL\n\n  │ TRANSLATION\n";
+        try std.testing.expectEqualStrings(expected, out.written());
+        out.clearRetainingCapacity();
+        try blocksText(&out.writer, &.{.{ .kind = kind, .depth = 1, .spans = &verse }}, false);
+        const expected_verse = if (kind == .quotation) "  │   VERSE_A\n\n  VERSE_B\n\n\n" else "  │   VERSE_A\n\n  VERSE_B\n\n";
+        try std.testing.expectEqualStrings(expected_verse, out.written());
+    }
 }

@@ -22,6 +22,34 @@ fn palette(theme: Theme, color: bool) Palette {
         .light => .{ .base = "\x1b[0;47;30m", .accent = "\x1b[1;34m", .muted = "\x1b[38;5;240m", .selected = "\x1b[48;5;252;30m" },
     };
 }
+// The query retains its original bytes for search and editing. Measure the
+// exact escaped display, and scroll only past complete original clusters.
+const QueryDisplay = struct { text: []u8, caret_cells: usize };
+fn queryDisplay(a: std.mem.Allocator, query: []const u8, cursor: usize, cells: usize) !QueryDisplay {
+    var rendered: std.Io.Writer.Allocating = .init(a);
+    defer rendered.deinit();
+    var boundaries: std.ArrayList(usize) = .empty;
+    defer boundaries.deinit(a);
+    try boundaries.append(a, 0);
+    var raw: usize = 0;
+    while (raw < cursor) {
+        const end = @min(cursor, term.nextClusterEnd(query, raw));
+        try output.terminalText(&rendered.writer, query[raw..end]);
+        try boundaries.append(a, rendered.written().len);
+        raw = end;
+    }
+    const rendered_cursor = rendered.written().len;
+    try output.terminalText(&rendered.writer, query[cursor..]);
+    // Match the single-line field's existing whitespace presentation.
+    for (rendered.written()) |*byte| if (byte.* == '\n' or byte.* == '\t') {
+        byte.* = ' ';
+    };
+    var first: usize = 0;
+    while (term.cellWidth(rendered.written()[boundaries.items[first]..rendered_cursor]) >= @max(cells, 1)) first += 1;
+    const start = boundaries.items[first];
+    return .{ .text = try a.dupe(u8, rendered.written()[start..]), .caret_cells = term.cellWidth(rendered.written()[start..rendered_cursor]) };
+}
+
 const State = struct {
     io: std.Io = undefined,
     a: std.mem.Allocator,
@@ -838,15 +866,10 @@ const State = struct {
             if (self.notice.len != 0) try self.put(w, 3, 3, sz.cols - 4, self.notice, p.accent);
             if (self.searchPending()) try self.put(w, 3, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "Searching... {d}%  /  {d} matches", .{ self.search.cursor * 100 / @max(1, self.db.count()), self.count() }), p.muted);
             try self.put(w, 4, 3, 10, if (self.nav == .learn) "Study" else "Search /", if (self.focus == .search) p.accent else p.muted);
-            // Horizontal input viewport follows the caret, at whole-codepoint boundaries.
-            var start: usize = 0;
             const input_width = sz.cols - 15;
-            while (term.cellWidth(self.query[start..self.cursor]) >= input_width) {
-                const next_start = term.nextClusterEnd(self.query[0..self.len], start);
-                if (next_start <= start) break;
-                start = next_start;
-            }
-            try self.put(w, 4, 13, input_width, if (self.nav == .learn) "Tab game; Esc search" else self.query[start..self.len], p.base);
+            const query_view = try queryDisplay(self.a, self.query[0..self.len], self.cursor, input_width);
+            defer self.a.free(query_view.text);
+            try self.put(w, 4, 13, input_width, if (self.nav == .learn) "Tab game; Esc search" else query_view.text, p.base);
             const show_matches = split_at != 0 or self.focus != .entry;
             if (show_matches) {
                 const cols = if (split_at == 0) sz.cols - 4 else split_at - 4;
@@ -897,7 +920,7 @@ const State = struct {
                     try w.print("\x1b[{d};1H{s}\x1b[2K", .{ 6 + i, p.base });
                     try self.put(w, 6 + i, 3, sz.cols - 4, line, if (i == 0) p.accent else p.base);
                 }
-            } else if (self.focus == .search) try w.print("\x1b[{d};{d}H\x1b[?25h", .{ 4, 13 + term.cellWidth(self.query[start..self.cursor]) });
+            } else if (self.focus == .search) try w.print("\x1b[{d};{d}H\x1b[?25h", .{ 4, 13 + query_view.caret_cells });
         }
         try w.writeAll("\x1b[?2026l");
         try term.writeAll(frame.written());
@@ -1502,4 +1525,41 @@ test "terminal table resize preserves folds scroll and disabled history state" {
     const after = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, reading.path, a, .limited(1024 * 1024));
     defer a.free(after);
     try std.testing.expectEqualStrings(persisted, after);
+}
+
+test "query viewport measures escaped controls while retaining raw clusters" {
+    term.initLocale();
+    const a = std.testing.allocator;
+    const query = "a\u{9b}b";
+    for ([_]usize{ 40, 80 }) |columns| {
+        const view = try queryDisplay(a, query, query.len, columns - 15);
+        defer a.free(view.text);
+        try std.testing.expectEqualStrings("a\\u{9b}b", view.text);
+        try std.testing.expectEqual(@as(usize, 8), view.caret_cells);
+        const home = try queryDisplay(a, query, 0, columns - 15);
+        defer a.free(home.text);
+        try std.testing.expectEqualStrings("a\\u{9b}b", home.text);
+        try std.testing.expectEqual(@as(usize, 0), home.caret_cells);
+    }
+    const narrow_query = "\u{9b}\u{9b}\u{9b}\u{9b}x";
+    const narrow = try queryDisplay(a, narrow_query, narrow_query.len, 40 - 15);
+    defer a.free(narrow.text);
+    try std.testing.expectEqualStrings("\\u{9b}\\u{9b}\\u{9b}x", narrow.text);
+    try std.testing.expectEqual(@as(usize, 19), narrow.caret_cells);
+    const wide_query = "\u{9b}\u{9b}\u{9b}\u{9b}\u{9b}\u{9b}\u{9b}\u{9b}\u{9b}\u{9b}\u{9b}\u{9b}x";
+    const wide = try queryDisplay(a, wide_query, wide_query.len, 80 - 15);
+    defer a.free(wide.text);
+    try std.testing.expectEqualStrings("\\u{9b}\\u{9b}\\u{9b}\\u{9b}\\u{9b}\\u{9b}\\u{9b}\\u{9b}\\u{9b}\\u{9b}x", wide.text);
+    try std.testing.expectEqual(@as(usize, 61), wide.caret_cells);
+    // The combining accent stays with its original control-containing cluster;
+    // the viewport never starts inside either the escape spelling or the mark.
+    const combined = "e\u{301}\u{9b}\u{301}x";
+    const combined_view = try queryDisplay(a, combined, combined.len, 7);
+    defer a.free(combined_view.text);
+    try std.testing.expectEqualStrings("x", combined_view.text);
+    try std.testing.expectEqual(@as(usize, 1), combined_view.caret_cells);
+    const middle = try queryDisplay(a, query, 3, 25);
+    defer a.free(middle.text);
+    try std.testing.expectEqualStrings("a\\u{9b}b", middle.text);
+    try std.testing.expectEqual(@as(usize, 7), middle.caret_cells);
 }
