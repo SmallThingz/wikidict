@@ -231,9 +231,12 @@ pub fn stripExpandedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
             if (tag_open) |open| {
                 if (tag_joined) {
                     if (inclusionTagAt(out.items, open)) |tag| {
-                        // Only the newly reconstructed, sanitizer-unknown nowiki
-                        // opener is escaped. Allowed pre and original scopes stay.
-                        if (std.ascii.eqlIgnoreCase(tag.name, "nowiki")) {
+                        // These strip hooks have already run before Sanitizer
+                        // removes comments. Reconstructed openers are unknown HTML.
+                        if (std.ascii.eqlIgnoreCase(tag.name, "nowiki") or
+                            std.ascii.eqlIgnoreCase(tag.name, "source") or
+                            std.ascii.eqlIgnoreCase(tag.name, "syntaxhighlight"))
+                        {
                             const old_len = out.items.len;
                             try out.resize(a, old_len + 3);
                             std.mem.copyBackwards(u8, out.items[open + 4 ..], out.items[open + 1 .. old_len]);
@@ -262,9 +265,14 @@ test "post expansion comments follow sanitizer boundaries and reconstructed open
         .{ "A\n <!--x--> ", "A\n  " },
         .{ "A<!--unclosed __NOEDITSECTION__ [[B]] ISBN 9780306406157", "A&lt;!--unclosed __NOEDITSECTION__ [[B]] ISBN 9780306406157" },
         .{ "<no<!--x-->wiki>__NOEDITSECTION__[[B]]</nowiki>", "&lt;nowiki>__NOEDITSECTION__[[B]]</nowiki>" },
+        .{ "<sour<!--x-->ce>[[cat]] __NOEDITSECTION__</source>", "&lt;source>[[cat]] __NOEDITSECTION__</source>" },
+        .{ "<syntax<!--x-->highlight>[[cat]] __NOEDITSECTION__</syntaxhighlight>", "&lt;syntaxhighlight>[[cat]] __NOEDITSECTION__</syntaxhighlight>" },
+        .{ "<syntax<!--x-->highlight lang=\"text\">[[dog]] __NOEDITSECTION__</syntaxhighlight>", "&lt;syntaxhighlight lang=\"text\">[[dog]] __NOEDITSECTION__</syntaxhighlight>" },
+        .{ "<SOU<!--x-->RCE>[[cat]]</SOURCE>", "&lt;SOURCE>[[cat]]</SOURCE>" },
         .{ "<pr<!--x-->e>body</pre>", "<pre>body</pre>" },
         .{ "<nowiki><!--literal-->__NOEDITSECTION__[[B]]</nowiki>", "<nowiki><!--literal-->__NOEDITSECTION__[[B]]</nowiki>" },
         .{ "<pre><!--literal--></pre><source><!--literal--></source><syntaxhighlight><!--literal--></syntaxhighlight>", "<pre><!--literal--></pre><source><!--literal--></source><syntaxhighlight><!--literal--></syntaxhighlight>" },
+        .{ "<source>[[cat]] __NOEDITSECTION__ <!--literal--></source><syntaxhighlight>[[dog]] __NOEDITSECTION__ <!--literal--></syntaxhighlight>", "<source>[[cat]] __NOEDITSECTION__ <!--literal--></source><syntaxhighlight>[[dog]] __NOEDITSECTION__ <!--literal--></syntaxhighlight>" },
         .{ "<code>A<!--x-->B</code>", "<code>AB</code>" },
     };
     for (cases) |case| {

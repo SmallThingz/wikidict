@@ -14,10 +14,52 @@ const A = std.mem.Allocator;
 pub const citation_state = @import("presentation_citations.zig");
 pub const CitationPlan = citation_state.Plan;
 
+fn optionalParagraphEnd(input: []const u8, opening: syntax.Tag, matcher: ?syntax.ControlMatcher) syntax.Pair {
+    var scan: syntax.OpaqueScan = .{};
+    var at = opening.end;
+    while (at < input.len) {
+        if (at > opening.end and input[at - 1] == '\n') {
+            const end = std.mem.indexOfScalarPos(u8, input, at, '\n') orelse input.len;
+            const line = std.mem.trimEnd(u8, input[at..end], "\r");
+            const controlled = line[syntax.leadingBehaviorControlOffset(line, matcher)..];
+            if (headingLineControlled(line, matcher) != null or Renderer.wikiTableIndent(line) != null or
+                starts(line, "----") or (controlled.len != 0 and std.mem.indexOfScalar(u8, "*#;:", controlled[0]) != null))
+                return .{ .inner_end = at, .end = at };
+        }
+        if (scan.tagAt(input, at, null)) |tag| {
+            if (tag.is("p") and tag.closing) return .{ .inner_end = at, .end = tag.end };
+            // Unsupported tag spellings remain escaped text, not block owners.
+            if (!tag.closing and oneOf(tag.name, &.{ "blockquote", "center", "div", "dl", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "ol", "p", "pre", "source", "syntaxhighlight", "table", "ul" }))
+                return .{ .inner_end = at, .end = at };
+        }
+        if (scan.protectedEnd(input, at, null)) |end| {
+            at = end;
+            continue;
+        }
+        if (starts(input[at..], "[[") or starts(input[at..], "{{")) {
+            if (syntax.balancedWithOpaqueScan(input, at, &scan)) |pair| {
+                at = pair.end;
+                continue;
+            }
+        } else if (input[at] == '[' and ir.hasExternalProtocol(input[at + 1 ..])) {
+            var links: ir.InlineIterator = .{ .input = input[at..], .renderer_boundaries = true };
+            if (links.next()) |token| if (token.kind == .external_link) {
+                at += links.cursor;
+                continue;
+            };
+        }
+        if (scan.tagAt(input, at, null)) |tag| {
+            at = tag.end;
+        } else at += 1;
+    }
+    return .{ .inner_end = input.len, .end = input.len };
+}
+
 // Ordinary HTML wrappers cannot cut a physical wiki table at an inner HTML
 // closer. Keep the original pair unless a real table close and later explicit
 // wrapper close prove the wider scope; genuinely unclosed tables stay unchanged.
-fn blockWrapperPair(input: []const u8, opening: syntax.Tag) ?syntax.Pair {
+fn blockWrapperPair(input: []const u8, opening: syntax.Tag, matcher: ?syntax.ControlMatcher) ?syntax.Pair {
+    if (opening.is("p") and !opening.closing and !opening.self_closing) return optionalParagraphEnd(input, opening, matcher);
     const original = syntax.matchingTag(input, opening) orelse return null;
     if (!opening.is("div") or std.mem.indexOf(u8, input[opening.end..original.inner_end], "{|") == null) return original;
     var scan: syntax.OpaqueScan = .{};
@@ -6645,7 +6687,7 @@ pub const Renderer = struct {
                     scan = if (syntax.matchingTag(input, tag)) |pair| pair.end else input.len;
                     continue;
                 }
-                if (tag.is("nowiki") and tag.closing) literal_end = tag.end;
+                if (tag.closing and oneOf(tag.name, &.{ "nowiki", "source", "syntaxhighlight" })) literal_end = tag.end;
                 if (oneOf(tag.name, &.{ "tbody", "thead", "tfoot" }) or (tag.closing and tag.is("ref")) or
                     (ordinaryHtmlName(tag.name) and !recognizedInlineHtmlName(tag.name)))
                 {
@@ -6941,7 +6983,7 @@ pub const Renderer = struct {
         // Consume the marker, not its contents: those still contain wiki links
         // and semantic HTML that must pass through the inline compiler.
         if (tag.is("li") and syntax.matchingTag(input, tag) == null) return tag.end;
-        const matched = syntax.matchingTag(input, tag);
+        const matched: ?syntax.Pair = if (tag.is("p")) optionalParagraphEnd(input, tag, self.behaviorControlMatcher()) else syntax.matchingTag(input, tag);
         if (matched == null) self.markUnclosed(input, tag, "known-html");
         // Unclosed layout containers have no inline style to scope. Consume
         // them iteratively, including long runs of malformed openers.
@@ -8707,8 +8749,9 @@ pub const Renderer = struct {
                 }
                 if (try self.semanticTagAt(input[at..], 0)) |tag| {
                     if (!tag.closing and syntax.pairedHtmlTag(tag.name)) {
-                        const pair = syntax.matchingTag(input[at..], tag) orelse return null;
-                        if (at > start and (oneOf(tag.name, &.{ "blockquote", "div", "p", "center" }) or htmlHeadingLevel(tag) != null))
+                        const pair = (if (tag.is("p")) blockWrapperPair(input[at..], tag, self.behaviorControlMatcher()) else syntax.matchingTag(input[at..], tag)) orelse return null;
+                        const item_block = self.html_list_item_flow and oneOf(tag.name, &.{ "ul", "ol", "dl", "table" });
+                        if (at > start and (item_block or oneOf(tag.name, &.{ "blockquote", "div", "p", "center" }) or htmlHeadingLevel(tag) != null))
                             return at;
                         at += pair.end;
                     } else at += tag.end;
@@ -9109,7 +9152,7 @@ pub const Renderer = struct {
             const table_indent: ?[]const u8 = if (anchored_inline) null else wikiTableIndent(clean);
             const html_tag = if (try self.semanticTagAt(clean, 0)) |tag| (if (!tag.closing and
                 (oneOf(tag.name, &.{ "table", "div", "blockquote", "p", "ul", "ol", "dl", "center", "noinclude" }) or htmlHeadingLevel(tag) != null) and
-                blockWrapperPair(clean, tag) != null) tag else null) else null;
+                blockWrapperPair(if (tag.is("p")) input[@intFromPtr(clean.ptr) - @intFromPtr(input.ptr) ..] else clean, tag, self.behaviorControlMatcher()) != null) tag else null) else null;
             const protected_tag = if (try self.semanticTagAt(clean, 0)) |tag| (if (!tag.closing and
                 (tag.is("pre") or tag.is("source") or tag.is("syntaxhighlight"))) tag else null) else null;
             // Horizontal rules precede behavior-control removal and require an
@@ -9287,8 +9330,8 @@ pub const Renderer = struct {
                 // Logical lines stop at the ordinary HTML pair. A DIV/table
                 // crossing must be proved against the remaining source, and
                 // every pair-relative slice must use that same source domain.
-                const wrapper_source = if (tag.is("div")) input[@intFromPtr(clean.ptr) - @intFromPtr(input.ptr) ..] else clean;
-                const pair = blockWrapperPair(wrapper_source, tag).?;
+                const wrapper_source = if (tag.is("div") or tag.is("p")) input[@intFromPtr(clean.ptr) - @intFromPtr(input.ptr) ..] else clean;
+                const pair = blockWrapperPair(wrapper_source, tag, self.behaviorControlMatcher()).?;
                 if (tag.is("table")) {
                     const inherited_formatting = self.block_formatting;
                     const inherited_poem_italic = self.poem_base_style.italic;
@@ -9379,9 +9422,10 @@ pub const Renderer = struct {
                     if (tag.is("blockquote")) self.html_blockquote_flow = false;
                 }
                 pos = @intFromPtr(wrapper_source.ptr) - @intFromPtr(input.ptr) + pair.end;
+                if (tag.is("p")) logical_line_end = null;
                 if (pos < input.len and input[pos] == '\n') {
                     pos += 1;
-                } else if (pos < input.len) {
+                } else if (pos < input.len and (pos == 0 or input[pos - 1] != '\n')) {
                     // A balanced block wrapper does not create a physical line
                     // boundary for following heading/list/table syntax.
                     inline_line_end = syntax.logicalEnd(input, pos);
@@ -9444,7 +9488,7 @@ pub const Renderer = struct {
                         inline_line_end = syntax.logicalEnd(input, pos);
                     continue;
                 }
-                var table = try self.parseTable(input, pos, try self.swatchCssHex(table_tag, "background-color"), try self.tableCellBackground(table_tag, null), try self.wikiTableForeground(table_tag, self.bodyFormattingStyle(.{})));
+                var table = try self.parseTable(input, pos, try self.swatchCssHex(table_tag, "background-color"), try self.tableCellBackground(table_tag, null), try self.wikiTableForeground(table_tag, self.bodyFormattingStyle(.{})), try self.wikiTableFontFormatting(table_tag.attrs, self.block_formatting));
                 if (legacyTableGeometry(table_tag)) |geometry| {
                     if (@import("blob_encoder").presentation_types.validTableGeometry(geometry)) table.table.geometry = geometry;
                 }
@@ -9571,7 +9615,7 @@ pub const Renderer = struct {
                 const wrapper_source = input[wrapper_offset..];
                 if (try self.semanticTagAt(wrapper_source, 0)) |tag| {
                     if (std.mem.eql(u8, path, "*") and !tag.closing and tag.is("div")) {
-                        if (blockWrapperPair(wrapper_source, tag)) |pair| {
+                        if (blockWrapperPair(wrapper_source, tag, self.behaviorControlMatcher())) |pair| {
                             const ordinary = syntax.matchingTag(wrapper_source, tag).?;
                             if (pair.end > ordinary.end) {
                                 const seed = try self.rawBodyQuoteSeed(input, wrapper_source[0..pair.end], &body_quotes);
@@ -9765,6 +9809,10 @@ pub const Renderer = struct {
         return result.toOwnedSlice(self.a);
     }
     fn htmlListItem(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, kind: Kind, path: []const u8, number: []const u8, item: syntax.Tag, depth: usize, style: Style) Error!void {
+        // Keep an enclosing container intact when it owns a nested block. The
+        // body parser applies its attributes to the prefix, child and suffix.
+        if (try self.htmlListItemHasScopedBlocks(input))
+            return self.htmlListItemWikiBody(blocks, input, kind, path, number, item, true, style);
         const item_style = try self.htmlListInheritedFontStyle(item, style);
         const previous_font_flags = self.block_formatting;
         const previous_poem_italic = self.poem_base_style.italic;
@@ -9828,6 +9876,47 @@ pub const Renderer = struct {
             preceding = cursor;
         }
         try self.htmlListItemPart(blocks, input[preceding..], if (emitted) .list_detail else kind, path, if (emitted) "" else number, item, !emitted, style);
+    }
+    fn htmlListItemHasScopedBlocks(self: *Renderer, input: []const u8) Error!bool {
+        var cursor: usize = 0;
+        var container_end: usize = 0;
+        var opaque_scan: syntax.OpaqueScan = .{};
+        var links: ir.InlineIterator = .{ .input = input, .renderer_boundaries = true, .link_trail = self.context.link_trail };
+        while (std.mem.indexOfAnyPos(u8, input, cursor, "<[")) |at| {
+            if (input[at] == '[') {
+                if (starts(input[at..], "[[")) {
+                    links.cursor = at;
+                    if (links.next()) |token| {
+                        if (token.kind == .link and safeInternalTarget(token.target) and !internalTargetHasNowikiRegion(token.target)) {
+                            cursor = links.cursor;
+                            continue;
+                        }
+                    }
+                }
+                cursor = at + 1;
+                continue;
+            }
+            if (opaque_scan.protectedEnd(input, at, null)) |end| {
+                cursor = end;
+                continue;
+            }
+            const tag = try self.semanticTagAt(input, at) orelse {
+                cursor = at + 1;
+                continue;
+            };
+            cursor = tag.end;
+            if (tag.closing or tag.self_closing) continue;
+            if (oneOf(tag.name, &.{ "div", "p", "blockquote", "center" })) {
+                if (syntax.matchingTagWithOpaqueScan(input, tag, &opaque_scan)) |pair|
+                    container_end = @max(container_end, pair.inner_end);
+            } else if (oneOf(tag.name, &.{ "ul", "ol", "dl", "table" })) {
+                if (syntax.matchingTagWithOpaqueScan(input, tag, &opaque_scan)) |pair| {
+                    if (at < container_end) return true;
+                    cursor = pair.end;
+                }
+            }
+        }
+        return false;
     }
     fn htmlListItemFormattingAt(self: *Renderer, input: []const u8, start: usize, line_end: usize) Error!?struct { offset: usize, tag: syntax.Tag } {
         var at = start;
@@ -10428,7 +10517,9 @@ pub const Renderer = struct {
                     .blocks = cell_blocks,
                 });
             }
-            if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
+            // Explicit empty rows still occupy a grid position and node budget.
+            if (cells.items.len != 0 or (!implicit_row and !self.truncated and self.spend()))
+                try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
         }
         try self.htmlTableFostered(fostered, input[processed..], &foster_joinable, &foster_formatting);
         // Unsupported authored group tags do not split the actual table row group.
@@ -10651,7 +10742,7 @@ pub const Renderer = struct {
         return found and depth == 0;
     }
 
-    fn parseTable(self: *Renderer, source: []const u8, start: usize, swatch_background: ?[]const u8, table_background: ?[]const u8, table_style: Style) Error!TableResult {
+    fn parseTable(self: *Renderer, source: []const u8, start: usize, swatch_background: ?[]const u8, table_background: ?[]const u8, table_style: Style, table_formatting: SpanFlags) Error!TableResult {
         const tracked = if (self.body_missing) |parent| try self.missingSliceWithHeadingSource(parent, source) else MissingText.untracked(source);
         // Slicing tracked ranges owns a copied byte domain. Derive every cell
         // and caption slice from that same domain before copying provenance.
@@ -10672,7 +10763,7 @@ pub const Renderer = struct {
         var outside_copies: std.ArrayList(HeadingSourceCopy) = .empty;
         defer outside_copies.deinit(self.a);
         var current: ?Cell = null;
-        const inherited_formatting = self.block_formatting;
+        const inherited_formatting = table_formatting;
         var row_formatting = inherited_formatting;
         var cell_formatting = inherited_formatting;
         var caption: std.ArrayList(Span) = .empty;
@@ -25888,7 +25979,7 @@ test "DIV scope retains complete wiki tables across inner closing tags" {
     };
     for (controls, 0..) |input, index| {
         const tag = syntax.tagAt(input, 0).?;
-        const pair = blockWrapperPair(input, tag).?;
+        const pair = blockWrapperPair(input, tag, null).?;
         if (index == 0) {
             try std.testing.expectEqual(std.mem.lastIndexOf(u8, input, "</div>").?, pair.inner_end);
         } else {
@@ -30687,5 +30778,248 @@ test "invalid follow bodies cannot enter explicit page definition authorities" {
         const refs = try r.finishReferences();
         try std.testing.expectEqual(@as(usize, 1), refs.len);
         try std.testing.expectEqualStrings("Reference text unavailable", try flattened(a, refs[0].spans));
+    }
+}
+
+test "HTML list containers preserve scoped nested blocks and sibling restoration through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const inherited: Style = .{ .language = "ar", .direction = "rtl", .bold = true, .italic = true };
+    const cleared: Style = .{ .language = "fr", .direction = "ltr" };
+    const Check = struct {
+        fn words(allocator: A, blocks: anytype, expected: Style) !void {
+            for ([_][]const u8{ "before", "tail" }) |word|
+                try FormattingScopeTest.word(allocator, blocks, word, expected);
+            for ([_][]const u8{ "outside", "sibling", "after" }) |word|
+                try FormattingScopeTest.word(allocator, blocks, word, .{});
+        }
+        fn table(allocator: A, blocks: anytype, expected: Style, override: Style) !void {
+            var count: usize = 0;
+            for (blocks) |block_value| if (block_value.table) |value| {
+                count += 1;
+                try std.testing.expectEqualStrings("*:", block_value.list_path);
+                try std.testing.expectEqual(@as(usize, 1), value.rows.len);
+                try std.testing.expectEqual(@as(usize, 2), value.rows[0].cells.len);
+                for (value.rows[0].cells, [_][]const u8{ "cell", "clear" }, [_]Style{ expected, override }) |cell, word, style| {
+                    const paragraphs = [_]struct { spans: @TypeOf(cell.spans) }{.{ .spans = cell.spans }};
+                    try FormattingScopeTest.word(allocator, &paragraphs, word, style);
+                }
+            };
+            try std.testing.expectEqual(@as(usize, 1), count);
+        }
+    };
+    const cases = [_]struct { nested: []const u8, child_path: []const u8, child_target: []const u8 = "" }{
+        .{ .nested = "<ul><li>[[cat|child]]</li><li lang=fr dir=ltr style='font-weight:normal;font-style:normal'>clear</li></ul>", .child_path = "**", .child_target = "cat" },
+        .{ .nested = "<ol><li>child</li><li lang=fr dir=ltr style='font-weight:normal;font-style:normal'>clear</li></ol>", .child_path = "*#" },
+        .{ .nested = "<dl><dt>child</dt><dd lang=fr dir=ltr style='font-weight:normal;font-style:normal'>clear</dd></dl>", .child_path = "*;" },
+        .{ .nested = "<table><tr><td>cell</td><td lang=fr dir=ltr style='font-weight:normal;font-style:normal'>clear</td></tr></table>", .child_path = "" },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(a, "<ul><li><div lang=ar dir=rtl style='font-weight:bold;font-style:italic'>before{s}tail</div>outside</li><li>sibling</li></ul>after", .{case.nested});
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+        try Check.words(a, blocks, inherited);
+        try Check.words(a, stored.entry.sections[0].blocks, inherited);
+        if (case.child_path.len != 0) {
+            var child_style = inherited;
+            if (case.child_target.len != 0) {
+                child_style.kind = .link;
+                child_style.target = case.child_target;
+            }
+            try FormattingScopeTest.word(a, blocks, "child", child_style);
+            try FormattingScopeTest.word(a, blocks, "clear", cleared);
+            try FormattingScopeTest.word(a, stored.entry.sections[0].blocks, "child", child_style);
+            try FormattingScopeTest.word(a, stored.entry.sections[0].blocks, "clear", cleared);
+            var children: usize = 0;
+            for (blocks) |block_value| if (std.mem.eql(u8, trim(try plainText(a, block_value.spans)), "child")) {
+                children += 1;
+                try std.testing.expectEqualStrings(case.child_path, block_value.list_path);
+                try std.testing.expectEqualStrings(if (std.mem.eql(u8, case.child_path, "*#")) "1" else "", block_value.number);
+            };
+            try std.testing.expectEqual(@as(usize, 1), children);
+            var decoded_children: usize = 0;
+            for (stored.entry.sections[0].blocks) |block_value| if (std.mem.eql(u8, trim(try FormattingScopeTest.text(a, block_value.spans)), "child")) {
+                decoded_children += 1;
+                try std.testing.expectEqualStrings(case.child_path, block_value.list_path);
+                try std.testing.expectEqualStrings(if (std.mem.eql(u8, case.child_path, "*#")) "1" else "", block_value.number);
+            };
+            try std.testing.expectEqual(@as(usize, 1), decoded_children);
+        } else {
+            try Check.table(a, blocks, inherited, cleared);
+            try Check.table(a, stored.entry.sections[0].blocks, inherited, cleared);
+        }
+        try std.testing.expect(!renderer.fallbacks.any());
+        try std.testing.expect(!renderer.html_list_item_flow);
+        try std.testing.expect(renderer.body_language_direction == null);
+        try std.testing.expectEqualStrings("", renderer.body_formatting_attributes.language);
+        try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(renderer.block_formatting)));
+    }
+}
+
+test "explicit empty HTML rows preserve rowspan grid positions through codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const codec = @import("blob_encoder").presentation_codec;
+    const cases = [_]struct { source: []const u8, rowspan: u16, columns: usize }{
+        .{ .source = "<table><tr><td rowspan=2>A</td></tr><tr></tr><tr><td>B</td></tr></table>", .rowspan = 2, .columns = 1 },
+        .{ .source = "<table><tr><td rowspan=0>A</td></tr><tr></tr><tr><td>B</td></tr></table>", .rowspan = 3, .columns = 2 },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(case.source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        const table = blocks[0].table.?;
+        try std.testing.expectEqual(@as(usize, 3), table.rows.len);
+        try std.testing.expectEqual(@as(usize, 0), table.rows[1].cells.len);
+        try std.testing.expectEqual(case.rowspan, table.rows[0].cells[0].rowspan);
+        try std.testing.expectEqualStrings("B", try plainText(a, table.rows[2].cells[0].spans));
+        const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+        const decoded = stored.entry.sections[0].blocks[0].table.?;
+        try std.testing.expectEqual(@as(usize, 3), decoded.rows.len);
+        try std.testing.expectEqual(@as(usize, 0), decoded.rows[1].cells.len);
+        try std.testing.expectEqual(case.rowspan, decoded.rows[0].cells[0].rowspan);
+        try std.testing.expectEqualStrings("B", try FormattingScopeTest.text(a, decoded.rows[2].cells[0].spans));
+        const grid = codec.measureTableGrid(decoded);
+        try std.testing.expectEqual(@as(?usize, case.columns), grid.exact_compact_columns);
+        try std.testing.expectEqual(@as(usize, 3), grid.occupied_rows);
+        const saved = try codec.encodeAlloc(a, stored);
+        const again = try codec.decodeAlloc(a, saved, "formatting scope", .language, .{ .code = "en", .heading = "English" });
+        const saved_grid = codec.measureTableGrid(again.entry.sections[0].blocks[0].table.?);
+        try std.testing.expectEqual(grid.exact_compact_columns, saved_grid.exact_compact_columns);
+        try std.testing.expectEqual(grid.occupied_rows, saved_grid.occupied_rows);
+        try std.testing.expect(!renderer.fallbacks.any());
+    }
+}
+
+test "wiki table opener fonts inherit into captions and cells without styling fostered text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "outside\n{| style='font-weight:bold;font-style:italic'\nfostered\n|+ caption\n|+ style='font-weight:normal;font-style:normal' | captionplain\n|-\n| inherited <span style='font-weight:normal;font-style:normal'>innerplain</span> restored || style='font-weight:normal;font-style:normal' | plaincell\n|- style='font-weight:normal;font-style:normal'\n| rowplain || style='font-weight:bold;font-style:italic' | rebold\n|}\nafter";
+    const Check = struct {
+        fn styled(allocator: A, spans: anytype, word: []const u8, style: Style) !void {
+            const paragraphs = [_]struct { spans: @TypeOf(spans) }{.{ .spans = spans }};
+            try FormattingScopeTest.word(allocator, &paragraphs, word, style);
+        }
+        fn check(allocator: A, blocks: anytype) !void {
+            for ([_][]const u8{ "outside", "fostered", "after" }) |word|
+                try FormattingScopeTest.word(allocator, blocks, word, .{});
+            var count: usize = 0;
+            for (blocks) |block_value| if (block_value.table) |table| {
+                count += 1;
+                try std.testing.expectEqual(@as(usize, 2), table.rows.len);
+                try std.testing.expectEqual(@as(usize, 2), table.rows[0].cells.len);
+                try std.testing.expectEqual(@as(usize, 2), table.rows[1].cells.len);
+                // The first caption's name is distinct from the normal override.
+                const caption = try FormattingScopeTest.text(allocator, table.caption);
+                try std.testing.expect(std.mem.indexOf(u8, caption, "caption") != null);
+                var bold_caption = false;
+                var normal_caption = false;
+                for (table.caption) |span| {
+                    const bold = if (@hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold;
+                    const italic = if (@hasField(@TypeOf(span), "flags")) span.flags.italic else span.italic;
+                    if (std.mem.eql(u8, trim(span.text), "caption")) bold_caption = bold and italic;
+                    if (std.mem.eql(u8, trim(span.text), "captionplain")) normal_caption = !bold and !italic;
+                }
+                try std.testing.expect(bold_caption and normal_caption);
+                const inherited = table.rows[0].cells[0].spans;
+                try styled(allocator, inherited, "inherited", .{ .bold = true, .italic = true });
+                try styled(allocator, inherited, "innerplain", .{});
+                try styled(allocator, inherited, "restored", .{ .bold = true, .italic = true });
+                try styled(allocator, table.rows[0].cells[1].spans, "plaincell", .{});
+                try styled(allocator, table.rows[1].cells[0].spans, "rowplain", .{});
+                try styled(allocator, table.rows[1].cells[1].spans, "rebold", .{ .bold = true, .italic = true });
+            };
+            try std.testing.expectEqual(@as(usize, 1), count);
+        }
+    };
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(source);
+    try Check.check(a, blocks);
+    const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+    try Check.check(a, stored.entry.sections[0].blocks);
+    try std.testing.expect(!renderer.fallbacks.any());
+    try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(renderer.block_formatting)));
+}
+
+test "optional HTML paragraphs preserve boundaries and scoped actions through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "one<p>two", "<p>one<p>two", "<p>one<p>two</p>" }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        try FormattingScopeTest.shapes(a, blocks, &.{ "paragraph", "paragraph" }, &.{ "one", "two" });
+        const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+        try FormattingScopeTest.shapes(a, stored.entry.sections[0].blocks, &.{ "paragraph", "paragraph" }, &.{ "one", "two" });
+        try std.testing.expect(!renderer.fallbacks.any());
+    }
+    const source = "<p lang=ar dir=rtl style='font-weight:bold'>one\ncontinued<p lang=fr dir=ltr style='font-weight:normal'>[[cat|two]]</p>tail";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(source);
+    const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+    try FormattingScopeTest.word(a, blocks, "continued", .{ .language = "ar", .direction = "rtl", .bold = true });
+    try FormattingScopeTest.word(a, blocks, "two", .{ .kind = .link, .target = "cat", .language = "fr", .direction = "ltr" });
+    try FormattingScopeTest.word(a, blocks, "tail", .{});
+    try FormattingScopeTest.word(a, stored.entry.sections[0].blocks, "continued", .{ .language = "ar", .direction = "rtl", .bold = true });
+    try FormattingScopeTest.word(a, stored.entry.sections[0].blocks, "two", .{ .kind = .link, .target = "cat", .language = "fr", .direction = "ltr" });
+    try FormattingScopeTest.word(a, stored.entry.sections[0].blocks, "tail", .{});
+    try std.testing.expect(!renderer.fallbacks.any());
+    try std.testing.expect(renderer.body_language_direction == null);
+    try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(renderer.block_formatting)));
+    // Span-only owners need the same boundary and scope restoration.
+    var inline_renderer: Renderer = .{ .a = a, .context = .{} };
+    const inline_spans = try inline_renderer.parseSpans("<p style='font-weight:bold'>one<p>[[cat|two]]", .{});
+    const inline_blocks = [_]struct { spans: []const Span }{.{ .spans = inline_spans }};
+    try FormattingScopeTest.word(a, &inline_blocks, "one", .{ .bold = true });
+    try FormattingScopeTest.word(a, &inline_blocks, "two", .{ .kind = .link, .target = "cat" });
+    try std.testing.expect(std.mem.indexOf(u8, try flattened(a, inline_spans), "one\ntwo") != null);
+    // Raw source atoms and entity spellings do not create paragraph openers.
+    for ([_][]const u8{
+        "<p><nowiki><p>literal</nowiki>tail<p>next",
+        "<p><!-- <p> -->tail<p>next",
+        "<p>[[cat|<p>label]]tail<p>next",
+        "<p>{{unknown|<p>argument}}tail<p>next",
+        "<p>&lt;p&gt;literal<p>next",
+    }) |protected_source| {
+        const opening = syntax.tagAt(protected_source, 0).?;
+        const pair = optionalParagraphEnd(protected_source, opening, null);
+        try std.testing.expectEqual(std.mem.lastIndexOf(u8, protected_source, "<p>").?, pair.inner_end);
+    }
+    var literal_renderer: Renderer = .{ .a = a, .context = .{} };
+    const literal_blocks = try literal_renderer.renderBody("one<nowiki><p></nowiki>two &lt;p&gt;three");
+    try FormattingScopeTest.shapes(a, literal_blocks, &.{"paragraph"}, &.{"one<p>two <p>three"});
+    const literal_stored = try FormattingScopeTest.encode(a, &literal_renderer, literal_blocks);
+    try FormattingScopeTest.shapes(a, literal_stored.entry.sections[0].blocks, &.{"paragraph"}, &.{"one<p>two <p>three"});
+    var unsupported: Renderer = .{ .a = a, .context = .{} };
+    const unsupported_blocks = try unsupported.renderBody("<p style='font-weight:bold'>one<address>two");
+    try FormattingScopeTest.word(a, unsupported_blocks, "two", .{ .bold = true });
+    const unsupported_stored = try FormattingScopeTest.encode(a, &unsupported, unsupported_blocks);
+    try FormattingScopeTest.word(a, unsupported_stored.entry.sections[0].blocks, "two", .{ .bold = true });
+}
+
+test "optional HTML paragraph ends restore styles before active wiki blocks" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "==Heading==\ntwo", "==Heading==\ntwo</p>", "* item\ntwo", "{|\n| cell\n|}\ntwo", "----\ntwo", "<pre>preformatted</pre>\ntwo", "<source>protected</source>\ntwo", "<syntaxhighlight>protected</syntaxhighlight>\ntwo" }) |following| {
+        const source = try std.fmt.allocPrint(a, "<p lang=ar dir=rtl style='font-weight:bold'>one\n{s}", .{following});
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+        try FormattingScopeTest.word(a, blocks, "one", .{ .language = "ar", .direction = "rtl", .bold = true });
+        try FormattingScopeTest.word(a, blocks, "two", .{});
+        try FormattingScopeTest.word(a, stored.entry.sections[0].blocks, "one", .{ .language = "ar", .direction = "rtl", .bold = true });
+        try FormattingScopeTest.word(a, stored.entry.sections[0].blocks, "two", .{});
+        if (starts(following, "==")) {
+            try FormattingScopeTest.word(a, blocks, "Heading", .{});
+            try std.testing.expectEqual(Kind.heading, blocks[1].kind);
+        }
+        try std.testing.expect(!renderer.fallbacks.any());
+        try std.testing.expect(renderer.body_language_direction == null);
+        try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(renderer.block_formatting)));
     }
 }

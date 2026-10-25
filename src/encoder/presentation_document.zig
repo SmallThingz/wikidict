@@ -354,7 +354,7 @@ const ObserveHeadings = struct {
         const offset = source_offset orelse return error.InvalidHeadingProjection;
         var report: Fallbacks = .{};
         try validateSpans(self.a, values, &report);
-        const text = trimHeading(try compiler.plainText(self.a, values));
+        const text = try compiler.plainText(self.a, values);
         const identity = if (authored_id.len != 0) try self.registry.authoredIds(self.a, authored_id) else try self.registry.headingIds(self.a, text);
         try self.result.append(self.a, .{ .source_offset = offset, .anchor = identity.anchor, .anchor_fallback = identity.anchor_fallback });
     }
@@ -388,7 +388,7 @@ const AssignHeadings = struct {
     }
     fn block(self: *@This(), value: *compiler.Block) anyerror!void {
         if (value.kind != .heading) return;
-        const ids = try self.identity(value.heading_source_offset, value.heading_authored_id, trimHeading(try compiler.plainText(self.a, value.spans)));
+        const ids = try self.identity(value.heading_source_offset, value.heading_authored_id, try compiler.plainText(self.a, value.spans));
         value.anchor = ids.anchor;
         value.anchor_fallback = ids.anchor_fallback;
     }
@@ -885,7 +885,7 @@ pub fn compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(
     for (@constCast(work.sections)) |*section| {
         // The shared registry follows section headings and cell blocks in source order.
         if (section.is_heading) {
-            const identity = try assign.identity(section.heading_source_offset, section.heading_authored_id, section.title);
+            const identity = try assign.identity(section.heading_source_offset, section.heading_authored_id, try compiler.plainText(a, section.title_spans));
             section.anchor = identity.anchor;
             section.anchor_fallback = identity.anchor_fallback;
         }
@@ -1675,6 +1675,48 @@ test "post-expansion generated-comment fixture preserves control semantics and I
     try std.testing.expectEqual(@as(usize, 1), body_links);
     const raw = [_]compiler.Span{.{ .text = "</nowiki>" }};
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+}
+
+test "post-expansion reconstructed source hooks keep body actions active through DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // stripExpandedComments asserts these exact handoff spellings for generated
+    // sour<!--x-->ce and syntax<!--x-->highlight openers. Their strip hooks ran
+    // before comment removal; only the original scopes below protect their body.
+    for ([_][]const u8{ "source", "syntaxhighlight" }) |tag| {
+        const normalized = try std.fmt.allocPrint(a, "&lt;{s}>[[cat]] __NOEDITSECTION__</{s}>\n\n<{s}>[[protected]] __NOEDITSECTION__</{s}>", .{ tag, tag, tag, tag });
+        var renderer: compiler.Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(normalized);
+        var parsed_links: usize = 0;
+        for (blocks) |block| for (block.spans) |span| {
+            if (span.kind == .link) {
+                try std.testing.expectEqualStrings("cat", span.target);
+                try std.testing.expect(span.provenance == .parsed);
+                parsed_links += 1;
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), parsed_links);
+        var report: Fallbacks = .{};
+        const encoded = try compileReportedAlloc(a, "entry", .language, "English", "en", normalized, null, &report);
+        try std.testing.expect(!report.literal_markup);
+        const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+        var visible: std.ArrayList(u8) = .empty;
+        var links: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            if (span.kind == .link) {
+                try std.testing.expectEqualStrings("cat", span.target);
+                links += 1;
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), links);
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, try std.fmt.allocPrint(a, "<{s}>cat </{s}>", .{ tag, tag })) != null);
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, "[[protected]]") != null);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, visible.items, "__NOEDITSECTION__"));
+        const raw = [_]compiler.Span{.{ .text = try std.fmt.allocPrint(a, "</{s}>", .{tag}) }};
+        try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+    }
 }
 
 test "poem lines metadata and protected strip breaks survive ordinary DPR2" {
@@ -3023,6 +3065,53 @@ test "allocated tracked fragments retain projected page-wide heading IDs" {
     try std.testing.expectEqualStrings("Noun_2", decoded.entry.sections[1].anchor);
     try std.testing.expectEqualStrings("Noun", decoded.entry.sections[1].title);
     try std.testing.expectEqualStrings("Noun_2", decoded.entry.sections[1].blocks[0].anchor);
+}
+
+test "leading NBSP heading identities stay distinct through observation projection and DPR2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const headings = "===&nbsp;Noun===\nfirst\n===Noun===\n[[#Noun|plain heading]]\n";
+    const cases = [_]struct { source: []const u8, cell: bool }{
+        .{ .source = headings, .cell = false },
+        .{ .source = "{|\n| intro\n" ++ headings ++ "|}\n", .cell = true },
+    };
+    for (cases) |case| {
+        const bytes = try compileAlloc(a, "entry", .language, "English", "en", case.source, null);
+        const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+        const body_blocks = if (case.cell) cell: {
+            try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections.len);
+            const blocks = decoded.entry.sections[0].blocks[0].table.?.rows[0].cells[0].blocks.?;
+            try std.testing.expectEqual(types.BlockKind.heading, blocks[1].kind);
+            try std.testing.expectEqual(types.BlockKind.heading, blocks[3].kind);
+            try std.testing.expectEqualStrings("_Noun", blocks[1].anchor);
+            try std.testing.expectEqualStrings("Noun", blocks[3].anchor);
+            break :cell blocks;
+        } else sections: {
+            try std.testing.expectEqual(@as(usize, 2), decoded.entry.sections.len);
+            try std.testing.expectEqualStrings("Noun", decoded.entry.sections[0].title);
+            try std.testing.expectEqualStrings("Noun", decoded.entry.sections[1].title);
+            try std.testing.expectEqualStrings("_Noun", decoded.entry.sections[0].anchor);
+            try std.testing.expectEqualStrings("Noun", decoded.entry.sections[1].anchor);
+            break :sections decoded.entry.sections[1].blocks;
+        };
+        var links: usize = 0;
+        for (body_blocks) |block| for (block.spans) |span| {
+            if (span.kind == .link) {
+                try std.testing.expectEqualStrings("#Noun", span.target);
+                try std.testing.expectEqualStrings("plain heading", span.text);
+                links += 1;
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), links);
+        const observation = try observeHeadingAnchorsAlloc(a, "entry", MissingText.untracked(case.source), .{}, null, null, null, .{}, null);
+        try std.testing.expectEqual(@as(usize, 2), observation.items.len);
+        try std.testing.expectEqualStrings("_Noun", observation.items[0].anchor);
+        try std.testing.expectEqualStrings("Noun", observation.items[1].anchor);
+        const projection = [_]HeadingSourceRange{.{ .owner_start = 0, .page_start = 0, .len = case.source.len }};
+        const projected = try compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(a, "entry", .language, "English", "en", MissingText.untracked(case.source), null, .{}, null, null, null, .{}, null, null, &.{}, &observation, &projection);
+        try std.testing.expectEqualSlices(u8, bytes, projected);
+    }
 }
 
 test "protected and entity literal heading text remains semantic display data" {
