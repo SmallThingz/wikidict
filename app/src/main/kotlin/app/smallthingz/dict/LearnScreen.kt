@@ -116,11 +116,11 @@ internal fun Flashcards(pool: List<SavedWord>, onOpen: (SavedWord) -> Unit, onAn
 }
 @Composable
 internal fun ScrambleGame(pool: List<SavedWord>, onAnswer: (String, Boolean) -> Unit, showEmpty: Boolean = true) {
-    val playable = remember(pool) { pool.filter { it.title.codePointCount(0, it.title.length) > 2 } }
+    val playable = remember(pool) { playableScrambleWords(pool) }
     var word by remember(playable) { mutableStateOf(playable.randomOrNull()) }
     var guess by remember(word) { mutableStateOf("") }
     var status by remember(word) { mutableStateOf<Boolean?>(null) }
-    val scrambled = remember(word) { word?.title?.let(::scramble).orEmpty() }
+    val scrambled = remember(word) { word?.title?.let { scramble(it) }.orEmpty() }
     Box(Modifier.fillMaxWidth()) { Column(Modifier.padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (word == null) { if (showEmpty) Text("Add a few longer words first.") } else word?.let { current ->
             Text(scrambled, style = MaterialTheme.typography.headlineLarge, letterSpacing = MaterialTheme.typography.headlineLarge.letterSpacing)
@@ -136,14 +136,6 @@ internal fun ScrambleGame(pool: List<SavedWord>, onAnswer: (String, Boolean) -> 
             } }
         }
     } }
-}
-
-private fun scramble(value: String): String {
-    val chars = value.codePoints().toArray().toMutableList()
-    if (chars.size < 2) return value
-    var shuffled = chars.shuffled()
-    if (shuffled == chars) shuffled = chars.drop(1) + chars.first()
-    return String(shuffled.toIntArray(), 0, shuffled.size)
 }
 
 private sealed interface LearnSample {
