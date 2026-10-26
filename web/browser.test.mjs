@@ -180,11 +180,25 @@ try{
  const renderedLists=await rendererPage.evaluate(entry=>{
   const host=document.getElementById('compiled-renderer-fixture');
   host.replaceChildren(WikidictRendererQA.renderEntry(entry,()=>{}, {collapseOtherSections:false,collapseDetails:false}));
+  const row=text=>[...host.querySelectorAll('.block.list_item')].find(el=>el.querySelector(':scope > .body')?.textContent===text);
+  const parent=row('Parent ordered').closest('li'),child=row('Nested unordered').closest('li'),grandchild=row('Nested ordered').closest('li');
+  const continuation=host.querySelector('.block.list_detail');
   return {prefixes:[...host.querySelectorAll('.block.list_item > .prefix')].map(el=>el.textContent),
    indents:[...host.querySelectorAll('.block.list_item')].map(el=>parseFloat(el.style.marginInlineStart)),
    definitions:host.querySelectorAll('.block.definition').length,
    meaningSections:[...host.querySelectorAll('details.meaning > summary')].map(el=>el.textContent),
-   text:host.textContent,literalLinks:host.querySelectorAll('.block.paragraph a').length};
+   text:host.textContent,literalLinks:host.querySelectorAll('.block.paragraph a').length,
+   hierarchy:{roots:[...host.querySelectorAll('details > .compiled-list')].map(el=>el.tagName),
+    outerItems:parent.parentElement.children.length,parentNumber:parent.value,explicitNumber:row('Explicit value').closest('li').value,
+    childList:child.parentElement.tagName,childOwner:child.parentElement.parentElement===parent,
+    grandchildList:grandchild.parentElement.tagName,grandchildOwner:grandchild.parentElement.parentElement===child,
+    continuationOwner:continuation.closest('li')===parent,
+    continuationAfterChildren:parent.lastElementChild===continuation,
+    siblingOwner:row('Explicit value').closest('li').parentElement===parent.parentElement,
+    namedLists:[...host.querySelectorAll('.compiled-list')].every(el=>el.getAttribute('role')==='list'),
+    decorativeHidden:[row('Nested unordered').querySelector(':scope > .prefix'),continuation.querySelector(':scope > .prefix')].every(el=>el.getAttribute('aria-hidden')==='true'),
+    authoredLabelsVisible:[...host.querySelectorAll('.list_item > .prefix')].filter(el=>el.textContent!=='•').every(el=>!el.hasAttribute('aria-hidden')),
+    itemCount:host.querySelectorAll('li').length,definitionHasItem:!!host.querySelector('.definition').closest('li')}};
  },{title:'Ordered fixture',kind:'supplemental',sections:[
   {title:'List',blocks:[
    listBlock('list_item','Parent ordered','3','#',1),listBlock('list_item','Nested unordered','','#*',2),
@@ -198,6 +212,46 @@ try{
  assert.ok(renderedLists.indents[2]>renderedLists.indents[1] && renderedLists.indents[1]>renderedLists.indents[0]);
  assert.equal(renderedLists.definitions,1);assert.deepEqual(renderedLists.meaningSections,['Meaning']);
  assert.ok(renderedLists.text.includes('{{example}} [[literal]]'));assert.equal(renderedLists.literalLinks,0);
+ assert.deepEqual(renderedLists.hierarchy,{roots:['OL'],outerItems:7,parentNumber:3,explicitNumber:8,childList:'UL',childOwner:true,grandchildList:'OL',grandchildOwner:true,continuationOwner:true,continuationAfterChildren:true,siblingOwner:true,namedLists:true,decorativeHidden:true,authoredLabelsVisible:true,itemCount:9,definitionHasItem:false});
+ const listAccessibility=await rendererPage.locator('details > .compiled-list').first().ariaSnapshot();
+ assert.ok(listAccessibility.includes('list:')&&listAccessibility.includes('listitem:'),'Semantic lists and items must reach the accessibility tree');
+ const cellLists=await rendererPage.evaluate(()=>{
+  const host=document.getElementById('compiled-renderer-fixture'),text=value=>[{kind:'text',text:value}],item=(label,path)=>({kind:'list_item',path,depth:path.length,spans:text(label)});
+  const first=[item('Cell parent','*'),item('Cell child','**'),{kind:'list_detail',path:'*:',depth:2,spans:text('Cell continuation')}];
+  const second=[item('Other cell','*')];
+  const entry={title:'Cell list fixture',sections:[{title:'Meaning',blocks:[{kind:'definition',spans:text('Definition')},{kind:'list_item',path:'*',depth:1,spans:text('Note parent')},{kind:'list_item',path:'**',depth:2,spans:text('Note child')},{kind:'table',table:{rows:[{cells:[{spans:[],blocks:first},{spans:[],blocks:second}]}]}}]}]};
+  const before=JSON.stringify(entry);host.replaceChildren(WikidictRendererQA.renderEntry(entry,()=>{}, {collapseOtherSections:false,collapseDetails:false}));
+  const cells=[...host.querySelectorAll('td')],parent=cells[0].querySelector('li'),child=cells[0].querySelector('li li'),notes=host.querySelector('.sense-notes');
+  return {unchanged:JSON.stringify(entry)===before,cellRoots:cells.map(cell=>cell.querySelectorAll(':scope > .compiled-list').length),
+   childOwner:child.parentElement.parentElement===parent,continuationOwner:cells[0].querySelector('.list_detail').closest('li')===parent,
+   cellItems:cells.map(cell=>cell.querySelectorAll('li').length),noteList:notes.querySelector(':scope > .compiled-list')?.tagName,
+   noteChild:!!notes.querySelector(':scope > .compiled-list > li > .compiled-list > li'),definitionOutside:!host.querySelector('.definition').closest('li')};
+ });
+ assert.deepEqual(cellLists,{unchanged:true,cellRoots:[1,1],childOwner:true,continuationOwner:true,cellItems:[2,1],noteList:'UL',noteChild:true,definitionOutside:true});
+ const emptyFurniture=await rendererPage.evaluate(()=>{
+  const host=document.getElementById('compiled-renderer-fixture');
+  const block=(kind,path,label)=>({kind,path,depth:path.length,number:'',spans:label===null?[]:[{kind:'text',text:label}]});
+  const render=blocks=>host.replaceChildren(WikidictRendererQA.renderEntry({title:'Empty furniture',presentation_version:'DPR9',sections:[{title:'Test',blocks}]},()=>{}, {collapseOtherSections:false,collapseDetails:false}));
+  const row=label=>[...host.querySelectorAll('.block')].find(el=>el.querySelector(':scope > .body')?.textContent===label);
+  render([block('list_item','*','First'),block('list_item','*',null),block('list_detail','*:','Tail')]);
+  let items=[...host.querySelector('ul').children];
+  const emptyThenTail={items:items.length,firstText:items[0].textContent,tailOwner:row('Tail').closest('li')===items[1],emptyRow:!!items[1].querySelector(':scope > .list_item')};
+  render([block('list_item','*',null),block('list_item','**','Child')]);
+  const parent=host.querySelector('ul > li'),child=row('Child').closest('li');
+  const emptyThenChild={rootItems:host.querySelector('ul').children.length,childOwner:child.parentElement.parentElement===parent,parentRow:!!parent.querySelector(':scope > .list_item')};
+  render([block('list_item','*','First'),block('term',';',null),block('list_detail','*:','Unowned tail')]);
+  const termBoundary={items:host.querySelectorAll('li').length,tailOutside:!row('Unowned tail').closest('li'),emptyTermRows:host.querySelectorAll('.block.term').length};
+  render([block('list_item','*','Parent'),block('list_item','**','Child one'),block('list_detail','*:',null),block('list_item','**','Child two')]);
+  const owner=row('Parent').closest('li'),nested=[...owner.querySelectorAll(':scope > ul')];
+  const emptyContinuation={nestedLists:nested.length,childOwners:nested.length===2&&row('Child one').closest('li').parentElement===nested[0]&&row('Child two').closest('li').parentElement===nested[1],emptyDetailRows:host.querySelectorAll('.block.list_detail').length};
+  render([{kind:'table',table:{rows:[{cells:[{spans:[],blocks:[block('list_item','*','Cell first'),block('list_item','*',null),block('list_detail','*:','Cell tail')]}]}]}}]);
+  items=[...host.querySelector('td > ul').children];
+  const cell={items:items.length,firstText:items[0].textContent,tailOwner:row('Cell tail').closest('li')===items[1],emptyRow:!!items[1].querySelector(':scope > .list_item')};
+  render([block('list_item','*',null)]);const onlyEmptySections=host.querySelectorAll('details').length;
+  render([block('definition','#','Meaning'),block('list_item','*',null),block('term',';',null)]);const onlyEmptyNotes=host.querySelectorAll('.sense-notes').length;
+  return {emptyThenTail,emptyThenChild,termBoundary,emptyContinuation,cell,onlyEmptySections,onlyEmptyNotes};
+ });
+ assert.deepEqual(emptyFurniture,{emptyThenTail:{items:2,firstText:'•First',tailOwner:true,emptyRow:false},emptyThenChild:{rootItems:1,childOwner:true,parentRow:false},termBoundary:{items:1,tailOutside:true,emptyTermRows:0},emptyContinuation:{nestedLists:2,childOwners:true,emptyDetailRows:0},cell:{items:2,firstText:'•Cell first',tailOwner:true,emptyRow:false},onlyEmptySections:0,onlyEmptyNotes:0});
  const renderedTables=await rendererPage.evaluate(()=>{
   const table=(depth,caption)=>({kind:'table',depth,path:depth?'#:':'',spans:[],table:{caption:[{kind:'text',text:caption}],rows:[{cells:[{header:false,colspan:1,rowspan:1,spans:[{kind:'text',text:'Cell'}]}]}]}});
   const host=document.getElementById('compiled-renderer-fixture');

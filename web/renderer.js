@@ -194,7 +194,7 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
     if(canonicalRGB(effectiveBackground))td.style.backgroundColor=effectiveBackground;
     if(cell.blocks!=null){
       if(!Array.isArray(cell.blocks)||cell.spans?.length||cell.nested_table!=null)throw Error('Invalid ordered table cell');
-      for(const block of cell.blocks)if(visibleBlock(block))td.append(blockView(block,onLink,explanations,'',{tableDepth:depth,background:effectiveBackground,header:!!cell.header}));
+      appendBlocks(td,cell.blocks,block=>blockView(block,onLink,explanations,'',{tableDepth:depth,background:effectiveBackground,header:!!cell.header}));
     }else if(cell.nested_table!=null){if(typeof cell.nested_table!=='object'||Array.isArray(cell.nested_table)||cell.spans?.length)throw Error('Invalid nested table cell');td.append(tableView(cell.nested_table,onLink,explanations,depth+1,effectiveBackground));}
     else td.append(spans(cell.spans,onLink,false,explanations,false,effectiveBackground));
     tr.append(td);
@@ -202,6 +202,43 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
 }
 function visibleBlock(block){
   return block.kind!=='blank'&&(block.table||block.kind==='rule'||block.spans?.some(s=>s.text?.trim()||s.trail?.trim())||block.spans?.some(isPoem)||(block.kind==='heading'&&(block.anchor||block.anchor_fallback)));
+}
+function appendBlocks(parent,values,render){
+  let lists=[];
+  for(const block of values){
+    const visible=visibleBlock(block);
+    const path=block.list_path??block.path??'';
+    if(block.kind==='list_item'){
+      const key=/^[*#:;]*[*#]$/.test(path)?path:(block.number?'#':'*');
+      let at=lists.findIndex(list=>list.path===key);
+      if(at<0){
+        while(lists.length&&!key.startsWith(lists.at(-1).path))lists.pop();
+        const owner=lists.at(-1)?.item||parent,list=node(key.endsWith('#')?'ol':'ul',null,'compiled-list');
+        // Retain list semantics when custom visible markers suppress native markers.
+        list.setAttribute('role','list');owner.append(list);
+        lists.push({path:key,list,item:null});at=lists.length-1;
+      }
+      lists.length=at+1;
+      const current=lists[at],item=node('li',null,'compiled-list-item');
+      if(key.endsWith('#')&&/^-?\d+$/.test(block.number||'')){
+        const number=Number(block.number);
+        if(Number.isInteger(number)&&number>=-2147483648&&number<=2147483647)item.value=number;
+      }
+      if(visible){
+        const view=render(block);
+        if(!block.number)view.querySelector(':scope > .prefix')?.setAttribute('aria-hidden','true');
+        item.append(view);
+      }
+      current.list.append(item);current.item=item;
+    }else{
+      const continuation=block.kind==='list_detail'?/^([*#:;]*[*#]):+$/.exec(path):null;
+      const at=continuation?lists.findIndex(list=>list.path===continuation[1]):-1;
+      if(at>=0&&lists[at].item){
+        lists.length=at+1;
+        if(visible){const view=render(block);view.querySelector(':scope > .prefix')?.setAttribute('aria-hidden','true');lists[at].item.append(view);}
+      }else{lists=[];if(visible)parent.append(render(block));}
+    }
+  }
 }
 function visitBlocks(values,visit){
   const table=value=>{for(const row of value.rows||[])for(const cell of row.cells||[]){if(cell.blocks!=null)visitBlocks(cell.blocks,visit);else if(cell.nested_table)table(cell.nested_table);}};
@@ -303,14 +340,14 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     const companion=sectionHeadingCompanion(section);
     const el=fold(section.title===entry.language?'Overview':section.title||'Notes',expanded,companion?.spans,companion?.depth);
     el.classList.toggle('meaning',meaning);destination(el,section,legacy.get(section)||'');
-    const notes=[];
+    const main=[],notes=[];
     for (const block of section.blocks.slice(companion?1:0)) {
-      if(!visibleBlock(block))continue;
-      const view=blockView(block,followLink,explanations,legacy.get(block)||'');
-      if(meaning&&block.kind!=='definition')notes.push(view);else el.append(view);
+      if(meaning&&block.kind!=='definition')notes.push(block);else main.push(block);
     }
-    if(notes.length){const details=fold('Examples & notes',!settings.collapseDetails);details.className='sense-notes';details.append(...notes);el.append(details);}
-    if(el.children.length>1||companion||section.anchor||section.anchor_fallback)root.append(el);
+    const view=block=>blockView(block,followLink,explanations,legacy.get(block)||'');
+    appendBlocks(el,main,view);
+    if(notes.some(visibleBlock)){const details=fold('Examples & notes',!settings.collapseDetails);details.className='sense-notes';appendBlocks(details,notes,view);el.append(details);}
+    if(section.blocks.some(visibleBlock)||companion||section.anchor||section.anchor_fallback)root.append(el);
   }
   if (entry.references?.length) {
     const section=fold('References',!settings.collapseOtherSections);
