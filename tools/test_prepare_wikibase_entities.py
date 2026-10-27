@@ -276,6 +276,69 @@ class WikibaseCaptureTests(unittest.TestCase):
 
 
 
+    def test_projection_rows_preserve_unicode_member_and_requested_order(self):
+        records = {'Q2': {'id': 'Q9', 'label': 'caf\u00e9', 'ordered': {'z': 1, 'a': 2}},
+                   'Q3': None, 'Q1': {'id': 'Q1', 'label': '\u6f22'}}
+        terms = {'Q1': {'label': {'value': '\u6f22'}}, 'Q2': {'label': None}}
+        bodies = (
+            'Q1\tE\tQ1\t{"id":"Q1","label":"\u6f22","schemaVersion":2}\n'
+            'Q2\tE\tQ9\t{"id":"Q9","label":"caf\u00e9","ordered":{"z":1,"a":2},"schemaVersion":2}\n'
+            'Q3\tM\t\t\n',
+            'Q1\tE\tQ1\t{"label":{"value":"\u6f22"}}\n'
+            'Q2\tE\tQ9\t{"label":null}\n'
+            'Q3\tM\t\t\n')
+        outputs = entities.render_outputs(records, terms, self.wiki, self.date, 'ar')
+        for name, body in zip(entities.NAMES, bodies):
+            header = ('# wikidict-' + name + '-v1\n# wiki=arwiktionary\n# date=20261001\n'
+                      '# content-language=ar\n# repository=https://www.wikidata.org\n'
+                      '# profile=' + entities.PROFILES[name] + '\n')
+            expected = (header + body).encode()
+            with self.subTest(name=name):
+                self.assertEqual(outputs[name + '.tsv'], expected)
+                self.assertEqual(entities.projection_identity(expected,
+                    entities.projection_rows(name, records, terms, self.wiki, self.date, 'ar')),
+                    (entities.digest(expected), len(expected)))
+
+    def test_projection_identity_rejects_mismatch_truncation_and_trailing_bytes(self):
+        rows = ['header\n', 'caf\u00e9\n', '\u6f22\n']
+        raw = ''.join(rows).encode()
+        for changed in (raw.replace(b'header', b'Header'), raw[:-1], raw + b'\n'):
+            with self.subTest(changed=changed), self.assertRaisesRegex(ValueError, 'exact offline replay'):
+                entities.projection_identity(changed, iter(rows))
+        with patch.object(entities, 'MAX_OUTPUT_BYTES', len(raw) - 1):
+            with self.assertRaisesRegex(ValueError, 'output bound'):
+                entities.projection_identity(raw, iter(rows))
+        with patch.object(entities, 'MAX_OUTPUT_BYTES', len(raw)):
+            self.assertEqual(entities.projection_identity(raw, iter(rows)), (entities.digest(raw), len(raw)))
+
+    def test_cold_validation_streams_projection_and_checks_manifest_accounting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'capture'
+            (manifest, _), _ = self.capture(root)
+            folder = root / entities.DIRECTORY
+            entities._VALIDATED_REPLAY_KEYS.clear()
+            with patch.object(entities, 'render_outputs', side_effect=AssertionError('whole projection allocated')):
+                self.assertEqual(entities.validate_snapshot(folder), manifest)
+            for field, value, message in (('output_sha256', '0' * 64, 'exact offline replay'),
+                                          ('output_bytes', manifest['output_bytes'] + 1, 'exact offline replay'),
+                                          ('seed_count', manifest['seed_count'] + 1, 'accounting')):
+                originals = {}
+                for name in entities.NAMES:
+                    path = folder / (name + '.manifest.json')
+                    originals[path] = path.read_bytes()
+                    record = json.loads(originals[path])
+                    record[field] = value
+                    path.chmod(0o644)
+                    path.write_bytes(entities.document(record))
+                try:
+                    entities._VALIDATED_REPLAY_KEYS.clear()
+                    with self.subTest(field=field), self.assertRaisesRegex(ValueError, message):
+                        entities.validate_snapshot(folder)
+                    self.assertFalse(entities._VALIDATED_REPLAY_KEYS)
+                finally:
+                    for path, raw in originals.items():
+                        path.write_bytes(raw)
+
     def test_verified_replay_reuses_exact_bytes_but_returns_fresh_manifests(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / 'capture'

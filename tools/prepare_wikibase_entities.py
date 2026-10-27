@@ -286,20 +286,39 @@ def resolved_terms(full, response, content_language):
     return result
 
 
+def projection_rows(name, records, terms, wiki, date, content_language):
+    yield ('# wikidict-' + name + '-v1\n# wiki=' + wiki + '\n# date=' + date
+           + '\n# content-language=' + content_language + '\n# repository=' + REPOSITORY
+           + '\n# profile=' + PROFILES[name] + '\n')
+    for requested, entity in sorted(records.items()):
+        if entity is None:
+            yield requested + '\tM\t\t\n'
+        else:
+            value = derived_entity(entity) if name == NAMES[0] else terms[requested]
+            yield requested + '\tE\t' + entity['id'] + '\t' + compact(value) + '\n'
+
+
+def projection_identity(raw, rows):
+    hasher = hashlib.sha256()
+    position = 0
+    for row in rows:
+        encoded = row.encode()
+        end = position + len(encoded)
+        if end > MAX_OUTPUT_BYTES:
+            raise ValueError('Entity snapshot exceeds output bound')
+        if not raw.startswith(encoded, position):
+            raise ValueError('Entity projection differs from exact offline replay')
+        hasher.update(encoded)
+        position = end
+    if position != len(raw):
+        raise ValueError('Entity projection differs from exact offline replay')
+    return hasher.hexdigest(), position
+
+
 def render_outputs(records, terms, wiki, date, content_language):
     outputs = {}
     for name in NAMES:
-        header = ('# wikidict-' + name + '-v1\n# wiki=' + wiki + '\n# date=' + date
-                  + '\n# content-language=' + content_language + '\n# repository=' + REPOSITORY
-                  + '\n# profile=' + PROFILES[name] + '\n')
-        rows = []
-        for requested, entity in sorted(records.items()):
-            if entity is None:
-                rows.append(requested + '\tM\t\t\n')
-            else:
-                value = derived_entity(entity) if name == NAMES[0] else terms[requested]
-                rows.append(requested + '\tE\t' + entity['id'] + '\t' + compact(value) + '\n')
-        raw = (header + ''.join(rows)).encode()
+        raw = ''.join(projection_rows(name, records, terms, wiki, date, content_language)).encode()
         if len(raw) > MAX_OUTPUT_BYTES:
             raise ValueError('Entity snapshot exceeds output bound')
         outputs[name + '.tsv'] = raw
@@ -420,7 +439,6 @@ def validate_snapshot(path, wiki=None, date=None):
     if not isinstance(requests, list) or not requests or len(requests) > 2 * MAX_ENTITIES:
         raise ValueError('Invalid entity request count')
     records, terms, dependencies = replay(blobs, requests, seeds, content_language)
-    outputs = render_outputs(records, terms, actual_wiki, actual_date, content_language)
     receipts = [parse_json(blobs[row['request']]) for row in requests]
     if (manifest.get('seed_count') != len(seeds) or manifest.get('entity_count') != len(records)
             or manifest.get('missing_count') != sum(value is None for value in records.values())
@@ -431,11 +449,11 @@ def validate_snapshot(path, wiki=None, date=None):
         raise ValueError('Entity manifest accounting differs from evidence')
     timestamp(manifest.get('created_utc'))
     for name, other in manifests.items():
-        raw = outputs[name + '.tsv']
+        output_sha256, output_bytes = projection_identity(blobs[name + '.tsv'],
+            projection_rows(name, records, terms, actual_wiki, actual_date, content_language))
         if (not isinstance(other, dict) or manifest_common(other) != manifest_common(manifest)
                 or other.get('name') != name or other.get('profile') != PROFILES[name]
-                or other.get('output_sha256') != digest(raw) or other.get('output_bytes') != len(raw)
-                or blobs[name + '.tsv'] != raw):
+                or other.get('output_sha256') != output_sha256 or other.get('output_bytes') != output_bytes):
             raise ValueError('Entity projection differs from exact offline replay')
     if len(_VALIDATED_REPLAY_KEYS) >= _MAX_VALIDATED_REPLAY_KEYS:
         _VALIDATED_REPLAY_KEYS.clear()
