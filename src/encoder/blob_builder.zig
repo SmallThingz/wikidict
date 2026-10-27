@@ -6450,6 +6450,46 @@ test "Writer publishes authored table group literals with cells links and fallba
     try std.testing.expect(lines.next() == null);
 }
 
+test "Writer citation raw quote external boundary preserves label prose and navigation through DPR2" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    const title = "Citations:witches' stone";
+    const source = "==English==\n=== a [[hagstone]] ===\n* '''1895''', ''[https://archive.org/details/x?q=\"witches'+stones\" Notes and Queries]'', page 414:\n*: I found '''witches' stones''' [...compare...] here.\n";
+    try writer.addExpandedPage(a, .{ .id = 114, .kind = .citations }, title, source, source, null);
+    const stats = try writer.finish(.{});
+    try std.testing.expectEqual(@as(usize, 1), stats.citations_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    var mapped = try mmapPath(std.testing.io, try std.fs.path.join(a, &.{ root, "citations.wikblb" }));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    var iterator = blob.iterator();
+    const record = (try iterator.next()).?;
+    try std.testing.expectEqualStrings("witches' stone", record.title);
+    try std.testing.expect(blob.kind == .citations);
+    try std.testing.expectEqual(@as(usize, 0), blob.metadata.len);
+    try std.testing.expect((try iterator.next()) == null);
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .citations, null);
+    var label: std.ArrayList(u8) = .empty;
+    var prose: std.ArrayList(u8) = .empty;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try prose.appendSlice(a, span.text);
+        if (span.kind == .external_link) {
+            try std.testing.expectEqualStrings("https://archive.org/details/x?q=", span.target);
+            try std.testing.expect(span.italic);
+            try label.appendSlice(a, span.text);
+        }
+    };
+    try std.testing.expectEqualStrings("\"witches'+stones\" Notes and Queries", label.items);
+    try std.testing.expect(std.mem.indexOf(u8, prose.items, "[...compare...]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prose.items, "witches' stones") != null);
+}
+
 test "Writer quote scopes preserve linked owner styles and outside suffix through DPR2" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

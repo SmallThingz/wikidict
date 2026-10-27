@@ -3677,6 +3677,28 @@ test "nested-only table cells participate in strict document span validation" {
     try std.testing.expectError(error.UncompiledTemplate, validateTableSpans(a, parent, null));
 }
 
+test "citation raw quote external label survives presentation roundtrip without weakening residual guard" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const bytes = try compileAlloc(a, "Citations:witches' stone", .language, "English", "en", "* '''1895''', ''[https://archive.org/details/x?q=\"witches'+stones\" Notes and Queries]'', page 414:\n*: I found '''witches' stones''' [...compare...] here.", null);
+    const decoded = try codec.decodeAlloc(a, bytes, "Citations:witches' stone", .language, .{ .code = "en", .heading = "English" });
+    var label: std.ArrayList(u8) = .empty;
+    var prose: std.ArrayList(u8) = .empty;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try prose.appendSlice(a, span.text);
+        if (span.kind == .external_link) {
+            try std.testing.expectEqualStrings("https://archive.org/details/x?q=", span.target);
+            try std.testing.expect(span.italic);
+            try label.appendSlice(a, span.text);
+        }
+    };
+    try std.testing.expectEqualStrings("\"witches'+stones\" Notes and Queries", label.items);
+    try std.testing.expect(std.mem.indexOf(u8, prose.items, "[...compare...]") != null);
+    const raw = [_]compiler.Span{.{ .text = "[https://example.test" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+}
+
 test "captured nested external link preserves literal protocol prefix and child action" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

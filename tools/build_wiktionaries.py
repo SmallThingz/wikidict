@@ -22,6 +22,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from compress_blobs import compress, compress_many, default_workers, verify_round_trip
 from build_disk_limits import BUILD_DISK_RESERVE_BYTES, require_merge_disk_space, compressed_blob_size
 from build_artifact_root import configure_artifact_root, artifact_path, remove_artifact_tree, unlink_artifact
@@ -1531,6 +1532,101 @@ def timed_run(command, edition, date, phase, **fields):
         run_checked(command)
 
 
+class DeterministicPresentationFailure(subprocess.CalledProcessError):
+    def __init__(self, original, receipt):
+        super().__init__(original.returncode, original.cmd, output=original.output, stderr=original.stderr)
+        self.failure_receipt = str(receipt)
+
+
+def write_failure_evidence(path, row):
+    try:
+        path.write_text(json.dumps(row, sort_keys=True) + '\n')
+    except OSError:
+        # Reporting must never replace the builder or coverage failure.
+        try:
+            print(f'Unable to write shard failure evidence: {path}', file=sys.stderr, flush=True)
+        except OSError:
+            pass
+
+
+def matching_presentation_failure(path, invocation_id, invocation_args, start, limit):
+    # The private, newly created attempt directory is the authority. Never infer
+    # classification from exit 1, page text, or inherited stderr.
+    try:
+        with path.open('rb') as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode): return False
+            raw = stream.read(64 * 1024 + 1)
+        if len(raw) > 64 * 1024: return False
+        row = json.loads(raw)
+        if not isinstance(row, dict): return False
+        if (row.get('schema') != 'wikidict.blob-build.failure.v1'
+                or row.get('error_name') != 'UncompiledPresentation'
+                or row.get('failure_class') != 'deterministic-presentation'
+                or row.get('invocation_id') != invocation_id
+                or row.get('invocation_args') != invocation_args): return False
+        page = row.get('page')
+        return (isinstance(page, dict) and type(page.get('ordinal')) is int
+                and start <= page['ordinal'] < start + limit
+                and type(page.get('namespace')) is int and page['namespace'] >= 0
+                and isinstance(page.get('title'), str) and bool(page['title'])
+                and type(page.get('page_id')) is int and page['page_id'] >= 0
+                and type(page.get('revision_id')) is int and page['revision_id'] >= 0)
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def build_shard_with_retries(command, shard, evidence_root, edition, date, start, limit, check_identity, validate):
+    evidence_root.mkdir(mode=0o700, exist_ok=True)
+    if evidence_root.is_symlink() or not evidence_root.is_dir():
+        raise ValueError('Invalid shard failure evidence directory')
+    last_error = None
+    for attempt in range(1, SHARD_RETRIES + 1):
+        if shard.exists(): remove_artifact_tree(shard)
+        invocation_id = uuid.uuid4().hex
+        # Receipts survive ordinary workspace retirement. Matching failures leave
+        # the failed shard in place; unclassified retries retain old cleanup.
+        evidence = evidence_root / invocation_id
+        evidence.mkdir(mode=0o700)
+        receipt = evidence / 'failure.json'
+        argv = list(command) + ['--failure-receipt', str(receipt), '--invocation-id', invocation_id]
+        invocation_args = argv[argv.index('--') + 1:]
+        (evidence / 'invocation.json').write_text(json.dumps(dict(
+            invocation_id=invocation_id, argv=argv, start_page=start, pages=limit,
+            attempt=attempt), sort_keys=True) + '\n')
+        try:
+            timed_run(argv, edition, date, 'shard_build', start_page=start, pages=limit, attempt=attempt)
+        except subprocess.CalledProcessError as error:
+            write_failure_evidence(evidence / 'exit.json', dict(returncode=error.returncode,
+                classification='pending-input-identity'))
+            # Preserve the command evidence first. Changed input identity is an
+            # independent fatal condition, never a typed-data failure or retry.
+            check_identity()
+            deterministic = matching_presentation_failure(receipt, invocation_id, invocation_args, start, limit)
+            write_failure_evidence(evidence / 'classification.json', dict(
+                deterministic_presentation=deterministic))
+            if deterministic:
+                phase_event(edition, date, 'shard_build', 'retry_suppressed', start_page=start,
+                            pages=limit, attempt=attempt, failure_receipt=str(receipt),
+                            error_name='UncompiledPresentation')
+                raise DeterministicPresentationFailure(error, receipt) from error
+            last_error = error
+            print(f'Retrying failed shard builder {edition} start={start} attempt={attempt}/{SHARD_RETRIES}', flush=True)
+            continue
+        check_identity()
+        try:
+            validate()
+        except ValueError as error:
+            write_failure_evidence(evidence / 'coverage-error.json', dict(error=str(error)))
+            last_error = error
+            print(f'Retrying shard with invalid coverage {edition} start={start} attempt={attempt}/{SHARD_RETRIES}', flush=True)
+            continue
+        # Successful invocations have no failure evidence to retain.
+        (evidence / 'invocation.json').unlink()
+        evidence.rmdir()
+        return attempt
+    raise last_error
+
+
 def shard_blob_paths(shard):
     paths = []
     language_root = shard/'languages'
@@ -1712,38 +1808,23 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                         with build_phase(edition,date,'shard_compress',start_page=start,pages=limit):
                             compress_verified_shard(shard)
                     shard_paths.append(shard);continue
-            last_error=None
-            for attempt in range(1,SHARD_RETRIES+1):
-                if shard.exists(): remove_artifact_tree(shard)
-                try:
-                    timed_run([zig,'build','-j1','-Doptimize=fast','build-blobs','--',str(dump),str(shard),
-                                 '--expander-root',str(expander),'--start-page',str(start),'--limit-pages',str(limit),
-                                 '--index-byte-offset',str(offset),
-                                 '--workers',str(expansion_workers),'--now-unix',str(now_unix),*timeout_args],
-                              edition,date,'shard_build',start_page=start,pages=limit,attempt=attempt)
-                except subprocess.CalledProcessError as error:
-                    last_error=error
-                    print(f'Retrying failed shard builder {items[0]["wiki"]} start={start} attempt={attempt}/{SHARD_RETRIES}',flush=True)
-                    continue
-                require_index_identity(index_path,index)
-                try:
-                    validate_page_coverage(shard,start,limit,index,offset)
-                except ValueError as error:
-                    last_error=error
-                    print(f'Retrying shard with invalid coverage {items[0]["wiki"]} start={start} attempt={attempt}/{SHARD_RETRIES}',flush=True)
-                    continue
-                # Preserve a completed shard if verification fails because of
-                # a transient tool/resource error. The next run revalidates it.
-                timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(shard)],
-                          edition,date,'shard_verify',start_page=start,pages=limit,attempt=attempt)
-                require_index_identity(index_path,index)
-                marker.write_text('verified\n')
-                if compress_shards:
-                    with build_phase(edition,date,'shard_compress',start_page=start,pages=limit):
-                        compress_verified_shard(shard)
-                last_error=None
-                break
-            if last_error is not None: raise last_error
+            command=[zig,'build','-j1','-Doptimize=fast','build-blobs','--',str(dump),str(shard),
+                     '--expander-root',str(expander),'--start-page',str(start),'--limit-pages',str(limit),
+                     '--index-byte-offset',str(offset),
+                     '--workers',str(expansion_workers),'--now-unix',str(now_unix),*timeout_args]
+            evidence_root=workspace.with_name(workspace.name+'.failures')
+            attempt=build_shard_with_retries(command,shard,evidence_root,edition,date,start,limit,
+                lambda:require_index_identity(index_path,index),
+                lambda:validate_page_coverage(shard,start,limit,index,offset))
+            # Preserve a completed shard if verification fails because of
+            # a transient tool/resource error. The next run revalidates it.
+            timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(shard)],
+                      edition,date,'shard_verify',start_page=start,pages=limit,attempt=attempt)
+            require_index_identity(index_path,index)
+            marker.write_text('verified\n')
+            if compress_shards:
+                with build_phase(edition,date,'shard_compress',start_page=start,pages=limit):
+                    compress_verified_shard(shard)
             shard_paths.append(shard)
 
     require_index_identity(index_path,index)

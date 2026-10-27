@@ -19,6 +19,152 @@ from unittest.mock import patch
 from types import SimpleNamespace
 import build_wiktionaries as b
 import build_resource_limits as limits
+
+
+class PresentationRetryPolicyTests(unittest.TestCase):
+    def exercise(self, mode):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);shard=root/'00000000';calls=[];validated=[]
+            command=['zig','build','build-blobs','--','dump',str(shard),'--start-page','0','--limit-pages','2']
+            def run(argv, *args, **kwargs):
+                calls.append(argv);shard.mkdir();(shard/'partial').write_text('retained failure bytes')
+                if len(calls)>1: return
+                if mode!='transient':
+                    invocation=argv[argv.index('--invocation-id')+1]
+                    receipt=Path(argv[argv.index('--failure-receipt')+1])
+                    receipt.write_text(json.dumps(dict(schema='wikidict.blob-build.failure.v1',
+                        error_name='OtherFailure' if mode=='unknown' else 'UncompiledPresentation',failure_class='deterministic-presentation',
+                        invocation_id='old-invocation' if mode=='stale' else invocation,
+                        invocation_args=argv[argv.index('--')+1:]+(['--different-context'] if mode=='argv-mismatch' else []),
+                        page=dict(ordinal=2 if mode=='out-of-range' else 1,namespace=114,title='fixture',page_id=7,revision_id=9))))
+                    if mode=='malformed': receipt.write_text('{')
+                raise subprocess.CalledProcessError(1,argv)
+            with patch.object(b,'timed_run',side_effect=run):
+                if mode=='deterministic':
+                    with self.assertRaises(b.DeterministicPresentationFailure) as failed:
+                        b.build_shard_with_retries(command,shard,root/'failures','enwiktionary','20261001',0,2,lambda:None,lambda:validated.append(True))
+                    self.assertTrue(Path(failed.exception.failure_receipt).is_file())
+                    self.assertEqual(len(calls),1);self.assertEqual(validated,[])
+                    self.assertEqual((shard/'partial').read_text(),'retained failure bytes')
+                else:
+                    self.assertEqual(b.build_shard_with_retries(command,shard,root/'failures','enwiktionary','20261001',0,2,lambda:None,lambda:validated.append(True)),2)
+                    self.assertEqual(len(calls),2);self.assertEqual(validated,[True])
+            evidence=list((root/'failures').iterdir())
+            self.assertEqual(len(evidence),1)
+            self.assertEqual(json.loads((evidence[0]/'exit.json').read_text())['returncode'],1)
+            self.assertTrue((evidence[0]/'invocation.json').is_file())
+
+    def test_matching_presentation_failure_stops_and_preserves(self):
+        self.exercise('deterministic')
+
+    def test_unclassified_transient_failure_retries_and_recovers(self):
+        self.exercise('transient')
+
+    def test_stale_presentation_receipt_retains_retry_and_evidence(self):
+        self.exercise('stale')
+
+    def test_unknown_or_malformed_receipt_retains_retry(self):
+        for mode in ('unknown','malformed'):
+            with self.subTest(mode=mode): self.exercise(mode)
+
+    def test_full_argv_mismatch_or_out_of_range_page_retains_retry(self):
+        for mode in ('argv-mismatch','out-of-range'):
+            with self.subTest(mode=mode): self.exercise(mode)
+
+    def test_evidence_and_logging_write_errors_keep_typed_failure_and_identity_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);shard=root/'00000000';calls=[];checked=[];original=[];failed_writes=[]
+            command=['zig','build','build-blobs','--','dump',str(shard)]
+            real_write_text=Path.write_text
+            def write_text(path, text, *args, **kwargs):
+                if path.name in ('exit.json','classification.json'):
+                    failed_writes.append(path.name)
+                    raise OSError('simulated evidence disk error')
+                return real_write_text(path,text,*args,**kwargs)
+            def run(argv, *args, **kwargs):
+                calls.append(argv);shard.mkdir();(shard/'partial').write_text('retained bytes')
+                receipt=Path(argv[argv.index('--failure-receipt')+1])
+                receipt.write_text(json.dumps(dict(schema='wikidict.blob-build.failure.v1',
+                    error_name='UncompiledPresentation',failure_class='deterministic-presentation',
+                    invocation_id=argv[argv.index('--invocation-id')+1],invocation_args=argv[argv.index('--')+1:],
+                    page=dict(ordinal=1,namespace=114,title='fixture',page_id=7,revision_id=9))))
+                error=subprocess.CalledProcessError(23,argv,output=b'original stdout',stderr=b'original stderr')
+                original.append(error)
+                raise error
+            with patch.object(b,'timed_run',side_effect=run), \
+                 patch.object(Path,'write_text',new=write_text), \
+                 patch.object(b,'phase_event',wraps=b.phase_event) as event, \
+                 patch('builtins.print',side_effect=OSError('simulated stderr error')):
+                with self.assertRaises(b.DeterministicPresentationFailure) as failed:
+                    b.build_shard_with_retries(command,shard,root/'failures','enwiktionary','20261001',0,2,
+                        lambda:checked.append(True),lambda:self.fail('failed builder cannot validate'))
+            self.assertEqual(checked,[True]);self.assertEqual(len(calls),1)
+            event.assert_called_once()
+            self.assertEqual(event.call_args.args[3],'retry_suppressed')
+            self.assertEqual(failed_writes,['exit.json','classification.json'])
+            self.assertIs(failed.exception.__cause__,original[0])
+            self.assertEqual(failed.exception.returncode,23)
+            self.assertEqual(failed.exception.cmd,original[0].cmd)
+            self.assertEqual(failed.exception.output,b'original stdout')
+            self.assertEqual(failed.exception.stderr,b'original stderr')
+            self.assertTrue(Path(failed.exception.failure_receipt).is_file())
+            self.assertEqual((shard/'partial').read_text(),'retained bytes')
+
+    def test_coverage_evidence_write_error_keeps_original_coverage_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);shard=root/'00000000';checked=[];writes=[]
+            command=['zig','build','build-blobs','--','dump',str(shard)]
+            coverage_error=ValueError('original invalid coverage')
+            real_write_text=Path.write_text
+            def write_text(path, text, *args, **kwargs):
+                if path.name=='coverage-error.json':
+                    writes.append(path.name)
+                    raise OSError('simulated evidence disk error')
+                return real_write_text(path,text,*args,**kwargs)
+            def run(*args, **kwargs): shard.mkdir()
+            def validate(): raise coverage_error
+            stderr=io.StringIO()
+            with patch.object(b,'timed_run',side_effect=run),patch.object(Path,'write_text',new=write_text),contextlib.redirect_stderr(stderr):
+                with self.assertRaises(ValueError) as failed:
+                    b.build_shard_with_retries(command,shard,root/'failures','enwiktionary','20261001',0,2,
+                        lambda:checked.append(True),validate)
+            self.assertIs(failed.exception,coverage_error)
+            self.assertEqual(len(checked),b.SHARD_RETRIES)
+            self.assertEqual(len(writes),b.SHARD_RETRIES)
+            warnings=stderr.getvalue().splitlines()
+            self.assertEqual(len(warnings),b.SHARD_RETRIES)
+            for warning in warnings:
+                self.assertTrue(warning.startswith(f'Unable to write shard failure evidence: {root}/failures/'))
+                self.assertTrue(warning.endswith('/coverage-error.json'))
+
+    def test_changed_input_after_failure_preserves_receipt_and_bypasses_classification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);shard=root/'00000000';calls=[]
+            command=['zig','build','build-blobs','--','dump',str(shard),'--start-page','0','--limit-pages','2']
+            identity_error=ValueError('Page index identity changed')
+            def run(argv, *args, **kwargs):
+                calls.append(argv);shard.mkdir();(shard/'partial').write_text('failed bytes')
+                receipt=Path(argv[argv.index('--failure-receipt')+1])
+                receipt.write_text(json.dumps(dict(schema='wikidict.blob-build.failure.v1',
+                    error_name='UncompiledPresentation',failure_class='deterministic-presentation',
+                    invocation_id=argv[argv.index('--invocation-id')+1],
+                    invocation_args=argv[argv.index('--')+1:],
+                    page=dict(ordinal=1,namespace=114,title='fixture',page_id=7,revision_id=9))))
+                raise subprocess.CalledProcessError(1,argv)
+            with patch.object(b,'timed_run',side_effect=run), \
+                 patch.object(b,'matching_presentation_failure') as classify:
+                def changed_identity(): raise identity_error
+                with self.assertRaises(ValueError) as failed:
+                    b.build_shard_with_retries(command,shard,root/'failures','enwiktionary','20261001',0,2,changed_identity,lambda:None)
+                self.assertIs(failed.exception,identity_error)
+                classify.assert_not_called()
+            self.assertEqual(len(calls),1)
+            evidence=list((root/'failures').iterdir());self.assertEqual(len(evidence),1)
+            self.assertTrue((evidence[0]/'failure.json').is_file())
+            self.assertTrue((evidence[0]/'invocation.json').is_file())
+            self.assertEqual(json.loads((evidence[0]/'exit.json').read_text())['returncode'],1)
+            self.assertFalse((evidence[0]/'classification.json').exists())
+            self.assertEqual((shard/'partial').read_text(),'failed bytes')
 from compress_blobs import compress, compress_many, default_workers
 
 def write_namespace_fixture(folder, edition=None, date=None):

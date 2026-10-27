@@ -20,7 +20,48 @@ const Options = struct {
     shard_pages: ?usize = null,
     audit_presentation_errors: bool = false,
     audit_expanded_bytes: ?usize = null,
+    failure_receipt: ?[]const u8 = null,
+    invocation_id: ?[]const u8 = null,
 };
+
+// Standalone CLI invocation state, read only by the ordered Writer consumer.
+// Expansion worker threads do not emit or classify publication failures.
+const FailureReceiptContext = struct {
+    io: std.Io,
+    a: std.mem.Allocator,
+    path: []const u8,
+    invocation_id: []const u8,
+    invocation_args: []const []const u8,
+};
+var failure_receipt_context: ?FailureReceiptContext = null;
+
+fn writePresentationFailure(context: FailureReceiptContext, job: ExpansionJob) !void {
+    const bytes = try std.json.Stringify.valueAlloc(context.a, .{
+        .schema = "wikidict.blob-build.failure.v1",
+        .error_name = "UncompiledPresentation",
+        .failure_class = "deterministic-presentation",
+        .invocation_id = context.invocation_id,
+        .invocation_args = context.invocation_args,
+        .page = .{ .ordinal = job.ordinal, .namespace = job.ns.id, .title = job.title, .page_id = job.page_id, .revision_id = job.revision_id },
+    }, .{});
+    defer context.a.free(bytes);
+    if (bytes.len > 64 * 1024) return error.FailureReceiptTooLarge;
+    var file = try std.Io.Dir.cwd().createFile(context.io, context.path, .{ .exclusive = true });
+    defer file.close(context.io);
+    try file.writeStreamingAll(context.io, bytes);
+    try file.sync(context.io);
+}
+
+fn recordPresentationFailure(err: anyerror, job: ExpansionJob) anyerror {
+    if (err != error.UncompiledPresentation) return err;
+    const context = failure_receipt_context orelse return err;
+    writePresentationFailure(context, job) catch |receipt_error| {
+        // Receipt failure cannot replace the original Writer error. A missing or
+        // partial receipt keeps the caller's existing transient retry policy.
+        diagnostics.printLine("presentation failure receipt unavailable: error={s}\n", .{@errorName(receipt_error)});
+    };
+    return err;
+}
 
 const PageIndexIdentity = struct {
     device_major: u32,
@@ -601,7 +642,7 @@ fn consumeExpandedPage(writer: *encoder.blob_builder.Writer, job: ExpansionJob, 
                 try discardAuditPage(writer, a);
                 return false;
             };
-            return err;
+            return recordPresentationFailure(err, job);
         };
     } else {
         writer.addExpandedPageWithReasonsAndPhases(a, job.ns, job.title, expanded.source, job.source, expanded.display_title, extra_reasons, expanded.poem_metadata, expanded.missing_dependency_metadata) catch |err| {
@@ -611,7 +652,7 @@ fn consumeExpandedPage(writer: *encoder.blob_builder.Writer, job: ExpansionJob, 
                 try discardAuditPage(writer, a);
                 return false;
             };
-            return err;
+            return recordPresentationFailure(err, job);
         };
     }
     if (audit) |value| {
@@ -885,7 +926,16 @@ fn parseOptions(args: []const []const u8) !Options {
     var index: usize = 3;
     while (index < args.len) {
         const arg = args[index];
-        if (std.mem.eql(u8, arg, "--audit-presentation-errors")) {
+        if (std.mem.eql(u8, arg, "--failure-receipt")) {
+            index += 1;
+            if (index >= args.len or out.failure_receipt != null or args[index].len == 0) return error.Usage;
+            out.failure_receipt = args[index];
+        } else if (std.mem.eql(u8, arg, "--invocation-id")) {
+            index += 1;
+            if (index >= args.len or out.invocation_id != null or args[index].len != 32) return error.Usage;
+            for (args[index]) |c| if (!std.ascii.isHex(c)) return error.Usage;
+            out.invocation_id = args[index];
+        } else if (std.mem.eql(u8, arg, "--audit-presentation-errors")) {
             if (out.audit_presentation_errors) return error.Usage;
             out.audit_presentation_errors = true;
         } else if (std.mem.eql(u8, arg, "--audit-expanded-bytes")) {
@@ -932,6 +982,8 @@ fn parseOptions(args: []const []const u8) !Options {
         } else return error.Usage;
         index += 1;
     }
+    if ((out.failure_receipt == null) != (out.invocation_id == null)) return error.Usage;
+    if (out.audit_presentation_errors and out.failure_receipt != null) return error.Usage;
     if (out.expander_root.len == 0 or (out.audit_expanded_bytes != null and !out.audit_presentation_errors) or (out.audit_presentation_errors and (out.shard_pages != null or out.start_page != 0 or out.index_byte_offset != null or out.limit_pages != null))) return error.Usage;
     if (out.shard_pages) |shard_pages| {
         if (out.index_byte_offset == null or out.limit_pages == null or out.limit_pages.? == 0 or
@@ -940,7 +992,58 @@ fn parseOptions(args: []const []const u8) !Options {
     return out;
 }
 
+test "presentation failure receipt round trips exact invocation and page identity" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/failure.json", .{tmp.sub_path});
+    defer a.free(path);
+    const invocation_args = [_][]const u8{ "dump.xml.zst", "out", "--expander-root", "bundle", "--now-unix", "1791731560", "--failure-receipt", path, "--invocation-id", "0123456789abcdef0123456789abcdef" };
+    const context: FailureReceiptContext = .{ .io = io, .a = a, .path = path, .invocation_id = "0123456789abcdef0123456789abcdef", .invocation_args = &invocation_args };
+    const job: ExpansionJob = .{ .ordinal = 14002, .ns = .{ .id = 114, .kind = .citations }, .title = "Citations:quoted \"fixture\"", .source = "not serialized", .page_id = 7, .revision_id = 9 };
+    try writePresentationFailure(context, job);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(64 * 1024));
+    defer a.free(bytes);
+    const Receipt = struct {
+        schema: []const u8, error_name: []const u8, failure_class: []const u8,
+        invocation_id: []const u8, invocation_args: []const []const u8,
+        page: struct { ordinal: u64, namespace: u32, title: []const u8, page_id: u64, revision_id: u64 },
+    };
+    const parsed = try std.json.parseFromSlice(Receipt, a, bytes, .{});
+    defer parsed.deinit();
+    const row = parsed.value;
+    try std.testing.expectEqualStrings("wikidict.blob-build.failure.v1", row.schema);
+    try std.testing.expectEqualStrings("UncompiledPresentation", row.error_name);
+    try std.testing.expectEqualStrings("deterministic-presentation", row.failure_class);
+    try std.testing.expectEqualStrings(context.invocation_id, row.invocation_id);
+    try std.testing.expectEqual(invocation_args.len, row.invocation_args.len);
+    for (invocation_args, row.invocation_args) |expected, actual| try std.testing.expectEqualStrings(expected, actual);
+    try std.testing.expectEqual(job.ordinal, row.page.ordinal);
+    try std.testing.expectEqual(job.ns.id, row.page.namespace);
+    try std.testing.expectEqualStrings(job.title, row.page.title);
+    try std.testing.expectEqual(job.page_id, row.page.page_id);
+    try std.testing.expectEqual(job.revision_id, row.page.revision_id);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, job.source) == null);
+    try std.testing.expectError(error.PathAlreadyExists, writePresentationFailure(context, job));
+    failure_receipt_context = context;
+    defer failure_receipt_context = null;
+    // Exercise the production error-return helper with an existing receipt:
+    // failure to create an exclusive file must retain the Writer's error.
+    try std.testing.expect(recordPresentationFailure(error.UncompiledPresentation, job) == error.UncompiledPresentation);
+    const after = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(64 * 1024));
+    defer a.free(after);
+    try std.testing.expectEqualSlices(u8, bytes, after);
+}
+
 test "blob shard options preserve explicit byte offset and page limit" {
+    try std.testing.expectError(error.Usage, parseOptions(&.{
+        "dict-blob-build", "dump", "out", "--expander-root", "bundle", "--failure-receipt", "receipt.json",
+    }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{
+        "dict-blob-build", "dump", "out", "--expander-root", "bundle", "--audit-presentation-errors",
+        "--failure-receipt", "receipt.json", "--invocation-id", "0123456789abcdef0123456789abcdef",
+    }));
     const options = try parseOptions(&.{
         "dict-blob-build", "dump.bz2", "out",                 "--expander-root", "bundle",
         "--start-page",    "100",      "--index-byte-offset", "2048",            "--limit-pages",
@@ -1315,6 +1418,11 @@ pub fn main(init: std.process.Init) !void {
         return error.ResourceLimit;
     }
 
+    failure_receipt_context = if (options.failure_receipt) |path| .{
+        .io = init.io, .a = a, .path = path,
+        .invocation_id = options.invocation_id.?, .invocation_args = args[1..],
+    } else null;
+    defer failure_receipt_context = null;
     var audit_storage: ?PresentationAudit = if (options.audit_presentation_errors)
         try PresentationAudit.init(init.io, a, args[2], .{ .dump_path = args[1], .expander_root = options.expander_root, .workers = options.workers, .timeout_ms = options.expansion_timeout_ms orelse expansion_deadline.default_ms, .now_unix = options.now_unix orelse std.Io.Clock.real.now(init.io).toSeconds(), .start_page = options.start_page, .requested_limit = options.limit_pages, .index_byte_offset = options.index_byte_offset, .expanded_byte_cap = options.audit_expanded_bytes orelse 0 })
     else

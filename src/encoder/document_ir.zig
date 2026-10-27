@@ -907,9 +907,10 @@ fn parseExternalLinkAt(input: []const u8, start: usize) ?ParsedExternalLink {
     const body = input[body_start..close];
     var separator: ?usize = null;
     for (body, 0..) |byte, index| {
-        // MediaWiki ends the URL before an HTML label even without whitespace.
+        // MediaWiki ends the URL before a raw double quote or HTML label,
+        // even without whitespace; the boundary remains part of the label.
         // Reuse the existing tag parser; malformed angle text is not a new URL rule.
-        if (externalLabelWhitespaceLen(body, index) != 0 or
+        if (byte == '"' or externalLabelWhitespaceLen(body, index) != 0 or
             (byte == '<' and syntax.tagAt(body, index) != null))
         {
             separator = index;
@@ -1045,6 +1046,32 @@ fn hasMatchingEmphasis(input: []const u8, start: usize, opens_bold: bool, opens_
         cursor += if (run == 0) 1 else run;
     }
     return false;
+}
+
+test "bracketed external raw quotes begin labels while encoded quotes stay in targets" {
+    const cases = [_]struct { source: []const u8, target: []const u8, label: []const u8 }{
+        .{ .source = "''[https://archive.org/details/x?q=\"witches'+stones\" Title]''", .target = "https://archive.org/details/x?q=", .label = "\"witches'+stones\" Title" },
+        .{ .source = "''[https://example.test/?q=%22word%22 Title]''", .target = "https://example.test/?q=%22word%22", .label = "Title" },
+        .{ .source = "''[https://example.test/?q=&quot;word&quot; Title]''", .target = "https://example.test/?q=&quot;word&quot;", .label = "Title" },
+    };
+    for (cases) |case| {
+        var it: InlineIterator = .{ .input = case.source };
+        const link = it.next().?;
+        try std.testing.expectEqual(InlineKind.external_link, link.kind);
+        try std.testing.expectEqualStrings(case.target, link.target);
+        try std.testing.expectEqualStrings(case.label, link.text);
+        try std.testing.expect(link.italic);
+        try std.testing.expect(it.next() == null);
+    }
+    // A quote cannot supply the mandatory address following the protocol.
+    try std.testing.expect(parseExternalLinkAt("[https://\"host\" label]", 0) == null);
+    try std.testing.expect(!validExternalUrl("https://example.test/?q=\"word\""));
+    var free: InlineIterator = .{ .input = "https://example.test/?q=\"word\"" };
+    const link = free.next().?;
+    try std.testing.expectEqual(InlineKind.external_link, link.kind);
+    try std.testing.expectEqualStrings("https://example.test/?q=", link.target);
+    try std.testing.expectEqualStrings("\"word\"", free.next().?.text);
+    try std.testing.expect(free.next() == null);
 }
 
 test "external link closing ignores brackets inside protected extension bodies" {
