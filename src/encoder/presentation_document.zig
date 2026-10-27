@@ -2956,6 +2956,72 @@ test "malformed source recovery roundtrip stores diagnostics not active syntax" 
     try std.testing.expectEqualStrings(once, generated_copy[2].text);
 }
 
+test "colon angle literals preserve visible labels and targets through strict DPR2 compilation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { raw: []const u8, escaped: []const u8, visible: []const u8, target: ?[]const u8 = null, italic: bool = false }{
+        .{ .raw = "<tr:āg>", .escaped = "&lt;tr:āg&gt;", .visible = "<tr:āg>" },
+        .{ .raw = "</tr:āg>", .escaped = "&lt;/tr:āg&gt;", .visible = "</tr:āg>" },
+        .{ .raw = "<tr:āg>word</tr:āg>", .escaped = "&lt;tr:āg&gt;word&lt;/tr:āg&gt;", .visible = "<tr:āg>word</tr:āg>" },
+        .{ .raw = "<span><tr:āg></span>", .escaped = "<span>&lt;tr:āg&gt;</span>", .visible = "<tr:āg>" },
+        .{ .raw = "[[આગ|આગ<tr:āg>]]", .escaped = "[[આગ|આગ&lt;tr:āg&gt;]]", .visible = "આગ<tr:āg>", .target = "આગ" },
+        .{ .raw = "[[Target|before <custom:term> after]]", .escaped = "[[Target|before &lt;custom:term&gt; after]]", .visible = "before <custom:term> after", .target = "Target" },
+        .{ .raw = "[[આગ|''આગ<tr:āg>tail</tr:āg>'']]", .escaped = "[[આગ|''આગ&lt;tr:āg&gt;tail&lt;/tr:āg&gt;'']]", .visible = "આગ<tr:āg>tail</tr:āg>", .target = "આગ", .italic = true },
+    };
+    for (cases) |case| for ([_][]const u8{ case.raw, case.escaped }, 0..) |source, variant| {
+        var report: Fallbacks = .{};
+        const encoded = try compileReportedAlloc(a, "fixture", .language, "English", "en", source, null, &report);
+        const decoded = try codec.decodeAlloc(a, encoded, "fixture", .language, .{ .code = "en", .heading = "English" });
+        var visible: std.ArrayList(u8) = .empty;
+        var linked: std.ArrayList(u8) = .empty;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            try visible.appendSlice(a, span.trail);
+            try std.testing.expectEqual(case.italic, span.italic);
+            try std.testing.expect(!span.bold);
+            if (span.kind == .link) {
+                try std.testing.expectEqualStrings(case.target orelse return error.UnexpectedLink, span.target);
+                try linked.appendSlice(a, span.text);
+                try linked.appendSlice(a, span.trail);
+            }
+        };
+        try std.testing.expectEqualStrings(case.visible, visible.items);
+        try std.testing.expectEqualStrings(if (case.target != null) case.visible else "", linked.items);
+        try std.testing.expectEqual(variant == 0, report.literal_markup);
+    };
+    // Parsed source still fails the residual guard; only compiler-owned literal
+    // angle provenance can make these visible spellings safe for a record.
+    for ([_][]const u8{ "<tr:āg>", "</tr:āg>" }) |source| {
+        const raw_spans = [_]compiler.Span{.{ .text = source }};
+        try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw_spans, null));
+    }
+}
+
+test "colon angle normalization preserves recognized HTML and opaque scopes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_][2][]const u8{
+        .{ "<tr>kept</tr>", "kept" },
+        .{ "<b>kept</b>", "kept" },
+        .{ "<nowiki><tr:āg>[[Target]]</tr:āg></nowiki>", "<tr:āg>[[Target]]</tr:āg>" },
+        .{ "<pre><tr:āg>[[Target]]</tr:āg></pre>", "<tr:āg>[[Target]]</tr:āg>" },
+    };
+    for (cases) |case| {
+        var report: Fallbacks = .{};
+        const encoded = try compileReportedAlloc(a, "fixture", .language, "English", "en", case[0], null, &report);
+        const decoded = try codec.decodeAlloc(a, encoded, "fixture", .language, .{ .code = "en", .heading = "English" });
+        var visible: std.ArrayList(u8) = .empty;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            try std.testing.expect(span.kind != .link);
+        };
+        try std.testing.expectEqualStrings(case[1], visible.items);
+        try std.testing.expect(!report.literal_markup);
+    }
+}
+
 test "invalid nowiki literal angles pass strict document compilation with active children" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

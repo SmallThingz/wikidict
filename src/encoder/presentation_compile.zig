@@ -6676,7 +6676,22 @@ pub const Renderer = struct {
         var emitted: usize = 0;
         var scan: usize = 0;
         var opaque_scan: syntax.OpaqueScan = .{};
-        while (std.mem.indexOfScalarPos(u8, input, scan, '<')) |at| {
+        // Raw template arguments retain modifier syntax until their existing
+        // handlers consume it. The colon-angle recovery applies only outside
+        // complete template/parameter scopes; legacy angle handling is unchanged.
+        const boundaries = QuoteBoundaries.init(input);
+        var template_end: usize = 0;
+        // Lookahead must not publish opaque misses into the earlier angle scan.
+        var template_opaque_scan: syntax.OpaqueScan = .{};
+        while (std.mem.indexOfAnyPos(u8, input, scan, "{<")) |at| {
+            if (input[at] == '{') {
+                scan = at + 1;
+                if (at >= template_end and starts(input[at..], "{{") and boundaries.canClose(input, at)) {
+                    if (syntax.balancedWithOpaqueScan(input, at, &template_opaque_scan)) |pair|
+                        template_end = pair.end;
+                }
+                continue;
+            }
             if (opaque_scan.protectedEnd(input, at, null)) |end| {
                 scan = end;
                 continue;
@@ -6698,6 +6713,10 @@ pub const Renderer = struct {
                 scan = tag.end;
             } else {
                 scan = at + 1;
+                if (at >= template_end) if (colonHtmlNameEnd(input, at)) |end| {
+                    literal_end = end;
+                    self.fallbacks.literal_markup = true;
+                };
                 if (doubleQuotedHtmlNameEnd(input, at)) |end| {
                     literal_end = end;
                     self.fallbacks.literal_markup = true;
@@ -6727,6 +6746,41 @@ pub const Renderer = struct {
         if (emitted == 0) return tracked;
         try out.appendSlice(self.a, tracked, emitted, input.len);
         return try out.finish(self.a);
+    }
+    // A complete, attribute-free colon name cannot identify an HTML element:
+    // tagAt requires whitespace, slash or '>' after its ASCII name. Preserve
+    // its angles as authored literals without splitting the surrounding inline
+    // link/quote stream. Deliberately exclude attributes, URLs and partial names.
+    fn colonHtmlNameEnd(input: []const u8, at: usize) ?usize {
+        if (at >= input.len or input[at] != '<') return null;
+        var cursor = at + 1;
+        if (cursor < input.len and input[cursor] == '/') cursor += 1;
+        const name_start = cursor;
+        if (cursor >= input.len or !std.ascii.isAlphabetic(input[cursor])) return null;
+        while (cursor < input.len and (std.ascii.isAlphanumeric(input[cursor]) or input[cursor] == '-')) : (cursor += 1) {}
+        if (cursor >= input.len or input[cursor] != ':') return null;
+        if (ir.hasExternalProtocolScheme(input[name_start..cursor])) return null;
+        cursor += 1;
+        const suffix_start = cursor;
+        while (cursor < input.len) {
+            const ch = input[cursor];
+            if (ch == '>') return if (cursor > suffix_start) cursor + 1 else null;
+            if (ch < 0x80) {
+                if (!std.ascii.isAlphanumeric(ch) and ch != '-') return null;
+                cursor += 1;
+                continue;
+            }
+            const width = std.unicode.utf8ByteSequenceLength(ch) catch return null;
+            if (width > input.len - cursor) return null;
+            const cp = std.unicode.utf8Decode(input[cursor .. cursor + width]) catch return null;
+            // Keep Unicode whitespace/control spellings outside this finite
+            // recovery, just as ASCII attribute separators are excluded above.
+            if (cp <= 0x00a0 or cp == 0x1680 or (cp >= 0x2000 and cp <= 0x200f) or
+                (cp >= 0x2028 and cp <= 0x202f) or (cp >= 0x205f and cp <= 0x206f) or
+                cp == 0x3000 or cp == 0xfeff or cp == 0xfffd) return null;
+            cursor += width;
+        }
+        return null;
     }
     // Double quotes are part of the sanitizer's atomic name, not attributes.
     // Such names cannot identify HTML elements. Keep this finite recovery free
@@ -11403,6 +11457,29 @@ pub fn plainText(a: A, spans: []const Span) A.Error![]u8 {
         } else if (span.kind == .line_break) try out.append(a, '\n') else try out.appendSlice(a, span.text);
     }
     return out.toOwnedSlice(a);
+}
+
+test "colon literals outside raw template scopes preserve modifier and parameter semantics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans("{{syn|en|kitty<q:rare>}} [[Target|x<tr:āg>]] {{{term|{{syn|en|kitten<q:small>}}}}}", .{});
+    try std.testing.expectEqualStrings("Synonyms: kitty (rare) x<tr:āg> Synonyms: kitten (small)", try flattened(a, spans));
+    var kitty: std.ArrayList(u8) = .empty;
+    var literal: std.ArrayList(u8) = .empty;
+    var kitten: std.ArrayList(u8) = .empty;
+    for (spans) |span| if (span.kind == .link) {
+        const label = if (std.mem.eql(u8, span.target, "kitty")) &kitty else if (std.mem.eql(u8, span.target, "Target")) &literal else if (std.mem.eql(u8, span.target, "kitten")) &kitten else return error.UnexpectedLink;
+        try label.appendSlice(a, span.text);
+    };
+    try std.testing.expectEqualStrings("kitty", kitty.items);
+    try std.testing.expectEqualStrings("x<tr:āg>", literal.items);
+    try std.testing.expectEqualStrings("kitten", kitten.items);
+    try std.testing.expect(renderer.fallbacks.literal_markup);
+    var escaped: Renderer = .{ .a = a, .context = .{} };
+    const escaped_spans = try escaped.parseSpans("{{syn|en|kitty&lt;q:rare&gt;}}", .{});
+    try std.testing.expectEqualStrings("Synonyms: kitty<q:rare>", try flattened(a, escaped_spans));
 }
 
 test "emphasis template boundaries and nested image captions render without raw wiki delimiters" {
@@ -29188,6 +29265,31 @@ test "complete unknown HTML names escape only angles and retain independent wiki
     var literal: Renderer = .{ .a = a, .context = .{} };
     try std.testing.expectEqualStrings("<quechua>[[Target|label]]</quechua>", try flattened(a, try literal.parseSpans("<nowiki><quechua>[[Target|label]]</quechua></nowiki>", .{})));
     try std.testing.expect(!literal.fallbacks.literal_markup);
+}
+
+test "colon angle recovery excludes attributes URLs and incomplete names" {
+    for ([_][]const u8{ "<tr:āg>", "</tr:āg>", "<custom:term>", "</custom:term>" }) |source|
+        try std.testing.expectEqual(@as(?usize, source.len), Renderer.colonHtmlNameEnd(source, 0));
+    for ([_][]const u8{
+        "<tr>",                   "</tr>",                   "<span>",          "<tr:>",          "</tr:>",
+        "<tr:āg",
+        "</tr:āg",
+        "<tr:āg title=x>",
+        "</tr:āg title=x>",
+        "<tr:āg'word>",
+        "</tr:āg'word>",
+        "<tr:āg\"word>",
+        "<tr:āg/> options",
+        "</tr:āg/>",
+        "<https://example.test>", "</https://example.test>", "<http:broken>",   "</http:broken>", "<HTTP:broken>",
+        "</HTTP:broken>",         "<https:broken>",          "</https:broken>", "<mailto:word>",  "</mailto:word>",
+        "<MAILTO:word>",          "</MAILTO:word>",
+        "<tr:āg\n>",
+        "<tr:āg >",
+        "<tr:āg[[Target]]>",
+        "<tr:āg&amp;x>",
+        "<tr:āg:more>",
+    }) |source| try std.testing.expect(Renderer.colonHtmlNameEnd(source, 0) == null);
 }
 
 test "escaped unknown tags preserve whole inline quote and link domains" {

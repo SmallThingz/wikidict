@@ -573,6 +573,15 @@ pub fn hasExternalProtocol(input: []const u8) bool {
     return false;
 }
 
+// Reserve supported schemes even when the following URL syntax is incomplete.
+pub fn hasExternalProtocolScheme(name: []const u8) bool {
+    for (external_protocols) |protocol| {
+        const colon = std.mem.indexOfScalar(u8, protocol, ':') orelse continue;
+        if (std.ascii.eqlIgnoreCase(name, protocol[0..colon])) return true;
+    }
+    return false;
+}
+
 fn hasAbsoluteExternalProtocol(input: []const u8) bool {
     for (external_protocols) |protocol| {
         if (std.mem.eql(u8, protocol, "//")) continue;
