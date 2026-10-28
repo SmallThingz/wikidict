@@ -11156,7 +11156,15 @@ pub const Renderer = struct {
     }
     fn tableSpanAttr(self: *Renderer, tag: syntax.Tag, name: []const u8) Error!u16 {
         const raw = (try self.semanticAttribute(tag, name)) orelse return 1;
-        const parsed = std.fmt.parseInt(u16, raw, 10) catch 1;
+        const parsed: u16 = std.fmt.parseInt(u16, raw, 10) catch |err| overflow: {
+            if (err != error.Overflow or raw.len == 0) break :overflow 1;
+            // Validate the entire positive decimal: overflow may precede junk.
+            // Keep parseInt's optional plus and internal underscore grammar.
+            const digits = if (raw[0] == '+') raw[1..] else raw;
+            if (digits.len == 0 or digits[0] == '_' or digits[digits.len - 1] == '_') break :overflow 1;
+            for (digits) |ch| if (ch != '_' and !std.ascii.isDigit(ch)) break :overflow 1;
+            break :overflow 100;
+        };
         // Zero is build-only: the completed row group resolves it before encoding.
         if (parsed == 0 and std.mem.eql(u8, name, "rowspan")) return 0;
         return @max(1, @min(100, parsed));
@@ -11604,6 +11612,46 @@ test "table span attributes decode entities and stay bounded" {
     const wiki_cell = wiki[0].table.?.rows[0].cells[0];
     try std.testing.expectEqual(@as(u16, 3), wiki_cell.colspan);
     try std.testing.expectEqual(@as(u16, 1), wiki_cell.rowspan);
+}
+
+test "positive table spans exceeding u16 retain bounded geometry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    for ([_][]const u8{
+        "<table><tr><td colspan='65536' rowspan='65536'>cell</td></tr></table>",
+        "{|\n| colspan=65536 rowspan=65536 | cell\n|}",
+    }) |source| {
+        var renderer: Renderer = .{ .a = arena.allocator(), .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        const cell = blocks[0].table.?.rows[0].cells[0];
+        try std.testing.expectEqual(@as(u16, 100), cell.colspan);
+        try std.testing.expectEqual(@as(u16, 100), cell.rowspan);
+    }
+}
+
+test "table span overflow preserves positive signs and malformed zero negative controls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var renderer: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    const cases = [_]struct { raw: []const u8, colspan: u16, rowspan: u16 }{
+        .{ .raw = "+999", .colspan = 100, .rowspan = 100 },
+        .{ .raw = "+65536", .colspan = 100, .rowspan = 100 },
+        .{ .raw = "+65_536", .colspan = 100, .rowspan = 100 },
+        .{ .raw = "655360000000000000000bad", .colspan = 1, .rowspan = 1 },
+        .{ .raw = "+655360000000000000000bad", .colspan = 1, .rowspan = 1 },
+        .{ .raw = "65536_", .colspan = 1, .rowspan = 1 },
+        .{ .raw = "-65536", .colspan = 1, .rowspan = 1 },
+        .{ .raw = "-1", .colspan = 1, .rowspan = 1 },
+        .{ .raw = "0", .colspan = 1, .rowspan = 0 },
+        .{ .raw = "+0", .colspan = 1, .rowspan = 0 },
+        .{ .raw = "-0", .colspan = 1, .rowspan = 0 },
+    };
+    for (cases) |case| {
+        const attrs = try std.fmt.allocPrint(arena.allocator(), "colspan='{s}' rowspan='{s}'", .{ case.raw, case.raw });
+        const tag: syntax.Tag = .{ .name = "td", .attrs = attrs, .end = 0, .closing = false, .self_closing = false };
+        try std.testing.expectEqual(case.colspan, try renderer.tableSpanAttr(tag, "colspan"));
+        try std.testing.expectEqual(case.rowspan, try renderer.tableSpanAttr(tag, "rowspan"));
+    }
 }
 
 test "translation layout tables preserve lists with optional closing tags" {

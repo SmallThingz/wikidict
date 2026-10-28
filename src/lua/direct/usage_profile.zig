@@ -61,8 +61,9 @@ const NameGraph = struct {
         const owned = try a.dupe(u8, raw);
         errdefer a.free(owned);
         const id_value: u32 = @intCast(self.names.count());
+        try self.root_seed.ensureUnusedCapacity(a, 1);
         try self.names.put(a, owned, id_value);
-        try self.root_seed.append(a, 0);
+        self.root_seed.appendAssumeCapacity(0);
         return id_value;
     }
 };
@@ -105,6 +106,7 @@ const Csr = struct {
 
 fn buildCsr(a: std.mem.Allocator, node_count: usize, edges: []const Edge, reverse: bool) !Csr {
     const offsets = try a.alloc(u32, node_count + 1);
+    errdefer a.free(offsets);
     @memset(offsets, 0);
     for (edges) |edge| {
         const from = if (reverse) edge.to else edge.from;
@@ -113,6 +115,7 @@ fn buildCsr(a: std.mem.Allocator, node_count: usize, edges: []const Edge, revers
     for (1..offsets.len) |index| offsets[index] += offsets[index - 1];
 
     const targets = try a.alloc(u32, edges.len);
+    errdefer a.free(targets);
     const cursor = try a.dupe(u32, offsets[0..node_count]);
     defer a.free(cursor);
     for (edges) |edge| {
@@ -170,6 +173,7 @@ fn components(
     }
 
     const ids = try a.alloc(u32, node_count);
+    errdefer a.free(ids);
     @memset(ids, std.math.maxInt(u32));
     var component_count: u32 = 0;
     var nodes: std.ArrayList(u32) = .empty;
@@ -285,13 +289,13 @@ pub fn pageSeeds(
     module_ids: *const std.StringHashMapUnmanaged(u32),
     module_count: usize,
 ) !PageSeeds {
-    const direct_page = try a.alloc(u64, module_count);
-    @memset(direct_page, 0);
-
     var file = try std.Io.Dir.cwd().openFile(io, path, .{});
     defer file.close(io);
     const stat = try file.stat(io);
     const len = std.math.cast(usize, stat.size) orelse return error.FileTooBig;
+
+    const direct_page = try a.alloc(u64, module_count);
+    @memset(direct_page, 0);
     if (len == 0) return .{ .values = direct_page };
     defer a.free(direct_page);
 
@@ -406,6 +410,7 @@ pub fn pageSeeds(
     };
     if (all_templates_reachable) {
         a.free(template_usage);
+        template_usage = &.{};
         for (templates.root_seed.items) |*seed| {
             if (seed.* == 0) seed.* = 1;
         }
@@ -597,6 +602,29 @@ test "usage propagation collapses cycles before accumulating reach" {
     try std.testing.expectEqual(@as(u64, 3), profile.module_reach[2]);
 }
 
+test "usage propagation releases every failed allocation and preserves caller seeds" {
+    const Probe = struct {
+        fn run(a: std.mem.Allocator) !void {
+            const edges = [_]Edge{
+                .{ .from = 0, .to = 1 },
+                .{ .from = 1, .to = 0 },
+                .{ .from = 1, .to = 2 },
+                .{ .from = 2, .to = 3 },
+                .{ .from = 2, .to = 3 },
+            };
+            var seeds = [_]u64{ 3, 4, 5, 0, 9 };
+            const original = seeds;
+            const usage = try propagate(a, seeds.len, &edges, &seeds);
+            defer a.free(usage);
+            try std.testing.expectEqualSlices(u64, &.{ 7, 7, 12, 12, 9 }, usage);
+            try std.testing.expectEqualSlices(u64, &original, &seeds);
+            usage[0] = 99;
+            try std.testing.expectEqualSlices(u64, &original, &seeds);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Probe.run, .{});
+}
+
 test "mode selection is usage first with a modest size penalty" {
     const a = std.testing.allocator;
     var profile = Profile{
@@ -678,4 +706,38 @@ test "reachable dynamic module load conservatively retains whole module set" {
     const reachable = try reachableModules(a, profile, &dynamic, false);
     defer a.free(reachable);
     try std.testing.expectEqualSlices(bool, &.{ true, true, true }, reachable);
+}
+
+test "page seed missing file releases caller allocations" {
+    const a = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const missing = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/missing.tsv", .{tmp.sub_path});
+    defer a.free(missing);
+    const ids: std.StringHashMapUnmanaged(u32) = .empty;
+    try std.testing.expectError(error.FileNotFound, pageSeeds(std.testing.io, a, missing, &ids, 1));
+}
+
+test "page seed graph releases failed allocations during dynamic template propagation" {
+    const a = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/usage.tsv", .{tmp.sub_path});
+    defer a.free(path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{
+        .sub_path = path,
+        .data = "R\tTemplate:A\t2\nT\tTemplate:A\tTemplate:B\nI\tTemplate:B\tModule:A\nD\ttemplate\n",
+    });
+    var ids: std.StringHashMapUnmanaged(u32) = .empty;
+    defer ids.deinit(a);
+    try ids.put(a, "Module:A", 0);
+    const Probe = struct {
+        fn run(backing: std.mem.Allocator, fixture: []const u8, module_ids: *const std.StringHashMapUnmanaged(u32)) !void {
+            var seeds = try pageSeeds(std.testing.io, backing, fixture, module_ids, 1);
+            defer seeds.deinit(backing);
+            try std.testing.expectEqualSlices(u64, &.{3}, seeds.values);
+            try std.testing.expect(!seeds.dynamic_module_target);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(a, Probe.run, .{ path, &ids });
 }
