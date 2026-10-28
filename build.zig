@@ -239,7 +239,8 @@ pub fn build(b: *std.Build) void {
     // Encoder and readers share one module identity for this source file.
     encoder_mod.addImport("blob_files", blob_files_mod);
     encoder_mod_test.addImport("blob_files", blob_files_mod_test);
-    const blob_query_exe = addCliExecutable(b, "dict", b.path("src/frontend/main.zig"), target, optimize, &.{
+    const reader_name = if (target.result.os.tag == .windows or target.result.os.tag == .wasi) "dict" else "wikidict";
+    const blob_query_exe = addCliExecutable(b, reader_name, b.path("src/frontend/main.zig"), target, optimize, &.{
         .{ .name = "blob_encoder", .module = blob_encoder_mod },
         .{ .name = "blob_decoder", .module = blob_decoder_mod },
         .{ .name = "blob_files", .module = blob_files_mod },
@@ -252,7 +253,20 @@ pub fn build(b: *std.Build) void {
     blob_query_exe.use_lld = true;
     const cli_install = b.addInstallArtifact(blob_query_exe, .{});
     b.getInstallStep().dependOn(&cli_install.step);
-    b.step("cli", "Build and install the CLI and terminal reader").dependOn(&cli_install.step);
+    const cli_step = b.step("cli", "Build and install wikidict and its invocation aliases");
+    cli_step.dependOn(&cli_install.step);
+    if (target.result.os.tag != .windows and target.result.os.tag != .wasi) {
+        // Preserve existing CLI tooling and select the GUI via argv[0]. Both
+        // aliases point at the same installed executable.
+        for ([_][]const u8{ "dict", "wikidict-gio" }) |alias| {
+            const link = b.addSystemCommand(&.{ "ln", "-sfn", "wikidict", alias });
+            link.setCwd(b.graph.path(.install_bin, ""));
+            link.has_side_effects = true;
+            link.step.dependOn(&cli_install.step);
+            b.getInstallStep().dependOn(&link.step);
+            cli_step.dependOn(&link.step);
+        }
+    }
 
     const ffi_mod = b.createModule(.{
         .root_source_file = b.path("src/frontend/c_api.zig"),

@@ -6,24 +6,25 @@ const output = @import("output.zig");
 const tui = @import("tui.zig");
 const ReadingState = @import("reading_state.zig").State;
 const search = @import("search.zig");
+const desktop_dispatch = @import("desktop_dispatch.zig");
 
 const usage =
-    \\dict — fast local Wiktionary
+    \\wikidict — fast local Wiktionary
     \\
     \\Usage
-    \\  dict WORD                         Look up a word
-    \\  dict search [PREFIX]              Browse prefix matches
-    \\  dict tui [PREFIX]                 Open the interactive reader
-    \\  dict saved / dict history         List saved or recently viewed words
-    \\  dict save WORD / dict unsave WORD Save or remove a word
-    \\  dict export WORD                  Export compiled presentation JSON
-    \\  dict languages [WORD]             List installed languages
-    \\  dict catalog [HTTPS_LIST]         Read a download catalogue
-    \\  dict install FILE_OR_HTTPS_URL    Install raw/XZ blob; optional --sha256 HASH
-    \\  dict stats                        Show dataset statistics
+    \\  wikidict WORD                         Look up a word
+    \\  wikidict search [PREFIX]              Browse prefix matches
+    \\  wikidict tui [PREFIX]                 Open the interactive reader
+    \\  wikidict saved / wikidict history     List saved or recently viewed words
+    \\  wikidict save WORD / wikidict unsave WORD Save or remove a word
+    \\  wikidict export WORD                  Export compiled presentation JSON
+    \\  wikidict languages [WORD]             List installed languages
+    \\  wikidict catalog [HTTPS_LIST]         Read a download catalogue
+    \\  wikidict install FILE_OR_HTTPS_URL    Install raw/XZ blob; optional --sha256 HASH
+    \\  wikidict stats                        Show dataset statistics
     \\
     \\Desktop GUI
-    \\  dict-qt [--root PATH] [WORD]      Open the native Qt 6 application
+    \\  wikidict-gio [--root PATH] [WORD] Open the native desktop application
     \\
     \\Common options
     \\  --language NAME    Language heading (DICT_LANGUAGE, otherwise English)
@@ -38,7 +39,8 @@ const usage =
     \\  --theme THEME      TUI palette: terminal, dark, light
     \\  --                 End options, for words beginning with a dash
     \\
-    \\Run dict without arguments in a terminal to open the interactive reader.
+    \\Run wikidict without arguments in a terminal to open the interactive reader.
+    \\The dict command remains an alias for wikidict.
     \\Set DICT_ROOT once to use your dictionary from any folder.
     \\Exit status: 0 success, 1 no match, 2 invalid input or an operation failed.
 ;
@@ -57,6 +59,8 @@ pub fn main(init: std.process.Init) void {
 fn run(init: std.process.Init) !u8 {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
+    if (argv.len > 0 and desktop_dispatch.isGuiInvocation(argv[0]))
+        return desktop_dispatch.run(init, argv);
     var opts = try args.parseWithDefaults(argv[1..], .{
         .root = init.environ_map.get("DICT_ROOT") orelse (args.Options{}).root,
         .language = init.environ_map.get("DICT_LANGUAGE") orelse (args.Options{}).language,
@@ -282,6 +286,7 @@ fn pageHint(io: std.Io, opts: args.Options, total: usize, count: usize) !void {
 }
 
 test {
+    _ = desktop_dispatch;
     _ = args;
     _ = store;
     _ = model;

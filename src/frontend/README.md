@@ -1,16 +1,18 @@
 # Native frontends
 
-The shipped desktop reader has three native surfaces over the same compiled dictionary data:
+The shipped reader has three native surfaces over the same compiled dictionary data:
 
-- `dict`: CLI
-- `dict tui`: terminal UI
-- `dict-qt`: Qt 6 / C++ desktop GUI
+- `wikidict`: CLI (`dict` remains an invocation alias)
+- `wikidict tui`: terminal UI
+- `wikidict-gio`: Qt 6 / C++ desktop GUI, a symlink to `wikidict`
+
+The invocation name selects the surface in the same process. The CLI and TUI require no Qt libraries. The GUI invocation loads the installed desktop library from `../lib` relative to the real executable; install the desktop component into the same prefix as `wikidict`.
 
 The separate [desktop repository](https://github.com/SmallThingz/wikidict-desktop) owns the Qt and web interfaces. There is no read-time Lua, template, or wikitext execution. Lua/templates/wikitext are bundle-time compiler inputs only.
 
 ## C ABI
 
-`src/frontend/c_api.zig` exposes an opaque data-reader handle through `src/ffi/dict.h`. The Qt application links to `libdictffi` and calls the Zig reader in-process. The ABI returns versioned UTF-8 `dict.results.v1` JSON buffers rather than exposing Zig layouts.
+`src/frontend/c_api.zig` exposes an opaque data-reader handle through `src/ffi/dict.h`. The Qt desktop library links to `libdictffi` and calls the Zig reader in-process. The ABI returns versioned UTF-8 `dict.results.v1` JSON buffers rather than exposing Zig layouts. The desktop component exports `extern C int wikidict_gui_main(int argc, char **argv)`; exceptions must be handled within that entry point.
 
 A handle owns the mapped blob/index and selected collection. Lookup, prefix search, random words, language catalog, and statistics are data-only operations.
 
