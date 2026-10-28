@@ -11,6 +11,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
+import reviewed_nonlexical as nonlexical
 
 MARKUP = re.compile(r'\[\[|\]\]|\{\{|\}\}|</?[A-Za-z][^>]*>|\{\||\|}')
 # Decoded spans do not preserve reliable nowiki/source provenance. Intentional
@@ -118,8 +119,9 @@ def coverage_rows(root):
     if not path.exists():
         return None
     coverage = json.loads(path.read_text())
-    require(coverage.get('version') == 1 and isinstance(coverage.get('namespaces'), list),
+    require(coverage.get('version') in (1, 2) and isinstance(coverage.get('namespaces'), list),
             'invalid namespace coverage')
+    nonlexical.check_publication(root)
     rows, ids = coverage['namespaces'], set()
     for row in rows:
         require(natural(row['id']) and row['id'] not in ids and

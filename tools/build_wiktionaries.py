@@ -27,6 +27,7 @@ from compress_blobs import compress, compress_many, default_workers, verify_roun
 from build_disk_limits import BUILD_DISK_RESERVE_BYTES, require_merge_disk_space, compressed_blob_size
 from build_artifact_root import configure_artifact_root, artifact_path, remove_artifact_tree, unlink_artifact
 from download_wiktionaries import digest, language_registry_snapshot, validate_item, write_language_registry, select_manifest_files
+import reviewed_nonlexical as nonlexical
 
 PROJECT = Path(__file__).resolve().parent.parent
 SHARD_PAGES = 100_000
@@ -861,7 +862,7 @@ def source_fingerprint():
     return checksum.hexdigest()
 
 
-def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_timeout_ms, auxiliary_snapshots=None, downloads=None):
+def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_timeout_ms, auxiliary_snapshots=None, downloads=None, reviewed_nonlexical=None):
     executable=shutil.which(zig)
     if executable is None:raise ValueError('Zig compiler executable is unavailable')
     identity=dict(version=1, source=source_fingerprint(),
@@ -877,6 +878,7 @@ def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_
     from prepare_page_redirects import source_identity
     redirects=source_identity(items, downloads if downloads is not None else PROJECT/'data/dumps') if items else None
     if redirects is not None:identity['derived_page_redirects']=redirects
+    if reviewed_nonlexical is not None:identity['reviewed_nonlexical_source_review_sha256']=reviewed_nonlexical['sha256']
     return identity
 
 
@@ -1303,7 +1305,7 @@ def cleanup_dead_private_shards(shards_root):
         remove_artifact_tree(partial)
 
 
-def shard_state(items, registry, now_unix=None, interwiki_snapshot=None, auxiliary_snapshots=None):
+def shard_state(items, registry, now_unix=None, interwiki_snapshot=None, auxiliary_snapshots=None, reviewed_nonlexical=None):
     state={
         'version':SHARD_STATE_VERSION,
         'edition':items[0]['wiki'],
@@ -1314,6 +1316,7 @@ def shard_state(items, registry, now_unix=None, interwiki_snapshot=None, auxilia
         'shard_pages':SHARD_PAGES,
     }
     if now_unix is not None: state['now_unix']=now_unix
+    if reviewed_nonlexical is not None:state['reviewed_nonlexical_source_review_sha256']=reviewed_nonlexical['sha256']
     if interwiki_snapshot is not None:
         state['interwiki_map_sha256']=sha256_file(interwiki_snapshot)
     if auxiliary_snapshots:
@@ -1690,7 +1693,7 @@ def extraction_cache_args(cache_root, staged):
             '--verified-index-sha256',staged['index_sha256']]
 
 
-def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None, raw_shards_path=None, compress_shards=False, extraction_cache_root=None):
+def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None, raw_shards_path=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical=None):
     if type(compress_shards) is not bool: raise ValueError('Invalid compressed shard mode')
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     if raw_shards_path is not None:
@@ -1730,6 +1733,11 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         raise ValueError('Staged dump lacks a verified source page count')
     if indexed_pages!=cache_record['source_pages']:
         raise ValueError('Page index count differs from staged source pages')
+    reviewed_path = None
+    if reviewed_nonlexical is not None:
+        reviewed_path = nonlexical.materialize(reviewed_nonlexical,dump,index_path,workspace/nonlexical.NAME)
+        nonlexical.bind_identity(workspace,build_identity,reviewed_nonlexical)
+    reviewed_args = ['--reviewed-nonlexical',str(reviewed_path)] if reviewed_path is not None else []
 
     shards_root=raw_shards_path if raw_shards_path is not None else workspace/'shards'
     shards_root.mkdir(exist_ok=True)
@@ -1772,7 +1780,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                    '--limit-pages',str(indexed_pages-first),
                    '--index-byte-offset',str(index['offsets'][first]),
                    '--shard-pages',str(SHARD_PAGES),
-                   '--workers',str(expansion_workers),'--now-unix',str(now_unix),*timeout_args],
+                   '--workers',str(expansion_workers),'--now-unix',str(now_unix),*timeout_args,*reviewed_args],
                   edition,date,'continuous_shard_build',start_page=first,pages=indexed_pages-first)
         require_index_identity(index_path,index)
         for start in missing_starts:
@@ -1811,7 +1819,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
             command=[zig,'build','-j1','-Doptimize=fast','build-blobs','--',str(dump),str(shard),
                      '--expander-root',str(expander),'--start-page',str(start),'--limit-pages',str(limit),
                      '--index-byte-offset',str(offset),
-                     '--workers',str(expansion_workers),'--now-unix',str(now_unix),*timeout_args]
+                     '--workers',str(expansion_workers),'--now-unix',str(now_unix),*timeout_args,*reviewed_args]
             evidence_root=workspace.with_name(workspace.name+'.failures')
             attempt=build_shard_with_retries(command,shard,evidence_root,edition,date,start,limit,
                 lambda:require_index_identity(index_path,index),
@@ -1840,13 +1848,17 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     if staging.exists(): remove_artifact_tree(staging)
     admission=require_merge_disk_space(shard_paths,staging,BUILD_DISK_RESERVE_BYTES,
         metadata_paths=(expander_build/'compile-plan.tsv',),metadata_texts=metadata_texts,
+        **({'reviewed_manifest_path':reviewed_path} if reviewed_path is not None else {}),
         **({'allow_compressed':True,'compressed_output':True} if compress_shards else {}))
     phase_event(edition,date,'merge_disk_admission','admitted',**admission)
-    timed_run([zig,'build','-j1','-Doptimize=fast','merge-blobs','--',*(['--compress-output'] if compress_shards else []),str(staging),*[str(path) for path in shard_paths]],
+    timed_run([zig,'build','-j1','-Doptimize=fast','merge-blobs','--',*(['--compress-output'] if compress_shards else []),*reviewed_args,str(staging),*[str(path) for path in shard_paths]],
               edition,date,'merge',shards=len(shard_paths))
     timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(staging)],
               edition,date,'merged_verify',shards=len(shard_paths))
     (staging/'page-coverage.json').write_text(json.dumps(coverage,sort_keys=True)+'\n')
+    if reviewed_path is not None:
+        nonlexical.require(nonlexical.read_bytes(reviewed_path)==nonlexical.read_bytes(staging/nonlexical.NAME), 'Native merge execution manifest differs')
+        nonlexical.check_coverage(staging,build_identity)
     plan=expander_build/'compile-plan.tsv'
     if plan.is_file(): shutil.copyfile(plan,staging/'compile-plan.tsv')
     if interwiki_snapshot is not None:
@@ -1872,7 +1884,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     cleanup_shard_workspace(workspace)
 
 
-def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None):
+def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None):
     artifact_path(output)
     if raw_shard_root is not None: artifact_path(raw_shard_root)
     validate_now_unix(now_unix)
@@ -1894,7 +1906,7 @@ def build(items, downloads, output, zig, compression_workers=None, expansion_wor
             # Legitimate producers share this edition lock; success still overrides.
             if (parent / date / 'complete.json').exists():
                 result['execution_mode']='existing_output'
-            mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}), **({'raw_shard_root':raw_shard_root} if raw_shard_root is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}))
+            mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}), **({'raw_shard_root':raw_shard_root} if raw_shard_root is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical_review=reviewed_nonlexical_review)
             result['execution_mode']=mode
             return mode
 
@@ -1959,7 +1971,7 @@ def require_current_staging_version(path, version):
 def publication_inventory(root, *, allow_raw=False):
     """Pin verified data bytes so resume cannot bless missing or changed output."""
     required={'languages.tsv','page-coverage.json','namespace-coverage.json','fallback-pages.jsonl'}
-    metadata=required|{'compile-plan.tsv','module-compile-plan.tsv',BUILD_IDENTITY_NAME,
+    metadata=required|{nonlexical.NAME,'compile-plan.tsv','module-compile-plan.tsv',BUILD_IDENTITY_NAME,
                        INTERWIKI_SHA_NAME,AUXILIARY_SHA_NAME,NOW_UNIX_NAME}
     if root.is_symlink() or not root.is_dir():raise ValueError('Unsafe publication directory')
     pending=[root];files=[]
@@ -2109,7 +2121,7 @@ def validate_namespace_coverage(root, expected_rows, namespace_snapshot=None, fa
     path=root/'namespace-coverage.json'
     try:report=read_small_json(path,8*1024*1024)
     except (OSError,ValueError,json.JSONDecodeError) as error:raise ValueError('Missing or invalid namespace coverage') from error
-    if not isinstance(report,dict) or report.get('version')!=1 or not isinstance(report.get('namespaces'),list):raise ValueError('Invalid namespace coverage')
+    if not isinstance(report,dict) or report.get('version') not in (1,2) or not isinstance(report.get('namespaces'),list):raise ValueError('Invalid namespace coverage')
     expected_routes=None
     if namespace_snapshot is not None:
         expected_hash=sha256_file(Path(namespace_snapshot))
@@ -2124,6 +2136,7 @@ def validate_namespace_coverage(root, expected_rows, namespace_snapshot=None, fa
             if ns in expected_routes or kind=='INVALID':raise ValueError('Invalid namespace registry routing')
             expected_routes[ns]=(columns[1],kind)
     counters=('input_rows','compile_only_rows','source_unavailable_rows','dispatched_rows','expanded_pages','fallback_pages','duplicate_rows')
+    if report['version']==2:counters+=('reviewed_nonlexical_rows',)
     alias_fields=['alias_pages' in row for row in report['namespaces'] if isinstance(row,dict)]
     if alias_fields and any(alias_fields)!=all(alias_fields):raise ValueError('Mixed alias coverage schema')
     if alias_fields and all(alias_fields):counters+=('alias_pages',)
@@ -2154,7 +2167,7 @@ def validate_namespace_coverage(root, expected_rows, namespace_snapshot=None, fa
             value=row.get(key)
             if type(value) is not int or not 0<=value<2**64:raise ValueError('Invalid namespace coverage counter')
             totals[key]+=value
-        if row['input_rows']!=row['compile_only_rows']+row['source_unavailable_rows']+row.get('site_metadata_rows',0)+row['dispatched_rows'] or row['dispatched_rows']!=row['expanded_pages']+row['fallback_pages']+row['duplicate_rows']:raise ValueError('Incomplete namespace coverage')
+        if row['input_rows']!=row['compile_only_rows']+row['source_unavailable_rows']+row.get('site_metadata_rows',0)+row.get('reviewed_nonlexical_rows',0)+row['dispatched_rows'] or row['dispatched_rows']!=row['expanded_pages']+row['fallback_pages']+row['duplicate_rows']:raise ValueError('Incomplete namespace coverage')
         if row.get('site_metadata_rows',0) and (ns!=0 or kind!='language'):raise ValueError('Invalid site metadata coverage disposition')
         if row.get('alias_pages',0)>row['expanded_pages']+row['fallback_pages'] or (kind is None and row.get('alias_pages',0)):raise ValueError('Invalid alias coverage subset')
         if (kind is None and row['input_rows']!=row['compile_only_rows']) or (kind is not None and row['compile_only_rows']!=0):raise ValueError('Invalid namespace coverage disposition')
@@ -2185,6 +2198,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     recorded_now=read_small_json(staging/NOW_UNIX_NAME) if (staging/NOW_UNIX_NAME).is_file() else None
     validate_now_unix(recorded_now)
     coverage=validate_page_coverage(staging,require_total=True)
+    nonlexical.check_coverage(staging,build_identity)
     fallback_counts = {}
     fallback_pages = validate_fallback_report(staging / 'fallback-pages.jsonl', fallback_counts)
     namespace_totals=validate_namespace_coverage(staging,coverage['pages_seen'],namespace_snapshot,fallback_counts,site_info_snapshot)
@@ -2240,7 +2254,7 @@ def publish_verified_staging(staging, target, edition, date, compression_workers
         blobs,fallback_pages=_publish_verified_staging(staging,target,edition,date,compression_workers,interwiki_sha,auxiliary_hashes,build_identity,namespace_snapshot,site_info_snapshot)
         result.update(blobs=blobs,fallback_pages=fallback_pages)
 
-def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None):
+def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None):
     validate_now_unix(now_unix)
     if extraction_cache_root is not None:
         if not Path(extraction_cache_root).is_dir():raise ValueError('Explicit extraction cache root must exist')
@@ -2276,7 +2290,8 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     else:
         interwiki_sha=None
     auxiliary_hashes=verified_auxiliary_hashes(auxiliary_snapshots,edition,date)
-    build_identity=build_input_identity(items,zig,auxiliary_hashes,interwiki_sha,expansion_timeout_ms,auxiliary_snapshots,downloads)
+    reviewed = nonlexical.load_review(reviewed_nonlexical_review,items,namespace)
+    build_identity=build_input_identity(items,zig,auxiliary_hashes,interwiki_sha,expansion_timeout_ms,auxiliary_snapshots,downloads,reviewed)
     target = output / edition / date
     if (target / 'complete.json').exists():
         try:
@@ -2293,6 +2308,8 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
             raise ValueError('Existing output uses a different interwiki map snapshot; choose a new output directory')
         if metadata.get('auxiliary_snapshot_sha256',{})!=auxiliary_hashes:
             raise ValueError('Existing output uses different auxiliary snapshots; choose a new output directory')
+        nonlexical.bind_identity(target,build_identity,reviewed)
+        nonlexical.check_coverage(target,build_identity)
         require_build_identity(metadata.get('build_inputs'),build_identity)
         coverage=validate_page_coverage(target,require_total=True)
         if type(metadata.get('input_pages')) is not int or metadata['input_pages']!=coverage['pages_seen']:
@@ -2330,6 +2347,8 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         if not staging.is_dir() or staging.is_symlink():
             raise ValueError(f'Unsafe incomplete build path: {staging}')
         if (staging / VERIFIED_MARKER).is_file():
+            nonlexical.bind_identity(staging,build_identity,reviewed)
+            nonlexical.check_coverage(staging,build_identity)
             recorded_now=read_small_json(staging/NOW_UNIX_NAME) if (staging/NOW_UNIX_NAME).is_file() else None
             if now_unix is not None and recorded_now!=now_unix:
                 raise ValueError('Verified staging uses a different or unrecorded build time')
@@ -2340,9 +2359,10 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         remove_artifact_tree(staging)
     workers = min(compression_workers or default_build_threads(),MAX_PIPELINE_WORKERS)
     workspace=target.with_name(date+'.shards')
-    expected=shard_state(items,registry,interwiki_snapshot=interwiki_snapshot,auxiliary_snapshots=auxiliary_snapshots)
+    expected=shard_state(items,registry,interwiki_snapshot=interwiki_snapshot,auxiliary_snapshots=auxiliary_snapshots,reviewed_nonlexical=reviewed)
     raw_shards_path=(Path(raw_shard_root).absolute()/edition/(date+'.raw-shards')) if raw_shard_root is not None else None
     now_unix=prepare_shard_workspace(workspace,expected,now_unix,**({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}))
+    if reviewed is not None:nonlexical.pin_review(reviewed,workspace/'reviewed-nonlexical-source.json')
     dump=cached_shard_dump(xml,downloads,workspace)
     source_metadata=read_small_json(workspace/'input/.complete.json')
     if not isinstance(source_metadata,dict) or type(source_metadata.get('source_pages')) is not int or source_metadata['source_pages']<0:
@@ -2363,9 +2383,9 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         result.update(provider_installed=page_redirects_snapshot is not None,sha256=page_redirects_sha)
     # XML compression ratio does not bound the writer's whole-bucket sort.
     # Reuse the verified repack for either path, retaining it after failures.
-    if source_pages>SHARD_PAGES:
+    if source_pages>SHARD_PAGES or reviewed is not None:
         print(f'Sharding {edition}: {source_pages:,} verified source pages in {SHARD_PAGES:,}-page chunks',flush=True)
-        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}))
+        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical=reviewed)
     else:
         timed_run([zig,'build','-j1','-Doptimize=fast','build-dictionary','--',str(dump),str(staging),
                      *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
@@ -2401,7 +2421,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     cleanup_shard_workspace(workspace)
     return 'pipeline_run_may_reuse_verified_inputs_or_shards'
 
-def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS, cpu_admission='load', raw_shard_root=None, adaptive_workers=False, compress_shards=False, extraction_cache_root=None):
+def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS, cpu_admission='load', raw_shard_root=None, adaptive_workers=False, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None):
     from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS
     validate_now_unix(now_unix)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
@@ -2433,6 +2453,7 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
                     break
                 key,group=pending.pop(0)
                 options={}
+                if reviewed_nonlexical_review is not None:options['reviewed_nonlexical_review']=reviewed_nonlexical_review
                 if expansion_workers is not None: options['expansion_workers']=expansion_workers
                 if expansion_timeout_ms is not None: options['expansion_timeout_ms']=expansion_timeout_ms
                 if now_unix is not None: options['now_unix']=now_unix
@@ -2509,6 +2530,7 @@ def main():
     p.add_argument('--now-unix',type=int,help='Pin build-time MediaWiki time for repeatable complete builds')
     p.add_argument('--interwiki-map-snapshot',type=Path,
                    help='Current siteinfo interwiki-map.tsv; its SHA-256 is part of the shard identity')
+    p.add_argument('--reviewed-nonlexical-review',type=Path,help='Exact source-bound reviewed nonlexical page dispositions for one edition')
     for name in AUXILIARY_SNAPSHOT_NAMES:
         p.add_argument('--'+name+'-snapshot',type=Path,
                        help='Optional '+name+' snapshot; its SHA-256 is part of the shard identity')
@@ -2576,8 +2598,11 @@ def main():
         p.error('Auxiliary snapshots require exactly one edition')
     if a.extraction_cache_root is not None and len(groups)!=1:
         p.error('An explicit extraction cache requires exactly one edition')
+    if a.reviewed_nonlexical_review is not None and len(groups)!=1:
+        p.error('A reviewed nonlexical source manifest requires exactly one edition')
     print(f'Building {len(groups)} editions with up to {a.jobs} concurrent jobs and {a.threads} workers per edition',flush=True)
     options={}
+    if a.reviewed_nonlexical_review is not None:options['reviewed_nonlexical_review']=a.reviewed_nonlexical_review.resolve(strict=True)
     if a.cpu_admission!='load':options['cpu_admission']=a.cpu_admission
     if adaptive_workers:options['adaptive_workers']=True
     if a.resource_mode=='watchdog':

@@ -7,6 +7,7 @@ const dump_source = @import("wikimedia_dump");
 const language_registry = @import("language_registry.zig");
 const bundle_expander = @import("bundle_expander.zig");
 const expansion_deadline = @import("expansion_deadline.zig");
+const reviewed_nonlexical = @import("reviewed_nonlexical.zig");
 const max_worker_count: usize = 8;
 
 const Options = struct {
@@ -22,6 +23,7 @@ const Options = struct {
     audit_expanded_bytes: ?usize = null,
     failure_receipt: ?[]const u8 = null,
     invocation_id: ?[]const u8 = null,
+    reviewed_nonlexical: ?[]const u8 = null,
 };
 
 // Standalone CLI invocation state, read only by the ordered Writer consumer.
@@ -804,8 +806,8 @@ fn parseSiteMainPage(a: std.mem.Allocator, bytes: []const u8, namespaces: *const
     if (raw.len == 0 or std.mem.indexOfAny(u8, raw, "\t\r\n#") != null) return error.InvalidSiteMainPage;
     const title = try namespaces.normalizeTitle(a, raw, 0, .any);
     errdefer a.free(title);
-    // Valid project-namespace homepages retain ordinary compile-only routing.
-    // siteTerminalPage refuses non-main namespace rows, without invalidating capture.
+    // Direct project-namespace inputs retain ordinary compile-only routing.
+    // Their validated terminal identity can still identify main-namespace aliases.
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
     return .{ .title = title, .digest = digest };
@@ -835,6 +837,8 @@ const ExpansionPool = struct {
     page_title_index: ?dump_source.PageTitleIndex = null,
     page_redirects: ?*const encoder.page_redirects.Snapshot = null,
     site_mainpage: ?SiteMainPage = null,
+    reviewed_nonlexical: ?*reviewed_nonlexical.Review = null,
+    reviewed_dump_identity: ?PageIndexIdentity = null,
     audit: ?*PresentationAudit = null,
 
     fn init(
@@ -926,7 +930,11 @@ fn parseOptions(args: []const []const u8) !Options {
     var index: usize = 3;
     while (index < args.len) {
         const arg = args[index];
-        if (std.mem.eql(u8, arg, "--failure-receipt")) {
+        if (std.mem.eql(u8, arg, "--reviewed-nonlexical")) {
+            index += 1;
+            if (index >= args.len or out.reviewed_nonlexical != null or args[index].len == 0) return error.Usage;
+            out.reviewed_nonlexical = args[index];
+        } else if (std.mem.eql(u8, arg, "--failure-receipt")) {
             index += 1;
             if (index >= args.len or out.failure_receipt != null or args[index].len == 0) return error.Usage;
             out.failure_receipt = args[index];
@@ -1148,25 +1156,65 @@ fn siteTerminalPage(pool: *const ExpansionPool, a: std.mem.Allocator, initial: d
     var seen: [32]u64 = undefined;
     var count: usize = 0;
     while (count < seen.len) : (count += 1) {
-        if (page.ns != 0 or !page.has_source) return null;
+        if (!page.has_source) return null;
         for (seen[0..count]) |id| if (id == page.page_id) return null;
         seen[count] = page.page_id;
         const xml_target = page.redirect orelse return page;
         const redirects = pool.page_redirects orelse return error.PageRedirectSnapshotMissing;
         const target = try redirects.lookup(a, page.page_id, xml_target);
-        if (target.namespace != 0 or target.interwiki.len != 0) return null;
-        page = (try aliasTargetPage(pool, target.title)) orelse return null;
+        if (target.namespace < 0 or target.interwiki.len != 0) return null;
+        const next = (try aliasTargetPage(pool, target.title)) orelse return null;
+        if (next.ns != @as(u32, @intCast(target.namespace))) return null;
+        page = next;
     }
     return null; // Cyclic/overlong chains keep ordinary strict treatment.
 }
 fn isSiteMetadata(pool: *const ExpansionPool, a: std.mem.Allocator, initial: dump_source.IndexedPage) !bool {
+    // Only main-namespace candidates are reclassified. Project/homepage source
+    // rows retain their registry-defined compile-only routing.
+    if (initial.ns != 0) return false;
     const site = pool.site_mainpage orelse return false;
     const declared = (try aliasTargetPage(pool, site.title)) orelse return false;
     // The captured official main page may itself redirect to a localized notice.
     const canonical = (try siteTerminalPage(pool, a, declared)) orelse return false;
     const resolved = (try siteTerminalPage(pool, a, initial)) orelse return false;
-    return resolved.page_id == canonical.page_id and resolved.revision_id == canonical.revision_id and
+    return resolved.ns == canonical.ns and resolved.page_id == canonical.page_id and resolved.revision_id == canonical.revision_id and
         std.mem.eql(u8, resolved.title, canonical.title);
+}
+
+// Hash the already-open source handle, using bounded memory and checking its
+// identity on both sides. The manifest binds these actual native input bytes.
+fn reviewedDumpDigest(io: std.Io, file: std.Io.File) !struct { digest: [32]u8, identity: PageIndexIdentity } {
+    const before = try fileIdentity(file);
+    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+    var buffer: [64 * 1024]u8 = undefined;
+    var offset: u64 = 0;
+    while (true) {
+        const n = try file.readPositionalAll(io, &buffer, offset);
+        if (n == 0) break;
+        hash.update(buffer[0..n]);
+        offset = try std.math.add(u64, offset, n);
+    }
+    if (offset != before.size or !std.meta.eql(before, try fileIdentity(file))) return error.ReviewedNonlexicalInputsChanged;
+    var digest: [32]u8 = undefined;
+    hash.final(&digest);
+    return .{ .digest = digest, .identity = before };
+}
+fn checkReviewedDump(pool: *const ExpansionPool, dump: *const dump_source.SourceReader) !void {
+    if (pool.reviewed_dump_identity) |expected| if (!std.meta.eql(expected, try fileIdentity(dump.file))) return error.ReviewedNonlexicalInputsChanged;
+}
+fn loadReviewedNonlexical(io: std.Io, a: std.mem.Allocator, path: []const u8, namespaces: *const namespace_registry.Registry, page_index: []const u8, kind: dump_source.PageIndexKind, dump_digest: [32]u8) !reviewed_nonlexical.Review {
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(4 * 1024 * 1024));
+    defer a.free(bytes);
+    var review = try reviewed_nonlexical.Review.init(a, bytes, namespaces.wiki, namespaces.dump_date, namespaces.source_sha256, dump_digest, page_index);
+    errdefer review.deinit();
+    var lines = std.mem.splitScalar(u8, page_index, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0 or line[0] == '#') continue;
+        try review.preflightPage(try dump_source.parsePageIndexLine(kind, line));
+    }
+    try review.finishPreflight();
+    return review;
 }
 
 fn dispatchIndexedPage(
@@ -1182,6 +1230,24 @@ fn dispatchIndexedPage(
     const spec = namespaces.byId(std.math.cast(i32, page.ns) orelse return error.InvalidNamespace) orelse return error.InvalidNamespace;
     const role = compiledKind(spec);
     try writer.namespace_coverage.input(writer.allocator, page.ns, spec.name, role, page.has_source);
+    // Explicit source review precedes ordinary aliases and language ownership.
+    // Unlisted pages retain the existing dispatch path without a title heuristic.
+    if (pool.reviewed_nonlexical) |review| {
+        if (try review.matches(page)) {
+            var review_arena = std.heap.ArenaAllocator.init(writer.allocator);
+            defer review_arena.deinit();
+            const ra = review_arena.allocator();
+            try checkReviewedDump(pool, dump);
+            const raw_source = try dump.readAlloc(ra, page.source);
+            const source = if (page.source_needs_decode) try xml_decode.decodeSinglePassAlloc(ra, raw_source) else raw_source;
+            if (!try review.consume(page, source)) return error.ReviewedNonlexicalPageMismatch;
+            try checkReviewedDump(pool, dump);
+            try writer.namespace_coverage.reviewedNonlexical(writer.allocator, page.ns, review.sha256, page.page_id);
+            writer.stats.main_pages += 1;
+            if (pool.audit) |audit| audit.skipped += 1;
+            return;
+        }
+    }
     if (!page.has_source or role == null) {
         if (pool.audit) |audit| audit.skipped += 1;
         return;
@@ -1306,10 +1372,11 @@ const PendingShard = struct {
         self.* = undefined;
     }
 
-    fn publish(self: *PendingShard, pool: *ExpansionPool, codes: encoder.blob_builder.LanguageCodes, index_path: []const u8, identity: PageIndexIdentity) !void {
+    fn publish(self: *PendingShard, pool: *ExpansionPool, dump: *const dump_source.SourceReader, codes: encoder.blob_builder.LanguageCodes, index_path: []const u8, identity: PageIndexIdentity) !void {
         if (self.selected != self.requested) return error.ShortPageIndex;
         const writer = if (self.writer) |*value| value else return error.WriterFinished;
         try pool.drain(writer);
+        try checkReviewedDump(pool, dump);
         const stats = try writer.finish(codes);
         if (stats.pages_seen != self.selected) return error.PageCoverageMismatch;
         try writePageCoverage(self.io, self.allocator, self.temporary, .{
@@ -1368,7 +1435,7 @@ fn runContinuous(
         if (page_ordinal < options.start_page) continue;
         if (selected == total) break;
         if (pending != null and pending.?.selected == pending.?.requested) {
-            try pending.?.publish(pool, codes, index_path, page_index.identity);
+            try pending.?.publish(pool, dump, codes, index_path, page_index.identity);
             pending.?.deinit();
             pending = null;
         }
@@ -1377,6 +1444,7 @@ fn runContinuous(
             const requested = @min(shard_pages, total - selected);
             const offset = if (start == 0) 0 else line_offset;
             pending = try PendingShard.init(io, a, output_root, start, requested, offset, codes);
+            if (pool.reviewed_nonlexical) |review| pending.?.writer.?.namespace_coverage.reviewed_nonlexical_sha256 = review.sha256;
         }
         const shard = &pending.?;
         shard.selected += 1;
@@ -1394,7 +1462,7 @@ fn runContinuous(
     }
     if (selected != total) return error.ShortPageIndex;
     if (pending != null) {
-        try pending.?.publish(pool, codes, index_path, page_index.identity);
+        try pending.?.publish(pool, dump, codes, index_path, page_index.identity);
         pending.?.deinit();
         pending = null;
     }
@@ -1518,6 +1586,14 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     const site_mainpage = try loadSiteMainPage(io, a, options.expander_root, &namespaces);
     defer if (site_mainpage) |site| a.free(site.title);
     pool.site_mainpage = site_mainpage;
+    var reviewed_storage: ?reviewed_nonlexical.Review = null;
+    defer if (reviewed_storage) |*review| review.deinit();
+    if (options.reviewed_nonlexical) |path| {
+        const actual_dump = try reviewedDumpDigest(io, dump.file);
+        reviewed_storage = try loadReviewedNonlexical(io, a, path, &namespaces, page_index.bytes, page_index_kind, actual_dump.digest);
+        pool.reviewed_nonlexical = &reviewed_storage.?;
+        pool.reviewed_dump_identity = actual_dump.identity;
+    }
     if (options.shard_pages != null) {
         try runContinuous(io, a, args[2], options, codes, &namespaces, &pool, &dump, &page_index, page_index_kind, page_index_path);
         return;
@@ -1526,6 +1602,7 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     var writer = try encoder.blob_builder.Writer.init(io, a, if (audit) |value| value.scratch_root else args[2]);
     defer writer.deinit();
     writer.language_codes = codes;
+    if (pool.reviewed_nonlexical) |review| writer.namespace_coverage.reviewed_nonlexical_sha256 = review.sha256;
     const index_start = try pageIndexStart(page_index.bytes, options);
     var lines = std.mem.splitScalar(u8, index_start.bytes, '\n');
     var corpus_ordinal: usize = index_start.ordinal;
@@ -1557,6 +1634,7 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
         }
     }
     try pool.drain(&writer);
+    try checkReviewedDump(&pool, &dump);
     if (audit) |value| {
         // No finish, coverage, shard publication or normal success path in audit mode.
         if (!std.meta.eql(page_index.identity, try pathIdentity(io, page_index_path))) return error.AuditInputsChanged;
@@ -2452,6 +2530,93 @@ test "Aal exact Arabic noun subtrees preserve exclusive English German bodies an
     try std.testing.expect(std.mem.indexOf(u8, manifest, "العربية") == null);
 }
 
+test "reviewed nonlexical rows authenticate all four sources before skipping aliases" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const pa = arena.allocator();
+    const root = try std.fmt.allocPrint(pa, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var namespaces = try namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\ttestwiktionary\n# dump-date\t20261001\n# content-language\ttest\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\n");
+    defer namespaces.deinit();
+    const titles = [_][]const u8{ "Notice", "Alias one", "Alias two", "Alias three" };
+    // These are independently authored regression bodies, unrelated to corpus text.
+    const bodies = [_][]const u8{ "authored &amp; notice", "#REDIRECT[[Notice]]", "#REDIRECT[[Notice]]", "#REDIRECT[[Notice]]" };
+    var row_lines: [5][]const u8 = undefined;
+    var review_rows: [4]reviewed_nonlexical.Row = undefined;
+    var offset: usize = 0;
+    for (titles, bodies, 0..) |title, body, i| {
+        const target = if (i == 0) "" else "Notice";
+        row_lines[i] = try std.fmt.allocPrint(pa, "{d}\t{d}\t{s}\t{s}\t{d}\t{d}\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t{d}", .{ offset, body.len, title, target, i + 1, i + 101, @intFromBool(i == 0) });
+        const hash = std.fmt.bytesToHex(reviewed_nonlexical.digest(if (i == 0) "authored & notice" else body), .lower);
+        review_rows[i] = .{ .namespace = 0, .page_id = @intCast(i + 1), .revision_id = @intCast(i + 101), .title = title, .decoded_source_sha256 = try pa.dupe(u8, &hash) };
+        offset += body.len;
+    }
+    const lexical_body = "==English==\n# authored independent lexical definition";
+    row_lines[4] = try std.fmt.allocPrint(pa, "{d}\t{d}\tIndependent word\t\t99\t199\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t0", .{ offset, lexical_body.len });
+    const reviewed_source = try std.mem.concat(pa, u8, &bodies);
+    const source = try std.fmt.allocPrint(pa, "{s}{s}", .{ reviewed_source, lexical_body });
+    const index_text = try std.mem.join(pa, "\n", &row_lines);
+    const dump_path = try std.fs.path.join(pa, &.{ root, "pages.xml" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dump_path, .data = source });
+    var dump = try dump_source.SourceReader.open(io, a, a, dump_path, .raw_xml, null);
+    defer dump.deinit();
+    const actual_dump = try reviewedDumpDigest(io, dump.file);
+    const registry_hash = std.fmt.bytesToHex(namespaces.source_sha256, .lower);
+    const dump_hash = std.fmt.bytesToHex(actual_dump.digest, .lower);
+    const index_hash = std.fmt.bytesToHex(reviewed_nonlexical.digest(index_text), .lower);
+    const review_hash = std.fmt.bytesToHex(reviewed_nonlexical.digest("authored independent review evidence"), .lower);
+    const manifest = try std.json.Stringify.valueAlloc(pa, reviewed_nonlexical.Manifest{ .schema = "wikidict.reviewed-nonlexical.v1", .wiki = namespaces.wiki, .date = namespaces.dump_date, .namespace_registry_sha256 = &registry_hash, .dump_sha256 = &dump_hash, .page_index_sha256 = &index_hash, .source_review_sha256 = &review_hash, .rows = &review_rows }, .{});
+    const manifest_path = try std.fs.path.join(pa, &.{ root, "review.json" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest_path, .data = manifest });
+    var review = try loadReviewedNonlexical(io, a, manifest_path, &namespaces, index_text, .raw_xml, actual_dump.digest);
+    defer review.deinit();
+    var completion: std.Io.Event = .unset;
+    var slots = [_]ExpansionSlot{.{ .io = io, .completion = &completion, .arena = std.heap.ArenaAllocator.init(a), .worker = undefined }};
+    const slot = &slots[0];
+    defer slot.arena.deinit();
+    var pool: ExpansionPool = .{ .io = io, .allocator = a, .completion = &completion, .slots = &slots, .page_index_bytes = index_text, .reviewed_nonlexical = &review, .reviewed_dump_identity = actual_dump.identity };
+    const out = try std.fs.path.join(pa, &.{ root, "dictionary" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, out);
+    defer writer.deinit();
+    writer.namespace_coverage.reviewed_nonlexical_sha256 = review.sha256;
+    // An idle slot captures dispatch without executing a worker. Reviewed rows
+    // must leave it idle, including the separately enumerated alias sources.
+    for (row_lines[0..4], 0..) |line, i| {
+        writer.stats.pages_seen += 1;
+        try dispatchIndexedPage(&pool, &writer, &dump, .raw_xml, &namespaces, line, i);
+        try std.testing.expect(!slot.busy);
+    }
+    try checkReviewedDump(&pool, &dump);
+    const stats = try writer.finish(.{});
+    try std.testing.expectEqual(@as(usize, 4), stats.pages_seen);
+    try std.testing.expectEqual(@as(usize, 0), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.alias_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    const counts = writer.namespace_coverage.rows.get(0).?;
+    try std.testing.expectEqual(@as(u64, 4), counts.input_rows);
+    try std.testing.expectEqual(@as(u64, 4), counts.reviewed_nonlexical_rows);
+    try std.testing.expectEqual(@as(u64, 0), counts.dispatched_rows);
+    try std.testing.expect(writer.namespace_coverage.site_info_sha256 == null);
+    const lexical = try dump_source.parsePageIndexLine(.raw_xml, row_lines[4]);
+    try std.testing.expect(!try review.matches(lexical));
+    const control_out = try std.fs.path.join(pa, &.{ root, "control" });
+    var control_writer = try encoder.blob_builder.Writer.init(io, a, control_out);
+    defer control_writer.deinit();
+    control_writer.namespace_coverage.reviewed_nonlexical_sha256 = review.sha256;
+    try dispatchIndexedPage(&pool, &control_writer, &dump, .raw_xml, &namespaces, row_lines[4], 4);
+    try std.testing.expect(slot.busy);
+    try std.testing.expectEqualStrings("Independent word", slot.job.title);
+    try std.testing.expectEqualStrings(lexical_body, slot.job.source);
+    try std.testing.expectEqual(@as(u64, 1), control_writer.namespace_coverage.rows.get(0).?.dispatched_rows);
+    try std.testing.expectEqual(@as(u64, 0), control_writer.namespace_coverage.rows.get(0).?.reviewed_nonlexical_rows);
+}
+
 test "captured main page identity and SQL-bound aliases are metadata not lexical pages" {
     const a = std.testing.allocator;
     const io = std.testing.io;
@@ -2580,7 +2745,95 @@ test "valid project namespace mainpage capture does not invalidate ordinary rout
     try std.testing.expect(compiledKind(namespaces.byId(4).?) == null);
     const page = try dump_source.parsePageIndexLine(.raw_xml, "0\t0\tWiktionary:Main Page\t\t1\t2\t2026-10-01T00:00:00Z\tUser\twikitext\t4\t1\t0");
     const pool: ExpansionPool = .{ .io = std.testing.io, .allocator = a, .completion = undefined, .slots = &.{}, .site_mainpage = site };
-    try std.testing.expect((try siteTerminalPage(&pool, a, page)) == null);
+    const terminal = (try siteTerminalPage(&pool, a, page)) orelse return error.ExpectedProjectHomepage;
+    try std.testing.expectEqual(@as(u32, 4), terminal.ns);
+    try std.testing.expectEqual(page.page_id, terminal.page_id);
+    try std.testing.expect(!try isSiteMetadata(&pool, a, page));
+}
+
+test "official project homepage identifies only its SQL-bound main-namespace aliases" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const pa = arena.allocator();
+    const root = try std.fmt.allocPrint(pa, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var namespaces = try namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\ttestwiktionary\n# dump-date\t20261001\n# content-language\ttest\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "4\tWiktionary\tProject\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tinput\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\n");
+    defer namespaces.deinit();
+    const registry_hash = std.fmt.bytesToHex(namespaces.source_sha256, .lower);
+    const site_bytes = try std.json.Stringify.valueAlloc(pa, .{
+        .schema = "wikidict.site-info.v2", .wiki = namespaces.wiki, .date = namespaces.dump_date,
+        .content_language = namespaces.content_language, .namespace_registry_sha256 = @as([]const u8, &registry_hash),
+        .query = .{ .general = .{ .wikiid = namespaces.wiki, .mainpage = "Wiktionary:Home" } },
+    }, .{});
+    const site = try parseSiteMainPage(pa, site_bytes, &namespaces);
+    const control_source = "#REDIRECT[[Wiktionary:Other]]";
+    const source_rows = [_][]const u8{
+        "0\t0\tWiktionary:Home\t\t1\t101\t2026-10-01T00:00:00Z\tUser\twikitext\t4\t1\t0",
+        "0\t0\tHome alias\tWiktionary:Home\t2\t102\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t0",
+        "0\t0\tHome chain\tHome alias\t3\t103\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t0",
+        try std.fmt.allocPrint(pa, "0\t{d}\tLexical alias\tWiktionary:Other\t4\t104\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t0", .{control_source.len}),
+        "0\t0\tWiktionary:Other\t\t5\t105\t2026-10-01T00:00:00Z\tUser\twikitext\t4\t1\t0",
+        "0\t0\tCycle\tCycle\t6\t106\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t0",
+        "0\t0\tRemote home\tw:Wiktionary:Home\t7\t107\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t0",
+        "0\t0\tUnavailable\t\t8\t108\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t0\t0",
+    };
+    const index_text = try std.mem.join(pa, "\n", &source_rows);
+    const index_path = try std.fs.path.join(pa, &.{ root, "page-index.tsv" });
+    const titles_path = try std.fs.path.join(pa, &.{ root, dump_source.page_title_index_filename });
+    const dump_path = try std.fs.path.join(pa, &.{ root, "pages.xml" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = index_text });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dump_path, .data = control_source });
+    try dump_source.buildPageTitleIndex(io, a, index_path, titles_path);
+    const title_bytes = try std.Io.Dir.cwd().readFileAlloc(io, titles_path, pa, .limited(4096));
+    var redirects = try encoder.page_redirects.Snapshot.init(a, "# wikidict-page-redirects-v1\n# wiki\ttestwiktionary\n# dump-date\t20261001\n# sql-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n" ++
+        "2\t4\t486f6d65\t\t\n3\t0\t486f6d655f616c696173\t\t\n4\t4\t4f74686572\t\t\n6\t0\t4379636c65\t\t\n7\t4\t486f6d65\t77\t\n# end\t5\n", &namespaces);
+    defer redirects.deinit();
+    var pool: ExpansionPool = .{ .io = io, .allocator = a, .completion = undefined, .slots = &.{}, .page_index_bytes = index_text, .page_title_index = try dump_source.PageTitleIndex.init(title_bytes), .page_redirects = &redirects, .site_mainpage = site };
+    for (source_rows, 0..) |line, i| {
+        const page = try dump_source.parsePageIndexLine(.raw_xml, line);
+        try std.testing.expectEqual(i == 1 or i == 2, try isSiteMetadata(&pool, pa, page));
+    }
+    // An indexed target namespace mismatch must not satisfy SQL authority.
+    var mismatch_rows = source_rows;
+    mismatch_rows[0] = "0\t0\tWiktionary:Home\t\t1\t101\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t0";
+    pool.page_index_bytes = try std.mem.join(pa, "\n", &mismatch_rows);
+    try std.testing.expect(!try isSiteMetadata(&pool, pa, try dump_source.parsePageIndexLine(.raw_xml, source_rows[1])));
+    // Source-unavailable official terminals cannot authorize alias exclusion.
+    mismatch_rows[0] = "0\t0\tWiktionary:Home\t\t1\t101\t2026-10-01T00:00:00Z\tUser\twikitext\t4\t0\t0";
+    pool.page_index_bytes = try std.mem.join(pa, "\n", &mismatch_rows);
+    try std.testing.expect(!try isSiteMetadata(&pool, pa, try dump_source.parsePageIndexLine(.raw_xml, source_rows[1])));
+    pool.page_index_bytes = index_text;
+    // Official captured home may itself name a main-namespace redirect chain.
+    pool.site_mainpage = .{ .title = "Home chain", .digest = site.digest };
+    try std.testing.expect(try isSiteMetadata(&pool, pa, try dump_source.parsePageIndexLine(.raw_xml, source_rows[1])));
+    pool.site_mainpage = site;
+    const out = try std.fs.path.join(pa, &.{ root, "dictionary" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, out);
+    defer writer.deinit();
+    var dump = try dump_source.SourceReader.open(io, a, a, dump_path, .raw_xml, null);
+    defer dump.deinit();
+    // Direct project input remains compile-only. The unrelated cross-namespace
+    // lexical alias follows ordinary alias dispatch and retains its target.
+    for (source_rows[0..4], 0..) |line, i| {
+        writer.stats.pages_seen += 1;
+        try dispatchIndexedPage(&pool, &writer, &dump, .raw_xml, &namespaces, line, i);
+    }
+    const stats = try writer.finish(.{});
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    try std.testing.expectEqual(@as(usize, 1), stats.alias_records);
+    const main_counts = writer.namespace_coverage.rows.get(0).?;
+    try std.testing.expectEqual(@as(u64, 3), main_counts.input_rows);
+    try std.testing.expectEqual(@as(u64, 2), main_counts.site_metadata_rows);
+    try std.testing.expectEqual(@as(u64, 1), main_counts.dispatched_rows);
+    try std.testing.expectEqual(@as(u64, 1), main_counts.alias_pages);
+    try std.testing.expectEqual(@as(u64, 1), writer.namespace_coverage.rows.get(4).?.compile_only_rows);
 }
 
 test "reviewed exact local heading owns the captured Amharic language entry without global ISO trust" {

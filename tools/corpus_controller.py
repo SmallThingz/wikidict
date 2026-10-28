@@ -1027,6 +1027,8 @@ def validate_content_review(value, source, rows, expected_editions, *, scope):
                     site_info.get('wiki') == row['edition'] and site_info.get('date') == complete['date'],
                     'Site-info review authority differs from accepted build inputs')
             site_info_path = Path(site_info_ref['path'])
+        if complete['build_inputs'].get('reviewed_nonlexical_sha256') is not None:
+            builder.nonlexical.check_publication(root)
         namespace_totals = builder.validate_namespace_coverage(root, coverage['pages_seen'],
             fallback_counts=fallback_namespaces, site_info_snapshot=site_info_path)
         require(coverage['pages_seen'] == complete['input_pages'] == accepted['input_pages'] and

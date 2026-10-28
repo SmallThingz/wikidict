@@ -15,6 +15,7 @@ test "blob encoder root imports data-only presentation codecs" {
     _ = presentation_codec;
     _ = part_kind;
     _ = wikitext_syntax;
+    _ = namespace_coverage;
 }
 
 pub const wikitext_syntax = @import("wikitext_syntax.zig");

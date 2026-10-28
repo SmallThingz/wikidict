@@ -39,6 +39,7 @@ const Options = struct {
     now_unix: ?i64 = null,
     parse_workers: usize = 4,
     expander_only: bool = false,
+    reviewed_nonlexical: ?[]const u8 = null,
     extraction_cache_root: ?[]const u8 = null,
     verified_dump_sha256: ?[]const u8 = null,
     verified_index_sha256: ?[]const u8 = null,
@@ -159,6 +160,11 @@ fn parseOptions(args: []const []const u8) !Options {
         } else if (std.mem.eql(u8, args[index], "--expander-only")) {
             if (options.expander_only) return error.Usage;
             options.expander_only = true;
+        } else if (std.mem.eql(u8, args[index], "--reviewed-nonlexical")) {
+            index += 1;
+            if (index >= args.len or options.reviewed_nonlexical != null) return error.Usage;
+            if (args[index].len == 0 or std.mem.startsWith(u8, args[index], "--")) return error.Usage;
+            options.reviewed_nonlexical = args[index];
         } else if (std.mem.eql(u8, args[index], "--extraction-cache-root")) {
             index += 1;
             if (index >= args.len or options.extraction_cache_root != null) return error.Usage;
@@ -197,7 +203,32 @@ fn parseOptions(args: []const []const u8) !Options {
             }
         }
     }
+    // This execution manifest is consumed only by the final blob stage.
+    // Refuse to accept approval input that an expander-only build cannot use.
+    if (options.expander_only and options.reviewed_nonlexical != null) return error.Usage;
     return options;
+}
+
+fn blobStageArgv(
+    buffer: *[13][]const u8,
+    options: Options,
+    reviewed_manifest: ?[]const u8,
+    expander_root: []const u8,
+    page_workers_text: []const u8,
+    timeout_text: []const u8,
+    now_text: []const u8,
+) []const []const u8 {
+    buffer.* = .{
+        paths.blobs, options.dump, options.root, "--expander-root", expander_root,
+        "--workers", page_workers_text, "--expansion-timeout-ms", timeout_text,
+        "--now-unix", now_text, "", "",
+    };
+    if (reviewed_manifest) |manifest| {
+        buffer[11] = "--reviewed-nonlexical";
+        buffer[12] = manifest;
+        return buffer[0..13];
+    }
+    return buffer[0..11];
 }
 
 fn defaultLlvmWorkersForCpuCount(logical_cpu_threads: usize) usize {
@@ -338,6 +369,33 @@ fn fileSize(io: std.Io, path: []const u8) !u64 {
     var file = try std.Io.Dir.cwd().openFile(io, path, .{});
     defer file.close(io);
     return (try file.stat(io)).size;
+}
+
+const PinnedReviewedManifest = struct {
+    bytes: []u8,
+    path: []u8,
+
+    fn deinit(self: PinnedReviewedManifest, a: std.mem.Allocator) void {
+        a.free(self.bytes);
+        a.free(self.path);
+    }
+
+    fn publish(self: PinnedReviewedManifest, io: std.Io, a: std.mem.Allocator, root: []const u8) !void {
+        const destination = try std.fs.path.join(a, &.{ root, "reviewed-nonlexical.json" });
+        defer a.free(destination);
+        // Publish retained bytes, never a reopened source or a symlink target.
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = destination, .data = self.bytes });
+    }
+};
+
+fn pinReviewedManifest(io: std.Io, a: std.mem.Allocator, source: []const u8, expander_root: []const u8) !PinnedReviewedManifest {
+    // Match the native consumer's limit. It alone authenticates manifest semantics.
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, source, a, .limited(4 * 1024 * 1024));
+    errdefer a.free(bytes);
+    const path = try std.fs.path.join(a, &.{ expander_root, "reviewed-nonlexical.execution.json" });
+    errdefer a.free(path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+    return .{ .bytes = bytes, .path = path };
 }
 
 fn installSnapshot(io: std.Io, a: std.mem.Allocator, source: []const u8, root: []const u8, name: []const u8) !void {
@@ -925,6 +983,7 @@ pub fn main(init: std.process.Init) !void {
     const argv = try init.minimal.args.toSlice(a);
     const options = parseOptions(argv[1..]) catch {
         std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY --namespace-registry-snapshot FILE [--site-info-snapshot FILE] [--site-statistics-format-snapshot FILE] [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--category-statistics-format-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--wikibase-entities-snapshot FILE] [--wikibase-entity-terms-snapshot FILE] [--wikibase-page-links-snapshot FILE] [--page-redirects-snapshot FILE] [--language-registry-snapshot FILE] [--language-fallbacks-snapshot FILE] [--language-names-snapshot FILE] [--date-numbering-snapshot FILE] [--magic-words-snapshot FILE] [--behavior-switches-snapshot FILE] [--image-options-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
+        std.debug.print("optional final blob stage input: --reviewed-nonlexical PATH (incompatible with --expander-only)\n", .{});
         return error.Usage;
     };
     const dump = options.dump;
@@ -1033,9 +1092,17 @@ pub fn main(init: std.process.Init) !void {
     const page_workers_text = try std.fmt.allocPrint(a, "{d}", .{options.page_workers});
     const timeout_text = try std.fmt.allocPrint(a, "{d}", .{options.expansion_timeout_ms orelse expansion_deadline.default_ms});
     const now_text = try std.fmt.allocPrint(a, "{d}", .{options.now_unix orelse std.Io.Clock.real.now(init.io).toSeconds()});
-    try stage(init.io, marker, "expand and encode dictionary blobs", &.{
-        paths.blobs, dump, root, "--expander-root", expander_root, "--workers", page_workers_text, "--expansion-timeout-ms", timeout_text, "--now-unix", now_text,
-    });
+    var blob_argv: [13][]const u8 = undefined;
+    const reviewed: ?PinnedReviewedManifest = if (options.reviewed_nonlexical) |source|
+        try pinReviewedManifest(init.io, a, source, expander_root)
+    else
+        null;
+    defer if (reviewed) |pinned| pinned.deinit(a);
+    try stage(init.io, marker, "expand and encode dictionary blobs", blobStageArgv(
+        &blob_argv, options, if (reviewed) |pinned| pinned.path else null,
+        expander_root, page_workers_text, timeout_text, now_text,
+    ));
+    if (reviewed) |pinned| try pinned.publish(init.io, a, root);
     try std.Io.Dir.cwd().deleteTree(init.io, expander_root);
     try std.Io.Dir.cwd().deleteFile(init.io, marker);
     std.debug.print("dictionary build complete: {s}\n", .{root});
@@ -1049,6 +1116,70 @@ test "pipeline expansion deadline preserves the default and validates overrides"
     try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--expansion-timeout-ms" }));
     try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--expansion-timeout-ms", "3600001" }));
     try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--expansion-timeout-ms", "100", "--expansion-timeout-ms", "200" }));
+}
+
+test "reviewed nonlexical manifest rejects missing duplicate and unused arguments" {
+    const cases = [_][]const []const u8{
+        &.{ "dump.xml", "out", "--reviewed-nonlexical" },
+        &.{ "dump.xml", "out", "--reviewed-nonlexical", "" },
+        &.{ "dump.xml", "out", "--reviewed-nonlexical", "--expander-only" },
+        &.{ "dump.xml", "out", "--reviewed-nonlexical", "one.json", "--reviewed-nonlexical", "two.json" },
+        &.{ "dump.xml", "out", "--reviewed-nonlexical", "one.json", "--expander-only" },
+        &.{ "dump.xml", "out", "--expander-only", "--reviewed-nonlexical", "one.json" },
+    };
+    for (cases) |args| try std.testing.expectError(error.Usage, parseOptions(args));
+}
+
+test "final blob argv preserves defaults and forwards exact reviewed manifest path" {
+    const defaults = try parseOptions(&.{ "dump.xml", "out" });
+    var default_buffer: [13][]const u8 = undefined;
+    const default_argv = blobStageArgv(&default_buffer, defaults, null, "out/.bundle-expander", "2", "600000", "1791072000");
+    const expected = [_][]const u8{
+        paths.blobs, "dump.xml", "out", "--expander-root", "out/.bundle-expander",
+        "--workers", "2", "--expansion-timeout-ms", "600000", "--now-unix", "1791072000",
+    };
+    try std.testing.expectEqual(expected.len, default_argv.len);
+    for (expected, default_argv) |want, got| try std.testing.expectEqualStrings(want, got);
+    const configured = try parseOptions(&.{ "dump.xml", "out", "--reviewed-nonlexical", "reviewed execution manifest.json" });
+    var configured_buffer: [13][]const u8 = undefined;
+    const configured_argv = blobStageArgv(&configured_buffer, configured, "out/.bundle-expander/reviewed-nonlexical.execution.json", "out/.bundle-expander", "2", "600000", "1791072000");
+    try std.testing.expectEqual(@as(usize, 13), configured_argv.len);
+    for (expected, configured_argv[0..11]) |want, got| try std.testing.expectEqualStrings(want, got);
+    try std.testing.expectEqualStrings("--reviewed-nonlexical", configured_argv[11]);
+    try std.testing.expectEqualStrings("out/.bundle-expander/reviewed-nonlexical.execution.json", configured_argv[12]);
+}
+
+test "reviewed manifest pinning and publication preserve exact bytes after source changes" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const base = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(base);
+    const source = try std.fs.path.join(a, &.{ base, "approved.json" });
+    defer a.free(source);
+    const expander_root = try std.fs.path.join(a, &.{ base, ".bundle-expander" });
+    defer a.free(expander_root);
+    try std.Io.Dir.cwd().createDirPath(io, expander_root);
+    const original = "{\n  \"schema\": \"wikidict.reviewed-nonlexical.v1\"\n}\n";
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source, .data = original });
+    const pinned = try pinReviewedManifest(io, a, source, expander_root);
+    defer pinned.deinit(a);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source, .data = "changed" });
+    var argv_buffer: [13][]const u8 = undefined;
+    const options: Options = .{ .dump = "dump.xml", .root = base, .reviewed_nonlexical = source };
+    const argv = blobStageArgv(&argv_buffer, options, pinned.path, expander_root, "1", "600000", "1791072000");
+    try std.testing.expectEqualStrings(pinned.path, argv[12]);
+    try std.testing.expect(!std.mem.eql(u8, source, argv[12]));
+    const consumed = try std.Io.Dir.cwd().readFileAlloc(io, argv[12], a, .limited(4 * 1024 * 1024));
+    defer a.free(consumed);
+    try std.testing.expectEqualStrings(original, consumed);
+    try pinned.publish(io, a, base);
+    const published_path = try std.fs.path.join(a, &.{ base, "reviewed-nonlexical.json" });
+    defer a.free(published_path);
+    const published = try std.Io.Dir.cwd().readFileAlloc(io, published_path, a, .limited(4 * 1024 * 1024));
+    defer a.free(published);
+    try std.testing.expectEqualStrings(consumed, published);
 }
 
 test "pipeline pins explicit build time and rejects invalid duplicate timestamps" {

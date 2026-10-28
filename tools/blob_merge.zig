@@ -1,3 +1,4 @@
+const reviewed_nonlexical = @import("reviewed_nonlexical.zig");
 const std = @import("std");
 const encoder = @import("encoder");
 const format = encoder.blob_format;
@@ -314,14 +315,56 @@ fn mergeFallbackReports(io: std.Io, a: std.mem.Allocator, output_root: []const u
     try writer.interface.flush();
 }
 
+const MergeArgs = struct { compress: bool = false, review_path: ?[]const u8 = null, first: usize };
+fn parseMergeArgs(args: []const []const u8) !MergeArgs {
+    var result: MergeArgs = .{ .first = 1 };
+    while (result.first < args.len and std.mem.startsWith(u8, args[result.first], "--")) {
+        const option = args[result.first];
+        result.first += 1;
+        if (std.mem.eql(u8, option, "--compress-output")) {
+            if (result.compress) return error.Usage;
+            result.compress = true;
+        } else if (std.mem.eql(u8, option, "--reviewed-nonlexical")) {
+            if (result.review_path != null or result.first == args.len or std.mem.startsWith(u8, args[result.first], "--")) return error.Usage;
+            result.review_path = args[result.first];
+            result.first += 1;
+        } else return error.Usage;
+    }
+    if (args.len < result.first + 2) return error.Usage;
+    for (args[result.first..]) |arg| if (std.mem.startsWith(u8, arg, "--")) return error.Usage;
+    return result;
+}
+
+fn validateReviewedUnion(a: std.mem.Allocator, coverage: *const encoder.namespace_coverage.Table, bytes: []const u8) !void {
+    const hash = reviewed_nonlexical.digest(bytes);
+    if (coverage.reviewed_nonlexical_sha256 == null or !std.meta.eql(coverage.reviewed_nonlexical_sha256.?, hash)) return error.NamespaceCoverageIdentityMismatch;
+    const parsed = try std.json.parseFromSlice(reviewed_nonlexical.Manifest, a, bytes, .{});
+    defer parsed.deinit();
+    if (!std.mem.eql(u8, parsed.value.schema, "wikidict.reviewed-nonlexical.v1") or parsed.value.rows.len == 0 or parsed.value.rows.len > 4096) return error.InvalidReviewedNonlexical;
+    var ids: std.AutoHashMapUnmanaged(u64, void) = .empty;
+    defer ids.deinit(a);
+    for (parsed.value.rows) |row| {
+        const slot = try ids.getOrPut(a, row.page_id);
+        if (slot.found_existing) return error.DuplicateReviewedNonlexical;
+        if (!coverage.reviewed_nonlexical_page_ids.contains(row.page_id)) return error.UnusedReviewedNonlexical;
+    }
+    if (ids.count() != coverage.reviewed_nonlexical_page_ids.count()) return error.NamespaceCoverageMismatch;
+}
+
+fn writeReviewedSidecar(io: std.Io, a: std.mem.Allocator, root: []const u8, bytes: []const u8) !void {
+    const path = try std.fs.path.join(a, &.{ root, "reviewed-nonlexical.json" });
+    defer a.free(path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+}
+
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    const compress_output = args.len > 1 and std.mem.eql(u8, args[1], "--compress-output");
-    const first: usize = if (compress_output) 2 else 1;
-    if (args.len < first + 2) {
-        std.debug.print("usage: dict-blob-merge [--compress-output] OUTPUT_ROOT SHARD_ROOT SHARD_ROOT...\n", .{});
+    const options = parseMergeArgs(args) catch {
+        std.debug.print("usage: dict-blob-merge [--compress-output] [--reviewed-nonlexical PATH] OUTPUT_ROOT SHARD_ROOT...\n", .{});
         return error.Usage;
-    }
+    };
+    const compress_output = options.compress;
+    const first = options.first;
     const a = std.heap.smp_allocator;
     const output_root = args[first];
     var output_exists = true;
@@ -374,6 +417,12 @@ pub fn main(init: std.process.Init) !void {
         defer shard_coverage.deinit(a);
         try coverage.merge(a, &shard_coverage);
     }
+    if (options.review_path) |path| {
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, path, a, .limited(8 * 1024 * 1024));
+        defer a.free(bytes);
+        try validateReviewedUnion(a, &coverage, bytes);
+        try writeReviewedSidecar(init.io, a, output_root, bytes);
+    } else if (coverage.reviewed_nonlexical_sha256 != null) return error.NamespaceCoverageIdentityMismatch;
     try coverage.write(init.io, a, output_root);
     std.debug.print("merged shards={d} language_blobs={d} language_records={d} fixed_records={d} alias_records={d}\n", .{ roots.len, headings.len, language_records, fixed_records, alias_records });
 }
@@ -654,4 +703,48 @@ test "language merge reclaims decoded blocks outside heading scratch arena" {
     const partial = try std.fmt.allocPrint(a, "{s}.part", .{kept_path});
     defer a.free(partial);
     try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, partial, .{}));
+}
+
+test "merge arguments reject missing and duplicate reviewed manifest options" {
+    try std.testing.expectError(error.Usage, parseMergeArgs(&.{ "merge", "--reviewed-nonlexical" }));
+    try std.testing.expectError(error.Usage, parseMergeArgs(&.{ "merge", "--reviewed-nonlexical", "a", "--reviewed-nonlexical", "b", "out", "shard" }));
+    try std.testing.expectError(error.Usage, parseMergeArgs(&.{ "merge", "--reviewed-nonlexical", "--compress-output", "out", "shard" }));
+    const ordinary = try parseMergeArgs(&.{ "merge", "out", "shard" });
+    try std.testing.expectEqual(@as(usize, 1), ordinary.first);
+    try std.testing.expect(ordinary.review_path == null);
+    const reviewed = try parseMergeArgs(&.{ "merge", "--reviewed-nonlexical", "review.json", "--compress-output", "out", "shard" });
+    try std.testing.expect(reviewed.compress);
+    try std.testing.expectEqualStrings("review.json", reviewed.review_path.?);
+}
+
+test "merged reviewed IDs must match the whole pinned manifest" {
+    const a = std.testing.allocator;
+    const bytes = "{\"schema\":\"wikidict.reviewed-nonlexical.v1\",\"wiki\":\"x\",\"date\":\"x\",\"namespace_registry_sha256\":\"x\",\"dump_sha256\":\"x\",\"page_index_sha256\":\"x\",\"source_review_sha256\":\"x\",\"rows\":[{\"namespace\":0,\"page_id\":7,\"revision_id\":1,\"title\":\"a\",\"decoded_source_sha256\":\"x\"},{\"namespace\":0,\"page_id\":8,\"revision_id\":1,\"title\":\"b\",\"decoded_source_sha256\":\"x\"}]}";
+    var coverage: encoder.namespace_coverage.Table = .{};
+    defer coverage.deinit(a);
+    coverage.reviewed_nonlexical_sha256 = reviewed_nonlexical.digest(bytes);
+    try coverage.reviewed_nonlexical_page_ids.put(a, 7, {});
+    try std.testing.expectError(error.UnusedReviewedNonlexical, validateReviewedUnion(a, &coverage, bytes));
+    try coverage.reviewed_nonlexical_page_ids.put(a, 8, {});
+    try validateReviewedUnion(a, &coverage, bytes);
+    try coverage.reviewed_nonlexical_page_ids.put(a, 9, {});
+    try std.testing.expectError(error.NamespaceCoverageMismatch, validateReviewedUnion(a, &coverage, bytes));
+    coverage.reviewed_nonlexical_sha256 = @splat(0);
+    try std.testing.expectError(error.NamespaceCoverageIdentityMismatch, validateReviewedUnion(a, &coverage, bytes));
+}
+
+test "reviewed sidecar preserves the authenticated bytes" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const bytes = "{ \"rows\": [1] }\n";
+    try writeReviewedSidecar(io, a, root, bytes);
+    const path = try std.fs.path.join(a, &.{ root, "reviewed-nonlexical.json" });
+    defer a.free(path);
+    const actual = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(1024));
+    defer a.free(actual);
+    try std.testing.expectEqualStrings(bytes, actual);
 }

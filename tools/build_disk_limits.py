@@ -39,24 +39,34 @@ def _coverage_bound(data):
     bytes per UTF-8 name byte. This avoids assuming Python/Zig JSON byte parity.
     """
     report = json.loads(data)
-    if not isinstance(report, dict) or type(report.get('version', 1)) is not int or report.get('version', 1) != 1:
+    if not isinstance(report, dict) or type(report.get('version', 1)) is not int or report.get('version', 1) not in (1, 2):
         raise ValueError('Unsupported namespace coverage')
     rows = report.get('namespaces')
     if not isinstance(rows, list):
         raise ValueError('Invalid namespace coverage rows')
     total = len(json.dumps(dict(version=1, registry_sha256='0' * 64, site_info_sha256='0' * 64, namespaces=[]),
                            separators=(',', ':')))
+    counters = _COUNTERS
+    if report.get('version') == 2:
+        counters += ('reviewed_nonlexical_rows',)
+        ids = report.get('reviewed_nonlexical_page_ids')
+        sha = report.get('reviewed_nonlexical_sha256')
+        if (not isinstance(ids, list) or any(type(page) is not int or not 0 < page < 2**64 for page in ids)
+                or ids != sorted(set(ids)) or not isinstance(sha, str) or len(sha) != 64
+                or any(c not in '0123456789abcdef' for c in sha)):
+            raise ValueError('Invalid reviewed namespace coverage')
+        total = _add(total, len(',"reviewed_nonlexical_sha256":"' + '0'*64 + '","reviewed_nonlexical_page_ids":[]'), 21 * len(ids))
     for row in rows:
         if not isinstance(row, dict) or type(row.get('id')) is not int or not 0 <= row['id'] < 2**32:
             raise ValueError('Invalid namespace coverage row')
         if not isinstance(row.get('name'), str) or row.get('kind') not in _KINDS:
             raise ValueError('Invalid namespace identity')
-        for key in _COUNTERS:
+        for key in counters:
             value = row.get(key, 0)
             if type(value) is not int or not 0 <= value < 2**64:
                 raise ValueError('Invalid namespace counter')
         bounded = dict(id=2**32 - 1, name='', kind=row.get('kind'),
-                       **{key: 2**64 - 1 for key in _COUNTERS})
+                       **{key: 2**64 - 1 for key in counters})
         total = _add(total, len(json.dumps(bounded, separators=(',', ':'))),
                      6 * len(row['name'].encode('utf-8')), 1)
     return total
@@ -99,7 +109,8 @@ def compressed_blob_size(path, kind):
 
 
 def require_merge_disk_space(shard_paths, destination, reserve_bytes,
-                             *, metadata_paths=(), metadata_texts=(), allow_compressed=False, compressed_output=False):
+                             *, metadata_paths=(), metadata_texts=(), allow_compressed=False, compressed_output=False,
+                             reviewed_manifest_path=None):
     """Require raw output room or streaming headroom, plus sidecars/metadata.
 
     Call immediately before merge while owning the edition lock. Shards must
@@ -213,6 +224,8 @@ def require_merge_disk_space(shard_paths, destination, reserve_bytes,
             blob_count += 1
         coverage = _add(coverage, _coverage_bound(
             read_small(root / 'namespace-coverage.json', 8 * 1024**2)))
+    if reviewed_manifest_path is not None:
+        metadata = _add(metadata, remember(Path(reviewed_manifest_path)).st_size)
     for path in metadata_paths:
         path = Path(path)
         if os.path.lexists(path):
