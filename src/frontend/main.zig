@@ -293,6 +293,7 @@ test {
     _ = output;
     _ = tui;
     _ = @import("media_job.zig");
+    _ = @import("reader_media.zig");
     _ = @import("pipeline_tests.zig");
     _ = @import("library.zig");
     _ = @import("blob_storage");

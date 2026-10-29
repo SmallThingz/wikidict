@@ -979,9 +979,17 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
     }
     const organization = entry.organization;
     if (organization.lexemes.len == 0) {
+        const has_definitions = blk: {
+            for (entry.sections) |section| for (section.blocks) |block| {
+                if (block.kind == .definition) break :blk true;
+            };
+            break :blk false;
+        };
+        // A language entry without a semantic summary must still expose its stored body.
+        const show_sections = details or (entry.kind == .language and !has_definitions);
         for (entry.sections, 0..) |section, index| {
             if (details and emptyReferencePlaceholder(entry, index)) continue;
-            if (!details) {
+            if (!show_sections) {
                 var heading = false;
                 for (section.blocks) |block| if (block.kind == .definition) {
                     if (!heading) {
@@ -1316,6 +1324,46 @@ test "detailed CLI keeps nested quotation children after their parent across det
         try std.testing.expect(std.mem.indexOf(u8, out.written(), "SENSE_TWO") != null);
         for ([_][]const u8{ "INTRO", "QUOTE_PARENT", "NUMBERED_CHILD", "EXAMPLE_AFTER", "QUOTE_AFTER", "SECOND_EXAMPLE", "OTHER_BLOCK" }) |text| try std.testing.expect(std.mem.indexOf(u8, out.written(), text) == null);
     }
+}
+
+
+test "default text retains unorganized nested lists without classifying meanings" {
+    const headword = [_]model.Span{.{ .text = "assamese", .bold = true }};
+    const meaning = [_]model.Span{.{ .kind = .link, .text = "অসমীয়া", .target = "অসমীয়া" }};
+    const blocks = [_]model.Block{
+        .{ .kind = .paragraph, .spans = &headword },
+        .{ .kind = .list_item, .depth = 2, .list_path = ":#", .number = "1", .spans = &meaning },
+    };
+    const sections = [_]model.Section{
+        .{ .level = 2, .title = "নাম", .blocks = &blocks },
+        .{ .level = 2, .title = "বিশেষণ", .blocks = &blocks },
+    };
+    const entry: model.Entry = .{ .title = "assamese", .kind = .language, .language = "Unclassified", .sections = &sections };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try entryTextWithDetails(&out.writer, entry, false, false);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "নাম") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "বিশেষণ") != null);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, out.written(), "1. অসমীয়া"));
+    try std.testing.expect(blocks[1].kind == .list_item);
+    try std.testing.expectEqualStrings(":#", blocks[1].list_path);
+    try std.testing.expectEqual(@as(usize, 0), entry.organization.lexemes.len);
+}
+
+test "default text retains selective definitions when organization is absent" {
+    const support = [_]model.Span{.{ .text = "support-only paragraph" }};
+    const meaning = [_]model.Span{.{ .text = "recognized meaning" }};
+    const blocks = [_]model.Block{
+        .{ .kind = .paragraph, .spans = &support },
+        .{ .kind = .definition, .depth = 1, .list_path = "#", .spans = &meaning },
+    };
+    const sections = [_]model.Section{.{ .level = 2, .title = "Noun", .blocks = &blocks }};
+    const entry: model.Entry = .{ .title = "term", .kind = .language, .language = "English", .sections = &sections };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try entryTextWithDetails(&out.writer, entry, false, false);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "recognized meaning") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "support-only paragraph") == null);
 }
 
 test "compact terminal output retains the displayed alias destination" {

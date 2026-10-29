@@ -219,7 +219,9 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
     }
     if (std.mem.eql(u8, out.content_code orelse "", "ar")) {
         try loadArabicLanguageModules(io, a, expander_root, namespaces, manifest.bytes, &out);
-        try loadArabicLanguageTemplates(io, a, expander_root, namespaces, &out);
+        try loadLiteralLanguageTemplates(io, a, expander_root, namespaces, &out, .arabic);
+    } else if (std.mem.eql(u8, out.content_code orelse "", "za")) {
+        try loadLiteralLanguageTemplates(io, a, expander_root, namespaces, &out, .zhuang);
     }
     return out;
 }
@@ -269,7 +271,30 @@ fn literalArabicLanguageTemplate(source: []const u8) ?[]const u8 {
     return label;
 }
 
-fn loadArabicLanguageTemplates(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, registry: *language_registry.Registry) !void {
+fn literalZhuangLanguageTemplate(source: []const u8, code: []const u8) ?[]const u8 {
+    // Captured ZA hyphen banners repeat one literal label and their title's
+    // registered code. Parameters, calls and additional content supply no alias.
+    const raw = std.mem.trim(u8, source, " \t\r\n");
+    const prefix = "<includeonly>[[Category:";
+    const separator = "]]</includeonly>__NOEDITSECTION__\n<br>\n=<div id=\"toc\" class=\"toccolours\" ><big>[[";
+    if (!std.mem.startsWith(u8, raw, prefix)) return null;
+    const split = std.mem.indexOfPos(u8, raw, prefix.len, separator) orelse return null;
+    const label = raw[prefix.len..split];
+    if (label.len == 0 or std.mem.indexOfAny(u8, label, "[]{}|<>#:&\x00\r\n\t") != null or
+        !std.mem.eql(u8, label, std.mem.trim(u8, label, " "))) return null;
+    var rest = raw[split + separator.len ..];
+    if (!std.mem.startsWith(u8, rest, label)) return null;
+    rest = rest[label.len..];
+    const code_prefix = "]] <small><small>(";
+    if (!std.mem.startsWith(u8, rest, code_prefix)) return null;
+    rest = rest[code_prefix.len..];
+    if (!std.mem.startsWith(u8, rest, code)) return null;
+    return if (std.mem.eql(u8, rest[code.len..], ")</small></small></big></div>=")) label else null;
+}
+
+const LiteralLanguageTemplateKind = enum { arabic, zhuang };
+
+fn loadLiteralLanguageTemplates(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, registry: *language_registry.Registry, kind: LiteralLanguageTemplateKind) !void {
     const path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
     defer a.free(path);
     var index = mmapPath(io, path) catch |err| switch (err) {
@@ -279,24 +304,35 @@ fn loadArabicLanguageTemplates(io: std.Io, a: std.mem.Allocator, root: []const u
     defer index.deinit();
     var templates = (try dump_source.TemplateSource.open(io, a, root, index.bytes)) orelse return;
     defer templates.deinit();
-    const kind = dump_source.pageIndexKind(index.bytes);
+    const index_kind = dump_source.pageIndexKind(index.bytes);
     var rows = std.mem.splitScalar(u8, index.bytes, '\n');
     var ordinal: u64 = 0;
     while (rows.next()) |line| {
         if (line.len == 0 or line[0] == '#') continue;
-        const row = try dump_source.parsePageIndexLine(kind, line);
+        const row = try dump_source.parsePageIndexLine(index_kind, line);
         const this_ordinal = ordinal;
         ordinal += 1;
         if (row.ns != 10 or row.redirect != null or !row.has_source) continue;
         const title = namespaces.ofTitle(row.title);
-        if (title.id != 10 or !registry.codes.contains(title.text)) continue;
+        if (title.id != 10) continue;
+        const code = switch (kind) {
+            .arabic => title.text,
+            .zhuang => blk: {
+                if (title.text.len <= 2 or title.text[0] != '-' or title.text[title.text.len - 1] != '-') continue;
+                break :blk title.text[1 .. title.text.len - 1];
+            },
+        };
+        if (!registry.codes.contains(code)) continue;
         const raw = (try templates.lookup(this_ordinal, row.page_id, row.revision_id)) orelse return error.MissingLanguageTemplateSource;
         // Only the bounded literal forms above can be language-name evidence.
         if (raw.len > 4096) continue;
         const source = if (row.source_needs_decode) try xml_decode.decodeSinglePassAlloc(a, raw) else null;
         defer if (source) |bytes| a.free(bytes);
-        if (literalArabicLanguageTemplate(source orelse raw)) |label|
-            try registry.addLocalAlias(label, title.text);
+        const label = switch (kind) {
+            .arabic => literalArabicLanguageTemplate(source orelse raw),
+            .zhuang => literalZhuangLanguageTemplate(source orelse raw, code),
+        };
+        if (label) |name| try registry.addLocalAlias(name, code);
     }
 }
 
@@ -3515,6 +3551,374 @@ test "audit propagates real Writer phase and allocator failures and seals only i
         const lines = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ inputs.audit_root, "failures.jsonl" }), a, .limited(1024));
         try std.testing.expectEqual(@as(usize, 0), lines.len);
         try auditControlNoPublishedFiles(a, inputs.writer_root);
+    }
+}
+
+const ZaLiteralTemplateTest = struct {
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tzawiktionary\n# dump-date\t20261001\n# content-language\tza\n" ++
+        "0\t\t\tfirst-letter\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\t模板\tTemplate\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\t分类\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n";
+    const registry = "# content-language\tza\n# mediawiki\n" ++
+        "za\tVahcuengh\tza\tZhuang\tzha\n" ++
+        "en\tYinghyij\tEnglish\ten\n" ++
+        "es\tVah Sihbanhyaz\tEspañol\tespañol\tes\tSpanish\tspa\n" ++
+        "th\tDaiyij\tไทย\tth\tThai\ttha\n" ++
+        "pt\tVah Buzdauzyaz\tPortuguês\tportuguês\tpt\tPortuguese\tpor\n" ++
+        "zh-min-nan\t闽南语 (zh-min-nan)\t闽南语\t闽南语\tBân-lâm-gú\tzh-min-nan\tnan\tMin Nan Chinese\n";
+    // Complete literal bodies from ZA 20261001, in page/revision order below.
+    const templates = [_]struct { code: []const u8, label: []const u8, page: u64, revision: u64, source: []const u8 }{
+        .{ .code = "th", .label = "Vahdai", .page = 8702, .revision = 11175, .source = "<includeonly>[[Category:Vahdai]]</includeonly>__NOEDITSECTION__\n<br>\n=<div id=\"toc\" class=\"toccolours\" ><big>[[Vahdai]] <small><small>(th)</small></small></big></div>=" },
+        .{ .code = "es", .label = "Sihbanhyazyij", .page = 8865, .revision = 11531, .source = "<includeonly>[[Category:Sihbanhyazyij]]</includeonly>__NOEDITSECTION__\n<br>\n=<div id=\"toc\" class=\"toccolours\" ><big>[[Sihbanhyazyij]] <small><small>(es)</small></small></big></div>=" },
+        .{ .code = "zh-min-nan", .label = "Vah Hozloz", .page = 8936, .revision = 11761, .source = "<includeonly>[[Category:Vah Hozloz]]</includeonly>__NOEDITSECTION__\n<br>\n=<div id=\"toc\" class=\"toccolours\" ><big>[[Vah Hozloz]] <small><small>(zh-min-nan)</small></small></big></div>=" },
+        .{ .code = "en", .label = "Yinghyij", .page = 8687, .revision = 11152, .source = "<includeonly>[[Category:Yinghyij]]</includeonly>__NOEDITSECTION__\n<br>\n=<div id=\"toc\" class=\"toccolours\" ><big>[[Yinghyij]] <small><small>(en)</small></small></big></div>=" },
+    };
+
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8) !void {
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = registry });
+        var index: std.ArrayList(u8) = .empty;
+        var writer = try dump_source.TemplateSourceWriter.init(io, a, root);
+        defer writer.deinit();
+        for (templates, 0..) |row, ordinal| {
+            try index.appendSlice(a, try std.fmt.allocPrint(a, "0\t0\t模板:-{s}-\t\t{d}\t{d}\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t0\n", .{ row.code, row.page, row.revision }));
+            try writer.append(ordinal, row.page, row.revision, row.source);
+        }
+        const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = index.items });
+        try writer.finish(index_path);
+    }
+
+    fn banner(a: std.mem.Allocator, row: @TypeOf(templates[0])) ![]const u8 {
+        // Source-instantiated transclusion fixture, not saved runtime output.
+        // Only includeonly's literal category wrapper changes in these bodies.
+        return std.fmt.allocPrint(a, "[[Category:{s}]]{s}", .{ row.label, row.source[("<includeonly>[[Category:".len + row.label.len + "]]</includeonly>".len)..] });
+    }
+
+    fn missingMetadata(a: std.mem.Allocator, source: []const u8, unknown: bool) ![]const u8 {
+        const Range = struct { start: u32, end: u32, occurrence: u32 };
+        const Occurrence = struct { id: u32, title: []const u8 };
+        const Coordinates = struct { ranges: []const Range, unknown: bool };
+        const ranges = [_]Range{.{ .start = 0, .end = "[[:模板:-pt-]]".len, .occurrence = 1 }};
+        const occurrences = [_]Occurrence{.{ .id = 1, .title = "模板:-pt-" }};
+        const found: []const Occurrence = if (unknown) &.{} else &occurrences;
+        return std.json.Stringify.valueAlloc(a, .{
+            .schema = "wikidict.missing-dependency-phase.v1",
+            .output_sha256 = try auditControlHash(a, source),
+            .display_title_sha256 = try auditControlHash(a, ""),
+            .occurrences = found,
+            .output = Coordinates{ .ranges = if (unknown) &.{} else &ranges, .unknown = unknown },
+            .display_title = Coordinates{ .ranges = &.{}, .unknown = unknown },
+        }, .{});
+    }
+};
+
+test "ZA literal banner alias proof rejects dynamic malformed and mixed declarations" {
+    for (ZaLiteralTemplateTest.templates) |row|
+        try std.testing.expectEqualStrings(row.label, literalZhuangLanguageTemplate(row.source, row.code).?);
+    try std.testing.expect(literalZhuangLanguageTemplate(ZaLiteralTemplateTest.templates[0].source, "es") == null);
+    for ([_][]const u8{
+        "<includeonly>[[Category:{{{1}}}]]</includeonly>__NOEDITSECTION__\n<br>\n=<div id=\"toc\" class=\"toccolours\" ><big>[[{{{1}}}]] <small><small>(th)</small></small></big></div>=",
+        "<includeonly>[[Category:Vahdai]]</includeonly>__NOEDITSECTION__\n<br>\n=<div id=\"toc\" class=\"toccolours\" ><big>[[Other]] <small><small>(th)</small></small></big></div>=",
+        "<includeonly>[[Category:Vahdai]]</includeonly>__NOEDITSECTION__\n<br>\n=<div id=\"toc\" class=\"toccolours\" ><big>[[Vahdai|Other]] <small><small>(th)</small></small></big></div>=",
+        "<includeonly>[[Category:Vahdai]]</includeonly>__NOEDITSECTION__\n<br>\n=<div id=\"toc\" class=\"toccolours\" ><big>[[Vahdai]] [[Yinghyij]] <small><small>(th)</small></small></big></div>=",
+        "<includeonly>[[Category:Vahdai]]</includeonly>__NOEDITSECTION__\n<br>\n=<div id=\"toc\" class=\"toccolours\" ><big>[[Vahdai]] <small><small>(th)</small></big></div>=",
+        "<nowiki><includeonly>[[Category:Vahdai]]</includeonly>__NOEDITSECTION__\n<br>\n=<div id=\"toc\" class=\"toccolours\" ><big>[[Vahdai]] <small><small>(th)</small></small></big></div>=</nowiki>",
+        "<!--<includeonly>[[Category:Vahdai]]</includeonly>__NOEDITSECTION__\n<br>\n=<div id=\"toc\" class=\"toccolours\" ><big>[[Vahdai]] <small><small>(th)</small></small></big></div>=-->",
+        "#REDIRECT [[Template:-th-]]",
+        "[[Vahdai]]",
+        "Vah{{{1}}}[[Category:Vah{{{1}}}]]",
+    }) |source| try std.testing.expect(literalZhuangLanguageTemplate(source, "th") == null);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const extra = try std.fmt.allocPrint(arena.allocator(), "{s}\nextra", .{ZaLiteralTemplateTest.templates[0].source});
+    try std.testing.expect(literalZhuangLanguageTemplate(extra, "th") == null);
+}
+
+test "ZA indexed static aliases preserve registry conflicts and edition scope" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try ZaLiteralTemplateTest.install(io, a, root);
+    var namespaces = try namespace_registry.Registry.init(a, ZaLiteralTemplateTest.namespaces);
+    defer namespaces.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces);
+    defer registry.deinit();
+    for (ZaLiteralTemplateTest.templates) |row| {
+        try std.testing.expectEqualStrings(row.code, registry.resolveTrusted(row.label).?.code);
+        try std.testing.expectEqualStrings(row.code, registry.resolve(row.code).?.code);
+    }
+    try std.testing.expectEqualStrings("Daiyij", registry.resolveTrusted("Vahdai").?.heading);
+    try std.testing.expectEqualStrings("Vah Sihbanhyaz", registry.resolveTrusted("Sihbanhyazyij").?.heading);
+    try std.testing.expect(registry.resolveTrusted("Thai") == null);
+    try std.testing.expect(registry.resolve("dai") == null);
+    // A later competing local source makes the new alias unresolved forever.
+    try registry.addLocalAlias("Vahdai", "es");
+    try registry.addLocalAlias("Vahdai", "th");
+    try std.testing.expect(registry.resolveTrusted("Vahdai") == null);
+    var conflict = language_registry.Registry.empty(a);
+    defer conflict.deinit();
+    try conflict.addTsv(ZaLiteralTemplateTest.registry ++ "fr\tFazyij\tSihbanhyazyij\n");
+    try loadLiteralLanguageTemplates(io, a, root, &namespaces, &conflict, .zhuang);
+    try std.testing.expectEqualStrings("fr", conflict.resolve("Sihbanhyazyij").?.code);
+    try std.testing.expect(conflict.resolveTrusted("Sihbanhyazyij") == null);
+    // The same indexed templates are not ingested by a different edition.
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = "# content-language\ten\n# mediawiki\nen\tEnglish\nes\tSpanish\nth\tThai\nzh-min-nan\tMin Nan Chinese\n" });
+    var foreign = try loadLanguageRegistry(io, a, root, &namespaces);
+    defer foreign.deinit();
+    try std.testing.expect(foreign.resolveTrusted("Vahdai") == null);
+    try std.testing.expect(foreign.resolveTrusted("Sihbanhyazyij") == null);
+    try std.testing.expect(foreign.resolveTrusted("Vah Hozloz") == null);
+}
+
+test "ZA captured aliases retain two Australia owners and unresolved source controls through DPR2" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try ZaLiteralTemplateTest.install(io, a, root);
+    var namespaces = try namespace_registry.Registry.init(a, ZaLiteralTemplateTest.namespaces);
+    defer namespaces.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces);
+    defer registry.deinit();
+    const codes = languageCodes(&registry, &namespaces);
+    const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Lexical regions from Australia p8796/r12635. Metadata-only interwiki
+    // tails are omitted; both identical definitions must remain single-owner.
+    const australia_raw = "{{-es-}}\n'''Australia''' \n\n# [[Audaihleihya]]\n\n{{-en-}}\n'''Australia''' \n\n# [[Audaihleihya]]\n\n";
+    const australia_expanded = try std.fmt.allocPrint(a, "{s}\n'''Australia''' \n\n# [[Audaihleihya]]\n\n{s}\n'''Australia''' \n\n# [[Audaihleihya]]\n\n", .{ try ZaLiteralTemplateTest.banner(a, ZaLiteralTemplateTest.templates[1]), try ZaLiteralTemplateTest.banner(a, ZaLiteralTemplateTest.templates[3]) });
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "Australia", australia_expanded, australia_raw, null);
+    // ลม p8654/r12479 has this exact active L2 and parameterized L3.
+    const lom_raw = "==Vahdai==\n\n==={{vah|dai}}===\n{{pn}} (lom)\n\n# [[rumz]]\n\n";
+    const lom_expanded = "==Vahdai==\n\n===Vahdai[[Category:Vahdai]]===\n'''ลม''' (lom)\n\n# [[rumz]]\n\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ลม", lom_expanded, lom_raw, null);
+    const pase_raw = "{{-zh-min-nan-}}\n'''Pa-se''' \n\n# [[Bahsih]]\n\n";
+    const pase_expanded = try std.fmt.allocPrint(a, "{s}\n'''Pa-se''' \n\n# [[Bahsih]]\n\n", .{try ZaLiteralTemplateTest.banner(a, ZaLiteralTemplateTest.templates[2])});
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "Pa-se", pase_expanded, pase_raw, null);
+    // 广州 p8275/r11843 declares -zh- only in a comment. 壮语 p8269/r12470
+    // has no declaration. Neither title/script nor interwiki links lend owners.
+    const guangzhou = "<!--{{-zh-}}-->\n'''广州''' ([[廣州]])\n\n#[[Gvangjcouh]]\n\n[[en:广州]]\n[[fr:广州]]\n[[hu:广州]]\n[[mg:广州]]\n[[zh:广州]]";
+    const zhuang = ":[saɯ˨˦ ʃu˨˦ eŋ˧]\n#[[Sawcuengh]]\n\n[[zh:壮语]]";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "广州", guangzhou, guangzhou, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "壮语", zhuang, zhuang, null);
+    // New trusted labels must preserve a genuine owner at a different depth,
+    // while heading-looking protected/table text stays within its live owner.
+    const mixed_raw = "{{-es-}}\n# [[SpanishMixed]]\n==Vahdai==\n# [[ThaiMixed]]\n";
+    const mixed_expanded = try std.fmt.allocPrint(a, "{s}\n# [[SpanishMixed]]\n==Vahdai==\n# [[ThaiMixed]]\n", .{try ZaLiteralTemplateTest.banner(a, ZaLiteralTemplateTest.templates[1])});
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "mixed-depth-control", mixed_expanded, mixed_raw, null);
+    const protected_body = "\n# [[ProtectedOwner]]\n<nowiki>\n==Vahdai==\n# [[protected-action]]\n</nowiki>\n<pre>\n==Vahdai==\n# [[pre-action]]\n</pre>\n{|\n|\n==Vahdai==\n[[table-action]]\n|}\n";
+    const protected_raw = try std.fmt.allocPrint(a, "{{{{-es-}}}}{s}", .{protected_body});
+    const protected_expanded = try std.fmt.allocPrint(a, "{s}{s}", .{ try ZaLiteralTemplateTest.banner(a, ZaLiteralTemplateTest.templates[1]), protected_body });
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "protected-control", protected_expanded, protected_raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 9), stats.language_records);
+    const expected = [_][4][]const u8{
+        .{ "es", "Vah Sihbanhyaz", "Australia", "Audaihleihya" },
+        .{ "en", "Yinghyij", "Australia", "Audaihleihya" },
+        .{ "th", "Daiyij", "ลม", "rumz" },
+        .{ "zh-min-nan", "闽南语 (zh-min-nan)", "Pa-se", "Bahsih" },
+        .{ "", "Unclassified", "广州", "Gvangjcouh" },
+        .{ "", "Unclassified", "壮语", "Sawcuengh" },
+        .{ "es", "Vah Sihbanhyaz", "mixed-depth-control", "SpanishMixed" },
+        .{ "th", "Daiyij", "mixed-depth-control", "ThaiMixed" },
+        .{ "es", "Vah Sihbanhyaz", "protected-control", "ProtectedOwner" },
+    };
+    for (expected) |entry| {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename(entry[1], &filename) }));
+        defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(entry[0], metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(entry[2])).?;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(entry[0], decoded.entry.language_code);
+        if (std.mem.eql(u8, entry[2], "Australia") or std.mem.eql(u8, entry[2], "Pa-se")) {
+            const spanish = std.mem.eql(u8, entry[0], "es");
+            const min_nan = std.mem.eql(u8, entry[0], "zh-min-nan");
+            const label = if (spanish) "Sihbanhyazyij" else if (min_nan) "Vah Hozloz" else "Yinghyij";
+            const heading = if (spanish) "Sihbanhyazyij (es)" else if (min_nan) "Vah Hozloz (zh-min-nan)" else "Yinghyij (en)";
+            const anchor = if (spanish) "Sihbanhyazyij_(es)" else if (min_nan) "Vah_Hozloz_(zh-min-nan)" else "Yinghyij_(en)";
+            const legacy = if (spanish) "Sihbanhyazyij_.28es.29" else if (min_nan) "Vah_Hozloz_.28zh-min-nan.29" else "Yinghyij_.28en.29";
+            const iso = if (spanish) "(es)" else if (min_nan) "(zh-min-nan)" else "(en)";
+            var headings: usize = 0;
+            var companion_links: usize = 0;
+            var small_codes: usize = 0;
+            var bold_titles: usize = 0;
+            for (decoded.entry.sections) |section| {
+                if (std.mem.eql(u8, section.title, heading)) {
+                    headings += 1;
+                    try std.testing.expectEqual(@as(u8, 1), section.level);
+                    try std.testing.expectEqualStrings(anchor, section.anchor);
+                    try std.testing.expectEqualStrings(legacy, section.anchor_fallback);
+                }
+                for (section.blocks) |block| {
+                    if (block.kind == .heading) {
+                        try std.testing.expectEqual(@as(u8, 1), block.level);
+                        try std.testing.expectEqualStrings(anchor, block.anchor);
+                        try std.testing.expectEqualStrings(legacy, block.anchor_fallback);
+                    }
+                    for (block.spans) |span| {
+                        if (std.mem.eql(u8, span.target, label)) {
+                            companion_links += 1;
+                            try std.testing.expectEqualStrings("toccolours", span.classes);
+                        }
+                        if (std.mem.eql(u8, span.text, iso)) {
+                            small_codes += 1;
+                            try std.testing.expect(span.small);
+                            try std.testing.expectEqualStrings("toccolours", span.classes);
+                        }
+                        if (std.mem.eql(u8, span.text, entry[2]) and span.bold) bold_titles += 1;
+                    }
+                }
+            }
+            try std.testing.expectEqual(@as(usize, 1), headings);
+            try std.testing.expectEqual(@as(usize, 1), companion_links);
+            try std.testing.expectEqual(@as(usize, 1), small_codes);
+            try std.testing.expectEqual(@as(usize, 1), bold_titles);
+        }
+        if (std.mem.eql(u8, entry[2], "ลม")) {
+            var l2: usize = 0;
+            var l3: usize = 0;
+            var bold_title: usize = 0;
+            var pronunciation: usize = 0;
+            for (decoded.entry.sections) |section| {
+                if (section.level == 2 and std.mem.eql(u8, section.title, "Vahdai")) {
+                    l2 += 1;
+                    try std.testing.expectEqualStrings("Vahdai", section.anchor);
+                    try std.testing.expectEqual(@as(usize, 0), section.blocks.len);
+                }
+                if (section.level == 3 and std.mem.eql(u8, section.title, "Vahdai")) {
+                    l3 += 1;
+                    try std.testing.expectEqualStrings("Vahdai_2", section.anchor);
+                }
+                for (section.blocks) |block| for (block.spans) |span| {
+                    if (std.mem.eql(u8, span.text, "ลม") and span.bold) bold_title += 1;
+                    if (std.mem.eql(u8, span.text, " (lom)") and !span.bold) pronunciation += 1;
+                };
+            }
+            try std.testing.expectEqual(@as(usize, 1), l2);
+            try std.testing.expectEqual(@as(usize, 1), l3);
+            try std.testing.expectEqual(@as(usize, 1), bold_title);
+            try std.testing.expectEqual(@as(usize, 1), pronunciation);
+        }
+        var definitions: usize = 0;
+        var target_links: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| {
+            if (block.kind == .definition) {
+                definitions += 1;
+                try std.testing.expectEqualStrings("#", block.list_path);
+                try std.testing.expectEqualStrings("1", block.number);
+            }
+            for (block.spans) |span| {
+                try std.testing.expect(std.mem.indexOf(u8, span.text, "__NOEDITSECTION__") == null);
+                if (std.mem.eql(u8, span.target, entry[3])) target_links += 1;
+                if (std.mem.eql(u8, entry[0], "es")) try std.testing.expect(!std.mem.eql(u8, span.target, "Yinghyij"));
+                if (std.mem.eql(u8, entry[0], "en")) try std.testing.expect(!std.mem.eql(u8, span.target, "Sihbanhyazyij"));
+                if (std.mem.eql(u8, entry[2], "mixed-depth-control"))
+                    try std.testing.expect(!std.mem.eql(u8, span.target, if (std.mem.eql(u8, entry[0], "es")) "ThaiMixed" else "SpanishMixed"));
+                try std.testing.expect(!std.mem.eql(u8, span.target, "protected-action"));
+                try std.testing.expect(!std.mem.eql(u8, span.target, "pre-action"));
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), definitions);
+        try std.testing.expectEqual(@as(usize, 1), target_links);
+        if (entry[0].len == 0) try std.testing.expect((try index.find("Australia")) == null);
+        if (!std.mem.eql(u8, entry[0], "es")) try std.testing.expect((try index.find("protected-control")) == null);
+    }
+}
+
+test "ZA missing Portuguese prefix cannot be absorbed by a later Spanish alias" {
+    const Mode = enum { tracked, absent, unknown };
+    for ([_]Mode{ .tracked, .absent, .unknown }) |mode| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const io = std.testing.io;
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        try ZaLiteralTemplateTest.install(io, a, root);
+        var namespaces = try namespace_registry.Registry.init(a, ZaLiteralTemplateTest.namespaces);
+        defer namespaces.deinit();
+        var registry = try loadLanguageRegistry(io, a, root, &namespaces);
+        defer registry.deinit();
+        const codes = languageCodes(&registry, &namespaces);
+        const output = try std.fs.path.join(a, &.{ root, "blobs" });
+        var writer = try encoder.blob_builder.Writer.init(io, a, output);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        // Brasil p8869/r12263: captured -pt- is absent. The actual baseline keeps
+        // its missing-template link and first definition before the Spanish banner.
+        // This source-instantiated fixture permits whole Unclassified retention or
+        // a correct split; alias recovery must neither lose nor adopt that prefix.
+        const raw = "{{-pt-}}\n'''Brasil''' \n\n# [[Bahsih]]\n\n{{-es-}}\n'''Brasil''' \n\n# [[Bahsih]]\n\n";
+        const expanded = try std.fmt.allocPrint(a, "[[:模板:-pt-]]\n'''Brasil''' \n\n# [[Bahsih]]\n\n{s}\n'''Brasil''' \n\n# [[Bahsih]]\n\n", .{try ZaLiteralTemplateTest.banner(a, ZaLiteralTemplateTest.templates[1])});
+        if (mode == .absent) {
+            // Retain the original untracked regression, without weaker body counts.
+            try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "Brasil", expanded, raw, null);
+        } else {
+            const metadata = try ZaLiteralTemplateTest.missingMetadata(a, expanded, mode == .unknown);
+            try writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, "Brasil", expanded, raw, null, &.{}, null, metadata);
+        }
+        const stats = try writer.finish(codes);
+        try std.testing.expect(stats.language_records == 1 or stats.language_records == 2);
+        var unowned_filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var unowned_mapped = try mmapPath(io, try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename("Unclassified", &unowned_filename) }));
+        defer unowned_mapped.deinit();
+        const unowned_blob = try encoder.blob_format.inspect(unowned_mapped.bytes);
+        const unowned_metadata = try unowned_blob.languageMetadata();
+        var unowned_index = try unowned_blob.buildTrustedIndexAlloc(a);
+        defer unowned_index.deinit(a);
+        const unowned_record = (try unowned_index.find("Brasil")).?;
+        const unowned = try encoder.presentation_codec.decodeAlloc(a, unowned_record.payload, unowned_record.title, .language, unowned_metadata);
+        try std.testing.expectEqualStrings("", unowned.entry.language_code);
+        var missing_links: usize = 0;
+        var unowned_definitions: usize = 0;
+        for (unowned.entry.sections) |section| for (section.blocks) |block| {
+            if (block.kind == .definition) {
+                unowned_definitions += 1;
+                try std.testing.expectEqualStrings("Bahsih", block.spans[0].target);
+            }
+            for (block.spans) |span| if (std.mem.eql(u8, span.target, "模板:-pt-")) {
+                missing_links += 1;
+            };
+        };
+        try std.testing.expectEqual(@as(usize, 1), missing_links);
+        try std.testing.expectEqual(@as(usize, if (stats.language_records == 1) 2 else 1), unowned_definitions);
+        if (stats.language_records == 2) {
+            var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+            var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename("Vah Sihbanhyaz", &filename) }));
+            defer mapped.deinit();
+            const blob = try encoder.blob_format.inspect(mapped.bytes);
+            const metadata = try blob.languageMetadata();
+            var index = try blob.buildTrustedIndexAlloc(a);
+            defer index.deinit(a);
+            const record = (try index.find("Brasil")).?;
+            const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+            try std.testing.expectEqualStrings("es", decoded.entry.language_code);
+            var definitions: usize = 0;
+            for (decoded.entry.sections) |section| for (section.blocks) |block| {
+                if (block.kind == .definition) {
+                    definitions += 1;
+                    try std.testing.expectEqualStrings("Bahsih", block.spans[0].target);
+                }
+                for (block.spans) |span| try std.testing.expect(!std.mem.eql(u8, span.target, "模板:-pt-"));
+            };
+            try std.testing.expectEqual(@as(usize, 1), definitions);
+        }
     }
 }
 

@@ -18,6 +18,9 @@ pub fn speak(io: std.Io, a: A, word: []const u8, language: []const u8) !void {
     a.free(bytes);
 }
 pub fn trim(io: std.Io, a: A, root: []const u8, mb: usize) !void {
+    return trimExcept(io, a, root, mb, null);
+}
+fn trimExcept(io: std.Io, a: A, root: []const u8, mb: usize, protected_basename: ?[]const u8) !void {
     var dir = std.Io.Dir.cwd().openDir(io, root, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return,
         else => return err,
@@ -37,7 +40,9 @@ pub fn trim(io: std.Io, a: A, root: []const u8, mb: usize) !void {
         defer file.close(io);
         const stat = try file.stat(io);
         total += stat.size;
-        try items.append(a, .{ .name = try a.dupe(u8, entry.name), .size = stat.size, .time = stat.mtime.nanoseconds });
+        try items.ensureUnusedCapacity(a, 1);
+        const name = try a.dupe(u8, entry.name);
+        items.appendAssumeCapacity(.{ .name = name, .size = stat.size, .time = stat.mtime.nanoseconds });
     }
     std.mem.sort(Item, items.items, {}, struct {
         fn less(_: void, x: Item, y: Item) bool {
@@ -46,6 +51,7 @@ pub fn trim(io: std.Io, a: A, root: []const u8, mb: usize) !void {
     }.less);
     for (items.items) |item| {
         if (total <= @as(u64, mb) * 1024 * 1024) break;
+        if (protected_basename) |name| if (std.mem.eql(u8, item.name, name)) continue;
         try dir.deleteFile(io, item.name);
         total -= item.size;
     }
@@ -99,5 +105,74 @@ pub fn open(io: std.Io, a: A, root: []const u8, file: []const u8, image: bool, m
     _ = try command(io, scratch, &.{ "xdg-open", absolute });
     // The desktop viewer owns playback; retention is bounded independently.
     // Do not remove the just-opened file before the external player reads it.
-    if (mb != 0) try trim(io, a, directory, mb);
+    if (mb != 0) try trimExcept(io, a, directory, mb, std.fs.path.basename(path));
+}
+
+fn retentionFixtureFile(dir: std.Io.Dir, name: []const u8, size: u64, seconds: i96) !void {
+    const io = std.testing.io;
+    var file = try dir.createFile(io, name, .{});
+    defer file.close(io);
+    try file.setLength(io, size);
+    try file.setTimestamps(io, .{ .modify_timestamp = .{ .new = .{ .nanoseconds = seconds * std.time.ns_per_s } } });
+}
+
+fn expectRetentionFile(dir: std.Io.Dir, name: []const u8, expected: bool) !void {
+    const file = dir.openFile(std.testing.io, name, .{}) catch |err| switch (err) {
+        error.FileNotFound => return std.testing.expect(!expected),
+        else => return err,
+    };
+    file.close(std.testing.io);
+    try std.testing.expect(expected);
+}
+
+test "media retention protects oldest selected file while evicting newer files" {
+    const a = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    try retentionFixtureFile(tmp.dir, "selected.ogg", 700 * 1024, 100);
+    try retentionFixtureFile(tmp.dir, "newer.ogg", 700 * 1024, 200);
+    try trimExcept(std.testing.io, a, root, 1, "selected.ogg");
+    try expectRetentionFile(tmp.dir, "selected.ogg", true);
+    try expectRetentionFile(tmp.dir, "newer.ogg", false);
+}
+
+test "media retention keeps sole oversized selection until ordinary trim" {
+    const a = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    try retentionFixtureFile(tmp.dir, "selected.ogg", 2 * 1024 * 1024, 100);
+    try trimExcept(std.testing.io, a, root, 1, "selected.ogg");
+    try expectRetentionFile(tmp.dir, "selected.ogg", true);
+    try trim(std.testing.io, a, root, 1);
+    try expectRetentionFile(tmp.dir, "selected.ogg", false);
+}
+
+test "ordinary zero-budget media trim removes cached files" {
+    const a = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    try retentionFixtureFile(tmp.dir, "cached.ogg", 1, 100);
+    try trim(std.testing.io, a, root, 0);
+    try expectRetentionFile(tmp.dir, "cached.ogg", false);
+}
+
+test "media trim releases names and list storage on every allocation failure" {
+    const a = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    try retentionFixtureFile(tmp.dir, "first.ogg", 1, 100);
+    try retentionFixtureFile(tmp.dir, "second.ogg", 1, 200);
+    try std.testing.checkAllAllocationFailures(a, struct {
+        fn run(allocator: A, directory: []const u8) !void {
+            try trim(std.testing.io, allocator, directory, 1);
+        }
+    }.run, .{root});
 }

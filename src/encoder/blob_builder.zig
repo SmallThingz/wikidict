@@ -1452,6 +1452,85 @@ fn amharicSupportSections(codes: LanguageCodes, sections: []const language_sourc
     return seen == 3;
 }
 
+// Captured aswiktionary assamese p1964/r4743 starts with {{en}}; that
+// template emits an ordinary paragraph, followed by noun/adjective templates.
+// Recover only this corroborated support form, without changing its body.
+fn assameseEnglishCategory(codes: LanguageCodes, source: []const u8) ?ResolvedLanguage {
+    const namespaces = codes.namespace_catalog orelse return null;
+    var categories: language_source.CategoryIterator = .{ .source = source };
+    var found: ?ResolvedLanguage = null;
+    while (categories.next()) |target| {
+        const title = namespaces.ofTitle(target);
+        if (title.id != 14) continue;
+        const name = std.mem.trim(u8, title.text, " \t\r\n");
+        const owner = codes.resolveStrong(name) orelse codes.resolveTrusted(name) orelse continue;
+        if (!std.mem.eql(u8, owner.code, "en")) return null;
+        if (std.mem.eql(u8, name, "ইংৰাজী")) found = owner;
+    }
+    return found;
+}
+
+fn assameseSupportLanguage(codes: LanguageCodes, source: []const u8, raw_source: ?[]const u8) ?ResolvedLanguage {
+    const namespaces = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, namespaces.content_language, "as")) return null;
+    const raw = raw_source orelse return null;
+    const owner = assameseEnglishCategory(codes, raw) orelse return null;
+    _ = assameseEnglishCategory(codes, source) orelse return null;
+    const markers: LanguageMarkers = .{ .codes = &codes };
+    const every_heading: language_source.Iterator.MarkerFilter = .{
+        .ctx = null,
+        .accepts = struct {
+            fn accepts(_: ?*const anyopaque, _: []const u8) bool { return true; }
+        }.accepts,
+    };
+    var original = languageSections(raw, &markers);
+    // Inspect every authored marker, including POS names that are not codes.
+    original.marker_filter = null;
+    original.all_heading_levels = true;
+    original.heading_filter = every_heading;
+    var expanded = languageSections(source, &markers);
+    expanded.all_heading_levels = true;
+    expanded.heading_filter = every_heading;
+    const forms = [_]struct { marker: []const u8, heading: []const u8 }{
+        .{ .marker = "{{-noun-}}", .heading = "নাম" },
+        .{ .marker = "{{-adj-}}", .heading = "বিশেষণ" },
+    };
+    var allowed_offsets: [3]usize = .{ 0, 0, 0 };
+    for (forms, 0..) |form, index| {
+        const authored = original.next() orelse return null;
+        const rendered = expanded.next() orelse return null;
+        const raw_offset = @intFromPtr(authored.source.ptr) - @intFromPtr(raw.ptr);
+        const expanded_offset = @intFromPtr(rendered.source.ptr) - @intFromPtr(source.ptr);
+        if (index == 0) {
+            // Do not trim initial spaces: an indented line is preformatted.
+            if (!std.mem.eql(u8, std.mem.trimEnd(u8, raw[0..raw_offset], "\r\n"), "{{en}}") or
+                !std.mem.eql(u8, std.mem.trimEnd(u8, source[0..expanded_offset], "\r\n"), "ইংৰাজী")) return null;
+        }
+        const raw_end = std.mem.indexOfScalar(u8, authored.source, '\n') orelse authored.source.len;
+        if (!authored.hyphen_marker or !std.mem.eql(u8, std.mem.trimEnd(u8, authored.source[0..raw_end], "\r"), form.marker)) return null;
+        if (rendered.hyphen_marker or !std.mem.eql(u8, std.mem.trim(u8, rendered.heading, " \t\r\n"), form.heading) or
+            hasExplicitLanguageDeclaration(codes, rendered) or resolveSection(codes, rendered) != null) return null;
+        if (rendered.source.len < 3 or !std.mem.startsWith(u8, rendered.source, "==") or rendered.source[2] == '=') return null;
+        allowed_offsets[index + 1] = raw_offset;
+    }
+    if (original.next() != null or expanded.next() != null) return null;
+    // Other active transclusions, including a second bare language banner,
+    // are outside this captured convention. Conservatively refuse protected
+    // template examples too; this recovery supports only the captured form.
+    var cursor: usize = 0;
+    while (std.mem.indexOfPos(u8, raw, cursor, "{{")) |offset| {
+        cursor = offset + 2;
+        var allowed = false;
+        for (allowed_offsets) |expected| if (offset == expected) {
+            allowed = true;
+            break;
+        };
+        if (!allowed) return null;
+    }
+    // Registry-owned slices remain valid through grouping and encoding.
+    return owner;
+}
+
 fn amharicSupportCategoryLanguage(
     codes: LanguageCodes,
     source: []const u8,
@@ -2069,6 +2148,181 @@ fn coalesceCorroboratedAnRawRegions(codes: LanguageCodes, raw: []const u8, secti
     sections.items.len = written;
 }
 
+fn prefixEvidenceOutside(source: []const u8, offset: usize) bool {
+    if (offset > source.len or !language_source.outsideNestedOrOpaque(source, offset)) return false;
+    var context = language_source.Iterator.init(source[0..offset]);
+    while (context.next() != null) {}
+    if (context.balance.tables != 0) return false;
+    // The source iterator tracks wiki tables. Ordinary HTML table bodies also
+    // remain local; reuse tag matching rather than treating their text as root.
+    const syntax = blobs.wikitext_syntax;
+    var at: usize = 0;
+    while (at < offset) {
+        if (syntax.protectedEnd(source, at)) |end| {
+            if (end > offset) return false;
+            at = end;
+            continue;
+        }
+        if (std.mem.startsWith(u8, source[at..], "{{") or std.mem.startsWith(u8, source[at..], "[[")) {
+            const pair = syntax.balanced(source, at) orelse return false;
+            if (pair.end > offset) return false;
+            at = pair.end;
+            continue;
+        }
+        if (source[at] == '<') if (syntax.tagAt(source, at)) |tag| {
+            if (!tag.closing and !tag.self_closing and (tag.is("table") or tag.is("nowiki") or tag.is("pre") or tag.isOpaque())) {
+                const pair = syntax.matchingTag(source, tag) orelse return false;
+                if (pair.end > offset) return false;
+                at = pair.end;
+            } else at = tag.end;
+            continue;
+        };
+        at += 1;
+    }
+    return true;
+}
+
+fn wholeMissingMarkerLink(codes: LanguageCodes, source: []const u8, code: []const u8) bool {
+    const namespaces = codes.namespace_catalog orelse return false;
+    if (!std.mem.startsWith(u8, source, "[[") or !std.mem.endsWith(u8, source, "]]")) return false;
+    const pair = blobs.wikitext_syntax.balanced(source, 0) orelse return false;
+    if (pair.end != source.len) return false;
+    var links: blobs.document_ir.InlineIterator = .{ .input = source, .link_trail = codes.link_trail };
+    const link = links.next() orelse return false;
+    if (link.kind != .link or link.link_has_pipe or link.trail.len != 0 or links.cursor != source.len) return false;
+    var target = link.target;
+    if (std.mem.startsWith(u8, target, ":")) target = target[1..];
+    const title = namespaces.ofTitle(target);
+    return title.id == 10 and title.text.len == code.len + 2 and title.text[0] == '-' and
+        title.text[title.text.len - 1] == '-' and std.mem.eql(u8, title.text[1 .. title.text.len - 1], code);
+}
+
+fn prefixHasMissingMarkerLink(codes: LanguageCodes, prefix: []const u8, code: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, prefix, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (!wholeMissingMarkerLink(codes, line, code)) continue;
+        const offset = @intFromPtr(line.ptr) - @intFromPtr(prefix.ptr);
+        if (prefixEvidenceOutside(prefix, offset)) return true;
+    }
+    return false;
+}
+
+fn missingForeignLanguagePrefix(codes: LanguageCodes, source: MissingText, prefix_len: usize, phase: ?*const missing_dependency.Phase, raw_prefix: []const u8, owner_code: []const u8) bool {
+    const namespaces = codes.namespace_catalog orelse return false;
+    if (prefix_len > source.bytes.len or raw_prefix.len == 0) return false;
+    const markers: LanguageMarkers = .{ .codes = &codes };
+    var sections = languageSections(raw_prefix, &markers);
+    while (sections.next()) |section| {
+        if (!section.hyphen_marker) continue;
+        const language = codes.resolve(section.heading) orelse continue;
+        const code = language.code;
+        if (!std.mem.eql(u8, section.heading, code) or std.mem.eql(u8, code, owner_code)) continue;
+        const raw_offset = @intFromPtr(section.source.ptr) - @intFromPtr(raw_prefix.ptr);
+        if (!prefixEvidenceOutside(raw_prefix, raw_offset)) continue;
+        if (!source.unknown) if (phase) |provenance| {
+            const occurrences = provenance.occurrences();
+            for (source.ranges) |range| {
+                if (range.start >= range.end or range.end > prefix_len or range.end > source.bytes.len or
+                    range.occurrence == 0 or range.occurrence > occurrences.len) continue;
+                const title = namespaces.ofTitle(occurrences[range.occurrence - 1].title);
+                if (title.id != 10 or title.text.len != code.len + 2 or title.text[0] != '-' or
+                    title.text[title.text.len - 1] != '-' or !std.mem.eql(u8, title.text[1 .. title.text.len - 1], code)) continue;
+                if (wholeMissingMarkerLink(codes, source.bytes[range.start..range.end], code) and
+                    prefixEvidenceOutside(source.bytes, range.start)) return true;
+            }
+        };
+        // Optional provenance can be absent or incomplete. Only the same exact
+        // standalone missing-template link in this expanded prefix corroborates
+        // refusal then. Neither raw markers alone nor matching links elsewhere
+        // assign an owner; the existing unowned-prefix path retains these bytes.
+        if ((phase == null or source.unknown) and prefixHasMissingMarkerLink(codes, source.bytes[0..prefix_len], code)) return true;
+    }
+    return false;
+}
+
+test "missing language prefix refusal requires active matching evidence in its exact domain" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tzawiktionary\n# dump-date\t20261001\n# content-language\tza\n" ++
+        "0\t\t\tfirst-letter\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\t模板\tTemplate\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\t分类\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const Local = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            for ([_][2][]const u8{ .{ "es", "Spanish" }, .{ "pt", "Portuguese" }, .{ "en", "English" }, .{ "adj", "Adioukrou" } }) |row|
+                if (std.mem.eql(u8, value, row[0])) return .{ .code = row[0], .heading = row[1] };
+            if (std.mem.eql(u8, value, "por")) return .{ .code = "pt", .heading = "Portuguese" };
+            return null;
+        }
+    };
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .resolve_fn = Local.resolve };
+    const raw_prefix = "{{-pt-}}\n# prefix\n";
+    const link = "[[:模板:-pt-]]";
+    const prefix = link ++ "\n# prefix\n";
+    const source = prefix ++ "==Spanish==\n# later\n";
+    const occurrences = [_]missing_dependency.Occurrence{.{ .id = 1, .title = "模板:-pt-" }};
+    const ranges = [_]missing_dependency.Range{.{ .start = 0, .end = link.len, .occurrence = 1 }};
+    const encoded = try missing_dependency.encode(a, .{ .bytes = source, .ranges = &ranges }, MissingText.untracked(""), &occurrences);
+    var phase = try missing_dependency.decode(a, encoded, source, "");
+    defer phase.deinit();
+    try std.testing.expect(missingForeignLanguagePrefix(codes, phase.output(), prefix.len, &phase, raw_prefix, "es"));
+    try std.testing.expect(missingForeignLanguagePrefix(codes, MissingText.untracked(source), prefix.len, null, raw_prefix, "es"));
+    try std.testing.expect(missingForeignLanguagePrefix(codes, MissingText.transformed(source), prefix.len, &phase, raw_prefix, "es"));
+    // Complete provenance with no matching occurrence proves this is authored
+    // text. The optional-provenance fallback cannot override that evidence.
+    const known_encoded = try missing_dependency.encode(a, MissingText.untracked(source), MissingText.untracked(""), &.{});
+    var known = try missing_dependency.decode(a, known_encoded, source, "");
+    defer known.deinit();
+    try std.testing.expect(!missingForeignLanguagePrefix(codes, known.output(), prefix.len, &known, raw_prefix, "es"));
+    const unknown_encoded = try missing_dependency.encode(a, MissingText.transformed(source), MissingText.transformed(""), &.{});
+    var unknown = try missing_dependency.decode(a, unknown_encoded, source, "");
+    defer unknown.deinit();
+    try std.testing.expect(missingForeignLanguagePrefix(codes, unknown.output(), prefix.len, &unknown, raw_prefix, "es"));
+    const invalid_ranges = [_]missing_dependency.Range{
+        .{ .start = 0, .end = 1, .occurrence = 1 },
+        .{ .start = 0, .end = prefix.len + 1, .occurrence = 1 },
+        .{ .start = 0, .end = source.len + 1, .occurrence = 1 },
+        .{ .start = 0, .end = link.len, .occurrence = 2 },
+    };
+    for (invalid_ranges) |range| {
+        const one = [_]missing_dependency.Range{range};
+        try std.testing.expect(!missingForeignLanguagePrefix(codes, .{ .bytes = source, .ranges = &one }, prefix.len, &phase, raw_prefix, "es"));
+    }
+    const cases = [_]struct { expanded: []const u8, raw: []const u8 = raw_prefix }{
+        .{ .expanded = "[[:模板:-es-]]\n", .raw = "{{-es-}}\n" },
+        .{ .expanded = "[[:模板:-en-]]\n" },
+        .{ .expanded = "[[:Category:-pt-]]\n" },
+        .{ .expanded = "[[:模板:pt]]\n" },
+        .{ .expanded = "[[:模板:ordinary]]\n", .raw = "{{ordinary}}\n" },
+        .{ .expanded = "[[:模板:-por-]]\n", .raw = "{{-por-}}\n" },
+        .{ .expanded = "[[:模板:-pt-|label]]\n" },
+        .{ .expanded = "[[:模板:-pt-]]trail\n" },
+        .{ .expanded = "inline [[:模板:-pt-]]\n" },
+        .{ .expanded = "<!--\n[[:模板:-pt-]]\n-->\n" },
+        .{ .expanded = "<nowiki>\n[[:模板:-pt-]]\n</nowiki>\n" },
+        .{ .expanded = "<pre>\n[[:模板:-pt-]]\n</pre>\n" },
+        .{ .expanded = "<nowiki>\n[[:模板:-pt-]]\n" },
+        .{ .expanded = "{|\n|\n[[:模板:-pt-]]\n|}\n" },
+        .{ .expanded = "<table><tr><td>\n[[:模板:-pt-]]\n</td></tr></table>\n" },
+        .{ .expanded = prefix, .raw = "inline {{-pt-}}\n" },
+        .{ .expanded = prefix, .raw = "<!--\n{{-pt-}}\n-->\n" },
+        .{ .expanded = prefix, .raw = "<nowiki>\n{{-pt-}}\n</nowiki>\n" },
+        .{ .expanded = prefix, .raw = "<pre>\n{{-pt-}}\n</pre>\n" },
+        .{ .expanded = prefix, .raw = "{|\n|\n{{-pt-}}\n|}\n" },
+        .{ .expanded = prefix, .raw = "<table><tr><td>\n{{-pt-}}\n</td></tr></table>\n" },
+        .{ .expanded = "# preserved POS context\n", .raw = "{{-adj-}}\n" },
+        .{ .expanded = "# preserved raw marker context\n" },
+    };
+    for (cases) |row|
+        try std.testing.expect(!missingForeignLanguagePrefix(codes, MissingText.untracked(row.expanded), row.expanded.len, null, row.raw, "es"));
+    // A matching link after the first admitted language is not prefix evidence.
+    const outside = "# prefix\n==Spanish==\n" ++ link;
+    try std.testing.expect(!missingForeignLanguagePrefix(codes, MissingText.untracked(outside), "# prefix\n".len, null, raw_prefix, "es"));
+}
+
 fn processMain(
     page_allocator: std.mem.Allocator,
     spools: *Spools,
@@ -2367,7 +2621,8 @@ fn processMain(
         // Captured edition-local support forms require corroborated raw and
         // expanded category authority and preserve the whole entry body.
         const support = amharicSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items) orelse
-            arabicMeaningsSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items);
+            arabicMeaningsSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items) orelse
+            assameseSupportLanguage(codes, source, raw_source);
         const explicit = if (page_sections.items.len == 0)
             unsectionedLanguage(codes, raw_source orelse source) orelse unsectionedExpandedLanguage(codes, source) orelse unsectionedAfrikaansExpandedLanguage(codes, source)
         else
@@ -2451,9 +2706,17 @@ fn processMain(
     // Preserve ordinary page context only for one unambiguous language.
     // Repeated resolved sections may share that group; inherited unknown
     // sections and pending unresolved regions must not gain attribution.
+    const missing_foreign_marker_prefix = missing: {
+        if (shared_prefix != null or page_prefix.len == 0 or fallbacks.unresolved_language_heading or
+            groups.items.len != 1 or groups.items[0].language.code.len == 0 or raw_sections.items.len == 0) break :missing false;
+        const raw = raw_source orelse break :missing false;
+        const raw_prefix_len = @intFromPtr(raw_sections.items[0].source.ptr) - @intFromPtr(raw.ptr);
+        if (raw_prefix_len > raw.len) break :missing false;
+        break :missing missingForeignLanguagePrefix(codes, source_missing, page_prefix.len, missing_phase, raw[0..raw_prefix_len], groups.items[0].language.code);
+    };
     const preserve_prefix = shared_prefix == null and page_prefix.len != 0 and
         groups.items.len == 1 and groups.items[0].language.code.len != 0 and
-        !fallbacks.unresolved_language_heading;
+        !fallbacks.unresolved_language_heading and !missing_foreign_marker_prefix;
     // A prefix cannot disappear merely because a later language boundary is
     // uncertain. Keep meaningful unowned context exactly once, never lending it
     // to a resolved language. Invisible categories/comments/controls add no row.
@@ -9029,4 +9292,167 @@ test "ordinary Writer publishes authored citation diagnostics without losing sur
         rows += 1;
     }
     try std.testing.expectEqual(invalid.len, rows);
+}
+
+const AssameseSupportFixture = struct {
+    // Exact decoded authored body: aswiktionary assamese p1964/r4743,
+    // SHA256 5667819698cb60697c24280ec4185b47333840da39ee31016ed58a55112ffc4e.
+    const raw = "{{en}}\n\n{{-noun-}}\n'''assamese'''\n\n:# [[অসমীয়া ]]\n\n\n{{-adj-}}\n'''assamese'''\n\n:# [[অসমীয়া ]]\n\n\n[[Category:ইংৰাজী]]";
+    // Captured en/-noun-/-adj- bodies, with compile-time noinclude removed.
+    const expanded = "ইংৰাজী\n\n== নাম   ==\n\n'''assamese'''\n\n:# [[অসমীয়া ]]\n\n\n== বিশেষণ   ==\n\n'''assamese'''\n\n:# [[অসমীয়া ]]\n\n\n[[Category:ইংৰাজী]]";
+    fn catalog(allocator: std.mem.Allocator, edition: []const u8) !@import("namespace_registry").Registry {
+        return @import("namespace_registry").Registry.init(allocator, try std.fmt.allocPrint(allocator,
+            "# wikidict-namespace-registry-v1\n# wiki\t{s}wiktionary\n# dump-date\t20261001\n# content-language\t{s}\n" ++
+                "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+                "10\tসাঁচ\tTemplate\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+                "14\tশ্ৰেণী\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tcategories\n", .{ edition, edition }));
+    }
+    fn resolve(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+        for ([_]struct { label: []const u8, code: []const u8, heading: []const u8 }{
+            .{ .label = "ইংৰাজী", .code = "en", .heading = "English" },
+            .{ .label = "অসমীয়া", .code = "as", .heading = "Assamese" },
+            .{ .label = "Adioukrou", .code = "adj", .heading = "Adioukrou" },
+        }) |row| if (std.mem.eql(u8, name, row.label) or std.mem.eql(u8, name, row.code) or std.mem.eql(u8, name, row.heading)) return .{ .code = row.code, .heading = row.heading };
+        return null;
+    }
+    fn get(ctx: ?*const anyopaque, name: []const u8) ?[]const u8 {
+        return if (resolve(ctx, name)) |owner| owner.code else null;
+    }
+    fn deny(_: ?*const anyopaque, _: []const u8) ?ResolvedLanguage { return null; }
+    fn codes(namespaces: *const @import("namespace_registry").Registry) LanguageCodes {
+        return .{ .namespace_catalog = namespaces, .get_fn = get, .resolve_fn = resolve, .strong_fn = resolve, .trusted_fn = resolve };
+    }
+    fn replaced(allocator: std.mem.Allocator, source: []const u8, old: []const u8, new: []const u8) ![]u8 {
+        const offset = std.mem.indexOf(u8, source, old) orelse return error.TestUnexpectedResult;
+        return std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ source[0..offset], new, source[offset + old.len ..] });
+    }
+};
+
+test "AS corroborated support ownership preserves complete authored noun adjective payload" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try AssameseSupportFixture.catalog(a, "as");
+    defer ns.deinit();
+    const codes = AssameseSupportFixture.codes(&ns);
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/as", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, output);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "assamese", AssameseSupportFixture.expanded, AssameseSupportFixture.raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ output, "fallback-pages.jsonl" }), a, .limited(4096));
+    try std.testing.expect(std.mem.indexOf(u8, report, "missing_language_heading") == null);
+    try std.testing.expect(std.mem.indexOf(u8, report, "unresolved_language_heading") == null);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, output, "English"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("assamese")).?;
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    try std.testing.expectEqualStrings("en", decoded.entry.language_code);
+    try std.testing.expectEqualStrings("English", decoded.entry.language.?);
+    try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, decoded));
+    try std.testing.expectEqual(@as(usize, 3), decoded.entry.sections.len);
+    try std.testing.expectEqualStrings("নাম", decoded.entry.sections[1].title);
+    try std.testing.expectEqualStrings("বিশেষণ", decoded.entry.sections[2].title);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections[0].blocks.len);
+    for (decoded.entry.sections[1..]) |section| {
+        try std.testing.expectEqualStrings(section.title, section.anchor);
+        try std.testing.expectEqual(@as(usize, 2), section.blocks.len);
+        const headword = section.blocks[0];
+        try std.testing.expect(headword.kind == .paragraph);
+        try std.testing.expectEqual(@as(usize, 1), headword.spans.len);
+        try std.testing.expectEqualStrings("assamese", headword.spans[0].text);
+        try std.testing.expect(headword.spans[0].bold);
+        const sense = section.blocks[1];
+        try std.testing.expect(sense.kind == .list_item);
+        try std.testing.expectEqual(@as(usize, 1), sense.spans.len);
+        try std.testing.expect(sense.spans[0].kind == .link);
+        try std.testing.expectEqualStrings("অসমীয়া", sense.spans[0].target);
+        try std.testing.expectEqualStrings("অসমীয়া ", sense.spans[0].text);
+        try std.testing.expectEqualStrings(":#", sense.list_path);
+    }
+    var banners: usize = 0;
+    var headwords: usize = 0;
+    var links: usize = 0;
+    for (decoded.entry.sections, 0..) |section, section_index| {
+        for (section.blocks) |block| for (block.spans) |span| {
+            if (std.mem.eql(u8, span.text, "ইংৰাজী")) { banners += 1; try std.testing.expectEqual(@as(usize, 0), section_index); }
+            if (std.mem.eql(u8, span.text, "assamese")) { headwords += 1; try std.testing.expect(span.bold and section_index != 0); }
+            if (span.kind == .link) {
+                links += 1;
+                try std.testing.expectEqualStrings("অসমীয়া", span.target);
+                try std.testing.expectEqualStrings("অসমীয়া ", span.text);
+                try std.testing.expectEqualStrings(":#", block.list_path);
+                try std.testing.expect(section_index != 0);
+            }
+        };
+    }
+    try std.testing.expectEqual(@as(usize, 1), banners);
+    try std.testing.expectEqual(@as(usize, 2), headwords);
+    try std.testing.expectEqual(@as(usize, 2), links);
+}
+
+test "AS support ownership requires edition trusted categories and both source declarations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try AssameseSupportFixture.catalog(a, "as"); defer ns.deinit();
+    const codes = AssameseSupportFixture.codes(&ns);
+    try std.testing.expectEqualStrings("en", assameseSupportLanguage(codes, AssameseSupportFixture.expanded, AssameseSupportFixture.raw).?.code);
+    try std.testing.expect(assameseSupportLanguage(codes, AssameseSupportFixture.expanded, null) == null);
+    var absent = codes; absent.namespace_catalog = null;
+    try std.testing.expect(assameseSupportLanguage(absent, AssameseSupportFixture.expanded, AssameseSupportFixture.raw) == null);
+    var untrusted = codes; untrusted.strong_fn = AssameseSupportFixture.deny; untrusted.trusted_fn = AssameseSupportFixture.deny;
+    try std.testing.expect(assameseSupportLanguage(untrusted, AssameseSupportFixture.expanded, AssameseSupportFixture.raw) == null);
+    var other = try AssameseSupportFixture.catalog(a, "am"); defer other.deinit();
+    try std.testing.expect(assameseSupportLanguage(AssameseSupportFixture.codes(&other), AssameseSupportFixture.expanded, AssameseSupportFixture.raw) == null);
+    for ([_][]const u8{ "", "{{as}}", "{{en|x}}", " {{en}}", "before\n{{en}}", "{{en}} extra", "<nowiki>{{en}}</nowiki>", "<!--{{en}}-->", "<pre>{{en}}</pre>", "<includeonly>{{en}}</includeonly>", "{{outer|{{en}}}}" }) |declaration| {
+        const raw = try AssameseSupportFixture.replaced(a, AssameseSupportFixture.raw, "{{en}}", declaration);
+        try std.testing.expect(assameseSupportLanguage(codes, AssameseSupportFixture.expanded, raw) == null);
+    }
+    for ([_][]const u8{ "", "অসমীয়া", " ইংৰাজী", "ইংৰাজী extra", "<nowiki>ইংৰাজী</nowiki>", "<!--ইংৰাজী-->" }) |declaration| {
+        const expanded = try AssameseSupportFixture.replaced(a, AssameseSupportFixture.expanded, "ইংৰাজী", declaration);
+        try std.testing.expect(assameseSupportLanguage(codes, expanded, AssameseSupportFixture.raw) == null);
+    }
+}
+
+test "AS support ownership refuses protected nested missing and conflicting category evidence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try AssameseSupportFixture.catalog(a, "as"); defer ns.deinit();
+    const codes = AssameseSupportFixture.codes(&ns);
+    for ([_][]const u8{ "", "[[:Category:ইংৰাজী]]", "<nowiki>[[Category:ইংৰাজী]]</nowiki>", "<!--[[Category:ইংৰাজী]]-->", "<pre>[[Category:ইংৰাজী]]</pre>", "<source>[[Category:ইংৰাজী]]</source>", "<math>[[Category:ইংৰাজী]]</math>", "<includeonly>[[Category:ইংৰাজী]]</includeonly>", "{{outer|[[Category:ইংৰাজী]]}}", "[[Category:ইংৰাজী]][[Category:অসমীয়া]]", "[[Category:অসমীয়া]][[Category:ইংৰাজী]]" }) |category| {
+        const raw = try AssameseSupportFixture.replaced(a, AssameseSupportFixture.raw, "[[Category:ইংৰাজী]]", category);
+        const expanded = try AssameseSupportFixture.replaced(a, AssameseSupportFixture.expanded, "[[Category:ইংৰাজী]]", category);
+        try std.testing.expect(assameseSupportLanguage(codes, AssameseSupportFixture.expanded, raw) == null);
+        try std.testing.expect(assameseSupportLanguage(codes, expanded, AssameseSupportFixture.raw) == null);
+    }
+}
+
+test "AS support ownership refuses mixed banners unsupported boundaries and real language headings" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try AssameseSupportFixture.catalog(a, "as"); defer ns.deinit();
+    const codes = AssameseSupportFixture.codes(&ns);
+    for ([_][]const u8{ "{{en}}", "{{as}}", "{{en|x}}", "==English==", "===English===", "==Unknown==", "=Unknown=", "===Unknown===" }) |suffix| {
+        const raw = try std.fmt.allocPrint(a, "{s}\n{s}\n", .{ AssameseSupportFixture.raw, suffix });
+        try std.testing.expect(assameseSupportLanguage(codes, AssameseSupportFixture.expanded, raw) == null);
+    }
+    for ([_][]const u8{ "==English==", "===English===", "==Unknown==", "=Unknown=", "===Unknown===" }) |suffix| {
+        const expanded = try std.fmt.allocPrint(a, "{s}\n{s}\n", .{ AssameseSupportFixture.expanded, suffix });
+        try std.testing.expect(assameseSupportLanguage(codes, expanded, AssameseSupportFixture.raw) == null);
+    }
+    for ([_][]const u8{ "==Noun==", "== বিশেষণ ==", "=== নাম ===", "==English==" }) |heading| {
+        const expanded = try AssameseSupportFixture.replaced(a, AssameseSupportFixture.expanded, "== নাম   ==", heading);
+        try std.testing.expect(assameseSupportLanguage(codes, expanded, AssameseSupportFixture.raw) == null);
+    }
+    const wrong_marker = try AssameseSupportFixture.replaced(a, AssameseSupportFixture.raw, "{{-noun-}}", "{{-adj-}}");
+    try std.testing.expect(assameseSupportLanguage(codes, AssameseSupportFixture.expanded, wrong_marker) == null);
 }
