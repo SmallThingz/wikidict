@@ -295,6 +295,52 @@ private slots:
         learning.sync();
     }
 
+    void explicitEmptyRootRemainsTheNormalImportDestination() {
+        QTemporaryDir empty(QDir::currentPath() + QStringLiteral("/.tmp/explicit-empty-import-XXXXXX"));
+        QVERIFY(empty.isValid());
+        const QString requested = QDir(empty.path()).absolutePath();
+        QSettings().setValue(QStringLiteral("reader/root"), fixture_);
+        QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{});
+        MainWindow window(requested);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        QVERIFY(!window.api_);
+        QCOMPARE(QSettings().value(QStringLiteral("reader/root")).toString(), requested);
+        bool imported = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto *dialog = static_cast<LibraryDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog && dialog->objectName() == QStringLiteral("libraryDialog"));
+            auto close = qScopeGuard([dialog] { dialog->done(QDialog::Rejected); });
+            QCOMPARE(dialog->selectedRoot(), requested);
+            auto *progress = dialog->findChild<QProgressBar *>(QStringLiteral("libraryProgress"));
+            auto *status = dialog->findChild<QLabel *>(QStringLiteral("libraryStatus"));
+            QVERIFY(progress && status);
+            QTRY_VERIFY_WITH_TIMEOUT(!progress->isVisible(), 30000);
+            dialog->startImport(fixture_ + QStringLiteral("/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb"));
+            QTRY_VERIFY_WITH_TIMEOUT(!progress->isVisible() && status->text().startsWith(QStringLiteral("Installed ")), 30000);
+            QVERIFY(dialog->libraryChanged());
+            QCOMPARE(dialog->selectedRoot(), requested);
+            imported = true;
+        });
+        window.chooseRoot();
+        QVERIFY(imported);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QCOMPARE(QDir(window.api_->root()).absolutePath(), requested);
+        QCOMPARE(QSettings().value(QStringLiteral("reader/root")).toString(), requested);
+        QVERIFY(QFileInfo::exists(requested + QStringLiteral("/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb")));
+        QVERIFY(window.openWord(QStringLiteral("cat")));
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+    }
+
+    void unspecifiedEmptyRootDoesNotPersistWorkingDirectory() {
+        QVERIFY(!QSettings().contains(QStringLiteral("reader/root")));
+        MainWindow window{QString()};
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        QVERIFY(!window.api_);
+        QVERIFY(!QSettings().contains(QStringLiteral("reader/root")));
+    }
+
     void emptyLibraryGuidanceDoesNotExposeInternalErrors() {
         QTemporaryDir empty(QDir::currentPath() + QStringLiteral("/.tmp/empty-library-XXXXXX"));
         QVERIFY(empty.isValid());
@@ -357,6 +403,7 @@ private slots:
             QVERIFY(!failed.api_);
             QVERIFY(failed.reading_->toPlainText().contains(QStringLiteral("Could not open this dictionary.")));
             QVERIFY(!failed.reading_->toPlainText().contains(QStringLiteral("No dictionaries are installed yet.")));
+            QCOMPARE(QSettings().value(QStringLiteral("reader/root")).toString(), QDir(empty.path()).absolutePath());
         }
         // Synthetic empty-library state, captured before ordinary recovery.
         window.resize(780, 480);
@@ -3341,7 +3388,7 @@ private slots:
             block(QStringLiteral("paragraph"), QStringLiteral("{{example}} [[literal]]"), {}, {}, 0)};
         QJsonObject entry{{QStringLiteral("title"), QStringLiteral("Ordered fixture")}, {QStringLiteral("kind"), QStringLiteral("supplemental")},
             {QStringLiteral("sections"), QJsonArray{QJsonObject{{QStringLiteral("title"), QStringLiteral("List")}, {QStringLiteral("blocks"), items}}}}};
-        QCOMPARE(window.clueFor(entry), QStringLiteral("Parent ordered"));
+        QCOMPARE(window.clueFor(entry), QStringLiteral("Parent ordered · Nested unordered · Nested ordered · Parent continuation · Explicit value · Following value · Alphabetic label · Roman label · Roman value · Escaped label · {{example}} [[literal]]"));
         QJsonArray sections = entry.value(QStringLiteral("sections")).toArray();
         sections.append(QJsonObject{{QStringLiteral("title"), QStringLiteral("Meaning")}, {QStringLiteral("blocks"), QJsonArray{
             block(QStringLiteral("definition"), QStringLiteral("Actual dictionary meaning"), QStringLiteral("1"), QStringLiteral("#"), 1)}}});
@@ -5152,6 +5199,99 @@ private slots:
         QCOMPARE(window.clueFor(entry), QStringLiteral("Useful linked prose example.wav"));
     }
 
+    void savedPreviewKeepsCapturedUnclassifiedBody() {
+        MainWindow window{QString()};
+        const auto paragraph = [](const QString &text) {
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("paragraph")},
+                {QStringLiteral("spans"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), text}}}}};
+        };
+        const auto item = [](const QString &text) {
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("list_item")}, {QStringLiteral("depth"), 2},
+                {QStringLiteral("list_path"), QStringLiteral(":#")}, {QStringLiteral("number"), QStringLiteral("1")},
+                {QStringLiteral("spans"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("link")},
+                    {QStringLiteral("text"), text}, {QStringLiteral("target"), text.trimmed()}}}}};
+        };
+        const auto section = [](int level, const QString &title, const QJsonArray &blocks) {
+            return QJsonObject{{QStringLiteral("level"), level}, {QStringLiteral("title"), title}, {QStringLiteral("blocks"), blocks}};
+        };
+        // Body shapes from authenticated AS capture02 entries01 (father) and00 (assamese).
+        const QJsonObject father{{QStringLiteral("title"), QStringLiteral("father")}, {QStringLiteral("sections"), QJsonArray{
+            section(1, QStringLiteral("ইংৰাজী"), {}),
+            section(2, QStringLiteral("নাম"), QJsonArray{paragraph(QStringLiteral("father")), item(QStringLiteral("জনক"))})}}};
+        const QJsonObject assamese{{QStringLiteral("title"), QStringLiteral("assamese")}, {QStringLiteral("sections"), QJsonArray{
+            section(2, QStringLiteral("Unclassified"), QJsonArray{paragraph(QStringLiteral("ইংৰাজী"))}),
+            section(2, QStringLiteral("নাম"), QJsonArray{paragraph(QStringLiteral("assamese")), item(QStringLiteral("অসমীয়া "))}),
+            section(2, QStringLiteral("বিশেষণ"), QJsonArray{paragraph(QStringLiteral("assamese")), item(QStringLiteral("অসমীয়া "))})}}};
+        for (const QJsonObject &entry : {father, assamese}) {
+            const QJsonObject original = entry;
+            const QString expected = entry.value(QStringLiteral("title")).toString() == QStringLiteral("father")
+                ? QStringLiteral("father · জনক") : QStringLiteral("ইংৰাজী · assamese · অসমীয়া · assamese · অসমীয়া");
+            QCOMPARE(window.clueFor(entry), expected);
+            QCOMPARE(window.savedWord(entry).clue, expected);
+            QCOMPARE(entry, original);
+            for (const auto &sectionValue : entry.value(QStringLiteral("sections")).toArray())
+                for (const auto &blockValue : sectionValue.toObject().value(QStringLiteral("blocks")).toArray())
+                    QVERIFY(blockValue.toObject().value(QStringLiteral("kind")).toString() != QStringLiteral("definition"));
+        }
+    }
+
+    void savedPreviewOmitsOnlyRenderedHeadingCompanions() {
+        MainWindow window{QString()};
+        const auto block = [](const QString &kind, const QString &text, bool bold = false) {
+            return QJsonObject{{QStringLiteral("kind"), kind}, {QStringLiteral("level"), 2},
+                {QStringLiteral("spans"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")},
+                    {QStringLiteral("text"), text}, {QStringLiteral("bold"), bold}}}}};
+        };
+        const QJsonObject entry{{QStringLiteral("sections"), QJsonArray{QJsonObject{
+            {QStringLiteral("level"), 2}, {QStringLiteral("title"), QStringLiteral("নাম")},
+            {QStringLiteral("blocks"), QJsonArray{block(QStringLiteral("heading"), QStringLiteral("নাম"), true),
+                block(QStringLiteral("paragraph"), QStringLiteral("headword")),
+                block(QStringLiteral("heading"), QStringLiteral("Body heading")),
+                block(QStringLiteral("list_item"), QStringLiteral("body text"))}}}}}};
+        const QJsonObject original = entry;
+        QCOMPARE(window.clueFor(entry), QStringLiteral("headword · Body heading · body text"));
+        QCOMPARE(entry, original);
+    }
+
+    void savedPreviewBoundsUnclassifiedBodyWithoutSplittingCharacters() {
+        MainWindow window{QString()};
+        const auto entry = [](const QStringList &texts) {
+            QJsonArray blocks;
+            for (const QString &text : texts) blocks.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("paragraph")},
+                {QStringLiteral("spans"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), text}}}}});
+            return QJsonObject{{QStringLiteral("sections"), QJsonArray{QJsonObject{{QStringLiteral("blocks"), blocks}}}}};
+        };
+        const QString supplementary = QString::fromUtf8("\xf0\x9f\x98\x80");
+        QCOMPARE(window.clueFor(entry({QString(410, QChar('a')), QStringLiteral("123456") + supplementary + QStringLiteral("tail")})),
+            QString(410, QChar('a')) + QStringLiteral(" · 123456"));
+        QCOMPARE(window.clueFor(entry({QString(419, QChar('a')) + supplementary, QStringLiteral("later")})), QString(419, QChar('a')));
+        QCOMPARE(window.clueFor(entry({QString(418, QChar('a')), QStringLiteral("next")})), QString(418, QChar('a')));
+        QCOMPARE(window.clueFor(entry({QString(500, QChar('a'))})), QString(420, QChar('a')));
+    }
+
+    void savedPreviewBoundsDefinitionsWithoutSplittingCharacters() {
+        MainWindow window{QString()};
+        const auto block = [](const QString &kind, const QString &text) {
+            return QJsonObject{{QStringLiteral("kind"), kind}, {QStringLiteral("spans"), QJsonArray{QJsonObject{
+                {QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), text}}}}};
+        };
+        const QString supplementary = QString::fromUtf8("\xf0\x9f\x98\x80");
+        for (int prefixLength : {418, 419, 420}) {
+            const QString prefix(prefixLength, QChar('a'));
+            const QJsonObject entry{{QStringLiteral("sections"), QJsonArray{QJsonObject{{QStringLiteral("blocks"), QJsonArray{
+                block(QStringLiteral("paragraph"), QStringLiteral("Fallback body")),
+                block(QStringLiteral("definition"), QStringLiteral(" ")),
+                block(QStringLiteral("definition"), prefix + supplementary + QStringLiteral("tail")),
+                block(QStringLiteral("definition"), QStringLiteral("Later definition"))}}}}}};
+            const QJsonObject original = entry;
+            const QString expected = prefixLength == 418 ? prefix + supplementary : prefix;
+            QCOMPARE(window.clueFor(entry), expected);
+            QCOMPARE(window.savedWord(entry).clue, expected);
+            QVERIFY(expected.size() <= 420);
+            QCOMPARE(entry, original);
+        }
+    }
+
     void savedListsRemoveSelectedWordInsteadOfCurrent_data() {
         QTest::addColumn<bool>("bookmarks");
         QTest::addColumn<bool>("staleCurrent");
@@ -6306,6 +6446,8 @@ private slots:
         QTRY_COMPARE(title(window), QStringLiteral("cat"));
         QTextDocument *document = window.reading_->document();
         const QString text = document->toPlainText();
+        QVERIFY(text.contains(QStringLiteral("Example: The cat sleeps.")));
+        QVERIFY(!text.contains(QStringLiteral("Example:The cat sleeps.")));
         for (const QString &expected : {QStringLiteral("PREAMBLE"), QStringLiteral("A small animal."), QStringLiteral("The cat sleeps."), QStringLiteral("column A  column B"), QStringLiteral("Inflection table"), QStringLiteral("Reference content.")}) {
             QVERIFY2(text.contains(expected), qPrintable(expected));
         }
@@ -6334,16 +6476,40 @@ private slots:
         QVERIFY(window.reading_->document()->find(QStringLiteral("A small animal.")).charFormat().fontPointSize() > previousSize);
         QCOMPARE(QSettings().value(QStringLiteral("reader/pointSize")).toInt(), window.readingPointSize_);
         QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+        const auto paintedTitleInk = [&] {
+            const QImage frame = window.title_->viewport()->grab().toImage();
+            const QColor ink = window.palette().color(QPalette::Text);
+            int pixels = 0;
+            for (int y = 0; y < frame.height(); ++y) {
+                for (int x = 0; x < frame.width(); ++x) {
+                    const QColor pixel = frame.pixelColor(x, y);
+                    if (qAbs(pixel.red() - ink.red()) <= 12 &&
+                        qAbs(pixel.green() - ink.green()) <= 12 &&
+                        qAbs(pixel.blue() - ink.blue()) <= 12) ++pixels;
+                }
+            }
+            return pixels;
+        };
         window.learning_.setTheme(QStringLiteral("light"));
         window.applyTheme();
         const QColor lightInk = window.palette().color(QPalette::Text);
+        QCOMPARE(window.title_->palette().color(QPalette::Text), lightInk);
+        QVERIFY2(paintedTitleInk() > 20, "Light title must paint readable theme ink");
         QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-light.png")));
         window.learning_.setTheme(QStringLiteral("dark"));
         window.applyTheme();
         QVERIFY(window.palette().color(QPalette::Text) != lightInk);
+        QCOMPARE(window.title_->palette().color(QPalette::Text), window.palette().color(QPalette::Text));
+        QVERIFY2(paintedTitleInk() > 20, "Dark title must paint readable theme ink");
         QCOMPARE(window.reading_->document()->toPlainText(), text);
         QCOMPARE(window.reading_->document()->find(QStringLiteral("A small animal.")).charFormat().foreground().color(), window.palette().color(QPalette::Text));
         QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-dark.png")));
+        window.learning_.setTheme(QStringLiteral("light"));
+        window.applyTheme();
+        QCOMPARE(window.title_->palette().color(QPalette::Text), lightInk);
+        QVERIFY2(paintedTitleInk() > 20, "Title ink must follow a second theme switch");
+        QCOMPARE(title(window), QStringLiteral("cat"));
+        QCOMPARE(window.reading_->document()->toPlainText(), text);
     }
 };
 

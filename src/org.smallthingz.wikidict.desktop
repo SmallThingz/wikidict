@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Wikidict
+GenericName=Dictionary
+Comment=Read offline Wiktionary dictionaries
+Exec=wikidict-gio
+TryExec=wikidict-gio
+Icon=org.smallthingz.wikidict
+Terminal=false
+Categories=Education;Dictionary;
+StartupNotify=true

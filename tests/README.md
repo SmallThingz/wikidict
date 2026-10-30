@@ -39,8 +39,16 @@ it, because the core writes a derived title cache beside dictionary files. It us
 real Qt input events and renders light, dark and compact screenshots under
 `.tmp/ui-screenshots`. Each UI harness isolates config, cache and data paths before
 constructing QApplication, redirects both native and INI QSettings formats/scopes,
-and checks the effective settings paths. CTest also sets outer XDG directories
-under `.tmp/ctest` for subprocesses.
+and checks the effective settings paths. CTest runs from the build directory, so
+these artifacts and its outer XDG directories under `.tmp/ctest` stay there.
+The fixture paths remain anchored to the source checkout.
+
+On Linux, `native-unified-entry` installs the application twice into an isolated
+directory, relocates that install, checks the `wikidict-gio` symlink and library
+paths, runs CLI help without a display or Qt, and launches the real GUI entry with
+copied fixtures. A test-only preload isolates
+all QSettings paths before QApplication; it is not installed with the application.
+This startup check complements the rendered reader and interaction tests.
 
 `LibraryStoreTests` checks staged raw/compressed import, structural validation,
 checksums, cancellation and removal. `LibraryDialogTests` drives the actual file

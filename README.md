@@ -5,7 +5,7 @@ Desktop readers for dictionaries produced by
 
 This repository contains:
 
-- a native Qt 6 reader using the core C ABI;
+- the native Qt 6 component of the unified `wikidict` application;
 - a browser reader under `web/`.
 
 The native Qt 0.4.0 reader and browser reader support compiled WIKBLB08
@@ -24,11 +24,11 @@ repository.
 - Zig 0.17.0 for the core and fixture generator
 - a built [wikidict](https://github.com/SmallThingz/wikidict) checkout
 
-Point `CORE` at a wikidict checkout and build its C ABI first:
+Point `CORE` at a wikidict checkout and build its CLI and C ABI first:
 
 ```sh
 CORE=/path/to/wikidict
-(cd "$CORE" && zig build ffi -Doptimize=fast)
+(cd "$CORE" && zig build cli ffi -Doptimize=fast)
 ```
 
 Then, from this repository, build the desktop application against that checkout:
@@ -38,8 +38,15 @@ cmake -S . -B build \
   -DWIKIDICT_CORE="$CORE" \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
-./build/bin/dict-qt
+cmake --install build --prefix "$PWD/build/install"
+./build/install/bin/wikidict-gio
 ```
+
+`wikidict` is the single executable. `wikidict-gio` is a relative symlink to it;
+that invocation loads the Qt component in the same process. Normal `wikidict`
+commands use the CLI or TUI without loading Qt. The installed `dict` symlink
+preserves existing CLI commands. Keep `bin/` and `lib/` together when relocating
+an installation.
 
 Pass `--root <folder>` to open a dictionary directory explicitly. Otherwise the app
 restores its previous dictionary folder and word.

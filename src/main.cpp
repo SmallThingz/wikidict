@@ -5,12 +5,16 @@
 #include <QCommandLineParser>
 #include <QMessageBox>
 #include <QTimer>
+#include <cstdio>
+#include <exception>
 
-int main(int argc, char **argv) {
+namespace {
+int runGui(int argc, char **argv) {
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName(QStringLiteral("SmallThingz"));
     QCoreApplication::setApplicationName(QStringLiteral("Dict"));
     QCoreApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+    QGuiApplication::setDesktopFileName(QStringLiteral("org.smallthingz.wikidict"));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(QStringLiteral("Native Qt 6 Wiktionary reader"));
@@ -39,4 +43,16 @@ int main(int argc, char **argv) {
         QMessageBox::critical(nullptr, QStringLiteral("Dict could not start"), QString::fromUtf8(error.what()));
         return 2;
     }
+}
+}
+
+extern "C" Q_DECL_EXPORT int wikidict_gui_main(int argc, char **argv) noexcept {
+    try {
+        return runGui(argc, argv);
+    } catch (const std::exception &error) {
+        std::fprintf(stderr, "wikidict-gio: %s\n", error.what());
+    } catch (...) {
+        std::fputs("wikidict-gio: desktop startup failed\n", stderr);
+    }
+    return 2;
 }

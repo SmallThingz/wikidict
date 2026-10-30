@@ -27,6 +27,10 @@ QByteArray read(const QString &path) {
     require(file.open(QIODevice::ReadOnly), "open result");
     return file.readAll();
 }
+QByteArray readFixture() {
+    const QString root = qEnvironmentVariable("DICT_TEST_ROOT", QStringLiteral("tests/fixtures"));
+    return read(QDir(root).filePath(QStringLiteral("languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb")));
+}
 void rejects(const std::function<void()> &action, const char *message) {
     try { action(); } catch (const std::exception &) { return; }
     throw std::runtime_error(message);
@@ -90,7 +94,7 @@ void appendLength(QByteArray &bytes, quint64 value) {
     } while (value);
 }
 QByteArray aliasRecord(const QByteArray &source = "Cats", const QByteArray &target = "cat", const QByteArray &presentationOverride = {}) {
-    const QByteArray fixture = read(QStringLiteral("tests/fixtures/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb"));
+    const QByteArray fixture = readFixture();
     qsizetype at = 9;
     for (int field = 0; field < 3; ++field) { at = fixture.indexOf('\0', at) + 1; require(at > 0, "fixture framing"); }
     quint64 length = 0;
@@ -234,7 +238,7 @@ int main(int argc, char **argv) {
             LibraryStorage::recoverPendingMutation(first.path());
             require(!QFileInfo::exists(destination) && !QFileInfo::exists(first.filePath(QStringLiteral("languages.tsv"))), "interrupted first import restores genuinely empty root");
         }
-        // Both ordinary and DAL1 records use the ABI4 full native DPR2-8 decoder.
+        // Both ordinary and DAL1 records use the ABI4 full native DPR2-9 decoder.
         const QByteArray coloredPresentation = QByteArray::fromHex("445052340100000000000005000000636f6c6f72000000000000000000000000000000000000000000000000010700000023316333396262000000000000000000000000000000000000000000000000");
         QByteArray paintedPresentation = coloredPresentation;
         paintedPresentation.replace(0, 4, "DPR6");
@@ -249,6 +253,7 @@ int main(int argc, char **argv) {
             QByteArray("DPR6") + QByteArray(28, '\0'),
             QByteArray("DPR7") + QByteArray(28, '\0'),
             QByteArray("DPR8") + QByteArray(28, '\0'),
+            QByteArray("DPR9") + QByteArray(28, '\0'),
             orderedPresentation({}),
             orderedPresentation({cellBlock(0), cellBlock(9, QByteArray(1, '\0'), "Cell_heading", "cell-heading"),
                                  cellBlock(5), cellBlock(11), cellBlock(12, orderedCellTable({cellBlock(0)})), cellBlock(0)}),
@@ -260,7 +265,7 @@ int main(int argc, char **argv) {
             const QByteArray ordinary = blob("English", {"annotation"}, 1, presentation);
             write(source, ordinary);
             auto accepted = LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress);
-            require(accepted->dictionary.words == 1, "accept complete ordinary DPR2-8 including ordered painted cells and headings");
+            require(accepted->dictionary.words == 1, "accept complete ordinary DPR2-9 including ordered painted cells and headings");
             LibraryStorage::commitImport(gateRoot, *accepted);
             auto installed = LibraryStorage::installed(gateRoot);
             require(installed.size() == 1 && read(installed.first().path) == ordinary,
@@ -270,7 +275,7 @@ int main(int argc, char **argv) {
             write(source, alias);
             accepted = LibraryStorage::prepareImport(gateRoot, source, {}, -1, cancelled, progress);
             require(accepted->dictionary.kind == QStringLiteral("alias") && accepted->dictionary.words == 1,
-                    "accept complete DPR2-8 DAL1 including ordered painted cells and headings");
+                    "accept complete DPR2-9 DAL1 including ordered painted cells and headings");
             LibraryStorage::commitImport(gateRoot, *accepted);
             installed = LibraryStorage::installed(gateRoot);
             require(installed.size() == 1 && read(installed.first().path) == alias,
@@ -288,7 +293,7 @@ int main(int argc, char **argv) {
         QByteArray invalidBackgroundPresence = paintedPresentation;
         invalidBackgroundPresence[foregroundEnd] = char(2);
         for (const QByteArray &presentation : {
-                QByteArray("DPR9") + QByteArray(28, '\0'),
+                QByteArray("DPR0") + QByteArray(28, '\0'),
                 coloredPresentation.chopped(1), coloredPresentation + QByteArray(1, '\0'), invalidRgb,
                 invalidBackground, invalidBackgroundPresence}) {
             const QString gateRoot = temporary.filePath(QStringLiteral("invalid-version-gate"));
@@ -519,7 +524,7 @@ int main(int argc, char **argv) {
         LibraryStorage::removeDictionary(root, LibraryStorage::installed(root)[0]);
 
         // Identical transport bytes do not make different source editions/snapshots installed.
-        const QByteArray realFixture = read(QStringLiteral("tests/fixtures/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb"));
+        const QByteArray realFixture = readFixture();
         const QByteArray realHash = QCryptographicHash::hash(realFixture, QCryptographicHash::Sha256).toHex();
         const QString identityRoot = temporary.filePath(QStringLiteral("catalogue-identity"));
         write(source, realFixture);

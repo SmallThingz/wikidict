@@ -722,6 +722,8 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                     language_->setCurrentText(api_->language());
                     resultStatus_->setText(QStringLiteral("Could not open the selected dictionary. Your current dictionary is still open."));
                 } else {
+                    if (loaded->emptyLibrary && !root.isEmpty())
+                        QSettings().setValue(QStringLiteral("reader/root"), QDir(root).absolutePath());
                     // No reader owns the previous entry or its suggestions anymore.
                     json_->clear();
                     results_->clear();
@@ -2349,16 +2351,34 @@ QString MainWindow::clueFor(const QJsonObject &entry) const {
             const QJsonObject block = blockValue.toObject();
             if (block.value(QStringLiteral("kind")).toString() != QStringLiteral("definition")) continue;
             const QString text = textFor(block.value(QStringLiteral("spans")).toArray());
-            if (!text.isEmpty()) return text.left(420);
+            if (!text.isEmpty()) {
+                qsizetype end = std::min<qsizetype>(text.size(), 420);
+                if (end < text.size() && text[end - 1].isHighSurrogate() && text[end].isLowSurrogate()) --end;
+                return text.left(end);
+            }
         }
     }
+    // A headword or language paragraph can precede useful unclassified body text.
+    QString fallback;
     for (const QJsonValue &sectionValue : entry.value(QStringLiteral("sections")).toArray()) {
-        for (const QJsonValue &blockValue : sectionValue.toObject().value(QStringLiteral("blocks")).toArray()) {
-            const QString text = textFor(blockValue.toObject().value(QStringLiteral("spans")).toArray());
-            if (!text.isEmpty()) return text.left(420);
+        const QJsonObject section = sectionValue.toObject();
+        const QJsonArray blocks = section.value(QStringLiteral("blocks")).toArray();
+        const bool companion = !sectionHeadingSpans(section).isEmpty();
+        for (qsizetype i = 0; i < blocks.size(); ++i) {
+            if (i == 0 && companion) continue; // Already rendered as the section heading.
+            const QString separator = fallback.isEmpty() ? QString() : QStringLiteral(" · ");
+            const qsizetype available = 420 - fallback.size() - separator.size();
+            if (available <= 0) return fallback;
+            const QString text = textFor(blocks[i].toObject().value(QStringLiteral("spans")).toArray());
+            if (text.isEmpty()) continue;
+            qsizetype end = std::min(text.size(), available);
+            if (end < text.size() && end > 0 && text[end - 1].isHighSurrogate() && text[end].isLowSurrogate()) --end;
+            if (end == 0) return fallback;
+            fallback += separator + text.left(end);
+            if (end < text.size()) return fallback;
         }
     }
-    return QStringLiteral("Definition unavailable in this entry.");
+    return fallback.isEmpty() ? QStringLiteral("Definition unavailable in this entry.") : fallback;
 }
 
 SavedWord MainWindow::savedWord(const QJsonObject &entry) const {
@@ -2782,6 +2802,7 @@ void MainWindow::applyTheme() {
     palette.setColor(QPalette::Disabled, QPalette::ButtonText, palette.color(QPalette::Disabled, QPalette::Text));
     qApp->setPalette(palette);
     setPalette(palette);
+    title_->setPalette(palette);
     refreshReading();
 }
 

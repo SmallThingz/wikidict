@@ -178,7 +178,8 @@ void validateAlias(const QByteArray &payload, const QByteArray &key) {
         fields.append(input.read(qint64(length)));
         if (i < 6 && (!fields.last().isValidUtf8() || fields.last().contains('\0') || (i < 4 && fields.last().isEmpty()))) invalid();
     }
-    if (!input.atEnd() || fields[5].size() > 255 || !(fields[6].startsWith("DPR2") || fields[6].startsWith("DPR3") || fields[6].startsWith("DPR4") || fields[6].startsWith("DPR5") || fields[6].startsWith("DPR6") || fields[6].startsWith("DPR7") || fields[6].startsWith("DPR8"))) invalid();
+    // Presentation versions and bodies are checked by the native record decoder below.
+    if (!input.atEnd() || fields[5].size() > 255) invalid();
     const auto lookupKey = [&](const QByteArray &title, unsigned char kind) {
         if (kind == 1 || kind == 7) return title;
         const qsizetype colon = title.indexOf(':');
