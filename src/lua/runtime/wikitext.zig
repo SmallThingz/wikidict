@@ -2613,6 +2613,7 @@ pub const Expander = struct {
 
     fn invokeExportErrorMarkup(self: *Expander, failure: anyerror, module_name: []const u8, function_name: []const u8) !?[]const u8 {
         const detail = switch (failure) {
+            error.InvokeModuleNotTable => try self.runtime.allocator.dupe(u8, "The module did not return an export table."),
             error.InvokeFunctionMissing => try std.fmt.allocPrint(self.runtime.allocator, "The function \"{s}\" does not exist.", .{function_name}),
             error.InvokeExportNotFunction => try std.fmt.allocPrint(self.runtime.allocator, "\"{s}\" is not a function.", .{function_name}),
             else => return null,
@@ -5374,7 +5375,7 @@ test "invoke export recovery preserves unrelated runtime and host errors" {
             return failure.*;
         }
     };
-    for ([_]anyerror{ error.NotCallable, error.OutOfMemory, error.FileMetadataSnapshotMissing }) |expected_error| {
+    for ([_]anyerror{ error.NotCallable, error.OutOfMemory, error.FileMetadataSnapshotMissing, error.IndexType, error.Timeout }) |expected_error| {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
@@ -8011,5 +8012,43 @@ test "URL parser missing title parameters do not become encoded action destinati
     }) |literal_source| {
         const literal_url = try expander.expandFragment("Page", literal_source, 1_670_803_200);
         try std.testing.expect(std.mem.startsWith(u8, literal_url, "//ar.wiktionary.org/w/index.php?title="));
+    }
+}
+
+test "non table invoke renders a specific error while preserving surrounding page text" {
+    const P = struct {
+        fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
+            if (std.mem.eql(u8, raw_name, "Module:Test")) return 0;
+            if (std.mem.eql(u8, raw_name, "Module:Healthy")) return 1;
+            return null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return switch (id) { 0 => "Module:Test", 1 => "Module:Healthy", else => null };
+        }
+    };
+    for ([_]rt.FunctionFn{ rt.stabilizeBuffered(TestModule.empty), rt.stabilizeBuffered(TestModule.numericReturn) }) |root| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var runtime = try rt.Context.initProgram(arena.allocator(), 24, 2);
+        defer runtime.deinit();
+        const functions = [_]rt.FunctionFn{ root, rt.stabilize(TestModule.root) };
+        runtime.module_root_entries = &functions;
+        runtime.configureModules(null, P.lookup, P.name);
+        try rt.bindGlobalTable(&runtime, null, 0);
+        try stdlib.install(&runtime);
+        var expander = Expander{
+            .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+            .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .resolve_call_symbol = TestProvider.resolveCallSymbol },
+            .install_scribunto = installTestInvoke,
+        };
+        for ([_][]const u8{ "Test", "@module" }) |module| {
+            const source = try std.fmt.allocPrint(runtime.allocator, "A{{{{#invoke:{s}|show}}}}B\n# definition\nConstituency\n{{{{#invoke:Healthy|run|x=OK}}}}", .{module});
+            const expanded = try expander.expandFragment("Page", source, 1_791_731_560);
+            try std.testing.expectEqualStrings("A<strong class=\"error\"><span class=\"scribunto-error\">Lua error in Module:Test: The module did not return an export table.</span></strong>B\n# definition\nConstituency\nOK", expanded);
+            try std.testing.expect(runtime.current_frame == null and runtime.aotErrorName() == null and !runtime.last_error_present);
+        }
+        const caught = try expander.expandFragment("Page", "A{{#iferror:{{#invoke:Test|show}}|caught|BAD}}B{{#iferror:{{#invoke:@module|show}}|caught|BAD}}C", 1_791_731_560);
+        try std.testing.expectEqualStrings("AcaughtBcaughtC", caught);
+        try std.testing.expect(runtime.current_frame == null and runtime.aotErrorName() == null and !runtime.last_error_present);
     }
 }

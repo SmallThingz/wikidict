@@ -4014,3 +4014,63 @@ test "audit payload exhaustion retains hashes while report exhaustion aborts inc
         try auditControlNoPublishedFiles(a, inputs.writer_root);
     }
 }
+
+// Source-derived lexical control and typed invocation-error contract; not a
+// captured expansion or an edition-based owner/pronunciation inference.
+test "Writer retains typed invocation error beside MNI definition and translation" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const raw = "==[[ꯃꯤꯇꯩꯂꯣꯟ|ꯃꯤꯇꯩꯂꯣꯟ]]==\n\n==={{꯱}}===\n\n===ꯈꯣꯟꯊꯣꯛ===\n{{mni-pron|ꯂꯩꯌꯥꯠ}}\n\n# ꯂꯩꯄꯥꯛ ꯉꯥꯛꯄꯗ ꯌꯥꯎꯒꯗꯕ ꯃꯤꯍꯨꯠ ꯑꯃꯝ ꯑꯃꯝꯅ ꯀꯣꯟꯕ ꯃꯐꯝ ꯫\n----\n\n====ꯑꯇꯩ ꯂꯣꯟꯁꯤꯡꯗ====\n* [[ꯏꯪꯂꯤꯁ|ꯏꯪꯂꯤꯁ]]: {{t|en|Constituency}}\n\n[[ꯃꯆꯥꯈꯥꯏꯕ:ꯃꯤꯇꯩꯂꯣꯟ]]";
+    const definition = "ꯂꯩꯄꯥꯛ ꯉꯥꯛꯄꯗ ꯌꯥꯎꯒꯗꯕ ꯃꯤꯍꯨꯠ ꯑꯃꯝ ꯑꯃꯝꯅ ꯀꯣꯟꯕ ꯃꯐꯝ ꯫";
+    const expanded = "==[[ꯃꯤꯇꯩꯂꯣꯟ|ꯃꯤꯇꯩꯂꯣꯟ]]==\n===ꯈꯣꯟꯊꯣꯛ===\n<strong class=\"error\"><span class=\"scribunto-error\">Lua error in Module:mni-pron: The module did not return an export table.</span></strong>\n# ꯂꯩꯄꯥꯛ ꯉꯥꯛꯄꯗ ꯌꯥꯎꯒꯗꯕ ꯃꯤꯍꯨꯠ ꯑꯃꯝ ꯑꯃꯝꯅ ꯀꯣꯟꯕ ꯃꯐꯝ ꯫\n----\n====ꯑꯇꯩ ꯂꯣꯟꯁꯤꯡꯗ====\n* [[ꯏꯪꯂꯤꯁ|ꯏꯪꯂꯤꯁ]]: <span lang=\"en\">[[Constituency#English|Constituency]]</span>\n";
+    const message = "Lua error in Module:mni-pron: The module did not return an export table.";
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv("# wikidict-language-registry-v2\n# content-language\tmni\n# mediawiki\nen\tꯏꯪꯂꯤꯁ\tEnglish\ten\teng\nmni\tꯃꯤꯇꯩ ꯂꯣꯟ\tmni\tManipuri\n");
+    var namespaces = try namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tmniwiktionary\n# dump-date\t20261001\n# content-language\tmni\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n10\tꯇꯦꯝꯄ꯭ꯂꯦꯠ\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tTemplate\n14\tꯃꯆꯥꯈꯥꯏꯕ\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tCategory\n"); defer namespaces.deinit();
+    try std.testing.expect(registry.resolve("ꯃꯤꯇꯩꯂꯣꯟ") == null);
+    const codes = languageCodes(&registry, &namespaces);
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/mni-invoke-body", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ꯂꯩꯌꯥꯠ", expanded, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
+    const path = try encoder.blob_builder.languageBlobPathAlloc(a, output, "Unclassified");
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(1024 * 1024));
+    const blob = try encoder.blob_format.inspect(bytes);
+    var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+    const record = (try index.find("ꯂꯩꯌꯥꯠ")).?;
+    const stored = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+    try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, stored));
+    try std.testing.expectEqualStrings("", stored.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 3), stored.entry.sections.len);
+    var errors: usize = 0;
+    var definitions: usize = 0;
+    var translations: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (std.mem.eql(u8, span.text, message)) {
+            errors += 1;
+            try std.testing.expect(span.bold);
+            try std.testing.expectEqualStrings("error scribunto-error", span.classes);
+            try std.testing.expect(span.kind == .text);
+            try std.testing.expectEqualStrings("", span.target);
+        }
+        if (std.mem.eql(u8, span.text, definition)) definitions += 1;
+        if (span.kind == .link and std.mem.eql(u8, span.text, "Constituency")) {
+            translations += 1;
+            try std.testing.expectEqualStrings("Constituency#English", span.target);
+            try std.testing.expectEqualStrings("en", span.language);
+        }
+        try std.testing.expect(std.mem.indexOf(u8, span.text, "{{") == null);
+    };
+    try std.testing.expectEqual(@as(usize, 1), errors);
+    try std.testing.expectEqual(@as(usize, 1), definitions);
+    try std.testing.expectEqual(@as(usize, 1), translations);
+    const fallback = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{output, "fallback-pages.jsonl"}), a, .limited(1024 * 1024));
+    try std.testing.expect(std.mem.indexOf(u8, fallback, "rendered_lua_error") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fallback, "expansion_error") == null);
+}
