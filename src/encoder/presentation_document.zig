@@ -4501,3 +4501,52 @@ test "prepared citation owner copies share temporal bodies and body probes retai
         _ = try observePreScopesAlloc(a, "entry", copy, .{}, null, null, null, definitions, prepared.poem_phase);
     }
 }
+
+test "RW rejected HTML link targets survive semantic table roundtrip without navigation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "== Ikinyarwanda ==\n# programmable device\n{|\n|-\n| [[<span lang=ar>حاسوب</span>]], [[<span lang=ar>كمبيوتر</span>]]\n|-\n| [[<span lang=ru>компьютер</span>]] and [[حاسوب|<span lang=ar>حاسوب</span>]]\n|}\n";
+    var report: Fallbacks = .{};
+    const encoded = try compileReportedAlloc(a, "mudasobwa", .language, "Ikinyarwanda", "rw", source, null, &report);
+    const decoded = try codec.decodeAlloc(a, encoded, "mudasobwa", .language, .{ .code = "rw", .heading = "Ikinyarwanda" });
+    var visible: std.ArrayList(u8) = .empty;
+    var actions: usize = 0;
+    var ar: usize = 0;
+    var ru: usize = 0;
+    var tables: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| {
+        if (block.table) |table| {
+            tables += 1;
+            for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |span| {
+                try visible.appendSlice(a, span.text);
+                if (span.kind == .link) {
+                    actions += 1;
+                    try std.testing.expectEqualStrings("حاسوب", span.target);
+                    try std.testing.expectEqualStrings("ar", span.language);
+                } else try std.testing.expectEqualStrings("", span.target);
+                if (std.mem.eql(u8, span.language, "ar")) ar += 1;
+                if (std.mem.eql(u8, span.language, "ru")) ru += 1;
+            };
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), tables);
+    try std.testing.expectEqual(@as(usize, 1), actions);
+    try std.testing.expect(ar >= 3 and ru >= 1 and report.literal_markup);
+    for ([_][]const u8{ "[[حاسوب]]", "[[كمبيوتر]]", "[[компьютер]]" }) |text|
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, visible.items, text));
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "<span") == null);
+}
+
+test "invalid title literal delimiters do not authorize deferred or parsed HTML content" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const parsed_html = [_]compiler.Span{.{ .text = "<span lang=ar>حاسوب</span>" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &parsed_html, null));
+    const parsed_template = [_]compiler.Span{.{ .text = "{{deferred}}" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &parsed_template, null));
+    try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "entry", .language, "English", "en", "[[<span>{{missing}}</span>]]", null));
+    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "[[<li'>word</li>]]", null));
+    _ = try compileAlloc(a, "entry", .language, "English", "en", "[[&lt;span lang=ar&gt;حاسوب&lt;/span&gt;]]", null);
+}

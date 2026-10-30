@@ -1251,9 +1251,75 @@ fn classificationControlHeadingAlloc(a: std.mem.Allocator, codes: LanguageCodes,
     return try out.toOwnedSlice(a);
 }
 
+// Captured language banners put a maintenance request after a whole language
+// name. Recognize the complete warning, not an arbitrary small-text suffix.
+// The edit code only corroborates an independently trusted visible label.
+fn translationWarningHeading(codes: LanguageCodes, value: []const u8) ?[]const u8 {
+    if (value.len > 4096) return null;
+    const heading = std.mem.trim(u8, value, " \t\r\n");
+    const prefix = "<div id=\"toc\" class=\"toccolours\" ><big><big><big> ";
+    const annotation = "<small><small><small>'''(Please translate \"";
+    const suffix = "</small></small></small> </big></big></big></div>";
+    if (heading.len < prefix.len + suffix.len or !std.mem.startsWith(u8, heading, prefix) or !std.mem.endsWith(u8, heading, suffix)) return null;
+    const body = heading[prefix.len .. heading.len - suffix.len];
+    const at = std.mem.indexOf(u8, body, annotation) orelse return null;
+    const label = std.mem.trim(u8, body[0..at], " \t");
+    if (label.len == 0 or std.mem.indexOfAny(u8, label, "<>{}[]\"\r\n") != null) return null;
+    const language = codes.resolveStrong(label) orelse
+        (if (codes.trusted_fn) |trusted| trusted(codes.ctx, label) else null) orelse return null;
+    var rest = body[at + annotation.len ..];
+    if (!std.mem.startsWith(u8, rest, label)) return null;
+    rest = rest[label.len..];
+    const edit = "\" [http://ik.wiktionary.org/w/index.php?title=Template:-";
+    const end = "-&action=edit here])'''";
+    if (!std.mem.startsWith(u8, rest, edit) or !std.mem.endsWith(u8, rest, end) or rest.len < edit.len + end.len) return null;
+    const code = rest[edit.len .. rest.len - end.len];
+    return if (std.mem.eql(u8, code, language.code)) label else null;
+}
+
+fn classificationHeadingProjectionAlloc(a: std.mem.Allocator, codes: LanguageCodes, value: []const u8) !?[]u8 {
+    const controlled = try classificationControlHeadingAlloc(a, codes, value);
+    errdefer if (controlled) |owned| a.free(owned);
+    if (translationWarningHeading(codes, controlled orelse value)) |label| {
+        const projected = try a.dupe(u8, label);
+        if (controlled) |owned| a.free(owned);
+        return projected;
+    }
+    return controlled;
+}
+
+// AY's captured -syn- emits a lower-level support heading, while syn is also
+// Senaya's ISO code. Admit only the corroborated noun/synonym shape after -ay-.
+fn corroboratedAySynonymSupport(raw: []const language_source.Section, rendered: []const language_source.Section) bool {
+    if (raw.len != 2 or rendered.len != 1 or !raw[0].hyphen_marker or !raw[1].hyphen_marker or
+        !std.mem.eql(u8, raw[0].heading, "ay") or !std.mem.eql(u8, raw[1].heading, "syn")) return false;
+    const noun = "==<div><big><big>[[suti|Suti]]</big></big></div>==";
+    const synonym = "===<big>[[aru masi|Aru masi]]\u{200b}naka</big>===";
+    const translations = "===[[Image:Nuvola filesystems www.png|30px]] Yaqha arunaka===";
+    var headings = language_source.Iterator.init(rendered[0].source);
+    headings.all_heading_levels = true;
+    // all_heading_levels admits candidates; the filter also permits depth
+    // transitions so the exact sequence checks below can see active L3 support.
+    headings.heading_filter = .{ .ctx = null, .accepts = struct {
+        fn accepts(_: ?*const anyopaque, _: []const u8) bool { return true; }
+    }.accepts };
+    const first = headings.next() orelse return false;
+    if (!std.mem.startsWith(u8, first.source, noun) or
+        (first.source.len > noun.len and first.source[noun.len] != '\n' and first.source[noun.len] != '\r')) return false;
+    const second = headings.next() orelse return false;
+    if (!std.mem.startsWith(u8, second.source, synonym) or
+        (second.source.len > synonym.len and second.source[synonym.len] != '\n' and second.source[synonym.len] != '\r')) return false;
+    if (headings.next()) |third| {
+        if (!std.mem.startsWith(u8, third.source, translations) or
+            (third.source.len > translations.len and third.source[translations.len] != '\n' and third.source[translations.len] != '\r')) return false;
+        if (headings.next() != null) return false;
+    }
+    return true;
+}
+
 fn appendClassifiedSection(a: std.mem.Allocator, codes: LanguageCodes, sections: *std.ArrayList(language_source.Section), owned_headings: *std.ArrayList([]u8), section: language_source.Section) !void {
     var projected = section;
-    if (try classificationControlHeadingAlloc(a, codes, section.heading)) |heading| {
+    if (try classificationHeadingProjectionAlloc(a, codes, section.heading)) |heading| {
         errdefer a.free(heading);
         try owned_headings.append(a, heading);
         projected.heading = heading;
@@ -1381,7 +1447,7 @@ fn languageSections(source: []const u8, context: *const LanguageMarkers) languag
         .accepts = struct {
             fn accepts(raw: ?*const anyopaque, heading: []const u8) bool {
                 const markers: *const LanguageMarkers = @ptrCast(@alignCast(raw.?));
-                const normalized = classificationControlHeadingAlloc(std.heap.page_allocator, markers.codes.*, heading) catch return false;
+                const normalized = classificationHeadingProjectionAlloc(std.heap.page_allocator, markers.codes.*, heading) catch return false;
                 defer if (normalized) |value| std.heap.page_allocator.free(value);
                 const projected = normalized orelse heading;
                 const section: language_source.Section = .{ .heading = projected, .source = "" };
@@ -2641,15 +2707,31 @@ fn processMain(
             if (!std.mem.eql(u8, language.code, "ay") or raw_sections.items.len == 0 or
                 !raw_sections.items[0].hyphen_marker or
                 !std.mem.eql(u8, raw_sections.items[0].heading, "ay")) break :native null;
+            // num is also Niuafo'ou's ISO code. The captured AY numeral form
+            // has exactly one Jakhu POS heading after -ay-/-num-; no other
+            // rendered language or raw declaration can use this exception.
+            const number_pos = raw_sections.items.len == 2 and
+                raw_sections.items[1].hyphen_marker and
+                std.mem.eql(u8, raw_sections.items[1].heading, "num") and
+                page_sections.items.len == 1 and
+                std.mem.eql(u8, std.mem.trim(u8, page_sections.items[0].heading, " \t\r\n"), "<big><big>[[jakhu|Jakhu]]</big></big>");
+            const synonym_support = corroboratedAySynonymSupport(raw_sections.items, page_sections.items);
             for (raw_sections.items) |section| {
                 if (!section.hyphen_marker or
                     !(std.mem.eql(u8, section.heading, "ay") or
-                        std.mem.eql(u8, section.heading, "adj"))) break :native null;
+                        std.mem.eql(u8, section.heading, "adj") or
+                        (number_pos and std.mem.eql(u8, section.heading, "num")) or
+                        (synonym_support and std.mem.eql(u8, section.heading, "syn")))) break :native null;
             }
             for (page_sections.items) |section| {
                 const heading = std.mem.trim(u8, section.heading, " \t\r\n");
                 if (!std.mem.eql(u8, heading, "<div><big><big>[[suti|Suti]]</big></big></div>") and
-                    !std.mem.eql(u8, heading, "<big><big>[[mayjachiri|Mayjachiri]]</big></big>")) break :native null;
+                    !std.mem.eql(u8, heading, "<big><big>[[mayjachiri|Mayjachiri]]</big></big>") and
+                    !std.mem.eql(u8, heading, "<big><big>[[aruchiri|Aruchiri]]</big></big>") and
+                    !std.mem.eql(u8, heading, "<big><big>[[k'iläru|K'iläru]]</big></big>") and
+                    !std.mem.eql(u8, heading, "<big><big>[[jakhu|Jakhu]]</big></big>") and
+                    !std.mem.eql(u8, heading, "<big><big>[[mayjt'ayiri|Mayjt'ayiri]]</big></big>") and
+                    !std.mem.eql(u8, heading, "<big><big>[[sutilanti|Sutilanti]]</big></big>")) break :native null;
             }
             break :native language;
         };
@@ -7436,7 +7518,8 @@ test "Spools allocation failures unwind all owned slots root path and retry" {
         try owned.append(a, try std.fmt.allocPrint(a, "{s}/.spool/lang-{d:0>2}.tmp", .{ root, idx }));
     for ([_][]const u8{ "thesaurus", "citations", "reconstruction", "rhymes", "sign-gloss", "supplemental", "aliases" }) |name|
         try owned.append(a, try std.fmt.allocPrint(a, "{s}/.spool/{s}.tmp", .{ root, name }));
-    var measured = std.testing.FailingAllocator.init(a, .{});
+    // Force allocation fallback so remap success cannot change fault indices.
+    var measured = std.testing.FailingAllocator.init(a, .{ .resize_fail_index = 0 });
     const allocation_count = initial_scope: {
         var initial = try Spools.init(io, measured.allocator(), root);
         var closed = false;
@@ -7455,11 +7538,12 @@ test "Spools allocation failures unwind all owned slots root path and retry" {
     // the root path and every later fixed-slot filename/path allocation.
     try std.testing.expect(allocation_count > 2 * language_bucket_count + 1);
     for (0..allocation_count) |fail_index| {
-        var failing = std.testing.FailingAllocator.init(a, .{ .fail_index = fail_index });
+        var failing = std.testing.FailingAllocator.init(a, .{ .fail_index = fail_index, .resize_fail_index = 0 });
         if (Spools.init(io, failing.allocator(), root)) |value| {
             var unexpected = value;
             unexpected.close();
             unexpected.cleanup();
+            std.testing.failPrint("Spools unexpected success: fail_index={d}, measured_allocations={d}, actual_allocations={d}\n", .{ fail_index, allocation_count, failing.alloc_index });
             return error.TestExpectedError;
         } else |err| try std.testing.expectEqual(error.OutOfMemory, err);
         // No unlink/cleanup happens before this exact owned-file fd assertion.
@@ -9455,4 +9539,485 @@ test "AS support ownership refuses mixed banners unsupported boundaries and real
     }
     const wrong_marker = try AssameseSupportFixture.replaced(a, AssameseSupportFixture.raw, "{{-noun-}}", "{{-adj-}}");
     try std.testing.expect(assameseSupportLanguage(codes, AssameseSupportFixture.expanded, wrong_marker) == null);
+}
+
+const TranslationWarningFixture = struct {
+    fn banner(a: std.mem.Allocator, label: []const u8, code: []const u8) ![]u8 {
+        // Exact active heading form in captured IK Template:-en-, p2057/r4885,
+        // and its twelve siblings (proof 373a8aed). Only label/code vary.
+        return std.fmt.allocPrint(a, "<div id=\"toc\" class=\"toccolours\" ><big><big><big> {s} <small><small><small>'''(Please translate \"{s}\" [http://ik.wiktionary.org/w/index.php?title=Template:-{s}-&action=edit here])'''</small></small></small> </big></big></big></div>", .{ label, label, code });
+    }
+    const rows = [_]struct { label: []const u8, code: []const u8 }{
+        .{ .label = "Arabic", .code = "ar" }, .{ .label = "Czech", .code = "cs" },
+        .{ .label = "German", .code = "de" }, .{ .label = "English", .code = "en" },
+        .{ .label = "Spanish", .code = "es" }, .{ .label = "French", .code = "fr" },
+        .{ .label = "Icelandic", .code = "is" }, .{ .label = "Italian", .code = "it" },
+        .{ .label = "Inuktitut", .code = "iu" }, .{ .label = "Kalaallisut", .code = "kl" },
+        .{ .label = "Polish", .code = "pl" }, .{ .label = "Portuguese", .code = "pt" },
+        .{ .label = "Albanian", .code = "sq" }, .{ .label = "Adioukrou", .code = "adj" },
+    };
+    fn trusted(_: ?*const anyopaque, label: []const u8) ?ResolvedLanguage {
+        for (rows) |row| if (std.mem.eql(u8, label, row.label)) return .{ .code = row.code, .heading = row.label };
+        return null;
+    }
+    fn resolve(ctx: ?*const anyopaque, label: []const u8) ?ResolvedLanguage {
+        if (trusted(ctx, label)) |owner| return owner;
+        for (rows) |row| if (std.mem.eql(u8, label, row.code)) return .{ .code = row.code, .heading = row.label };
+        return null;
+    }
+    fn get(ctx: ?*const anyopaque, label: []const u8) ?[]const u8 {
+        return if (resolve(ctx, label)) |owner| owner.code else null;
+    }
+    fn codes() LanguageCodes {
+        return .{ .get_fn = get, .resolve_fn = resolve, .strong_fn = trusted, .trusted_fn = trusted };
+    }
+};
+
+test "translation warning headings require complete corroboration and preserve source slices" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const codes = TranslationWarningFixture.codes();
+    for (TranslationWarningFixture.rows[0..13]) |row| {
+        const label = if (std.mem.eql(u8, row.code, "kl")) "Kalaallisut\u{200e}" else row.label;
+        const heading = try TranslationWarningFixture.banner(a, label, row.code);
+        if (std.mem.eql(u8, row.code, "kl")) {
+            try std.testing.expect(translationWarningHeading(codes, heading) == null);
+            continue;
+        }
+        try std.testing.expectEqualStrings(label, translationWarningHeading(codes, heading).?);
+        const source = try std.fmt.allocPrint(a, "=={s}==\n# kept\n", .{heading});
+        var owned: std.ArrayList([]u8) = .empty;
+        var sections: std.ArrayList(language_source.Section) = .empty;
+        try appendClassifiedSection(a, codes, &sections, &owned, .{ .heading = heading, .source = source });
+        try std.testing.expectEqualStrings(label, sections.items[0].heading);
+        try std.testing.expectEqual(@intFromPtr(source.ptr), @intFromPtr(sections.items[0].source.ptr));
+        try std.testing.expectEqualStrings(source, sections.items[0].source);
+        const markers: LanguageMarkers = .{ .codes = &codes };
+        const iterator = languageSections(source, &markers);
+        try std.testing.expect(iterator.heading_filter.?.accepts(iterator.heading_filter.?.ctx, heading));
+    }
+}
+
+test "translation warning headings reject POS codes protected forms and conflicting annotations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const codes = TranslationWarningFixture.codes();
+    const good = try TranslationWarningFixture.banner(a, "English", "en");
+    const negative = [_][]const u8{
+        try TranslationWarningFixture.banner(a, "adj", "adj"),
+        try TranslationWarningFixture.banner(a, "en", "en"),
+        try TranslationWarningFixture.banner(a, "Unknown", "en"),
+        try TranslationWarningFixture.banner(a, "English", "fr"),
+        try AssameseSupportFixture.replaced(a, good, "translate \"English\"", "translate \"French\""),
+        try AssameseSupportFixture.replaced(a, good, "(Please translate", "(or French; Please translate"),
+        try AssameseSupportFixture.replaced(a, good, " here])", " here] [[French]])"),
+        try AssameseSupportFixture.replaced(a, good, " here])", " here] [[English|French]])"),
+        try AssameseSupportFixture.replaced(a, good, " English <small>", " English French <small>"),
+        try AssameseSupportFixture.replaced(a, good, "</big></div>", "</big>extra</div>"),
+        good[0 .. good.len - 1],
+        try std.fmt.allocPrint(a, "<nowiki>{s}</nowiki>", .{good}),
+        try std.fmt.allocPrint(a, "<pre>{s}</pre>", .{good}),
+        try std.fmt.allocPrint(a, "<!--{s}-->", .{good}),
+        try std.fmt.allocPrint(a, "<span title='{s}'>unknown</span>", .{good}),
+    };
+    for (negative) |heading| try std.testing.expect(translationWarningHeading(codes, heading) == null);
+}
+
+test "Writer translation warning owners retain complete headings links styles and lexical bodies" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/warning", .{tmp.sub_path});
+    const codes = TranslationWarningFixture.codes();
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Focused lexical excerpts from eye p2056/r6671, ours noir p2066/r5288,
+    // and both explicit sombra p2301/r6351 regions. This is not a full-page
+    // expansion oracle; the real current Reader capture remains separate.
+    const cases = [_]struct { title: []const u8, label: []const u8, code: []const u8, body: []const u8 }{
+        .{ .title = "eye", .label = "English", .code = "en", .body = "'''eye'''\n\n:[1] [[iri]]\n" },
+        .{ .title = "ours noir", .label = "French", .code = "fr", .body = "'''[[ours]] [[noir]]''' ''m''\n\n:[1] [[iggaġri]]\n" },
+        .{ .title = "sombra", .label = "Portuguese", .code = "pt", .body = "'''sombra'''\n\n:[1] [[taġġaq]]\n" },
+        .{ .title = "sombra", .label = "Spanish", .code = "es", .body = "'''sombra'''\n\n:[1] [[taġġaq]]\n" },
+    };
+    var expanded: [4][]const u8 = undefined;
+    var raw: [4][]const u8 = undefined;
+    for (cases, 0..) |case, i| {
+        expanded[i] = try std.fmt.allocPrint(a, "__NOEDITSECTION__\n=={s}==\n{s}", .{ try TranslationWarningFixture.banner(a, case.label, case.code), case.body });
+        raw[i] = try std.fmt.allocPrint(a, "{{{{-{s}-}}}}\n{s}", .{ case.code, case.body });
+    }
+    for (cases[0..2], 0..) |case, i| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, case.title, expanded[i], raw[i], null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "sombra", try std.mem.concat(a, u8, &.{ expanded[2], expanded[3] }), try std.mem.concat(a, u8, &.{ raw[2], raw[3] }), null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_blobs);
+    const diagnostics = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(4096));
+    try std.testing.expect(std.mem.indexOf(u8, diagnostics, "missing_language_heading") == null);
+    try std.testing.expect(std.mem.indexOf(u8, diagnostics, "unresolved_language_heading") == null);
+    for (cases, 0..) |case, i| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, case.label));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(case.title)).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        var report: presentation_document.Fallbacks = .{};
+        const expected_payload = try presentation_document.compileReportedAlloc(a, case.title, .language, case.label, case.code, expanded[i], null, &report);
+        const expected = try blobs.presentation_codec.decodeAlloc(a, expected_payload, case.title, .language, .{ .code = case.code, .heading = case.label });
+        try std.testing.expectEqualDeep(expected.entry.sections, decoded.entry.sections);
+        try std.testing.expectEqualDeep(expected.entry.references, decoded.entry.references);
+        try std.testing.expectEqualDeep(expected.entry.media, decoded.entry.media);
+    }
+}
+
+test "translation warning projection never substitutes generic resolution for trusted names" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const codes: LanguageCodes = .{ .get_fn = TranslationWarningFixture.get, .resolve_fn = TranslationWarningFixture.resolve };
+    for ([_][]const u8{ "en", "adj" }) |label| {
+        try std.testing.expect(codes.resolve(label) != null);
+        const heading = try TranslationWarningFixture.banner(a, label, label);
+        try std.testing.expect(translationWarningHeading(codes, heading) == null);
+    }
+}
+
+test "Writer warning projection preserves undeclared POS LRM and literal diagnostic controls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/warning-controls", .{tmp.sub_path});
+    const codes = TranslationWarningFixture.codes();
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const cases = [_]struct { title: []const u8, raw: []const u8, expanded: []const u8 }{
+        .{ .title = "pos-code", .raw = "{{-adj-}}\n# kept\n", .expanded = try std.fmt.allocPrint(a, "=={s}==\n# kept\n", .{try TranslationWarningFixture.banner(a, "adj", "adj")}) },
+        .{ .title = "conflicting-edit", .raw = "{{-en-}}\n# kept\n", .expanded = try std.fmt.allocPrint(a, "=={s}==\n# kept\n", .{try TranslationWarningFixture.banner(a, "English", "fr")}) },
+        .{ .title = "lrm-label", .raw = "{{-kl-}}\n# kept\n", .expanded = try std.fmt.allocPrint(a, "=={s}==\n# kept\n", .{try TranslationWarningFixture.banner(a, "Kalaallisut\u{200e}", "kl")}) },
+        // Exact lexical prefix of iggaġri p1691/r4832. Its later translation
+        // template expansion is deliberately not fabricated by this fixture.
+        .{ .title = "iggaġri prefix", .raw = "'''iggaġri''' \n\n#''Ursus americanus''\n", .expanded = "'''iggaġri''' \n\n#''Ursus americanus''\n" },
+        .{ .title = "literal-control", .raw = "#[[]]\n", .expanded = "#[[]]\n" },
+    };
+    for (cases) |case| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, case.title, case.expanded, case.raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(cases.len, stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "Unclassified"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    for (cases) |case| {
+        const record = (try index.find(case.title)).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        var report: presentation_document.Fallbacks = .{};
+        const expected_payload = try presentation_document.compileReportedAlloc(a, case.title, .language, "Unclassified", "", case.expanded, null, &report);
+        const expected = try blobs.presentation_codec.decodeAlloc(a, expected_payload, case.title, .language, .{ .code = "", .heading = "Unclassified" });
+        try std.testing.expectEqualDeep(expected.entry.sections, decoded.entry.sections);
+    }
+    const diagnostics = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(8192));
+    var lines = std.mem.splitScalar(u8, diagnostics, '\n');
+    var literal_found = false;
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        const parsed = try std.json.parseFromSlice(std.json.Value, a, line, .{});
+        defer parsed.deinit();
+        if (!std.mem.eql(u8, parsed.value.object.get("title").?.string, "literal-control")) continue;
+        for (parsed.value.object.get("reasons").?.array.items) |reason| {
+            if (std.mem.eql(u8, reason.string, "literal_markup")) literal_found = true;
+        }
+    }
+    try std.testing.expect(literal_found);
+}
+
+test "Writer decorated language warnings remain separate across mixed heading depths" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/warning-depths", .{tmp.sub_path});
+    const codes = TranslationWarningFixture.codes();
+    const english = try std.fmt.allocPrint(a, "=={s}==\n# [[first]]\n", .{try TranslationWarningFixture.banner(a, "English", "en")});
+    const french = try std.fmt.allocPrint(a, "={s}=\n# [[second]]\n", .{try TranslationWarningFixture.banner(a, "French", "fr")});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "mixed depth", try std.mem.concat(a, u8, &.{ english, french }), "{{-en-}}\n# [[first]]\n{{-fr-}}\n# [[second]]\n", null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    for ([_][]const u8{ "English", "French" }, [_][]const u8{ "en", "fr" }, [_][]const u8{ english, french }) |heading, code, source| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, heading));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("mixed depth")).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        var report: presentation_document.Fallbacks = .{};
+        const expected_payload = try presentation_document.compileReportedAlloc(a, "mixed depth", .language, heading, code, source, null, &report);
+        const expected = try blobs.presentation_codec.decodeAlloc(a, expected_payload, "mixed depth", .language, .{ .code = code, .heading = heading });
+        try std.testing.expectEqualDeep(expected.entry.sections, decoded.entry.sections);
+    }
+}
+
+// Integration snippet only: append beside the existing AY Writer regression.
+// Source authority: ay-template-pos-source-proof01.json, SHA256
+// 2826457e497a2451e49092ac364722153fd7bacd101fcf6959d2a8910df35a3d.
+// Expansions below instantiate those literal template bodies; they are not
+// captured runtime output. Diagnostic clearing is deliberately untested here.
+test "captured AY POS forms preserve declared owners and typed lexical bodies" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var codes = TestLanguages.codes();
+    const NumLanguages = struct {
+        fn resolve(context: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "num") or std.mem.eql(u8, value, "Niuafo'ou"))
+                return .{ .code = "num", .heading = "Niuafo'ou" };
+            return TestLanguages.resolve(context, value);
+        }
+        fn get(context: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(context, value)) |language| language.code else null;
+        }
+    };
+    codes.resolve_fn = NumLanguages.resolve;
+    codes.get_fn = NumLanguages.get;
+    codes.content_fn = struct {
+        fn content(_: ?*const anyopaque) ?ResolvedLanguage {
+            return .{ .code = "ay", .heading = "Aymar aru" };
+        }
+    }.content;
+    var writer = try Writer.init(io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+
+    // Plantilla:-ay- p1761/r17662: includeonly wrappers removed, content kept.
+    const banner = "[[Category:Aymara aru]]__NOEDITSECTION__\n" ++
+        "<div style=\"text-align:center; font-family:Sans; font-size:2em; \" class=\"plainlinks\"><div style=\"padding:8px; background:#FFEEFF; color:#000; border:3px solid #FFDDFF; -moz-border-radius:10px; -webkit-border-radius:10px; border-radius:10px;\">'''[[Aymara aru|AYMARA ARU]]'''\n</div></div>";
+    // Literal transclusion bodies: noinclude documentation is omitted.
+    const noun = "==<div><big><big>[[suti|Suti]]</big></big></div>==\n[[Category:Sutinaka]]\n";
+    const adjective = "==<big><big>[[mayjachiri|Mayjachiri]]</big></big>==\n[[Category:Mayjachirinaka]]\n";
+    const verb = "==<big><big>[[aruchiri|Aruchiri]]</big></big>==\n[[Category:Aruchirinaka]]\n";
+    const suffix = "==<big><big>[[k'iläru|K'iläru]]</big></big>==\n[[Category:K'ilärunaka]]\n";
+    const number = "==<big><big>[[jakhu|Jakhu]]</big></big>==\n[[Category:Jakhunaka]]\n";
+
+    const adverb = "==<big><big>[[mayjt'ayiri|Mayjt'ayiri]]</big></big>==\n[[Category:Mayjt'ayirinaka]]\n";
+    const pronoun = "== <big><big>[[sutilanti|Sutilanti]]</big></big> ==\n[[Category:Sutilantinaka]]\n";
+
+    // Exact lexical excerpts stop before the uncaptured -trans- dependency.
+    // achikaña p1605/r17199, raw SHA256 eb127993dd08f680acc9298ff55482390349188d2378b6eb61ffa784e6dad4fc.
+    const definition = "Irnaqañataki, taqi kunatakisa suma chuymampi yanapt’a mayiñawa. Wawataki sutiyiri jani ukaxa jaqichayiri tata uma amuyumpi mayiñawa. Kunaymana lurañanakampi phuqhañataki pachani jaqinakaru yanapt’ayasiñataki mayiñawa";
+    const verb_body = "'''achikaña'''\n#" ++ definition ++ " \n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "achikaña", banner ++ "\n" ++ verb ++ verb_body, "{{-ay-}}\n{{-verb-}}\n" ++ verb_body, null);
+    // -naka p1606/r18700, raw SHA256 c3589d5928bf93697d9d4f5c5bfd525893241a4ba5e0ba190b454e90545e894f.
+    // Its authored '#' is empty; no nonempty meaning may be manufactured.
+    const suffix_body = "'''-naka'''\n#\n\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "-naka", banner ++ "\n" ++ suffix ++ suffix_body, "{{-ay-}}\n{{-suf-}}\n" ++ suffix_body, null);
+    // maya p2699/r17335, raw SHA256 cf701def143283d88beea3949f991cc62f4c943c01b8174768fdc3021055bb5d.
+    // num is registered as Niuafo'ou; only the captured Jakhu POS corroborates AY.
+    const number_body = "'''maya'''\n\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "maya", banner ++ "\n" ++ number ++ number_body, "{{-ay-}}\n{{-num-}}\n" ++ number_body, null);
+
+    // Synthetic lexical bodies exercise the other literal captured POS forms.
+    // They are controls, not claims about additional historical page bodies.
+    const controls = [_]struct { title: []const u8, marker: []const u8, expanded: []const u8 }{
+        .{ .title = "ay-noun-control", .marker = "noun", .expanded = noun },
+        .{ .title = "ay-adj-control", .marker = "adj", .expanded = adjective },
+        .{ .title = "ay-adv-control", .marker = "adv", .expanded = adverb },
+        .{ .title = "ay-pronoun-control", .marker = "pronoun", .expanded = pronoun },
+    };
+    for (controls) |row| {
+        const body = try std.fmt.allocPrint(a, "'''{s}'''\n# [[TypedBody|retained lexical body]]\n", .{row.title});
+        const raw = try std.fmt.allocPrint(a, "{{{{-ay-}}}}\n{{{{-{s}-}}}}\n{s}", .{ row.marker, body });
+        const expanded = try std.fmt.allocPrint(a, "{s}\n{s}{s}", .{ banner, row.expanded, body });
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, row.title, expanded, raw, null);
+    }
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ay-no-marker", verb ++ "# [[NoAyBody|no AY declaration]]\n", "{{-verb-}}\n# [[NoAyBody|no AY declaration]]\n", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ay-arbitrary-heading", banner ++ "\n==Unknown language==\n# [[UnknownBody|unknown body]]\n", "{{-ay-}}\n==Unknown language==\n# [[UnknownBody|unknown body]]\n", null);
+    // adj remains the registered ISO code for Adioukrou in this test registry.
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ay-iso-adj", "==Adioukrou==\n# [[AdjBody|Adioukrou body]]\n", "{{-adj-}}\n# [[AdjBody|Adioukrou body]]\n", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ay-foreign-num", banner ++ "\n==Niuafo'ou==\n# [[NumBody|Niuafo'ou body]]\n", "{{-ay-}}\n{{-num-}}\n# [[NumBody|Niuafo'ou body]]\n", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ay-num-mismatch", banner ++ "\n" ++ verb ++ "# [[MismatchBody|mismatched POS body]]\n", "{{-ay-}}\n{{-num-}}\n# [[MismatchBody|mismatched POS body]]\n", null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 12), stats.language_records);
+    // Existing missing/unresolved diagnostics are not cleared by this delta.
+
+    const Check = struct {
+        fn record(alloc: std.mem.Allocator, directory: []const u8, heading: []const u8, code: []const u8, title: []const u8, headword: ?[]const u8, meaning: ?[]const u8, action: ?[]const u8, banner_present: bool) !void {
+            var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(alloc, directory, heading));
+            defer mapped.deinit();
+            const blob = try blob_format.inspect(mapped.bytes);
+            const metadata = try blob.languageMetadata();
+            try std.testing.expectEqualStrings(code, metadata.code);
+            var index = try blob.buildTrustedIndexAlloc(alloc);
+            defer index.deinit(alloc);
+            const value = (try index.find(title)).?;
+            const decoded = try blobs.presentation_codec.decodeAlloc(alloc, value.payload, value.title, .language, metadata);
+            try std.testing.expectEqualStrings(code, decoded.entry.language_code);
+            try std.testing.expectEqualStrings(title, decoded.entry.title);
+            var headwords: usize = 0;
+            var definitions: usize = 0;
+            var actions: usize = 0;
+            var banners: usize = 0;
+            for (decoded.entry.sections) |section| for (section.blocks) |block| {
+                var text: std.ArrayList(u8) = .empty;
+                for (block.spans) |span| {
+                    try text.appendSlice(alloc, span.text);
+                    if (headword) |expected| if (std.mem.eql(u8, span.text, expected)) {
+                        headwords += 1;
+                        try std.testing.expect(span.bold);
+                    };
+                    if (action) |target| if (std.mem.eql(u8, span.target, target)) {
+                        actions += 1;
+                        try std.testing.expect(span.kind == .link);
+                    };
+                    if (std.mem.eql(u8, span.target, "Aymara aru")) banners += 1;
+                }
+                if (block.kind == .definition and text.items.len != 0) {
+                    definitions += 1;
+                    try std.testing.expectEqualStrings(meaning orelse return error.TestUnexpectedResult, text.items);
+                    try std.testing.expectEqualStrings("1", block.number);
+                }
+            };
+            try std.testing.expectEqual(@as(usize, if (headword != null) 1 else 0), headwords);
+            try std.testing.expectEqual(@as(usize, if (meaning != null) 1 else 0), definitions);
+            try std.testing.expectEqual(@as(usize, if (action != null) 1 else 0), actions);
+            try std.testing.expectEqual(@as(usize, if (banner_present) 1 else 0), banners);
+        }
+    };
+    try Check.record(a, root, "Aymar aru", "ay", "achikaña", "achikaña", definition, null, true);
+    try Check.record(a, root, "Aymar aru", "ay", "-naka", "-naka", null, null, true);
+    try Check.record(a, root, "Aymar aru", "ay", "maya", "maya", null, null, true);
+    for (controls) |row| try Check.record(a, root, "Aymar aru", "ay", row.title, row.title, "retained lexical body", "TypedBody", true);
+    try Check.record(a, root, "Unclassified", "", "ay-no-marker", null, "no AY declaration", "NoAyBody", false);
+    try Check.record(a, root, "Unclassified", "", "ay-arbitrary-heading", null, "unknown body", "UnknownBody", true);
+    try Check.record(a, root, "Adioukrou", "adj", "ay-iso-adj", null, "Adioukrou body", "AdjBody", false);
+    try Check.record(a, root, "Niuafo'ou", "num", "ay-foreign-num", null, "Niuafo'ou body", "NumBody", true);
+    try Check.record(a, root, "Unclassified", "", "ay-num-mismatch", null, "mismatched POS body", "MismatchBody", true);
+    var ay_mapped = try mmapPath(io, try languageBlobPathAlloc(a, root, "Aymar aru"));
+    defer ay_mapped.deinit();
+    const ay_blob = try blob_format.inspect(ay_mapped.bytes);
+    var ay_index = try ay_blob.buildTrustedIndexAlloc(a);
+    defer ay_index.deinit(a);
+    for ([_][]const u8{ "ay-no-marker", "ay-arbitrary-heading", "ay-iso-adj", "ay-foreign-num", "ay-num-mismatch" }) |title|
+        try std.testing.expect((try ay_index.find(title)) == null);
+}
+
+// Exact captured template transclusions and achachi p1618/r17689 prefix.
+// Later translation-template calls are not expanded or invented by this test.
+const AySynonymFixture = struct {
+    const banner = "[[Category:Aymara aru]]__NOEDITSECTION__\n<div style=\"text-align:center; font-family:Sans; font-size:2em; \" class=\"plainlinks\"><div style=\"padding:8px; background:#FFEEFF; color:#000; border:3px solid #FFDDFF; -moz-border-radius:10px; -webkit-border-radius:10px; border-radius:10px;\">'''[[Aymara aru|AYMARA ARU]]'''\n</div></div>";
+    const noun = "==<div><big><big>[[suti|Suti]]</big></big></div>==\n[[Category:Sutinaka]]\n";
+    const synonym = "===<big>[[aru masi|Aru masi]]​naka</big>===\n";
+    const translations = "===[[Image:Nuvola filesystems www.png|30px]] Yaqha arunaka===\n";
+    const raw = "{{-ay-}}\n{{-noun-}}\n'''achachi / achichi'''\n#Walja marani chacha jaqiwa. Chacha jaqiru achachi sañasa utjarakiwa, ukaxa thithisina tuqksnasa ukhamawa. \n#Walja marani laka ch’akhapasa q’ala mirq’irata urqu uywanakawa. Alinakaru, quqanakarusa achachi, satarakiwa.\n{{-syn-}}\n*[[achila]]\n\n";
+    const raw_without_ay = "{{-noun-}}\n'''achachi / achichi'''\n#Walja marani chacha jaqiwa. Chacha jaqiru achachi sañasa utjarakiwa, ukaxa thithisina tuqksnasa ukhamawa. \n#Walja marani laka ch’akhapasa q’ala mirq’irata urqu uywanakawa. Alinakaru, quqanakarusa achachi, satarakiwa.\n{{-syn-}}\n*[[achila]]\n\n";
+    const noun_body = "'''achachi / achichi'''\n#Walja marani chacha jaqiwa. Chacha jaqiru achachi sañasa utjarakiwa, ukaxa thithisina tuqksnasa ukhamawa. \n#Walja marani laka ch’akhapasa q’ala mirq’irata urqu uywanakawa. Alinakaru, quqanakarusa achachi, satarakiwa.\n";
+    const synonym_body = "*[[achila]]\n\n";
+};
+
+test "Writer AY synonym ISO collision requires the captured lower level support shape" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ay-synonym", .{tmp.sub_path});
+    var codes = TestLanguages.codes();
+    const SenayaLanguages = struct {
+        fn resolve(ctx: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, name, "syn") or std.mem.eql(u8, name, "Senaya")) return .{ .code = "syn", .heading = "Senaya" };
+            return TestLanguages.resolve(ctx, name);
+        }
+        fn get(ctx: ?*const anyopaque, name: []const u8) ?[]const u8 {
+            return if (resolve(ctx, name)) |language| language.code else null;
+        }
+    };
+    codes.resolve_fn = SenayaLanguages.resolve;
+    codes.get_fn = SenayaLanguages.get;
+    codes.strong_fn = struct {
+        fn strong(ctx: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, name, "Senaya")) return .{ .code = "syn", .heading = "Senaya" };
+            return TestLanguages.strong(ctx, name);
+        }
+    }.strong;
+    codes.content_fn = struct {
+        fn content(_: ?*const anyopaque) ?ResolvedLanguage { return .{ .code = "ay", .heading = "Aymar aru" }; }
+    }.content;
+    const F = AySynonymFixture;
+    const expanded = F.banner ++ "\n" ++ F.noun ++ F.noun_body ++ F.synonym ++ F.synonym_body;
+    const raw = F.raw;
+    const with_trans = expanded ++ F.translations ++ "\n:* preserved translation control\n";
+    const no_zero_width = try AssameseSupportFixture.replaced(a, expanded, "\u{200b}naka", "naka");
+    const wrong_level = try AssameseSupportFixture.replaced(a, expanded, F.synonym, "==<big>[[aru masi|Aru masi]]\u{200b}naka</big>==\n");
+    const comment = try AssameseSupportFixture.replaced(a, expanded, F.synonym, "<!--" ++ F.synonym ++ "-->\n");
+    const protected = try AssameseSupportFixture.replaced(a, expanded, F.synonym, "<nowiki>" ++ F.synonym ++ "</nowiki>\n");
+    const cases = [_]struct { title: []const u8, source: []const u8, raw: []const u8, owner: []const u8, code: []const u8 }{
+        .{ .title = "achachi excerpt", .source = expanded, .raw = raw, .owner = "Aymar aru", .code = "ay" },
+        .{ .title = "synonym with translation support", .source = with_trans, .raw = raw ++ "{{-trans-}}\n:* preserved translation control\n", .owner = "Aymar aru", .code = "ay" },
+        .{ .title = "synonym without ay declaration", .source = expanded, .raw = F.raw_without_ay, .owner = "Unclassified", .code = "" },
+        .{ .title = "synonym changed title", .source = no_zero_width, .raw = raw, .owner = "Unclassified", .code = "" },
+        .{ .title = "synonym changed depth", .source = wrong_level, .raw = raw, .owner = "Unclassified", .code = "" },
+        .{ .title = "synonym comment only", .source = comment, .raw = raw, .owner = "Unclassified", .code = "" },
+        .{ .title = "synonym protected only", .source = protected, .raw = raw, .owner = "Unclassified", .code = "" },
+        .{ .title = "synonym extra support", .source = expanded ++ "===Unproven support===\n# kept\n", .raw = raw, .owner = "Unclassified", .code = "" },
+        .{ .title = "foreign Senaya", .source = "==Senaya==\n# [[Foreign|retained foreign meaning]]\n", .raw = "{{-syn-}}\n# [[Foreign|retained foreign meaning]]\n", .owner = "Senaya", .code = "syn" },
+    };
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    for (cases) |case| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, case.title, case.source, case.raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(cases.len, stats.language_records);
+    try std.testing.expectEqual(@as(usize, 3), stats.language_blobs);
+    for (cases) |case| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, case.owner));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(case.title)).?;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        try std.testing.expectEqualStrings(case.code, decoded.entry.language_code);
+        var report: presentation_document.Fallbacks = .{};
+        const expected_payload = try presentation_document.compileReportedAlloc(a, case.title, .language, case.owner, case.code, case.source, null, &report);
+        const expected = try blobs.presentation_codec.decodeAlloc(a, expected_payload, case.title, .language, .{ .code = case.code, .heading = case.owner });
+        try std.testing.expectEqualDeep(expected.entry.sections, decoded.entry.sections);
+        try std.testing.expectEqualDeep(expected.entry.references, decoded.entry.references);
+        try std.testing.expectEqualDeep(expected.entry.media, decoded.entry.media);
+    }
+    // This change must not silently clear historical diagnostic carry.
+    const diagnostics = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(16384));
+    var lines = std.mem.splitScalar(u8, diagnostics, '\n');
+    var positive_seen = false;
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        const parsed = try std.json.parseFromSlice(std.json.Value, a, line, .{});
+        defer parsed.deinit();
+        if (!std.mem.eql(u8, parsed.value.object.get("title").?.string, "achachi excerpt")) continue;
+        var missing = false;
+        var unresolved = false;
+        for (parsed.value.object.get("reasons").?.array.items) |reason| {
+            if (std.mem.eql(u8, reason.string, "missing_language_heading")) missing = true;
+            if (std.mem.eql(u8, reason.string, "unresolved_language_heading")) unresolved = true;
+        }
+        try std.testing.expect(missing and unresolved);
+        positive_seen = true;
+    }
+    try std.testing.expect(positive_seen);
 }

@@ -1904,6 +1904,43 @@ fn magicLinkStart(input: []const u8, start: usize) ?usize {
     }
     return null;
 }
+// Strip only complete active comments before decoding title entities. Keep
+// protected bodies intact. Ordinary attribute quotes do not protect comments.
+fn internalTargetWithoutCommentsAlloc(a: A, value: []const u8) ![]const u8 {
+    if (std.mem.indexOf(u8, value, "<!--") == null) return value;
+    var result: std.ArrayList(u8) = .empty;
+    errdefer result.deinit(a);
+    var scan: syntax.OpaqueScan = .{};
+    var cursor: usize = 0;
+    var copied: usize = 0;
+    var changed = false;
+    while (cursor < value.len) {
+        if (starts(value[cursor..], "<!--")) {
+            const close = std.mem.indexOfPos(u8, value, cursor + 4, "-->") orelse break;
+            try result.appendSlice(a, value[copied..cursor]);
+            cursor = close + 3;
+            copied = cursor;
+            changed = true;
+            continue;
+        }
+        if (scan.protectedEnd(value, cursor, null)) |end| {
+            cursor = end;
+            continue;
+        }
+        if (scan.tagAt(value, cursor, null)) |tag| {
+            cursor = tag.end;
+            continue;
+        }
+        cursor += 1;
+    }
+    if (!changed) {
+        result.deinit(a);
+        return value;
+    }
+    try result.appendSlice(a, value[copied..]);
+    return try result.toOwnedSlice(a);
+}
+
 fn internalTargetHasNowikiRegion(target: []const u8) bool {
     var cursor: usize = 0;
     var no_more_close = false;
@@ -7577,7 +7614,7 @@ pub const Renderer = struct {
                     const probing_root = self.navigation_target_probe != null and
                         input.ptr == self.navigation_probe_source.ptr and input.len == self.navigation_probe_source.len and
                         token_start == 0 and it.cursor == input.len;
-                    var target = token.target;
+                    var target = try internalTargetWithoutCommentsAlloc(self.a, token.target);
                     const input_address = @intFromPtr(input.ptr);
                     const target_address = @intFromPtr(token.target.ptr);
                     const target_in_input = target_address >= input_address and target_address - input_address <= input.len and token.target.len <= input.len - (target_address - input_address);
@@ -7684,7 +7721,7 @@ pub const Renderer = struct {
                         try self.malformedInternalBody(prepared_missing, if (token.link_has_pipe) token.text else token.target, token.trail, input[it.cursor..], s, depth);
                         continue;
                     }
-                    const authored_target = target;
+                    const authored_target = token.target;
                     target = try self.withoutBehaviorControls(target);
                     if (target.len != authored_target.len) {
                         target = std.mem.trim(u8, target, " \t");
@@ -7749,6 +7786,23 @@ pub const Renderer = struct {
                         const raw_start = token_start + std.mem.indexOf(u8, input[token_start..it.cursor], "[[").?;
                         const outer_end = it.cursor - token.trail.len;
                         try self.malformedInternalBody(prepared_missing, input[raw_start + 2 .. outer_end - 2], token.trail, input[it.cursor..], s, depth);
+                        continue;
+                    }
+                    if (std.mem.indexOfAny(u8, target, "<>") != null) {
+                        if (probing_root) return;
+                        const raw_start = token_start + std.mem.indexOf(u8, input[token_start..it.cursor], "[[").?;
+                        const outer_end = it.cursor - token.trail.len;
+                        var literal_style = s;
+                        literal_style.kind = .text;
+                        literal_style.target = "";
+                        literal_style.self_link_target = null;
+                        self.fallbacks.literal_markup = true;
+                        // Invalid title characters leave the authored brackets visible.
+                        // Parse the original body so entity literals cannot become HTML.
+                        try self.protectedLiteral("[[", literal_style);
+                        try self.inlineTextWithMissing(try missingSlice(self.a, prepared_missing, input[raw_start + 2 .. outer_end - 2]), literal_style, depth + 1);
+                        try self.protectedLiteral("]]", literal_style);
+                        try self.text(trail, literal_style);
                         continue;
                     }
                     if (std.mem.indexOfScalar(u8, target, '_') != null) {
@@ -31172,4 +31226,113 @@ test "optional HTML paragraph ends restore styles before active wiki blocks" {
         try std.testing.expect(renderer.body_language_direction == null);
         try std.testing.expectEqual(@as(u8, 0), @as(u8, @bitCast(renderer.block_formatting)));
     }
+}
+
+test "captured RW HTML-bearing internal targets retain literal delimiters and typed language" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, visible: []const u8, word: []const u8, language: []const u8 }{
+        .{ .source = "[[<span lang=ar>حاسوب</span>]]", .visible = "[[حاسوب]]", .word = "حاسوب", .language = "ar" },
+        .{ .source = "[[<span lang=ar>كمبيوتر</span>]]", .visible = "[[كمبيوتر]]", .word = "كمبيوتر", .language = "ar" },
+        .{ .source = "[[<span lang=ru>компьютер</span>]]", .visible = "[[компьютер]]", .word = "компьютер", .language = "ru" },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
+        var language_seen = false;
+        for (spans) |span| {
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+            if (std.mem.eql(u8, span.text, case.word)) {
+                language_seen = true;
+                try std.testing.expectEqualStrings(case.language, span.language);
+                try std.testing.expect(span.provenance == .parsed);
+            }
+            if (std.mem.eql(u8, span.text, "[[") or std.mem.eql(u8, span.text, "]]"))
+                try std.testing.expect(span.provenance == .protected_literal);
+        }
+        try std.testing.expect(language_seen and renderer.fallbacks.literal_markup);
+    }
+}
+
+test "invalid HTML title recovery preserves raw body pipes trails and entity literal distinction" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, visible: []const u8 }{
+        .{ .source = "[[<span lang=ar>حاسوب</span>|''label'']]s", .visible = "[[حاسوب|label]]s" },
+        .{ .source = "[[&lt;span lang=ar&gt;حاسوب&lt;/span&gt;]]", .visible = "[[<span lang=ar>حاسوب</span>]]" },
+        .{ .source = "<nowiki>[[<span lang=ar>حاسوب</span>]]</nowiki>", .visible = "[[<span lang=ar>حاسوب</span>]]" },
+    };
+    for (cases, 0..) |case, index| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
+        var italic_seen = false;
+        for (spans) |span| {
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+            if (index != 0) try std.testing.expectEqualStrings("", span.language);
+            if (span.flags.italic and std.mem.eql(u8, span.text, "label")) italic_seen = true;
+        }
+        if (index == 0) try std.testing.expect(italic_seen);
+    }
+    var valid: Renderer = .{ .a = a, .context = .{} };
+    const linked = try valid.parseSpans("[[حاسوب|<span lang=ar>حاسوب</span>]]", .{});
+    try std.testing.expectEqualStrings("حاسوب", try flattened(a, linked));
+    try std.testing.expectEqual(@as(usize, 1), linked.len);
+    try std.testing.expectEqual(ir.InlineKind.link, linked[0].kind);
+    try std.testing.expectEqualStrings("حاسوب", linked[0].target);
+    try std.testing.expectEqualStrings("ar", linked[0].language);
+    try std.testing.expect(!valid.fallbacks.literal_markup);
+}
+
+test "internal title comments remain suppressed before invalid HTML title checks" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const valid = [_]struct { source: []const u8, target: []const u8 }{
+        .{ .source = "[[ክብድ ትዕምርት<!--ገለፃ ወይም ትርጉም እዚህ ያስገቡ-->]]", .target = "ክብድ ትዕምርት" },
+        .{ .source = "[[ ተጨማሪ መረጃ<!--ተጨማሪ መረጃን እዚህ ያስገቡ -->]]", .target = "ተጨማሪ መረጃ" },
+        .{ .source = "[[fo<!--hidden {{deferred}} <nowiki>\n-->o]]", .target = "foo" },
+    };
+    for (valid) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqual(@as(usize, 1), spans.len);
+        try std.testing.expectEqual(ir.InlineKind.link, spans[0].kind);
+        try std.testing.expectEqualStrings(case.target, spans[0].target);
+        try std.testing.expectEqualStrings(case.target, spans[0].text);
+        try std.testing.expect(!renderer.fallbacks.literal_markup and !renderer.fallbacks.missing_template);
+    }
+    const retained = [_][]const u8{
+        "foo&lt;!--hidden--&gt;bar",
+        "<nowiki>foo<!--hidden-->bar</nowiki>",
+        "<pre>foo<!--hidden-->bar</pre>",
+        "foo<!--unfinished",
+    };
+    for (retained) |value|
+        try std.testing.expectEqualStrings(value, try internalTargetWithoutCommentsAlloc(a, value));
+    // Comment preprocessing precedes ordinary HTML attribute parsing.
+    try std.testing.expectEqualStrings(
+        "<span title=''>foo</span>",
+        try internalTargetWithoutCommentsAlloc(a, "<span title='<!--attribute-->'>foo</span>"),
+    );
+    var invalid: Renderer = .{ .a = a, .context = .{} };
+    const rejected = try invalid.parseSpans("[[<!--hidden--><span lang=ar>حاسوب</span>]]", .{});
+    try std.testing.expectEqualStrings("[[حاسوب]]", try flattened(a, rejected));
+    var language_seen = false;
+    for (rejected) |span| {
+        try std.testing.expect(span.kind == .text and span.target.len == 0);
+        if (std.mem.eql(u8, span.text, "حاسوب")) {
+            language_seen = true;
+            try std.testing.expectEqualStrings("ar", span.language);
+        }
+    }
+    try std.testing.expect(language_seen and invalid.fallbacks.literal_markup);
+    var entity: Renderer = .{ .a = a, .context = .{} };
+    const literal = try entity.parseSpans("[[foo&lt;!--hidden--&gt;bar]]", .{});
+    try std.testing.expectEqualStrings("[[foo<!--hidden-->bar]]", try flattened(a, literal));
+    for (literal) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
+    try std.testing.expectEqualStrings("foo{{deferred}}", try internalTargetWithoutCommentsAlloc(a, "foo<!--hidden-->{{deferred}}"));
 }
