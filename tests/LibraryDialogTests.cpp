@@ -524,6 +524,8 @@ int main(int argc, char **argv) {
         diagnosticStage = "wait connection refusal";
         require(QTest::qWaitFor([&] { return unavailableNetwork->requests == 1 && failure->text() == QStringLiteral("Could not finish: 127.0.0.1: Connection refused"); }, 5000), "catalogue failure is visible");
         require(control<QPushButton>(unavailable, "importDictionary")->isEnabled(), "failed network operation does not disable local import");
+        require(control<QLabel>(unavailable, "availableDictionariesSummary")->text() == QStringLiteral("Could not check all catalogues. Try again or import a dictionary file."),
+                "failed catalogue check is not reported as a successful empty result");
         QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{
             QStringLiteral("https://catalogue.example/private?token=secret")});
         int managerDestructions = 0;
@@ -547,6 +549,8 @@ int main(int argc, char **argv) {
                     "typed HTTP 404 has actionable guidance without raw transfer diagnostics or URL secrets");
             require(control<QTreeWidget>(missing, "availableDictionaries")->topLevelItemCount() == 0,
                     "HTTP 404 does not create catalogue entries");
+            require(control<QLabel>(missing, "availableDictionariesSummary")->text() == QStringLiteral("Could not check all catalogues. Try again or import a dictionary file."),
+                    "HTTP 404 summary distinguishes an unavailable catalogue from no downloads");
             auto *localImport = control<QPushButton>(missing, "importDictionary");
             require(localImport->isEnabled(), "HTTP 404 preserves local import");
             diagnosticStage = "import after HTTP 404";

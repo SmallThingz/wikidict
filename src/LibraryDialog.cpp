@@ -463,7 +463,9 @@ void LibraryDialog::fetchNextCatalog() {
     if (cancelled_.load()) { finishOperation(QStringLiteral("Cancelled")); return; }
     if (pendingSources_.isEmpty()) {
         refreshCatalogView();
-        if (catalog_.isEmpty()) availableSummary_->setText(QStringLiteral("No downloads found. Add another source or import a dictionary file."));
+        if (catalog_.isEmpty()) availableSummary_->setText(catalogErrors_.isEmpty()
+            ? QStringLiteral("No downloads found. Add another source or import a dictionary file.")
+            : QStringLiteral("Could not check all catalogues. Try again or import a dictionary file."));
         finishOperation(catalogErrors_.isEmpty() ? QStringLiteral("Catalogues refreshed.") : catalogErrors_.join(QLatin1Char('\n')), !catalogErrors_.isEmpty());
         return;
     }
