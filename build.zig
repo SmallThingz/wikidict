@@ -727,6 +727,7 @@ pub fn build(b: *std.Build) void {
     bundle_test_run.addFileArg(module_extract_exe.getEmittedBin());
     b.step("test-bundle", "Exercise build-time Lua/template expansion into data-only blobs").dependOn(&bundle_test_run.step);
     const reader_test_exe = addCliExecutable(b, "dict-reader-integration-test", b.path("tools/reader_integration_test.zig"), b.graph.host, test_optimize, &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }});
+    reader_test_exe.root_module.addImport("encoder", encoder_mod_test);
     const reader_test_run = b.addRunArtifact(reader_test_exe);
     reader_test_run.addFileArg(blob_query_exe.getEmittedBin());
     reader_test_run.addFileArg(ffi_test_exe.getEmittedBin());

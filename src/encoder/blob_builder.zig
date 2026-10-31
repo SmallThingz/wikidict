@@ -2205,6 +2205,7 @@ fn fragmentPreContextAlloc(a: std.mem.Allocator, start: usize, end: usize, scope
                 .formatting = scope.formatting,
                 .attributes = scope.attributes,
                 .target = scope.target,
+                .tag_name = scope.tag_name,
                 .quote = if (scope.kind == .link) try quotes.links[index].at(start) else null,
                 .resume_quote = if (scope.kind == .link) (scope.link_quotes orelse return error.InvalidPreContext).resume_quote else null,
             });
@@ -2217,7 +2218,7 @@ fn fragmentPreContextAlloc(a: std.mem.Allocator, start: usize, end: usize, scope
     while (cursor) |index| {
         const scope = scopes[index];
         if (scope.opening_start >= start and scope.body_start <= end and scope.body_end >= end)
-            try trailing.append(a, .{ .opening_start = scope.opening_start - start, .body_start = scope.body_start - start, .kind = scope.kind, .formatting = scope.formatting, .attributes = scope.attributes, .target = scope.target, .quote = if (scope.kind == .link) (scope.link_quotes orelse return error.InvalidPreContext).entry else null });
+            try trailing.append(a, .{ .opening_start = scope.opening_start - start, .body_start = scope.body_start - start, .kind = scope.kind, .formatting = scope.formatting, .attributes = scope.attributes, .target = scope.target, .tag_name = scope.tag_name, .quote = if (scope.kind == .link) (scope.link_quotes orelse return error.InvalidPreContext).entry else null });
         cursor = scope.parent;
     }
     // Initial ancestors were appended inner-first. Trailing opens need the
@@ -3503,6 +3504,48 @@ pub const Writer = struct {
         return self.stats;
     }
 };
+
+test "Writer publishes quoted colon prose while retaining literal markup diagnostic" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    const codes = TestLanguages.codes();
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const source = "==English==\n===Usage===\n# before <Usage:'That time'> after [[Target|child]]\n<Usage: 'That person' More prose>\n<Usage: 'Mouth belonging to that person' Note that it is masculine>\n";
+    try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, "quoted-colon-prose", source, source, null, &.{});
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
+    const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(4096));
+    var lines = std.mem.tokenizeScalar(u8, report, '\n');
+    const row = try std.json.parseFromSlice(std.json.Value, a, lines.next().?, .{});
+    defer row.deinit();
+    const reasons = row.value.object.get("reasons").?.array.items;
+    try std.testing.expectEqual(@as(usize, 1), reasons.len);
+    try std.testing.expectEqualStrings("literal_markup", reasons[0].string);
+    try std.testing.expect(lines.next() == null);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "English"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("quoted-colon-prose")).?;
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+    var text: std.ArrayList(u8) = .empty;
+    var actions: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try text.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.target, "Target")) actions += 1;
+    };
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "<Usage:'That time'>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "<Usage: 'That person' More prose>") != null);
+    try std.testing.expectEqual(@as(usize, 1), actions);
+}
 
 test "wikitext writer emits only data blobs" {
     var tmp = std.testing.tmpDir(.{});
@@ -6672,6 +6715,92 @@ test "Arabic meanings category refuses uncorroborated ambiguous protected and ne
     const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, foreign_metadata);
     try std.testing.expectEqualStrings("fr", decoded.entry.language_code);
     try std.testing.expect(std.mem.indexOf(u8, record.payload, "Foreign definition") != null);
+}
+
+test "Writer language cuts preserve hidden source citations and visible quote continuation" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    const codes = TestLanguages.codes();
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const source_format = "==English==\n# [[visible-en|English sense]]\n<div{s}>\n==French==\n# [[hidden-fr|hidden sense]]<ref>anonymous</ref><ref name=x>[[citation-target|hidden definition]]</ref>\n''</div>[[visible-fr|suffix]]<ref name=x/>\n<references/>\n";
+    for ([_]bool{ false, true }) |hidden| {
+        const source = try std.fmt.allocPrint(a, source_format, .{if (hidden) " style='display:none'" else ""});
+        const fallback_before = writer.stats.fallback_pages;
+        try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, if (hidden) "hidden-cut" else "visible-control", source, source, null, &.{});
+        // The repaired fixture is supported. The CSS-removed control retains
+        // the existing visible-DIV cut behavior and is not a clean oracle.
+        if (hidden) try std.testing.expectEqual(fallback_before, writer.stats.fallback_pages);
+    }
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
+    const fallback_report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(8192));
+    var fallback_lines = std.mem.tokenizeScalar(u8, fallback_report, '\n');
+    while (fallback_lines.next()) |line| {
+        const row = try std.json.parseFromSlice(std.json.Value, a, line, .{});
+        defer row.deinit();
+        try std.testing.expect(!std.mem.eql(u8, row.value.object.get("title").?.string, "hidden-cut"));
+    }
+    for ([_][]const u8{ "English", "French" }) |owner| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, owner));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const english = std.mem.eql(u8, owner, "English");
+        var control_italic: ?bool = null;
+        var control_bold: ?bool = null;
+        for ([_]bool{ false, true }) |hidden| {
+            const record = (try index.find(if (hidden) "hidden-cut" else "visible-control")).?;
+            const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+            try std.testing.expectEqualStrings(if (english) "en" else "fr", decoded.entry.language_code);
+            var english_links: usize = 0;
+            var hidden_links: usize = 0;
+            var suffix_links: usize = 0;
+            var visible_reuses: usize = 0;
+            for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+                if (std.mem.eql(u8, span.target, "visible-en")) english_links += 1;
+                if (std.mem.eql(u8, span.target, "hidden-fr")) hidden_links += 1;
+                if (std.mem.eql(u8, span.target, "visible-fr")) {
+                    suffix_links += 1;
+                    if (hidden) {
+                        try std.testing.expectEqual(control_italic.?, span.italic);
+                        try std.testing.expectEqual(control_bold.?, span.bold);
+                    } else {
+                        control_italic = span.italic;
+                        control_bold = span.bold;
+                    }
+                }
+                if (hidden and std.mem.eql(u8, span.target, "#reference-2")) {
+                    try std.testing.expectEqualStrings("[2]", span.text);
+                    visible_reuses += 1;
+                }
+                try std.testing.expect(!std.mem.eql(u8, span.target, "citation-target"));
+            };
+            try std.testing.expectEqual(@as(usize, @intFromBool(english)), english_links);
+            try std.testing.expectEqual(@as(usize, @intFromBool(!english and !hidden)), hidden_links);
+            try std.testing.expectEqual(@as(usize, @intFromBool(!english)), suffix_links);
+            if (hidden) try std.testing.expectEqual(@as(usize, @intFromBool(!english)), visible_reuses);
+            if (!english) {
+                try std.testing.expectEqual(@as(usize, 2), decoded.entry.references.len);
+                try std.testing.expectEqualStrings("x", decoded.entry.references[1].name);
+                try std.testing.expectEqual(@as(usize, 2), decoded.entry.references[1].number);
+                var citation_targets: usize = 0;
+                for (decoded.entry.references[1].spans) |span| if (std.mem.eql(u8, span.target, "citation-target")) {
+                    citation_targets += 1;
+                    try std.testing.expectEqualStrings("hidden definition", span.text);
+                };
+                try std.testing.expectEqual(@as(usize, 1), citation_targets);
+            }
+        }
+    }
 }
 
 test "Writer language fragments preserve parsed pre scope through DPR2" {
@@ -10527,4 +10656,145 @@ test "Writer trailing peer isolation requires active adjacent page bound languag
     try std.testing.expectEqualDeep(full.entry.sections[0..1], known.sections);
     try std.testing.expectEqualDeep(full.entry.sections[1..], unknown.sections);
     try std.testing.expectEqualStrings("", unknown.language_code);
+}
+
+test "Writer plain block DIV across language cuts retains owners without false fallback" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const codes = TestLanguages.codes();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const source = "==English==\n# [[visible-en|English sense]]\n<div>\n==French==\n# [[visible-fr|French sense]]<ref>anonymous</ref><ref name=x>[[citation-target|definition]]</ref>\n</div>[[suffix|suffix]]<ref name=x/>\n<references/>\n";
+    const observation = try presentation_document.observePreScopesAlloc(a, "plain-div-cut", source, .{}, null, null, null, .{}, null);
+    defer freePreObservation(a, observation);
+    try std.testing.expectEqual(@as(usize, 1), observation.scopes.len);
+    try std.testing.expectEqual(presentation_document.FragmentPreContext.Kind.layout_div, observation.scopes[0].kind);
+    try std.testing.expect(observation.scopes[0].matched and !observation.unclosed_formatting);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "plain-div-cut", source, source, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    const english = (try LeadingRegionFixture.entry(a, root, "English", "plain-div-cut")).?;
+    const french = (try LeadingRegionFixture.entry(a, root, "French", "plain-div-cut")).?;
+    try std.testing.expect(LeadingRegionFixture.contains(english, "visible-en"));
+    try std.testing.expect(!LeadingRegionFixture.contains(english, "visible-fr"));
+    try std.testing.expect(!LeadingRegionFixture.contains(english, "suffix"));
+    try std.testing.expect(LeadingRegionFixture.contains(french, "visible-fr"));
+    try std.testing.expect(LeadingRegionFixture.contains(french, "suffix"));
+    try std.testing.expect(!LeadingRegionFixture.contains(french, "visible-en"));
+    try std.testing.expectEqual(@as(usize, 2), french.references.len);
+    var definition = false;
+    for (french.references) |reference| for (reference.spans) |span| {
+        definition = definition or (span.kind == .link and std.mem.eql(u8, span.target, "citation-target"));
+    };
+    try std.testing.expect(definition);
+    const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .unlimited);
+    try std.testing.expect(std.mem.indexOf(u8, report, "plain-div-cut") == null);
+}
+
+test "Writer nested block DIV and hidden scopes preserve owner quotes citations and closing headings" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    const codes = TestLanguages.codes();
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const source_format = "==English==\n# [[visible-en|English sense]]\n<div>\n<div{s}>\n==French==\n# [[hidden-fr|hidden sense]]<ref>anonymous</ref><ref name=x>[[citation-target|hidden definition]]</ref>\n''</div>[[visible-fr|suffix]]<ref name=x/>\n===Topic===</div>[[after-layout|after]]\n<references/>\n";
+    for ([_]bool{ false, true }) |hidden| {
+        const source = try std.fmt.allocPrint(a, source_format, .{if (hidden) " style='display:none'" else ""});
+        const observation = try presentation_document.observePreScopesAlloc(a, "nested-div-observation", source, .{}, null, null, null, .{}, null);
+        defer freePreObservation(a, observation);
+        try std.testing.expectEqual(@as(usize, 2), observation.scopes.len);
+        try std.testing.expectEqual(presentation_document.FragmentPreContext.Kind.layout_div, observation.scopes[0].kind);
+        try std.testing.expectEqual(if (hidden) presentation_document.FragmentPreContext.Kind.hidden else presentation_document.FragmentPreContext.Kind.layout_div, observation.scopes[1].kind);
+        try std.testing.expectEqual(@as(?usize, 0), observation.scopes[1].parent);
+        try std.testing.expect(observation.scopes[0].matched and observation.scopes[1].matched and !observation.unclosed_formatting);
+        const fallback_before = writer.stats.fallback_pages;
+        try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, if (hidden) "nested-hidden-cut" else "nested-visible-control", source, source, null, &.{});
+        try std.testing.expectEqual(fallback_before, writer.stats.fallback_pages);
+    }
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    const fallback_report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(8192));
+    var fallback_lines = std.mem.tokenizeScalar(u8, fallback_report, '\n');
+    while (fallback_lines.next()) |line| {
+        const row = try std.json.parseFromSlice(std.json.Value, a, line, .{});
+        defer row.deinit();
+        try std.testing.expect(!std.mem.eql(u8, row.value.object.get("title").?.string, "nested-hidden-cut"));
+    }
+    for ([_][]const u8{ "English", "French" }) |owner| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, owner));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const english = std.mem.eql(u8, owner, "English");
+        var control_italic: ?bool = null;
+        var control_bold: ?bool = null;
+        for ([_]bool{ false, true }) |hidden| {
+            const record = (try index.find(if (hidden) "nested-hidden-cut" else "nested-visible-control")).?;
+            const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+            try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, decoded));
+            try std.testing.expectEqualStrings(if (english) "en" else "fr", decoded.entry.language_code);
+            var english_links: usize = 0;
+            var hidden_links: usize = 0;
+            var suffix_links: usize = 0;
+            var visible_reuses: usize = 0;
+            var after_layout: usize = 0;
+            var topic_headings: usize = 0;
+            for (decoded.entry.sections) |section| if (std.mem.eql(u8, section.title, "Topic")) {
+                try std.testing.expectEqual(@as(u8, 3), section.level);
+                topic_headings += 1;
+            };
+            for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+                if (std.mem.eql(u8, span.target, "after-layout")) after_layout += 1;
+                if (std.mem.eql(u8, span.target, "visible-en")) english_links += 1;
+                if (std.mem.eql(u8, span.target, "hidden-fr")) hidden_links += 1;
+                if (std.mem.eql(u8, span.target, "visible-fr")) {
+                    suffix_links += 1;
+                    if (hidden) {
+                        try std.testing.expectEqual(control_italic.?, span.italic);
+                        try std.testing.expectEqual(control_bold.?, span.bold);
+                    } else {
+                        control_italic = span.italic;
+                        control_bold = span.bold;
+                    }
+                }
+                if (hidden and std.mem.eql(u8, span.target, "#reference-2")) {
+                    try std.testing.expectEqualStrings("[2]", span.text);
+                    visible_reuses += 1;
+                }
+                try std.testing.expect(!std.mem.eql(u8, span.target, "citation-target"));
+            };
+            try std.testing.expectEqual(@as(usize, @intFromBool(english)), english_links);
+            try std.testing.expectEqual(@as(usize, @intFromBool(!english and !hidden)), hidden_links);
+            try std.testing.expectEqual(@as(usize, @intFromBool(!english)), suffix_links);
+            if (hidden) try std.testing.expectEqual(@as(usize, @intFromBool(!english)), visible_reuses);
+            try std.testing.expectEqual(@as(usize, @intFromBool(!english)), after_layout);
+            try std.testing.expectEqual(@as(usize, @intFromBool(!english)), topic_headings);
+            if (!english) {
+                try std.testing.expectEqual(@as(usize, 2), decoded.entry.references.len);
+                try std.testing.expectEqualStrings("x", decoded.entry.references[1].name);
+                try std.testing.expectEqual(@as(usize, 2), decoded.entry.references[1].number);
+                var citation_targets: usize = 0;
+                for (decoded.entry.references[1].spans) |span| if (std.mem.eql(u8, span.target, "citation-target")) {
+                    citation_targets += 1;
+                    try std.testing.expectEqualStrings("hidden definition", span.text);
+                };
+                try std.testing.expectEqual(@as(usize, 1), citation_targets);
+            }
+        }
+    }
 }

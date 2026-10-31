@@ -1,6 +1,7 @@
 //! Real installed CLI behavior against a freshly built split dictionary.
 const std = @import("std");
 const enc = @import("blob_encoder");
+const encoder = @import("encoder");
 
 const source = "==English==\n===Etymology===\nHistorical source.\n===Noun===\n{{en-noun}}\n# A small animal.\n#: The cat sleeps.\n====Translations====\nFrench: chat\n====Synonyms====\nFeline\n===Quotations===\nA printed quotation\n===References===\nBook, 2020.\n";
 const Harness = struct {
@@ -174,6 +175,53 @@ fn writeAliasFixture(io: std.Io, a: std.mem.Allocator, root: []const u8, neutral
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = marker, .data = "Synthetic compiled alias reader integration fixture.\n" });
 }
 
+fn checkWriterCellRules(h: *Harness, bin: []const u8, dir: []const u8) !void {
+    const a = h.a;
+    const root = try std.fs.path.join(a, &.{ dir, "writer-cell-rules" });
+    const authored = "==01==\n{|\n| '''A'''\n----\n*[[alal]]\n'''B'''\n----\n*''[[baat]]''\n|}\n";
+    // Build the fixture through the ordinary Writer; do not seed typed rule blocks.
+    var writer = try encoder.blob_builder.Writer.init(h.io, a, root);
+    defer writer.deinit();
+    try writer.addPage(a, .{ .id = 0, .kind = .language }, "cell-rules", authored, null);
+    const stats = try writer.finish(.{});
+    try h.require(stats.language_records == 1 and stats.language_blobs == 1, "Writer preserves unclassified word-index owner");
+    var filename: [enc.blob_catalog.language_blob_filename_len]u8 = undefined;
+    const path = try std.fs.path.join(a, &.{ root, "languages", enc.blob_catalog.languageBlobFilename("Unclassified", &filename) });
+    const blob_bytes = try std.Io.Dir.cwd().readFileAlloc(h.io, path, a, .limited(1024 * 1024));
+    const blob = try enc.blob_format.inspect(blob_bytes);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("cell-rules")) orelse return error.AssertionFailed;
+    const stored = try enc.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+    try h.require(std.mem.eql(u8, record.payload, try enc.presentation_codec.encodeAlloc(a, stored)), "Writer rule blocks round trip exact codec bytes");
+    try h.require(stored.entry.sections.len == 1 and std.mem.eql(u8, stored.entry.sections[0].title, "01"), "Writer retains numeric source section without language inference");
+    const cell = stored.entry.sections[0].blocks[0].table.?.rows[0].cells[0];
+    const ordered = cell.blocks orelse return error.AssertionFailed;
+    const kinds = [_]enc.presentation_types.BlockKind{ .paragraph, .rule, .list_item, .paragraph, .rule, .list_item };
+    try h.require(ordered.len == kinds.len and cell.spans.len == 0, "Writer stores ordered cell blocks rather than flattened rules");
+    for (ordered, kinds) |block, kind| try h.require(block.kind == kind, "Writer rule source position");
+    const entry = try h.entry(try h.run(&.{ bin, "lookup", "cell-rules", "--root", root, "--language", "Unclassified", "--format", "json" }, 0));
+    const sections = entry.object.get("sections").?.array.items;
+    try h.require(sections.len == 1, "Reader keeps cell blocks within original section");
+    const cells = sections[0].object.get("blocks").?.array.items[0].object.get("table").?.object.get("rows").?.array.items[0].object.get("cells").?.array.items;
+    const blocks = cells[0].object.get("blocks").?.array.items;
+    try h.require(blocks.len == 6, "Reader emits all six ordered cell blocks");
+    for (blocks, [_][]const u8{ "paragraph", "rule", "list_item", "paragraph", "rule", "list_item" }) |block, kind|
+        try h.require(std.mem.eql(u8, block.object.get("kind").?.string, kind), "Reader rule placement matches Writer codec");
+    for ([_]usize{ 2, 5 }, [_][]const u8{ "alal", "baat" }) |position, target| {
+        const spans = blocks[position].object.get("spans").?.array.items;
+        try h.require(spans.len == 1 and std.mem.eql(u8, spans[0].object.get("target").?.string, target), "Reader retains links beside cell rules");
+    }
+    const text = try h.run(&.{ bin, "lookup", "cell-rules", "--root", root, "--language", "Unclassified", "--details" }, 0);
+    const rule = "────────────────────────";
+    try h.require(std.mem.count(u8, text, rule) == 2, "Reader visibly renders both cell rules");
+    const first_rule = std.mem.indexOf(u8, text, rule) orelse return error.AssertionFailed;
+    const alal = std.mem.indexOf(u8, text, "alal") orelse return error.AssertionFailed;
+    const second_rule = std.mem.indexOfPos(u8, text, first_rule + rule.len, rule) orelse return error.AssertionFailed;
+    const baat = std.mem.indexOf(u8, text, "baat") orelse return error.AssertionFailed;
+    try h.require(first_rule < alal and alal < second_rule and second_rule < baat, "Reader plain rule and link order matches authored cells");
+}
+
 pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
@@ -185,6 +233,7 @@ pub fn main(init: std.process.Init) !void {
 
     var h: Harness = .{ .a = a, .io = init.io };
     const bin = argv[1];
+    try checkWriterCellRules(&h, bin, dir);
     const ux_python = init.environ_map.get("WIKIDICT_READER_UX_PYTHON") orelse "python3";
     const ffi_test = argv[2];
     const ffi_output = try h.run(&.{ ffi_test, root, "cat" }, 0);

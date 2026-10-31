@@ -54,6 +54,8 @@ pub const ObservedPreScope = struct {
     formatting: compiler.SpanFlags = .{},
     attributes: FormattingAttributes = .{},
     target: []const u8 = "",
+    // Borrowed from the exact immutable page domain, not reconstructed markup.
+    tag_name: []const u8 = "",
     link_quotes: ?compiler.LinkQuoteObservation = null,
     parent: ?usize = null,
     depth: usize = 1,
@@ -102,6 +104,13 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
             }
             if (opening_start >= body_start or body_start > body_end or body_end > resume_at or resume_at > domain.len)
                 return error.InvalidPreContext;
+            const hidden_tag = if (kind == .hidden) blk: {
+                const tag = blobs.wikitext_syntax.tagAt(domain, opening_start) orelse return error.InvalidPreContext;
+                if (!matched or tag.closing or tag.self_closing or tag.end != body_start or target.len != 0) return error.InvalidPreContext;
+                const pair = blobs.wikitext_syntax.matchingTag(domain, tag) orelse return error.InvalidPreContext;
+                if (pair.inner_end != body_end or pair.end != resume_at) return error.InvalidPreContext;
+                break :blk tag.name;
+            } else "";
             const absolute_open = base + opening_start;
             var parent: ?usize = if (self.scopes.items.len == 0) null else self.scopes.items.len - 1;
             if (parent) |previous| if (self.scopes.items[previous].opening_start >= absolute_open) return error.InvalidPreContext;
@@ -141,6 +150,7 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
                 .formatting = formatting,
                 .attributes = .{ .classes = owned_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set, .foreground = owned_foreground, .foreground_set = attributes.foreground_set },
                 .target = owned_target,
+                .tag_name = hidden_tag,
                 .link_quotes = link_quotes,
                 .parent = parent,
                 .depth = depth,
@@ -970,6 +980,31 @@ pub fn compileClassifiedWithHeadingAnchorsAlloc(
     else
         try semantic.build(a, work.sections);
     return codec.encodeBuildAlloc(a, display_spans, work.sections, layout, work.references, work.media);
+}
+
+test "quoted colon prose survives roundtrip without weakening parsed residual guard" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "==English==\n===Usage===\n# before <Usage:'That time'> after [[Target|child]]\n";
+    var report: Fallbacks = .{};
+    const encoded = try compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report);
+    try std.testing.expect(report.literal_markup);
+    try std.testing.expect(!report.unclosed_formatting and !report.unsupported_element);
+    const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+    var text: std.ArrayList(u8) = .empty;
+    var actions: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try text.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.target, "Target")) actions += 1;
+    };
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "<Usage:'That time'>") != null);
+    try std.testing.expectEqual(@as(usize, 1), actions);
+    const raw = [_]compiler.Span{.{ .text = "<Usage:'That time'>" }};
+    var rejected: Fallbacks = .{};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, &rejected));
+    for ([_][]const u8{ "<ref:'word'>", "<https:'word'>", "{{deferred}}", "[[uncompiled" }) |residual|
+        try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(residual));
 }
 
 test "shipped presentation accepts protected literal examples as compiled data" {
@@ -4791,4 +4826,121 @@ test "generic document metadata does not claim classified single language author
     const unknown = try compileAlloc(a, "unbound", .language, "Unclassified", "", source, null);
     const unresolved = try codec.decodeAlloc(a, unknown, "unbound", .language, .{ .code = "", .heading = "Unclassified" });
     for (unresolved.entry.organization.lexemes) |lexeme| try std.testing.expectEqualStrings("", lexeme.language);
+}
+
+
+test "heading free cell rules survive typed codec in source order" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "==01==\n{|\n| '''A'''\n----\n*[[alal]]\n'''B'''\n----\n*''[[baat]]''\n|}\n";
+    const bytes = try compileAlloc(a, "cell-rules", .language, "Unclassified", "", source, null);
+    const decoded = try codec.decodeAlloc(a, bytes, "cell-rules", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections.len);
+    try std.testing.expectEqualStrings("01", decoded.entry.sections[0].title);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections[0].blocks.len);
+    const cell = decoded.entry.sections[0].blocks[0].table.?.rows[0].cells[0];
+    try std.testing.expect(cell.spans.len == 0 and cell.nested_table == null);
+    const ordered = cell.blocks orelse return error.TestUnexpectedResult;
+    const kinds = [_]types.BlockKind{ .paragraph, .rule, .list_item, .paragraph, .rule, .list_item };
+    try std.testing.expectEqual(kinds.len, ordered.len);
+    for (ordered, kinds) |block, kind| try std.testing.expectEqual(kind, block.kind);
+    for ([_]usize{ 0, 3 }, [_][]const u8{ "A", "B" }) |index, label| {
+        try std.testing.expectEqual(@as(usize, 1), ordered[index].spans.len);
+        try std.testing.expectEqualStrings(label, ordered[index].spans[0].text);
+        try std.testing.expect(ordered[index].spans[0].bold);
+    }
+    for ([_]usize{ 2, 5 }, [_][]const u8{ "alal", "baat" }, 0..) |index, target, i| {
+        try std.testing.expectEqualStrings("*", ordered[index].list_path);
+        try std.testing.expectEqual(@as(usize, 1), ordered[index].spans.len);
+        const span = ordered[index].spans[0];
+        try std.testing.expect(span.kind == .link);
+        try std.testing.expectEqualStrings(target, span.target);
+        try std.testing.expectEqualStrings(target, span.text);
+        try std.testing.expectEqual(i == 1, span.italic);
+    }
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeBuildAlloc(a, decoded.entry.display_title, decoded.entry.sections, decoded.entry.organization, decoded.entry.references, decoded.entry.media));
+}
+
+
+test "angle bracketed external citation keeps typed navigation without synthesized HTML rejection" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, visible: []const u8, target: []const u8, bold_italic: bool = false }{
+        .{ .source = "<[http://www.etymonline.com etymonline.com]>", .visible = "<etymonline.com>", .target = "http://www.etymonline.com" },
+        .{ .source = "<b><[https://example.test ''label'']></b>", .visible = "<label>", .target = "https://example.test", .bold_italic = true },
+        // Exact retained DIQ line56, excluding the enclosing span close whose
+        // opener belongs to preceding lines. Metadata is only a test container.
+        .{ .source = "# Etymonline. ''Online English Etymology Dictionary''. <[http://www.etymonline.com etymonline.com]> by Douglas Harper.", .visible = "Etymonline. Online English Etymology Dictionary. <etymonline.com> by Douglas Harper.", .target = "http://www.etymonline.com" },
+    };
+    for (cases) |case| {
+        var report: Fallbacks = .{};
+        const bytes = try compileReportedAlloc(a, "-ıstan", .language, "English", "en", case.source, null, &report);
+        const decoded = try codec.decodeAlloc(a, bytes, "-ıstan", .language, .{ .code = "en", .heading = "English" });
+        var visible: std.ArrayList(u8) = .empty;
+        var actions: usize = 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            if (span.kind == .external_link) {
+                actions += 1;
+                try std.testing.expectEqualStrings(case.target, span.target);
+                try std.testing.expectEqual(case.bold_italic, span.bold);
+                try std.testing.expectEqual(case.bold_italic, span.italic);
+            }
+            if (std.mem.eql(u8, span.text, "<") or std.mem.eql(u8, span.text, ">"))
+                try std.testing.expect(span.kind == .text and span.target.len == 0);
+        };
+        try std.testing.expectEqualStrings(case.visible, visible.items);
+        try std.testing.expectEqual(@as(usize, 1), actions);
+        try std.testing.expect(!report.any());
+    }
+    // Identical display bytes without authored-boundary proof remain rejected.
+    const raw = [_]compiler.Span{
+        .{ .text = "<" },
+        .{ .kind = .external_link, .text = "label", .target = "https://example.test" },
+        .{ .text = ">" },
+    };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+    // Source compilation already preserves an ordinary unregistered tag as
+    // literal text. The residual guard below receives no such source proof.
+    var diq_formula_report: Fallbacks = .{};
+    const diq_formula_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", "<C6H6>", null, &diq_formula_report);
+    const diq_formula_decoded = try codec.decodeAlloc(a, diq_formula_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    var diq_formula_visible: std.ArrayList(u8) = .empty;
+    for (diq_formula_decoded.entry.sections) |diq_formula_section| for (diq_formula_section.blocks) |diq_formula_block| for (diq_formula_block.spans) |diq_formula_span| {
+        try diq_formula_visible.appendSlice(a, diq_formula_span.text);
+        try std.testing.expect(diq_formula_span.kind == .text and diq_formula_span.target.len == 0);
+    };
+    try std.testing.expectEqualStrings("<C6H6>", diq_formula_visible.items);
+    try std.testing.expect(diq_formula_report.literal_markup);
+    try std.testing.expectError(error.UncompiledPresentation, compiler.requireCompiledText("<C6H6>"));
+    for ([_][]const u8{ "<[https:// broken]>", "before |} after" }) |source|
+        try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", source, null));
+}
+
+
+test "single-brace template recovery does not exempt ordinary inline table delimiters" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "entry", .language, "Unclassified", "", "{{ png.|} [[Child|child]] ''kept''", null, &report);
+    const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "", .heading = "Unclassified" });
+    var visible: std.ArrayList(u8) = .empty;
+    var actions: usize = 0;
+    var italic = false;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        if (span.kind == .link and std.mem.eql(u8, span.target, "Child")) actions += 1;
+        if (std.mem.eql(u8, span.text, "kept") and span.italic) italic = true;
+    };
+    try std.testing.expectEqualStrings("[malformed template] child kept", visible.items);
+    try std.testing.expect(actions == 1 and italic and report.literal_markup);
+    for ([_][]const u8{ "before |} after", "* before |} after", "* |} suffix |}", "{{ png.|} suffix |}" }) |source| {
+        var rejected: Fallbacks = .{};
+        try std.testing.expectError(error.UncompiledPresentation, compileReportedAlloc(a, "entry", .language, "Unclassified", "", source, null, &rejected));
+    }
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("{{ png.|}"));
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("before |} after"));
 }

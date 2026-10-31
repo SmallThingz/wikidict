@@ -5478,3 +5478,104 @@ test "first failure capture preserves complete successful Writer output bytes" {
     try F.sameTree(a, without, with);
     try F.absent(try std.fs.path.join(a, &.{ with, ".presentation-first-failure" }));
 }
+
+
+test "Writer captured Macedonian z retains protected text and orphan math closers" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    // Exact production p3423/r47486/ordinal1351; raw and expanded are identical.
+    const source = "[[Медија:\n== Пример.ogg ==\n[[''Наслов на врска''<nowiki>--~~~~Овде внесете неформатиран текст\n----\n<math>[[Медија:Овде вметни формула]]<math><nowiki>Овде вметни формула</nowiki>[[[Наслов на врска]]]</math></math></nowiki>]]]]";
+    // Exact retained namespace snapshot, including the Media alias Медија.
+    // Language callbacks are deliberately unbound: this is not language-ownership evidence.
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tmkwiktionary\n# dump-date\t20261001\n# content-language\tmk\n-2\tМедиум\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\tМедија\n-1\tСпецијална\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\tСпецијални\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\tРазговор\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n2\tКорисник\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n3\tРазговор со корисник\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n4\tВикиречник\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\tWiktionary\n5\tРазговор за Викиречник\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWiktionary talk\n6\tПодатотека\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\tСлика\n7\tРазговор за податотека\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tImage talk\tРазговор за слика\n8\tМедијаВики\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n9\tРазговор за МедијаВики\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n10\tПредлошка\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tШаблон\n11\tРазговор за предлошка\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tРазговор за шаблон\n12\tПомош\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n13\tРазговор за помош\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n14\tКатегорија\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n15\tРазговор за категорија\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\tМодул\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\tРазговор за модул\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\tEvent\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\tEvent talk\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
+    var ns = try namespace_registry.Registry.init(a, namespaces); defer ns.deinit();
+    const codes: encoder.blob_builder.LanguageCodes = .{ .namespace_catalog = &ns };
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/mk-orphan-math", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "z", source, source, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    // Existing helper exercises normal Writer finish, trusted blob index, decoder and codec roundtrip.
+    const entry = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, "Unclassified", "z");
+    try std.testing.expectEqual(@as(usize, 0), entry.media.len);
+    var visible: std.ArrayList(u8) = .empty;
+    for (entry.sections) |section| {
+        try visible.appendSlice(a, section.title);
+        for (section.blocks) |block| for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            if (span.kind == .link or span.kind == .external_link) {
+                try std.testing.expect(std.mem.indexOfAny(u8, span.target, "\r\n") == null);
+                try std.testing.expect(std.mem.indexOf(u8, span.target, "Медија:") == null);
+            }
+        };
+    }
+    for ([_][]const u8{ "Пример.ogg", "Наслов на врска", "--~~~~", "Овде внесете неформатиран текст", "----", "<math>[[Медија:Овде вметни формула]]<math><nowiki>Овде вметни формула" }) |authored|
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, authored) != null);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, visible.items, "</math>"));
+}
+
+
+test "Writer captured BCL malformed single-brace suffix retains body and actions" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    // Exact p8910/r30738/ordinal8466 captured input and output; no expansion replay.
+    const raw = "===Pagsayod===\n/pag.ti.ri.pon/\n{{ png.|} pagpupulong\n\n===Pinaghalian===\n{{pref|bcl|pag|tiripon}}\n\n===Dakitaramon===\n*'''Ingles:''' assembly\n*'''Tagalog:''' pagpupulong";
+    const expanded = "===Pagsayod===\n/pag.ti.ri.pon/\n{{ png.|} pagpupulong\n\n===Pinaghalian===\n<i class=\"Latn mention\" lang=\"bcl\">[[pag-#Bikol Sentral|pag-]]</i> +&lrm; <i class=\"Latn mention\" lang=\"bcl\">[[tiripon#Bikol Sentral|tiripon]]</i>[[Kategorya:Bikol Sentral tataramon na may prefixong pag-|TIRIPON]] \n\n===Dakitaramon===\n*'''Ingles:''' assembly\n*'''Tagalog:''' pagpupulong";
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tbclwiktionary\n# dump-date\t20261001\n# content-language\tbcl\n-2\tMedio\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n-1\tEspesyal\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\tOlay\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n2\tParagamit\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n3\tOlay kan paragamit\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n4\tWiksyunaryo\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\tWiktionary\n5\tOlay sa Wiksyunaryo\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWiktionary talk\n6\tLadawan\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\n7\tOlay sa ladawan\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tImage talk\n8\tMediaWiki\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n9\tOlay sa MediaWiki\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n10\tPlantilya\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n11\tOlay sa plantilya\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n12\tTabang\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n13\tOlay sa tabang\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n14\tKategorya\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n15\tOlay sa kategorya\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\tModule\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\tModule talk\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\tEvent\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\tEvent talk\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
+    var ns = try namespace_registry.Registry.init(a, namespaces); defer ns.deinit();
+    // Callbacks intentionally unbound: this tests rendering, not language ownership.
+    const codes: encoder.blob_builder.LanguageCodes = .{ .namespace_catalog = &ns };
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/bcl-malformed-template", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "pagtiripon", expanded, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
+    // Existing helper exercises Writer finish, trusted index, decoding and codec roundtrip.
+    const entry = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, "Unclassified", "pagtiripon");
+    var visible: std.ArrayList(u8) = .empty;
+    var actions: usize = 0;
+    const expected_headings = [_][]const u8{ "Pagsayod", "Pinaghalian", "Dakitaramon" };
+    var heading_count: usize = 0;
+    for (entry.sections) |section| {
+        if (section.title.len != 0) {
+            try std.testing.expect(heading_count < expected_headings.len);
+            try std.testing.expectEqualStrings(expected_headings[heading_count], section.title);
+            try std.testing.expectEqual(@as(u8, 3), section.level);
+            heading_count += 1;
+        }
+        try visible.appendSlice(a, section.title);
+        for (section.blocks) |block| {
+            for (block.spans) |span| {
+                try visible.appendSlice(a, span.text);
+                if (span.kind == .link or span.kind == .external_link) {
+                    try std.testing.expect(span.kind == .link);
+                    const expected_target: []const u8 = if (actions == 0) "pag-#Bikol Sentral" else "tiripon#Bikol Sentral";
+                    const expected_label: []const u8 = if (actions == 0) "pag-" else "tiripon";
+                    try std.testing.expectEqualStrings(expected_target, span.target);
+                    try std.testing.expectEqualStrings(expected_label, span.text);
+                    try std.testing.expect(span.italic);
+                    actions += 1;
+                }
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 2), actions);
+    try std.testing.expectEqual(@as(usize, 3), heading_count);
+    for ([_][]const u8{ "Pagsayod", "Pinaghalian", "Dakitaramon", "/pag.ti.ri.pon/", "[malformed template] pagpupulong", "Ingles:", "assembly", "Tagalog:" }) |kept|
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, kept) != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, visible.items, "[malformed template]"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, visible.items, "pagpupulong"));
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Kategorya:") == null);
+    const report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ output, "fallback-pages.jsonl" }), a, .limited(8192));
+    var rows = std.mem.tokenizeScalar(u8, report, '\n');
+    const row = try std.json.parseFromSlice(std.json.Value, a, rows.next() orelse return error.TestUnexpectedResult, .{});
+    defer row.deinit();
+    var literal_reason = false;
+    for (row.value.object.get("reasons").?.array.items) |reason| if (std.mem.eql(u8, reason.string, "literal_markup")) { literal_reason = true; };
+    try std.testing.expect(literal_reason and rows.next() == null);
+}
