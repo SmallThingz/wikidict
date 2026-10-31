@@ -98,9 +98,36 @@ pub const LanguageNameFn = *const fn (?*anyopaque, []const u8, ?[]const u8) anye
 pub const LanguageDirectionFn = *const fn (?*anyopaque, []const u8) anyerror!LanguageDirection;
 pub const LanguageKnownTagFn = *const fn (?*anyopaque, []const u8) anyerror!bool;
 
+pub const PageMetadata = struct {
+    page_id: u64,
+    revision_id: u64,
+    revision_timestamp: []const u8,
+    revision_user: []const u8,
+    content_model: []const u8,
+};
+
+// Validated SQL redirect identity, borrowed for the page context lifetime.
+pub const RedirectTarget = struct {
+    namespace: i32,
+    title: []const u8,
+    fragment: []const u8,
+    interwiki: []const u8,
+};
+
+// Borrowed identity of one authenticated stored row, valid for its page context.
+pub const CurrentPage = struct {
+    namespace: i32,
+    metadata: PageMetadata,
+    redirect: ?RedirectTarget = null,
+    source_ctx: ?*anyopaque = null,
+    read_source: ?*const fn (?*anyopaque, std.mem.Allocator) anyerror![]const u8 = null,
+};
+
 pub const Host = struct {
     ctx: ?*anyopaque = null,
     current_title: []const u8 = "",
+    current_page: ?CurrentPage = null,
+    page_identity_failure: ?anyerror = null,
     now_unix: ?i64 = null,
     invoke_depth: u32 = 0,
     page_exists: ?PageExistsFn = null,
@@ -183,6 +210,19 @@ pub fn beginInvokeHostProbe(probe: *InvokeHostProbe) void {
 pub fn endInvokeHostProbe(probe: *InvokeHostProbe) void {
     std.debug.assert(invoke_host_probe == probe);
     invoke_host_probe = probe.previous;
+}
+
+// Only typed stored-page identity failures make page completion terminal.
+// Lua protected calls may clear their error envelope, but not this page state.
+pub fn recordPageIdentityFailure(runtime: *const rt.Context, failure: anyerror) void {
+    switch (failure) {
+        error.UnsupportedStoredInterwikiNamespace, error.UnsupportedStoredLocalInterwiki,
+        error.InvalidStoredRedirectTarget, error.NamespaceTitleCollision => {},
+        else => unreachable,
+    }
+    if (get(runtime)) |host| {
+        if (host.page_identity_failure == null) host.page_identity_failure = failure;
+    }
 }
 
 // enterInvoke needs the host to maintain invoke_depth and random state. This

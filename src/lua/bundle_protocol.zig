@@ -5,19 +5,27 @@ pub const max_source_bytes: usize = 16 * 1024 * 1024;
 pub const max_display_title_bytes: usize = 64 * 1024;
 pub const max_path_bytes: usize = 4096;
 pub const max_title_bytes: usize = 4096;
-const request_version: u8 = 3;
+const request_version: u8 = 4;
 pub const max_poem_metadata_bytes: usize = 16 * 1024 * 1024;
 // Encoder-only occurrence provenance; independent from Poem and never DPR data.
 pub const max_missing_dependency_metadata_bytes: usize = 16 * 1024 * 1024;
-const request_header_len: usize = 1 + 8 + 8 + 4 * 4;
+const request_header_len: usize = 1 + 8 + 8 + 8 + 8 + 8 + 4 + 4 * 4;
 const success_header_len: usize = 1 + 4 * 2 + 1;
 const error_header_len: usize = 1 + 4 * 3;
+
+pub const PageIdentity = struct {
+    index_offset: u64,
+    page_id: u64,
+    revision_id: u64,
+    namespace: u32,
+};
 
 pub const Request = struct {
     root: []const u8,
     dump: []const u8,
     now_unix: i64,
     page_ordinal: u64,
+    identity: PageIdentity,
     title: []const u8,
     source: []const u8,
 };
@@ -71,10 +79,14 @@ pub fn writeRequest(w: *std.Io.Writer, request: Request) !void {
     header[0] = request_version;
     std.mem.writeInt(i64, header[1..9], request.now_unix, .little);
     std.mem.writeInt(u64, header[9..17], request.page_ordinal, .little);
-    try putU32(header[17..21], request.root.len);
-    try putU32(header[21..25], request.dump.len);
-    try putU32(header[25..29], request.title.len);
-    try putU32(header[29..33], request.source.len);
+    std.mem.writeInt(u64, header[17..25], request.identity.index_offset, .little);
+    std.mem.writeInt(u64, header[25..33], request.identity.page_id, .little);
+    std.mem.writeInt(u64, header[33..41], request.identity.revision_id, .little);
+    std.mem.writeInt(u32, header[41..45], request.identity.namespace, .little);
+    try putU32(header[45..49], request.root.len);
+    try putU32(header[49..53], request.dump.len);
+    try putU32(header[53..57], request.title.len);
+    try putU32(header[57..61], request.source.len);
     try w.writeAll(&outer);
     try w.writeAll(&header);
     try w.writeAll(request.root);
@@ -101,6 +113,12 @@ pub fn decodeRequest(bytes: []const u8) !Request {
     var cursor: usize = 1;
     const now_unix = std.mem.readInt(i64, (try take(bytes, &cursor, 8))[0..8], .little);
     const page_ordinal = std.mem.readInt(u64, (try take(bytes, &cursor, 8))[0..8], .little);
+    const identity: PageIdentity = .{
+        .index_offset = std.mem.readInt(u64, (try take(bytes, &cursor, 8))[0..8], .little),
+        .page_id = std.mem.readInt(u64, (try take(bytes, &cursor, 8))[0..8], .little),
+        .revision_id = std.mem.readInt(u64, (try take(bytes, &cursor, 8))[0..8], .little),
+        .namespace = std.mem.readInt(u32, (try take(bytes, &cursor, 4))[0..4], .little),
+    };
     const root_len = try takeU32(bytes, &cursor);
     const dump_len = try takeU32(bytes, &cursor);
     const title_len = try takeU32(bytes, &cursor);
@@ -112,6 +130,7 @@ pub fn decodeRequest(bytes: []const u8) !Request {
         .source = try take(bytes, &cursor, source_len),
         .now_unix = now_unix,
         .page_ordinal = page_ordinal,
+        .identity = identity,
     };
     if (cursor != bytes.len) return error.InvalidFrame;
     try validateRequest(request);
@@ -248,7 +267,7 @@ pub fn decodeReply(bytes: []const u8) !Reply {
 test "binary bundle request round trips without copying fields" {
     var bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer bytes.deinit();
-    try writeRequest(&bytes.writer, .{ .root = "root", .dump = "dump.xml", .now_unix = 42, .page_ordinal = 17, .title = "cat", .source = "A & B" });
+    try writeRequest(&bytes.writer, .{ .root = "root", .dump = "dump.xml", .now_unix = 42, .page_ordinal = 17, .identity = .{ .index_offset = 123, .page_id = 456, .revision_id = 789, .namespace = 1728 }, .title = "cat", .source = "A & B" });
     const framed = bytes.written();
     const len = std.mem.readInt(u32, framed[0..4], .little);
     try std.testing.expectEqual(@as(u32, @intCast(framed.len - 4)), len);
@@ -259,6 +278,7 @@ test "binary bundle request round trips without copying fields" {
     try std.testing.expectEqualStrings("A & B", decoded.source);
     try std.testing.expectEqual(@as(i64, 42), decoded.now_unix);
     try std.testing.expectEqual(@as(u64, 17), decoded.page_ordinal);
+    try std.testing.expectEqualDeep(PageIdentity{ .index_offset = 123, .page_id = 456, .revision_id = 789, .namespace = 1728 }, decoded.identity);
 }
 
 test "binary bundle replies preserve output and errors" {
@@ -288,12 +308,12 @@ test "binary bundle replies preserve output and errors" {
 test "binary bundle protocol rejects malformed framing" {
     var request_bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer request_bytes.deinit();
-    try writeRequest(&request_bytes.writer, .{ .root = "root", .dump = "dump", .now_unix = 1, .page_ordinal = 0, .title = "x", .source = "body" });
+    try writeRequest(&request_bytes.writer, .{ .root = "root", .dump = "dump", .now_unix = 1, .page_ordinal = 0, .identity = .{ .index_offset = 0, .page_id = 1, .revision_id = 2, .namespace = 0 }, .title = "x", .source = "body" });
     const request = request_bytes.written()[4..];
     try std.testing.expectError(error.InvalidFrame, decodeRequest(request[0 .. request.len - 1]));
     const damaged = try std.testing.allocator.dupe(u8, request);
     defer std.testing.allocator.free(damaged);
-    std.mem.writeInt(u32, damaged[29..33], 0xffff_ffff, .little);
+    std.mem.writeInt(u32, damaged[57..61], 0xffff_ffff, .little);
     try std.testing.expectError(error.InvalidFrame, decodeRequest(damaged));
 
     try std.testing.expectError(error.InvalidFrame, decodeReply(&.{}));
@@ -375,13 +395,13 @@ test "Poem success rejects truncated unknown oversized and invalid UTF8 metadata
 test "bundle request version rejects old native workers" {
     var bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer bytes.deinit();
-    try writeRequest(&bytes.writer, .{ .root = "root", .dump = "dump", .now_unix = 1, .page_ordinal = 0, .title = "x", .source = "body" });
+    try writeRequest(&bytes.writer, .{ .root = "root", .dump = "dump", .now_unix = 1, .page_ordinal = 0, .identity = .{ .index_offset = 0, .page_id = 1, .revision_id = 2, .namespace = 0 }, .title = "x", .source = "body" });
     const payload = try std.testing.allocator.dupe(u8, bytes.written()[4..]);
     defer std.testing.allocator.free(payload);
-    try std.testing.expectEqual(@as(u8, 3), payload[0]);
-    payload[0] = 2;
+    try std.testing.expectEqual(@as(u8, 4), payload[0]);
+    payload[0] = 3;
     try std.testing.expectError(error.InvalidFrame, decodeRequest(payload));
-    payload[0] = 4;
+    payload[0] = 5;
     try std.testing.expectError(error.InvalidFrame, decodeRequest(payload));
 }
 

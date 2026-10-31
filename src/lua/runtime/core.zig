@@ -3235,6 +3235,9 @@ pub const Context = struct {
                 try self.tables.put(self.mapAllocator(), source_table, table);
                 return .{ .table = table };
             }
+            // Title values retain native per-page identity outside their Lua fields.
+            // Removing their methods cannot make that state portable to a new Context.
+            if (source_table.native_namespace == .title_value) return error.UnsupportedModuleTemplate;
             if (source_table.cross_page_stable and source_table.read_only) {
                 try self.tables.put(self.mapAllocator(), source_table, source_table);
                 return .{ .table = source_table };
@@ -3550,6 +3553,7 @@ pub const Context = struct {
                     if (!try self.first(table)) return true;
                     if (self.clone.source.nativeMetatableIndex(table)) |index|
                         return self.clone.target.template_native_metatables[index] != null;
+                    if (table.native_namespace == .title_value) return false;
                     if (table.cross_page_stable and table.read_only) return true;
                     if (table.native_namespace == .namespace_map)
                         return self.clone.target.findTemplateNamespaceMap(self.clone.source, table) != null;
@@ -9500,4 +9504,40 @@ test "cold live-host admission still promotes pure roots and preserves loader fa
     try std.testing.expectError(error.AotCallFailed, failing_child.requireByName("Module:TemplateProbe"));
     try std.testing.expectEqualStrings("NotImplemented", failing_child.aotErrorName() orelse "missing");
     try std.testing.expect(failing_source.aotErrorName() == null);
+}
+
+
+test "title values refuse module template portability before stable sharing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var source = try Context.init(a, 0);
+    defer source.deinit();
+    var target = try Context.init(a, 0);
+    defer target.deinit();
+    const source_meta = try source.newTable();
+    const target_meta = try target.newTable();
+    source.registerNativeMetatable(.title_value, source_meta);
+    target.registerNativeMetatable(.title_value, target_meta);
+    var clone = Context.ModuleTemplateClone{ .source = &source, .target = &target };
+    defer clone.deinit();
+    const mapped_meta = try clone.cloneValue(.{ .table = source_meta });
+    try std.testing.expect(mapped_meta.table == target_meta);
+    const title = try source.newNativeNamespace(.title_value);
+    try title.rawSetNativeField(.title_value, "namespace", .{ .number = 0 });
+    try title.rawSetNativeField(.title_value, "text", .{ .string = "Event:Stored page" });
+    try title.rawSetNativeField(.title_value, "prefixedText", .{ .string = "Event:Stored page" });
+    title.metatable = source_meta;
+    // This deliberately has no native methods; their removal cannot erase identity.
+    title.cross_page_stable = true;
+    title.read_only = true;
+    try std.testing.expectError(error.UnsupportedModuleTemplate, clone.cloneValue(.{ .table = title }));
+    var preflight = Context.PromotionPreflight{ .clone = .{ .source = &source, .target = &target } };
+    defer preflight.deinit();
+    try std.testing.expect(!try preflight.value(.{ .table = title }));
+    try std.testing.expect(try preflight.value(.{ .table = source_meta }));
+    const ordinary = try source.newTable();
+    try ordinary.rawSet(a, .{ .string = "value" }, .{ .number = 7 });
+    const copied = try clone.cloneValue(.{ .table = ordinary });
+    try std.testing.expectEqual(@as(f64, 7), copied.table.rawGet(.{ .string = "value" }).?.number);
 }

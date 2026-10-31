@@ -14,6 +14,7 @@ pub const Expansion = struct {
 };
 
 pub const Failure = protocol.ErrorReply;
+pub const PageIdentity = protocol.PageIdentity;
 
 // Transporting an error must not turn resource exhaustion into a semantic
 // fallback. Keep this shared with the blob writer's defensive classification.
@@ -23,7 +24,7 @@ pub fn operationalFailure(failure: Failure) ?anyerror {
     // Asset loading, protocol validation and bootstrap are compiler operations,
     // not per-page MediaWiki semantics. Never publish empty pages for them.
     if (!std.mem.eql(u8, failure.stage, "expand")) return error.BundleInfrastructureFailed;
-    inline for (&.{ "BundleRootChanged", "BundleDumpChanged", "BundleTimeChanged", "InvalidPageIndex", "InvalidPageTitleIndex", "PageIndexChanged", "InvalidProgramMetadata", "InvalidPoemMetadata", "MissingPoemMetadata", "OrphanPoemMarker", "FrameTooLarge" }) |name|
+    inline for (&.{ "BundleRootChanged", "BundleDumpChanged", "BundleTimeChanged", "InvalidPageIndex", "InvalidPageTitleIndex", "NamespaceTitleCollision", "NamespaceTitleMismatch", "InvalidNamespace", "UnsupportedStoredInterwikiNamespace", "UnsupportedStoredLocalInterwiki", "InvalidStoredRedirectTarget", "PageIndexChanged", "InvalidProgramMetadata", "InvalidPoemMetadata", "MissingPoemMetadata", "OrphanPoemMarker", "FrameTooLarge" }) |name|
         if (std.mem.eql(u8, failure.error_name, name)) return error.BundleInfrastructureFailed;
     return null;
 }
@@ -168,7 +169,7 @@ pub const Worker = struct {
         }
     }
 
-    fn writeRequest(self: *Worker, child: *std.process.Child, page_ordinal: u64, title: []const u8, source: []const u8) !void {
+    fn writeRequest(self: *Worker, child: *std.process.Child, page_ordinal: u64, identity: PageIdentity, title: []const u8, source: []const u8) !void {
         var buffer: [8192]u8 = undefined;
         var writer = child.stdin.?.writer(self.io, &buffer);
         try protocol.writeRequest(&writer.interface, .{
@@ -176,12 +177,13 @@ pub const Worker = struct {
             .dump = self.dump,
             .now_unix = self.now_unix,
             .page_ordinal = page_ordinal,
+            .identity = identity,
             .title = title,
             .source = source,
         });
     }
 
-    pub fn expand(self: *Worker, a: A, page_ordinal: u64, title: []const u8, source: []const u8) !?Expansion {
+    pub fn expand(self: *Worker, a: A, page_ordinal: u64, identity: PageIdentity, title: []const u8, source: []const u8) !?Expansion {
         self.last_failure = null;
         if (source.len > protocol.max_source_bytes) return error.RequestTooLarge;
         // Both attempts share the page budget; each new generation has a
@@ -189,7 +191,7 @@ pub const Worker = struct {
         // still requires the outer watchdog for a stuck/non-reading child.
         var remaining_page_ns = @as(i128, self.timeout_ms) * std.time.ns_per_ms;
         var remote_oom = false;
-        return self.expandOnce(a, page_ordinal, title, source, &remaining_page_ns, &remote_oom) catch |err| {
+        return self.expandOnce(a, page_ordinal, identity, title, source, &remaining_page_ns, &remote_oom) catch |err| {
             if (!remote_oom) return err;
             // Only a fully decoded remote OOM reaches here. Local allocator,
             // transport, semantic and deadline failures never authorize replay.
@@ -200,7 +202,7 @@ pub const Worker = struct {
             });
             self.last_failure = null;
             remote_oom = false;
-            const recovered = self.expandOnce(a, page_ordinal, title, source, &remaining_page_ns, &remote_oom) catch |cold_err| {
+            const recovered = self.expandOnce(a, page_ordinal, identity, title, source, &remaining_page_ns, &remote_oom) catch |cold_err| {
                 self.reset();
                 self.oom_retry_failed +|= 1;
                 diagnostics.printLine("bundle OOM recovery failed ordinal={d} generation={d} error={s}\n", .{ page_ordinal, self.generation, @errorName(cold_err) });
@@ -224,7 +226,7 @@ pub const Worker = struct {
         };
     }
 
-    fn expandOnce(self: *Worker, a: A, page_ordinal: u64, title: []const u8, source: []const u8, remaining_page_ns: *i128, remote_oom: *bool) !?Expansion {
+    fn expandOnce(self: *Worker, a: A, page_ordinal: u64, identity: PageIdentity, title: []const u8, source: []const u8, remaining_page_ns: *i128, remote_oom: *bool) !?Expansion {
         if (remaining_page_ns.* <= 0) return error.Timeout;
         const start = std.Io.Clock.awake.now(self.io).toNanoseconds();
         var page_started: ?i128 = if (self.child != null and self.ready_received) start else null;
@@ -234,7 +236,7 @@ pub const Worker = struct {
         };
         var deadline = start + if (page_started != null) remaining_page_ns.* else @as(i128, self.startup_timeout_ms) * std.time.ns_per_ms;
         const child = try self.ensure();
-        self.writeRequest(child, page_ordinal, title, source) catch |err| {
+        self.writeRequest(child, page_ordinal, identity, title, source) catch |err| {
             self.reset();
             return err;
         };
@@ -348,4 +350,10 @@ test "Poem provenance failures are operational rather than semantic fallback" {
     inline for (&.{ "InvalidPoemMetadata", "MissingPoemMetadata", "OrphanPoemMarker", "FrameTooLarge" }) |name| {
         try std.testing.expectEqual(error.BundleInfrastructureFailed, operationalFailure(.{ .stage = "expand", .error_name = name, .detail = "" }).?);
     }
+}
+
+test "page identity failures are operational rather than fallback" {
+    inline for (&.{ "InvalidPageIndex", "NamespaceTitleCollision", "NamespaceTitleMismatch", "InvalidNamespace", "UnsupportedStoredInterwikiNamespace", "UnsupportedStoredLocalInterwiki", "InvalidStoredRedirectTarget" }) |name|
+        try std.testing.expectEqual(error.BundleInfrastructureFailed, operationalFailure(.{ .stage = "expand", .error_name = name, .detail = "" }).?);
+    try std.testing.expect(operationalFailure(.{ .stage = "expand", .error_name = "LuaRaised", .detail = "UnsupportedStoredInterwikiNamespace" }) == null);
 }

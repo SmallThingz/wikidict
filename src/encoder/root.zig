@@ -3,6 +3,7 @@ const blobs = @import("blob_encoder");
 pub const part_kind = blobs.part_kind;
 pub const language_source = @import("language_source.zig");
 pub const document_ir = blobs.document_ir;
+pub const wikitext_syntax = blobs.wikitext_syntax;
 pub const blob_format = blobs.blob_format;
 pub const blob_catalog = blobs.blob_catalog;
 pub const alias_codec = blobs.alias_codec;

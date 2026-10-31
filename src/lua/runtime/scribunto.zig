@@ -260,20 +260,26 @@ fn one(value: Value) ![]const Value {
     return out;
 }
 
-fn cloneValue(a: std.mem.Allocator, value: Value, seen: *std.AutoHashMapUnmanaged(*rt.Table, *rt.Table)) !Value {
+fn cloneValue(runtime: *rt.Context, title_state: *title_lib.CloneState, value: Value, seen: *std.AutoHashMapUnmanaged(*rt.Table, *rt.Table)) !Value {
+    const a = runtime.allocator;
     if (value != .table) return value;
     if (seen.get(value.table)) |old| return .{ .table = old };
-    const copy = try a.create(rt.Table);
-    copy.* = .{};
+    const is_title = value.table.native_namespace == .title_value;
+    const copy = if (is_title) try runtime.newNativeNamespace(.title_value) else blk: {
+        const table = try a.create(rt.Table);
+        table.* = .{};
+        break :blk table;
+    };
     try seen.put(a, value.table, copy);
     var it = value.table.iterator();
     while (it.next()) |entry| {
-        const item = try cloneValue(a, entry.value_ptr.*, seen);
+        const item = try cloneValue(runtime, title_state, entry.value_ptr.*, seen);
         try copy.rawSet(a, entry.key_ptr.*, item);
     }
     copy.append_index = value.table.append_index;
     if (value.table.metatable) |mt|
-        copy.metatable = (try cloneValue(a, .{ .table = mt }, seen)).table;
+        copy.metatable = (try cloneValue(runtime, title_state, .{ .table = mt }, seen)).table;
+    if (is_title) try title_lib.retainCloneState(title_state, a, value.table, copy);
     return .{ .table = copy };
 }
 
@@ -353,11 +359,12 @@ fn installLoadDataChild(runtime: *rt.Context, state: *State, child: *rt.Context)
     child.current_frame = empty_frame.table;
 }
 
-fn cloneCall(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+fn cloneCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    const title_state: *title_lib.CloneState = @ptrCast(@alignCast(raw orelse return error.MissingTitleState));
     if (args.len == 0) return one(.nil);
     var seen: std.AutoHashMapUnmanaged(*rt.Table, *rt.Table) = .empty;
     defer seen.deinit(runtime.allocator);
-    return one(try cloneValue(runtime.allocator, args[0], &seen));
+    return one(try cloneValue(runtime, title_state, args[0], &seen));
 }
 
 fn installStringAliases(runtime: *rt.Context, string: *rt.Table, ustring: *rt.Table) !void {
@@ -385,7 +392,7 @@ fn installInto(runtime: *rt.Context, state: *State) !void {
     try html_lib.install(runtime, mw);
     try mw.rawSetNativeField(.mw, "ustring", .{ .table = ustring });
     try text_lib.install(runtime, mw);
-    try title_lib.install(runtime, mw, case_mapper);
+    const title_state = try title_lib.installWithCloneState(runtime, mw, case_mapper);
     try language_lib.install(runtime, mw, case_mapper);
     try installStringAliases(runtime, string.table, ustring);
     try frame_lib.install(runtime, mw);
@@ -395,7 +402,7 @@ fn installInto(runtime: *rt.Context, state: *State) !void {
     try os_lib.install(runtime);
     try mw.rawSetNativeField(.mw, "loadData", try runtime.newNative(state, loadDataCall));
     try mw.rawSetNativeField(.mw, "loadJsonData", try runtime.newNative(state, loadJsonDataCall));
-    try mw.rawSetNativeField(.mw, "clone", try runtime.newNative(null, cloneCall));
+    try mw.rawSetNativeField(.mw, "clone", try runtime.newNative(title_state, cloneCall));
     try runtime.setGlobal(state.mw_slot, .{ .table = mw });
 }
 fn loadDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
@@ -1736,4 +1743,98 @@ test "static headword data warms without inventing a page module or changing fie
     try std.testing.expectEqual(@as(usize, 2), DataProbe.root_calls.load(.monotonic));
     try std.testing.expectEqual(@as(usize, 1), shared.entries.count());
     try std.testing.expect(shared.hits > 0);
+}
+
+test "mw clone preserves typed title identity through mutation and nested cycles" {
+    const Probe = struct {
+        fn source(_: ?*anyopaque, a: std.mem.Allocator) ![]const u8 {
+            return a.dupe(u8, "complete stored revision");
+        }
+        fn ordinaryId(_: ?*anyopaque, _: []const u8) !?u64 {
+            return 1728;
+        }
+        fn temporaryIndex(_: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const Value {
+            return one(.{ .string = "temporary index" });
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try makeMovedHostContext(arena.allocator());
+    defer runtime.deinit();
+    var host = host_api.Host{
+        .current_title = "Event:Stored page",
+        .stable_page_reads = true,
+        .page_id = Probe.ordinaryId,
+        .current_page = .{
+            .namespace = 0,
+            .metadata = .{ .page_id = 8451, .revision_id = 32521, .revision_timestamp = "2026-01-01T00:00:00Z", .revision_user = "fixture", .content_model = "wikitext" },
+            .read_source = Probe.source,
+        },
+    };
+    host_api.set(&runtime, &host);
+    const mw = runtime.getGlobal(23);
+    const titles = try runtime.getIndex(mw, .{ .string = "title" });
+    const made = try callField(&runtime, titles, "getCurrentTitle", &.{});
+    defer rt.freeResults(made);
+    const original = made[0];
+    const first = try callField(&runtime, mw, "clone", &.{original});
+    defer rt.freeResults(first);
+    try std.testing.expect(first[0].table != original.table);
+    try std.testing.expect(first[0].table.metatable.? != original.table.metatable.?);
+    try std.testing.expect(first[0].table.native_namespace == .title_value);
+    try std.testing.expectEqual(@as(f64, 0), (try runtime.getIndex(first[0], .{ .string = "namespace" })).number);
+    try std.testing.expectEqual(@as(f64, 8451), (try runtime.getIndex(first[0], .{ .string = "id" })).number);
+    const content = try callField(&runtime, first[0], "getContent", &.{first[0]});
+    defer rt.freeResults(content);
+    try std.testing.expectEqualStrings("complete stored revision", content[0].string);
+    const second = try callField(&runtime, mw, "clone", &.{first[0]});
+    defer rt.freeResults(second);
+    try std.testing.expectEqual(@as(f64, 8451), (try runtime.getIndex(second[0], .{ .string = "id" })).number);
+
+    const ordinary = try callField(&runtime, titles, "new", &.{.{ .string = "Event:Stored page" }});
+    defer rt.freeResults(ordinary);
+    const ordinary_clone = try callField(&runtime, mw, "clone", &.{ordinary[0]});
+    defer rt.freeResults(ordinary_clone);
+    try std.testing.expect(ordinary_clone[0].table.native_namespace == .title_value);
+    try std.testing.expectEqual(@as(f64, 1728), (try runtime.getIndex(ordinary_clone[0], .{ .string = "namespace" })).number);
+    try std.testing.expectEqual(@as(f64, 1728), (try runtime.getIndex(ordinary_clone[0], .{ .string = "id" })).number);
+
+    try original.table.rawSetNativeField(.title_value, "getContent", .nil);
+    try original.table.rawSetNativeField(.title_value, "subPageTitle", .nil);
+    const stripped = try callField(&runtime, mw, "clone", &.{original});
+    defer rt.freeResults(stripped);
+    try std.testing.expect(stripped[0].table.native_namespace == .title_value);
+    try std.testing.expectEqual(@as(f64, 8451), (try runtime.getIndex(stripped[0], .{ .string = "id" })).number);
+    try std.testing.expectEqualStrings("complete stored revision", (try runtime.getIndex(stripped[0], .{ .string = "content" })).string);
+
+    const original_meta = original.table.metatable.?;
+    const index = original_meta.rawGet(.{ .string = "__index" }).?;
+    try original_meta.rawSet(runtime.allocator, .{ .string = "__index" }, try runtime.newNative(null, Probe.temporaryIndex));
+    const changed_meta = try callField(&runtime, mw, "clone", &.{original});
+    defer rt.freeResults(changed_meta);
+    try std.testing.expectEqualStrings("temporary index", (try runtime.getIndex(changed_meta[0], .{ .string = "id" })).string);
+    try changed_meta[0].table.metatable.?.rawSet(runtime.allocator, .{ .string = "__index" }, index);
+    try original_meta.rawSet(runtime.allocator, .{ .string = "__index" }, index);
+    try std.testing.expectEqual(@as(f64, 8451), (try runtime.getIndex(changed_meta[0], .{ .string = "id" })).number);
+
+    try original.table.rawSetNativeField(.title_value, "prefixedText", .{ .string = "Template:Changed" });
+    const changed_title = try callField(&runtime, mw, "clone", &.{original});
+    defer rt.freeResults(changed_title);
+    try std.testing.expectEqual(@as(f64, 1728), (try runtime.getIndex(changed_title[0], .{ .string = "id" })).number);
+    try changed_title[0].table.rawSetNativeField(.title_value, "prefixedText", .{ .string = "Event:Stored page" });
+    try original.table.rawSetNativeField(.title_value, "prefixedText", .{ .string = "Event:Stored page" });
+    try std.testing.expectEqual(@as(f64, 8451), (try runtime.getIndex(changed_title[0], .{ .string = "id" })).number);
+
+    const cycle = try runtime.newTable();
+    try cycle.rawSet(runtime.allocator, .{ .string = "self" }, .{ .table = cycle });
+    try cycle.rawSet(runtime.allocator, .{ .string = "title" }, original);
+    try original.table.rawSet(runtime.allocator, .{ .string = "owner" }, .{ .table = cycle });
+    const nested = try callField(&runtime, mw, "clone", &.{.{ .table = cycle }});
+    defer rt.freeResults(nested);
+    try std.testing.expect(nested[0].table.rawGet(.{ .string = "self" }).?.table == nested[0].table);
+    const nested_title = nested[0].table.rawGet(.{ .string = "title" }).?;
+    try std.testing.expect(nested_title.table.native_namespace == .title_value);
+    try std.testing.expect(nested_title.table.rawGet(.{ .string = "owner" }).?.table == nested[0].table);
+    try std.testing.expectEqual(@as(f64, 8451), (try runtime.getIndex(nested_title, .{ .string = "id" })).number);
+    try std.testing.expectEqualStrings("complete stored revision", (try runtime.getIndex(nested_title, .{ .string = "content" })).string);
 }

@@ -170,7 +170,8 @@ const Engine = struct {
         if (!std.mem.eql(u8, request.root, self.requested_root)) return error.BundleRootChanged;
         if (!std.mem.eql(u8, request.dump, self.requested_dump)) return error.BundleDumpChanged;
         if (request.now_unix != self.requested_now_unix) return error.BundleTimeChanged;
-        if (!self.provider.isCanonicalPage(request.title, request.page_ordinal)) return null;
+        const current_page = try self.provider.resolveCurrentPage(request.identity, request.title, request.page_ordinal);
+        if (!try self.provider.isCanonicalCurrentPage(request.identity, current_page)) return null;
         var page_work = work_stats.Page{
             .sampled = self.profile_enabled and (self.measured_pages & 31) == 0,
             .root_sampled = self.profile_enabled and (self.measured_pages & 31) == 0,
@@ -192,7 +193,8 @@ const Engine = struct {
         expander.invoke_reuse = if (self.invoke_reuse) |*stats| stats else null;
         stage.* = "expand";
         const expand_start = work_stats.cpuNow();
-        const output = expander.expandFragment(request.title, request.source, self.requested_now_unix) catch |err| {
+        const current = try self.provider.currentPageContext(page_a, current_page);
+        const output = expander.expandStoredFragment(request.title, request.source, self.requested_now_unix, current) catch |err| {
             page_work.expand_ns +|= work_stats.elapsed(expand_start);
             detail.* = try page_a.dupe(u8, if (ctx.last_error == .string)
                 ctx.last_error.string

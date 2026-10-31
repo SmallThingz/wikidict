@@ -21,6 +21,8 @@ const DerivedPreferredName = struct {
     code: []const u8,
 };
 
+pub const SourceLanguageBanner = struct { heading: []const u8, level: u8, target: []const u8, label: []const u8 };
+
 pub const Registry = struct {
     arena: std.heap.ArenaAllocator,
     names: std.StringHashMapUnmanaged([]const u8) = .empty,
@@ -33,6 +35,7 @@ pub const Registry = struct {
     headings: std.StringHashMapUnmanaged([]const u8) = .empty,
     arabic_articleless_names: std.StringHashMapUnmanaged(?DerivedPreferredName) = .empty,
     local_aliases: std.StringHashMapUnmanaged(?[]const u8) = .empty,
+    source_banners: std.StringHashMapUnmanaged(?SourceLanguageBanner) = .empty,
     content_code: ?[]const u8 = null,
     link_trail_ranges: []const LinkTrailRange = &default_link_trail_ranges,
     link_trail_configured: bool = false,
@@ -54,6 +57,7 @@ pub const Registry = struct {
         self.canonical_names.deinit(self.arena.allocator());
         self.arabic_articleless_names.deinit(self.arena.allocator());
         self.local_aliases.deinit(self.arena.allocator());
+        self.source_banners.deinit(self.arena.allocator());
         self.arena.deinit();
         self.* = undefined;
     }
@@ -127,6 +131,49 @@ pub const Registry = struct {
         const owner = self.names.get(candidate.original_name) orelse return null;
         if (!std.mem.eql(u8, owner, candidate.code)) return null;
         return owner;
+    }
+
+    /// ASCII case tolerance belongs only to an authenticated source-banner proof.
+    /// Code aliases and any competing/ambiguous folded spelling provide no proof.
+    pub fn sourceBannerNameMatches(self: *const Registry, code_value: []const u8, value: []const u8) bool {
+        if (!self.codes.contains(code_value) or value.len == 0) return false;
+        var found = false;
+        var names = self.names.iterator();
+        while (names.next()) |entry| {
+            if (!std.ascii.eqlIgnoreCase(entry.key_ptr.*, value)) continue;
+            if (!std.mem.eql(u8, entry.value_ptr.*, code_value)) return false;
+            if (self.codes.contains(entry.key_ptr.*)) continue;
+            found = true;
+        }
+        var ambiguous = self.ambiguous.iterator();
+        while (ambiguous.next()) |entry| if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, value)) return false;
+        var local = self.local_aliases.iterator();
+        while (local.next()) |entry| {
+            if (!std.ascii.eqlIgnoreCase(entry.key_ptr.*, value)) continue;
+            const owner = entry.value_ptr.* orelse return false;
+            if (!std.mem.eql(u8, owner, code_value)) return false;
+        }
+        return found;
+    }
+    pub fn addSourceLanguageBanner(self: *Registry, code_value: []const u8, proof: SourceLanguageBanner) !void {
+        if (!self.sourceBannerNameMatches(code_value, proof.target) or !self.sourceBannerNameMatches(code_value, proof.label)) return;
+        if (self.source_banners.getPtr(code_value)) |stored| {
+            if (stored.*) |previous| {
+                if (previous.level != proof.level or !std.mem.eql(u8, previous.heading, proof.heading) or
+                    !std.mem.eql(u8, previous.target, proof.target) or !std.mem.eql(u8, previous.label, proof.label)) stored.* = null;
+            }
+            return;
+        }
+        const a = self.arena.allocator();
+        try self.source_banners.put(a, try a.dupe(u8, code_value), .{
+            .heading = try a.dupe(u8, proof.heading), .level = proof.level,
+            .target = try a.dupe(u8, proof.target), .label = try a.dupe(u8, proof.label),
+        });
+    }
+    pub fn matchesSourceLanguageBanner(self: *const Registry, code_value: []const u8, heading: []const u8, level: u8) bool {
+        const proof = (self.source_banners.get(code_value) orelse return false) orelse return false;
+        return proof.level == level and std.mem.eql(u8, proof.heading, heading) and
+            self.sourceBannerNameMatches(code_value, proof.target) and self.sourceBannerNameMatches(code_value, proof.label);
     }
 
     pub fn content(self: *const Registry) ?Resolved {

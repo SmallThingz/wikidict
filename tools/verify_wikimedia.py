@@ -72,8 +72,8 @@ def unescape(value):
     return re.sub(r'\\([tnr\\])', lambda m: {'t': '\t', 'n': '\n', 'r': '\r', '\\': '\\'}[m[1]], value)
 
 
-def row(fields, ordinal):
-    return dict(offset=int(fields[0]), length=int(fields[1]), title=unescape(fields[2].decode()),
+def row(fields, ordinal, index_offset):
+    return dict(index_offset=index_offset, offset=int(fields[0]), length=int(fields[1]), title=unescape(fields[2].decode()),
                 page_id=int(fields[4]), revision=int(fields[5]), timestamp=fields[6].decode(),
                 namespace=int(fields[9]), ordinal=ordinal, decode=fields[11] == b'1')
 
@@ -82,10 +82,13 @@ def select_pages(index, count, seed, titles):
     """Uniform reservoir over nonredirect main-namespace wikitext with source."""
     rng = random.Random(seed)
     selected, targets, revisions = [], {}, {}
-    wanted = {title.encode() for title in titles}
+    wanted = set(titles)
     population = ordinal = 0
     with index.open('rb') as f:
+        next_index_offset = 0
         for line in f:
+            index_offset = next_index_offset
+            next_index_offset += len(line)
             if line.startswith(b'#'):
                 if b'v2' in line:
                     raise ValueError('Compressed page index unsupported; use raw XML and its index')
@@ -97,13 +100,14 @@ def select_pages(index, count, seed, titles):
                 raise ValueError(f'Invalid index at ordinal {ordinal}')
             if fields[9] in (b'10', b'828'):
                 revisions[unescape(fields[2].decode())] = int(fields[5])
-            if fields[2] in wanted:
-                targets[unescape(fields[2].decode())] = row(fields, ordinal)
+            decoded_title = unescape(fields[2].decode())
+            if decoded_title in wanted:
+                targets[decoded_title] = row(fields, ordinal, index_offset)
             if fields[9] == b'0' and fields[8] == b'wikitext' and not fields[3] and fields[10] == b'1':
                 population += 1
                 slot = population - 1 if population <= count else rng.randrange(population)
                 if slot < count:
-                    item = row(fields, ordinal)
+                    item = row(fields, ordinal, index_offset)
                     if slot == len(selected):
                         selected.append(item)
                     else:
@@ -121,12 +125,31 @@ def source_at(dump, page):
     return (ET.fromstring(b'<text>' + raw + b'</text>').text or '') if page['decode'] else raw.decode()
 
 
+def request_payload(root, dump, now, page, source):
+    """Version4 row identity is taken from the selected index row, never inferred."""
+    parts = [str(root).encode(), str(dump).encode(), page['title'].encode(), source.encode()]
+    if not all(0 < len(part) <= 4096 for part in parts[:3]) or len(parts[3]) > 16 * 1024 * 1024:
+        raise ValueError('Request exceeds worker protocol field limits')
+    values = [page['ordinal'], page['index_offset'], page['page_id'], page['revision']]
+    if any(type(value) is not int or not 0 <= value < 2**64 for value in values):
+        raise ValueError('Invalid selected page identity')
+    namespace = page['namespace']
+    if type(namespace) is not int or not 0 <= namespace < 2**32:
+        raise ValueError('Invalid selected page namespace')
+    payload = struct.pack('<BqQQQQIIIII', 4, now, *values, namespace, *map(len, parts)) + b''.join(parts)
+    if len(payload) > 32 * 1024 * 1024:
+        raise ValueError('Request exceeds worker frame limit')
+    return payload
+
+
 class NativeWorker:
     def __init__(self, executable, root, dump, now, timeout, log):
         self.executable, self.root, self.dump = executable, root, dump
         self.now, self.timeout, self.log, self.child = now, timeout, log, None
+        self.ready_received = False
 
     def close(self):
+        self.ready_received = False
         if self.child is not None:
             self.child.kill()
             self.child.wait()
@@ -155,10 +178,7 @@ class NativeWorker:
         return bytes(out)
 
     def expand(self, page, source):
-        parts = [str(self.root).encode(), str(self.dump).encode(), page['title'].encode(), source.encode()]
-        if len(parts[3]) > 16 * 1024 * 1024:
-            raise ValueError('Source exceeds worker protocol limit')
-        payload = struct.pack('<BqQIIII', 2, self.now, page['ordinal'], *map(len, parts)) + b''.join(parts)
+        payload = request_payload(self.root, self.dump, self.now, page, source)
         try:
             if self.child is None:
                 self.child = subprocess.Popen([str(self.executable)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -167,38 +187,61 @@ class NativeWorker:
                 os.set_blocking(self.child.stdout.fileno(), False)
             deadline = time.monotonic() + self.timeout
             self.transfer(self.child.stdin, struct.pack('<I', len(payload)) + payload, True, deadline)
-            size = struct.unpack('<I', self.transfer(self.child.stdout, 4, False, deadline))[0]
-            if not 0 < size <= 32 * 1024 * 1024:
-                raise ValueError('Invalid native reply length')
-            return decode_reply(self.transfer(self.child.stdout, size, False, deadline))
+            return self.read_reply(deadline)
         except Exception:
             self.close()
             raise
 
 
+    def read_reply(self, deadline):
+        while True:
+            size = struct.unpack('<I', self.transfer(self.child.stdout, 4, False, deadline))[0]
+            if not 0 < size <= 32 * 1024 * 1024:
+                raise ValueError('Invalid native reply length')
+            payload = self.transfer(self.child.stdout, size, False, deadline)
+            if payload == b'\x03':
+                if self.ready_received:
+                    raise ValueError('Duplicate native readiness')
+                self.ready_received = True
+                continue
+            if not self.ready_received and (not payload or payload[0] != 1):
+                raise ValueError('Native output before readiness')
+            return decode_reply(payload)
+
+
 def decode_reply(payload):
     if payload == b'\x02':
         raise ValueError('Worker skipped noncanonical page; sample is not verified')
-    if not payload or payload[0] not in (0, 1):
+    if not payload or payload[0] not in (0, 1, 4, 5, 6):
         raise ValueError('Invalid native reply')
-    count = 2 if payload[0] == 0 else 3
-    header = 10 if payload[0] == 0 else 13
+    error_reply = payload[0] == 1
+    metadata_count = 2 if payload[0] == 6 else int(payload[0] in (4, 5))
+    count = 3 if error_reply else 2
+    header = 13 if error_reply else 10 + 4 * metadata_count
     if len(payload) < header:
         raise ValueError('Truncated native reply')
-    diagnostic = payload[9] if payload[0] == 0 else 0
+    diagnostic = 0 if error_reply else payload[9]
     if diagnostic not in (0, 1):
         raise ValueError('Invalid native expansion diagnostic')
-    lengths = struct.unpack_from('<' + 'I' * count, payload, 1)
+    lengths = list(struct.unpack_from('<' + 'I' * count, payload, 1))
+    if not error_reply:
+        lengths.extend(struct.unpack_from('<' + 'I' * metadata_count, payload, 10))
+        if lengths[0] > 16 * 1024 * 1024 or lengths[1] > 64 * 1024:
+            raise ValueError('Invalid native output field limits')
+        if any(not 0 < length <= 16 * 1024 * 1024 for length in lengths[2:]):
+            raise ValueError('Invalid native metadata length')
     if header + sum(lengths) != len(payload):
         raise ValueError('Invalid native reply fields')
     fields, pos = [], header
     for length in lengths:
         fields.append(payload[pos:pos + length].decode())
         pos += length
-    if payload[0] == 1:
+    if error_reply:
         raise RuntimeError(': '.join(fields))
     if diagnostic:
         raise RuntimeError('Native expansion unverified: unsupported parser function')
+    # Metadata is transport framing only here; this verifier compares expansion
+    # text, never credits blob/Writer semantics from the metadata payload.
     return fields[0], fields[1]
 
 

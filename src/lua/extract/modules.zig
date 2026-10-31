@@ -372,8 +372,7 @@ fn rebuildUsage(io: std.Io, a: std.mem.Allocator, input: []const u8, root: []con
         defer _ = scratch.reset(.retain_capacity);
         const page = try wikimedia_dump.parsePageIndexLine(kind, line);
         count += 1;
-        const spec = registry.byId(std.math.cast(i32, page.ns) orelse return error.InvalidNamespace) orelse return error.InvalidNamespace;
-        if (registry.ofTitle(page.title).id != spec.id) return error.NamespaceTitleMismatch;
+        const spec = try registry.storedPageSpec(page.title, std.math.cast(i32, page.ns) orelse return error.InvalidNamespace);
         if (spec.role == .compile_only or page.redirect != null or !page.has_source or !std.mem.eql(u8, page.content_model, "wikitext")) continue;
         const raw = try reader.readAlloc(scratch.allocator(), page.source);
         const source = if (page.source_needs_decode) try xml_decode.decodeSinglePassAlloc(scratch.allocator(), raw) else raw;
@@ -606,8 +605,7 @@ pub fn main(init: std.process.Init) !void {
             indexed_page_id = page_id;
             indexed_revision_id = revision_id;
 
-            const namespace_spec = registry.byId(std.math.cast(i32, parsed_ns) orelse return error.InvalidNamespace) orelse return error.InvalidNamespace;
-            if (registry.ofTitle(title).id != namespace_spec.id) return error.NamespaceTitleMismatch;
+            const namespace_spec = try registry.storedPageSpec(title, std.math.cast(i32, parsed_ns) orelse return error.InvalidNamespace);
             if (uw != null and namespace_spec.role != .compile_only and redirect == null and
                 std.mem.eql(u8, content_model, "wikitext") and
                 (std.mem.indexOfScalar(u8, text_raw, '{') != null or std.mem.indexOfScalar(u8, text_raw, '&') != null))

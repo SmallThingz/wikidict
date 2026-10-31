@@ -2,6 +2,7 @@
 const std = @import("std");
 const A = std.mem.Allocator;
 const lua_program = @import("lua_program");
+const protocol = @import("bundle_protocol.zig");
 const xml_decode = @import("shared_xml_decode");
 const preprocess = @import("lua_wikitext_preprocess");
 const wikimedia_dump = @import("wikimedia_dump");
@@ -149,7 +150,7 @@ fn messageLookupKey(a: A, language: []const u8, raw: []const u8) ![]u8 {
     defer a.free(key);
     return std.fmt.allocPrint(a, "{s}\t{s}", .{ language, key });
 }
-const CorpusPage = struct { title: []const u8, source: wikimedia_dump.PageSource, page_id: u64, revision_id: u64, revision_timestamp: []const u8, revision_user: []const u8, content_model: []const u8, ns: u32, ordinal: usize, source_needs_decode: bool, redirect: ?[]const u8 = null };
+pub const CorpusPage = struct { title: []const u8, source: wikimedia_dump.PageSource, page_id: u64, revision_id: u64, revision_timestamp: []const u8, revision_user: []const u8, content_model: []const u8, ns: u32, ordinal: usize, source_needs_decode: bool, redirect: ?[]const u8 = null };
 fn packCorpusPageRef(line_offset: usize, ordinal: usize) !u64 {
     return wikimedia_dump.packPageRowRef(line_offset, ordinal);
 }
@@ -1078,6 +1079,57 @@ pub const Provider = struct {
         };
     }
 
+    pub fn resolveCurrentPage(self: *const Provider, identity: protocol.PageIdentity, title: []const u8, ordinal: u64) !CorpusPage {
+        const mapped = self.corpus_pages_storage orelse return error.MissingPageIndex;
+        const start = std.math.cast(usize, identity.index_offset) orelse return error.InvalidPageIndex;
+        if (start >= mapped.bytes.len or (start != 0 and mapped.bytes[start - 1] != '\n')) return error.InvalidPageIndex;
+        if (mapped.bytes[start] == '#' or mapped.bytes[start] == '\n') return error.InvalidPageIndex;
+        const end = std.mem.indexOfScalarPos(u8, mapped.bytes, start, '\n') orelse mapped.bytes.len;
+        const indexed = try wikimedia_dump.parsePageIndexLine(self.corpus_page_index_kind, mapped.bytes[start..end]);
+        if (!std.mem.eql(u8, indexed.title, title) or indexed.page_id != identity.page_id or
+            indexed.revision_id != identity.revision_id or indexed.ns != identity.namespace)
+            return error.InvalidPageIndex;
+        _ = try self.namespace_catalog.storedPageSpec(indexed.title, std.math.cast(i32, indexed.ns) orelse return error.InvalidNamespace);
+        return .{
+            .title = indexed.title, .source = indexed.source, .page_id = indexed.page_id,
+            .revision_id = indexed.revision_id, .revision_timestamp = indexed.revision_timestamp,
+            .revision_user = indexed.revision_user, .content_model = indexed.content_model,
+            .ns = indexed.ns, .ordinal = std.math.cast(usize, ordinal) orelse return error.InvalidPageIndex,
+            .source_needs_decode = indexed.source_needs_decode, .redirect = indexed.redirect,
+        };
+    }
+
+    pub fn isCanonicalCurrentPage(self: *const Provider, identity: protocol.PageIdentity, page: CorpusPage) !bool {
+        const ref = (try self.corpusPageRef(page.title)) orelse return error.InvalidPageIndex;
+        const winner = try self.corpusPageFromRef(ref);
+        // A title-only index cannot select between different stored namespaces.
+        // Reject this limitation explicitly instead of silently skipping a row.
+        if (winner.ns != page.ns) return error.NamespaceTitleCollision;
+        if (corpusPageRefOffset(ref) != identity.index_offset) return false;
+        if (winner.ordinal != page.ordinal) return error.InvalidPageIndex;
+        return true;
+    }
+
+    const CurrentSource = struct { provider: *Provider, page: CorpusPage };
+
+    fn readCurrentSource(raw: ?*anyopaque, a: A) anyerror![]const u8 {
+        const current: *CurrentSource = @ptrCast(@alignCast(raw orelse return error.MissingPageIndex));
+        return current.provider.readCorpusSource(a, current.page);
+    }
+
+    pub fn currentPageContext(self: *Provider, a: A, page: CorpusPage) !lua_program.WikitextProvider.CurrentPage {
+        const current = try a.create(CurrentSource);
+        errdefer a.destroy(current);
+        current.* = .{ .provider = self, .page = page };
+        return .{
+            .namespace = std.math.cast(i32, page.ns) orelse return error.InvalidNamespace,
+            .metadata = .{ .page_id = page.page_id, .revision_id = page.revision_id,
+                .revision_timestamp = page.revision_timestamp, .revision_user = page.revision_user,
+                .content_model = page.content_model },
+            .redirect = try self.storedRedirectIdentity(a, page), .source_ctx = current, .read_source = readCurrentSource,
+        };
+    }
+
     pub fn isCanonicalPage(self: *const Provider, title: []const u8, ordinal: u64) bool {
         const ref = (self.corpusPageRef(title) catch return false) orelse return false;
         const wanted = std.math.cast(usize, ordinal) orelse return false;
@@ -1191,7 +1243,10 @@ pub const Provider = struct {
         const title = try self.namespace_catalog.normalizeTitle(std.heap.smp_allocator, raw_title, 0, .any);
         defer std.heap.smp_allocator.free(title);
         const ref = (try self.corpusPageRef(title)) orelse return null;
-        return try self.corpusPageFromRef(ref);
+        const page = try self.corpusPageFromRef(ref);
+        const expected = self.namespace_catalog.ofTitle(title).id;
+        if (std.math.cast(i32, page.ns) != expected) return error.NamespaceTitleCollision;
+        return page;
     }
 
     fn lookup(self: *Provider, a: A, raw_title: []const u8, content: bool) !?[]const u8 {
@@ -1283,18 +1338,27 @@ pub const Provider = struct {
         self.page_redirects_storage = mapped;
     }
 
+    fn storedRedirectIdentity(self: *Provider, a: A, page: CorpusPage) !?lua_program.WikitextProvider.RedirectTarget {
+        const xml_target = page.redirect orelse return null;
+        const snapshot = if (self.page_redirects) |*value| value else return error.PageRedirectSnapshotMissing;
+        const target = try snapshot.lookup(a, page.page_id, xml_target);
+        return .{ .namespace = target.namespace, .title = target.title,
+            .fragment = target.fragment, .interwiki = target.interwiki };
+    }
+
+    fn storedRedirectTarget(self: *Provider, a: A, page: CorpusPage) !?[]const u8 {
+        const target = (try self.storedRedirectIdentity(a, page)) orelse return null;
+        // The legacy arbitrary-title callback keeps its existing string contract.
+        defer a.free(target.interwiki);
+        defer a.free(target.fragment);
+        if (target.fragment.len == 0) return target.title;
+        defer a.free(target.title);
+        return try std.fmt.allocPrint(a, "{s}#{s}", .{ target.title, target.fragment });
+    }
+
     fn redirectTarget(ctx: ?*anyopaque, a: A, title: []const u8) anyerror!?[]const u8 {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
-        if (try self.findPage(title)) |page| {
-            const xml_target = page.redirect orelse return null;
-            const snapshot = if (self.page_redirects) |*value| value else return error.PageRedirectSnapshotMissing;
-            const target = try snapshot.lookup(a, page.page_id, xml_target);
-            defer a.free(target.interwiki);
-            defer a.free(target.fragment);
-            if (target.fragment.len == 0) return target.title;
-            defer a.free(target.title);
-            return try std.fmt.allocPrint(a, "{s}#{s}", .{ target.title, target.fragment });
-        }
+        if (try self.findPage(title)) |page| return self.storedRedirectTarget(a, page);
         // Supplemental redirects absent from the selected XML have explicit
         // captured targets. Ordinary transclusion routing remains title-only.
         return try self.transclusionRedirectTarget(title);
@@ -1654,6 +1718,11 @@ test "provider keeps the later duplicate page row as canonical" {
     try std.testing.expect(!provider.isCanonicalPage("Same", 0));
     try std.testing.expect(provider.isCanonicalPage("Same", 1));
     try std.testing.expect(!provider.isCanonicalPage("Missing", 1));
+    const first_identity: protocol.PageIdentity = .{ .index_offset = 0, .page_id = 1, .revision_id = 11, .namespace = 0 };
+    const later_identity: protocol.PageIdentity = .{ .index_offset = std.mem.indexOfScalar(u8, page_index, '\n').? + 1, .page_id = 2, .revision_id = 22, .namespace = 0 };
+    try std.testing.expect(!try provider.isCanonicalCurrentPage(first_identity, try provider.resolveCurrentPage(first_identity, "Same", 0)));
+    try std.testing.expect(try provider.isCanonicalCurrentPage(later_identity, try provider.resolveCurrentPage(later_identity, "Same", 1)));
+    try std.testing.expectError(error.InvalidPageIndex, provider.isCanonicalCurrentPage(later_identity, try provider.resolveCurrentPage(later_identity, "Same", 0)));
 
     var page_arena = std.heap.ArenaAllocator.init(a);
     defer page_arena.deinit();
@@ -2550,4 +2619,135 @@ test "provider rejects malformed optional interlanguage columns" {
         try tmp.dir.writeFile(io, .{ .sub_path = "interwiki-map.tsv", .data = bytes });
         try std.testing.expectError(error.InvalidInterwikiSnapshot, Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), "unused-dump.xml"));
     }
+}
+
+
+test "current page exact row keeps namespace zero body and rejects cross-namespace winner" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const dump_path = try std.fs.path.join(a, &.{ root, "dump.xml" });
+    defer a.free(dump_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dump_path, .data = "oldnew" });
+    const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    defer a.free(index_path);
+    const header = "# stored-page-row-control\n";
+    const first = "0\t3\tEvent:Stored page\t\t8451\t32521\t2026-01-01T00:00:00Z\tFirst\twikitext\t0\t1\t0\n";
+    const second = "3\t3\tEvent:Stored page\t\t8452\t32522\t2026-01-02T00:00:00Z\tSecond\twikitext\t1728\t1\t0\n";
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = header ++ first ++ second });
+    const title_index_path = try std.fs.path.join(a, &.{ root, wikimedia_dump.page_title_index_filename });
+    defer a.free(title_index_path);
+    try wikimedia_dump.buildPageTitleIndex(io, a, index_path, title_index_path);
+    var provider = try Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), dump_path);
+    defer provider.deinit();
+    try std.testing.expect(provider.corpus_title_index != null);
+    const identity: protocol.PageIdentity = .{ .index_offset = header.len, .page_id = 8451, .revision_id = 32521, .namespace = 0 };
+    const title = "Event:Stored page";
+    const page = try provider.resolveCurrentPage(identity, title, 0);
+    try std.testing.expectEqual(@as(u32, 0), page.ns);
+    try std.testing.expectEqual(@as(u64, 8451), page.page_id);
+    try std.testing.expectError(error.NamespaceTitleCollision, provider.isCanonicalCurrentPage(identity, page));
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const current = try provider.currentPageContext(arena.allocator(), page);
+    try std.testing.expectEqualStrings("old", try current.read_source.?(current.source_ctx, arena.allocator()));
+    try std.testing.expectEqual(@as(u64, 32521), current.metadata.revision_id);
+    const arbitrary = (try provider.findPage(title)).?;
+    try std.testing.expectEqual(@as(u32, 1728), arbitrary.ns);
+    try std.testing.expectEqual(@as(u64, 8452), arbitrary.page_id);
+    var collision_row = page;
+    collision_row.redirect = "Target";
+    try std.testing.expectError(error.PageRedirectSnapshotMissing, provider.currentPageContext(arena.allocator(), collision_row));
+    var wrong = identity; wrong.namespace = 1728;
+    try std.testing.expectError(error.InvalidPageIndex, provider.resolveCurrentPage(wrong, title, 0));
+    wrong = identity; wrong.page_id += 1;
+    try std.testing.expectError(error.InvalidPageIndex, provider.resolveCurrentPage(wrong, title, 0));
+    wrong = identity; wrong.revision_id += 1;
+    try std.testing.expectError(error.InvalidPageIndex, provider.resolveCurrentPage(wrong, title, 0));
+    wrong = identity; wrong.index_offset = 0;
+    try std.testing.expectError(error.InvalidPageIndex, provider.resolveCurrentPage(wrong, title, 0));
+    wrong = identity; wrong.index_offset = header.len + 1;
+    try std.testing.expectError(error.InvalidPageIndex, provider.resolveCurrentPage(wrong, title, 0));
+    wrong = identity; wrong.index_offset = header.len + first.len + second.len;
+    try std.testing.expectError(error.InvalidPageIndex, provider.resolveCurrentPage(wrong, title, 0));
+    try std.testing.expectError(error.InvalidPageIndex, provider.resolveCurrentPage(identity, "Other", 0));
+    const later: protocol.PageIdentity = .{ .index_offset = header.len + first.len, .page_id = 8452, .revision_id = 32522, .namespace = 1728 };
+    const later_page = try provider.resolveCurrentPage(later, title, 1);
+    try std.testing.expect(try provider.isCanonicalCurrentPage(later, later_page));
+}
+
+
+test "explicit prefixed lookup cannot borrow the stored main namespace row" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const dump_path = try std.fs.path.join(a, &.{ root, "dump.xml" });
+    defer a.free(dump_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dump_path, .data = "body" });
+    const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    defer a.free(index_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = "0\t4\tEvent:Stored page\t\t8451\t32521\t2026-01-01T00:00:00Z\tEditor\twikitext\t0\t1\t0\n" });
+    var provider = try Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), dump_path);
+    defer provider.deinit();
+    const identity: protocol.PageIdentity = .{ .index_offset = 0, .page_id = 8451, .revision_id = 32521, .namespace = 0 };
+    const page = try provider.resolveCurrentPage(identity, "Event:Stored page", 0);
+    try std.testing.expect(try provider.isCanonicalCurrentPage(identity, page));
+    try std.testing.expectError(error.NamespaceTitleCollision, provider.findPage("Event:Stored page"));
+    try std.testing.expectError(error.NamespaceTitleCollision, Provider.pageMetadata(&provider, "Event:Stored page"));
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const current = try provider.currentPageContext(arena.allocator(), page);
+    try std.testing.expectEqualStrings("body", try current.read_source.?(current.source_ctx, arena.allocator()));
+}
+
+
+test "current page redirect identity retains SQL namespace interwiki and fragment" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const pa = arena.allocator();
+    const root = try std.fmt.allocPrint(pa, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const dump_path = try std.fs.path.join(pa, &.{ root, "dump.xml" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dump_path, .data = "unused" });
+    const index_path = try std.fs.path.join(pa, &.{ root, "page-index.tsv" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = "0\t0\tLocalCollision\tEvent:Stored page\t1\t11\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t0\n0\t0\tLocalInterwiki\tw:Local\t2\t12\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t0\n0\t0\tExternal\tw:Remote\t3\t13\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t0\n0\t0\tNonmain\tTemplate:Target\t4\t14\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t0\n0\t0\tMissing\tAbsent\t5\t15\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t0\n0\t0\tOrdinary\t\t6\t16\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t0\n" });
+    const namespaces = try lua_program.namespace_registry.englishTestRegistry();
+    const snapshot_path = try std.fs.path.join(pa, &.{ root, "page-redirects.tsv" });
+    const snapshot = try std.fmt.allocPrint(pa, "# wikidict-page-redirects-v1\n# wiki\t{s}\n# dump-date\t{s}\n# sql-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n" ++ "1\t0\t4576656e743a53746f7265645f70616765\t\t415f26616d703b2342\n2\t0\t773a4c6f63616c\t\t\n3\t0\t52656d6f7465\t77\t72656d6f74655f667261676d656e74\n4\t10\t546172676574\t\t7461696c\n# end\t4\n", .{ namespaces.wiki, namespaces.dump_date });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = snapshot_path, .data = snapshot });
+    var provider = try Provider.init(io, a, root, namespaces, dump_path);
+    defer provider.deinit();
+    const cases = .{
+        .{ "LocalCollision", @as(i32, 0), "Event:Stored page", "", "A_&amp;#B" },
+        .{ "LocalInterwiki", @as(i32, 0), "w:Local", "", "" },
+        .{ "External", @as(i32, 0), "w:Remote", "w", "remote_fragment" },
+        .{ "Nonmain", @as(i32, 10), "Template:Target", "", "tail" },
+    };
+    inline for (cases) |case| {
+        const page = (try provider.findPage(case[0])).?;
+        const current = try provider.currentPageContext(pa, page);
+        const target = current.redirect.?;
+        try std.testing.expectEqual(case[1], target.namespace);
+        try std.testing.expectEqualStrings(case[2], target.title);
+        try std.testing.expectEqualStrings(case[3], target.interwiki);
+        try std.testing.expectEqualStrings(case[4], target.fragment);
+        const expected = if (case[4].len == 0) case[2] else try std.fmt.allocPrint(pa, "{s}#{s}", .{ case[2], case[4] });
+        try std.testing.expectEqualStrings(expected, (try Provider.redirectTarget(&provider, pa, case[0])).?);
+    }
+    const missing = (try provider.findPage("Missing")).?;
+    try std.testing.expectError(error.PageRedirectSnapshotMissing, provider.currentPageContext(pa, missing));
+    const ordinary = (try provider.findPage("Ordinary")).?;
+    try std.testing.expect((try provider.currentPageContext(pa, ordinary)).redirect == null);
+    var mismatch = (try provider.findPage("LocalCollision")).?;
+    mismatch.redirect = "Different";
+    try std.testing.expectError(error.PageRedirectTargetMismatch, provider.currentPageContext(pa, mismatch));
 }

@@ -271,7 +271,11 @@ pub const DisplayTitle = struct {
 const heading_ids = @import("presentation_heading_anchors.zig");
 pub const HeadingSourceRange = struct { owner_start: usize, page_start: usize, len: usize };
 pub const HeadingAnchor = struct { source_offset: usize, anchor: []const u8, anchor_fallback: []const u8 = "" };
-pub const HeadingObservation = struct { items: []const HeadingAnchor = &.{} };
+pub const HeadingObservation = struct {
+    items: []const HeadingAnchor = &.{},
+    page_html_openings: []const usize = &.{},
+    page_html_source: ?[]const u8 = null,
+};
 
 const WorkSection = struct {
     is_heading: bool = false,
@@ -288,6 +292,7 @@ const WorkSection = struct {
 };
 const Work = struct {
     sections: []const WorkSection,
+    page_html_openings: []const usize = &.{},
     references: []const compiler.Reference,
     media: []const compiler.media_types.Media,
     media_caption_spans: []const []const compiler.Span,
@@ -515,7 +520,10 @@ fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, 
 }
 
 fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment) !Work {
+    var html_openings: std.ArrayList(usize) = .empty;
+    defer html_openings.deinit(a);
     var renderer: compiler.Renderer = .{ .a = a, .context = .{ .title = title, .language = if (language.len == 0) "English" else language, .link_trail = link_trail, .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .image_options = image_options, .poem_phase = poem_phase } };
+    if (fragments.len == 0) renderer.page_html_heading_openings = &html_openings;
     renderer.context.citations = reference_context.citations;
     renderer.context.external_links_prepared = reference_context.citations != null;
     renderer.page_reference_definitions = reference_context.items;
@@ -540,7 +548,7 @@ fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, so
         renderer.heading_source = null;
         try builder.consume(try rendered.toOwnedSlice(a));
     }
-    return .{ .sections = try builder.sections.toOwnedSlice(a), .references = try renderer.finishReferences(), .media = try renderer.media.toOwnedSlice(a), .media_caption_spans = try renderer.media_caption_spans.toOwnedSlice(a), .rendered_templates = renderer.rendered_templates, .unresolved_templates = renderer.unresolved_templates, .fallbacks = renderer.fallbacks };
+    return .{ .sections = try builder.sections.toOwnedSlice(a), .page_html_openings = try html_openings.toOwnedSlice(a), .references = try renderer.finishReferences(), .media = try renderer.media.toOwnedSlice(a), .media_caption_spans = try renderer.media_caption_spans.toOwnedSlice(a), .rendered_templates = renderer.rendered_templates, .unresolved_templates = renderer.unresolved_templates, .fallbacks = renderer.fallbacks };
 }
 
 pub fn observeHeadingAnchorsAlloc(a: A, title: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase) !HeadingObservation {
@@ -555,7 +563,7 @@ pub fn observeHeadingAnchorsAlloc(a: A, title: []const u8, source: MissingText, 
         if (section.is_heading) try observe.add(section.heading_source_offset, section.heading_authored_id, section.title_spans);
         try walk.blocks(&observe, section.blocks, 0);
     }
-    return .{ .items = try result.toOwnedSlice(a) };
+    return .{ .items = try result.toOwnedSlice(a), .page_html_openings = work.page_html_openings, .page_html_source = source.bytes };
 }
 
 fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, fallbacks: ?*Fallbacks, poem_phase: ?*const PoemPhase) ![]const compiler.Span {
@@ -834,6 +842,9 @@ pub fn compileReportedWithReferencesAndPhasesFragmentsAlloc(
 ) ![]u8 {
     return compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(a, title, kind, language, language_code, source, display_title, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, fallbacks, poem_phase, fragments, null, &.{});
 }
+/// Explicit publication authority from the producer's resolved source group.
+/// Generic compilation metadata alone is not evidence of a single owner.
+pub const ClassifiedLanguage = struct { heading: []const u8, code: []const u8 };
 pub fn compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(
     a: A,
     title: []const u8,
@@ -853,6 +864,34 @@ pub fn compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(
     heading_observation: ?*const HeadingObservation,
     heading_projection: []const HeadingSourceRange,
 ) ![]u8 {
+    return compileClassifiedWithHeadingAnchorsAlloc(a, title, kind, language, language_code, source, display_title, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, fallbacks, poem_phase, fragments, heading_observation, heading_projection, null);
+}
+pub fn compileClassifiedWithHeadingAnchorsAlloc(
+    a: A,
+    title: []const u8,
+    kind: format.BlobKind,
+    language: ?[]const u8,
+    language_code: []const u8,
+    source: MissingText,
+    display_title: ?DisplayTitle,
+    link_trail: ir.LinkTrail,
+    namespace_catalog: ?*const NamespaceRegistry,
+    behavior_switches: ?*const BehaviorRegistry,
+    image_options: ?*const ImageRegistry,
+    reference_context: compiler.ReferenceDefinitions,
+    fallbacks: ?*Fallbacks,
+    poem_phase: ?*const PoemPhase,
+    fragments: []const SourceFragment,
+    heading_observation: ?*const HeadingObservation,
+    heading_projection: []const HeadingSourceRange,
+    classified_owner: ?ClassifiedLanguage,
+) ![]u8 {
+    if (classified_owner) |owner| {
+        if (kind != .language or owner.code.len == 0 or owner.heading.len == 0 or
+            !std.mem.eql(u8, owner.code, language_code) or
+            !std.mem.eql(u8, owner.heading, language orelse "")) return error.InvalidClassifiedLanguage;
+    }
+
     const work = if (heading_observation != null)
         try workWithHeadingOffsetsAlloc(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments)
     else
@@ -926,6 +965,8 @@ pub fn compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(
         std.mem.eql(u8, language orelse "", "Unclassified");
     const layout = if (synthetic_unclassified)
         try semantic.buildUnclassified(a, work.sections)
+    else if (classified_owner) |owner|
+        try semantic.buildOwned(a, work.sections, owner.heading)
     else
         try semantic.build(a, work.sections);
     return codec.encodeBuildAlloc(a, display_spans, work.sections, layout, work.references, work.media);
@@ -4735,4 +4776,19 @@ test "publication roundtrip keeps unmatched external opener children at LF and E
         const source = try std.fmt.allocPrint(a, "==English==\n===Noun===\n# {s}", .{invalid});
         try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", source, null));
     }
+}
+
+
+test "generic document metadata does not claim classified single language authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "==English==\n===Noun===\n# English meaning.\n==French==\n===Verb===\n# French meaning.\n";
+    const encoded = try compileAlloc(a, "unbound", .language, "Hausa", "ha", source, null);
+    const decoded = try codec.decodeAlloc(a, encoded, "unbound", .language, .{ .code = "ha", .heading = "Hausa" });
+    try std.testing.expectEqual(@as(usize, 2), decoded.entry.organization.lexemes.len);
+    try std.testing.expectEqualStrings("English", decoded.entry.organization.lexemes[0].language);
+    try std.testing.expectEqualStrings("French", decoded.entry.organization.lexemes[1].language);
+    const unknown = try compileAlloc(a, "unbound", .language, "Unclassified", "", source, null);
+    const unresolved = try codec.decodeAlloc(a, unknown, "unbound", .language, .{ .code = "", .heading = "Unclassified" });
+    for (unresolved.entry.organization.lexemes) |lexeme| try std.testing.expectEqualStrings("", lexeme.language);
 }

@@ -93,13 +93,9 @@ pub const Provider = struct {
     pub const WikibaseEntityTerms = host_api.WikibaseEntityTerms;
     pub const SymbolKind = CallSymbolKind;
     pub const Symbol = CallSymbol;
-    pub const PageMetadata = struct {
-        page_id: u64,
-        revision_id: u64,
-        revision_timestamp: []const u8,
-        revision_user: []const u8,
-        content_model: []const u8,
-    };
+    pub const PageMetadata = host_api.PageMetadata;
+    pub const CurrentPage = host_api.CurrentPage;
+    pub const RedirectTarget = host_api.RedirectTarget;
     pub const TransclusionBody = struct {
         text: []const u8,
         title: []const u8,
@@ -272,6 +268,8 @@ pub const Expander = struct {
         self.script_cpu_budget.reset();
         self.releasePageModuleTemplates();
         self.host.current_title = title;
+        self.host.current_page = null;
+        self.host.page_identity_failure = null;
         self.host.now_unix = now_unix;
         self.current_source = source;
         self.page_allocator = self.runtime.allocator;
@@ -384,7 +382,8 @@ pub const Expander = struct {
     fn hostPageContent(raw: ?*anyopaque, a: std.mem.Allocator, title: []const u8) anyerror!?[]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const canonical = try namespace_lib.canonicalizeTitle(a, self.runtime, title);
-        if (std.mem.eql(u8, canonical, self.host.current_title)) {
+        if (std.mem.eql(u8, canonical, self.host.current_title) and
+            (self.host.current_page == null or namespace_lib.ofTitle(self.runtime, canonical).id == self.host.current_page.?.namespace)) {
             if (self.provider.authoritative_page_source) return self.provider.get(self.provider.ctx, a, canonical);
             if (self.current_source) |source| return source;
         }
@@ -511,7 +510,8 @@ pub const Expander = struct {
         // ParserFunctions checks Title::newFromText before any existence lookup.
         // Invalid title bodies cannot require a captured page or file result.
         if (!title_lib.validTitleBody(self.runtime, spec, parsed.text)) return false;
-        if (std.mem.eql(u8, canonical, self.host.current_title) and self.current_source != null) return true;
+        if (std.mem.eql(u8, canonical, self.host.current_title) and self.current_source != null and
+            (self.host.current_page == null or parsed.id == self.host.current_page.?.namespace)) return true;
         if (try self.provider.exists(self.provider.ctx, canonical)) return true;
         if (namespace_lib.ofTitle(self.runtime, canonical).id == 828) {
             _ = self.runtime.resolveModule(canonical) catch return false;
@@ -521,7 +521,12 @@ pub const Expander = struct {
     }
 
     pub fn expandFragment(self: *Expander, title: []const u8, source: []const u8, now_unix: ?i64) anyerror![]const u8 {
+        return self.expandStoredFragment(title, source, now_unix, null);
+    }
+
+    pub fn expandStoredFragment(self: *Expander, title: []const u8, source: []const u8, now_unix: ?i64, current: ?host_api.CurrentPage) anyerror![]const u8 {
         self.beginPage(title, source, now_unix);
+        self.host.current_page = current;
         defer self.releasePageModuleTemplates();
         if (work_stats.current()) |work| work.comment_bytes +|= source.len;
         const comments_start = work_stats.cpuNow();
@@ -530,6 +535,10 @@ pub const Expander = struct {
         defer self.runtime.allocator.free(stripped);
         const params = try self.runtime.newTable();
         var output_text = try self.expandPageWikitextTracked(stripped, params, title);
+        if (self.host.page_identity_failure) |failure| {
+            self.runtime.allocator.free(output_text.bytes);
+            return failure;
+        }
         // Native evaluation has finished. Escape only exact source-literal
         // curly ranges before any final normalizer can discard copy metadata.
         const evaluated_output = output_text.bytes;
@@ -645,6 +654,16 @@ pub const Expander = struct {
 
     fn normalizeTransclusionName(self: *Expander, raw: []const u8, host_title: ?[]const u8) ![]const u8 {
         const registry = self.runtime.namespace_catalog orelse return error.NamespaceRegistryRequired;
+        if (self.host.current_page) |current| if (host_title) |host_value| {
+            const name = std.mem.trim(u8, raw, " \t\r\n");
+            if (std.mem.startsWith(u8, name, "/") and std.mem.eql(u8, host_value, self.host.current_title) and
+                registry.ofTitle(host_value).id != current.namespace)
+            {
+                const spec = try registry.storedPageSpec(host_value, current.namespace);
+                if (spec.has_subpages) return error.NamespaceTitleCollision;
+                return registry.normalizeTransclusion(self.runtime.allocator, raw, null);
+            }
+        };
         return registry.normalizeTransclusion(self.runtime.allocator, raw, host_title);
     }
 
@@ -1797,12 +1816,14 @@ pub const Expander = struct {
             const trimmed = std.mem.trim(u8, value, " \t\r\n");
             break :blk if (trimmed.len == 0) self.host.current_title else trimmed;
         } else self.host.current_title;
-        const canonical_with_fragment = try namespace_lib.canonicalizeTitle(self.runtime.allocator, self.runtime, requested);
+        const implicit = raw_page == null or std.mem.trim(u8, raw_page.?, " \t\r\n").len == 0;
+        const current = if (implicit) self.host.current_page else null;
+        const canonical_with_fragment = if (current != null) requested else try namespace_lib.canonicalizeTitle(self.runtime.allocator, self.runtime, requested);
         const page = if (std.mem.indexOfScalar(u8, canonical_with_fragment, '#')) |hash|
             canonical_with_fragment[0..hash]
         else
             canonical_with_fragment;
-        const ns = namespace_lib.ofTitle(self.runtime, page);
+        const ns = if (current) |identity| try namespace_lib.storedTitle(self.runtime, page, identity.namespace) else namespace_lib.ofTitle(self.runtime, page);
         const ns_spec = namespace_lib.byId(self.runtime, ns.id) orelse return error.InvalidNamespace;
         if (std.ascii.eqlIgnoreCase(base_name, "NAMESPACENUMBER")) return self.formatMagic("{d}", .{ns.id});
         const value: []const u8 = result: {
@@ -1851,6 +1872,8 @@ pub const Expander = struct {
     }
 
     fn pageMetadataFor(self: *Expander, raw_page: ?[]const u8) !?Provider.PageMetadata {
+        if (raw_page == null or std.mem.trim(u8, raw_page.?, " \t\r\n").len == 0)
+            if (self.host.current_page) |identity| return identity.metadata;
         const get = self.provider.page_metadata orelse return error.MissingPageMetadata;
         const requested = if (raw_page) |value| blk: {
             const trimmed = std.mem.trim(u8, value, " \t\r\n");
@@ -2622,6 +2645,12 @@ pub const Expander = struct {
         return try self.scribuntoErrorMarkup(module_name, detail);
     }
 
+    fn storedIdentityFailure(name: []const u8) ?anyerror {
+        inline for ([_]anyerror{ error.UnsupportedStoredInterwikiNamespace, error.UnsupportedStoredLocalInterwiki, error.InvalidStoredRedirectTarget, error.NamespaceTitleCollision }) |failure|
+            if (std.mem.eql(u8, name, @errorName(failure))) return failure;
+        return null;
+    }
+
     fn invokeWithRecovery(
         self: *Expander,
         module_id: ?u32,
@@ -2645,6 +2674,7 @@ pub const Expander = struct {
             if (self.runtime.aotErrorName()) |name| {
                 if (std.mem.eql(u8, name, "OutOfMemory")) return error.OutOfMemory;
                 if (std.mem.eql(u8, name, "LuaCpuClockUnavailable")) return error.LuaCpuClockUnavailable;
+                if (storedIdentityFailure(name)) |failure| return failure;
             }
             const first_detail = try self.runtime.allocator.dupe(u8, invokeFailureDetail(self.runtime, err));
             clearInvokeFailure(self.runtime);
@@ -2668,6 +2698,7 @@ pub const Expander = struct {
                         if (self.runtime.aotErrorName()) |name| {
                             if (std.mem.eql(u8, name, "OutOfMemory")) return error.OutOfMemory;
                             if (std.mem.eql(u8, name, "LuaCpuClockUnavailable")) return error.LuaCpuClockUnavailable;
+                            if (storedIdentityFailure(name)) |failure| return failure;
                         }
                         const retry_detail = try self.runtime.allocator.dupe(u8, invokeFailureDetail(self.runtime, retry_err));
                         clearInvokeFailure(self.runtime);
@@ -8050,5 +8081,144 @@ test "non table invoke renders a specific error while preserving surrounding pag
         const caught = try expander.expandFragment("Page", "A{{#iferror:{{#invoke:Test|show}}|caught|BAD}}B{{#iferror:{{#invoke:@module|show}}|caught|BAD}}C", 1_791_731_560);
         try std.testing.expectEqualStrings("AcaughtBcaughtC", caught);
         try std.testing.expect(runtime.current_frame == null and runtime.aotErrorName() == null and !runtime.last_error_present);
+    }
+}
+
+
+test "stored current-page magic and metadata distinguish explicit titles and reset" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .page_metadata = TestProvider.pageMetadata } };
+    const title = "Event:Stored page";
+    const current: host_api.CurrentPage = .{ .namespace = 0, .metadata = .{
+        .page_id = 8451, .revision_id = 32521, .revision_timestamp = "2026-01-01T00:00:00Z", .revision_user = "Stored editor", .content_model = "wikitext",
+    } };
+    const output = try expander.expandStoredFragment(title,
+        "{{NAMESPACENUMBER}}|{{PAGENAME}}|{{PAGEID}}|{{REVISIONID}}|{{NAMESPACENUMBER:Event:Stored page}}|{{PAGENAME:Event:Stored page}}", 1_670_803_200, current);
+    try std.testing.expectEqualStrings("0|Event:Stored page|8451|32521|1728|Stored page", output);
+    try std.testing.expectEqualStrings("Template:/Child", try expander.normalizeTransclusionName("/Child", title));
+    try std.testing.expectError(error.UnsupportedExtensionTag, expander.expandStoredFragment(title, "{{#tag:UnsupportedStoredPageReset|x}}", 1_670_803_200, current));
+    try std.testing.expectEqualStrings("100|42", try expander.expandFragment("Appendix:Page/Sub", "{{NAMESPACENUMBER}}|{{PAGEID}}", 1_670_803_200));
+    try std.testing.expect(expander.host.current_page == null);
+}
+
+
+test "stored redirect identity errors cross invoke envelopes without semantic fallback" {
+    const Probe = struct {
+        const Mode = enum { direct, repaired, lua, pcall, xpcall, nested, lua_pcall, lua_xpcall };
+        var failure: anyerror = error.InvalidStoredRedirectTarget;
+        var mode: Mode = .direct;
+        var nested_started: bool = false;
+        fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            const exports = try ctx.newTable();
+            try exports.rawSet(ctx.allocator, .{ .string = "run" }, try ctx.makeFunctionKnown(1, run, &.{}));
+            return value(.{ .table = exports });
+        }
+        fn value(item: Value) ![]const Value {
+            const result = try std.heap.smp_allocator.alloc(Value, 1);
+            result[0] = item;
+            return result;
+        }
+        fn fail(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            if (mode == .lua or mode == .lua_pcall or mode == .lua_xpcall) {
+                ctx.setLuaError(.{ .string = @errorName(failure) });
+                return error.LuaRaised;
+            }
+            host_api.recordPageIdentityFailure(ctx, failure);
+            return failure;
+        }
+        fn handler(_: *rt.Context, _: rt.Captures, args: []const Value) ![]const Value {
+            return value(args[0]);
+        }
+        fn run(ctx: *rt.Context, _: rt.Captures, args: []const Value) ![]const Value {
+            if (mode == .repaired) {
+                const frame_args = try ctx.getIndex(args[0], .{ .string = "args" });
+                const x = try ctx.getIndex(frame_args, .{ .string = "x" });
+                if (x == .string and std.mem.indexOf(u8, x.string, "&lt;") != null) {
+                    ctx.setLuaError(.{ .string = "Invalid page title \"Reconstruction:Probe/term&lt;t:gloss&gt;\" encountered." });
+                    return error.LuaRaised;
+                }
+            }
+            if (mode == .nested and !nested_started) {
+                nested_started = true;
+                const preprocess_call = try ctx.getIndex(args[0], .{ .string = "preprocess" });
+                const result = try ctx.callValue(preprocess_call, &.{ args[0], .{ .string = "{{#invoke:Test|run}}" } });
+                defer rt.freeResults(result);
+                try std.testing.expectEqualStrings("caught", result[0].string);
+                return value(.{ .string = "nested completed" });
+            }
+            if (mode == .pcall or mode == .xpcall or mode == .nested or mode == .lua_pcall or mode == .lua_xpcall) {
+                const is_xpcall = mode == .xpcall or mode == .lua_xpcall;
+                const pcall_slot: u32 = 16; // Stable ABI slot; the fixture global table has no name mapping.
+                const protected = if (is_xpcall)
+                    try ctx.getIndex(.{ .table = ctx.global_table.? }, .{ .string = "xpcall" })
+                else
+                    ctx.getGlobal(pcall_slot);
+                try std.testing.expect(protected == .callable);
+                const callable = try ctx.makeFunctionKnown(2, fail, &.{});
+                const handler_callable = try ctx.makeFunctionKnown(3, handler, &.{});
+                const result = if (is_xpcall)
+                    try ctx.callValue(protected, &.{ callable, handler_callable })
+                else
+                    try ctx.callValue(protected, &.{callable});
+                defer rt.freeResults(result);
+                try std.testing.expect(result.len >= 1 and result[0] == .boolean and !result[0].boolean);
+                if (mode != .lua_pcall and mode != .lua_xpcall) {
+                    host_api.recordPageIdentityFailure(ctx, error.InvalidStoredRedirectTarget);
+                    try std.testing.expectEqual(failure, host_api.get(ctx).?.page_identity_failure.?);
+                }
+                return value(.{ .string = "caught" });
+            }
+            return fail(ctx, .{ .direct = &.{} }, args);
+        }
+    };
+    for ([_]anyerror{ error.UnsupportedStoredInterwikiNamespace, error.UnsupportedStoredLocalInterwiki, error.InvalidStoredRedirectTarget, error.NamespaceTitleCollision }) |expected| {
+        for ([_]Probe.Mode{ .direct, .repaired, .lua, .pcall, .xpcall, .nested, .lua_pcall, .lua_xpcall }) |mode| {
+            errdefer std.debug.print("stored redirect identity case: expected={s} mode={s}\n", .{ @errorName(expected), @tagName(mode) });
+            Probe.failure = expected;
+            Probe.mode = mode;
+            Probe.nested_started = false;
+            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer arena.deinit();
+            var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+            defer runtime.deinit();
+            const functions = [_]rt.FunctionFn{rt.stabilize(Probe.root)};
+            runtime.module_root_entries = &functions;
+            runtime.configureModules(null, TestModule.lookup, TestModule.name);
+            try rt.bindGlobalTable(&runtime, null, 0);
+            try stdlib.install(&runtime);
+            var expander = Expander{
+                .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+                .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists },
+                .install_scribunto = installTestInvoke,
+            };
+            const source = switch (mode) {
+                .direct => "{{#iferror:{{#invoke:Test|run}}|caught|success}}",
+                .repaired => "A{{#invoke:Test|run|x=term&lt;t:gloss&gt;}}B",
+                else => "{{#invoke:Test|run}}",
+            };
+            if (mode == .lua or mode == .lua_pcall or mode == .lua_xpcall) {
+                const rendered = try expander.expandFragment("Page", source, 1_670_803_200);
+                if (mode == .lua) {
+                    try std.testing.expect(std.mem.indexOf(u8, rendered, "Lua error in Module:Test:") != null);
+                    try std.testing.expect(std.mem.indexOf(u8, rendered, @errorName(expected)) != null);
+                } else try std.testing.expectEqualStrings("caught", rendered);
+                try std.testing.expect(runtime.aotErrorName() == null and expander.host.page_identity_failure == null);
+            } else {
+                try std.testing.expectError(expected, expander.expandFragment("Page", source, 1_670_803_200));
+                try std.testing.expectEqual(expected, expander.host.page_identity_failure.?);
+                if (mode == .direct or mode == .repaired)
+                    try std.testing.expectEqualStrings(@errorName(expected), runtime.aotErrorName().?);
+            }
+            try std.testing.expect(runtime.current_frame == null);
+            try std.testing.expectEqualStrings("next page", try expander.expandFragment("Next", "next page", 1_670_803_200));
+            try std.testing.expect(expander.host.page_identity_failure == null);
+        }
     }
 }

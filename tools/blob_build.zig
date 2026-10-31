@@ -5,6 +5,7 @@ const encoder = @import("encoder");
 const xml_decode = @import("xml_decode");
 const dump_source = @import("wikimedia_dump");
 const language_registry = @import("language_registry.zig");
+const source_language_banner = @import("source_language_banner.zig");
 const bundle_expander = @import("bundle_expander.zig");
 const expansion_deadline = @import("expansion_deadline.zig");
 const reviewed_nonlexical = @import("reviewed_nonlexical.zig");
@@ -36,6 +37,100 @@ const FailureReceiptContext = struct {
     invocation_args: []const []const u8,
 };
 var failure_receipt_context: ?FailureReceiptContext = null;
+
+const FirstFailureCaptureContext = struct {
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    output_root: []const u8,
+    input: AuditInputContext,
+    requested_now_unix: ?i64,
+    invocation_args: []const []const u8,
+    invocation_id: ?[]const u8,
+    attempted: bool = false,
+};
+var first_failure_capture_context: ?FirstFailureCaptureContext = null;
+
+fn invocationArgumentsHash(a: std.mem.Allocator, args: []const []const u8) ![]const u8 {
+    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+    for (args) |arg| {
+        var length: [8]u8 = undefined;
+        std.mem.writeInt(u64, &length, @intCast(arg.len), .little);
+        hash.update(&length);
+        hash.update(arg);
+    }
+    var digest: [32]u8 = undefined;
+    hash.final(&digest);
+    return a.dupe(u8, &std.fmt.bytesToHex(digest, .lower));
+}
+
+fn captureFirstPresentationFailure(err: anyerror, job: ExpansionJob, expanded: bundle_expander.Expansion) void {
+    if (err != error.UncompiledPresentation) return;
+    const context = if (first_failure_capture_context) |*value| value else return;
+    if (context.attempted) return;
+    context.attempted = true;
+    writeFirstPresentationFailure(context.*, job, expanded) catch |capture_error| {
+        diagnostics.printLine("presentation failure capture unavailable: error={s}\n", .{@errorName(capture_error)});
+    };
+}
+
+fn writeFirstPresentationFailure(context: FirstFailureCaptureContext, job: ExpansionJob, expanded: bundle_expander.Expansion) !void {
+    var arena = std.heap.ArenaAllocator.init(context.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Use the top incomplete CLI output, not a shard's temporary Writer root:
+    // failed shard cleanup deletes that temporary directory during unwinding.
+    const marker = try std.fs.path.join(a, &.{ context.output_root, ".incomplete" });
+    const incomplete = try std.Io.Dir.cwd().openFile(context.io, marker, .{});
+    incomplete.close(context.io);
+    const root = try std.fs.path.join(a, &.{ context.output_root, ".presentation-first-failure" });
+    try std.Io.Dir.cwd().createDir(context.io, root, .default_dir);
+    try writeDiagnosticJson(context.io, a, root, "capture.json", .{
+        .schema = "wikidict.presentation-first-failure.v1", .record_complete = false,
+        .diagnostic_only = true, .publication_created = false,
+    }, 64 * 1024);
+    const payload_limit = 4 * 1024 * 1024;
+    var payload_bytes: usize = 0;
+    var title_len = @min(job.title.len, 1024);
+    while (title_len != 0 and !std.unicode.utf8ValidateSlice(job.title[0..title_len])) title_len -= 1;
+    const alias_bytes = if (job.alias_record) |alias| blk: {
+        const buffer = try a.alloc(u8, 256 * 1024);
+        var output = std.Io.Writer.fixed(buffer);
+        try std.json.Stringify.value(alias, .{}, &output);
+        break :blk buffer[0..output.end];
+    } else null;
+    const row = .{
+        .schema = "wikidict.presentation-first-failure.v1",
+        .record_complete = true, .diagnostic_only = true,
+        .publication_created = false, .semantic_acceptance = false,
+        .error_name = "UncompiledPresentation",
+        .ordinal = job.ordinal, .index_offset = job.index_offset, .namespace = job.ns.id,
+        .namespace_kind = @tagName(job.ns.kind),
+        .page_id = job.page_id, .revision_id = job.revision_id,
+        .title = job.title[0..title_len], .title_bytes = job.title.len,
+        .title_truncated = title_len != job.title.len,
+        .title_sha256 = try auditHash(a, job.title),
+        .alias = job.alias_record != null,
+        .unsupported_parser_function = expanded.unsupported_parser_function,
+        .input = .{ .dump_path = context.input.dump_path, .expander_root = context.input.expander_root,
+            .tool_path = context.input.tool_path, .workers = context.input.workers,
+            .timeout_ms = context.input.timeout_ms, .now_unix = context.requested_now_unix,
+            .start_page = context.input.start_page, .requested_limit = context.input.requested_limit,
+            .index_byte_offset = context.input.index_byte_offset },
+        .invocation_id = context.invocation_id,
+        .invocation_args_sha256 = try invocationArgumentsHash(a, context.invocation_args),
+        .invocation_args_hash_framing = "each argv item: u64 little-endian byte length then exact bytes",
+        .provenance_scope = "borrowed job inputs and CLI context; outer source/input qualification remains separate; no input-file scan",
+        .payload_limit_bytes = payload_limit,
+        .raw_source = try captureDiagnosticPayload(context.io, a, root, 1, "raw.wikitext", job.source, 256 * 1024, payload_limit, &payload_bytes),
+        .expanded = try captureDiagnosticPayload(context.io, a, root, 1, "expanded.wikitext", expanded.source, 2 * 1024 * 1024, payload_limit, &payload_bytes),
+        .display_title = try captureDiagnosticPayload(context.io, a, root, 1, "display-title.wikitext", expanded.display_title, 256 * 1024, payload_limit, &payload_bytes),
+        .poem_metadata = try captureDiagnosticPayload(context.io, a, root, 1, "poem.json", expanded.poem_metadata, 256 * 1024, payload_limit, &payload_bytes),
+        .missing_dependency_metadata = try captureDiagnosticPayload(context.io, a, root, 1, "missing-dependency.json", expanded.missing_dependency_metadata, 256 * 1024, payload_limit, &payload_bytes),
+        .index_row = try captureDiagnosticPayload(context.io, a, root, 1, "index-row.tsv", job.index_line, 256 * 1024, payload_limit, &payload_bytes),
+        .alias_record = try captureDiagnosticPayload(context.io, a, root, 1, "alias.json", alias_bytes, 256 * 1024, payload_limit, &payload_bytes),
+    };
+    try writeDiagnosticJson(context.io, a, root, "capture.json", row, 64 * 1024);
+}
 
 fn writePresentationFailure(context: FailureReceiptContext, job: ExpansionJob) !void {
     const bytes = try std.json.Stringify.valueAlloc(context.a, .{
@@ -222,7 +317,10 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
         try loadLiteralLanguageTemplates(io, a, expander_root, namespaces, &out, .arabic);
     } else if (std.mem.eql(u8, out.content_code orelse "", "za")) {
         try loadLiteralLanguageTemplates(io, a, expander_root, namespaces, &out, .zhuang);
+    } else if (std.mem.eql(u8, out.content_code orelse "", "gor")) {
+        try loadLiteralLanguageTemplates(io, a, expander_root, namespaces, &out, .documented_literal);
     }
+    try loadSourceLanguageBanners(io, a, expander_root, namespaces, &out);
     return out;
 }
 
@@ -292,7 +390,26 @@ fn literalZhuangLanguageTemplate(source: []const u8, code: []const u8) ?[]const 
     return if (std.mem.eql(u8, rest[code.len..], ")</small></small></big></div>=")) label else null;
 }
 
-const LiteralLanguageTemplateKind = enum { arabic, zhuang };
+// Only one complete literal prefix and one fully excluded documentation block.
+// No other '<' permits nested onlyinclude, comments or protected-tag ambiguity;
+// ordinary transclusion therefore removes the entire suffix before any calls.
+fn literalDocumentedLanguageTemplate(source: []const u8) ?[]const u8 {
+    const raw = std.mem.trim(u8, source, " \t\r\n");
+    const open = std.mem.indexOfScalar(u8, raw, '<') orelse return null;
+    const suffix = raw[open..];
+    const prefix = "<noinclude>";
+    const close = "</noinclude>";
+    if (!std.mem.startsWith(u8, suffix, prefix) or !std.mem.endsWith(u8, suffix, close) or
+        suffix.len < prefix.len + close.len) return null;
+    if (std.mem.indexOfScalar(u8, suffix[prefix.len .. suffix.len - close.len], '<') != null) return null;
+    const label = raw[0..open];
+    if (label.len == 0 or !std.mem.eql(u8, label, std.mem.trim(u8, label, " ")) or
+        std.mem.indexOfAny(u8, label, "[]{}|<>&#:='") != null) return null;
+    for (label) |byte| if (byte < 0x20 or byte == 0x7f) return null;
+    return label;
+}
+
+const LiteralLanguageTemplateKind = enum { arabic, zhuang, documented_literal };
 
 fn loadLiteralLanguageTemplates(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, registry: *language_registry.Registry, kind: LiteralLanguageTemplateKind) !void {
     const path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
@@ -316,7 +433,7 @@ fn loadLiteralLanguageTemplates(io: std.Io, a: std.mem.Allocator, root: []const 
         const title = namespaces.ofTitle(row.title);
         if (title.id != 10) continue;
         const code = switch (kind) {
-            .arabic => title.text,
+            .arabic, .documented_literal => title.text,
             .zhuang => blk: {
                 if (title.text.len <= 2 or title.text[0] != '-' or title.text[title.text.len - 1] != '-') continue;
                 break :blk title.text[1 .. title.text.len - 1];
@@ -331,8 +448,47 @@ fn loadLiteralLanguageTemplates(io: std.Io, a: std.mem.Allocator, root: []const 
         const label = switch (kind) {
             .arabic => literalArabicLanguageTemplate(source orelse raw),
             .zhuang => literalZhuangLanguageTemplate(source orelse raw, code),
+            .documented_literal => literalDocumentedLanguageTemplate(source orelse raw),
         };
         if (label) |name| try registry.addLocalAlias(name, code);
+    }
+}
+
+// Discover authenticated source banners without changing ordinary registry trust.
+// Open/checksum template data only when the index has a registered hyphen-code.
+fn loadSourceLanguageBanners(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, registry: *language_registry.Registry) !void {
+    const path = try std.fs.path.join(a, &.{ root, "page-index.tsv" }); defer a.free(path);
+    var index = mmapPath(io, path) catch |err| switch (err) { error.FileNotFound => return, else => return err };
+    defer index.deinit();
+    var templates: ?dump_source.TemplateSource = null;
+    defer if (templates) |*value| value.deinit();
+    var behavior: ?namespace_registry.behavior_switches.Registry = null;
+    defer if (behavior) |*value| value.deinit();
+    const index_kind = dump_source.pageIndexKind(index.bytes);
+    var rows = std.mem.splitScalar(u8, index.bytes, '\n');
+    var ordinal: u64 = 0;
+    while (rows.next()) |line| {
+        if (line.len == 0 or line[0] == '#') continue;
+        const row = try dump_source.parsePageIndexLine(index_kind, line);
+        const this_ordinal = ordinal; ordinal += 1;
+        if (row.ns != 10 or row.redirect != null or !row.has_source) continue;
+        const title = namespaces.ofTitle(row.title);
+        if (title.id != 10 or title.text.len < 3 or title.text[0] != '-' or title.text[title.text.len - 1] != '-') continue;
+        const code = title.text[1 .. title.text.len - 1];
+        if (!registry.codes.contains(code)) continue;
+        if (templates == null) {
+            templates = (try dump_source.TemplateSource.open(io, a, root, index.bytes)) orelse return;
+            const behavior_path = try std.fs.path.join(a, &.{ root, "behavior-switches.tsv" }); defer a.free(behavior_path);
+            const bytes = std.Io.Dir.cwd().readFileAlloc(io, behavior_path, a, .limited(1024 * 1024)) catch |err| switch (err) { error.FileNotFound => null, else => return err };
+            defer if (bytes) |value| a.free(value);
+            if (bytes) |value| behavior = try namespace_registry.behavior_switches.Registry.init(a, value, namespaces.wiki, namespaces.dump_date, namespaces.content_language, namespaces.source_sha256);
+        }
+        const raw = (try templates.?.lookup(this_ordinal, row.page_id, row.revision_id)) orelse return error.MissingLanguageTemplateSource;
+        if (raw.len > 4096) continue;
+        const decoded = if (row.source_needs_decode) try xml_decode.decodeSinglePassAlloc(a, raw) else null;
+        defer if (decoded) |value| a.free(value);
+        if (source_language_banner.parse(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code)) |proof|
+            try registry.addSourceLanguageBanner(code, proof);
     }
 }
 
@@ -340,6 +496,12 @@ fn languageCodes(registry: *const language_registry.Registry, namespaces: ?*cons
     return .{
         .namespace_catalog = namespaces,
         .ctx = registry,
+        .source_banner_fn = struct {
+            fn matches(raw: ?*const anyopaque, code_value: []const u8, heading: []const u8, level: u8) bool {
+                const value: *const language_registry.Registry = @ptrCast(@alignCast(raw orelse return false));
+                return value.matchesSourceLanguageBanner(code_value, heading, level);
+            }
+        }.matches,
         .get_fn = struct {
             fn get(raw: ?*const anyopaque, heading: []const u8) ?[]const u8 {
                 const value: *const @import("language_registry.zig").Registry = @ptrCast(@alignCast(raw orelse return null));
@@ -424,6 +586,40 @@ fn auditHash(a: std.mem.Allocator, bytes: []const u8) ![]const u8 {
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
     return a.dupe(u8, &std.fmt.bytesToHex(digest, .lower));
+}
+
+fn captureDiagnosticPayload(io: std.Io, a: std.mem.Allocator, root: []const u8, failure: usize, label: []const u8, value: ?[]const u8, cap: usize, total_cap: usize, payload_bytes: *usize) !AuditPayload {
+    const bytes = value orelse return .{ .present = false };
+    const digest = try auditHash(a, bytes);
+    if (bytes.len == 0) return .{ .present = true, .sha256 = digest };
+    const n = @min(bytes.len, @min(cap, total_cap - payload_bytes.*));
+    if (n == 0 and bytes.len != 0) return .{ .present = true, .bytes = bytes.len, .sha256 = digest, .unretained = true };
+    const path = try std.fmt.allocPrint(a, "{s}/failure-{d:0>8}-{s}", .{ root, failure, label });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes[0..n] });
+    payload_bytes.* += n;
+    return .{ .present = true, .bytes = bytes.len, .sha256 = digest, .path = path, .retained_bytes = n, .truncated = n != bytes.len };
+}
+
+fn writeDiagnosticJson(io: std.Io, a: std.mem.Allocator, root: []const u8, name: []const u8, value: anytype, byte_limit: usize) !void {
+    if (byte_limit != std.math.maxInt(usize)) {
+        const buffer = try a.alloc(u8, byte_limit);
+        defer a.free(buffer);
+        var output = std.Io.Writer.fixed(buffer);
+        try std.json.Stringify.value(value, .{}, &output);
+        return writeDiagnosticBytes(io, a, root, name, buffer[0..output.end]);
+    }
+    const bytes = try std.json.Stringify.valueAlloc(a, value, .{});
+    defer a.free(bytes);
+    return writeDiagnosticBytes(io, a, root, name, bytes);
+}
+
+fn writeDiagnosticBytes(io: std.Io, a: std.mem.Allocator, root: []const u8, name: []const u8, bytes: []const u8) !void {
+    const path = try std.fs.path.join(a, &.{ root, name });
+    defer a.free(path);
+    const temporary = try std.fmt.allocPrint(a, "{s}.part", .{path});
+    defer a.free(temporary);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = temporary, .data = bytes });
+    try std.Io.Dir.cwd().rename(temporary, std.Io.Dir.cwd(), path, io);
 }
 
 fn auditFileStamp(io: std.Io, a: std.mem.Allocator, path: []const u8) !AuditFileStamp {
@@ -558,26 +754,11 @@ const PresentationAudit = struct {
     }
 
     fn writeJson(self: *PresentationAudit, name: []const u8, value: anytype) !void {
-        const bytes = try std.json.Stringify.valueAlloc(self.allocator, value, .{});
-        defer self.allocator.free(bytes);
-        const path = try std.fs.path.join(self.allocator, &.{ self.root, name });
-        defer self.allocator.free(path);
-        const temporary = try std.fmt.allocPrint(self.allocator, "{s}.part", .{path});
-        defer self.allocator.free(temporary);
-        try std.Io.Dir.cwd().writeFile(self.io, .{ .sub_path = temporary, .data = bytes });
-        try std.Io.Dir.cwd().rename(temporary, std.Io.Dir.cwd(), path, self.io);
+        return writeDiagnosticJson(self.io, self.allocator, self.root, name, value, std.math.maxInt(usize));
     }
 
     fn capture(self: *PresentationAudit, a: std.mem.Allocator, label: []const u8, value: ?[]const u8, cap: usize) !AuditPayload {
-        const bytes = value orelse return .{ .present = false };
-        const digest = try auditHash(a, bytes);
-        if (bytes.len == 0) return .{ .present = true, .sha256 = digest };
-        const n = @min(bytes.len, @min(cap, 64 * 1024 * 1024 - self.payload_bytes));
-        if (n == 0 and bytes.len != 0) return .{ .present = true, .bytes = bytes.len, .sha256 = digest, .unretained = true };
-        const path = try std.fmt.allocPrint(a, "{s}/failure-{d:0>8}-{s}", .{ self.root, self.failed, label });
-        try std.Io.Dir.cwd().writeFile(self.io, .{ .sub_path = path, .data = bytes[0..n] });
-        self.payload_bytes += n;
-        return .{ .present = true, .bytes = bytes.len, .sha256 = digest, .path = path, .retained_bytes = n, .truncated = n != bytes.len };
+        return captureDiagnosticPayload(self.io, a, self.root, self.failed, label, value, cap, 64 * 1024 * 1024, &self.payload_bytes);
     }
 
     fn recordSuccess(self: *PresentationAudit) void {
@@ -680,6 +861,7 @@ fn consumeExpandedPage(writer: *encoder.blob_builder.Writer, job: ExpansionJob, 
                 try discardAuditPage(writer, a);
                 return false;
             };
+            captureFirstPresentationFailure(err, job, expanded);
             return recordPresentationFailure(err, job);
         };
     } else {
@@ -690,6 +872,7 @@ fn consumeExpandedPage(writer: *encoder.blob_builder.Writer, job: ExpansionJob, 
                 try discardAuditPage(writer, a);
                 return false;
             };
+            captureFirstPresentationFailure(err, job, expanded);
             return recordPresentationFailure(err, job);
         };
     }
@@ -702,6 +885,7 @@ fn consumeExpandedPage(writer: *encoder.blob_builder.Writer, job: ExpansionJob, 
 
 const ExpansionJob = struct {
     ordinal: u64,
+    index_offset: u64,
     ns: encoder.blob_builder.PageNamespace,
     title: []const u8,
     source: []const u8,
@@ -750,6 +934,7 @@ const ExpansionSlot = struct {
             self.expansion = self.worker.expand(
                 self.arena.allocator(),
                 self.job.ordinal,
+                .{ .index_offset = self.job.index_offset, .page_id = self.job.page_id, .revision_id = self.job.revision_id, .namespace = self.job.ns.id },
                 self.job.title,
                 self.job.source,
             ) catch |err| blk: {
@@ -1045,7 +1230,7 @@ test "presentation failure receipt round trips exact invocation and page identit
     defer a.free(path);
     const invocation_args = [_][]const u8{ "dump.xml.zst", "out", "--expander-root", "bundle", "--now-unix", "1791731560", "--failure-receipt", path, "--invocation-id", "0123456789abcdef0123456789abcdef" };
     const context: FailureReceiptContext = .{ .io = io, .a = a, .path = path, .invocation_id = "0123456789abcdef0123456789abcdef", .invocation_args = &invocation_args };
-    const job: ExpansionJob = .{ .ordinal = 14002, .ns = .{ .id = 114, .kind = .citations }, .title = "Citations:quoted \"fixture\"", .source = "not serialized", .page_id = 7, .revision_id = 9 };
+    const job: ExpansionJob = .{ .index_offset = 0, .ordinal = 14002, .ns = .{ .id = 114, .kind = .citations }, .title = "Citations:quoted \"fixture\"", .source = "not serialized", .page_id = 7, .revision_id = 9 };
     try writePresentationFailure(context, job);
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(64 * 1024));
     defer a.free(bytes);
@@ -1253,6 +1438,20 @@ fn loadReviewedNonlexical(io: std.Io, a: std.mem.Allocator, path: []const u8, na
     return review;
 }
 
+// Only an exact row slice of the pinned mapping may become a wire address.
+fn mappedPageIndexOffset(mapped: []const u8, line: []const u8) !u64 {
+    const base = @intFromPtr(mapped.ptr);
+    const start = @intFromPtr(line.ptr);
+    if (start < base) return error.InvalidPageIndex;
+    const offset = start - base;
+    if (offset > mapped.len or line.len > mapped.len - offset) return error.InvalidPageIndex;
+    if (line.len == 0 or line[0] == '#' or std.mem.indexOfScalar(u8, line, '\n') != null) return error.InvalidPageIndex;
+    if (offset != 0 and mapped[offset - 1] != '\n') return error.InvalidPageIndex;
+    const end = offset + line.len;
+    if (end != mapped.len and mapped[end] != '\n') return error.InvalidPageIndex;
+    return std.math.cast(u64, offset) orelse error.InvalidPageIndex;
+}
+
 fn dispatchIndexedPage(
     pool: *ExpansionPool,
     writer: *encoder.blob_builder.Writer,
@@ -1301,6 +1500,11 @@ fn dispatchIndexedPage(
     if (page.redirect) |xml_target| {
         const index = pool.page_title_index orelse return error.MissingPageTitleIndex;
         const own_ref = (try index.lookup(pool.page_index_bytes, page.title)) orelse return error.InvalidPageTitleIndex;
+        const own_offset = dump_source.pageRowRefOffset(own_ref);
+        if (own_offset >= pool.page_index_bytes.len) return error.InvalidPageIndex;
+        const own_end = std.mem.indexOfScalarPos(u8, pool.page_index_bytes, own_offset, '\n') orelse pool.page_index_bytes.len;
+        const own_page = try dump_source.parsePageIndexLine(kind, pool.page_index_bytes[own_offset..own_end]);
+        if (own_page.ns != page.ns) return error.NamespaceTitleCollision;
         if (dump_source.pageRowRefOrdinal(own_ref) != ordinal) {
             try writer.namespace_coverage.outcome(page.ns, .duplicate);
             if (pool.audit) |audit| audit.skipped += 1;
@@ -1347,7 +1551,7 @@ fn dispatchIndexedPage(
             owned.target_key = try retained.dupe(u8, alias.target_key);
             owned.fragment = try retained.dupe(u8, alias.fragment);
             if (pool.audit) |audit| audit.dispatched += 1;
-            slot.dispatch(.{ .ordinal = @intCast(ordinal), .ns = .{ .id = page.ns, .kind = role.? }, .title = page.title, .source = try retained.dupe(u8, tail), .alias_record = owned, .page_id = page.page_id, .revision_id = page.revision_id, .index_line = line });
+            slot.dispatch(.{ .ordinal = @intCast(ordinal), .index_offset = try mappedPageIndexOffset(pool.page_index_bytes, line), .ns = .{ .id = page.ns, .kind = role.? }, .title = page.title, .source = try retained.dupe(u8, tail), .alias_record = owned, .page_id = page.page_id, .revision_id = page.revision_id, .index_line = line });
         }
         return;
     }
@@ -1360,6 +1564,7 @@ fn dispatchIndexedPage(
         raw_source;
     if (pool.audit) |audit| audit.dispatched += 1;
     slot.dispatch(.{
+        .index_offset = try mappedPageIndexOffset(pool.page_index_bytes, line),
         .page_id = page.page_id,
         .revision_id = page.revision_id,
         .index_line = line,
@@ -1527,6 +1732,17 @@ pub fn main(init: std.process.Init) !void {
         .invocation_id = options.invocation_id.?, .invocation_args = args[1..],
     } else null;
     defer failure_receipt_context = null;
+    first_failure_capture_context = if (options.audit_presentation_errors) null else .{
+        .io = init.io, .allocator = a, .output_root = args[2],
+        .input = .{ .dump_path = args[1], .expander_root = options.expander_root,
+            .workers = options.workers, .timeout_ms = options.expansion_timeout_ms orelse expansion_deadline.default_ms,
+            .now_unix = 0,
+            .start_page = options.start_page, .requested_limit = options.limit_pages,
+            .index_byte_offset = options.index_byte_offset },
+        .requested_now_unix = options.now_unix,
+        .invocation_args = args[1..], .invocation_id = options.invocation_id,
+    };
+    defer first_failure_capture_context = null;
     var audit_storage: ?PresentationAudit = if (options.audit_presentation_errors)
         try PresentationAudit.init(init.io, a, args[2], .{ .dump_path = args[1], .expander_root = options.expander_root, .workers = options.workers, .timeout_ms = options.expansion_timeout_ms orelse expansion_deadline.default_ms, .now_unix = options.now_unix orelse std.Io.Clock.real.now(init.io).toSeconds(), .start_page = options.start_page, .requested_limit = options.limit_pages, .index_byte_offset = options.index_byte_offset, .expanded_byte_cap = options.audit_expanded_bytes orelse 0 })
     else
@@ -2645,7 +2861,9 @@ test "reviewed nonlexical rows authenticate all four sources before skipping ali
     var control_writer = try encoder.blob_builder.Writer.init(io, a, control_out);
     defer control_writer.deinit();
     control_writer.namespace_coverage.reviewed_nonlexical_sha256 = review.sha256;
-    try dispatchIndexedPage(&pool, &control_writer, &dump, .raw_xml, &namespaces, row_lines[4], 4);
+    const lexical_offset = std.mem.indexOf(u8, index_text, row_lines[4]) orelse return error.InvalidPageIndex;
+    const lexical_row = index_text[lexical_offset .. lexical_offset + row_lines[4].len];
+    try dispatchIndexedPage(&pool, &control_writer, &dump, .raw_xml, &namespaces, lexical_row, 4);
     try std.testing.expect(slot.busy);
     try std.testing.expectEqualStrings("Independent word", slot.job.title);
     try std.testing.expectEqualStrings(lexical_body, slot.job.source);
@@ -3329,7 +3547,7 @@ test "diagnostic seam with nil audit retains real Writer strict guards and prove
     defer std.Io.Dir.cwd().deleteTree(io, root) catch {};
     var writer = try encoder.blob_builder.Writer.init(io, a, root);
     defer writer.deinit();
-    const job: ExpansionJob = .{ .ordinal = 1, .ns = .{ .id = 0, .kind = .language }, .title = "Strict fixture", .source = "raw fixture" };
+    const job: ExpansionJob = .{ .index_offset = 0, .ordinal = 1, .ns = .{ .id = 0, .kind = .language }, .title = "Strict fixture", .source = "raw fixture" };
     try std.testing.expectError(error.UncompiledPresentation, consumeExpandedPage(&writer, job, .{ .source = "[https:// broken" }, a, null));
     try std.testing.expectError(error.UncompiledPresentation, consumeExpandedPage(&writer, job, .{ .source = "before |} after" }, a, null));
     try std.testing.expect(try consumeExpandedPage(&writer, job, .{ .source = "<nowiki>before |} after</nowiki>" }, a, null));
@@ -3350,10 +3568,10 @@ test "failed multi-owner page can touch scratch spools but never becomes a publi
         defer writer.deinit();
         writer.language_codes = .{ .get_fn = auditControlLanguages, .boundary_fn = auditControlBoundary };
         const source = "==English==\n# first owner is valid\n==French==\n# [https:// broken\n";
-        const job: ExpansionJob = .{ .ordinal = 2, .ns = .{ .id = 0, .kind = .language }, .title = "Partial owners", .source = source };
+        const job: ExpansionJob = .{ .index_offset = 0, .ordinal = 2, .ns = .{ .id = 0, .kind = .language }, .title = "Partial owners", .source = source };
         try std.testing.expectError(error.UncompiledPresentation, consumeExpandedPage(&writer, job, .{ .source = source }, a, null));
         try std.testing.expect(writer.stats.language_records > 0);
-        const later: ExpansionJob = .{ .ordinal = 3, .ns = .{ .id = 0, .kind = .language }, .title = "Later valid", .source = "==English==\n# later valid" };
+        const later: ExpansionJob = .{ .index_offset = 0, .ordinal = 3, .ns = .{ .id = 0, .kind = .language }, .title = "Later valid", .source = "==English==\n# later valid" };
         try std.testing.expect(try consumeExpandedPage(&writer, later, .{ .source = later.source }, a, null));
         try auditControlNoPublishedFiles(a, root);
     }
@@ -3447,7 +3665,7 @@ fn auditControlSequence(a: std.mem.Allocator, label: []const u8, cap: usize) !vo
         defer writer.deinit();
         writer.language_codes = .{ .get_fn = auditControlLanguages, .boundary_fn = auditControlBoundary };
         for (pages, 1000..) |page, ordinal| {
-            const job: ExpansionJob = .{ .ordinal = @intCast(ordinal), .ns = .{ .id = 0, .kind = .language }, .title = page.title, .source = raw_request };
+            const job: ExpansionJob = .{ .index_offset = 0, .ordinal = @intCast(ordinal), .ns = .{ .id = 0, .kind = .language }, .title = page.title, .source = raw_request };
             try std.testing.expectEqual(page.valid, try consumeExpandedPage(&writer, job, .{ .source = page.source }, a, &audit));
             // Includes a failure after English was already appended: diagnostic
             // continuation must discard that partial owner before the next page.
@@ -3534,7 +3752,7 @@ test "audit propagates real Writer phase and allocator failures and seals only i
         defer audit.deinit();
         var writer = try encoder.blob_builder.Writer.init(io, a, inputs.writer_root);
         defer writer.deinit();
-        const job: ExpansionJob = .{ .ordinal = 7, .ns = .{ .id = 0, .kind = .language }, .title = "Operational control", .source = "valid [[allocation]] source" };
+        const job: ExpansionJob = .{ .index_offset = 0, .ordinal = 7, .ns = .{ .id = 0, .kind = .language }, .title = "Operational control", .source = "valid [[allocation]] source" };
         if (comptime std.mem.eql(u8, label, "provenance")) {
             try std.testing.expectError(error.InvalidPoemMetadata, consumeExpandedPage(&writer, job, .{ .source = job.source, .poem_metadata = "{" }, a, &audit));
             audit.abort(error.InvalidPoemMetadata);
@@ -3982,7 +4200,7 @@ test "audit payload exhaustion retains hashes while report exhaustion aborts inc
         var writer = try encoder.blob_builder.Writer.init(io, a, inputs.writer_root);
         defer writer.deinit();
         const source = "before |} after";
-        const job: ExpansionJob = .{ .ordinal = 99, .ns = .{ .id = 0, .kind = .language }, .title = "budget control", .source = source };
+        const job: ExpansionJob = .{ .index_offset = 0, .ordinal = 99, .ns = .{ .id = 0, .kind = .language }, .title = "budget control", .source = source };
         if (comptime std.mem.eql(u8, label, "payload-budget")) {
             // Exercise the boundary without allocating a giant payload.
             audit.payload_bytes = 64 * 1024 * 1024;
@@ -4429,6 +4647,248 @@ test "Writer composed hidden template conflicts refuse unproved page ownership" 
     }
 }
 
+const GorLiteralHeadingTest = struct {
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tgorwiktionary\n# dump-date\t20261001\n# content-language\tgor\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplat\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tDalala\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tcategories\n";
+    const registry = "# content-language\tgor\n# mediawiki\ngor\tBahasa Hulontalo\tgor\tGorontalo\nen\tEnglish\tOrdinary English alias\n";
+    // Retained Templat:gor p2925/r10737. Documentation is excluded before calls.
+    const source = "bahasa Hulontalo<noinclude>[[Dalala:{{kat:kode bahasa}}]]</noinclude>";
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8) !void {
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = registry });
+        const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = "0\t0\tTemplat:gor\t\t2925\t10737\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t0\n" });
+        var writer = try dump_source.TemplateSourceWriter.init(io, a, root);
+        defer writer.deinit();
+        try writer.append(0, 2925, 10737, source);
+        try writer.finish(index_path);
+    }
+};
+
+test "GOR literal code template proves exact prefix and excludes complete documentation" {
+    try std.testing.expectEqualStrings("bahasa Hulontalo", literalDocumentedLanguageTemplate(GorLiteralHeadingTest.source).?);
+    try std.testing.expectEqualStrings("Literal Name", literalDocumentedLanguageTemplate("Literal Name<noinclude>{{any documentation}} [[Category:Any topic]]</noinclude>").?);
+    for ([_][]const u8{
+        "{{dynamic}}<noinclude>docs</noinclude>", "Label&amp;Other<noinclude>docs</noinclude>",
+        "''Label''<noinclude>docs</noinclude>",
+        "[[Label]]<noinclude>docs</noinclude>", "Label<noinclude>docs", "Label<noinclude>docs</noinclude>extra",
+        "Label<noinclude><onlyinclude>Other</onlyinclude></noinclude>",
+        "Label<noinclude><!-- </noinclude> -->", "Label<noinclude>nested<noinclude>other</noinclude></noinclude>",
+        "Label<noinclude/>", "Label<noinclude attr='x'>docs</noinclude>", "Label\nOther<noinclude>docs</noinclude>",
+    }) |source| try std.testing.expect(literalDocumentedLanguageTemplate(source) == null);
+}
+
+test "GOR indexed literal alias preserves ordinary aliases conflicts and edition scope" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try GorLiteralHeadingTest.install(io, a, root);
+    var namespaces = try namespace_registry.Registry.init(a, GorLiteralHeadingTest.namespaces); defer namespaces.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+    try std.testing.expectEqualStrings("gor", registry.resolveTrusted("bahasa Hulontalo").?.code);
+    try std.testing.expectEqualStrings("Bahasa Hulontalo", registry.resolveTrusted("bahasa Hulontalo").?.heading);
+    try std.testing.expect(registry.resolveTrusted("Gorontalo") == null);
+    try std.testing.expect(registry.resolveTrusted("Ordinary English alias") == null);
+    try registry.addLocalAlias("bahasa Hulontalo", "en");
+    try registry.addLocalAlias("bahasa Hulontalo", "gor");
+    try std.testing.expect(registry.resolveTrusted("bahasa Hulontalo") == null);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = "# content-language\ten\n# mediawiki\ngor\tBahasa Hulontalo\nen\tEnglish\n" });
+    var foreign = try loadLanguageRegistry(io, a, root, &namespaces); defer foreign.deinit();
+    try std.testing.expect(foreign.resolveTrusted("bahasa Hulontalo") == null);
+}
+
+test "Writer trusted language link ignores only hidden category metadata and preserves typed content" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try GorLiteralHeadingTest.install(io, a, root);
+    var namespaces = try namespace_registry.Registry.init(a, GorLiteralHeadingTest.namespaces); defer namespaces.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+    const behavior_source = "# wikidict-behavior-switches-v1\n# wiki\tgorwiktionary\n# dump-date\t20261001\n# content-language\tgor\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\nnotoc\t0\t__NOTOC__\nnotoc\t1\tSoft\nnotoc\t0\t＿＿目次非表示＿＿\n";
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, "gorwiktionary", "20261001", "gor", @splat(0)); defer behavior.deinit();
+    var codes = languageCodes(&registry, &namespaces); codes.behavior_switches = &behavior;
+    const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    // Source-instantiated heading fixture from Hulontalo + gor, not runtime expansion.
+    const positive = "==[[bahasa Hulontalo]][[Dalala:Tahe bahasa Hulontalo]]==\n# [[tuwawu]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "retained-heading", positive, "=={{Hulontalo}}==\n# [[tuwawu]]\n", null);
+    // A registered different language inside hidden metadata cannot choose the owner.
+    const topic = "==[[bahasa Hulontalo]][[Dalala:English|sort]][[Category:Unrelated topic]]==\n# [[tuwawu]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "topic-control", topic, topic, null);
+    const negatives = [_][]const u8{
+        "[[bahasa Hulontalo]][[:Dalala:Topic]]", "[[bahasa Hulontalo]][[Dalala:Topic]]trail",
+        "[[bahasa Hulontalo]] prose [[Dalala:Topic]]", "[[bahasa Hulontalo]][[English]]",
+        "[[Gorontalo]][[Dalala:Bahasa Hulontalo]]", "[[Unknown]][[Dalala:Bahasa Hulontalo]]",
+        "[[bahasa Hulontalo|visible prose]][[Dalala:Topic]]", "[[bahasa Hulontalo]][[Dalala:Topic|[[nested]]]]",
+        "[[bahasa Hulontalo]][[Dalala:Topic", "[[bahasa Hulontalo]][[NotCategory:Topic]]",
+        "[[bahasa Hulontalo]][[Dalala:bad&lt;target]]",
+        "[[bahasa Hulontalo]][[Dalala:__NOTOC__]]",
+        "[[bahasa Hulontalo]][[Dalala:Soft]]",
+        "[[bahasa Hulontalo]][[Dalala:＿＿目次非表示＿＿]]",
+        "[[bahasa Hulontalo]][[Dalala:Topic]]''",
+        "[[bahasa Hulontalo]][[Dalala:Topic]] \t'' [[Dalala:Other]]",
+    };
+    for (negatives, 0..) |heading, i| {
+        const source = try std.fmt.allocPrint(a, "=={s}==\n# [[tuwawu]]\n", .{heading});
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, try std.fmt.allocPrint(a, "negative-{d}", .{i}), source, source, null);
+    }
+    const protected = "==English==\n# [[outer-meaning]]\n<nowiki>\n==[[bahasa Hulontalo]][[Dalala:Topic]]==\n</nowiki>\n{|\n|\n==[[bahasa Hulontalo]][[Dalala:Topic]]==\n|}\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "protected", protected, protected, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, negatives.len + 3), stats.language_records);
+    for (0..negatives.len + 3) |i| {
+        const language = if (i < 2) "Bahasa Hulontalo" else if (i == negatives.len + 2) "English" else "Unclassified";
+        const code = if (i < 2) "gor" else if (i == negatives.len + 2) "en" else "";
+        const title = if (i == 0) "retained-heading" else if (i == 1) "topic-control" else if (i == negatives.len + 2) "protected" else try std.fmt.allocPrint(a, "negative-{d}", .{i - 2});
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename(language, &filename) })); defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes); const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(code, metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find(title)).?;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(code, decoded.entry.language_code);
+        const original_source = if (i == 0) positive else if (i == 1) topic else if (i == negatives.len + 2) protected else try std.fmt.allocPrint(a, "=={s}==\n# [[tuwawu]]\n", .{negatives[i - 2]});
+        const whole_payload = try encoder.presentation_document.compileReportedWithBehaviorAlloc(a, title, .language, "Unclassified", "", original_source, null, .{}, &namespaces, &behavior, null);
+        const whole = try encoder.presentation_codec.decodeAlloc(a, whole_payload, title, .language, .{ .code = "", .heading = "Unclassified" });
+        try std.testing.expectEqualDeep(whole.entry.sections, decoded.entry.sections);
+        var meanings: usize = 0; var language_links: usize = 0; var heading_language_links: usize = 0;
+        // Decoded Section stores the plain title; navigable title spans are a heading block.
+        for (decoded.entry.sections) |section| {
+            if (i < 2) try std.testing.expect(std.mem.indexOf(u8, section.title, "Tahe ") == null);
+        }
+        for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (std.mem.eql(u8, span.target, if (i == negatives.len + 2) "outer-meaning" else "tuwawu")) meanings += 1;
+            if (std.mem.eql(u8, span.target, "bahasa Hulontalo")) {
+                language_links += 1;
+                if (block.kind == .heading) heading_language_links += 1;
+            }
+            if (i < 2) try std.testing.expect(std.mem.indexOf(u8, span.text, "Tahe ") == null);
+        };
+        try std.testing.expectEqual(@as(usize, 1), meanings);
+        if (i < 2) {
+            try std.testing.expectEqual(@as(usize, 1), language_links);
+            try std.testing.expectEqual(@as(usize, 1), heading_language_links);
+        }
+        const encoded = try encoder.presentation_codec.encodeAlloc(a, decoded);
+        try std.testing.expectEqualSlices(u8, record.payload, encoded);
+    }
+}
+
+const QuSourceBannerTest = struct {
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tquwiktionary\n# dump-date\t20261001\n# content-language\tqu\n0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n10\tPlantilla\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n14\tKatiguriya\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tcategories\n";
+    const registry = "# content-language\tqu\n# mediawiki\nqu\tRuna Simi\tqu\tQuechua\tque\nen\tEnglish\nsyn\tSenaya\nfr\tFrench\n";
+    const template_raw = "__NOEDITSECTION__&lt;noinclude&gt;[[Category:Template|qu]]&lt;/noinclude&gt;&lt;includeonly&gt;[[Katiguriya:Runa simi|Runa]]&lt;/includeonly&gt;\n= [[runa simi|Runa simi]] (Qhichwa rimay) =";
+    const raw = "{{-qu-}}\n{{-noun-}}\n{{pn}}\n# q'ispi [[puriqlla]], [[yakuchaq]]pa [[muksi]]n, [[upyay|upyanapaq]]\n{{-trad-}}\n{{(}}\n* {{de}}: {{trad|de|Wasser}}\n* {{chr}}: {{trad|chr|ᎠᎹ}}\n* {{fr}}: {{trad|fr|eau}}\n* {{el}}: {{trad|el|νερό}}\n* {{en}}: {{trad|en|water}}\n{{-}}\n* {{es}}: {{trad|es|agua}}\n* {{eo}}: {{trad|eo|akvo}}\n* {{nci}}: {{trad|nci|atl}}\n* {{vi}}: {{trad|vi|nước}}\n* {{pt}}: {{trad|pt|água}}\n{{)}}";
+    const expanded = "__NOEDITSECTION__[[Katiguriya:Runa simi|Runa]]\n= [[runa simi|Runa simi]] (Qhichwa rimay) =\n__NOEDITSECTION__\n===Suti===\n'''yaku'''\n# q'ispi [[puriqlla]], [[yakuchaq]]pa [[muksi]]n, [[upyay|upyanapaq]]\n__NOEDITSECTION__\n====T'ikray Kay====\n{| border=0  width=100%\n|-\n|bgcolor=\"#FFFFE0\" valign=top width=48%|\n{|\n\n* Alimanya: <span lang=\"de\" xml:lang=\"de\">[[Wasser]]</span> <sup>[[:de:Wasser|(de)]]</sup>\n* Chiruki: <span lang=\"chr\" xml:lang=\"chr\">[[ᎠᎹ]]</span> <sup>[[:chr:ᎠᎹ|(chr)]]</sup>\n* Fransiya: <span lang=\"fr\" xml:lang=\"fr\">[[eau]]</span> <sup>[[:fr:eau|(fr)]]</sup>\n* Grigu: <span lang=\"el\" xml:lang=\"el\">[[νερό]]</span> <sup>[[:el:νερό|(el)]]</sup>\n* Inlish: <span lang=\"en\" xml:lang=\"en\">[[water]]</span> <sup>[[:en:water|(en)]]</sup>\n|}\n| width=1% |\n|bgcolor=\"#FFFFE0\" valign=top width=48%|\n{|\n\n* Ispaña: <span lang=\"es\" xml:lang=\"es\">[[agua]]</span> <sup>[[:es:agua|(es)]]</sup>\n* Ispirantu: <span lang=\"eo\" xml:lang=\"eo\">[[akvo]]</span> <sup>[[:eo:akvo|(eo)]]</sup>\n* Astika nawa: <span lang=\"nci\" xml:lang=\"nci\">[[atl]]</span> <sup>[[:nci:atl|(nci)]]</sup>\n* Witnam: <span lang=\"vi\" xml:lang=\"vi\">[[nước]]</span> <sup>[[:vi:nước|(vi)]]</sup>\n* Purtugal: <span lang=\"pt\" xml:lang=\"pt\">[[água]]</span> <sup>[[:pt:água|(pt)]]</sup>\n|}\n|}\n";
+    const heading = "[[runa simi|Runa simi]] (Qhichwa rimay)";
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8) !void {
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = registry });
+        const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = "0\t0\tPlantilla:-qu-\t\t1739\t13231\t2021-08-03T10:16:49Z\tA\twikitext\t10\t1\t1\n" });
+        var writer = try dump_source.TemplateSourceWriter.init(io, a, root); defer writer.deinit();
+        try writer.append(0, 1739, 13231, template_raw); try writer.finish(index_path);
+    }
+};
+
+test "source language banner requires complete literal body and registry name agreement" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var namespaces = try namespace_registry.Registry.init(a, QuSourceBannerTest.namespaces); defer namespaces.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(QuSourceBannerTest.registry);
+    const decoded = try xml_decode.decodeSinglePassAlloc(a, QuSourceBannerTest.template_raw);
+    const proof = source_language_banner.parse(decoded, &namespaces, null, &registry, "qu").?;
+    try std.testing.expectEqualStrings(QuSourceBannerTest.heading, proof.heading); try std.testing.expectEqual(@as(u8, 1), proof.level);
+    const l2 = source_language_banner.parse("== [[runa simi|Runa simi]] (Qhichwa rimay) ==", &namespaces, null, &registry, "qu").?;
+    try std.testing.expectEqual(@as(u8, 2), l2.level);
+    for ([_][]const u8{
+        "= [[Noun|Noun]] =", "= [[English|English]] =", "= [[qu|qu]] =", "= [[runa simi|English]] =",
+        "= [[runa simi|Runa simi]] ({{dynamic}}) =", "= [[{{{1}}}|Runa simi]] =",
+        "<nowiki>= [[runa simi|Runa simi]] =</nowiki>", "<ref>= [[runa simi|Runa simi]] =</ref>",
+        "{|\n|\n= [[runa simi|Runa simi]] =\n|}", "= [[runa simi|Runa simi]] =\nvisible extra",
+        "= [[runa simi|Runa simi]] =\n= [[runa simi|Runa simi]] =",
+        "<noinclude><onlyinclude>Wrong</onlyinclude></noinclude>\n= [[runa simi|Runa simi]] =",
+        "<includeonly>[[:Katiguriya:Topic]]</includeonly>\n= [[runa simi|Runa simi]] =",
+        "<includeonly>[[Katiguriya:__NOTOC__]]</includeonly>\n= [[runa simi|Runa simi]] =",
+        "__TOC__\n= [[runa simi|Runa simi]] =",
+    }) |source| try std.testing.expect(source_language_banner.parse(source, &namespaces, null, &registry, "qu") == null);
+    try std.testing.expect(source_language_banner.parse("= [[Noun|Noun]] =", &namespaces, null, &registry, "syn") == null);
+    // Captured aliases are syntactically unrestricted. Recognition alone must
+    // not erase constructs interpreted earlier by ordinary transclusion.
+    const behavior_header = "# wikidict-behavior-switches-v1\n# wiki\tquwiktionary\n# dump-date\t20261001\n# content-language\tqu\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n";
+    for ([_][]const u8{
+        "<onlyinclude>Wrong</onlyinclude>", "<onlyinclude>", "</onlyinclude>",
+        "{{dynamic}}", "[[Visible]]", "<noinclude>hidden</noinclude>", "&amp;", "''styled''", "|cell", "=heading",
+    }) |alias| {
+        const captured = try std.fmt.allocPrint(a, "{s}noeditsection\t1\t{s}\n", .{ behavior_header, alias });
+        var behavior = try namespace_registry.behavior_switches.Registry.init(a, captured, "quwiktionary", "20261001", "qu", @splat(0));
+        defer behavior.deinit();
+        const input = try std.fmt.allocPrint(a, "{s}\n= [[runa simi|Runa simi]] (Qhichwa rimay) =", .{alias});
+        try std.testing.expectEqual(@as(?usize, alias.len), try behavior.matchAt(a, input, 0));
+        try std.testing.expect(source_language_banner.parse(input, &namespaces, &behavior, &registry, "qu") == null);
+    }
+    var normal_behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_header ++ "noeditsection\t1\t__NOEDITSECTION__\n", "quwiktionary", "20261001", "qu", @splat(0));
+    defer normal_behavior.deinit();
+    try std.testing.expect(source_language_banner.parse(decoded, &namespaces, &normal_behavior, &registry, "qu") != null);
+    try registry.addTsv("xx\tConflicting\tRUNA SIMI\n");
+    try std.testing.expect(source_language_banner.parse(decoded, &namespaces, null, &registry, "qu") == null);
+}
+
+test "indexed source banner proof does not promote aliases and retains later conflicts" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}); try QuSourceBannerTest.install(io, a, root);
+    var namespaces = try namespace_registry.Registry.init(a, QuSourceBannerTest.namespaces); defer namespaces.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+    try std.testing.expect(registry.matchesSourceLanguageBanner("qu", QuSourceBannerTest.heading, 1));
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("syn", QuSourceBannerTest.heading, 1));
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("qu", QuSourceBannerTest.heading, 2));
+    try std.testing.expect(registry.resolveTrusted("Runa simi") == null);
+    try std.testing.expect(registry.resolveTrusted(QuSourceBannerTest.heading) == null);
+    try registry.addLocalAlias("runa simi", "fr");
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("qu", QuSourceBannerTest.heading, 1));
+}
+
+test "Writer captured Quechua banner requires exact root invocation and preserves all typed source" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}); try QuSourceBannerTest.install(io, a, root);
+    var namespaces = try namespace_registry.Registry.init(a, QuSourceBannerTest.namespaces); defer namespaces.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+    const codes = languageCodes(&registry, &namespaces); const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    // Exact saved raw410/expanded1273 witness. This test replays captured data;
+    // it does not claim a new template expansion or a whole-corpus build.
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "yaku", QuSourceBannerTest.expanded, QuSourceBannerTest.raw, null);
+    const controls = [_][]const u8{
+        "", "{{-syn-}}\n", "{{-qu-|parameter}}\n", "prefix\n{{-qu-}}\n",
+        "<!--{{-qu-}}-->\n", "<nowiki>{{-qu-}}</nowiki>\n", "<ref>{{-qu-}}</ref>\n", "{|\n|{{-qu-}}\n|}\n",
+    };
+    for (controls, 0..) |raw, i| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, try std.fmt.allocPrint(a, "root-control-{d}", .{i}), QuSourceBannerTest.expanded, raw, null);
+    const stats = try writer.finish(codes); try std.testing.expectEqual(@as(usize, controls.len + 1), stats.language_records);
+    for (0..controls.len + 1) |i| {
+        const heading = if (i == 0) "Runa Simi" else "Unclassified";
+        const title = if (i == 0) "yaku" else try std.fmt.allocPrint(a, "root-control-{d}", .{i - 1});
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename(heading, &filename) })); defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes); const metadata = try blob.languageMetadata(); var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find(title)).?; const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(if (i == 0) "qu" else "", decoded.entry.language_code);
+        var report: encoder.presentation_document.Fallbacks = .{};
+        const whole_payload = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, title, .language, heading, metadata.code, QuSourceBannerTest.expanded, null, .{}, &namespaces, &report);
+        const whole = try encoder.presentation_codec.decodeAlloc(a, whole_payload, title, .language, metadata);
+        try std.testing.expectEqualDeep(whole.entry.sections, decoded.entry.sections);
+        try std.testing.expectEqualDeep(whole.entry.references, decoded.entry.references);
+        try std.testing.expectEqualDeep(whole.entry.media, decoded.entry.media);
+        try std.testing.expectEqualStrings("Runa simi (Qhichwa rimay)", decoded.entry.sections[0].title);
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    }
+}
+
 
 test "Writer preserves same line noinclude table rows and stored actions" {
     var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
@@ -4467,4 +4927,554 @@ test "Writer preserves same line noinclude table rows and stored actions" {
     }
     for (actual.sections[1].blocks[1].spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "B")) { after = true; };
     try std.testing.expect(linked and italic and after);
+}
+
+test "Writer classified owner survives Hausa support headings without changing source semantics" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = "# content-language\tha\n# mediawiki\nha\tHausa\nen\tEnglish\n" });
+    var namespaces = try namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\thawiktionary\n# dump-date\t20261001\n# content-language\tha\n0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tcategories\n"); defer namespaces.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+    const codes = languageCodes(&registry, &namespaces);
+    const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    // Exact selected literal lines from kura p1824/r46648. Audio/reflist and
+    // intervening paragraphs are not an executed expansion fixture. The source
+    // has no numbered definition list: the Noun definitions must remain empty.
+    const selected = "== Hausa ==\n==Suna==\n'''Ƙura''' tashin turbaya dalilin iska shine ƙura\n=== Noun ===\n'''kura''' ''f'', pl. '''kuraya'''\n==Misali==\n*Kura ta cinye rago a bayan gari\n";
+    const english = "==English==\n===Verb===\n# [[english-meaning]]\n";
+    const mixed = try std.mem.concat(a, u8, &.{ selected, english });
+    const unresolved = "==Unknown label==\n===Noun===\n# [[unresolved-meaning]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "kura-selected", selected, selected, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "mixed-control", mixed, mixed, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "unresolved-control", unresolved, unresolved, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    const cases = [_]struct { title: []const u8, heading: []const u8, code: []const u8, source: []const u8, pos: []const u8, definitions: usize }{
+        .{ .title = "kura-selected", .heading = "Hausa", .code = "ha", .source = selected, .pos = "Noun", .definitions = 0 },
+        .{ .title = "mixed-control", .heading = "Hausa", .code = "ha", .source = selected, .pos = "Noun", .definitions = 0 },
+        .{ .title = "mixed-control", .heading = "English", .code = "en", .source = english, .pos = "Verb", .definitions = 1 },
+        .{ .title = "unresolved-control", .heading = "Unclassified", .code = "", .source = unresolved, .pos = "Noun", .definitions = 1 },
+    };
+    for (cases) |case| {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename(case.heading, &filename) })); defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes); const metadata = try blob.languageMetadata();
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find(case.title)).?;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(case.code, decoded.entry.language_code);
+        try std.testing.expectEqual(@as(usize, 1), decoded.entry.organization.lexemes.len);
+        const lexeme = decoded.entry.organization.lexemes[0];
+        try std.testing.expectEqualStrings(if (case.code.len == 0) "" else case.heading, lexeme.language);
+        try std.testing.expectEqualStrings(case.pos, lexeme.kind);
+        try std.testing.expectEqual(case.definitions, lexeme.definitions.len);
+        const whole_payload = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, case.title, .language, case.heading, case.code, case.source, null, .{}, &namespaces, null);
+        const whole = try encoder.presentation_codec.decodeAlloc(a, whole_payload, case.title, .language, metadata);
+        try std.testing.expectEqualDeep(whole.entry.sections, decoded.entry.sections);
+        try std.testing.expectEqual(whole.entry.organization.lexemes[0].section, lexeme.section);
+        try std.testing.expectEqualDeep(whole.entry.organization.lexemes[0].definitions, lexeme.definitions);
+        try std.testing.expectEqualDeep(whole.entry.organization.lexemes[0].introduction, lexeme.introduction);
+        try std.testing.expectEqualDeep(whole.entry.organization.lexemes[0].other_blocks, lexeme.other_blocks);
+        try std.testing.expectEqualDeep(whole.entry.organization.lexemes[0].related_sections, lexeme.related_sections);
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    }
+}
+
+// Private, unapplied normal Writer regression proposal. Static GA t/en header
+// contract plus synthetic POS/fragment controls; no native capture is claimed.
+const GaHtmlLanguageBoundaryFixture = struct {
+    const registry = "# content-language\tga\n# mediawiki\nen\tBéarla\tEnglish\ten\teng\nga\tGaeilge\tga\tIrish\tgle\n";
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tgawiktionary\n# dump-date\t20261001\n# content-language\tga\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "6\tÍomhá\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\n" ++
+        "10\tTeimpléad\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tMúnla\n" ++
+        "14\tCatagóir\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tRang\n";
+    fn load(io: std.Io, a: std.mem.Allocator, root: []const u8, ns: *namespace_registry.Registry) !language_registry.Registry {
+        try std.Io.Dir.cwd().createDirPath(io, root);
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = registry });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "" });
+        return loadLanguageRegistry(io, a, root, ns);
+    }
+    fn entry(io: std.Io, a: std.mem.Allocator, root: []const u8, heading: []const u8, title: []const u8) !?encoder.presentation_types.Entry {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{ root, "languages", encoder.blob_catalog.languageBlobFilename(heading, &filename) });
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(1024 * 1024));
+        const blob = try encoder.blob_format.inspect(bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(title)) orelse return null;
+        const stored = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, stored));
+        return stored.entry;
+    }
+    fn requiredEntry(io: std.Io, a: std.mem.Allocator, root: []const u8, heading: []const u8, title: []const u8) !encoder.presentation_types.Entry {
+        const actual = (try entry(io, a, root, heading, title)) orelse {
+            std.debug.print("missing required language record: heading={s}, title={s}\n", .{ heading, title });
+            return error.TestUnexpectedResult;
+        };
+        return actual;
+    }
+    fn whole(a: std.mem.Allocator, title: []const u8, text: []const u8, ns: *namespace_registry.Registry) !encoder.presentation_types.Entry {
+        const payload = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, title, .language, "Unclassified", "", text, null, .{}, ns, null);
+        return (try encoder.presentation_codec.decodeAlloc(a, payload, title, .language, .{ .code = "", .heading = "Unclassified" })).entry;
+    }
+    fn targetCount(value: encoder.presentation_types.Entry, target: []const u8) usize {
+        var count: usize = 0;
+        for (value.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (std.mem.eql(u8, span.target, target)) count += 1;
+        };
+        return count;
+    }
+};
+
+test "Writer admitted plain HTML h2 preserves trusted language and complete typed meanings" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io; const F = GaHtmlLanguageBoundaryFixture;
+    var ns = try namespace_registry.Registry.init(a, F.namespaces); defer ns.deinit();
+    const input = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ga-html-input", .{tmp.sub_path});
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ga-html-output", .{tmp.sub_path});
+    var registry = try F.load(io, a, input, &ns); defer registry.deinit();
+    const codes = languageCodes(&registry, &ns);
+    try std.testing.expectEqualStrings("en", registry.resolveTrusted("Béarla").?.code);
+    try std.testing.expect(registry.resolveTrusted("English") == null);
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    // Static t|en header with synthetic POS headings; the three numbered
+    // meanings are retained from Irish p1640/r53353.
+    const source = "<h2 title=\"English\">Béarla</h2>\n===Noun===\n'''Irish'''\n#[[Gaeilge]].\n===Adjective===\n'''Irish'''\n#[[Éireannach]].\n#[[Gaelach]].\n";
+    const raw = "{{t|en}}\n{{-ainm-|en}}\n'''Irish'''\n#[[Gaeilge]].\n{{-aid-|en}}\n'''Irish'''\n#[[Éireannach]].\n#[[Gaelach]].\n";
+    inline for (.{ "Irish", "unrelated-title" }) |title|
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, title, source, raw, null);
+    const equals = "==Béarla==\n# [[existing]]\n";
+    const unknown = "==Unresolved label==\n# [[unknown]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "equals", equals, equals, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "unknown", unknown, unknown, null);
+    _ = try writer.finish(codes);
+    inline for (.{ "Irish", "unrelated-title" }) |title| {
+        const actual = (try F.requiredEntry(io, a, output, "Béarla", title));
+        try std.testing.expectEqualStrings("en", actual.language_code);
+        try std.testing.expectEqualDeep((try F.whole(a, title, source, &ns)).sections, actual.sections);
+        inline for (.{ "Gaeilge", "Éireannach", "Gaelach" }) |target|
+            try std.testing.expectEqual(@as(usize, 1), F.targetCount(actual, target));
+        try std.testing.expect((try F.entry(io, a, output, "Unclassified", title)) == null);
+    }
+    try std.testing.expectEqualStrings("en", (try F.requiredEntry(io, a, output, "Béarla", "equals")).language_code);
+}
+
+test "Writer HTML h2 boundary proposal preserves page domains and ordinary alias trust" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io; const F = GaHtmlLanguageBoundaryFixture;
+    var ns = try namespace_registry.Registry.init(a, F.namespaces); defer ns.deinit();
+    const input = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ga-html-controls-input", .{tmp.sub_path});
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ga-html-controls-output", .{tmp.sub_path});
+    var registry = try F.load(io, a, input, &ns); defer registry.deinit();
+    const codes = languageCodes(&registry, &ns);
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    const known = "==Béarla==\n# [[known]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "known", known, known, null);
+    const cases = [_][]const u8{
+        "<h2>English</h2>\n# [[control]]\n", // Ordinary alias remains untrusted.
+        "<h2>Unknown language label</h2>\n# [[control]]\n",
+        "<!--\n<h2>Béarla</h2>\n-->\n# [[control]]\n",
+        "<nowiki>\n<h2>Béarla</h2>\n</nowiki>\n# [[control]]\n",
+        "<pre>\n<h2>Béarla</h2>\n</pre>\n# [[control]]\n",
+        "<ref>\n<h2>Béarla</h2>\nreference text</ref>\n# [[control]]\n<references/>\n",
+        "<span title='&lt;h2&gt;Béarla&lt;/h2&gt;'>attribute</span>\n# [[control]]\n",
+        "<span title='<h2>Béarla</h2>'>attribute</span>\n# [[control]]\n",
+        "&lt;h2&gt;Béarla&lt;/h2&gt;\n# [[control]]\n",
+        "<h2>Béarla\n# [[control]]\n", // No complete pair.
+        "<h2>Béarla<h2>Gaeilge</h2>\n# [[control]]\n",
+        "prefix<h2>Béarla</h2>\n# [[control]]\n", // Initial scope is a whole line.
+        "<h2>Béarla</h2>suffix\n# [[control]]\n",
+        "<h2>\nBéarla\n</h2>\n# [[control]]\n",
+        "<h1>Béarla</h1>\n# [[control]]\n",
+        "<h3>Béarla</h3>\n# [[control]]\n",
+        "<h2>Noun</h2>\n# [[control]]\n",
+        "{|\n|\n<h2>Béarla</h2>\n|}\n# [[control]]\n",
+        "<table><tr><td>\n<h2>Béarla</h2>\n</td></tr></table>\n# [[control]]\n",
+        // A layout-shaped wrapper must keep its direct heading cell-local.
+        "{|\n|\n{| class=wikitable\n| nested\n|}\n<h2>Béarla</h2>\n|}\n# [[control]]\n",
+        // The layout precheck skips a balanced label; recursive rendering still
+        // cannot lend this cell's label heading to the original page domain.
+        "{|\n|\n{| class=wikitable\n| nested\n|}\n[[link|\n<h2>Béarla</h2>\nlabel]]\n|}\n# [[control]]\n",
+        "[[File:Uncaptured.svg|thumb|\n<h2>Béarla</h2>\ncaption]]\n# [[control]]\n",
+        "[[Catagóir:Unknown|\n<h2>Béarla</h2>\n]]\n# [[control]]\n",
+        // Q06 inline noinclude block splicing recurses; its h2 stays non-root.
+        "prefix<noinclude>\n<h2>Béarla</h2>\n# [[inside]]\n</noinclude>\n# [[control]]\n",
+    };
+    for (cases, 0..) |source, index| {
+        const title = try std.fmt.allocPrint(a, "control-{d}", .{index});
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, title, source, source, null);
+    }
+    // Two admitted raw regions include an exact en/ga template-code collision.
+    // One rendered HTML region cannot pair them: existing whole-page recovery
+    // must preserve both meanings as Unclassified, before rendered-owner fallback.
+    const conflicting_raw = "=={{en|ga}}==\n# [[first-meaning]]\n==Gaeilge==\n# [[second-meaning]]\n";
+    const conflicting_html = "<h2>Béarla</h2>\n# [[first-meaning]]\n# [[second-meaning]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "raw-conflict", conflicting_html, conflicting_raw, null);
+    // Preserve the distinct existing policy for an unadmitted unknown marker.
+    // It does not become a raw boundary or force the whole-page collision path.
+    const unsupported_raw = "{{=unknown=}}\n# [[first-meaning]]\n{{=ga=}}\n# [[second-meaning]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "unsupported-raw", conflicting_html, unsupported_raw, null);
+    _ = try writer.finish(codes);
+    const conflicting = (try F.requiredEntry(io, a, output, "Unclassified", "raw-conflict"));
+    try std.testing.expectEqualStrings("", conflicting.language_code);
+    try std.testing.expect((try F.entry(io, a, output, "Béarla", "raw-conflict")) == null);
+    try std.testing.expectEqualDeep((try F.whole(a, "raw-conflict", conflicting_html, &ns)).sections, conflicting.sections);
+    inline for (.{ "first-meaning", "second-meaning" }) |target|
+        try std.testing.expectEqual(@as(usize, 1), F.targetCount(conflicting, target));
+    const unsupported = try F.requiredEntry(io, a, output, "Béarla", "unsupported-raw");
+    try std.testing.expectEqualStrings("en", unsupported.language_code);
+    try std.testing.expect((try F.entry(io, a, output, "Unclassified", "unsupported-raw")) == null);
+    try std.testing.expectEqualDeep((try F.whole(a, "unsupported-raw", conflicting_html, &ns)).sections, unsupported.sections);
+    inline for (.{ "first-meaning", "second-meaning" }) |target|
+        try std.testing.expectEqual(@as(usize, 1), F.targetCount(unsupported, target));
+    const reports = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ output, "fallback-pages.jsonl" }), a, .limited(1024 * 1024));
+    var report_lines = std.mem.splitScalar(u8, reports, '\n');
+    var unsupported_warning = false;
+    while (report_lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, "\"title\":\"unsupported-raw\"") != null and
+            std.mem.indexOf(u8, line, "\"unresolved_language_heading\"") != null) unsupported_warning = true;
+    }
+    try std.testing.expect(unsupported_warning);
+    for (cases, 0..) |source, index| {
+        const title = try std.fmt.allocPrint(a, "control-{d}", .{index});
+        const actual = (try F.requiredEntry(io, a, output, "Unclassified", title));
+        try std.testing.expectEqualStrings("", actual.language_code);
+        try std.testing.expect((try F.entry(io, a, output, "Béarla", title)) == null);
+        try std.testing.expectEqualDeep((try F.whole(a, title, source, &ns)).sections, actual.sections);
+    }
+    try std.testing.expect(registry.resolveTrusted("English") == null);
+}
+
+test "Writer mixed HTML and equals language boundaries keep typed regions and global anchors" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io; const F = GaHtmlLanguageBoundaryFixture;
+    var ns = try namespace_registry.Registry.init(a, F.namespaces); defer ns.deinit();
+    const input = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ga-html-mixed-input", .{tmp.sub_path});
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ga-html-mixed-output", .{tmp.sub_path});
+    var registry = try F.load(io, a, input, &ns); defer registry.deinit();
+    const codes = languageCodes(&registry, &ns);
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    const source = "<h2 title=\"English\">Béarla</h2>\n===Noun===\n# [[Gaeilge]] [[#Noun_2|later]]\n==Gaeilge==\n===Noun===\n# [[Éireannach]] [[#Noun|earlier]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "mixed", source, source, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    const english = (try F.requiredEntry(io, a, output, "Béarla", "mixed"));
+    const irish = (try F.requiredEntry(io, a, output, "Gaeilge", "mixed"));
+    const full = try F.whole(a, "mixed", source, &ns);
+    try std.testing.expectEqualDeep(full.sections[0..2], english.sections);
+    try std.testing.expectEqualDeep(full.sections[2..], irish.sections);
+    try std.testing.expectEqualStrings("Noun_2", irish.sections[1].anchor);
+    try std.testing.expectEqual(@as(usize, 1), F.targetCount(english, "Gaeilge"));
+    try std.testing.expectEqual(@as(usize, 0), F.targetCount(irish, "Gaeilge"));
+    try std.testing.expectEqual(@as(usize, 0), F.targetCount(english, "Éireannach"));
+    try std.testing.expectEqual(@as(usize, 1), F.targetCount(irish, "Éireannach"));
+}
+
+test "worker row address requires exact mapped row boundaries" {
+    const rows = "# header\nfirst\nsecond";
+    try std.testing.expectEqual(@as(u64, 9), try mappedPageIndexOffset(rows, rows[9..14]));
+    try std.testing.expectEqual(@as(u64, 15), try mappedPageIndexOffset(rows, rows[15..]));
+    try std.testing.expectError(error.InvalidPageIndex, mappedPageIndexOffset(rows, rows[0..8]));
+    try std.testing.expectError(error.InvalidPageIndex, mappedPageIndexOffset(rows, rows[10..14]));
+    try std.testing.expectError(error.InvalidPageIndex, mappedPageIndexOffset(rows, rows[9..13]));
+    try std.testing.expectError(error.InvalidPageIndex, mappedPageIndexOffset(rows, rows[9..15]));
+    try std.testing.expectError(error.InvalidPageIndex, mappedPageIndexOffset(rows, rows[rows.len..]));
+    const detached = try std.testing.allocator.dupe(u8, rows[9..14]);
+    defer std.testing.allocator.free(detached);
+    try std.testing.expectError(error.InvalidPageIndex, mappedPageIndexOffset(rows, detached));
+}
+
+const FirstFailureControl = struct {
+    const io = std.testing.io;
+    const args = [_][]const u8{ "fixture.xml", "owned-output", "--workers", "1" };
+
+    fn context(a: std.mem.Allocator, root: []const u8) FirstFailureCaptureContext {
+        return .{ .io = io, .allocator = a, .output_root = root,
+            // Deliberately nonexistent: capture must not scan input/tool files.
+            .input = .{ .dump_path = "not-opened.xml", .expander_root = "not-opened-inputs", .tool_path = "not-opened-tool" },
+            .requested_now_unix = 1791731560, .invocation_args = &args,
+            .invocation_id = "0123456789abcdef0123456789abcdef" };
+    }
+    fn marker(a: std.mem.Allocator, root: []const u8) !void {
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, ".incomplete" }), .data = "building" });
+    }
+    fn manifest(a: std.mem.Allocator, root: []const u8) !std.json.Value {
+        const path = try std.fs.path.join(a, &.{ root, ".presentation-first-failure", "capture.json" });
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(64 * 1024));
+        return std.json.parseFromSliceLeaky(std.json.Value, a, bytes, .{});
+    }
+    fn absent(path: []const u8) !void {
+        if (std.Io.Dir.cwd().access(io, path, .{})) |_| return error.TestUnexpectedResult else |err|
+            try std.testing.expect(err == error.FileNotFound);
+    }
+    fn noPublication(a: std.mem.Allocator, root: []const u8) !void {
+        inline for (.{ encoder.blob_catalog.manifest_filename, "complete.json", "page-coverage.json", "namespace-coverage.json", "aliases.wikblb", "thesaurus.wikblb", "citations.wikblb", "supplemental.wikblb" }) |name|
+            try absent(try std.fs.path.join(a, &.{ root, name }));
+        const languages_path = try std.fs.path.join(a, &.{ root, "languages" });
+        if (std.Io.Dir.cwd().openDir(io, languages_path, .{ .iterate = true })) |opened| {
+            var languages = opened; defer languages.close(io);
+            var entries = languages.iterate();
+            try std.testing.expect(try entries.next(io) == null);
+        } else |err| try std.testing.expect(err == error.FileNotFound);
+    }
+    fn payload(a: std.mem.Allocator, row: std.json.Value, name: []const u8, original: []const u8, cap: usize) !void {
+        const value = row.object.get(name).?;
+        const n = @min(cap, original.len);
+        try std.testing.expect(value.object.get("present").?.bool);
+        try std.testing.expectEqual(@as(i64, @intCast(original.len)), value.object.get("bytes").?.integer);
+        try std.testing.expectEqual(@as(i64, @intCast(n)), value.object.get("retained_bytes").?.integer);
+        try std.testing.expectEqual(n != original.len, value.object.get("truncated").?.bool);
+        try std.testing.expectEqualStrings(try auditControlHash(a, original), value.object.get("sha256").?.string);
+        if (original.len == 0) {
+            try std.testing.expect(value.object.get("path").? == .null);
+        } else {
+            const path = value.object.get("path").?.string;
+            try std.testing.expect(std.mem.startsWith(u8, std.fs.path.basename(path), "failure-00000001-"));
+            const retained = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(cap + 1));
+            try std.testing.expectEqualSlices(u8, original[0..n], retained);
+        }
+    }
+    fn ignoreFileSize(_: std.posix.SIG) callconv(.c) void {}
+    fn sameTree(a: std.mem.Allocator, left: []const u8, right: []const u8) anyerror!void {
+        var ldir = try std.Io.Dir.cwd().openDir(io, left, .{ .iterate = true }); defer ldir.close(io);
+        var rdir = try std.Io.Dir.cwd().openDir(io, right, .{ .iterate = true }); defer rdir.close(io);
+        var entries = ldir.iterate(); var left_count: usize = 0;
+        while (try entries.next(io)) |entry| {
+            left_count += 1;
+            const lpath = try std.fs.path.join(a, &.{ left, entry.name });
+            const rpath = try std.fs.path.join(a, &.{ right, entry.name });
+            switch (entry.kind) {
+                .directory => try sameTree(a, lpath, rpath),
+                .file => {
+                    const lbytes = try std.Io.Dir.cwd().readFileAlloc(io, lpath, a, .limited(4 * 1024 * 1024));
+                    const rbytes = try std.Io.Dir.cwd().readFileAlloc(io, rpath, a, .limited(4 * 1024 * 1024));
+                    try std.testing.expectEqualSlices(u8, lbytes, rbytes);
+                },
+                else => return error.TestUnexpectedResult,
+            }
+        }
+        var right_entries = rdir.iterate(); var right_count: usize = 0;
+        while (try right_entries.next(io)) |_| right_count += 1;
+        try std.testing.expectEqual(left_count, right_count);
+    }
+};
+
+test "first failure snapshot retains normal Writer error inputs and outer receipt" {
+    const F = FirstFailureControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const root = try auditControlFreshRoot(a, "first-failure-normal");
+    defer std.Io.Dir.cwd().deleteTree(F.io, root) catch {};
+    try F.marker(a, root);
+    try std.testing.expect(first_failure_capture_context == null and failure_receipt_context == null);
+    first_failure_capture_context = F.context(a, root); defer first_failure_capture_context = null;
+    const receipt = try std.fs.path.join(a, &.{ root, "outer-failure.json" });
+    failure_receipt_context = .{ .io = F.io, .a = a, .path = receipt, .invocation_id = F.context(a, root).invocation_id.?, .invocation_args = &F.args };
+    defer failure_receipt_context = null;
+    var writer = try encoder.blob_builder.Writer.init(F.io, a, root); defer writer.deinit();
+    const job: ExpansionJob = .{ .ordinal = 17, .index_offset = 0, .ns = .{ .id = 0, .kind = .language },
+        .title = "Fixture/../title", .source = "raw fixture", .page_id = 71, .revision_id = 91, .index_line = "exact index row\t71\t91" };
+    const expanded: bundle_expander.Expansion = .{ .source = "[https:// broken", .display_title = "" };
+    try std.testing.expectError(error.UncompiledPresentation, consumeExpandedPage(&writer, job, expanded, a, null));
+    const row = try F.manifest(a, root);
+    try std.testing.expect(row.object.get("record_complete").?.bool);
+    try std.testing.expect(!row.object.get("publication_created").?.bool);
+    try std.testing.expectEqualStrings(job.title, row.object.get("title").?.string);
+    try std.testing.expectEqual(@as(i64, 17), row.object.get("ordinal").?.integer);
+    try std.testing.expectEqual(@as(i64, 0), row.object.get("index_offset").?.integer);
+    try std.testing.expectEqual(@as(i64, 0), row.object.get("namespace").?.integer);
+    try std.testing.expectEqual(@as(i64, 71), row.object.get("page_id").?.integer);
+    try std.testing.expectEqual(@as(i64, 91), row.object.get("revision_id").?.integer);
+    try F.payload(a, row, "raw_source", job.source, 256 * 1024);
+    try F.payload(a, row, "expanded", expanded.source, 2 * 1024 * 1024);
+    try F.payload(a, row, "index_row", job.index_line, 256 * 1024);
+    try F.payload(a, row, "display_title", "", 256 * 1024);
+    try std.testing.expect(!row.object.get("poem_metadata").?.object.get("present").?.bool);
+    const receipt_bytes = try std.Io.Dir.cwd().readFileAlloc(F.io, receipt, a, .limited(64 * 1024));
+    const outer = try std.json.parseFromSliceLeaky(std.json.Value, a, receipt_bytes, .{});
+    try std.testing.expectEqualStrings(outer.object.get("invocation_id").?.string, row.object.get("invocation_id").?.string);
+    try std.testing.expectEqualStrings("UncompiledPresentation", outer.object.get("error_name").?.string);
+    try std.testing.expectEqual(@as(i64, 71), outer.object.get("page").?.object.get("page_id").?.integer);
+    // Retain the first capture even if a test caller deliberately supplies another failure.
+    const before = try std.Io.Dir.cwd().readFileAlloc(F.io, try std.fs.path.join(a, &.{ root, ".presentation-first-failure", "capture.json" }), a, .limited(64 * 1024));
+    captureFirstPresentationFailure(error.UncompiledPresentation, job, .{ .source = "replacement" });
+    const after = try std.Io.Dir.cwd().readFileAlloc(F.io, try std.fs.path.join(a, &.{ root, ".presentation-first-failure", "capture.json" }), a, .limited(64 * 1024));
+    try std.testing.expectEqualSlices(u8, before, after);
+    try std.testing.expect(!std.mem.eql(u8, try invocationArgumentsHash(a, &.{ "a", "bc" }), try invocationArgumentsHash(a, &.{ "ab", "c" })));
+    try F.noPublication(a, root);
+    try std.Io.Dir.cwd().access(F.io, try std.fs.path.join(a, &.{ root, ".incomplete" }), .{});
+}
+
+test "first failure snapshot survives normal failed shard cleanup" {
+    const F = FirstFailureControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const root = try auditControlFreshRoot(a, "first-failure-shard");
+    defer std.Io.Dir.cwd().deleteTree(F.io, root) catch {};
+    try F.marker(a, root);
+    first_failure_capture_context = F.context(a, root); defer first_failure_capture_context = null;
+    const shards = try std.fs.path.join(a, &.{ root, "shards" });
+    try std.Io.Dir.cwd().createDir(F.io, shards, .default_dir);
+    var shard = try PendingShard.init(F.io, a, shards, 0, 1, 0, .{});
+    var closed = false; defer if (!closed) shard.deinit();
+    const temporary = try a.dupe(u8, shard.temporary);
+    const final = try a.dupe(u8, shard.final);
+    const job: ExpansionJob = .{ .ordinal = 0, .index_offset = 0, .ns = .{ .id = 0, .kind = .language }, .title = "Failed shard", .source = "raw fixture", .page_id = 1, .revision_id = 2 };
+    try std.testing.expectError(error.UncompiledPresentation, consumeExpandedPage(&shard.writer.?, job, .{ .source = "before |} after" }, a, null));
+    shard.deinit(); closed = true;
+    try F.absent(temporary); try F.absent(final);
+    try std.testing.expect((try F.manifest(a, root)).object.get("record_complete").?.bool);
+    try std.Io.Dir.cwd().access(F.io, try std.fs.path.join(a, &.{ root, ".incomplete" }), .{});
+    try F.noPublication(a, root);
+}
+
+test "first failure snapshot caps payloads with full hashes and bounded serialization" {
+    const F = FirstFailureControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const root = try auditControlFreshRoot(a, "first-failure-caps");
+    defer std.Io.Dir.cwd().deleteTree(F.io, root) catch {};
+    try F.marker(a, root);
+    const small = try a.alloc(u8, 256 * 1024 + 1); @memset(small, 'r');
+    const large = try a.alloc(u8, 2 * 1024 * 1024 + 1); @memset(large, 'e');
+    const title = try a.alloc(u8, 1025); @memset(title, 't');
+    const job: ExpansionJob = .{ .ordinal = 4, .index_offset = 0, .ns = .{ .id = 0, .kind = .language }, .title = title, .source = small, .index_line = small };
+    try writeFirstPresentationFailure(F.context(a, root), job, .{ .source = large, .display_title = small, .poem_metadata = small, .missing_dependency_metadata = small });
+    const row = try F.manifest(a, root);
+    try std.testing.expect(row.object.get("record_complete").?.bool);
+    try std.testing.expect(row.object.get("title_truncated").?.bool);
+    try std.testing.expectEqualStrings(title[0..1024], row.object.get("title").?.string);
+    try std.testing.expectEqualStrings(try auditControlHash(a, title), row.object.get("title_sha256").?.string);
+    try F.payload(a, row, "raw_source", small, 256 * 1024);
+    try F.payload(a, row, "expanded", large, 2 * 1024 * 1024);
+    inline for (.{ "index_row", "display_title", "poem_metadata", "missing_dependency_metadata" }) |field|
+        try F.payload(a, row, field, small, 256 * 1024);
+    var total: i64 = 0;
+    inline for (.{ "raw_source", "expanded", "index_row", "display_title", "poem_metadata", "missing_dependency_metadata", "alias_record" }) |field|
+        total += row.object.get(field).?.object.get("retained_bytes").?.integer;
+    try std.testing.expect(total <= 4 * 1024 * 1024);
+    try std.testing.expectError(error.WriteFailed, writeDiagnosticJson(F.io, a, root, "too-large.json", .{ .oversized = small }, 64 * 1024));
+    try F.absent(try std.fs.path.join(a, &.{ root, "too-large.json" }));
+    const alias_root = try std.fs.path.join(a, &.{ root, "oversized-alias" });
+    try std.Io.Dir.cwd().createDir(F.io, alias_root, .default_dir); try F.marker(a, alias_root);
+    var alias_job = job;
+    alias_job.alias_record = .{ .source_namespace = 0, .source_kind = .language,
+        .source_title = small, .source_key = small, .xml_target = small, .target_title = small,
+        .target_namespace = null, .target_kind = null, .target_key = "", .fragment = "", .presentation = "" };
+    try std.testing.expectError(error.WriteFailed, writeFirstPresentationFailure(F.context(a, alias_root), alias_job, .{ .source = "reply" }));
+    try std.testing.expect(!(try F.manifest(a, alias_root)).object.get("record_complete").?.bool);
+    try F.noPublication(a, alias_root);
+    try F.noPublication(a, root);
+}
+
+test "first failure snapshot I O refusal preserves the primary Writer error" {
+    const F = FirstFailureControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    inline for (.{ "missing-marker", "existing-capture" }) |label| {
+        const root = try auditControlFreshRoot(a, "first-failure-" ++ label);
+        defer std.Io.Dir.cwd().deleteTree(F.io, root) catch {};
+        const path = try std.fs.path.join(a, &.{ root, ".presentation-first-failure" });
+        if (comptime std.mem.eql(u8, label, "existing-capture")) {
+            try F.marker(a, root);
+            try std.Io.Dir.cwd().writeFile(F.io, .{ .sub_path = path, .data = "do not overwrite" });
+        }
+        first_failure_capture_context = F.context(a, root); defer first_failure_capture_context = null;
+        var writer = try encoder.blob_builder.Writer.init(F.io, a, root); defer writer.deinit();
+        const job: ExpansionJob = .{ .ordinal = 8, .index_offset = 0, .ns = .{ .id = 0, .kind = .language }, .title = "IO failure", .source = "raw" };
+        try std.testing.expectError(error.UncompiledPresentation, consumeExpandedPage(&writer, job, .{ .source = "[https:// broken" }, a, null));
+        try std.testing.expect(first_failure_capture_context.?.attempted);
+        if (comptime std.mem.eql(u8, label, "existing-capture")) {
+            const bytes = try std.Io.Dir.cwd().readFileAlloc(F.io, path, a, .limited(1024));
+            try std.testing.expectEqualStrings("do not overwrite", bytes);
+        } else try F.absent(path);
+        try F.noPublication(a, root);
+    }
+}
+
+test "first failure partial file write retains incomplete snapshot and primary error" {
+    const F = FirstFailureControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const root = try auditControlFreshRoot(a, "first-failure-partial");
+    defer std.Io.Dir.cwd().deleteTree(F.io, root) catch {};
+    try F.marker(a, root);
+    first_failure_capture_context = F.context(a, root); defer first_failure_capture_context = null;
+    var writer = try encoder.blob_builder.Writer.init(F.io, a, root); defer writer.deinit();
+    const raw = try a.alloc(u8, 2048); @memset(raw, 'x');
+    const job: ExpansionJob = .{ .ordinal = 3, .index_offset = 0, .ns = .{ .id = 0, .kind = .language }, .title = "Partial write", .source = raw };
+    {
+        // The repository test runner isolates each test in its own child. Never
+        // lower a hard limit, and restore this child's soft limit and handler.
+        const previous = try std.posix.getrlimit(.FSIZE);
+        try std.testing.expect(previous.cur >= 1024 and previous.max >= 1024);
+        var previous_action: std.posix.Sigaction = undefined;
+        const action: std.posix.Sigaction = .{ .handler = .{ .handler = F.ignoreFileSize }, .mask = std.mem.zeroes(std.posix.sigset_t), .flags = 0 };
+        std.posix.sigaction(std.posix.SIG.XFSZ, &action, &previous_action);
+        defer std.posix.sigaction(std.posix.SIG.XFSZ, &previous_action, null);
+        try std.posix.setrlimit(.FSIZE, .{ .cur = 1024, .max = previous.max });
+        defer std.posix.setrlimit(.FSIZE, previous) catch unreachable;
+        try std.testing.expectError(error.UncompiledPresentation, consumeExpandedPage(&writer, job, .{ .source = "[https:// broken" }, a, null));
+    }
+    try std.testing.expect(!(try F.manifest(a, root)).object.get("record_complete").?.bool);
+    const partial = try std.Io.Dir.cwd().readFileAlloc(F.io, try std.fs.path.join(a, &.{ root, ".presentation-first-failure", "failure-00000001-raw.wikitext" }), a, .limited(2048));
+    try std.testing.expect(partial.len > 0 and partial.len < raw.len);
+    try std.testing.expectEqualSlices(u8, raw[0..partial.len], partial);
+    try F.noPublication(a, root);
+    try std.Io.Dir.cwd().access(F.io, try std.fs.path.join(a, &.{ root, ".incomplete" }), .{});
+}
+
+test "first failure capture leaves success unrelated errors and audit continuation unchanged" {
+    const F = FirstFailureControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const root = try auditControlFreshRoot(a, "first-failure-parity");
+    defer std.Io.Dir.cwd().deleteTree(F.io, root) catch {};
+    try F.marker(a, root);
+    first_failure_capture_context = F.context(a, root); defer first_failure_capture_context = null;
+    var writer = try encoder.blob_builder.Writer.init(F.io, a, root); defer writer.deinit();
+    const job: ExpansionJob = .{ .ordinal = 2, .index_offset = 0, .ns = .{ .id = 0, .kind = .language }, .title = "ordinary control", .source = "valid text" };
+    try std.testing.expect(try consumeExpandedPage(&writer, job, .{ .source = job.source }, a, null));
+    try std.testing.expectError(error.InvalidPoemMetadata, consumeExpandedPage(&writer, job, .{ .source = job.source, .poem_metadata = "{" }, a, null));
+    try std.testing.expect(!first_failure_capture_context.?.attempted);
+    try F.absent(try std.fs.path.join(a, &.{ root, ".presentation-first-failure" }));
+    // Reuse the existing real audit sequence, including two strict failures,
+    // successes, discarded partial owners, complete summary and capped payloads.
+    try auditControlSequence(a, "first-failure-audit-parity", 8);
+    try std.testing.expect(!first_failure_capture_context.?.attempted);
+    try F.absent(try std.fs.path.join(a, &.{ root, ".presentation-first-failure" }));
+    try F.noPublication(a, root);
+}
+
+test "first failure capture preserves complete successful Writer output bytes" {
+    const F = FirstFailureControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const root = try auditControlFreshRoot(a, "first-failure-success-bytes");
+    defer std.Io.Dir.cwd().deleteTree(F.io, root) catch {};
+    const without = try std.fs.path.join(a, &.{ root, "without-capture" });
+    const with = try std.fs.path.join(a, &.{ root, "with-capture" });
+    const source = "==English==\n# valid [[control]] source\n";
+    const job: ExpansionJob = .{ .ordinal = 0, .index_offset = 0, .ns = .{ .id = 0, .kind = .language }, .title = "Success", .source = source };
+    try std.testing.expect(first_failure_capture_context == null);
+    const baseline = blk: {
+        var writer = try encoder.blob_builder.Writer.init(F.io, a, without); defer writer.deinit();
+        writer.language_codes = .{ .get_fn = auditControlLanguages, .boundary_fn = auditControlBoundary };
+        try F.marker(a, without);
+        try std.testing.expect(try consumeExpandedPage(&writer, job, .{ .source = source }, a, null));
+        break :blk try writer.finish(writer.language_codes);
+    };
+    {
+        var writer = try encoder.blob_builder.Writer.init(F.io, a, with); defer writer.deinit();
+        writer.language_codes = .{ .get_fn = auditControlLanguages, .boundary_fn = auditControlBoundary };
+        try F.marker(a, with);
+        first_failure_capture_context = F.context(a, with); defer first_failure_capture_context = null;
+        try std.testing.expect(try consumeExpandedPage(&writer, job, .{ .source = source }, a, null));
+        try std.testing.expectEqualDeep(baseline, try writer.finish(writer.language_codes));
+        try std.testing.expect(!first_failure_capture_context.?.attempted);
+    }
+    try F.sameTree(a, without, with);
+    try F.absent(try std.fs.path.join(a, &.{ with, ".presentation-first-failure" }));
 }

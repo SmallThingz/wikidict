@@ -47,6 +47,7 @@ pub const LanguageCodes = struct {
     strong_fn: ?*const fn (?*const anyopaque, []const u8) ?ResolvedLanguage = null,
     content_fn: ?*const fn (?*const anyopaque) ?ResolvedLanguage = null,
     boundary_fn: ?*const fn (?*const anyopaque, []const u8) bool = null,
+    source_banner_fn: ?*const fn (?*const anyopaque, []const u8, []const u8, u8) bool = null,
     link_trail: blobs.document_ir.LinkTrail = .{},
 
     pub fn code(self: LanguageCodes, heading: []const u8) ?[]const u8 {
@@ -963,9 +964,62 @@ fn resolveLinkedDeclaration(codes: LanguageCodes, value: []const u8) ?ResolvedLa
     return target_language orelse label_language;
 }
 
+// A single independently trusted visible language link can precede hidden
+// topic categories. Category titles never create or corroborate an owner here.
+// Preserve the original source for rendering; accept no other visible tail.
+fn resolveCategorizedLinkedHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
+    const namespaces = codes.namespace_catalog orelse return null;
+    if (value.len > 4096) return null;
+    const heading = std.mem.trim(u8, value, " \t\r\n");
+    // Use the same active-control matcher as display compilation. Localized
+    // aliases need not use underscores. A changed target is outside this proof.
+    for (0..heading.len) |at| {
+        const control = if (codes.behavior_switches) |registry|
+            registry.matchAt(std.heap.page_allocator, heading, at) catch return null
+        else
+            blobs.wikitext_syntax.behaviorSwitchEnd(heading, at);
+        if (control != null) return null;
+    }
+    var tokens: blobs.document_ir.InlineIterator = .{ .input = heading, .renderer_boundaries = true, .link_trail = codes.link_trail };
+    const first = tokens.next() orelse return null;
+    if (first.kind != .link or first.link_has_pipe or first.trail.len != 0 or
+        !std.mem.startsWith(u8, heading, "[[") or tokens.cursor < 4) return null;
+    const label = first.target;
+    // Plain local title syntax avoids entity/HTML/current-wiki transformations.
+    if (label.len == 0 or std.mem.indexOfAny(u8, label, "[]{}<>|&#:") != null) return null;
+    for (label) |byte| if (byte < 0x20 or byte == 0x7f) return null;
+    const language = resolveLinkedHeading(codes, heading[0..tokens.cursor]) orelse return null;
+    var categories: usize = 0;
+    while (true) {
+        const start = tokens.cursor;
+        const token = tokens.next() orelse {
+            // InlineIterator can consume formatting delimiters without a token.
+            // Admission requires every original byte to remain accounted for.
+            if (std.mem.trim(u8, heading[start..tokens.cursor], " \t").len != 0) return null;
+            break;
+        };
+        if (token.kind == .text and std.mem.trim(u8, heading[start..tokens.cursor], " \t").len == 0) continue;
+        if (token.kind != .link or token.trail.len != 0 or tokens.cursor < start + 4) return null;
+        const authored = heading[start..tokens.cursor];
+        if (!std.mem.startsWith(u8, authored, "[[") or !std.mem.endsWith(u8, authored, "]]")) return null;
+        const body = authored[2 .. authored.len - 2];
+        // These rejected transformations precede namespace suppression in the
+        // renderer: protected/nested labels, entities, HTML and raw newlines.
+        if (std.mem.indexOfAny(u8, body, "[]{}<>&") != null) return null;
+        for (body) |byte| if (byte < 0x20 or byte == 0x7f) return null;
+        const target = std.mem.trim(u8, token.target, " ");
+        if (target.len == 0 or target[0] == ':') return null;
+        const category = namespaces.ofTitle(target);
+        if (category.id != 14 or std.mem.trim(u8, category.text, " ").len == 0) return null;
+        categories += 1;
+    }
+    return if (categories != 0) language else null;
+}
+
 // Language templates can append invisible category links inside a heading.
 // Accept only a whole trusted name followed by categories for that same language.
 fn resolveCategorizedHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
+    if (resolveCategorizedLinkedHeading(codes, value)) |language| return language;
     const namespaces = codes.namespace_catalog orelse return null;
     const heading = std.mem.trim(u8, value, " \t\r\n");
     const open = std.mem.indexOf(u8, heading, "[[") orelse return null;
@@ -1160,9 +1214,17 @@ fn rawPrefixBannerLanguage(codes: LanguageCodes, raw: []const u8, raw_sections: 
 
     const section = rendered[0];
     const line = std.mem.trim(u8, section.source[0 .. std.mem.indexOfScalar(u8, section.source, '\n') orelse section.source.len], " \t\r");
-    if (line.len < 3 or line[0] != '=' or line[1] == '=' or line[line.len - 1] != '=' or line[line.len - 2] == '=') return null;
-    const heading = std.mem.trim(u8, line[1 .. line.len - 1], " \t");
+    const parsed = blobs.wikitext_syntax.controlHeading(line, null) orelse return null;
+    if (parsed.level < 1 or parsed.level > 2) return null;
+    const heading = parsed.title;
     if (heading.len > 4096 or !std.mem.eql(u8, heading, section.heading)) return null;
+    // This exact root invocation must have an authenticated literal template
+    // banner proof. No ordinary alias or code-shaped POS name is promoted.
+    if (codes.source_banner_fn) |matches| if (matches(codes.ctx, canonical.code, heading, parsed.level)) {
+        for (rendered[1..]) |later| if (resolveSection(codes, later) == null) return null;
+        return canonical;
+    };
+    if (parsed.level != 1) return null;
     const prefix = "<div id=\"";
     const middle = "\" class=\"toccolours\" >'''[[";
     const suffix = "]]'''</div>";
@@ -2612,6 +2674,26 @@ fn processMain(
     defer page_sections.deinit(page_allocator);
     var reference_context = try presentation_document.referenceDefinitionsWithMissingAlloc(page_allocator, source_missing);
     reference_context.citations = numbered.citations;
+    // Only possible HTML owners need this existing observation before splitting.
+    // Other pages retain its original late position and raw-conflict early exit.
+    // The precheck supplies no admission: only actual renderer scopes do that.
+    var heading_arena = std.heap.ArenaAllocator.init(page_allocator);
+    defer heading_arena.deinit();
+    const early_heading_observation: ?presentation_document.HeadingObservation = if (language_source.mayHavePlainLineHtmlH2(source))
+        try presentation_document.observeHeadingAnchorsAlloc(
+        heading_arena.allocator(),
+        title,
+        source_missing,
+        codes.link_trail,
+        codes.namespace_catalog,
+        codes.behavior_switches,
+        codes.image_options,
+        reference_context,
+        poem_phase,
+    )
+    else
+        null;
+
     // Ordinary navigation admission is established by the actual renderer,
     // before ownership cuts. The same raw-domain map later carries rendering.
     const early_observation: presentation_document.PreObservation = if (may_cross_link)
@@ -2623,6 +2705,10 @@ fn processMain(
     defer page_allocator.free(expanded_link_openings);
     const expanded_markers: LanguageMarkers = .{ .codes = &codes, .raw_source = raw_source, .expanded_source = source };
     var sections = languageSections(source, &expanded_markers);
+    if (early_heading_observation) |observation| {
+        if (observation.page_html_source) |observed_source|
+            sections.html_headings = .{ .source = observed_source, .openings = observation.page_html_openings };
+    }
     if (may_cross_link) sections.link_headings = .{ .source = source, .openings = expanded_link_openings };
     while (sections.next()) |section| try appendClassifiedSection(page_allocator, codes, &page_sections, &owned_headings, section);
 
@@ -2741,9 +2827,8 @@ fn processMain(
 
     // Reserve heading IDs in the original semantic page order before owners
     // regroup repeated language sections or omit another owner's headings.
-    var heading_arena = std.heap.ArenaAllocator.init(page_allocator);
-    defer heading_arena.deinit();
-    const heading_observation = try presentation_document.observeHeadingAnchorsAlloc(
+    // Reuse early observation when present; never render a second heading pass.
+    const heading_observation = early_heading_observation orelse try presentation_document.observeHeadingAnchorsAlloc(
         heading_arena.allocator(),
         title,
         source_missing,
@@ -3030,7 +3115,7 @@ fn processMain(
             }
             if (fragments.len != 0) page_allocator.free(fragments);
         }
-        const payload = try presentation_document.compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(
+        const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAlloc(
             page_allocator,
             title,
             .language,
@@ -3048,6 +3133,9 @@ fn processMain(
             fragments,
             &heading_observation,
             heading_projection,
+            // This token follows source ownership resolution and grouping. An
+            // unresolved group cannot turn arbitrary L2 labels into owners.
+            if (group.language.code.len != 0) .{ .heading = group.language.heading, .code = group.language.code } else null,
         );
         try spools.appendLanguage(page_allocator, group.language.heading, title, payload);
         stats.language_records += 1;

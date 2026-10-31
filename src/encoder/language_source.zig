@@ -158,6 +158,43 @@ pub const LinkHeadingScopes = struct {
     }
 };
 
+/// Only the renderer's original page-body observation may supply these offsets.
+/// The parser below describes syntax; this scope carries its admitted domain.
+pub const HtmlHeadingScopes = struct {
+    source: []const u8,
+    openings: []const usize,
+
+    fn heading(self: HtmlHeadingScopes, source: []const u8, start: usize, line: []const u8) ?ParsedHeading {
+        const scope: LinkHeadingScopes = .{ .source = self.source, .openings = self.openings };
+        if (!scope.admits(source, start)) return null;
+        const label = plainLineHtmlH2(line) orelse return null;
+        return .{ .level = 2, .title = label };
+    }
+};
+
+/// Borrow the label of one complete plain HTML h2 line. This does not establish
+/// a language owner or authorize headings in a nested/protected source domain.
+pub fn plainLineHtmlH2(line: []const u8) ?[]const u8 {
+    if (line.len == 0 or line[0] != '<' or std.mem.indexOfAny(u8, line, "\r\n") != null) return null;
+    const tag = syntax.tagAt(line, 0) orelse return null;
+    if (!tag.is("h2") or tag.closing or tag.self_closing) return null;
+    const pair = syntax.matchingTag(line, tag) orelse return null;
+    if (pair.end != line.len) return null;
+    const label = std.mem.trim(u8, line[tag.end..pair.inner_end], " \t");
+    if (label.len == 0 or std.mem.indexOfAny(u8, label, "{}[]<>&|=\r\n") != null) return null;
+    return label;
+}
+
+/// Conservative scheduling hint only. The renderer still proves page scope.
+/// Match its physical-line CR trimming so CRLF cannot hide a possible heading.
+pub fn mayHavePlainLineHtmlH2(source: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (plainLineHtmlH2(std.mem.trimEnd(u8, line, "\r")) != null) return true;
+    }
+    return false;
+}
+
 pub const Iterator = struct {
     source: []const u8,
     cursor: usize = 0,
@@ -174,6 +211,7 @@ pub const Iterator = struct {
     mixed_levels: bool = false,
     all_heading_levels: bool = false,
     link_headings: ?LinkHeadingScopes = null,
+    html_headings: ?HtmlHeadingScopes = null,
     control_matcher: ?syntax.ControlMatcher = null,
 
     pub const MarkerFilter = struct {
@@ -234,7 +272,8 @@ pub const Iterator = struct {
                 };
             }
             if (!self.balance.isOpen() and line_start >= self.balance.protected_until) {
-                const heading = parseHeadingControlled(line, self.control_matcher);
+                const heading = parseHeadingControlled(line, self.control_matcher) orelse
+                    if (self.html_headings) |scopes| scopes.heading(self.source, line_start, line) else null;
                 const marker = if (heading == null) self.languageMarker(line) else null;
                 const hyphen_marker = if (marker != null) blk: {
                     const trimmed = std.mem.trim(u8, line, " \t\r");
@@ -1298,4 +1337,21 @@ test "peer language references reject protected mismatched and long ordinary inp
     defer ordinary.deinit(std.testing.allocator);
     for (0..4096) |_| try ordinary.appendSlice(std.testing.allocator, "ordinary prose with [[links]] and * non-row text\n");
     try std.testing.expect(peerLanguageReferenceCode(ordinary.items, "IsiSwazi", "sawubona", filter) == null);
+}
+
+
+test "HTML heading precheck includes renderer physical line normalization" {
+    for ([_][]const u8{
+        "<h2>Béarla</h2>",
+        "<H2 title='English'>Béarla</H2>\r\n# meaning",
+        "prefix\n<h2>Béarla</h2>\r\r\n# meaning",
+        "<nowiki>\n<h2>Béarla</h2>\n</nowiki>",
+    }) |source| try std.testing.expect(mayHavePlainLineHtmlH2(source));
+    for ([_][]const u8{
+        "==Béarla==\n# meaning",
+        "<h3>Béarla</h3>",
+        "prefix<h2>Béarla</h2>",
+        "<h2>Béarla</h2>suffix",
+        "<h2>Béarla",
+    }) |source| try std.testing.expect(!mayHavePlainLineHtmlH2(source));
 }

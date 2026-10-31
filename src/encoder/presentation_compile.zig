@@ -2865,6 +2865,8 @@ const CitationLocal = struct { plan: *const CitationPlan, indices: []?usize };
 
 pub const Renderer = struct {
     heading_source: ?[]const u8 = null,
+    // Enabled only by the full-page heading observation, never by a reader.
+    page_html_heading_openings: ?*std.ArrayList(usize) = null,
     fallbacks: @import("presentation_fallback.zig").Report = .{},
     a: A,
     context: Context,
@@ -9552,6 +9554,20 @@ pub const Renderer = struct {
                         try self.bodyRawBlock(&blocks, input, item_body, &body_quotes, .heading, ":", "", level);
                     } else try self.bodyRawBlock(&blocks, input, heading_body, &body_quotes, .heading, "", "", level);
                     blocks.items[blocks.items.len - 1].heading_authored_id = try self.headingAuthoredId(tag);
+                    if (level == 2 and self.body_depth == 1 and !anchored_inline and
+                        !self.in_reference and !self.pre_block and !self.parsed_pre and
+                        self.body_link_target.len == 0 and end == physical_end and
+                        (start == 0 or input[start - 1] == '\n'))
+                    {
+                        if (self.page_html_heading_openings) |openings| if (self.heading_source) |root| {
+                            // A nested cell/caption or copied preparation cannot
+                            // lend its local heading to the original page.
+                            if (input.ptr == root.ptr and input.len == root.len and
+                                @intFromPtr(wrapper_source.ptr) == @intFromPtr(line.ptr) and
+                                @import("language_source.zig").plainLineHtmlH2(line) != null)
+                                try openings.append(self.a, start);
+                        };
+                    }
                 } else if (tag.is("ul") or tag.is("ol") or tag.is("dl")) {
                     try self.htmlList(&blocks, wrapper_source[tag.end..pair.inner_end], tag, "", 0, self.bodyFormattingStyle(self.body_language_direction orelse .{}));
                 } else if (try self.appendEtymologyTree(&blocks, wrapper_source[tag.end..pair.inner_end], tag)) {

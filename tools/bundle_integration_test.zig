@@ -754,11 +754,38 @@ fn exists(io: std.Io, path: []const u8) bool {
     return true;
 }
 
+// Fake transport workers intentionally have no dump/index; their fixed identity
+// is protocol test input, never an authenticated production page.
+const transport_probe_identity: expander.PageIdentity = .{ .index_offset = 0, .page_id = 1, .revision_id = 1, .namespace = 0 };
+
+// Real native-worker fixtures use their generated index row and actual IDs.
+// This bounded fixture-only scan adds no production lookup or startup index.
+fn fixturePageIdentity(io: std.Io, a: std.mem.Allocator, root: []const u8, ordinal: u64, title: []const u8) !expander.PageIdentity {
+    const dump_index = @import("wikimedia_dump");
+    const path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    defer a.free(path);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(32 * 1024 * 1024));
+    defer a.free(bytes);
+    const kind = dump_index.pageIndexKind(bytes);
+    var lines = std.mem.splitScalar(u8, bytes, '\n');
+    var next: u64 = 0;
+    while (lines.next()) |line| {
+        if (line.len == 0 or line[0] == '#') continue;
+        const row_ordinal = next;
+        next += 1;
+        if (row_ordinal != ordinal) continue;
+        const row = try dump_index.parsePageIndexLine(kind, line);
+        if (!std.mem.eql(u8, row.title, title)) return error.InvalidPageIndex;
+        return .{ .index_offset = @intCast(@intFromPtr(line.ptr) - @intFromPtr(bytes.ptr)), .page_id = row.page_id, .revision_id = row.revision_id, .namespace = row.ns };
+    }
+    return error.InvalidPageIndex;
+}
+
 fn deadlineProbe(io: std.Io, a: std.mem.Allocator, dir: []const u8) !void {
     var worker = expander.Worker.init(io, dir, "tail", "missing-dump.xml");
     worker.startup_timeout_ms = 100;
     defer worker.deinit();
-    try std.testing.expectError(error.StartupTimeout, worker.expand(a, 0, "probe", "==English==\n"));
+    try std.testing.expectError(error.StartupTimeout, worker.expand(a, 0, transport_probe_identity, "probe", "==English==\n"));
 }
 
 fn startupHandshakeProbe(h: *Harness, dir: []const u8) !void {
@@ -831,17 +858,17 @@ fn startupHandshakeProbe(h: *Harness, dir: []const u8) !void {
         worker.timeout_ms = 500;
         const probe_title = try std.fmt.allocPrint(h.a, "startup-probe-{s}", .{case.mode});
         if (case.expected) |err| {
-            try std.testing.expectError(err, worker.expand(h.a, 0, probe_title, "==English==\n"));
+            try std.testing.expectError(err, worker.expand(h.a, 0, transport_probe_identity, probe_title, "==English==\n"));
             try h.require(worker.child == null, "startup or page protocol failure retires its worker");
         } else {
-            const value = (try worker.expand(h.a, 0, probe_title, "==English==\n")).?;
+            const value = (try worker.expand(h.a, 0, transport_probe_identity, probe_title, "==English==\n")).?;
             try std.testing.expectEqualStrings("==English==\n# startup recovered\n", value.source);
             try h.require(worker.ready_received, "successful generation completed the strict ready handshake");
             if (std.mem.eql(u8, case.mode, "warm-duplicate")) {
-                try std.testing.expectError(error.InvalidResponse, worker.expand(h.a, 1, probe_title, "==English==\n"));
+                try std.testing.expectError(error.InvalidResponse, worker.expand(h.a, 1, transport_probe_identity, probe_title, "==English==\n"));
                 try h.require(worker.child == null, "a warm duplicate ready retires the worker");
             } else {
-                _ = (try worker.expand(h.a, 1, probe_title, "==English==\n")).?;
+                _ = (try worker.expand(h.a, 1, transport_probe_identity, probe_title, "==English==\n")).?;
                 const expected_generation: u64 = if (std.mem.eql(u8, case.mode, "startup-oom") or std.mem.eql(u8, case.mode, "retry-startup")) 2 else 1;
                 try h.require(worker.generation == expected_generation, "warm page reuses the ready generation without another handshake");
                 try h.require(worker.oom_retry_attempts == expected_generation - 1, "startup OOM permits exactly one cold replacement");
@@ -869,7 +896,7 @@ fn failureMetadataProbe(h: *Harness, dir: []const u8) !void {
     try writeFailureExpander(h, script, "x");
     var worker = expander.Worker.init(h.io, dir, script, "missing-dump.xml");
     defer worker.deinit();
-    try std.testing.expectError(error.BundleInfrastructureFailed, worker.expand(h.a, 0, "probe", "==English==\n"));
+    try std.testing.expectError(error.BundleInfrastructureFailed, worker.expand(h.a, 0, transport_probe_identity, "probe", "==English==\n"));
     const failure = worker.last_failure orelse return error.MissingFailureMetadata;
     try h.require(std.mem.eql(u8, failure.stage, "x"), "worker failure stage survives transport");
     try h.require(std.mem.eql(u8, failure.error_name, "E"), "worker failure error name survives transport");
@@ -879,7 +906,7 @@ fn failureMetadataProbe(h: *Harness, dir: []const u8) !void {
     _ = try h.run(&.{ "chmod", "755", closed_script }, 0);
     var closed = expander.Worker.init(h.io, dir, closed_script, "missing-dump.xml");
     defer closed.deinit();
-    try std.testing.expectError(error.WorkerClosed, closed.expand(h.a, 17, "closed-probe", "==English==\n"));
+    try std.testing.expectError(error.WorkerClosed, closed.expand(h.a, 17, transport_probe_identity, "closed-probe", "==English==\n"));
     try h.require(closed.child == null, "closed worker is reaped after bounded status capture");
 }
 
@@ -954,10 +981,10 @@ fn coldRetryProbe(h: *Harness, blob_builder: []const u8, verifier: []const u8, r
         worker.now_unix = 1791072000;
         worker.timeout_ms = 1000;
         if (case.expected) |err| {
-            try std.testing.expectError(err, worker.expand(h.a, 17, "retry-probe", input_source));
+            try std.testing.expectError(err, worker.expand(h.a, 17, transport_probe_identity, "retry-probe", input_source));
             try h.require(worker.child == null and worker.oom_retry_failed == 1, "failed cold retry is terminal and reaped");
         } else {
-            const output = (try worker.expand(h.a, 17, "retry-probe", input_source)).?;
+            const output = (try worker.expand(h.a, 17, transport_probe_identity, "retry-probe", input_source)).?;
             try std.testing.expectEqualStrings("==English==\n# recovered\n", output.source);
             try std.testing.expectEqualStrings("Recovered", output.display_title.?);
             try h.require(worker.last_failure == null and worker.oom_retry_recovered == 1, "recovery clears stale failure metadata");
@@ -969,7 +996,7 @@ fn coldRetryProbe(h: *Harness, blob_builder: []const u8, verifier: []const u8, r
             const old = lines.next().?;
             const fresh = lines.next().?;
             try h.require(!std.mem.eql(u8, old, fresh), "OOM replacement has a distinct process");
-            _ = (try worker.expand(h.a, 18, "next-probe", input_source)).?;
+            _ = (try worker.expand(h.a, 18, transport_probe_identity, "next-probe", input_source)).?;
             try h.require(worker.last_failure == null and worker.generation == 2, "subsequent page reuses only recovered healthy child");
         }
         try h.require(worker.oom_retry_attempts == 1 and worker.generation == 2, "remote OOM gets exactly one replacement attempt");
@@ -983,7 +1010,7 @@ fn coldRetryProbe(h: *Harness, blob_builder: []const u8, verifier: []const u8, r
         var failing = std.testing.FailingAllocator.init(arena.allocator(), .{ .fail_index = fail_at });
         var worker = expander.Worker.init(h.io, root, script, dump);
         defer worker.deinit();
-        try std.testing.expectError(if (fail_at == 0) error.OutOfMemory else error.ColdRetryFailed, worker.expand(failing.allocator(), 17, "allocation-probe", input_source));
+        try std.testing.expectError(if (fail_at == 0) error.OutOfMemory else error.ColdRetryFailed, worker.expand(failing.allocator(), 17, transport_probe_identity, "allocation-probe", input_source));
         try h.require(worker.child == null and worker.oom_retry_attempts == fail_at, "local OOM never starts an extra recovery");
     }
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = mode_path, .data = "output-valid-display" });
@@ -1055,7 +1082,7 @@ fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []con
         "printf '\\001\\000\\000\\000\\003\\036\\000\\000\\000\\001\\006\\000\\000\\000\\013\\000\\000\\000\\000\\000\\000\\000expandOutOfMemory'\n" });
     var exhausted = expander.Worker.init(h.io, root, script, dump);
     defer exhausted.deinit();
-    try std.testing.expectError(error.OutOfMemory, exhausted.expand(h.a, 0, "probe", source_text));
+    try std.testing.expectError(error.OutOfMemory, exhausted.expand(h.a, 0, transport_probe_identity, "probe", source_text));
     try h.require(exhausted.child == null, "exhausted worker is retired");
     try h.require(std.mem.eql(u8, exhausted.last_failure.?.error_name, "OutOfMemory"), "remote OOM retains diagnostics");
     const oom_output = try std.fs.path.join(h.a, &.{ dir, "oom-dictionary" });
@@ -2221,7 +2248,7 @@ pub fn main(init: std.process.Init) !void {
         var worker = expander.Worker.init(init.io, plain_expander_root, plain_executable, plain_dump);
         defer worker.deinit();
         worker.now_unix = 1791072000;
-        const expanded = (try worker.expand(a, 0, "plain", "==English==\n===Noun===\n# A plain word.\n")) orelse return error.UnexpectedSkip;
+        const expanded = (try worker.expand(a, 0, try fixturePageIdentity(worker.io, a, worker.root, 0, "plain"), "plain", "==English==\n===Noun===\n# A plain word.\n")) orelse return error.UnexpectedSkip;
         try h.require(std.mem.indexOf(u8, expanded.source, "A plain word.") != null and worker.generation == 1 and worker.oom_retry_attempts == 0, "plain real worker completes its first request");
         const child = worker.child orelse return error.MissingLiveWorker;
         const pid = child.id orelse return error.MissingLivePid;
@@ -2824,12 +2851,12 @@ fn poemPhaseProbe(h: *Harness, pipeline: []const u8, blob_builder: []const u8, v
             if (std.mem.eql(u8, case.title, "PoemPlainControl")) {
                 try h.require(previous_generation != 0 and worker.child != null, "error-reset control reuses the actual native worker");
                 const failing_source = "==English==\n<poem>allocated before failure</poem>{{#tag:UnsupportedPoemReset|x}}";
-                try std.testing.expectError(error.ExpansionFailed, worker.expand(h.a, i, case.title, failing_source));
+                try std.testing.expectError(error.ExpansionFailed, worker.expand(h.a, i, try fixturePageIdentity(h.io, h.a, worker.root, i, case.title), case.title, failing_source));
                 const failure = worker.last_failure orelse return error.MissingPoemFailure;
                 try h.require(std.mem.eql(u8, failure.stage, "expand") and std.mem.eql(u8, failure.error_name, "UnsupportedExtensionTag"), "native expansion reports its genuine post-Poem error rather than a synthetic successful fallback");
                 try h.require(worker.child != null and worker.generation == previous_generation, "recoverable expansion error keeps the same native worker process");
             }
-            const expanded = (try worker.expand(h.a, i, case.title, raw)) orelse return error.UnexpectedSkip;
+            const expanded = (try worker.expand(h.a, i, try fixturePageIdentity(h.io, h.a, worker.root, i, case.title), case.title, raw)) orelse return error.UnexpectedSkip;
             if (std.mem.eql(u8, case.title, "PoemPlainControl")) try h.require(worker.last_failure == null and worker.generation == previous_generation, "ordinary next request clears error and Poem page state without a worker restart");
             try h.require(!expanded.unsupported_parser_function, "Poem fixture uses supported native functions");
             var encoded: std.Io.Writer.Allocating = .init(h.a);
@@ -3164,7 +3191,7 @@ fn emptyHeadingProvenanceProbe(h: *Harness, worker: *expander.Worker, parent: []
     const codes: encoder.blob_builder.LanguageCodes = .{ .get_fn = poemFixtureLanguage };
     writer.language_codes = codes;
     for (cases) |case| {
-        const expanded = (try worker.expand(h.a, 0, "plain", case.raw)) orelse return error.UnexpectedSkip;
+        const expanded = (try worker.expand(h.a, 0, try fixturePageIdentity(worker.io, h.a, worker.root, 0, "plain"), "plain", case.raw)) orelse return error.UnexpectedSkip;
         try h.require(!expanded.unsupported_parser_function, "empty heading uses the normal supported native path");
         try writer.addExpandedPageWithReasonsAndPhases(h.a, .{ .id = 0, .kind = .language }, case.name, expanded.source, case.raw, null, &.{}, expanded.poem_metadata, expanded.missing_dependency_metadata);
     }

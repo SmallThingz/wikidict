@@ -194,6 +194,14 @@ pub const Registry = struct {
         }
         return .{ .id = 0, .name = "", .text = title };
     }
+    pub fn storedPageSpec(self: *const Registry, title: []const u8, namespace: i32) !Spec {
+        const spec = self.byId(namespace) orelse return error.InvalidNamespace;
+        // XML namespace zero can retain a title whose prefix became a namespace.
+        // Non-main stored rows still require their declared namespace prefix.
+        if (namespace != 0 and self.ofTitle(title).id != namespace) return error.NamespaceTitleMismatch;
+        return spec;
+    }
+
     pub fn normalizeTransclusion(self: *const Registry, a: std.mem.Allocator, raw: []const u8, host_title: ?[]const u8) ![]u8 {
         const name = std.mem.trim(u8, raw, " \t\r\n");
         if (name.len == 0) return error.InvalidPageTitle;
@@ -477,4 +485,17 @@ test "captured interlanguage fields preserve legacy unknown and validate atomic 
     try registry.attachInterwikiMap("en\t1\t0\t0\t0\thttps://en.example/$1\n");
     try std.testing.expectEqual(@as(?bool, null), registry.interwiki_magic);
     try std.testing.expect(!registry.interwiki_rows[0].is_interlanguage);
+}
+
+
+test "stored namespace zero keeps recognized prefix while true mismatches fail" {
+    var registry = try Registry.init(std.testing.allocator, english_test_fixture);
+    defer registry.deinit();
+    const title = "Event:Stored page";
+    try std.testing.expectEqual(@as(i32, 0), (try registry.storedPageSpec(title, 0)).id);
+    try std.testing.expectEqual(@as(i32, 1728), registry.ofTitle(title).id);
+    try std.testing.expectEqual(@as(i32, 1728), (try registry.storedPageSpec(title, 1728)).id);
+    try std.testing.expectError(error.NamespaceTitleMismatch, registry.storedPageSpec(title, 10));
+    try std.testing.expectError(error.NamespaceTitleMismatch, registry.storedPageSpec("Plain", 1728));
+    try std.testing.expectError(error.InvalidNamespace, registry.storedPageSpec(title, 9999));
 }

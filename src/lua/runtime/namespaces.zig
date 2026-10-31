@@ -41,11 +41,19 @@ pub fn subjectSpec(runtime: *const rt.Context, id: i32) ?Spec {
 pub fn talkSpec(runtime: *const rt.Context, id: i32) ?Spec {
     return (runtime.namespace_catalog orelse return null).talkSpec(id);
 }
-pub fn ofTitle(runtime: *const rt.Context, title: []const u8) struct { id: i32, name: []const u8, text: []const u8 } {
+pub const TitleParts = struct { id: i32, name: []const u8, text: []const u8 };
+
+pub fn ofTitle(runtime: *const rt.Context, title: []const u8) TitleParts {
     const registry = runtime.namespace_catalog orelse @panic("missing edition namespace registry");
     const result = registry.ofTitle(title);
     return .{ .id = result.id, .name = result.name, .text = result.text };
 }
+pub fn storedTitle(runtime: *const rt.Context, title: []const u8, namespace: i32) !TitleParts {
+    const registry = runtime.namespace_catalog orelse return error.NamespaceRegistryRequired;
+    const spec = try registry.storedPageSpec(title, namespace);
+    return .{ .id = namespace, .name = spec.name, .text = if (namespace == 0) title else registry.ofTitle(title).text };
+}
+
 pub fn canonicalizeTitle(a: std.mem.Allocator, runtime: *const rt.Context, raw: []const u8) ![]const u8 {
     const registry = runtime.namespace_catalog orelse return error.NamespaceRegistryRequired;
     return registry.normalizeTitle(a, raw, 0, .any);

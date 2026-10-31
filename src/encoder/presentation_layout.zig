@@ -84,19 +84,24 @@ fn analyze(a: A, kind: []const u8, index: usize, etymology: ?usize, blocks: []co
 }
 /// Uses the entry arena. The result only refers to existing semantic source sections.
 pub fn build(a: A, sections: anytype) !Layout {
-    return buildInContext(a, sections, false);
+    return buildInContext(a, sections, false, null);
 }
 /// A synthetic unresolved owner supplies no evidence that an L2 term label is
 /// a language boundary or a part of speech. Keep nested POS structure, but do
 /// not turn those unverified boundary labels into language grouping metadata.
 pub fn buildUnclassified(a: A, sections: anytype) !Layout {
-    return buildInContext(a, sections, true);
+    return buildInContext(a, sections, true, null);
 }
-fn buildInContext(a: A, sections: anytype, unclassified: bool) !Layout {
+/// The caller has already classified and split this single-owner record.
+/// Section labels retain structure but cannot reclassify its lexeme language.
+pub fn buildOwned(a: A, sections: anytype, owner: []const u8) !Layout {
+    return buildInContext(a, sections, false, owner);
+}
+fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u8) !Layout {
     var lexemes: std.ArrayList(Lexeme) = .empty;
     var other: std.ArrayList(usize) = .empty;
     var origin: ?usize = null;
-    var current_language: []const u8 = "";
+    var current_language: []const u8 = owner orelse "";
     var active: ?usize = null;
     var related: std.ArrayList(usize) = .empty;
     for (sections, 0..) |section, i| {
@@ -104,7 +109,7 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool) !Layout {
         const etymology = part.named(section.title, "Etymology");
         if (section.level == 2) {
             origin = null;
-            if (!unclassified and kind == null and !etymology) current_language = section.title;
+            if (owner == null and !unclassified and kind == null and !etymology) current_language = section.title;
         }
         if (active) |previous| {
             const parent = sections[lexemes.items[previous].section];
@@ -219,4 +224,29 @@ test "unclassified term boundaries do not invent language or POS but retain nest
     const existing = try build(a, &sections);
     try std.testing.expectEqual(@as(usize, 2), existing.lexemes.len);
     try std.testing.expectEqualStrings("Counter", existing.lexemes[0].kind);
+}
+
+
+test "classified layout owner survives support labels without changing lexical structure" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "Hausa", .level = 2 }, .{ .title = "Suna", .level = 2 },
+        .{ .title = "Noun", .level = 3 }, .{ .title = "Unknown support", .level = 2 },
+        .{ .title = "Verb", .level = 3, .blocks = &.{.{ .kind = .definition, .list_path = "#" }} },
+    };
+    const owned = try buildOwned(a, &sections, "Hausa");
+    const legacy = try build(a, &sections);
+    const unresolved = try buildUnclassified(a, &sections);
+    try std.testing.expectEqual(@as(usize, 2), owned.lexemes.len);
+    for (owned.lexemes, legacy.lexemes, unresolved.lexemes) |actual, prior, unknown| {
+        try std.testing.expectEqualStrings("Hausa", actual.language);
+        try std.testing.expectEqualStrings("", unknown.language);
+        var expected = prior; expected.language = "Hausa";
+        try std.testing.expectEqualDeep(expected, actual);
+    }
+    try std.testing.expectEqualStrings("Suna", legacy.lexemes[0].language);
+    try std.testing.expectEqualStrings("Unknown support", legacy.lexemes[1].language);
+    try std.testing.expectEqualDeep(legacy.other_sections, owned.other_sections);
 }
