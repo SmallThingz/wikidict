@@ -2231,6 +2231,7 @@ pub fn main(init: std.process.Init) !void {
         // a large payload; virtual memory is not the resident watchdog budget.
         try h.require(std.os.linux.errno(std.os.linux.prlimit(pid, .AS, null, &observed)) == .SUCCESS, "read live worker address-space limits after asset loading");
         try h.require(observed.cur == inherited.cur and observed.max == inherited.max, "worker preserves inherited soft and hard address-space limits");
+        try emptyHeadingProvenanceProbe(&h, &worker, dir);
     }
     // Finish the same prepared fixture through the pipeline's encoding phase.
     _ = try h.run(&.{ argv[6], plain_dump, plain_root, "--expander-root", plain_expander_root, "--workers", "1", "--expansion-timeout-ms", "60000", "--now-unix", "1791072000" }, 0);
@@ -3117,4 +3118,69 @@ fn missingDependencyOccurrenceProbe(h: *Harness, pipeline: []const u8, verifier:
         try h.require(std.mem.indexOf(u8, payload, "wikidict.missing-dependency-phase.v1") == null and std.mem.indexOf(u8, payload, "output_sha256") == null, "build-only occurrence metadata is absent from strict decoded published records");
     }
     h.checks += 3;
+}
+
+
+// Reuse the already-built ordinary plain native worker: no alternate parser,
+// extra source fleet or new compiler invocation for this preservation probe.
+fn emptyHeadingProvenanceProbe(h: *Harness, worker: *expander.Worker, parent: []const u8) !void {
+    const prefix = "==English==\nBefore\n";
+    const suffix = "\n# after\n===Noun===\n# last\n";
+    const Case = struct { name: []const u8, raw: []const u8, expected: []const u8, empty_h3: bool = false };
+    const cases = [_]Case{
+        .{ .name = "CommentAdverb", .raw = prefix ++ "===<!--Adverb-->===" ++ suffix, .expected = prefix ++ "<h3></h3>" ++ suffix, .empty_h3 = true },
+        .{ .name = "CommentUnknown", .raw = prefix ++ "===<!--Unknown-->===" ++ suffix, .expected = prefix ++ "<h3></h3>" ++ suffix, .empty_h3 = true },
+        .{ .name = "CommentTrailing", .raw = prefix ++ "===<!--title-->=== <!--tail-->" ++ suffix, .expected = prefix ++ "<h3></h3>" ++ suffix, .empty_h3 = true },
+        .{ .name = "SeveralComments", .raw = prefix ++ "=== <!--one--> <!--two--> ===" ++ suffix, .expected = prefix ++ "<h3></h3>" ++ suffix, .empty_h3 = true },
+        .{ .name = "WhitespaceTitle", .raw = prefix ++ "=== \t ===" ++ suffix, .expected = prefix ++ "<h3></h3>" ++ suffix, .empty_h3 = true },
+        .{ .name = "HtmlBaseline", .raw = prefix ++ "<h3></h3>" ++ suffix, .expected = prefix ++ "<h3></h3>" ++ suffix, .empty_h3 = true },
+        .{ .name = "ProtectedComment", .raw = prefix ++ "<nowiki>===<!--Adverb-->===</nowiki>" ++ suffix, .expected = prefix ++ "<nowiki>===<!--Adverb-->===</nowiki>" ++ suffix },
+        .{ .name = "DiscardedArgument", .raw = "{{#if:|\n===<!--discarded-->===\n|==English==\n# selected\n}}", .expected = "==English==\n# selected" },
+        // Nested possible-h nodes receive no upstream heading-index marker.
+        // After selection the six active equals therefore form H2 with title==.
+        .{ .name = "SelectedArgument", .raw = "{{#if:1|==English==\n===<!--selected-->===\n# after|BAD}}", .expected = "==English==\n<h2>==</h2>\n# after" },
+        .{ .name = "TableCell", .raw = "==English==\n{|\n|-\n|\n===<!--cell-->===\ncell\n|}", .expected = "==English==\n{|\n|-\n|\n<h3></h3>\ncell\n|}" },
+        .{ .name = "AdjacentLines", .raw = "==English==\nfirst\n<!--hidden-->\nsecond", .expected = "==English==\nfirst\nsecond" },
+        .{ .name = "PureEqualsOne", .raw = prefix ++ "=" ++ suffix, .expected = prefix ++ "=" ++ suffix },
+        .{ .name = "PureEqualsTwo", .raw = prefix ++ "==" ++ suffix, .expected = prefix ++ "==" ++ suffix },
+        .{ .name = "PureEqualsThree", .raw = prefix ++ "===" ++ suffix, .expected = prefix ++ "<h1>=</h1>" ++ suffix },
+        .{ .name = "PureEqualsFour", .raw = prefix ++ "====" ++ suffix, .expected = prefix ++ "<h1>==</h1>" ++ suffix },
+        .{ .name = "PureEqualsFive", .raw = prefix ++ "=====" ++ suffix, .expected = prefix ++ "<h2>=</h2>" ++ suffix },
+        .{ .name = "PureEqualsSix", .raw = prefix ++ "======" ++ suffix, .expected = prefix ++ "<h2>==</h2>" ++ suffix },
+        .{ .name = "PureEqualsTwelve", .raw = prefix ++ "============" ++ suffix, .expected = prefix ++ "<h5>==</h5>" ++ suffix },
+        .{ .name = "PureEqualsThirteen", .raw = prefix ++ "=============" ++ suffix, .expected = prefix ++ "<h6>=</h6>" ++ suffix },
+        .{ .name = "PureEqualsFourteen", .raw = prefix ++ "==============" ++ suffix, .expected = prefix ++ "<h6>==</h6>" ++ suffix },
+        .{ .name = "PureEqualsSeventeen", .raw = prefix ++ "=================" ++ suffix, .expected = prefix ++ "<h6>=====</h6>" ++ suffix },
+        .{ .name = "PureEqualsSixtyFour", .raw = prefix ++ "================================================================" ++ suffix, .expected = prefix ++ "<h6>====================================================</h6>" ++ suffix },
+        .{ .name = "ControlJoinedEquals", .raw = prefix ++ "===__NOEDITSECTION__===" ++ suffix, .expected = prefix ++ "<h2>==</h2>" ++ suffix },
+        .{ .name = "IndentedPureEquals", .raw = prefix ++ " ======" ++ suffix, .expected = prefix ++ " ======" ++ suffix },
+        .{ .name = "PrePureEquals", .raw = prefix ++ "<pre>======</pre>" ++ suffix, .expected = prefix ++ "<pre>======</pre>" ++ suffix },
+        .{ .name = "EntityHeadingTitle", .raw = prefix ++ "==&#61;&#61;==" ++ suffix, .expected = prefix ++ "<h2>==</h2>" ++ suffix },
+        .{ .name = "ProtectedPureEquals", .raw = prefix ++ "<nowiki>======</nowiki>" ++ suffix, .expected = prefix ++ "<nowiki>======</nowiki>" ++ suffix },
+        .{ .name = "EntityPureEquals", .raw = prefix ++ "&#61;&#61;&#61;&#61;&#61;&#61;" ++ suffix, .expected = prefix ++ "&#61;&#61;&#61;&#61;&#61;&#61;" ++ suffix },
+    };
+    const output = try std.fs.path.join(h.a, &.{ parent, "empty-heading-provenance" });
+    var writer = try encoder.blob_builder.Writer.init(h.io, h.a, output); defer writer.deinit();
+    const codes: encoder.blob_builder.LanguageCodes = .{ .get_fn = poemFixtureLanguage };
+    writer.language_codes = codes;
+    for (cases) |case| {
+        const expanded = (try worker.expand(h.a, 0, "plain", case.raw)) orelse return error.UnexpectedSkip;
+        try h.require(!expanded.unsupported_parser_function, "empty heading uses the normal supported native path");
+        try writer.addExpandedPageWithReasonsAndPhases(h.a, .{ .id = 0, .kind = .language }, case.name, expanded.source, case.raw, null, &.{}, expanded.poem_metadata, expanded.missing_dependency_metadata);
+    }
+    const stats = try writer.finish(codes);
+    try h.require(stats.language_records == cases.len and stats.language_blobs == 1, "all empty heading controls publish exactly once under explicit English");
+    for (cases) |case| {
+        const actual = try readPoemRecord(h, output, "English", case.name);
+        const expected_payload = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(h.a, case.name, .language, "English", "en", case.expected, null, .{}, null, null);
+        const expected = try encoder.presentation_codec.decodeAlloc(h.a, expected_payload, case.name, .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqualDeep(expected.entry.sections, actual.stored.entry.sections);
+        try h.require(std.mem.eql(u8, actual.payload, try encoder.presentation_codec.encodeAlloc(h.a, actual.stored)), "empty heading payload roundtrips without source or marker fallback");
+        try h.require(std.mem.indexOf(u8, actual.payload, "<span></span>") == null and std.mem.indexOf(u8, actual.payload, "<noinclude/>") == null, "no build-only empty inline body survives semantic payload");
+        if (case.empty_h3) {
+            var found: usize = 0;
+            for (actual.stored.entry.sections) |section| if (section.level == 3 and section.title.len == 0) { found += 1; };
+            try h.require(found == 1, "comment and whitespace-only titles retain one empty H3 semantic boundary");
+        }
+    }
 }

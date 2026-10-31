@@ -1038,6 +1038,61 @@ fn arabicLemmaDeclaration(codes: LanguageCodes, section: language_source.Section
     return language_source.arabicNounSubtree(section, languageSections(section.source, &markers).control_matcher);
 }
 
+// A template name and its single canonical-code argument can disagree without
+// either proving the rendered language. Isolate that ambiguity; the argument
+// never supplies an owner. This deliberately leaves other template forms alone.
+fn rawTemplateCodeConflict(codes: LanguageCodes, raw: language_source.Section, resolved_code: ?[]const u8) bool {
+    if (raw.hyphen_marker) return false;
+    const newline = std.mem.indexOfScalar(u8, raw.source, '\n') orelse raw.source.len;
+    const line = std.mem.trim(u8, raw.source[0..newline], " \t\r");
+    if (line.len < 5 or !std.mem.startsWith(u8, line, "==") or line[2] == '=' or
+        !std.mem.endsWith(u8, line, "==") or line[line.len - 3] == '=') return false;
+    const heading = std.mem.trim(u8, line[2 .. line.len - 2], " \t");
+    if (!std.mem.eql(u8, heading, std.mem.trim(u8, raw.heading, " \t\r\n")) or
+        !std.mem.startsWith(u8, heading, "{{") or !std.mem.endsWith(u8, heading, "}}")) return false;
+    const body = heading[2 .. heading.len - 2];
+    // Excluding inner delimiters proves this is one complete balanced call,
+    // without adding another nested-pair scan to the heading parser.
+    if (std.mem.indexOfAny(u8, body, "{}[]<>=\r\n") != null) return false;
+    const pipe = std.mem.indexOfScalar(u8, body, '|') orelse return false;
+    if (std.mem.indexOfScalar(u8, body[pipe + 1 ..], '|') != null) return false;
+    const name = std.mem.trim(u8, body[0..pipe], " \t");
+    const argument = std.mem.trim(u8, body[pipe + 1 ..], " \t");
+    const named = codes.resolve(name) orelse return false;
+    const supplied = codes.resolve(argument) orelse return false;
+    if (!std.mem.eql(u8, name, named.code) or !std.mem.eql(u8, argument, supplied.code) or
+        (resolved_code != null and !std.mem.eql(u8, named.code, resolved_code.?)) or std.mem.eql(u8, named.code, supplied.code)) return false;
+    return true;
+}
+fn unresolvedTemplateCodeCollision(codes: LanguageCodes, raw: language_source.Section, rendered: language_source.Section, resolved_code: []const u8) bool {
+    return rawTemplateCodeConflict(codes, raw, resolved_code) and
+        boundaryLanguage(codes, rendered) == null and resolveSection(codes, rendered) == null;
+}
+
+const RawTemplateCodeConflicts = struct { present: bool = false, unemitted: bool = false };
+
+// The ordinary language iterator can deliberately keep an unknown L2 under L1.
+// Inventory only exact conflicting-code calls with the same protected-domain
+// parser. A monotonic source-pointer merge proves which calls were emitted.
+fn rawTemplateCodeConflicts(codes: LanguageCodes, original: language_source.Iterator, emitted: []const language_source.Section) RawTemplateCodeConflicts {
+    if (std.mem.indexOf(u8, original.source, "{{") == null or std.mem.indexOfScalar(u8, original.source, '|') == null) return .{};
+    var active = original;
+    active.heading_filter = .{ .ctx = null, .accepts = struct {
+        fn accepts(_: ?*const anyopaque, _: []const u8) bool { return true; }
+    }.accepts };
+    var result: RawTemplateCodeConflicts = .{};
+    var index: usize = 0;
+    while (active.next()) |section| {
+        if (!rawTemplateCodeConflict(codes, section, null)) continue;
+        result.present = true;
+        const start = @intFromPtr(section.source.ptr);
+        while (index < emitted.len and @intFromPtr(emitted[index].source.ptr) < start) : (index += 1) {}
+        if (index == emitted.len or @intFromPtr(emitted[index].source.ptr) != start) result.unemitted = true;
+    }
+    return result;
+}
+
+
 fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
     if (arabicLinkedOwner(codes, section.heading)) |declaration| return resolveArabicLinkedOwner(codes, declaration);
     if (codes.namespace_catalog) |namespaces| if (std.mem.eql(u8, namespaces.content_language, "ar")) {
@@ -1086,6 +1141,51 @@ fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?Resol
     }
 
     return resolveTemplateCandidates(codes, section.heading);
+}
+
+// The first raw declaration can corroborate its complete expanded banner even
+// when nested POS headings change section counts. The linked target contributes
+// no owner or alias; an independently registered conflicting target vetoes it.
+fn rawPrefixBannerLanguage(codes: LanguageCodes, raw: []const u8, raw_sections: []const language_source.Section, rendered: []const language_source.Section) ?ResolvedLanguage {
+    if (raw_sections.len == 0 or rendered.len == 0) return null;
+    const first = raw_sections[0];
+    if (!first.hyphen_marker) return null;
+    const start = @intFromPtr(first.source.ptr) - @intFromPtr(raw.ptr);
+    if (start > raw.len or std.mem.trim(u8, raw[0..start], " \t\r\n").len != 0) return null;
+    const canonical = resolveSection(codes, first) orelse return null;
+    if (!std.mem.eql(u8, first.heading, canonical.code)) return null;
+    const raw_line = std.mem.trim(u8, first.source[0 .. std.mem.indexOfScalar(u8, first.source, '\n') orelse first.source.len], " \t\r");
+    if (raw_line.len != canonical.code.len + 6 or !std.mem.startsWith(u8, raw_line, "{{-") or
+        !std.mem.endsWith(u8, raw_line, "-}}") or !std.mem.eql(u8, raw_line[3 .. raw_line.len - 3], canonical.code)) return null;
+
+    const section = rendered[0];
+    const line = std.mem.trim(u8, section.source[0 .. std.mem.indexOfScalar(u8, section.source, '\n') orelse section.source.len], " \t\r");
+    if (line.len < 3 or line[0] != '=' or line[1] == '=' or line[line.len - 1] != '=' or line[line.len - 2] == '=') return null;
+    const heading = std.mem.trim(u8, line[1 .. line.len - 1], " \t");
+    if (heading.len > 4096 or !std.mem.eql(u8, heading, section.heading)) return null;
+    const prefix = "<div id=\"";
+    const middle = "\" class=\"toccolours\" >'''[[";
+    const suffix = "]]'''</div>";
+    if (!std.mem.startsWith(u8, heading, prefix)) return null;
+    const code_end = std.mem.indexOfScalarPos(u8, heading, prefix.len, '"') orelse return null;
+    if (!std.mem.eql(u8, heading[prefix.len..code_end], canonical.code) or
+        !std.mem.startsWith(u8, heading[code_end..], middle) or !std.mem.endsWith(u8, heading, suffix) or
+        code_end + middle.len + suffix.len > heading.len) return null;
+    const body = heading[code_end + middle.len .. heading.len - suffix.len];
+    const pipe = std.mem.indexOfScalar(u8, body, '|') orelse return null;
+    if (std.mem.indexOfAny(u8, body, "[]{}<>&\r\n") != null or std.mem.indexOfScalar(u8, body[pipe + 1 ..], '|') != null) return null;
+    const target = std.mem.trim(u8, body[0..pipe], " \t");
+    const label = std.mem.trim(u8, body[pipe + 1 ..], " \t");
+    if (target.len == 0 or std.mem.indexOfAny(u8, target, ":#") != null or !std.mem.eql(u8, label, canonical.heading)) return null;
+    const trusted = codes.trusted_fn orelse return null;
+    const displayed = trusted(codes.ctx, label) orelse return null;
+    if (!std.mem.eql(u8, displayed.code, canonical.code)) return null;
+    if (codes.resolve(target)) |linked| if (!std.mem.eql(u8, linked.code, canonical.code)) return null;
+    // This exception cannot lend the first owner to a later unresolved peer.
+    // Ordinary nested support remains in the first section under the existing
+    // Iterator; subsequent independently resolved owners retain their boundary.
+    for (rendered[1..]) |later| if (resolveSection(codes, later) == null) return null;
+    return canonical;
 }
 
 fn hasExplicitLanguageDeclaration(codes: LanguageCodes, section: language_source.Section) bool {
@@ -1325,6 +1425,59 @@ fn appendClassifiedSection(a: std.mem.Allocator, codes: LanguageCodes, sections:
         projected.heading = heading;
     }
     try sections.append(a, projected);
+}
+
+// Known support/POS vocabulary only; it does not classify any language.
+fn knownOuterSupportOrPos(heading: []const u8) bool {
+    const part = blobs.part_kind;
+    const title = std.mem.trim(u8, heading, " \t\r\n");
+    if (part.classify(title) != null or @import("presentation_layout.zig").partOfSpeech(title) != null) return true;
+    for ([_][]const u8{ "Pronunciation", "Usage notes", "Alternative forms" }) |name|
+        if (part.named(title, name)) return true;
+    return false;
+}
+
+fn crossReferencedUnknownPeer(codes: LanguageCodes, title: []const u8, raw_before: language_source.Section, before: language_source.Section, raw_peer: language_source.Section, peer: language_source.Section, current_code: []const u8) bool {
+    if (current_code.len == 0 or knownOuterSupportOrPos(peer.heading) or knownOuterSupportOrPos(before.heading) or
+        !std.mem.eql(u8, raw_before.heading, before.heading) or !std.mem.eql(u8, raw_peer.heading, peer.heading) or
+        !std.mem.eql(u8, raw_peer.source, peer.source)) return false;
+    inline for (.{ raw_before, before, raw_peer, peer }) |section|
+        if (!language_source.literalL2Section(section, null)) return false;
+    const raw_owner = resolveSection(codes, raw_before) orelse return false;
+    const owner = resolveSection(codes, before) orelse return false;
+    if (!std.mem.eql(u8, raw_owner.code, current_code) or !std.mem.eql(u8, owner.code, current_code)) return false;
+    const CanonicalCode = struct {
+        fn accepts(ctx: ?*const anyopaque, code: []const u8) bool {
+            const registry: *const LanguageCodes = @ptrCast(@alignCast(ctx.?));
+            const language = registry.resolve(code) orelse return false;
+            return std.mem.eql(u8, language.code, code);
+        }
+    };
+    const filter: language_source.Iterator.MarkerFilter = .{ .ctx = &codes, .accepts = CanonicalCode.accepts };
+    const raw_code = language_source.peerLanguageReferenceCode(raw_before.source, peer.heading, title, filter) orelse return false;
+    const expanded_code = language_source.peerLanguageReferenceCode(before.source, peer.heading, title, filter) orelse return false;
+    return std.mem.eql(u8, raw_code, expanded_code);
+}
+
+// A leading authored lexical region has no established owner to inherit.
+// Preserve it as ambiguous data, not as a newly inferred language. Restrict
+// this recovery to unchanged source and an independently known literal peer.
+fn leadingUnownedLexicalRegion(codes: LanguageCodes, raw: []const language_source.Section, rendered: []const language_source.Section) bool {
+    if (raw.len != rendered.len or raw.len < 2) return false;
+    const first = rendered[0];
+    if (!std.mem.eql(u8, raw[0].heading, first.heading) or
+        !std.mem.eql(u8, raw[0].source, first.source) or
+        knownOuterSupportOrPos(first.heading) or
+        !language_source.authoredL2LexicalSubtree(first, null)) return false;
+    for (raw[1..], rendered[1..]) |authored, expanded| {
+        if (!std.mem.eql(u8, authored.heading, expanded.heading) or
+            !std.mem.eql(u8, authored.source, expanded.source) or
+            !language_source.literalL2Section(expanded, null)) continue;
+        const owner = boundaryLanguage(codes, expanded) orelse continue;
+        const raw_owner = boundaryLanguage(codes, authored) orelse continue;
+        if (std.mem.eql(u8, owner.code, raw_owner.code)) return true;
+    }
+    return false;
 }
 
 const LanguageMarkers = struct {
@@ -2473,6 +2626,7 @@ fn processMain(
     if (may_cross_link) sections.link_headings = .{ .source = source, .openings = expanded_link_openings };
     while (sections.next()) |section| try appendClassifiedSection(page_allocator, codes, &page_sections, &owned_headings, section);
 
+    var raw_conflicts: RawTemplateCodeConflicts = .{};
     var raw_sections: std.ArrayList(language_source.Section) = .empty;
     defer raw_sections.deinit(page_allocator);
     if (raw_source) |raw| {
@@ -2510,8 +2664,11 @@ fn processMain(
                 raw_it.link_headings = .{ .source = raw, .openings = raw_link_openings };
             }
         }
+        const conflict_iterator = raw_it;
         while (raw_it.next()) |section| try appendClassifiedSection(page_allocator, codes, &raw_sections, &owned_headings, section);
+        raw_conflicts = rawTemplateCodeConflicts(codes, conflict_iterator, raw_sections.items);
     }
+    const raw_count_before_coalescing = raw_sections.items.len;
     if (raw_source) |raw| coalesceCorroboratedAnRawRegions(codes, raw, &raw_sections, page_sections.items);
     var raw_aligned = raw_sections.items.len != 0 and raw_sections.items.len == page_sections.items.len;
     if (raw_aligned) for (raw_sections.items, page_sections.items) |raw_section, rendered_section| {
@@ -2528,8 +2685,12 @@ fn processMain(
         }
     };
 
-    if (!raw_aligned) for (raw_sections.items) |section| {
-        if (!hasExplicitLanguageDeclaration(codes, section) or resolveSection(codes, section) != null) continue;
+    // A hidden conflicting call or changed correspondence cannot lend another
+    // region's owner. Preserve the entire typed page as unresolved data instead.
+    const unpaired_collision = raw_conflicts.present and
+        (raw_conflicts.unemitted or !raw_aligned or raw_count_before_coalescing != raw_sections.items.len);
+    if (!raw_aligned or unpaired_collision) for (raw_sections.items) |section| {
+        if (!unpaired_collision and (!hasExplicitLanguageDeclaration(codes, section) or resolveSection(codes, section) != null)) continue;
         // An unresolved declaration cannot inherit an adjacent language. If
         // expansion changed the boundaries, retain the whole page without
         // guessing which rendered bytes belong to the unknown language.
@@ -2638,12 +2799,29 @@ fn processMain(
             }
         };
         if (resolved == null) resolved = resolveSection(codes, section);
+        if (resolved == null and index == 0) {
+            if (raw_source) |raw| {
+                resolved = rawPrefixBannerLanguage(codes, raw, raw_sections.items, page_sections.items);
+            }
+        }
+        if (raw_aligned and resolved != null and
+            unresolvedTemplateCodeCollision(codes, raw_sections.items[index], section, resolved.?.code))
+        {
+            fallbacks.unresolved_language_heading = true;
+            resolved = .{ .code = "", .heading = "Unclassified" };
+        }
 
         // A collision or explicit boundary-only label is a boundary without
         // an owner. Ordinary unknown support/POS headings keep their policy.
         const known_boundary = codes.isLanguageBoundary(std.mem.trim(u8, section.heading, " \t\r\n")) or
             (raw_aligned and codes.isLanguageBoundary(std.mem.trim(u8, raw_sections.items[index].heading, " \t\r\n")));
-        if (resolved == null and (known_boundary or isolate_mixed or hasExplicitLanguageDeclaration(codes, section) or
+        const leading_unowned = resolved == null and current == null and index == 0 and raw_aligned and
+            leadingUnownedLexicalRegion(codes, raw_sections.items, page_sections.items);
+        // Only the immediately preceding independently owned region can
+        // corroborate this boundary; no page-prefix rescan or owner inference.
+        const cross_referenced_peer = resolved == null and raw_aligned and index > 0 and current != null and
+            crossReferencedUnknownPeer(codes, title, raw_sections.items[index - 1], page_sections.items[index - 1], raw_sections.items[index], section, groups.items[current.?].language.code);
+        if (resolved == null and (known_boundary or isolate_mixed or leading_unowned or cross_referenced_peer or hasExplicitLanguageDeclaration(codes, section) or
             (raw_aligned and hasExplicitLanguageDeclaration(codes, raw_sections.items[index]))))
         {
             fallbacks.unresolved_language_heading = true;
@@ -10020,4 +10198,245 @@ test "Writer AY synonym ISO collision requires the captured lower level support 
         positive_seen = true;
     }
     try std.testing.expect(positive_seen);
+}
+
+
+const LeadingRegionFixture = struct {
+    const source = "== Frynkek ==\n=== Leveryans ===\n* IPA: /mɔ̃.taɲ/\n\n=== Hanow ===\n'''montagne''' ''benow'' (''liesplek'': '''[[montagnes]]''')\n# [[menydh]]\n\n== Italek ==\n=== Hanow ===\n'''montagne''' ''benow''\n# Liesplek '''[[montagna]]'''\n\n[[Klass:Frynkek]]\n[[Klass:Italek]]";
+    fn resolve(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+        if (std.mem.eql(u8, name, "Italek") or std.mem.eql(u8, name, "it")) return .{ .code = "it", .heading = "Italek" };
+        return TestLanguages.resolve(null, name);
+    }
+    fn trusted(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+        if (std.mem.eql(u8, name, "Italek")) return .{ .code = "it", .heading = "Italek" };
+        return TestLanguages.trusted(null, name);
+    }
+    fn get(ctx: ?*const anyopaque, name: []const u8) ?[]const u8 {
+        return if (resolve(ctx, name)) |value| value.code else null;
+    }
+    fn catalog(a: std.mem.Allocator) !@import("namespace_registry").Registry {
+        return @import("namespace_registry").Registry.init(a,
+            "# wikidict-namespace-registry-v1\n# wiki\tkwwiktionary\n# dump-date\t20261001\n# content-language\tkw\n" ++
+            "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+            "10\tSkantlyn\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tScantlyn\n" ++
+            "14\tKlass\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tcategories\n");
+    }
+    fn entry(a: std.mem.Allocator, root: []const u8, language: []const u8, title: []const u8) !?blobs.presentation_types.Entry {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, language));
+        defer mapped.deinit();
+        // Decoded strings borrow the blob; retain its bytes in the test arena
+        // before this helper releases the mapping.
+        const retained_bytes = try a.dupe(u8, mapped.bytes);
+        const blob = try blob_format.inspect(retained_bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(title)) orelse return null;
+        const stored = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, stored));
+        return stored.entry;
+    }
+    fn contains(entry_value: blobs.presentation_types.Entry, text: []const u8) bool {
+        for (entry_value.sections) |section| for (section.blocks) |block| for (block.spans) |span|
+            if (std.mem.indexOf(u8, span.text, text) != null or std.mem.eql(u8, span.target, text)) return true;
+        return false;
+    }
+};
+
+test "Writer leading unresolved lexical region preserves full typed page regions and original anchors" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try LeadingRegionFixture.catalog(a); defer ns.deinit();
+    const codes: LanguageCodes = .{ .namespace_catalog = &ns, .get_fn = LeadingRegionFixture.get, .resolve_fn = LeadingRegionFixture.resolve, .strong_fn = LeadingRegionFixture.trusted, .trusted_fn = LeadingRegionFixture.trusted };
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/leading", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root); defer writer.deinit(); writer.language_codes = codes;
+    // Exact KW p2238/r12404; this page has no authored fragment links.
+    const source = LeadingRegionFixture.source;
+    // Separate authored control: preserve cross-region targets and global IDs.
+    const cross = "==Frynkek==\n===Hanow===\n# [[menydh]] [[#Hanow_2|later region]]\n==Italek==\n===Hanow===\n# [[montagna]] [[#Hanow|earlier region]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "montagne", source, source, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "cross", cross, cross, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    inline for (.{ .{ "montagne", source, @as(usize, 3) }, .{ "cross", cross, @as(usize, 2) } }) |row| {
+        const unknown = (try LeadingRegionFixture.entry(a, root, "Unclassified", row[0])).?;
+        const italian = (try LeadingRegionFixture.entry(a, root, "Italek", row[0])).?;
+        try std.testing.expectEqualStrings("", unknown.language_code);
+        try std.testing.expectEqualStrings("it", italian.language_code);
+        // Compile the COMPLETE page to retain duplicate heading allocation.
+        // Independently compiling either region would wrongly reset Hanow_2.
+        const encoded = try presentation_document.compileReportedWithLinkTrailAlloc(a, row[0], .language, "Unclassified", "", row[1], null, .{}, &ns, null);
+        const full = try blobs.presentation_codec.decodeAlloc(a, encoded, row[0], .language, .{ .code = "", .heading = "Unclassified" });
+        try std.testing.expectEqualDeep(full.entry.sections[0..row[2]], unknown.sections);
+        try std.testing.expectEqualDeep(full.entry.sections[row[2]..], italian.sections);
+        try std.testing.expectEqualStrings("Hanow_2", italian.sections[1].anchor);
+        try std.testing.expect(LeadingRegionFixture.contains(unknown, "menydh"));
+        try std.testing.expect(!LeadingRegionFixture.contains(italian, "menydh"));
+        try std.testing.expect(LeadingRegionFixture.contains(italian, "montagna"));
+        try std.testing.expect(!LeadingRegionFixture.contains(unknown, "montagna"));
+    }
+    const actual = (try LeadingRegionFixture.entry(a, root, "Unclassified", "montagne")).?;
+    try std.testing.expect(LeadingRegionFixture.contains(actual, "/mɔ̃.taɲ/"));
+    var plural = false;
+    for (actual.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (std.mem.eql(u8, span.target, "montagnes")) { plural = true; try std.testing.expect(span.bold); }
+    };
+    try std.testing.expect(plural);
+    const cross_unknown = (try LeadingRegionFixture.entry(a, root, "Unclassified", "cross")).?;
+    const cross_known = (try LeadingRegionFixture.entry(a, root, "Italek", "cross")).?;
+    // Full-page deep equality above also covers normalized fragment targets;
+    // target spellings are not rewritten to compensate for regrouped owners.
+    try std.testing.expect(LeadingRegionFixture.contains(cross_unknown, "later region"));
+    try std.testing.expect(LeadingRegionFixture.contains(cross_known, "earlier region"));
+}
+
+test "Writer conservative leading lexical isolation preserves support and established owner policy" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const codes: LanguageCodes = .{ .get_fn = TestLanguages.get, .resolve_fn = TestLanguages.resolve, .strong_fn = TestLanguages.strong, .trusted_fn = TestLanguages.trusted };
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/controls", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root); defer writer.deinit(); writer.language_codes = codes;
+    const tail = "==English==\n===Noun===\n# CURRENT\n";
+    inline for (.{ "Etymology 2", "Noun", "Pronunciation 2", "Usage notes", "Alternative forms" }) |heading| {
+        const text = "==" ++ heading ++ "==\n===Sense===\n# SUPPORT\n" ++ tail;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, heading, text, text, null);
+    }
+    const ambiguous = "==Historical usage==\n===Noun===\n# PAST\n" ++ tail;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ambiguous", ambiguous, ambiguous, null);
+    const trailing = tail ++ "==Historical usage==\n===Noun===\n# TRAILING\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "trailing", trailing, trailing, null);
+    const direct = "==Unknown topic==\n# DIRECT\n" ++ tail;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "direct", direct, direct, null);
+    const protected = "==Unknown topic==\n<nowiki>===Noun===\n# PROTECTED</nowiki>\n" ++ tail;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "protected", protected, protected, null);
+    const changed = "==Historical usage==\n===Noun===\n# CHANGED\n" ++ tail;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "changed", changed, ambiguous, null);
+    const prefix = "unscoped prefix\n" ++ ambiguous;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "prefix", prefix, prefix, null);
+    const hatnote = "<div class=\"disambig-see-also\">[[context]]</div>\n" ++ ambiguous;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "hatnote", hatnote, hatnote, null);
+    _ = try writer.finish(codes);
+    inline for (.{ "Etymology 2", "Noun", "Pronunciation 2", "Usage notes", "Alternative forms" }) |heading| {
+        const entry_value = (try LeadingRegionFixture.entry(a, root, "English", heading)).?;
+        try std.testing.expect(LeadingRegionFixture.contains(entry_value, "SUPPORT"));
+        try std.testing.expect(LeadingRegionFixture.contains(entry_value, "CURRENT"));
+        try std.testing.expect((try LeadingRegionFixture.entry(a, root, "Unclassified", heading)) == null);
+    }
+    inline for (.{ .{ "trailing", "TRAILING" }, .{ "direct", "DIRECT" }, .{ "protected", "PROTECTED" }, .{ "changed", "CHANGED" } }) |row| {
+        const entry_value = (try LeadingRegionFixture.entry(a, root, "English", row[0])).?;
+        try std.testing.expect(LeadingRegionFixture.contains(entry_value, row[1]));
+        try std.testing.expect((try LeadingRegionFixture.entry(a, root, "Unclassified", row[0])) == null);
+    }
+    inline for (.{ "ambiguous", "prefix", "hatnote" }) |title| {
+        const unknown = (try LeadingRegionFixture.entry(a, root, "Unclassified", title)).?;
+        const known = (try LeadingRegionFixture.entry(a, root, "English", title)).?;
+        try std.testing.expect(LeadingRegionFixture.contains(unknown, "PAST"));
+        try std.testing.expect(!LeadingRegionFixture.contains(known, "PAST"));
+        try std.testing.expect(LeadingRegionFixture.contains(known, "CURRENT"));
+        try std.testing.expect(!LeadingRegionFixture.contains(unknown, "CURRENT"));
+        if (std.mem.eql(u8, title, "prefix")) {
+            try std.testing.expect(LeadingRegionFixture.contains(unknown, "unscoped prefix"));
+            try std.testing.expect(!LeadingRegionFixture.contains(known, "unscoped prefix"));
+        }
+        if (std.mem.eql(u8, title, "hatnote")) {
+            try std.testing.expect(LeadingRegionFixture.contains(unknown, "context"));
+            try std.testing.expect(LeadingRegionFixture.contains(known, "context"));
+        }
+    }
+}
+
+const TrailingPeerFixture = struct {
+    fn resolve(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+        if (std.mem.eql(u8, name, "IsiZulu") or std.mem.eql(u8, name, "isiZulu") or std.mem.eql(u8, name, "zu")) return .{ .code = "zu", .heading = "isiZulu" };
+        if (std.mem.eql(u8, name, "SiSwati") or std.mem.eql(u8, name, "ss")) return .{ .code = "ss", .heading = "isiSwati" };
+        return TestLanguages.resolve(null, name);
+    }
+    fn trusted(ctx: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+        if (std.mem.eql(u8, name, "IsiZulu") or std.mem.eql(u8, name, "isiZulu") or std.mem.eql(u8, name, "SiSwati")) return resolve(ctx, name);
+        return TestLanguages.trusted(ctx, name);
+    }
+    fn get(ctx: ?*const anyopaque, name: []const u8) ?[]const u8 { return if (resolve(ctx, name)) |value| value.code else null; }
+    fn codes() LanguageCodes { return .{ .get_fn = get, .resolve_fn = resolve, .trusted_fn = trusted, .strong_fn = trusted }; }
+};
+
+test "Writer cross referenced unresolved trailing peer preserves exact typed regions and anchors" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const codes = TrailingPeerFixture.codes();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/trailing", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root); defer writer.deinit(); writer.language_codes = codes;
+    // Literal excerpt from ZU sawubona p1948/r13301. Other template-produced
+    // translation rows require the normal corpus rebuild and are not invented here.
+    const source = "== IsiZulu ==\n'''IsiZulu:''' sawubona\n\nAlso see: [[sanibona]]\n\n====Ukuhunyushwa====\n* IsiSwazi: [[sawubona]] ([[:ss:sawubona|ss]])\n\n== IsiSwazi ==\n'''IsiZulu:''' [[sawubona]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "sawubona", source, source, null);
+    // Synthetic fragment control retains global heading IDs after ownership cuts.
+    const cross = "==IsiZulu==\n====Repeat====\n* IsiSwazi: [[cross]] ([[:ss:cross|ss]])\n[[#Repeat_2|later]]\n==IsiSwazi==\n====Repeat====\n[[#Repeat|earlier]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "cross", cross, cross, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 2), stats.fallback_pages);
+    inline for (.{ .{ "sawubona", source }, .{ "cross", cross } }) |row| {
+        const known = (try LeadingRegionFixture.entry(a, root, "isiZulu", row[0])).?;
+        const unknown = (try LeadingRegionFixture.entry(a, root, "Unclassified", row[0])).?;
+        try std.testing.expectEqualStrings("zu", known.language_code);
+        try std.testing.expectEqualStrings("", unknown.language_code);
+        const encoded = try presentation_document.compileReportedWithLinkTrailAlloc(a, row[0], .language, "Unclassified", "", row[1], null, .{}, null, null);
+        const full = try blobs.presentation_codec.decodeAlloc(a, encoded, row[0], .language, .{ .code = "", .heading = "Unclassified" });
+        try std.testing.expectEqualDeep(full.entry.sections[0..2], known.sections);
+        try std.testing.expectEqualDeep(full.entry.sections[2..], unknown.sections);
+        try std.testing.expectEqualStrings("IsiSwazi", unknown.sections[0].anchor);
+        if (std.mem.eql(u8, row[0], "cross")) try std.testing.expectEqualStrings("Repeat_2", unknown.sections[1].anchor);
+    }
+    const actual = (try LeadingRegionFixture.entry(a, root, "Unclassified", "sawubona")).?;
+    try std.testing.expect(LeadingRegionFixture.contains(actual, "IsiZulu:"));
+    try std.testing.expect(LeadingRegionFixture.contains(actual, "sawubona"));
+}
+
+test "Writer trailing peer isolation requires active adjacent page bound language evidence" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const codes = TrailingPeerFixture.codes();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/trailing-controls", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root); defer writer.deinit(); writer.language_codes = codes;
+    inline for (.{ "Noun", "Etymology 2", "Pronunciation 2", "Usage notes", "Alternative forms" }) |heading| {
+        const text = try std.fmt.allocPrint(a, "==IsiZulu==\n* {s}: [[{s}]] ([[:ss:{s}|ss]])\n=={s}==\nSUPPORT\n", .{ heading, heading, heading, heading });
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, heading, text, text, null);
+    }
+    const ordinary = "==IsiZulu==\nKNOWN\n==Historical usage==\n'''IsiZulu:''' [[ordinary]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ordinary", ordinary, ordinary, null);
+    const after = "==IsiZulu==\nKNOWN\n==IsiSwazi==\n* IsiSwazi: [[after]] ([[:ss:after|ss]])\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "after", after, after, null);
+    const unrelated = "==English==\n* IsiSwazi: [[unrelated]] ([[:ss:unrelated|ss]])\n==IsiZulu==\nKNOWN\n==IsiSwazi==\nUNRELATED\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "unrelated", unrelated, unrelated, null);
+    const mismatched = "==IsiZulu==\n* IsiSwazi: [[other]] ([[:ss:mismatch|ss]])\n==IsiSwazi==\nMISMATCH\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "mismatch", mismatched, mismatched, null);
+    const raw = "==IsiZulu==\nKNOWN\n==IsiSwazi==\nCHANGED\n";
+    const expanded = "==IsiZulu==\n* IsiSwazi: [[changed]] ([[:ss:changed|ss]])\n==IsiSwazi==\nCHANGED\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "changed", expanded, raw, null);
+    var ordinary_page: std.ArrayList(u8) = .empty;
+    try ordinary_page.appendSlice(a, "==IsiZulu==\n");
+    for (0..2048) |_| try ordinary_page.appendSlice(a, "ordinary prose and [[context]]\n");
+    for (0..64) |index| try ordinary_page.appendSlice(a, try std.fmt.allocPrint(a, "==Unknown topic {d}==\nordinary support prose\n", .{index}));
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "long-ordinary", ordinary_page.items, ordinary_page.items, null);
+    // Residual ambiguity is explicit: a complete same-page language row can
+    // corroborate an unknown support label too. Preserve it as Unclassified,
+    // without claiming the label names a language or assigning the row's code.
+    const ambiguous = "==IsiZulu==\n* Historical usage: [[ambiguous]] ([[:ss:ambiguous|ss]])\n==Historical usage==\n'''IsiZulu:''' [[ambiguous]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ambiguous", ambiguous, ambiguous, null);
+    _ = try writer.finish(codes);
+    inline for (.{ "Noun", "Etymology 2", "Pronunciation 2", "Usage notes", "Alternative forms", "ordinary", "after", "unrelated", "mismatch", "changed", "long-ordinary" }) |title| {
+        try std.testing.expect((try LeadingRegionFixture.entry(a, root, "isiZulu", title)) != null);
+        try std.testing.expect((try LeadingRegionFixture.entry(a, root, "Unclassified", title)) == null);
+    }
+    const known = (try LeadingRegionFixture.entry(a, root, "isiZulu", "ambiguous")).?;
+    const unknown = (try LeadingRegionFixture.entry(a, root, "Unclassified", "ambiguous")).?;
+    const encoded = try presentation_document.compileReportedWithLinkTrailAlloc(a, "ambiguous", .language, "Unclassified", "", ambiguous, null, .{}, null, null);
+    const full = try blobs.presentation_codec.decodeAlloc(a, encoded, "ambiguous", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqualDeep(full.entry.sections[0..1], known.sections);
+    try std.testing.expectEqualDeep(full.entry.sections[1..], unknown.sections);
+    try std.testing.expectEqualStrings("", unknown.language_code);
 }

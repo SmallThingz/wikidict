@@ -4074,3 +4074,357 @@ test "Writer retains typed invocation error beside MNI definition and translatio
     try std.testing.expect(std.mem.indexOf(u8, fallback, "rendered_lua_error") != null);
     try std.testing.expect(std.mem.indexOf(u8, fallback, "expansion_error") == null);
 }
+
+const GnRegistryApplicabilityFixture = struct {
+    // Exact relevant GN snapshot rows; aliases retain the real Registry trust policy.
+    const registry = "# content-language\tgn\n# mediawiki\ngn\tAvañe'ẽ\tgn\tGuarani\tgrn\nen\tinglés\tInglés\tEnglish\ten\teng\n";
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tgnwiktionary\n# dump-date\t20261001\n# content-language\tgn\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "10\tTembiecharã\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tÑemohenda\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n";
+    fn load(io: std.Io, a: std.mem.Allocator, root: []const u8, ns: *const namespace_registry.Registry) !language_registry.Registry {
+        try std.Io.Dir.cwd().createDirPath(io, root);
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = registry });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "" });
+        return loadLanguageRegistry(io, a, root, ns);
+    }
+    fn entry(io: std.Io, a: std.mem.Allocator, output: []const u8, heading: []const u8, title: []const u8) !encoder.presentation_types.Entry {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename(heading, &filename) });
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(1024 * 1024));
+        const blob = try encoder.blob_format.inspect(bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(title)).?;
+        const stored = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, stored));
+        return stored.entry;
+    }
+};
+
+test "GN captured registry and namespace do not promote ordinary target aliases" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var ns = try namespace_registry.Registry.init(a, GnRegistryApplicabilityFixture.namespaces); defer ns.deinit();
+    const input = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/gn-input", .{tmp.sub_path});
+    var registry = try GnRegistryApplicabilityFixture.load(io, a, input, &ns); defer registry.deinit();
+    try std.testing.expectEqualStrings("gn", registry.resolve("Guarani").?.code);
+    try std.testing.expect(registry.resolve("guarani") == null);
+    try std.testing.expect(registry.resolveTrusted("Guarani") == null);
+    try std.testing.expect(registry.resolveTrusted("guarani") == null);
+    try std.testing.expect(registry.resolveStrong("Guarani") == null);
+    try std.testing.expect(registry.resolveStrong("guarani") == null);
+    try std.testing.expectEqualStrings("gn", registry.resolveTrusted("Avañe'ẽ").?.code);
+    const normalized = try ns.normalizeTitle(a, "guarani", 0, .any);
+    try std.testing.expectEqualStrings("guarani", normalized);
+    try std.testing.expect(registry.resolve(normalized) == null);
+    const codes = languageCodes(&registry, &ns);
+    try std.testing.expect(codes.resolveTrusted("guarani") == null);
+    try std.testing.expectEqualStrings("gn", codes.resolveTrusted("Avañe'ẽ").?.code);
+}
+
+
+const GnRawBannerFixture = struct {
+    const banner = "<div id=\"gn\" class=\"toccolours\" >'''[[guarani|Avañe'ẽ]]'''</div>";
+    const lexical = "\n==Tero==\n;1: '''[[tembiapo|Tembiapo]]''' ipýpe [[ava]] oiko hag̃ua.\n;2: [[tapỹi|Tapỹi]] guasu. [[#Tero_2|later]]\n";
+    const expanded = "=" ++ banner ++ "=" ++ lexical;
+    const raw = "{{-gn-}}" ++ lexical;
+    fn full(a: std.mem.Allocator, title: []const u8, source: []const u8, ns: *const namespace_registry.Registry) !encoder.presentation_types.Entry {
+        const payload = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, title, .language, "Unclassified", "", source, null, .{}, ns, null);
+        return (try encoder.presentation_codec.decodeAlloc(a, payload, title, .language, .{ .code = "", .heading = "Unclassified" })).entry;
+    }
+};
+
+test "Writer raw prefix corroborates real registry banner and preserves later language regions" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var ns = try namespace_registry.Registry.init(a, GnRegistryApplicabilityFixture.namespaces); defer ns.deinit();
+    const input = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/gn-input", .{tmp.sub_path});
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/gn-output", .{tmp.sub_path});
+    var registry = try GnRegistryApplicabilityFixture.load(io, a, input, &ns); defer registry.deinit();
+    const codes = languageCodes(&registry, &ns);
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    writer.language_codes = codes;
+    const F = GnRawBannerFixture;
+    // Exact template-derived frame with synthetic lexical controls. These
+    // complete pages are not claimed as retained native expansions.
+    const later = "==inglés==\n===Tero===\n# [[house]] [[#Tero|earlier]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "single-banner", F.expanded, F.raw, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "mixed-banner", F.expanded ++ later, F.raw ++ later, null);
+    const literal = "==Avañe'ẽ==\n# LITERAL_OWNER\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "literal-control", literal, literal, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
+    const single = try GnRegistryApplicabilityFixture.entry(io, a, output, "Avañe'ẽ", "single-banner");
+    const gn = try GnRegistryApplicabilityFixture.entry(io, a, output, "Avañe'ẽ", "mixed-banner");
+    const en = try GnRegistryApplicabilityFixture.entry(io, a, output, "inglés", "mixed-banner");
+    const known = try GnRegistryApplicabilityFixture.entry(io, a, output, "Avañe'ẽ", "literal-control");
+    try std.testing.expectEqualStrings("gn", single.language_code);
+    try std.testing.expectEqualStrings("gn", gn.language_code);
+    try std.testing.expectEqualStrings("en", en.language_code);
+    try std.testing.expectEqualStrings("gn", known.language_code);
+    const whole_single = try F.full(a, "single-banner", F.expanded, &ns);
+    const whole_mixed = try F.full(a, "mixed-banner", F.expanded ++ later, &ns);
+    try std.testing.expectEqual(@as(usize, 2), whole_single.sections.len);
+    try std.testing.expectEqual(@as(usize, 4), whole_mixed.sections.len);
+    try std.testing.expectEqualDeep(whole_single.sections, single.sections);
+    try std.testing.expectEqualDeep(whole_mixed.sections[0..2], gn.sections);
+    try std.testing.expectEqualDeep(whole_mixed.sections[2..], en.sections);
+    try std.testing.expectEqualStrings("Tero_2", en.sections[1].anchor);
+    try std.testing.expect(registry.resolve("guarani") == null);
+    try std.testing.expect(registry.resolveTrusted("Guarani") == null);
+}
+
+test "Writer banner fallback rejects missing raw authority conflicts and unresolved peers" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var ns = try namespace_registry.Registry.init(a, GnRegistryApplicabilityFixture.namespaces); defer ns.deinit();
+    const input = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/gn-input", .{tmp.sub_path});
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/gn-negative", .{tmp.sub_path});
+    var registry = try GnRegistryApplicabilityFixture.load(io, a, input, &ns); defer registry.deinit();
+    const codes = languageCodes(&registry, &ns);
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    writer.language_codes = codes;
+    const F = GnRawBannerFixture;
+    const Case = struct { title: []const u8, raw: []const u8, source: []const u8 };
+    const cases = [_]Case{
+        .{ .title = "no-raw", .raw = "", .source = F.expanded },
+        .{ .title = "prefix-prose", .raw = "PROSE\n" ++ F.raw, .source = F.expanded },
+        .{ .title = "protected-raw", .raw = "<nowiki>{{-gn-}}</nowiki>" ++ F.lexical, .source = F.expanded },
+        .{ .title = "commented-raw", .raw = "<!--{{-gn-}}-->" ++ F.lexical, .source = F.expanded },
+        .{ .title = "wrong-raw-code", .raw = "{{-en-}}" ++ F.lexical, .source = F.expanded },
+        .{ .title = "wrong-id", .raw = F.raw, .source = "=<div id=\"en\" class=\"toccolours\" >'''[[guarani|Avañe'ẽ]]'''</div>=" ++ F.lexical },
+        .{ .title = "ordinary-conflicting-target", .raw = F.raw, .source = "=<div id=\"gn\" class=\"toccolours\" >'''[[English|Avañe'ẽ]]'''</div>=" ++ F.lexical },
+        .{ .title = "ordinary-display", .raw = F.raw, .source = "=<div id=\"gn\" class=\"toccolours\" >'''[[guarani|Guarani]]'''</div>=" ++ F.lexical },
+        .{ .title = "wrong-display", .raw = F.raw, .source = "=<div id=\"gn\" class=\"toccolours\" >'''[[guarani|inglés]]'''</div>=" ++ F.lexical },
+        .{ .title = "extra-text", .raw = F.raw, .source = "=" ++ F.banner ++ " EXTRA=" ++ F.lexical },
+        .{ .title = "incomplete-wrapper", .raw = F.raw, .source = "=<div id=\"gn\" class=\"toccolours\" >'''[[guarani|Avañe'ẽ]]'''=" ++ F.lexical },
+        .{ .title = "protected-heading", .raw = F.raw, .source = "=<nowiki>" ++ F.banner ++ "</nowiki>=" ++ F.lexical },
+        .{ .title = "entity-frame", .raw = F.raw, .source = "=&lt;div id=\"gn\" class=\"toccolours\" &gt;'''[[guarani|Avañe'ẽ]]'''&lt;/div&gt;=" ++ F.lexical },
+        .{ .title = "later-unresolved-peer", .raw = F.raw ++ "==Other support==\n# SUPPORT\n=Unresolved peer=\n# UNKNOWN\n", .source = F.expanded ++ "==Other support==\n# SUPPORT\n=Unresolved peer=\n# UNKNOWN\n" },
+    };
+    for (cases) |case| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, case.title, case.source, case.raw, null);
+    var no_trust = codes; no_trust.trusted_fn = null; no_trust.strong_fn = null;
+    writer.language_codes = no_trust;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "no-trust", F.expanded, F.raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, cases.len + 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    for (cases) |case| {
+        const actual = try GnRegistryApplicabilityFixture.entry(io, a, output, "Unclassified", case.title);
+        try std.testing.expectEqualStrings("", actual.language_code);
+        const whole = try F.full(a, case.title, case.source, &ns);
+        try std.testing.expectEqualDeep(whole.sections, actual.sections);
+    }
+    const untrusted = try GnRegistryApplicabilityFixture.entry(io, a, output, "Unclassified", "no-trust");
+    try std.testing.expectEqualStrings("", untrusted.language_code);
+}
+
+const TemplateCollisionFixture = struct {
+    // Exact relevant JBO snapshot rows; aliases retain the real Registry trust policy.
+    const registry = "# content-language\tjbo\n# mediawiki\nbau\tBada (Nigeria)\tbau\njbo\tla .lojban.\tLa .lojban.\tjbo\tLojban\nen\tEnglish\ten\teng\nde\tGerman\tDeutsch\tde\tdeu\tger\n";
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tjbowiktionary\n# dump-date\t20261001\n# content-language\tjbo\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "10\ttermo'a\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tklesi\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n";
+    fn load(io: std.Io, a: std.mem.Allocator, root: []const u8, ns: *const namespace_registry.Registry) !language_registry.Registry {
+        try std.Io.Dir.cwd().createDirPath(io, root);
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = registry });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "" });
+        return loadLanguageRegistry(io, a, root, ns);
+    }
+    fn entry(io: std.Io, a: std.mem.Allocator, output: []const u8, heading: []const u8, title: []const u8) !encoder.presentation_types.Entry {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename(heading, &filename) });
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(1024 * 1024));
+        const blob = try encoder.blob_format.inspect(bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(title)).?;
+        const stored = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, stored));
+        return stored.entry;
+    }
+};
+
+test "Writer real registry isolates conflicting template codes without assigning the argument" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const F = TemplateCollisionFixture;
+    var ns = try namespace_registry.Registry.init(a, F.namespaces); defer ns.deinit();
+    const input = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/collision-input", .{tmp.sub_path});
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/collision-output", .{tmp.sub_path});
+    var registry = try F.load(io, a, input, &ns); defer registry.deinit();
+    const codes = languageCodes(&registry, &ns);
+    try std.testing.expectEqualStrings("bau", registry.resolve("bau").?.code);
+    try std.testing.expectEqualStrings("Bada (Nigeria)", registry.resolve("bau").?.heading);
+    try std.testing.expectEqualStrings("jbo", registry.resolve("jbo").?.code);
+    try std.testing.expect(registry.resolve("lojban.") == null);
+    try std.testing.expect(registry.resolve("lojbo") == null);
+    try std.testing.expect(registry.resolve("lojban") == null);
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    writer.language_codes = codes;
+    // Source-derived heading and lexical excerpt, with synthetic mixed-page
+    // controls. This is not a claim to replay an exact captured expansion.
+    const lexical = "\n===gismu===\n'''nakni''' (rafsi [[nak#lojban.|nak]])\n# \n====xelfanva====\n* glibau: [[male#en|male]]\n";
+    const raw = "== {{bau|jbo}} ==" ++ lexical;
+    const expanded = "== lojban. ==" ++ lexical;
+    const before = "==English==\n===gismu===\n# [[before]] [[#gismu_2|middle]]\n";
+    const after = "==German==\n===gismu===\n# [[after]] [[#gismu_2|middle]]\n";
+    const literal = "==Bada (Nigeria)==\n# [[literal]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "single-collision", expanded, raw, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "mixed-collision", before ++ expanded ++ after, before ++ raw ++ after, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "literal-control", literal, literal, null);
+    // An unrelated argument can have the same shape. Conservative isolation
+    // does not prove that German owns this hypothetical English wrapper.
+    const ambiguous = "==Decorative English label==\n# [[retained]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "generic-ambiguity", ambiguous, "=={{en|de}}==\n# [[retained]]\n", null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 6), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_blobs);
+    const single = try F.entry(io, a, output, "Unclassified", "single-collision");
+    const unknown = try F.entry(io, a, output, "Unclassified", "mixed-collision");
+    const en = try F.entry(io, a, output, "English", "mixed-collision");
+    const de = try F.entry(io, a, output, "German", "mixed-collision");
+    const known = try F.entry(io, a, output, "Bada (Nigeria)", "literal-control");
+    const generic = try F.entry(io, a, output, "Unclassified", "generic-ambiguity");
+    try std.testing.expectEqualStrings("", generic.language_code);
+    try std.testing.expectEqualStrings("", single.language_code);
+    try std.testing.expectEqualStrings("", unknown.language_code);
+    try std.testing.expectEqualStrings("en", en.language_code);
+    try std.testing.expectEqualStrings("de", de.language_code);
+    try std.testing.expectEqualStrings("bau", known.language_code);
+    const whole = struct {
+        fn entry(alloc: std.mem.Allocator, title: []const u8, text: []const u8, catalog: *const namespace_registry.Registry) !encoder.presentation_types.Entry {
+            const payload = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(alloc, title, .language, "Unclassified", "", text, null, .{}, catalog, null);
+            return (try encoder.presentation_codec.decodeAlloc(alloc, payload, title, .language, .{ .code = "", .heading = "Unclassified" })).entry;
+        }
+    };
+    const full_single = try whole.entry(a, "single-collision", expanded, &ns);
+    const full_mixed = try whole.entry(a, "mixed-collision", before ++ expanded ++ after, &ns);
+    try std.testing.expectEqualDeep((try whole.entry(a, "generic-ambiguity", ambiguous, &ns)).sections, generic.sections);
+    try std.testing.expectEqual(@as(usize, 3), full_single.sections.len);
+    try std.testing.expectEqual(@as(usize, 7), full_mixed.sections.len);
+    try std.testing.expectEqualDeep(full_single.sections, single.sections);
+    try std.testing.expectEqualDeep(full_mixed.sections[0..2], en.sections);
+    try std.testing.expectEqualDeep(full_mixed.sections[2..5], unknown.sections);
+    try std.testing.expectEqualDeep(full_mixed.sections[5..], de.sections);
+    try std.testing.expectEqualStrings("gismu_2", unknown.sections[1].anchor);
+    try std.testing.expectEqualStrings("gismu_3", de.sections[1].anchor);
+    try std.testing.expect(registry.resolve("lojban.") == null);
+}
+
+
+test "Writer template code collision preserves corroborated owners and unrelated forms" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const F = TemplateCollisionFixture;
+    var ns = try namespace_registry.Registry.init(a, F.namespaces); defer ns.deinit();
+    const input = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/controls-input", .{tmp.sub_path});
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/controls-output", .{tmp.sub_path});
+    var registry = try F.load(io, a, input, &ns); defer registry.deinit();
+    const codes = languageCodes(&registry, &ns);
+    const Case = struct { name: []const u8, raw: ?[]const u8, rendered: []const u8, owner: []const u8, code: []const u8 };
+    const cases = [_]Case{
+        .{ .name = "known-name-owner", .raw = "=={{bau|jbo}}==", .rendered = "Bada (Nigeria)", .owner = "Bada (Nigeria)", .code = "bau" },
+        .{ .name = "known-argument-owner", .raw = "=={{bau|jbo}}==", .rendered = "la .lojban.", .owner = "la .lojban.", .code = "jbo" },
+        .{ .name = "known-other-owner", .raw = "=={{bau|jbo}}==", .rendered = "German", .owner = "German", .code = "de" },
+        .{ .name = "ordinary-parameter", .raw = "=={{bau|plural}}==", .rendered = "decorative label", .owner = "Bada (Nigeria)", .code = "bau" },
+        .{ .name = "same-code", .raw = "=={{bau|bau}}==", .rendered = "decorative label", .owner = "Bada (Nigeria)", .code = "bau" },
+        .{ .name = "no-parameter", .raw = "=={{bau}}==", .rendered = "decorative label", .owner = "Bada (Nigeria)", .code = "bau" },
+        .{ .name = "ordinary-alias-argument", .raw = "=={{bau|Lojban}}==", .rendered = "decorative label", .owner = "Bada (Nigeria)", .code = "bau" },
+        .{ .name = "noncanonical-name", .raw = "=={{Bada (Nigeria)|jbo}}==", .rendered = "decorative label", .owner = "Bada (Nigeria)", .code = "bau" },
+        .{ .name = "named-argument", .raw = "=={{bau|lang=jbo}}==", .rendered = "decorative label", .owner = "Bada (Nigeria)", .code = "bau" },
+        .{ .name = "extra-argument", .raw = "=={{bau|jbo|plural}}==", .rendered = "decorative label", .owner = "Bada (Nigeria)", .code = "bau" },
+        .{ .name = "multiple-calls", .raw = "=={{bau}}{{jbo}}==", .rendered = "decorative label", .owner = "Bada (Nigeria)", .code = "bau" },
+        .{ .name = "nested-call", .raw = "=={{bau|{{jbo}}}}==", .rendered = "decorative label", .owner = "Unclassified", .code = "" },
+        .{ .name = "protected-call", .raw = "==<nowiki>{{bau|jbo}}</nowiki>==", .rendered = "decorative label", .owner = "Unclassified", .code = "" },
+        .{ .name = "entity-call", .raw = "==&#123;&#123;bau|jbo&#125;&#125;==", .rendered = "decorative label", .owner = "Unclassified", .code = "" },
+        .{ .name = "incomplete-call", .raw = "=={{bau|jbo==", .rendered = "decorative label", .owner = "Unclassified", .code = "" },
+        .{ .name = "no-raw-authority", .raw = null, .rendered = "decorative label", .owner = "Unclassified", .code = "" },
+    };
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    writer.language_codes = codes;
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(a, "=={s}==\n# '''[[retained|body]]'''\n", .{case.rendered});
+        const raw: ?[]const u8 = if (case.raw) |heading| try std.fmt.allocPrint(a, "{s}\n# '''[[retained|body]]'''\n", .{heading}) else null;
+        if (raw) |raw_source| {
+            try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, case.name, source, raw_source, null);
+        } else {
+            // This direct authored-source control supplies no template authority.
+            try writer.addPage(a, .{ .id = 0, .kind = .language }, case.name, source, null);
+        }
+    }
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, cases.len), stats.language_records);
+    for (cases) |case| {
+        const stored = try F.entry(io, a, output, case.owner, case.name);
+        try std.testing.expectEqualStrings(case.code, stored.language_code);
+        const source = try std.fmt.allocPrint(a, "=={s}==\n# '''[[retained|body]]'''\n", .{case.rendered});
+        const payload = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, case.name, .language, "Unclassified", "", source, null, .{}, &ns, null);
+        const whole = try encoder.presentation_codec.decodeAlloc(a, payload, case.name, .language, .{ .code = "", .heading = "Unclassified" });
+        try std.testing.expectEqualDeep(whole.entry.sections, stored.sections);
+    }
+}
+
+test "Writer composed hidden template conflicts refuse unproved page ownership" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var ns = try namespace_registry.Registry.init(a, GnRegistryApplicabilityFixture.namespaces); defer ns.deinit();
+    const input = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/interaction-input", .{tmp.sub_path});
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/interaction-output", .{tmp.sub_path});
+    var registry = try GnRegistryApplicabilityFixture.load(io, a, input, &ns); defer registry.deinit();
+    // Additional exact rows from the same authenticated GN snapshot.
+    try registry.addTsv("bau\tBada (Nigeria)\tbau\njbo\tlojban\tLojban\tLa .lojban.\tla .lojban.\tjbo\nde\talemán\tAlemán\tDeutsch\tde\tGerman\tdeu\tger\nadj\tAdioukrou\tadj\n");
+    const codes = languageCodes(&registry, &ns);
+    try std.testing.expect(registry.resolve("lojban.") == null);
+    try std.testing.expectEqualStrings("bau", registry.resolve("bau").?.code);
+    const F = GnRawBannerFixture;
+    const raw_collision = "=={{bau|jbo}}==\n===gismu===\n# COLLISION_BODY [[#gismu_2|later]]\n";
+    const rendered_collision = "==lojban.==\n===gismu===\n# COLLISION_BODY [[#gismu_2|later]]\n";
+    const first = "==inglés==\n===gismu===\n# ENGLISH_BODY\n";
+    const last = "==alemán==\n===gismu===\n# GERMAN_BODY\n";
+    const Case = struct { title: []const u8, raw: []const u8, source: []const u8, unknown: bool };
+    // Exact existing fixture shapes composed synthetically; these are not
+    // retained native expansions or proof of positive JBO ownership.
+    const cases = [_]Case{
+        .{ .title = "gn-hidden", .raw = F.raw ++ raw_collision, .source = F.expanded ++ rendered_collision, .unknown = true },
+        .{ .title = "known-l1-hidden", .raw = "=inglés=\n# ENGLISH_BODY\n" ++ raw_collision, .source = "=inglés=\n# ENGLISH_BODY\n" ++ rendered_collision, .unknown = true },
+        .{ .title = "selected-argument", .raw = first ++ raw_collision ++ "{{#if:1|\n===<!--selected-->===\n# after|BAD}}\n" ++ last, .source = first ++ rendered_collision ++ "======\n# after\n" ++ last, .unknown = true },
+        .{ .title = "protected", .raw = F.raw ++ "<nowiki>\n" ++ raw_collision ++ "</nowiki>\n", .source = F.expanded ++ "<nowiki>\n" ++ raw_collision ++ "</nowiki>\n", .unknown = false },
+        .{ .title = "commented", .raw = F.raw ++ "<!--\n" ++ raw_collision ++ "-->\n", .source = F.expanded ++ "<!--\n" ++ raw_collision ++ "-->\n", .unknown = false },
+        .{ .title = "nested", .raw = F.raw ++ "{{#if:|\n" ++ raw_collision ++ "|# KEPT\n}}", .source = F.expanded ++ "# KEPT\n", .unknown = false },
+        .{ .title = "entity", .raw = F.raw ++ "==&#123;&#123;bau|jbo&#125;&#125;==\n# ENTITY\n", .source = F.expanded ++ "==&#123;&#123;bau|jbo&#125;&#125;==\n# ENTITY\n", .unknown = false },
+        .{ .title = "noncanonical-name", .raw = F.raw ++ "=={{Bada (Nigeria)|jbo}}==\n# LABEL\n", .source = F.expanded ++ "==Decorative label==\n# LABEL\n", .unknown = false },
+        .{ .title = "ordinary-argument", .raw = F.raw ++ "=={{bau|ordinary}}==\n# ORDINARY\n", .source = F.expanded ++ "==Decorative label==\n# ORDINARY\n", .unknown = false },
+        .{ .title = "pos-support", .raw = F.raw ++ "{{-adj-}}\n# ADJECTIVE\n", .source = F.expanded ++ "==Adjective==\n# ADJECTIVE\n", .unknown = false },
+    };
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    writer.language_codes = codes;
+    for (cases) |case| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, case.title, case.source, case.raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, cases.len), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
+    for (cases) |case| {
+        const actual = try GnRegistryApplicabilityFixture.entry(io, a, output, if (case.unknown) "Unclassified" else "Avañe'ẽ", case.title);
+        try std.testing.expectEqualStrings(if (case.unknown) "" else "gn", actual.language_code);
+        const whole = try F.full(a, case.title, case.source, &ns);
+        try std.testing.expectEqualDeep(whole.sections, actual.sections);
+        if (std.mem.eql(u8, case.title, "selected-argument")) {
+            try std.testing.expectEqual(@as(usize, 7), actual.sections.len);
+            try std.testing.expectEqualStrings("gismu_2", actual.sections[3].anchor);
+            try std.testing.expectEqualStrings("gismu_3", actual.sections[6].anchor);
+        }
+    }
+}

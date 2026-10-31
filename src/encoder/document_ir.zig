@@ -124,6 +124,8 @@ pub const InlineSpan = struct {
     link_empty_label: bool = false,
     external_label_prefix: []const u8 = "",
     literal_tail: bool = false,
+    // Renderer-only evidence: text is the complete proved pair with an empty raw target.
+    empty_target_link: bool = false,
     bold: bool = false,
     italic: bool = false,
 };
@@ -371,7 +373,17 @@ pub const InlineIterator = struct {
                         },
                         .invalid => if (self.renderer_boundaries) {
                             if (self.cursor != start) break :scan;
+                            const pair_start = self.cursor;
                             self.cursor = pair.end;
+                            const body = self.input[pair_start + 2 .. pair.inner_end];
+                            const target_prefix = std.mem.trimStart(u8, body, " \t");
+                            if (target_prefix.len == 0 or target_prefix[0] == '|') return .{
+                                .kind = .text,
+                                .text = self.input[pair_start..pair.end],
+                                .empty_target_link = true,
+                                .bold = self.bold,
+                                .italic = self.italic,
+                            };
                             continue :scan;
                         } else {
                             self.cursor = self.input.len;
@@ -1377,4 +1389,21 @@ test "free URL long semicolon suffix retains link and every punctuation byte" {
     try source.appendNTimes(a, ';', 4096);
     try std.testing.expectEqual(entity_end, externalUrlEnd(source.items, 0, false, true).?);
     try std.testing.expectEqual(@as(usize, 4096), source.items.len - entity_end);
+}
+
+
+test "renderer empty target tokens retain proved raw pair boundaries" {
+    var renderer: InlineIterator = .{ .input = "[[ \t|label]] tail [[A|]]", .renderer_boundaries = true };
+    const empty = renderer.next().?;
+    try std.testing.expect(empty.kind == .text and empty.empty_target_link and !empty.literal_tail);
+    try std.testing.expectEqualStrings("[[ \t|label]]", empty.text);
+    try std.testing.expectEqual(@as(usize, 12), renderer.cursor);
+    const tail = renderer.next().?;
+    try std.testing.expect(!tail.empty_target_link);
+    try std.testing.expectEqualStrings(" tail ", tail.text);
+    const valid = renderer.next().?;
+    try std.testing.expect(valid.kind == .link and !valid.empty_target_link);
+    try std.testing.expectEqualStrings("A", valid.target);
+    var ordinary: InlineIterator = .{ .input = "[[|label]] tail" };
+    while (ordinary.next()) |span| try std.testing.expect(!span.empty_target_link);
 }

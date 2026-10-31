@@ -154,10 +154,11 @@ pub fn controlHeading(raw: []const u8, matcher: ?ControlMatcher) ?ControlHeading
     if (line.len < 3 or line[0] != '=') return null;
     const opening = controlEqualsRun(line, 0, matcher);
     if (opening.end == line.len) {
-        // Preserve the existing capped-six delimiter contract for a line made
-        // entirely of equals: only unmatched equals can form its title.
-        if (opening.count <= 12) return null;
-        return .{ .level = 6, .title = line[opening.first_ends[5]..opening.last_starts[(opening.count - 6) % 6]] };
+        // MediaWiki leaves at least one title byte between symmetric runs.
+        // Pure runs use the deepest legal pair, capped at heading level six.
+        if (opening.count < 3) return null;
+        const level = @min(6, (opening.count - 1) / 2);
+        return .{ .level = @intCast(level), .title = line[opening.first_ends[level - 1]..opening.last_starts[(opening.count - level) % 6]] };
     }
     var closing: ?EqualsRun = null;
     var at = opening.end;
@@ -187,7 +188,6 @@ pub fn controlHeading(raw: []const u8, matcher: ?ControlMatcher) ?ControlHeading
     const end = suffix.last_starts[(suffix.count - level) % 6];
     if (start > end) return null;
     const title = std.mem.trim(u8, line[start..end], " \t");
-    if (title.len == 0) return null;
     return .{ .level = @intCast(level), .title = title };
 }
 
@@ -1071,7 +1071,9 @@ test "structural controls join empty heading and list delimiter runs only" {
         try std.testing.expectEqual(@as(u8, 2), heading.level);
         try std.testing.expectEqualStrings("French", heading.title);
     }
-    try std.testing.expect(controlHeading("============", null) == null);
+    const twelve_equals = controlHeading("============", null).?;
+    try std.testing.expectEqual(@as(u8, 5), twelve_equals.level);
+    try std.testing.expectEqualStrings("==", twelve_equals.title);
     const equals_only = controlHeading("=============", null).?;
     try std.testing.expectEqual(@as(u8, 6), equals_only.level);
     try std.testing.expectEqualStrings("=", equals_only.title);
@@ -1245,4 +1247,46 @@ test "multiline HTML headings retain one logical domain without widening ordinar
     const inline_span = "<span>first\nsecond</span>\nnext";
     try std.testing.expect(!isMultilineContainerTag("span"));
     try std.testing.expectEqual(std.mem.indexOfScalar(u8, inline_span, '\n').?, logicalEnd(inline_span, 0));
+}
+
+
+test "authored whitespace title retains an empty heading beside pure equals grammar" {
+    const heading = controlHeading("=== \t ===", null).?;
+    try std.testing.expectEqual(@as(u8, 3), heading.level);
+    try std.testing.expectEqualStrings("", heading.title);
+    const pure = controlHeading("======", null).?;
+    try std.testing.expectEqual(@as(u8, 2), pure.level);
+    try std.testing.expectEqualStrings("==", pure.title);
+}
+
+
+test "pure equals heading depths retain exact inner bytes and literal protection" {
+    const run: [64]u8 = @splat('=');
+    for ([_]usize{ 0, 1, 2 }) |count| try std.testing.expect(controlHeading(run[0..count], null) == null);
+    const Case = struct { count: usize, level: u8, inner: usize };
+    for ([_]Case{
+        .{ .count = 3, .level = 1, .inner = 1 }, .{ .count = 4, .level = 1, .inner = 2 },
+        .{ .count = 5, .level = 2, .inner = 1 }, .{ .count = 6, .level = 2, .inner = 2 },
+        .{ .count = 7, .level = 3, .inner = 1 }, .{ .count = 8, .level = 3, .inner = 2 },
+        .{ .count = 11, .level = 5, .inner = 1 }, .{ .count = 12, .level = 5, .inner = 2 },
+        .{ .count = 13, .level = 6, .inner = 1 }, .{ .count = 14, .level = 6, .inner = 2 },
+        .{ .count = 17, .level = 6, .inner = 5 }, .{ .count = 64, .level = 6, .inner = 52 },
+    }) |case| {
+        const actual = controlHeading(run[0..case.count], null).?;
+        try std.testing.expectEqual(case.level, actual.level);
+        try std.testing.expectEqualStrings(run[0..case.inner], actual.title);
+    }
+    const controlled = controlHeading("===__NOEDITSECTION__===", null).?;
+    try std.testing.expectEqual(@as(u8, 2), controlled.level);
+    try std.testing.expectEqualStrings("=__NOEDITSECTION__=", controlled.title);
+    const toc = controlHeading("===__TOC__===", null).?;
+    try std.testing.expectEqual(@as(u8, 3), toc.level);
+    try std.testing.expectEqualStrings("__TOC__", toc.title);
+    for ([_][]const u8{
+        " ======", "&#61;&#61;&#61;&#61;&#61;&#61;", "&equals;&equals;&equals;",
+        "<nowiki>======</nowiki>", "<pre>======</pre>", "<code>======</code>",
+    }) |literal| try std.testing.expect(controlHeading(literal, null) == null);
+    const entity_title = controlHeading("==&#61;&#61;==", null).?;
+    try std.testing.expectEqual(@as(u8, 2), entity_title.level);
+    try std.testing.expectEqualStrings("&#61;&#61;", entity_title.title);
 }

@@ -2228,11 +2228,15 @@ const PageExternalNumbering = struct {
         return out.finish(self.a);
     }
     fn annotateCitation(self: *@This(), input: []const u8, tag: syntax.Tag, event: usize) Error!void {
-        var end = tag.end - 1;
-        if (tag.self_closing) {
-            while (end > 0 and std.mem.indexOfScalar(u8, " \t\r\n", input[end - 1]) != null) end -= 1;
-            if (end > 0 and input[end - 1] == '/') end -= 1;
-        }
+        // An authored dangling assignment must not consume our generated
+        // attribute as its value. Tag normalization keeps the original name
+        // slice, so insert before all authored attributes without rewriting them.
+        const first = @intFromPtr(input.ptr);
+        const name = @intFromPtr(tag.name.ptr);
+        if (tag.closing or tag.name.len == 0 or name < first or name - first > input.len or
+            tag.name.len > input.len - (name - first) or tag.end > input.len) return error.InvalidPreContext;
+        const end = name - first + tag.name.len;
+        if (end >= tag.end) return error.InvalidPreContext;
         const attribute_text = try std.fmt.allocPrint(self.a, " {s}=\"{d}\"", .{ self.citations.?.attribute, event });
         try self.replace(input, end, end, attribute_text);
     }
@@ -7580,7 +7584,11 @@ pub const Renderer = struct {
             s.bold = token.bold;
             s.italic = token.italic;
             switch (token.kind) {
-                .text => if (token.literal_tail) {
+                .text => if (token.empty_target_link and s.provenance == .parsed) {
+                    // InlineIterator already proved this complete raw pair. Do
+                    // not rescan or reinterpret decoded/protected display text.
+                    try self.malformedInternalBody(prepared_missing, token.text[2 .. token.text.len - 2], "", input[it.cursor..], s, depth);
+                } else if (token.literal_tail) {
                     // A later independent root may have a closing pair even
                     // though this root is unbalanced. Recover only a wrong
                     // curly close reached before any intervening structural
@@ -11416,7 +11424,6 @@ fn headingLine(line: []const u8) ?Heading {
 fn headingLineControlled(line: []const u8, matcher: ?syntax.ControlMatcher) ?Heading {
     const heading = syntax.controlHeading(line, matcher) orelse return null;
     const title = trim(heading.title);
-    if (title.len == 0) return null;
     return .{ .level = heading.level, .title = title };
 }
 const CellContent = struct { text: []const u8, colspan: u16 = 1, rowspan: u16 = 1, swatch_color: ?[]const u8 = null };
@@ -31335,4 +31342,186 @@ test "internal title comments remain suppressed before invalid HTML title checks
     try std.testing.expectEqualStrings("[[foo<!--hidden-->bar]]", try flattened(a, literal));
     for (literal) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
     try std.testing.expectEqualStrings("foo{{deferred}}", try internalTargetWithoutCommentsAlloc(a, "foo<!--hidden-->{{deferred}}"));
+}
+
+
+test "empty target pairs preserve inner text styles and child actions as diagnosed content" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, visible: []const u8 }{
+        .{ .source = "[[|]]", .visible = "| [malformed link]" },
+        .{ .source = "[[|label]]", .visible = "|label [malformed link]" },
+        .{ .source = "[[ |label]]", .visible = " |label [malformed link]" },
+        .{ .source = "[[ ]]", .visible = "  [malformed link]" },
+    };
+    for (cases) |case| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const spans = try r.parseSpans(case.source, .{ .italic = true, .language = "cy" });
+        const visible = try flattened(a, spans);
+        try std.testing.expectEqualStrings(case.visible, visible);
+        try requireCompiledText(visible);
+        var markers: usize = 0;
+        for (spans) |span| {
+            try std.testing.expect(span.kind == .text and span.target.len == 0 and !span.self_link);
+            try std.testing.expect(span.flags.italic and span.provenance == .parsed);
+            try std.testing.expectEqualStrings("cy", span.language);
+            if (span.generated_diagnostic) markers += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 1), markers);
+        try std.testing.expect(r.fallbacks.literal_markup);
+    }
+    var nested: Renderer = .{ .a = a, .context = .{} };
+    const spans = try nested.parseSpans("[[|<b>label</b> [[Target|child]]]]s", .{});
+    try std.testing.expectEqualStrings("|label child [malformed link]s", try flattened(a, spans));
+    var actions: usize = 0;
+    var bold_label = false;
+    for (spans) |span| {
+        if (std.mem.eql(u8, span.text, "label")) bold_label = span.flags.bold;
+        if (span.kind == .link) {
+            actions += 1;
+            try std.testing.expectEqualStrings("Target", span.target);
+            try std.testing.expectEqualStrings("child", span.text);
+        }
+    }
+    try std.testing.expect(bold_label);
+    try std.testing.expectEqual(@as(usize, 1), actions);
+    var valid: Renderer = .{ .a = a, .context = .{} };
+    const normal = try valid.parseSpans("[[Target|]]", .{});
+    try std.testing.expect(unclosedExternalRecoveryHasLink(normal, .link, "Target"));
+    try std.testing.expect(!valid.fallbacks.literal_markup);
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("[[|"));
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("{{deferred}}"));
+}
+
+
+test "captured GV empty translation row preserves warning and protected literals" {
+    const source = "* <span title=\"Bretnish\">Bretnish:</span> <span lang=\"cy\" xml:lang=\"cy\">[[|]]</span>&nbsp;<span class=\"trad-sup-code\"><sup>[[:cy:|(cy)]]</sup></span><span style=\"\">My vel shiu abyl, cur stiagh y çhyndaa shoh my sailliu. [[Category:Bretnish: Çhyndaaghyn ry-laccal]]";
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody(source);
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const spans = blocks[0].spans;
+    const visible = try flattened(a, spans);
+    try requireCompiledText(visible);
+    try std.testing.expect(std.mem.indexOf(u8, visible, "Bretnish:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible, "| [malformed link]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible, "My vel shiu abyl, cur stiagh y çhyndaa shoh my sailliu.") != null);
+    var typed_empty = false;
+    for (spans) |span| if (span.generated_diagnostic) {
+        try std.testing.expect(span.kind == .text and span.target.len == 0 and span.provenance == .parsed);
+        try std.testing.expectEqualStrings("cy", span.language);
+        typed_empty = true;
+    };
+    try std.testing.expect(typed_empty and r.fallbacks.literal_markup);
+    const literals = [_][]const u8{ "<nowiki>[[|]]</nowiki>", "&#91;&#91;|&#93;&#93;" };
+    for (literals) |literal| {
+        var protected: Renderer = .{ .a = a, .context = .{} };
+        const protected_spans = try protected.parseSpans(literal, .{});
+        try std.testing.expectEqualStrings("[[|]]", try flattened(a, protected_spans));
+        for (protected_spans) |span| {
+            try std.testing.expect(!span.generated_diagnostic and span.kind == .text and span.target.len == 0);
+            if (std.mem.indexOfAny(u8, span.text, "[]") != null) try std.testing.expect(span.provenance != .parsed);
+        }
+        try std.testing.expect(!protected.fallbacks.literal_markup);
+    }
+    for ([_]Provenance{ .protected_literal, .entity_literal }) |origin| {
+        var inherited: Renderer = .{ .a = a, .context = .{} };
+        const literal_spans = try inherited.parseSpans("[[|]]", .{ .provenance = origin });
+        try std.testing.expectEqualStrings("[[|]]", try flattened(a, literal_spans));
+        for (literal_spans) |span| try std.testing.expect(span.provenance == origin and !span.generated_diagnostic and span.kind == .text);
+        try std.testing.expect(!inherited.fallbacks.literal_markup);
+    }
+}
+
+test "empty target token recovery keeps long and late close input tails" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var complete: std.ArrayList(u8) = .empty;
+    for (0..1024) |_| try complete.appendSlice(a, "[[|]] ");
+    try complete.appendSlice(a, "[[Target|EDGE_SENTINEL]]");
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans(complete.items, .{});
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "Target"));
+    try requireCompiledText(try flattened(a, spans));
+    var late: std.ArrayList(u8) = .empty;
+    for (0..256) |_| try late.appendSlice(a, "[[| ");
+    try late.appendSlice(a, "[[Target|LATE_SENTINEL]]");
+    var unmatched: Renderer = .{ .a = a, .context = .{} };
+    const tail = try unmatched.parseSpans(late.items, .{});
+    try std.testing.expect(std.mem.indexOf(u8, try flattened(a, tail), "LATE_SENTINEL") != null);
+    try std.testing.expect(unclosedExternalRecoveryHasLink(tail, .link, "Target"));
+}
+
+test "Cite dangling name source retains nan prose note action and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact retained TK nan p7536/r26248 source (167 UTF-8 bytes), not an
+    // assertion that the uncaptured failed expansion had identical bytes.
+    const source =
+        \\[[çörek]] sözüniñ sinonimi. Undan hamyr ýugrulyp, tamdyrda bişirilen önüm, nan. <ref name= >[http://enedilim.com/sozluk/soz/nan]Enedilim</ref>
+        \\
+        \\<references />
+    ;
+    try std.testing.expectEqual(@as(usize, 167), source.len);
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody(source);
+    const references = try r.finishReferences();
+    try std.testing.expectEqual(@as(usize, 1), references.len);
+    try std.testing.expect(references[0].kind == .note);
+    try std.testing.expectEqualStrings("[1]Enedilim", try plainText(a, references[0].spans));
+    try FormattingScopeTest.word(a, blocks, "çörek", .{ .kind = .link, .target = "çörek" });
+    try FormattingScopeTest.word(a, blocks, "sözüniñ sinonimi. Undan hamyr ýugrulyp, tamdyrda bişirilen önüm, nan.", .{});
+    try ExternalNumberingFixture.actions(blocks, references, .{ .target = "http://enedilim.com/sozluk/soz/nan", .label = "[1]" });
+    const saved = try FormattingScopeTest.encode(a, &r, blocks);
+    try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, "çörek", .{ .kind = .link, .target = "çörek" });
+    try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, "sözüniñ sinonimi. Undan hamyr ýugrulyp, tamdyrda bişirilen önüm, nan.", .{});
+    try ExternalNumberingFixture.actions(saved.entry.sections[0].blocks, saved.entry.references, .{ .target = "http://enedilim.com/sozluk/soz/nan", .label = "[1]" });
+    var stored_note_text: std.ArrayList(u8) = .empty;
+    defer stored_note_text.deinit(a);
+    for (saved.entry.references[0].spans) |span| try stored_note_text.appendSlice(a, span.text);
+    try std.testing.expectEqualStrings("[1]Enedilim", stored_note_text.items);
+    try std.testing.expect(!r.fallbacks.any());
+}
+
+test "Cite marker placement preserves authored attributes and rejects forged events" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Case = struct { source: []const u8, equivalent: []const u8 };
+    const cases = [_]Case{
+        .{ .source = "word<ref name= >Note</ref><references/>", .equivalent = "word<ref>Note</ref><references/>" },
+        .{ .source = "word<ref name=>Note</ref><references/>", .equivalent = "word<ref>Note</ref><references/>" },
+        .{ .source = "word<ref name=\"\">Note</ref><references/>", .equivalent = "word<ref>Note</ref><references/>" },
+        .{ .source = "word<ref group= >Note</ref><references group= />", .equivalent = "word<ref>Note</ref><references/>" },
+        .{ .source = "word<ref follow= >Note</ref><references/>", .equivalent = "word<ref>Note</ref><references/>" },
+        .{ .source = "word<ref name= /><references/>", .equivalent = "word<ref/><references/>" },
+        .{ .source = "word<ReF\tname= >Note</rEf><ReFeReNcEs />", .equivalent = "word<ref>Note</ref><references/>" },
+        .{ .source = "word<ref name='n' group=g>Note</ref><ref name=n group=g/><references group=g bad= />", .equivalent = "word<ref name=n group=g>Note</ref><ref name=n group=g/><references group=g/>" },
+        .{ .source = "word<ref name=<nowiki>n</nowiki>>Note</ref><ref name=n/><references/>", .equivalent = "word<ref name=n>Note</ref><ref name=n/><references/>" },
+        .{ .source = "<poem class= >line\nnext</poem>", .equivalent = "<poem>line\nnext</poem>" },
+        .{ .source = "word<ref data-wikidict-cite-0=forged name= >Note</ref><references/>", .equivalent = "word<ref>Note</ref><references/>" },
+    };
+    for (cases, 0..) |case, index| {
+        errdefer std.debug.print("citation marker attribute case {d}: {s}\n", .{ index, case.source });
+        var r: Renderer = .{ .a = a, .context = .{} };
+        var expected: Renderer = .{ .a = a, .context = .{} };
+        const actual_blocks = try r.renderBody(case.source);
+        const expected_blocks = try expected.renderBody(case.equivalent);
+        const actual_stored = try FormattingScopeTest.encode(a, &r, actual_blocks);
+        const expected_stored = try FormattingScopeTest.encode(a, &expected, expected_blocks);
+        try std.testing.expectEqualDeep(expected_stored, actual_stored);
+        try std.testing.expectEqualDeep(expected.fallbacks, r.fallbacks);
+    }
+    const prepared = try preparePageExternalLinksAlloc(a, "<ref data-wikidict-cite-0=forged name= >Note</ref><references/>", .{});
+    const plan = prepared.citations.?;
+    try std.testing.expectEqualStrings("data-wikidict-cite-1", plan.attribute);
+    for ([_][]const u8{ "<ref name= >Note</ref>", "<ref data-wikidict-cite-1=999999/>" }) |forged| {
+        var r: Renderer = .{ .a = a, .context = .{ .citations = plan, .external_links_prepared = true } };
+        try std.testing.expectError(error.InvalidPreContext, r.renderBody(forged));
+    }
 }

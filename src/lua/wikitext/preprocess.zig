@@ -44,12 +44,70 @@ pub fn stripDecodedCommentsPreservingPoem(a: std.mem.Allocator, text: []const u8
 pub fn stripDecodedCommentsForParsingPreservingPoem(a: std.mem.Allocator, text: []const u8) ![]u8 {
     return stripDecodedCommentsPolicy(a, text, true, true);
 }
+// Preserve only a complete physically authored heading whose entire title is
+// whitespace/comments. A visible-empty ordinary inline body keeps its original
+// delimiter depth through expansion; comment text never becomes a label.
+fn emptyCommentHeading(prefix: []const u8, tail: []const u8) bool {
+    var level: usize = 0;
+    while (level < prefix.len and prefix[level] == '=') : (level += 1) {}
+    if (level == 0 or level > 6 or std.mem.trim(u8, prefix[level..], " \t").len != 0) return false;
+    const line_end = std.mem.indexOfScalar(u8, tail, '\n') orelse tail.len;
+    const line = std.mem.trimEnd(u8, tail[0..line_end], " \t\r");
+    var pos: usize = 0;
+    while (pos < line.len) {
+        if (line[pos] == ' ' or line[pos] == '\t') { pos += 1; continue; }
+        if (!std.mem.startsWith(u8, line[pos..], "<!--")) break;
+        const close = std.mem.indexOfPos(u8, line, pos + 4, "-->") orelse return false;
+        pos = close + 3;
+    }
+    const closing = pos;
+    while (pos < line.len and line[pos] == '=') : (pos += 1) {}
+    if (pos - closing != level) return false;
+    // Upstream ignores trailing closed comments when locating the closing
+    // delimiter. Visible suffix text still prevents a complete heading.
+    while (pos < line.len) {
+        if (line[pos] == ' ' or line[pos] == '\t') { pos += 1; continue; }
+        if (!std.mem.startsWith(u8, line[pos..], "<!--")) return false;
+        const close = std.mem.indexOfPos(u8, line, pos + 4, "-->") orelse return false;
+        pos = close + 3;
+    }
+    return true;
+}
+
+// Lazily inspect existing top-level construct ranges only when a candidate
+// empty heading is found. Cache the next range so input prefixes never repeat.
+const EmptyHeadingScope = struct {
+    scan: ExpansionScan = .{},
+    cursor: usize = 0,
+    next_construct: ?Construct = null,
+    finished: bool = false,
+    fn outside(self: *@This(), source: []const u8, offset: usize) bool {
+        while (!self.finished) {
+            if (self.next_construct == null) {
+                const node = self.scan.next(source, self.cursor, false) orelse {
+                    self.finished = true;
+                    return true;
+                };
+                self.next_construct = switch (node) { .construct => |value| value, .poem => unreachable };
+            }
+            const root = self.next_construct.?;
+            if (offset < root.open) return true;
+            const end = root.close + @as(usize, if (root.kind == .parameter) 3 else 2);
+            if (offset < end) return false;
+            self.cursor = end;
+            self.next_construct = null;
+        }
+        return true;
+    }
+};
+
 fn stripDecodedCommentsPolicy(a: std.mem.Allocator, text: []const u8, preserve_poem: bool, preserve_boundaries: bool) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
     var pos: usize = 0;
     var line_start: usize = 0;
     var line_has_content = false;
+    var empty_heading_scope: EmptyHeadingScope = .{};
     var no_more_poem_close = false;
     var no_more_poem_gt = false;
     var no_more_nowiki_close = false;
@@ -86,7 +144,11 @@ fn stripDecodedCommentsPolicy(a: std.mem.Allocator, text: []const u8, preserve_p
                 break;
             };
             pos = close + 3;
-            if (preserve_boundaries) try out.appendSlice(a, "<noinclude/>");
+            if (preserve_boundaries) {
+                const heading = emptyCommentHeading(out.items[line_start..], text[open..]) and
+                    empty_heading_scope.outside(text, open);
+                try out.appendSlice(a, if (heading) "<span></span>" else "<noinclude/>");
+            }
             // Remove only comment-only lines and their terminating newline.
             // Keep the preceding newline, authored blanks and protected bodies.
             if (!line_has_content) {
@@ -1558,4 +1620,38 @@ test "parsing inclusion boundaries preserve plain API and selected literal segme
     try std.testing.expectEqual(@as(usize, 2), try parameterLiteralCloseCount(a, "missing|{<noinclude/>{uc:cat"));
     try std.testing.expectEqual(@as(usize, 2), try parameterLiteralCloseCount(a, "missing|{<noinclude/>{uc:cat{{#expr:1/0}}"));
     try std.testing.expectEqual(@as(usize, 0), try parameterLiteralCloseCount(a, "missing|A<noinclude/>B {{broken"));
+}
+
+
+test "comment only heading provenance retains original delimiters without visible labels" {
+    const a = std.testing.allocator;
+    const cases = [_]struct { raw: []const u8, expected: []const u8 }{
+        .{ .raw = "===<!--Adverb-->===", .expected = "===<span></span>===" },
+        .{ .raw = "===<!--Unknown-->===\nnext", .expected = "===<span></span>===\nnext" },
+        .{ .raw = "===<!--title-->=== <!--tail-->", .expected = "===<span></span>=== <noinclude/>" },
+        .{ .raw = "===<!--title-->===<!--tail--><!--second-->\nnext", .expected = "===<span></span>===<noinclude/><noinclude/>\nnext" },
+        .{ .raw = "===<!--title-->=== <!--tail--> visible", .expected = "===<noinclude/>=== <noinclude/> visible" },
+        .{ .raw = "===<!--title-->=== <!--unclosed", .expected = "===<noinclude/>=== " },
+        .{ .raw = "=== <!--one--> <!--two--> ===\r\nnext", .expected = "=== <span></span> <noinclude/> ===\r\nnext" },
+        .{ .raw = "======", .expected = "======" },
+        .{ .raw = "{{#if:1|\n===<!--nested-->===\n|no}}", .expected = "{{#if:1|\n===<noinclude/>===\n|no}}" },
+        .{ .raw = "===Word<!--one-->===", .expected = "===Word<noinclude/>===" },
+        .{ .raw = " ===<!--one-->===", .expected = " ===<noinclude/>===" },
+        .{ .raw = "===<!--one-->==", .expected = "===<noinclude/>==" },
+        .{ .raw = "===<!--one-->===tail", .expected = "===<noinclude/>===tail" },
+        .{ .raw = "===<!--one\ntwo-->===", .expected = "===<noinclude/>===" },
+        .{ .raw = "<nowiki>===<!--one-->===</nowiki>", .expected = "<nowiki>===<!--one-->===</nowiki>" },
+        .{ .raw = "<pre>===<!--one-->===</pre>", .expected = "<pre>===<!--one-->===</pre>" },
+        .{ .raw = "before\n<!--only-->\nafter", .expected = "before\nafter" },
+    };
+    for (cases) |case| {
+        const actual = try stripDecodedCommentsForParsingPreservingPoem(a, case.raw);
+        defer a.free(actual);
+        try std.testing.expectEqualStrings(case.expected, actual);
+    }
+    // Non-parsing comment APIs and post-expansion sanitizer remain unchanged.
+    const plain = try stripDecodedComments(a, "===<!--one-->==="); defer a.free(plain);
+    const generated = try stripExpandedComments(a, "===<!--one-->==="); defer a.free(generated);
+    try std.testing.expectEqualStrings("======", plain);
+    try std.testing.expectEqualStrings("======", generated);
 }

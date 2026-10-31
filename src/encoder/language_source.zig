@@ -1082,3 +1082,220 @@ test "corroborated recovery leaves matched table headings in their cell domain" 
         try std.testing.expect(iterator.next() == null);
     }
 }
+
+// This proves an authored lexical subtree, never a language or an owner.
+// Caller must independently establish raw/rendered identity, leading position,
+// a later resolved peer L2, and exclusion of known support/POS outer headings.
+pub fn literalL2Section(section: Section, matcher: ?syntax.ControlMatcher) bool {
+    if (section.hyphen_marker) return false;
+    const first_end = std.mem.indexOfScalar(u8, section.source, '\n') orelse return false;
+    const first_line = std.mem.trimEnd(u8, section.source[0..first_end], "\r");
+    const outer = literalSubtreeHeading(first_line, matcher) orelse return false;
+    return outer.level == 2 and std.mem.eql(u8, outer.title, section.heading) and
+        std.mem.indexOfAny(u8, outer.title, "<>{}[]|=\r\n") == null;
+}
+
+pub fn authoredL2LexicalSubtree(section: Section, matcher: ?syntax.ControlMatcher) bool {
+    if (!literalL2Section(section, matcher)) return false;
+    const first_end = std.mem.indexOfScalar(u8, section.source, '\n').?;
+
+    var balance: Balance = .{};
+    var cursor = first_end + 1;
+    var under_subheading = false;
+    var found_definition = false;
+    while (cursor < section.source.len) {
+        const end = std.mem.indexOfScalarPos(u8, section.source, cursor, '\n') orelse section.source.len;
+        const line = std.mem.trimEnd(u8, section.source[cursor..end], "\r");
+        const active = !balance.isOpen() and cursor >= balance.protected_until;
+        if (active and line.len != 0 and line[0] == '=') {
+            const heading = literalSubtreeHeading(line, matcher) orelse return false;
+            if (heading.level <= 2) return false;
+            under_subheading = true;
+        } else if (active and under_subheading and line.len != 0 and line[0] == '#') {
+            var body_start: usize = 0;
+            while (body_start < line.len and line[body_start] == '#') body_start += 1;
+            // Only a top-level numbered meaning is evidence; examples and
+            // nested list markers cannot supply the missing lexical subtree.
+            if (body_start == 1 and body_start < line.len and line[body_start] != ':' and line[body_start] != '*') {
+                if (nonemptyAuthoredDefinition(line[body_start..])) found_definition = true;
+            }
+        }
+        balance.update(section.source, cursor, end);
+        cursor = if (end == section.source.len) end else end + 1;
+    }
+    // One whole-source provenance check rejects failed template/link roots
+    // without rescanning every heading/meaning prefix. Balance above prevents
+    // opaque/table bodies from supplying evidence. A later unmatched opaque
+    // tail does not erase earlier evidence; its normal compile diagnostic stays.
+    return found_definition and !balance.isOpen() and
+        outsideNestedOrOpaque(section.source, section.source.len);
+}
+
+fn literalSubtreeHeading(line: []const u8, matcher: ?syntax.ControlMatcher) ?ParsedHeading {
+    // Reject mismatched or excessive equals depth, even if the ordinary parser
+    // can recover it. No leading indentation is allowed in this authored proof.
+    if (line.len == 0 or line[0] != '=') return null;
+    var opening: usize = 0;
+    while (opening < line.len and line[opening] == '=') opening += 1;
+    const stripped = std.mem.trimEnd(u8, line, " \t");
+    var closing: usize = 0;
+    while (closing < stripped.len and stripped[stripped.len - closing - 1] == '=') closing += 1;
+    if (opening < 2 or opening > 6 or closing != opening or opening * 2 >= stripped.len) return null;
+    const heading = parseHeadingControlled(line, matcher) orelse return null;
+    if (heading.level != opening) return null;
+    const authored_title = std.mem.trim(u8, stripped[opening .. stripped.len - closing], " \t");
+    if (!std.mem.eql(u8, authored_title, heading.title)) return null;
+    return heading;
+}
+
+fn nonemptyAuthoredDefinition(body: []const u8) bool {
+    var rest = std.mem.trim(u8, body, " \t\r");
+    while (std.mem.startsWith(u8, rest, "<!--")) {
+        const close = std.mem.indexOf(u8, rest[4..], "-->") orelse return false;
+        rest = std.mem.trim(u8, rest[4 + close + 3 ..], " \t\r");
+    }
+    // A template-only meaning needs expansion authority, not this raw proof.
+    return rest.len != 0 and !std.mem.startsWith(u8, rest, "{{");
+}
+
+test "authored literal L2 lexical subtrees require active deeper numbered meaning" {
+    // Exact lexical prefix of KW montagne; the caller separately proves the
+    // later Italek peer and raw/rendered identity before isolating this region.
+    const positive = "== Frynkek ==\n=== Leveryans ===\n* IPA: /mɔ̃.taɲ/\n\n=== Hanow ===\n'''montagne''' ''benow'' (''liesplek'': '''[[montagnes]]''')\n# [[menydh]]\n";
+    const region: Section = .{ .heading = "Frynkek", .source = positive };
+    try std.testing.expect(literalL2Section(region, null));
+    try std.testing.expect(authoredL2LexicalSubtree(region, null));
+    // An unclosed nowiki opening is literal; its remainder remains active.
+    // A matched nowiki pair cannot supply the heading or numbered meaning.
+    try std.testing.expect(authoredL2LexicalSubtree(.{ .heading = "Frynkek", .source = positive ++ "<nowiki>\n=== Fake ===\n# active tail" }, null));
+    try std.testing.expect(authoredL2LexicalSubtree(.{ .heading = "Frynkek", .source = "== Frynkek ==\n<nowiki>\n=== Hanow ===\n# active remainder" }, null));
+    try std.testing.expect(!authoredL2LexicalSubtree(.{ .heading = "Frynkek", .source = "== Frynkek ==\n<nowiki>\n=== Hanow ===\n# protected remainder\n</nowiki>" }, null));
+    try std.testing.expect(authoredL2LexicalSubtree(.{ .heading = "Frynkek", .source = "== Frynkek ==\r\n=== Hanow ===\r\n# [[menydh]]" }, null));
+    try std.testing.expect(!literalL2Section(.{ .heading = "Italek", .source = positive }, null));
+    try std.testing.expect(!literalL2Section(.{ .heading = "Frynkek", .source = positive, .hyphen_marker = true }, null));
+    const negatives = [_][]const u8{
+        "== Frynkek ==\n# [[menydh]]\n", // Direct L2 meaning is insufficient.
+        "== Frynkek ==\n=== Hanow ===\n#\n",
+        "== Frynkek ==\n=== Hanow ===\n# <!-- empty -->\n",
+        "== Frynkek ==\n=== Hanow ===\n## [[menydh]]\n",
+        "== Frynkek ==\n=== Hanow ===\n#: [[menydh]]\n",
+        "== Frynkek ==\n=== Hanow ===\n#* [[menydh]]\n",
+        "== Frynkek ==\n<nowiki>\n=== Hanow ===\n# [[menydh]]\n</nowiki>\n",
+        "== Frynkek ==\n<pre>\n=== Hanow ===\n# [[menydh]]\n</pre>\n",
+        "== Frynkek ==\n<!--\n=== Hanow ===\n# [[menydh]]\n-->\n",
+        "== Frynkek ==\n{|\n|\n=== Hanow ===\n# [[menydh]]\n|}\n",
+        "== Frynkek ==\n{{example|\n=== Hanow ===\n# [[menydh]]\n}}\n",
+        "== Frynkek ==\n{{{example|\n=== Hanow ===\n# [[menydh]]\n}}}\n",
+        "== Frynkek ==\n{{unclosed|\n=== Hanow ===\n# [[menydh]]\n",
+        "== Frynkek ==\n=== Hanow ===\n# {{meaning}}\n",
+        "== Frynkek ==\n=== Hanow ==\n# [[menydh]]\n",
+        "== Frynkek ===\n=== Hanow ===\n# [[menydh]]\n",
+        "=== Frynkek ===\n==== Hanow ====\n# [[menydh]]\n",
+        "== Frynkek ==\n=== Hanow ===\n# [[menydh]]\n== Italek ==\n# other\n",
+        "== Frynkek ==\n=== Hanow ===\n# [[menydh]]\n= Other =\n# other\n",
+        // An active deeper heading cannot borrow its sole definition from an opaque domain.
+        "== Frynkek ==\n=== Hanow ===\n<nowiki>\n# [[menydh]]\n</nowiki>\n",
+        "== Frynkek ==\n=== Hanow ===\n<!--\n# [[menydh]]\n-->\n",
+        "== Frynkek ==\n=== Hanow ===\n{|\n|\n# [[menydh]]\n|}\n",
+        "== Frynkek ==\n=== Hanow ===\n{{example|\n# [[menydh]]\n}}\n",
+    };
+    for (negatives) |source| {
+        try std.testing.expect(!authoredL2LexicalSubtree(.{ .heading = "Frynkek", .source = source }, null));
+    }
+}
+
+// A same-page language cross-reference can corroborate an unresolved peer
+// boundary. It never supplies that peer's owner. Scan each adjacent region
+// once; callers must independently bind raw/rendered headings and page title.
+pub fn peerLanguageReferenceCode(source: []const u8, label: []const u8, title: []const u8, filter: Iterator.MarkerFilter) ?[]const u8 {
+    if (label.len == 0 or title.len == 0 or std.mem.indexOfAny(u8, title, "[]|:#<>\r\n") != null) return null;
+    // Block containers can turn an otherwise active-looking row into quoted
+    // or embedded content. Conservatively leave those pages to existing rules.
+    var protection: ProtectionScan = .{};
+    var token: usize = 0;
+    while (token < source.len) {
+        if (protection.protectedEnd(source, token)) |end| { token = end; continue; }
+        if (source[token] == '<') if (protection.tagAt(source, token)) |tag| {
+            inline for (.{ "blockquote", "q", "div", "table", "ul", "ol", "dl", "li", "dd", "dt", "p", "poem", "pre" }) |name|
+                if (tag.is(name)) return null;
+            token = tag.end;
+            continue;
+        };
+        token += 1;
+    }
+    var balance: Balance = .{};
+    var cursor: usize = 0;
+    var found: ?[]const u8 = null;
+    while (cursor < source.len) {
+        const end = std.mem.indexOfScalarPos(u8, source, cursor, '\n') orelse source.len;
+        if (!balance.isOpen() and cursor >= balance.protected_until) {
+            if (peerLanguageRowCode(std.mem.trimEnd(u8, source[cursor..end], "\r"), label, title)) |code| {
+                if (filter.accepts(filter.ctx, code)) {
+                    if (found) |prior| if (!std.mem.eql(u8, prior, code)) return null;
+                    found = code;
+                }
+            }
+        }
+        balance.update(source, cursor, end);
+        cursor = if (end < source.len) end + 1 else end;
+    }
+    if (balance.isOpen() or !outsideNestedOrOpaque(source, source.len)) return null;
+    return found;
+}
+
+fn peerLanguageRowCode(line: []const u8, label: []const u8, title: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, line, "* ")) return null;
+    var rest = line[2..];
+    if (!std.mem.startsWith(u8, rest, label)) return null;
+    rest = rest[label.len..];
+    if (!std.mem.startsWith(u8, rest, ": [[")) return null;
+    rest = rest[4..];
+    if (!std.mem.startsWith(u8, rest, title)) return null;
+    rest = rest[title.len..];
+    if (!std.mem.startsWith(u8, rest, "]] ([[:")) return null;
+    rest = rest[7..];
+    const colon = std.mem.indexOfScalar(u8, rest, ':') orelse return null;
+    const code = rest[0..colon];
+    if (code.len == 0) return null;
+    for (code) |byte| if (!(byte >= 'a' and byte <= 'z') and byte != '-') return null;
+    rest = rest[colon + 1..];
+    if (!std.mem.startsWith(u8, rest, title)) return null;
+    rest = rest[title.len..];
+    if (!std.mem.startsWith(u8, rest, "|")) return null;
+    rest = rest[1..];
+    if (!std.mem.endsWith(u8, rest, "]])") or !std.mem.eql(u8, rest[0 .. rest.len - 3], code)) return null;
+    return code;
+}
+
+test "peer language references reject protected mismatched and long ordinary input" {
+    const Accept = struct {
+        fn accepts(_: ?*const anyopaque, code: []const u8) bool { return std.mem.eql(u8, code, "ss"); }
+    };
+    const filter: Iterator.MarkerFilter = .{ .ctx = null, .accepts = Accept.accepts };
+    const row = "* IsiSwazi: [[sawubona]] ([[:ss:sawubona|ss]])\n";
+    try std.testing.expectEqualStrings("ss", peerLanguageReferenceCode("==IsiZulu==\n" ++ row, "IsiSwazi", "sawubona", filter).?);
+    inline for (.{
+        "* IsiSwazi: [[other]] ([[:ss:sawubona|ss]])\n",
+        "* IsiSwazi: [[sawubona]] ([[:ss:other|ss]])\n",
+        "* IsiSwazi: [[sawubona]] ([[:commons:sawubona|commons]])\n",
+        "* IsiSwazi: [[sawubona]] ([[:ss:sawubona|Swati]])\n",
+        "* IsiSwazi extra: [[sawubona]] ([[:ss:sawubona|ss]])\n",
+        "* XIsiSwazi: [[sawubona]] ([[:ss:sawubona|ss]])\n",
+        "* [[sawubona]] ([[:ss:sawubona|ss]])\n",
+        "* IsiSwazi: [[sawubona]] ([[:ss:sawubona|ss]]) prose\n",
+        " " ++ row, ":" ++ row, "*" ++ row,
+        "<!--\n" ++ row ++ "-->\n",
+        "<nowiki>\n" ++ row ++ "</nowiki>\n",
+        "<pre>\n" ++ row ++ "</pre>\n",
+        "<blockquote>\n" ++ row ++ "</blockquote>\n",
+        "<div class=quote>\n" ++ row ++ "</div>\n",
+        "{|\n|\n" ++ row ++ "|}\n",
+        "{{quote|\n" ++ row ++ "}}\n",
+        "{{unclosed|\n" ++ row,
+        "[[unclosed|\n" ++ row,
+    }) |source| try std.testing.expect(peerLanguageReferenceCode(source, "IsiSwazi", "sawubona", filter) == null);
+    var ordinary: std.ArrayList(u8) = .empty;
+    defer ordinary.deinit(std.testing.allocator);
+    for (0..4096) |_| try ordinary.appendSlice(std.testing.allocator, "ordinary prose with [[links]] and * non-row text\n");
+    try std.testing.expect(peerLanguageReferenceCode(ordinary.items, "IsiSwazi", "sawubona", filter) == null);
+}
