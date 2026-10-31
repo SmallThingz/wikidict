@@ -950,15 +950,31 @@ test "shipped presentation accepts protected literal examples as compiled data" 
     }
 }
 
-test "reported publication audits malformed external link syntax" {
+test "publication compiles rejected external opener as literal beside its live URL" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     const source = "==English==\n===Noun===\n# A [https://example.test broken link.\n";
-    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", source, null));
+    const encoded = try compileAlloc(a, "entry", .language, "English", "en", source, null);
+    const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 2), decoded.entry.sections.len);
+    try std.testing.expectEqualStrings("English", decoded.entry.sections[0].title);
+    try std.testing.expectEqual(@as(usize, 0), decoded.entry.sections[0].blocks.len);
+    try std.testing.expectEqualStrings("Noun", decoded.entry.sections[1].title);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections[1].blocks.len);
+    try std.testing.expectEqual(types.BlockKind.definition, decoded.entry.sections[1].blocks[0].kind);
+    const spans = decoded.entry.sections[1].blocks[0].spans;
+    var visible: std.ArrayList(u8) = .empty;
+    var url = false;
+    for (spans) |span| {
+        try visible.appendSlice(a, span.text);
+        if (span.kind == .external_link and std.mem.eql(u8, span.target, "https://example.test")) url = true;
+    }
+    try std.testing.expectEqualStrings("A [https://example.test broken link.", visible.items);
+    try std.testing.expect(url);
 
     var report: Fallbacks = .{};
-    try std.testing.expectError(error.UncompiledPresentation, compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report));
+    _ = try compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report);
     try std.testing.expect(report.literal_markup);
 }
 
@@ -4376,19 +4392,142 @@ test "closed newline external recovery cannot borrow closure across source domai
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
+    const Check = struct {
+        const Action = struct { text: []const u8, target: []const u8 };
+        fn spans(allocator: A, values: anytype, visible: []const u8, actions: []const Action) !void {
+            var text: std.ArrayList(u8) = .empty;
+            defer text.deinit(allocator);
+            var count: usize = 0;
+            for (values) |span| {
+                try text.appendSlice(allocator, span.text);
+                if (span.kind == .external_link) {
+                    try std.testing.expect(count < actions.len);
+                    try std.testing.expectEqualStrings(actions[count].text, span.text);
+                    try std.testing.expectEqualStrings(actions[count].target, span.target);
+                    count += 1;
+                } else {
+                    try std.testing.expect(span.kind == .text);
+                    try std.testing.expectEqualStrings("", span.target);
+                }
+            }
+            try std.testing.expectEqual(actions.len, count);
+            try std.testing.expectEqualStrings(visible, text.items);
+        }
+        fn rootLiteral(values: anytype, expected: usize) !void {
+            var count: usize = 0;
+            for (values) |span| if (std.mem.eql(u8, span.text, "[") and span.provenance == .protected_literal) { count += 1; };
+            try std.testing.expectEqual(expected, count);
+        }
+    };
+    const single = &[_]Check.Action{.{ .text = "https://example.test", .target = "https://example.test" }};
+    const cases = [_]struct { source: []const u8, body: []const u8, visible: []const u8, reference: bool = true, actions: []const Check.Action = single }{
+        .{ .source = "word<ref>[https://example.test Alpha\nBeta</ref>", .body = "[https://example.test Alpha\nBeta", .visible = "[https://example.test Alpha Beta" },
+        .{ .source = "word [https://example.test Alpha\nBeta", .body = "word [https://example.test Alpha\nBeta", .visible = "word [https://example.test Alpha Beta", .reference = false },
+        .{ .source = "word<ref>[https://outer.test Alpha\n[https://inner.test Beta]</ref>", .body = "[https://outer.test Alpha\n[https://inner.test Beta]", .visible = "[https://outer.test Alpha Beta", .actions = &.{ .{ .text = "https://outer.test", .target = "https://outer.test" }, .{ .text = "Beta", .target = "https://inner.test" } } },
+        .{ .source = "word<ref>[https://example.test Alpha\n<nowiki>]</nowiki></ref>", .body = "[https://example.test Alpha\n<nowiki>]</nowiki>", .visible = "[https://example.test Alpha ]" },
+        .{ .source = "word<ref>[https://example.test Alpha\n<span title=']'>Beta</span></ref>", .body = "[https://example.test Alpha\n<span title=']'>Beta</span>", .visible = "[https://example.test Alpha Beta" },
+        .{ .source = "word<ref>[https://example.test Alpha\n&#93;</ref>", .body = "[https://example.test Alpha\n&#93;", .visible = "[https://example.test Alpha ]" },
+        .{ .source = "word<ref>[https://example.test Alpha</ref>Beta]", .body = "[https://example.test Alpha", .visible = "[https://example.test Alpha" },
+    };
+    for (cases, 0..) |case, index| {
+        errdefer std.debug.print("external recovery domain case {d}: {s}\n", .{ index, case.source });
+        var report: Fallbacks = .{};
+        const encoded = try compileReportedAlloc(a, "entry", .language, "English", "en", case.source, null, &report);
+        try std.testing.expectEqualDeep(Fallbacks{ .literal_markup = true }, report);
+        const stored = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, stored));
+        try std.testing.expectEqual(@as(usize, if (case.reference) 1 else 0), stored.entry.references.len);
+        if (case.reference) {
+            try std.testing.expectEqual(@as(usize, 1), stored.entry.references[0].number);
+            try Check.spans(a, stored.entry.references[0].spans, case.visible, case.actions);
+        } else {
+            try std.testing.expectEqual(@as(usize, 1), stored.entry.sections.len);
+            try std.testing.expectEqual(@as(usize, 1), stored.entry.sections[0].blocks.len);
+            try Check.spans(a, stored.entry.sections[0].blocks[0].spans, case.visible, case.actions);
+        }
+        var markers: usize = 0;
+        var outside: std.ArrayList(u8) = .empty;
+        for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try outside.appendSlice(a, span.text);
+            if (span.role == .reference) {
+                markers += 1;
+                try std.testing.expectEqualStrings("[1]", span.text);
+                try std.testing.expectEqualStrings("#reference-1", span.target);
+                try std.testing.expect(span.superscript);
+            } else if (case.reference) {
+                try std.testing.expect(span.kind == .text);
+                try std.testing.expectEqualStrings("", span.target);
+            }
+        };
+        try std.testing.expectEqual(@as(usize, if (case.reference) 1 else 0), markers);
+        if (case.reference) try std.testing.expectEqualStrings(if (index == cases.len - 1) "word[1]Beta]" else "word[1]", outside.items);
+        var raw: compiler.Renderer = .{ .a = a, .context = .{}, .in_reference = case.reference };
+        const raw_spans = try raw.parseSpans(case.body, .{});
+        try Check.rootLiteral(raw_spans, 1);
+        try std.testing.expect(raw.fallbacks.literal_markup);
+        var validated: Fallbacks = .{};
+        try validateSpans(a, raw_spans, &validated);
+    }
+    // A protocol with no address remains unresolved active syntax.
+    var invalid_report: Fallbacks = .{};
+    try std.testing.expectError(error.UncompiledPresentation, compileReportedAlloc(a, "entry", .language, "English", "en", "word<ref>[https:// Alpha\nBeta]</ref>", null, &invalid_report));
+    try std.testing.expect(invalid_report.literal_markup);
+    // A valid label owns its complete same-line raw domain before formatting
+    // is parsed. Local formatting fragments must not invent unmatched openers.
     for ([_][]const u8{
-        "word<ref>[https://example.test Alpha\nBeta</ref>",
-        "word [https://example.test Alpha\nBeta",
-        "word<ref>[https:// Alpha\nBeta]</ref>",
-        "word<ref>[https://outer.test Alpha\n[https://inner.test Beta]</ref>",
-        "word<ref>[https://example.test Alpha\n<nowiki>]</nowiki></ref>",
-        "word<ref>[https://example.test Alpha\n<span title=']'>Beta</span></ref>",
-        "word<ref>[https://example.test Alpha\n&#93;</ref>",
+        "word<ref>[https://example.test <b>Label</b>]</ref>",
+        "word<ref><b>[https://example.test Label</b>]</ref>",
     }) |source| {
         var report: Fallbacks = .{};
-        try std.testing.expectError(error.UncompiledPresentation, compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report));
-        try std.testing.expect(report.literal_markup);
+        const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report);
+        try std.testing.expect(!report.any());
+        const stored = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+        try std.testing.expectEqual(@as(usize, 1), stored.entry.references.len);
+        try Check.spans(a, stored.entry.references[0].spans, "Label", &.{.{ .text = "Label", .target = "https://example.test" }});
+        for (stored.entry.references[0].spans) |span| if (span.kind == .external_link) { try std.testing.expect(span.bold); };
     }
+    // Literal recovery preserves styles and unrelated actions within their scopes.
+    var styled_report: Fallbacks = .{};
+    const styled_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", "''word''<ref>[https://example.test ''Alpha''\nBeta</ref> tail [[Target|label]]", null, &styled_report);
+    try std.testing.expectEqualDeep(Fallbacks{ .literal_markup = true }, styled_report);
+    const styled = try codec.decodeAlloc(a, styled_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualSlices(u8, styled_bytes, try codec.encodeAlloc(a, styled));
+    try std.testing.expectEqual(@as(usize, 1), styled.entry.references.len);
+    try Check.spans(a, styled.entry.references[0].spans, "[https://example.test Alpha Beta", single);
+    var alpha = false;
+    var beta = false;
+    for (styled.entry.references[0].spans) |span| {
+        if (std.mem.eql(u8, span.text, "Alpha")) { alpha = true; try std.testing.expect(span.italic); }
+        if (std.mem.eql(u8, std.mem.trim(u8, span.text, " "), "Beta")) { beta = true; try std.testing.expect(!span.italic); }
+        if (span.kind == .external_link) try std.testing.expect(!span.italic);
+    }
+    try std.testing.expect(alpha and beta);
+    var targets: usize = 0;
+    var styled_markers: usize = 0;
+    var styled_word = false;
+    var styled_outside: std.ArrayList(u8) = .empty;
+    defer styled_outside.deinit(a);
+    for (styled.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try styled_outside.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.text, "word")) { styled_word = true; try std.testing.expect(span.italic); }
+        if (span.kind == .link and span.role != .reference) {
+            targets += 1;
+            try std.testing.expectEqualStrings("Target", span.target);
+            try std.testing.expectEqualStrings("label", span.text);
+            try std.testing.expect(!span.italic);
+        }
+        if (span.role == .reference) {
+            styled_markers += 1;
+            try std.testing.expectEqualStrings("[1]", span.text);
+            try std.testing.expectEqualStrings("#reference-1", span.target);
+            try std.testing.expect(span.superscript and !span.italic);
+        }
+    };
+    try std.testing.expect(styled_word);
+    try std.testing.expectEqualStrings("word[1] tail label", styled_outside.items);
+    try std.testing.expectEqual(@as(usize, 1), styled_markers);
+    try std.testing.expectEqual(@as(usize, 1), targets);
     // Valid single-line labels still own their whole label; LF after their
     // already consumed closer is ordinary following reference prose.
     var valid_report: Fallbacks = .{};
@@ -4406,9 +4545,12 @@ test "closed newline external recovery cannot borrow closure across source domai
     try split.inlineText("[https://example.test Alpha\n", .{}, 0);
     try split.inlineText("Beta]", .{}, 0);
     var split_report: Fallbacks = .{};
-    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, split.spans.items, &split_report));
-    try std.testing.expect(split_report.literal_markup);
-    // The next opener bounds each failed scan; only the last root closes.
+    try validateSpans(a, split.spans.items, &split_report);
+    try Check.rootLiteral(split.spans.items, 1);
+    try Check.spans(a, split.spans.items, "[https://example.test Alpha Beta]", single);
+    try std.testing.expect(split.fallbacks.literal_markup);
+    // Each authored newline bounds its own unmatched root. The final closer
+    // remains literal and cannot turn earlier prose into a bracketed label.
     var repeated: std.ArrayList(u8) = .empty;
     defer repeated.deinit(a);
     for (0..128) |_| try repeated.appendSlice(a, "[https://example.test Alpha\n");
@@ -4419,9 +4561,26 @@ test "closed newline external recovery cannot borrow closure across source domai
     for (repeated_spans) |span| if (span.provenance == .protected_literal and std.mem.eql(u8, span.text, "[")) {
         proved += 1;
     };
-    try std.testing.expectEqual(@as(usize, 1), proved);
+    try std.testing.expectEqual(@as(usize, 128), proved);
     var repeated_report: Fallbacks = .{};
-    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, repeated_spans, &repeated_report));
+    try validateSpans(a, repeated_spans, &repeated_report);
+    var repeated_expected: std.ArrayList(u8) = .empty;
+    defer repeated_expected.deinit(a);
+    var repeated_actions: [128]Check.Action = undefined;
+    for (&repeated_actions) |*action| {
+        action.* = single[0];
+        try repeated_expected.appendSlice(a, "[https://example.test Alpha ");
+    }
+    try repeated_expected.append(a, ']');
+    try Check.spans(a, repeated_spans, repeated_expected.items, &repeated_actions);
+    const repeated_source = try std.fmt.allocPrint(a, "word<ref>{s}</ref>", .{repeated.items});
+    var repeated_document_report: Fallbacks = .{};
+    const repeated_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", repeated_source, null, &repeated_document_report);
+    try std.testing.expectEqualDeep(Fallbacks{ .literal_markup = true }, repeated_document_report);
+    const repeated_stored = try codec.decodeAlloc(a, repeated_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualSlices(u8, repeated_bytes, try codec.encodeAlloc(a, repeated_stored));
+    try std.testing.expectEqual(@as(usize, 1), repeated_stored.entry.references.len);
+    try Check.spans(a, repeated_stored.entry.references[0].spans, repeated_expected.items, &repeated_actions);
     // Source case19 empty [] references and a bare URL plus authored ] remain
     // separate from the one diagnosed closed-newline citation.
     var extras_report: Fallbacks = .{};
@@ -4549,4 +4708,31 @@ test "invalid title literal delimiters do not authorize deferred or parsed HTML 
     try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "entry", .language, "English", "en", "[[<span>{{missing}}</span>]]", null));
     try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "[[<li'>word</li>]]", null));
     _ = try compileAlloc(a, "entry", .language, "English", "en", "[[&lt;span lang=ar&gt;حاسوب&lt;/span&gt;]]", null);
+}
+
+
+test "publication roundtrip keeps unmatched external opener children at LF and EOF" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "", "\nnext [[C]]" }) |tail| {
+        const source = try std.fmt.allocPrint(a, "==English==\n===Noun===\n# Before [https://example.test unfinished ''kept'' [[B]] tail{s}", .{tail});
+        const encoded = try compileAlloc(a, "entry", .language, "English", "en", source, null);
+        const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+        var url = false;
+        var child = false;
+        var italic = false;
+        var following = tail.len == 0;
+        for (decoded.entry.sections) |section| for (section.blocks) |block_value| for (block_value.spans) |span| {
+            if (span.kind == .external_link and std.mem.eql(u8, span.target, "https://example.test")) url = true;
+            if (span.kind == .link and std.mem.eql(u8, span.target, "B")) child = true;
+            if (span.kind == .link and std.mem.eql(u8, span.target, "C")) following = true;
+            if (std.mem.eql(u8, span.text, "kept")) italic = span.italic;
+        };
+        try std.testing.expect(url and child and italic and following);
+    }
+    for ([_][]const u8{ "[https:// unfinished", "[https:// label]" }) |invalid| {
+        const source = try std.fmt.allocPrint(a, "==English==\n===Noun===\n# {s}", .{invalid});
+        try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", source, null));
+    }
 }

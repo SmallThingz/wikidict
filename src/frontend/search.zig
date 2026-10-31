@@ -326,14 +326,15 @@ pub fn find(a: std.mem.Allocator, db: *store.Store, query: []const u8) !?usize {
     return task.exact_match;
 }
 
-fn testStore(a: std.mem.Allocator, titles: []const []const u8) !struct { path: []u8, db: store.Store } {
+fn testStore(a: std.mem.Allocator, temp_sub_path: []const u8, titles: []const []const u8) !struct { path: []u8, db: store.Store } {
     const enc = @import("blob_encoder");
     var records = try a.alloc(enc.blob_format.RecordInput, titles.len);
     defer a.free(records);
     for (titles, 0..) |title, i| records[i] = .{ .title = title, .payload = "" };
     const bytes = try enc.blob_format.buildAlloc(a, .citations, "", records);
     defer a.free(bytes);
-    const path = try std.fmt.allocPrint(a, ".zig-cache/tmp/search-{d}.wikblb", .{std.Io.Clock.awake.now(std.testing.io).toNanoseconds()});
+    const path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/search.wikblb", .{temp_sub_path});
+    errdefer a.free(path);
     try std.Io.Dir.cwd().createDirPath(std.testing.io, std.fs.path.dirname(path).?);
     try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = bytes });
     return .{ .path = path, .db = .{ .file = try @import("blob_storage").File.open(std.testing.io, a, path), .allocator = a } };
@@ -341,10 +342,11 @@ fn testStore(a: std.mem.Allocator, titles: []const []const u8) !struct { path: [
 
 test "case-insensitive search retains only the best bounded window" {
     const a = std.testing.allocator;
-    var fixture = try testStore(a, &.{ "Apple", "Banana", "aardvark", "alpha", "apricot" });
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var fixture = try testStore(a, &tmp.sub_path, &.{ "Apple", "Banana", "aardvark", "alpha", "apricot" });
     defer {
         fixture.db.file.deinit();
-        std.Io.Dir.cwd().deleteFile(std.testing.io, fixture.path) catch {};
         a.free(fixture.path);
     }
     var task: Task = .{};
@@ -362,10 +364,11 @@ test "case-insensitive search retains only the best bounded window" {
 
 test "exact lookup prefers byte exact and returns first folded collision" {
     const a = std.testing.allocator;
-    var fixture = try testStore(a, &.{ "APPLE", "Apple", "Banana", "apple", "applet" });
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var fixture = try testStore(a, &tmp.sub_path, &.{ "APPLE", "Apple", "Banana", "apple", "applet" });
     defer {
         fixture.db.file.deinit();
-        std.Io.Dir.cwd().deleteFile(std.testing.io, fixture.path) catch {};
         a.free(fixture.path);
     }
     try std.testing.expectEqualStrings("Apple", try fixture.db.titleAt((try find(a, &fixture.db, "Apple")).?));
@@ -376,10 +379,11 @@ test "exact lookup prefers byte exact and returns first folded collision" {
 
 test "early exact lookup removes unfinished folded cache temporary file" {
     const a = std.testing.allocator;
-    var fixture = try testStore(a, &.{ "APPLE", "Banana", "Cedar" });
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var fixture = try testStore(a, &tmp.sub_path, &.{ "APPLE", "Banana", "Cedar" });
     defer {
         fixture.db.file.deinit();
-        std.Io.Dir.cwd().deleteFile(std.testing.io, fixture.path) catch {};
         a.free(fixture.path);
     }
     var temp_path: ?[]u8 = null;
@@ -399,15 +403,11 @@ test "early exact lookup removes unfinished folded cache temporary file" {
 
 test "folded prefix cache persists two bytes per record and filters later queries" {
     const a = std.testing.allocator;
-    var fixture = try testStore(a, &.{ "Apple", "Banana", "aardvark", "alpha", "apricot" });
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var fixture = try testStore(a, &tmp.sub_path, &.{ "Apple", "Banana", "aardvark", "alpha", "apricot" });
     defer {
         fixture.db.file.deinit();
-        const cache = foldedCachePathAlloc(a, fixture.path) catch null;
-        if (cache) |path| {
-            std.Io.Dir.cwd().deleteFile(std.testing.io, path) catch {};
-            a.free(path);
-        }
-        std.Io.Dir.cwd().deleteFile(std.testing.io, fixture.path) catch {};
         a.free(fixture.path);
     }
     var first: Task = .{ .folded_cache_min_records = 0 };

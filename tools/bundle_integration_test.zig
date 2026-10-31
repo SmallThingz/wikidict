@@ -1663,7 +1663,7 @@ fn preprocessingLiteralBoundaryProbe(h: *Harness, pipeline: []const u8, verifier
     try h.require(std.mem.eql(u8, fallback_row.value.object.get("title").?.string, "Boundary entry") and reasons.len == 1 and
         std.mem.eql(u8, reasons[0].string, "literal_markup"), "only the authored orphan closer adds a source diagnostic; literal defaults remain clean");
     try h.require(hasBoundaryDiagnostic(parsed.value), "orphan close publishes one nonaction text diagnostic while CAT and the independent link survive");
-    for ([_][]const u8{"A<noinclude/>B [https://example.test broken link"}, 0..) |body, index| {
+    for ([_][]const u8{"A<noinclude/>B [https:// broken link"}, 0..) |body, index| {
         const refused_dump = try std.fmt.allocPrint(h.a, "{s}/preprocessing-refused-{d}.xml", .{ dir, index });
         const refused_root = try std.fmt.allocPrint(h.a, "{s}/preprocessing-refused-{d}-dictionary", .{ dir, index });
         try writePages(h.io, h.a, refused_dump, &.{.{ .title = "Unrelated unresolved source", .ns = 0, .id = 1, .body = try std.fmt.allocPrint(h.a, "==English==\n# {s}\n", .{body}) }});

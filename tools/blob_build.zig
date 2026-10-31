@@ -3330,7 +3330,7 @@ test "diagnostic seam with nil audit retains real Writer strict guards and prove
     var writer = try encoder.blob_builder.Writer.init(io, a, root);
     defer writer.deinit();
     const job: ExpansionJob = .{ .ordinal = 1, .ns = .{ .id = 0, .kind = .language }, .title = "Strict fixture", .source = "raw fixture" };
-    try std.testing.expectError(error.UncompiledPresentation, consumeExpandedPage(&writer, job, .{ .source = "[https://example.test broken" }, a, null));
+    try std.testing.expectError(error.UncompiledPresentation, consumeExpandedPage(&writer, job, .{ .source = "[https:// broken" }, a, null));
     try std.testing.expectError(error.UncompiledPresentation, consumeExpandedPage(&writer, job, .{ .source = "before |} after" }, a, null));
     try std.testing.expect(try consumeExpandedPage(&writer, job, .{ .source = "<nowiki>before |} after</nowiki>" }, a, null));
     try std.testing.expectError(error.InvalidPoemMetadata, consumeExpandedPage(&writer, job, .{ .source = "valid text", .poem_metadata = "{" }, a, null));
@@ -3349,7 +3349,7 @@ test "failed multi-owner page can touch scratch spools but never becomes a publi
         var writer = try encoder.blob_builder.Writer.init(io, a, root);
         defer writer.deinit();
         writer.language_codes = .{ .get_fn = auditControlLanguages, .boundary_fn = auditControlBoundary };
-        const source = "==English==\n# first owner is valid\n==French==\n# [https://example.test broken\n";
+        const source = "==English==\n# first owner is valid\n==French==\n# [https:// broken\n";
         const job: ExpansionJob = .{ .ordinal = 2, .ns = .{ .id = 0, .kind = .language }, .title = "Partial owners", .source = source };
         try std.testing.expectError(error.UncompiledPresentation, consumeExpandedPage(&writer, job, .{ .source = source }, a, null));
         try std.testing.expect(writer.stats.language_records > 0);
@@ -3433,7 +3433,7 @@ fn auditControlSequence(a: std.mem.Allocator, label: []const u8, cap: usize) !vo
     const before = try auditControlSummary(a, inputs.audit_root);
     try std.testing.expect(!before.object.get("inventory_complete").?.bool);
     const raw_request = "{{retained caller}}";
-    const bad_external = "[https://example.test broken unretained-expanded-A";
+    const bad_external = "[https:// broken unretained-expanded-A";
     const bad_inline = "==English==\n# valid partial owner\n==French==\n# before |} after unretained-expanded-B\n";
     const pages = [_]struct { title: []const u8, source: []const u8, valid: bool }{
         .{ .title = "valid-before", .source = "==English==\n# valid before [[first]]", .valid = true },
@@ -4427,4 +4427,44 @@ test "Writer composed hidden template conflicts refuse unproved page ownership" 
             try std.testing.expectEqualStrings("gismu_3", actual.sections[6].anchor);
         }
     }
+}
+
+
+test "Writer preserves same line noinclude table rows and stored actions" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    // Reuse the retained GN registry fixture solely as a portable declared-en
+    // control. This does not assign any language to the WO failed page.
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(GnRegistryApplicabilityFixture.registry);
+    var namespaces = try namespace_registry.Registry.init(a, GnRegistryApplicabilityFixture.namespaces); defer namespaces.deinit();
+    const codes = languageCodes(&registry, &namespaces);
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/noinclude-table", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    const plain = "==inglés==\n===Noun===\n{| class=wikitable style=\"background-color:#e6e6fa\"\n| [[A|cell]] ''kept''\n|}\n# after [[B]]\n";
+    const wrapped = "==inglés==\n===Noun===\n<noinclude>{| class=wikitable style=\"background-color:#e6e6fa\"</noinclude>\n| [[A|cell]] ''kept''\n|}\n# after [[B]]\n";
+    try writer.addPage(a, .{ .id = 0, .kind = .language }, "plain", plain, null);
+    try writer.addPage(a, .{ .id = 0, .kind = .language }, "wrapped", wrapped, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    const expected = try GnRegistryApplicabilityFixture.entry(io, a, output, "inglés", "plain");
+    const actual = try GnRegistryApplicabilityFixture.entry(io, a, output, "inglés", "wrapped");
+    try std.testing.expectEqualStrings("en", actual.language_code);
+    try std.testing.expectEqualDeep(expected.sections, actual.sections);
+    try std.testing.expectEqual(@as(usize, 2), actual.sections.len);
+    try std.testing.expectEqual(@as(usize, 0), actual.sections[0].blocks.len);
+    try std.testing.expectEqualStrings("Noun", actual.sections[1].title);
+    try std.testing.expectEqual(@as(usize, 2), actual.sections[1].blocks.len);
+    const table = actual.sections[1].blocks[0].table.?;
+    try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+    try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+    var linked = false; var italic = false; var after = false;
+    for (table.rows[0].cells[0].spans) |span| {
+        if (span.kind == .link and std.mem.eql(u8, span.target, "A") and std.mem.eql(u8, span.text, "cell")) linked = true;
+        if (std.mem.eql(u8, span.text, "kept") and span.italic) italic = true;
+    }
+    for (actual.sections[1].blocks[1].spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "B")) { after = true; };
+    try std.testing.expect(linked and italic and after);
 }

@@ -126,6 +126,8 @@ pub const InlineSpan = struct {
     literal_tail: bool = false,
     // Renderer-only evidence: text is the complete proved pair with an empty raw target.
     empty_target_link: bool = false,
+    // Renderer-only evidence: a valid free URL follows a raw opener rejected at LF/EOF.
+    rejected_external_opener: bool = false,
     bold: bool = false,
     italic: bool = false,
 };
@@ -264,7 +266,8 @@ pub const InlineIterator = struct {
                 .not_link, .invalid => {},
             }
             if (self.recognize_external_links) {
-                if (parseExternalLinkAt(self.input, self.cursor)) |link| {
+                var rejected_opener = false;
+                if (parseExternalLinkAtBoundary(self.input, self.cursor, if (self.renderer_boundaries) &rejected_opener else null)) |link| {
                     self.cursor = link.end;
                     return .{
                         .kind = .external_link,
@@ -274,6 +277,11 @@ pub const InlineIterator = struct {
                         .bold = self.bold,
                         .italic = self.italic,
                     };
+                }
+                if (rejected_opener) {
+                    const start = self.cursor;
+                    self.cursor += 1;
+                    return .{ .kind = .text, .text = self.input[start..self.cursor], .rejected_external_opener = true, .bold = self.bold, .italic = self.italic };
                 }
                 if (parseFreeExternalLinkAt(self.input, self.cursor)) |link| {
                     self.cursor = link.end;
@@ -398,7 +406,8 @@ pub const InlineIterator = struct {
                 if (self.recognize_external_links and rest[0] == '[' and rest.len > 1 and rest[1] != '[' and
                     hasExternalProtocol(rest[1..]))
                 {
-                    if (parseExternalLinkAt(self.input, self.cursor) != null) break;
+                    var rejected_opener = false;
+                    if (parseExternalLinkAtBoundary(self.input, self.cursor, if (self.renderer_boundaries) &rejected_opener else null) != null or rejected_opener) break;
                     if (self.renderer_boundaries) {
                         // An invalid bracketed opener does not make following
                         // URLs, links, entities or formatting literal text.
@@ -920,11 +929,20 @@ fn externalLabelStart(input: []const u8, start: usize) usize {
 }
 
 fn parseExternalLinkAt(input: []const u8, start: usize) ?ParsedExternalLink {
+    return parseExternalLinkAtBoundary(input, start, null);
+}
+
+fn parseExternalLinkAtBoundary(input: []const u8, start: usize, rejected_opener: ?*bool) ?ParsedExternalLink {
     if (start + 3 > input.len or input[start] != '[' or input[start + 1] == '[') return null;
     const body_start = start + 1;
     if (!hasExternalProtocol(input[body_start..])) return null;
 
-    const close = findExternalLinkClose(input, start) orelse return null;
+    const close = findExternalLinkClose(input, start) orelse {
+        // No closing bracket before the raw line boundary or EOF. Only prove
+        // the opener literal when its remaining URL can use normal free-link parsing.
+        if (rejected_opener) |rejected| rejected.* = externalUrlEnd(input, body_start, false, true) != null;
+        return null;
+    };
     const body = input[body_start..close];
     var separator: ?usize = null;
     for (body, 0..) |byte, index| {
@@ -1406,4 +1424,32 @@ test "renderer empty target tokens retain proved raw pair boundaries" {
     try std.testing.expectEqualStrings("A", valid.target);
     var ordinary: InlineIterator = .{ .input = "[[|label]] tail" };
     while (ordinary.next()) |span| try std.testing.expect(!span.empty_target_link);
+}
+
+
+test "rejected external opener evidence is confined to raw LF and EOF failures" {
+    for ([_][]const u8{
+        "[https://example.test unfinished",
+        "[https://example.test unfinished\nnext",
+        "[https://example.test unfinished\rnext",
+        "before [https://example.test ''kept'' [[B]] tail",
+    }) |source| {
+        var it: InlineIterator = .{ .input = source, .renderer_boundaries = true };
+        var rejected: usize = 0;
+        while (it.next()) |span| if (span.rejected_external_opener) {
+            rejected += 1;
+            try std.testing.expect(span.kind == .text);
+            try std.testing.expectEqualStrings("[", span.text);
+        };
+        try std.testing.expectEqual(@as(usize, 1), rejected);
+    }
+    for ([_][]const u8{
+        "[https://example.test label]", "[https:// label]", "[https:// unfinished",
+        "[not-a-protocol unfinished", "[//example.test unfinished", "[https://\"host\" unfinished",
+    }) |source| {
+        var it: InlineIterator = .{ .input = source, .renderer_boundaries = true };
+        while (it.next()) |span| try std.testing.expect(!span.rejected_external_opener);
+    }
+    var ordinary: InlineIterator = .{ .input = "[https://example.test unfinished" };
+    while (ordinary.next()) |span| try std.testing.expect(!span.rejected_external_opener);
 }
