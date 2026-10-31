@@ -353,6 +353,9 @@ def auxiliary_capture_helper(name, path):
         record=read_small_json(path.with_name(auxiliary_manifest_filename(name)))
     else:
         return None
+    if isinstance(record,dict) and record.get('schema')=='wikidict.language-messages-union.v1':
+        import prepare_language_messages_union
+        return prepare_language_messages_union
     if isinstance(record,dict) and record.get('schema')=='wikidict.language-messages-capture.v2':
         import prepare_language_messages_v2
         return prepare_language_messages_v2
@@ -666,11 +669,15 @@ def discover_auxiliary_generation(root,directory,names,edition,date):
         raise ValueError('Preferred autonym names require their versioned capture profile')
     if directory=='language-messages-loop-v1':
         import prepare_language_messages_v2 as messages
-        if helper is not messages:
+        import prepare_language_messages_union as message_union
+        if helper not in (messages,message_union):
             raise ValueError('Preferred loop messages require the current v2 capture profile')
     for path in snapshots.values():
         record=helper.validate_snapshot(path,edition,date)
         if directory=='language-messages-loop-v1':
+            if helper is message_union:
+                message_union.require_preferred_loop(record)
+                continue
             keys=record.get('keys')
             if (record.get('generator_sha256')!=messages.producer()['generator_sha256']
                     or not isinstance(keys,list) or not 1<=len(keys)<=67

@@ -1,0 +1,276 @@
+"""Incremental message evidence and unchanged paired TSV integration."""
+import copy
+import json
+import os
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
+
+import build_wiktionaries as builder
+import prepare_language_messages as legacy
+import prepare_language_messages_v2 as v2
+import prepare_language_messages_union as union
+
+WIKI, DATE = 'satwiktionary', '20261001'
+NAMESPACE = ('# wikidict-namespace-registry-v1\n# wiki\tsatwiktionary\n'
+             '# dump-date\t20261001\n# content-language\tsat\n')
+
+
+class Transport:
+    def __init__(self, missing=False, alter=None):
+        self.calls = []
+        self.missing, self.alter = missing, alter
+
+    def __call__(self, url, timeout):
+        query = parse_qs(urlsplit(url).query)
+        self.calls.append(query)
+        general = {'wikiid': WIKI, 'lang': 'sat'}
+        if query['meta'] == ['siteinfo|languageinfo']:
+            value = {'query': {'general': general, 'languageinfo': {
+                code: {'code': code, 'fallbacks': chain}
+                for code, chain in {'en': [], 'sat': ['en'], 'fr': ['en']}.items()}}}
+        else:
+            self.assert_plain(query)
+            value = {'query': {'general': general, 'allmessages': [
+                {'name': key, 'normalizedname': legacy.normalize_key(key),
+                 **({'missing': True} if self.missing else {'content': 'ᱟᱰᱨᱟᱣ ' + key + '\n\t\\ $1'})}
+                for key in query['ammessages'][0].split('|')]}}
+        if self.alter:
+            self.alter(value)
+        return 200, {'Content-Type': 'application/json'}, json.dumps(value).encode()
+
+    @staticmethod
+    def assert_plain(query):
+        assert query['meta'] == ['siteinfo|allmessages']
+        assert 'amenableparser' not in query and 'amargs' not in query
+
+
+class MessageUnionTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        scratch = union.evidence.REPO / '.tmp'
+        scratch.mkdir(exist_ok=True)
+        cls.base_temp = tempfile.TemporaryDirectory(prefix='message-union-base-', dir=scratch)
+        cls.addClassCleanup(cls.base_temp.cleanup)
+        root = Path(cls.base_temp.name)
+        namespace = root / 'namespace.tsv'
+        namespace.write_text(NAMESPACE)
+        cls.fixture_base = root / 'base'
+        args = SimpleNamespace(wiki=WIKI, date=DATE, namespace_registry=namespace,
+            output=cls.fixture_base, languages=['en', 'sat'], messages=['parser-template-loop-warning'] +
+            [f'key-{i:03d}' for i in range(61)], delay=0, wall_seconds=60)
+        # Construction of a synthetic pre-existing capture is not a durability
+        # test. Restore real fsync before any union operation under test.
+        with patch.object(os, 'fsync', lambda descriptor: None):
+            cls.original = v2.capture(args, transport=Transport(), sleep=lambda _: None)
+        cls.original_files = {p.name: p.read_bytes() for p in cls.fixture_base.iterdir()}
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='message-union-test-', dir=union.evidence.REPO / '.tmp')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.base = self.fixture_base
+
+    def capture(self, name='union', missing=False, alter=None, message='filedesc'):
+        args = SimpleNamespace(base=self.base, language='sat', message=message,
+                               output=self.root / name, delay=0, wall_seconds=60)
+        transport = Transport(missing, alter)
+        result = union.capture(args, transport=transport, sleep=lambda _: None)
+        return args.output, result, transport
+
+    def rebind(self, root, change=None):
+        inventory = legacy.owned_payload(root)
+        hashes = {}
+        for kind in union.KINDS:
+            path = root / (kind + '.manifest.json')
+            record = json.loads(path.read_text())
+            record['artifacts'] = inventory
+            raw = (root / (kind + '.tsv')).read_bytes()
+            record.update(output_bytes=len(raw), output_sha256=union.evidence.digest(raw))
+            if change:
+                change(record)
+            path.write_bytes(union.evidence.encoded(record))
+            hashes[path.name] = union.evidence.digest(path.read_bytes())
+        (root / union.COMPLETE).write_bytes(union.evidence.encoded({'schema': union.SCHEMA, 'manifests': hashes}))
+
+    def test_one_request_preserves_124_rows_and_fallback_bytes(self):
+        root, records, transport = self.capture()
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual(transport.calls[0]['meta'], ['siteinfo|allmessages'])
+        self.assertEqual(transport.calls[0]['amlang'], ['sat'])
+        self.assertEqual(transport.calls[0]['ammessages'], ['filedesc'])
+        before = self.original_files['interface-messages.tsv'].splitlines(keepends=True)
+        after = (root / 'interface-messages.tsv').read_bytes().splitlines(keepends=True)
+        extra = [row for row in after if row.startswith(b'sat\tfiledesc\t')]
+        self.assertEqual(len(extra), 1)
+        self.assertEqual([row for row in after if row not in extra], before)
+        self.assertEqual(records['interface-messages']['rows'], 125)
+        self.assertEqual((root / 'language-fallbacks.tsv').read_bytes(), self.original_files['language-fallbacks.tsv'])
+        self.assertEqual({p.name: p.read_bytes() for p in self.base.iterdir()}, self.original_files)
+        record = records['interface-messages']
+        self.assertEqual(record['sources'][0]['retrieved_utc'], self.original['interface-messages']['retrieved_utc'])
+        self.assertEqual([row['role'] for row in record['sources']], ['base-capture', 'singleton-message'])
+        self.assertNotIn('keys', record)
+        self.assertFalse(record['corpus_query_closure_proven'])
+        self.assertEqual(union.verify(root), records)
+
+    def test_explicit_missing_is_retained_as_one_negative_row(self):
+        root, records, _ = self.capture(missing=True)
+        self.assertIn(b'sat\tfiledesc\tM\n', (root / 'interface-messages.tsv').read_bytes())
+        self.assertEqual(records['interface-messages']['rows'], 125)
+        self.assertEqual(union.verify(root), records)
+
+    def test_existing_pair_is_rejected_before_request(self):
+        transport = Transport()
+        args = SimpleNamespace(base=self.base, language='sat', message='key-000',
+                               output=self.root / 'rejected', delay=0, wall_seconds=60)
+        with self.assertRaisesRegex(ValueError, 'conflicts'):
+            union.capture(args, transport=transport)
+        self.assertEqual(transport.calls, [])
+        self.assertFalse(args.output.exists())
+
+    def test_duplicate_base_rows_and_wrong_selected_key_are_rejected(self):
+        base = self.original['interface-messages']
+        raw = self.original_files['interface-messages.tsv']
+        with self.assertRaisesRegex(ValueError, 'Duplicate'):
+            union.merged_messages(raw + raw.splitlines(keepends=True)[4], {'filedesc': 'x'}, 'sat', 'filedesc', base)
+        with self.assertRaisesRegex(ValueError, 'key set'):
+            union.merged_messages(raw, {'other': 'x'}, 'sat', 'filedesc', base)
+        for key in ('Filedesc', 'file|desc', ''):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                union.selection({'selection': {'language': 'sat', 'key': key}})
+
+    def test_unrequested_or_duplicate_response_never_completes(self):
+        mutations = [lambda value: value['query']['allmessages'][0].update(name='other'),
+                     lambda value: value['query']['allmessages'].append(copy.deepcopy(value['query']['allmessages'][0]))]
+        for i, mutate in enumerate(mutations):
+            with self.subTest(i=i), self.assertRaises(ValueError):
+                self.capture(str(i), alter=mutate)
+            self.assertFalse((self.root / str(i) / union.COMPLETE).exists())
+
+    def test_missing_receipt_is_rejected_even_after_inventory_rebind(self):
+        root, records, _ = self.capture()
+        (root / records['interface-messages']['singleton']['accepted_receipt']).unlink()
+        self.rebind(root)
+        with self.assertRaises((ValueError, OSError)):
+            union.verify(root)
+
+    def test_changed_response_and_tsv_are_rejected_by_replay(self):
+        root, _, _ = self.capture()
+        path = root / 'language-messages.0001-01.raw.json'
+        value = json.loads(path.read_text())
+        value['query']['allmessages'][0]['content'] = 'changed'
+        path.write_text(json.dumps(value))
+        self.rebind(root)
+        with self.assertRaisesRegex(ValueError, 'response differs'):
+            union.verify(root)
+        root, _, _ = self.capture('changed-tsv')
+        path = root / 'interface-messages.tsv'
+        path.write_bytes(path.read_bytes().replace(b'sat\tfiledesc\tV\t', b'sat\tfiledesc\tV\tchanged '))
+        self.rebind(root)
+        with self.assertRaisesRegex(ValueError, 'TSV differs'):
+            union.verify(root)
+
+    def test_fallback_change_cannot_be_hidden_by_rebound_manifest(self):
+        root, _, _ = self.capture()
+        path = root / 'language-fallbacks.tsv'
+        path.write_bytes(path.read_bytes().replace(b'sat\ten\n', b'sat\tfr\n'))
+        self.rebind(root)
+        with self.assertRaisesRegex(ValueError, 'TSV differs'):
+            union.verify(root)
+
+    def test_provenance_scope_namespace_and_producer_are_bound(self):
+        changes = [lambda record: record['sources'][0].update(retrieved_utc='invented'),
+                   lambda record: record.update(corpus_query_closure_proven=True),
+                   lambda record: record.update(namespace_registry_sha256='0' * 64),
+                   lambda record: record['producer'].update(generator_sha256='0' * 64),
+                   lambda record: record['selection'].update(key='other')]
+        for i, change in enumerate(changes):
+            root, _, _ = self.capture(str(i))
+            self.rebind(root, change)
+            with self.subTest(i=i), self.assertRaises(ValueError):
+                union.verify(root)
+
+    def test_archive_and_completion_hashes_are_bound(self):
+        root, _, _ = self.capture()
+        path = root / union.ARCHIVE
+        raw = path.read_bytes()
+        path.write_bytes(raw[:-1024])
+        with self.assertRaisesRegex(ValueError, 'inventory'):
+            union.verify(root)
+        root, _, _ = self.capture('completion')
+        (root / union.COMPLETE).write_text('{}')
+        with self.assertRaisesRegex(ValueError, 'completion'):
+            union.verify(root)
+
+    def test_pair_manifest_change_is_rejected(self):
+        root, _, _ = self.capture()
+        path = root / 'language-fallbacks.manifest.json'
+        value = json.loads(path.read_text())
+        value['selection']['key'] = 'other'
+        path.write_bytes(union.evidence.encoded(value))
+        hashes = {k + '.manifest.json': union.evidence.digest((root / (k + '.manifest.json')).read_bytes()) for k in union.KINDS}
+        (root / union.COMPLETE).write_bytes(union.evidence.encoded({'schema': union.SCHEMA, 'manifests': hashes}))
+        with self.assertRaisesRegex(ValueError, 'Paired'):
+            union.verify(root)
+
+    def test_builder_both_dispatches_and_flat_relocation(self):
+        root, records, _ = self.capture('language-messages-loop-v1')
+        for kind in union.KINDS:
+            path = root / (kind + '.tsv')
+            self.assertIs(builder.auxiliary_capture_helper(kind, path), union)
+            record, inventory = builder.validated_auxiliary_capture(kind, path, WIKI, DATE)
+            self.assertEqual(record, records[kind])
+            self.assertIn(union.ARCHIVE, inventory)
+        self.assertEqual(set(builder.discover_auxiliary_generation(self.root, root.name, union.KINDS, WIKI, DATE)), set(union.KINDS))
+        copied = self.root / 'relocated'
+        namespace = self.root / 'namespace-registry.tsv'
+        namespace.write_text(NAMESPACE)
+        registry = self.root / 'language-registry.tsv'
+        registry.write_text('sat\tSantali\tsat\tSantali\tsat\n')
+        snapshots = {kind: root / (kind + '.tsv') for kind in union.KINDS}
+        snapshots.update({'namespace-registry': namespace, 'language-registry': registry})
+        hashes = {name: union.evidence.digest(path.read_bytes()) for name, path in snapshots.items()}
+        pinned = builder.pinned_auxiliary_snapshots(snapshots, hashes, copied)
+        self.assertEqual(set(pinned), set(snapshots))
+        self.assertEqual(pinned['interface-messages'].parent, pinned['namespace-registry'].parent)
+        self.assertEqual((copied / 'namespace-registry.tsv').read_text(), NAMESPACE)
+        self.assertEqual(union.verify(copied), records)
+        with self.assertRaisesRegex(ValueError, 'edition/date'):
+            union.validate_snapshot(pinned['interface-messages'], 'enwiktionary', DATE)
+        (copied / 'language-messages.unexpected.json').write_text('{}')
+        with self.assertRaisesRegex(ValueError, 'Unexpected union-owned'):
+            union.verify(copied)
+
+    def test_verify_initializes_absent_scratch_parent_in_isolated_repo(self):
+        root, records, _ = self.capture()
+        isolated_repo = self.root / 'isolated-checkout'
+        isolated_repo.mkdir()
+        scratch = isolated_repo / '.tmp'
+        self.assertFalse(scratch.exists())
+        with patch.object(union.evidence, 'REPO', isolated_repo):
+            self.assertEqual(union.verify(root), records)
+        self.assertTrue(scratch.is_dir())
+        self.assertFalse(scratch.is_symlink())
+        self.assertEqual(list(scratch.iterdir()), [])
+
+    def test_original_v1_remains_supported_but_not_preferred_loop(self):
+        namespace = self.root / 'namespace.tsv'
+        namespace.write_text(NAMESPACE)
+        args = SimpleNamespace(wiki=WIKI, date=DATE, namespace_registry=namespace,
+            output=self.root / 'base-v1', languages=['sat'], messages=['old-key'], delay=0, wall_seconds=60)
+        with patch.object(os, 'fsync', lambda descriptor: None):
+            legacy.capture(args, transport=Transport(), sleep=lambda _: None)
+        self.base = args.output
+        root, records, _ = self.capture()
+        self.assertEqual(union.verify(root), records)
+        self.assertEqual(records['interface-messages']['rows'], 2)
+        with self.assertRaisesRegex(ValueError, 'current v2'):
+            union.require_preferred_loop(records['interface-messages'])
+
+
+if __name__ == '__main__':
+    unittest.main()
