@@ -5579,3 +5579,87 @@ test "Writer captured BCL malformed single-brace suffix retains body and actions
     for (row.value.object.get("reasons").?.array.items) |reason| if (std.mem.eql(u8, reason.string, "literal_markup")) { literal_reason = true; };
     try std.testing.expect(literal_reason and rows.next() == null);
 }
+
+
+test "Writer captured Punjabi act preserves escaped iframe and ordinary page actions" {
+    var pa_tmp = std.testing.tmpDir(.{}); defer pa_tmp.cleanup();
+    var pa_arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer pa_arena.deinit();
+    const pa_alloc = pa_arena.allocator(); const pa_io = std.testing.io;
+    // Exact PA02 p5034/r34824/ordinal2834; retained expansion, never replayed.
+    const pa_raw_source = "==ਅੰਗਰੇਜ਼ੀ==\n===ਉਚਾਰਨ===\n{{pronunciation-audio-us-BE}}\n* \n\n\n<iframe src=\"//commons.wikimedia.org/wiki/File:En-us-act.ogg?embedplayer=yes\" width=\"175\" height=\"20\" frameborder=\"0\" webkitAllowFullScreen mozallowfullscreen allowFullScreen></iframe>\n\n===ਨਾਂਵ===\n'''act''' ਪੁਲਿੰਗ\n#[[ਕਨੂੰਨ]], ਅਧਿਨਿਯਮ,\n#ਕੰਮ, ਕਾਰਜ\n\n===ਕਿਰਿਆ===\n#ਕੰੰਮ ਕਰਨਾ , ਕਾਰਜ ਕਰਨਾ, ਵਿਹਾਰ ਕਰਨਾ, ਅਭਿਨੈ ਕਰਨਾ\n===ਹਵਾਲੇ===\n<ref>[https://web.archive.org/web/20190714163445/http://pupdepartments.ac.in/e2p/ ਅੰ-ਪੰ ਸ਼ਬਦ ਕੋਸ਼ , ਪੰਜਾਬੀ ਯੂਨੀਵਰਸਿਟੀ , ਪਟਿਆਲਾ]</ref>\n<ref>[http://dic.learnpunjabi.org/default.aspx ਪੰਜਾਬੀ ਸ਼ਬਦ ਕੋਸ਼ , ਪੰਜਾਬੀ ਯੂਨੀਵਰਸਿਟੀ , ਪਟਿਆਲਾ]</ref>";
+    const pa_expanded_source = "==ਅੰਗਰੇਜ਼ੀ==\n===ਉਚਾਰਨ===\n*<strong class=\"error\"><span class=\"scribunto-error\">Lua error in ਮੌਡਿਊਲ:audio: Parameter 1 must be a valid language or etymology language code; the value \"En-us-act.ogg\" is not valid. See [[WT:LOL]] and [[WT:LOL/E]].</span></strong> [[ਸ਼੍ਰੇਣੀ:1000BasicEnglish+audio-us]]\n* \n\n\n<iframe src=\"//commons.wikimedia.org/wiki/File:En-us-act.ogg?embedplayer=yes\" width=\"175\" height=\"20\" frameborder=\"0\" webkitAllowFullScreen mozallowfullscreen allowFullScreen></iframe>\n\n===ਨਾਂਵ===\n'''act''' ਪੁਲਿੰਗ\n#[[ਕਨੂੰਨ]], ਅਧਿਨਿਯਮ,\n#ਕੰਮ, ਕਾਰਜ\n\n===ਕਿਰਿਆ===\n#ਕੰੰਮ ਕਰਨਾ , ਕਾਰਜ ਕਰਨਾ, ਵਿਹਾਰ ਕਰਨਾ, ਅਭਿਨੈ ਕਰਨਾ\n===ਹਵਾਲੇ===\n<ref>[https://web.archive.org/web/20190714163445/http://pupdepartments.ac.in/e2p/ ਅੰ-ਪੰ ਸ਼ਬਦ ਕੋਸ਼ , ਪੰਜਾਬੀ ਯੂਨੀਵਰਸਿਟੀ , ਪਟਿਆਲਾ]</ref>\n<ref>[http://dic.learnpunjabi.org/default.aspx ਪੰਜਾਬੀ ਸ਼ਬਦ ਕੋਸ਼ , ਪੰਜਾਬੀ ਯੂਨੀਵਰਸਿਟੀ , ਪਟਿਆਲਾ]</ref>";
+    const pa_namespaces_source = "# wikidict-namespace-registry-v1\n# wiki\tpawiktionary\n# dump-date\t20261001\n# content-language\tpa\n-2\tਮੀਡੀਆ\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n-1\tਖ਼ਾਸ\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\tਖਾਸ\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\tਗੱਲ-ਬਾਤ\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tਚਰਚਾ\n2\tਵਰਤੋਂਕਾਰ\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\tਮੈਂਬਰ\tਵਰਤੌਂਕਾਰ\n3\tਵਰਤੋਂਕਾਰ ਗੱਲ-ਬਾਤ\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tਮੈਂਬਰ ਚਰਚਾ\tਵਰਤੌਂਕਾਰ ਗੱਲ-ਬਾਤ\n4\tWiktionary\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\n5\tWiktionary ਗੱਲ-ਬਾਤ\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWiktionary talk\tWiktionary ਚਰਚਾ\n6\tਤਸਵੀਰ\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\n7\tਤਸਵੀਰ ਗੱਲ-ਬਾਤ\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tImage talk\tਤਸਵੀਰ ਚਰਚਾ\n8\tਮੀਡੀਆਵਿਕੀ\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\tਮੀਡੀਆਵਿਕਿ\n9\tਮੀਡੀਆਵਿਕੀ ਗੱਲ-ਬਾਤ\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tਮੀਡੀਆਵਿਕਿ ਚਰਚਾ\n10\tਫਰਮਾ\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tਨਮੂਨਾ\n11\tਫਰਮਾ ਗੱਲ-ਬਾਤ\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tਨਮੂਨਾ ਚਰਚਾ\n12\tਮਦਦ\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n13\tਮਦਦ ਗੱਲ-ਬਾਤ\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tਮਦਦ ਚਰਚਾ\n14\tਸ਼੍ਰੇਣੀ\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n15\tਸ਼੍ਰੇਣੀ ਗੱਲ-ਬਾਤ\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tਸ਼੍ਰੇਣੀ ਚਰਚਾ\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\tਮੌਡਿਊਲ\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\tਮੌਡਿਊਲ ਗੱਲ-ਬਾਤ\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\tEvent\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\tEvent talk\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
+    var pa_namespaces = try namespace_registry.Registry.init(pa_alloc, pa_namespaces_source); defer pa_namespaces.deinit();
+    // No language-ownership claim: callbacks are deliberately unbound.
+    const pa_codes: encoder.blob_builder.LanguageCodes = .{ .namespace_catalog = &pa_namespaces };
+    const pa_output = try std.fmt.allocPrint(pa_alloc, ".zig-cache/tmp/{s}/pa-act-iframe", .{pa_tmp.sub_path});
+    var pa_writer = try encoder.blob_builder.Writer.init(pa_io, pa_alloc, pa_output); defer pa_writer.deinit();
+    pa_writer.language_codes = pa_codes;
+    // Writer API is (title, expanded/source, raw_source), not the reverse.
+    try pa_writer.addExpandedPage(pa_alloc, .{ .id = 0, .kind = .language }, "act", pa_expanded_source, pa_raw_source, null);
+    const pa_stats = try pa_writer.finish(pa_codes);
+    try std.testing.expectEqual(@as(usize, 1), pa_stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), pa_stats.fallback_pages);
+    const pa_entry = try GaHtmlLanguageBoundaryFixture.requiredEntry(pa_io, pa_alloc, pa_output, "Unclassified", "act");
+    var pa_visible: std.ArrayList(u8) = .empty;
+    var pa_definitions: usize = 0;
+    var pa_dictionary_actions: usize = 0;
+    var pa_wt_actions: usize = 0;
+    var pa_reference_markers: usize = 0;
+    for (pa_entry.sections) |pa_section| {
+        try pa_visible.appendSlice(pa_alloc, pa_section.title);
+        for (pa_section.blocks) |pa_block| {
+            if (pa_block.kind == .definition) pa_definitions += 1;
+            for (pa_block.spans) |pa_span| {
+                try pa_visible.appendSlice(pa_alloc, pa_span.text);
+                if (pa_span.kind == .link) {
+                    if (std.mem.eql(u8, pa_span.target, "ਕਨੂੰਨ")) {
+                        pa_dictionary_actions += 1; try std.testing.expectEqualStrings("ਕਨੂੰਨ", pa_span.text);
+                    } else if (std.mem.eql(u8, pa_span.target, "WT:LOL") or std.mem.eql(u8, pa_span.target, "WT:LOL/E")) {
+                        pa_wt_actions += 1; try std.testing.expectEqualStrings(pa_span.target, pa_span.text); try std.testing.expect(pa_span.bold);
+                    } else if (std.mem.startsWith(u8, pa_span.target, "#reference-")) {
+                        try std.testing.expect(pa_reference_markers < 2);
+                        try std.testing.expectEqualStrings(if (pa_reference_markers == 0) "#reference-1" else "#reference-2", pa_span.target);
+                        try std.testing.expect(pa_span.role == .reference and pa_span.superscript);
+                        pa_reference_markers += 1;
+                    } else return error.TestUnexpectedResult;
+                }
+                if (std.mem.indexOf(u8, pa_span.text, "<iframe") != null or std.mem.indexOf(u8, pa_span.text, "</iframe>") != null)
+                    try std.testing.expect(pa_span.kind == .text and pa_span.target.len == 0);
+                try std.testing.expect(pa_span.kind != .external_link);
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 3), pa_definitions);
+    try std.testing.expectEqual(@as(usize, 1), pa_dictionary_actions);
+    try std.testing.expectEqual(@as(usize, 2), pa_wt_actions);
+    try std.testing.expectEqual(@as(usize, 2), pa_reference_markers);
+    for ([_][]const u8{ "ਅੰਗਰੇਜ਼ੀ", "ਉਚਾਰਨ", "ਨਾਂਵ", "ਕਿਰਿਆ", "ਹਵਾਲੇ", "Lua error in ਮੌਡਿਊਲ:audio:", "En-us-act.ogg", "ਅਧਿਨਿਯਮ", "ਕੰਮ, ਕਾਰਜ", "ਅਭਿਨੈ ਕਰਨਾ" }) |pa_kept|
+        try std.testing.expect(std.mem.indexOf(u8, pa_visible.items, pa_kept) != null);
+    try std.testing.expect(std.mem.indexOf(u8, pa_visible.items, "<iframe src=\"//commons.wikimedia.org/wiki/File:En-us-act.ogg?embedplayer=yes\" width=\"175\" height=\"20\" frameborder=\"0\" webkitAllowFullScreen mozallowfullscreen allowFullScreen></iframe>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pa_visible.items, "ਸ਼੍ਰੇਣੀ:") == null);
+    try std.testing.expectEqual(@as(usize, 0), pa_entry.media.len);
+    try std.testing.expectEqual(@as(usize, 2), pa_entry.references.len);
+    const pa_urls = [_][]const u8{ "https://web.archive.org/web/20190714163445/http://pupdepartments.ac.in/e2p/", "http://dic.learnpunjabi.org/default.aspx" };
+    for (pa_entry.references, 0..) |pa_reference, pa_index| {
+        var pa_ref_actions: usize = 0;
+        var pa_ref_visible: std.ArrayList(u8) = .empty;
+        for (pa_reference.spans) |pa_span| {
+            try pa_ref_visible.appendSlice(pa_alloc, pa_span.text);
+            if (pa_span.kind == .external_link) {
+                pa_ref_actions += 1; try std.testing.expectEqualStrings(pa_urls[pa_index], pa_span.target);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), pa_ref_actions);
+        try std.testing.expect(std.mem.indexOf(u8, pa_ref_visible.items, "ਪੰਜਾਬੀ ਯੂਨੀਵਰਸਿਟੀ") != null);
+    }
+    const pa_report = try std.Io.Dir.cwd().readFileAlloc(pa_io, try std.fs.path.join(pa_alloc, &.{ pa_output, "fallback-pages.jsonl" }), pa_alloc, .limited(8192));
+    var pa_rows = std.mem.tokenizeScalar(u8, pa_report, '\n');
+    const pa_row = try std.json.parseFromSlice(std.json.Value, pa_alloc, pa_rows.next() orelse return error.TestUnexpectedResult, .{}); defer pa_row.deinit();
+    var pa_unsupported = false; var pa_lua_error = false;
+    for (pa_row.value.object.get("reasons").?.array.items) |pa_reason| {
+        if (std.mem.eql(u8, pa_reason.string, "unsupported_element")) pa_unsupported = true;
+        if (std.mem.eql(u8, pa_reason.string, "rendered_lua_error")) pa_lua_error = true;
+    }
+    try std.testing.expect(pa_unsupported and pa_lua_error and pa_rows.next() == null);
+}

@@ -7037,6 +7037,10 @@ pub const Renderer = struct {
                     literal_end = end;
                     self.fallbacks.literal_markup = true;
                 };
+                if (at >= template_end) if (dottedHtmlNameEnd(input, at)) |end| {
+                    literal_end = end;
+                    self.fallbacks.literal_markup = true;
+                };
                 if (doubleQuotedHtmlNameEnd(input, at)) |end| {
                     literal_end = end;
                     self.fallbacks.literal_markup = true;
@@ -7122,6 +7126,27 @@ pub const Renderer = struct {
         const end = std.mem.indexOfAnyPos(u8, input, cursor, "<>\r\n") orelse return null;
         if (input[end] != '>' or std.mem.indexOfScalar(u8, input[cursor..end], quote) == null) return null;
         return end + 1;
+    }
+
+    // A complete attribute-free dotted name is not an HTML element. Preserve
+    // only its authored angle boundaries; label actions and quote styles keep
+    // their ordinary parser domain. No URL, attribute or incomplete recovery.
+    fn dottedHtmlNameEnd(input: []const u8, at: usize) ?usize {
+        if (at >= input.len or input[at] != '<') return null;
+        var cursor = at + 1;
+        if (cursor < input.len and input[cursor] == '/') cursor += 1;
+        if (cursor >= input.len or !std.ascii.isAlphabetic(input[cursor])) return null;
+        var dotted = false;
+        while (cursor < input.len) {
+            if (!std.ascii.isAlphanumeric(input[cursor])) return null;
+            while (cursor < input.len and (std.ascii.isAlphanumeric(input[cursor]) or input[cursor] == '-')) : (cursor += 1) {}
+            if (input[cursor - 1] == '-' or cursor == input.len) return null;
+            if (input[cursor] == '>') return if (dotted) cursor + 1 else null;
+            if (input[cursor] != '.') return null;
+            dotted = true;
+            cursor += 1;
+        }
+        return null;
     }
 
     // Double quotes are part of the sanitizer's atomic name, not attributes.
@@ -7390,7 +7415,14 @@ pub const Renderer = struct {
             // These disallowed tags are escaped text, not opaque extensions.
             // Preserve only this literal tag token, then let ordinary body
             // markup, active switches and protected regions retain their rules.
-            try self.literal(input[at..tag.end], style);
+            if (tag.is("iframe")) {
+                // Only authored iframe angle delimiters are display literals.
+                // Keep the name and attributes parsed so residual syntax remains
+                // subject to the unchanged document validator.
+                try self.protectedLiteral(input[at .. at + 1], style);
+                try self.literal(input[at + 1 .. tag.end - 1], style);
+                try self.protectedLiteral(input[tag.end - 1 .. tag.end], style);
+            } else try self.literal(input[at..tag.end], style);
             return tag.end;
         }
         // Sanitizer recognizes closing pre as HTML even without an opening
@@ -32919,4 +32951,70 @@ test "unmatched template owns only its same-line single-brace suffix" {
     try std.testing.expectEqualStrings("[malformed template] child", try flattened(a, cell.spans));
     try std.testing.expect(unclosedExternalRecoveryHasLink(cell.spans, .link, "Child"));
     try std.testing.expectEqualStrings("after", try flattened(a, blocks[1].spans));
+}
+
+
+test "complete dotted source names preserve external label provenance and styles" {
+    var dotted_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer dotted_arena.deinit();
+    const dotted_a = dotted_arena.allocator();
+    for ([_][]const u8{ "<nisanyansozluk.com>", "</example.test>", "<sub.example-test2.test>" }) |dotted_source|
+        try std.testing.expectEqual(@as(?usize, dotted_source.len), Renderer.dottedHtmlNameEnd(dotted_source, 0));
+    for ([_][]const u8{ "<b>", "<ref>", "<a.>", "<.a>", "<a..b>", "<a-.b>", "<a.b", "<a.b x='y'>", "<a.b/>", "<https://example.test>", "<a.b\n>", "<a.b[child]>" }) |dotted_source|
+        try std.testing.expectEqual(@as(?usize, null), Renderer.dottedHtmlNameEnd(dotted_source, 0));
+    var dotted_renderer: Renderer = .{ .a = dotted_a, .context = .{} };
+    const dotted_spans = try dotted_renderer.parseSpans("<b>[http://www.nisanyansozluk.com ''<nisanyansozluk.com>'']</b>", .{});
+    try std.testing.expectEqualStrings("<nisanyansozluk.com>", try flattened(dotted_a, dotted_spans));
+    var dotted_label: std.ArrayList(u8) = .empty;
+    var dotted_angle_count: usize = 0;
+    for (dotted_spans) |dotted_span| {
+        try std.testing.expectEqual(ir.InlineKind.external_link, dotted_span.kind);
+        try std.testing.expectEqualStrings("http://www.nisanyansozluk.com", dotted_span.target);
+        try std.testing.expect(dotted_span.flags.bold and dotted_span.flags.italic);
+        try dotted_label.appendSlice(dotted_a, dotted_span.text);
+        if (std.mem.eql(u8, dotted_span.text, "<") or std.mem.eql(u8, dotted_span.text, ">")) {
+            dotted_angle_count += 1;
+            try std.testing.expect(dotted_span.provenance != .parsed);
+        }
+    }
+    try std.testing.expectEqualStrings("<nisanyansozluk.com>", dotted_label.items);
+    try std.testing.expectEqual(@as(usize, 2), dotted_angle_count);
+    try std.testing.expect(dotted_renderer.fallbacks.literal_markup);
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("<nisanyansozluk.com>"));
+}
+
+
+test "iframe literal angles preserve parsed attributes and ordinary body provenance" {
+    var pa_arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer pa_arena.deinit();
+    const pa_alloc = pa_arena.allocator();
+    for ([_][]const u8{ "iframe" }) |pa_tag| {
+        for ([_]bool{ true, false }) |pa_paired| {
+            const pa_close = if (pa_paired) try std.fmt.allocPrint(pa_alloc, "</{s}>", .{pa_tag}) else "";
+            const pa_source = try std.fmt.allocPrint(pa_alloc, "<{s} data-note='&amp;'>[[Target|linked]] __NOEDITSECTION__ &amp;{s}", .{ pa_tag, pa_close });
+            var pa_renderer: Renderer = .{ .a = pa_alloc, .context = .{} };
+            const pa_spans = try pa_renderer.parseSpans(pa_source, .{});
+            var pa_tokens: usize = 0;
+            var pa_actions: usize = 0;
+            for (pa_spans) |pa_span| {
+                if (pa_span.provenance == .protected_literal) {
+                    try std.testing.expect(pa_span.kind == .text and pa_span.target.len == 0);
+                    try std.testing.expect(std.mem.indexOf(u8, pa_span.text, "linked") == null);
+                }
+                if (std.mem.indexOfScalar(u8, pa_span.text, '<') != null) {
+                    pa_tokens += 1;
+                    try std.testing.expectEqual(Provenance.protected_literal, pa_span.provenance);
+                }
+                if (pa_span.kind == .link) {
+                    pa_actions += 1;
+                    try std.testing.expectEqualStrings("Target", pa_span.target);
+                    try std.testing.expectEqualStrings("linked", pa_span.text);
+                    try std.testing.expectEqual(Provenance.parsed, pa_span.provenance);
+                }
+            }
+            try std.testing.expectEqual(@as(usize, if (pa_paired) 2 else 1), pa_tokens);
+            try std.testing.expectEqual(@as(usize, 1), pa_actions);
+            try std.testing.expect(pa_renderer.fallbacks.unsupported_element and !pa_renderer.fallbacks.unclosed_formatting);
+            try std.testing.expectEqualStrings(try std.fmt.allocPrint(pa_alloc, "<{s} data-note='&'>linked  &{s}", .{pa_tag, pa_close}), try flattened(pa_alloc, pa_spans));
+        }
+    }
 }

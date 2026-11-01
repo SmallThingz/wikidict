@@ -4944,3 +4944,100 @@ test "single-brace template recovery does not exempt ordinary inline table delim
     try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("{{ png.|}"));
     try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("before |} after"));
 }
+
+
+test "dotted external citation label roundtrips without relaxing raw residual validation" {
+    var dotted_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer dotted_arena.deinit();
+    const dotted_a = dotted_arena.allocator();
+    const dotted_cases = [_]struct { source: []const u8, styled: bool }{
+        // Exact bracketed citation from retained DIQ adır expanded line 81.
+        .{ .source = "[http://www.nisanyansozluk.com <nisanyansozluk.com>]", .styled = false },
+        .{ .source = "<b>[http://www.nisanyansozluk.com ''<nisanyansozluk.com>'']</b>", .styled = true },
+    };
+    for (dotted_cases) |dotted_case| {
+        var dotted_report: Fallbacks = .{};
+        const dotted_bytes = try compileReportedAlloc(dotted_a, "adır", .language, "English", "en", dotted_case.source, null, &dotted_report);
+        const dotted_decoded = try codec.decodeAlloc(dotted_a, dotted_bytes, "adır", .language, .{ .code = "en", .heading = "English" });
+        var dotted_visible: std.ArrayList(u8) = .empty;
+        for (dotted_decoded.entry.sections) |dotted_section| for (dotted_section.blocks) |dotted_block| for (dotted_block.spans) |dotted_span| {
+            try dotted_visible.appendSlice(dotted_a, dotted_span.text);
+            try std.testing.expect(dotted_span.kind == .external_link);
+            try std.testing.expectEqualStrings("http://www.nisanyansozluk.com", dotted_span.target);
+            try std.testing.expectEqual(dotted_case.styled, dotted_span.bold);
+            try std.testing.expectEqual(dotted_case.styled, dotted_span.italic);
+        };
+        try std.testing.expectEqualStrings("<nisanyansozluk.com>", dotted_visible.items);
+        try std.testing.expect(dotted_report.literal_markup);
+    }
+    const dotted_raw = [_]compiler.Span{.{ .kind = .external_link, .text = "<nisanyansozluk.com>", .target = "http://www.nisanyansozluk.com" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(dotted_a, &dotted_raw, null));
+    try std.testing.expectError(error.UncompiledPresentation, compiler.requireCompiledText("<nisanyansozluk.com>"));
+    for ([_][]const u8{ "<[https:// broken]>", "before |} after" }) |dotted_rejected|
+        try std.testing.expectError(error.UncompiledPresentation, compileAlloc(dotted_a, "entry", .language, "English", "en", dotted_rejected, null));
+    var dotted_supported_report: Fallbacks = .{};
+    const dotted_supported_bytes = try compileReportedAlloc(dotted_a, "entry", .language, "English", "en", "<b>kept</b>", null, &dotted_supported_report);
+    const dotted_supported = try codec.decodeAlloc(dotted_a, dotted_supported_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    var dotted_supported_text: std.ArrayList(u8) = .empty;
+    for (dotted_supported.entry.sections) |dotted_section| for (dotted_section.blocks) |dotted_block| for (dotted_block.spans) |dotted_span| {
+        try dotted_supported_text.appendSlice(dotted_a, dotted_span.text);
+        try std.testing.expect(dotted_span.kind == .text and dotted_span.target.len == 0 and dotted_span.bold);
+    };
+    try std.testing.expectEqualStrings("kept", dotted_supported_text.items);
+    try std.testing.expect(!dotted_supported_report.any());
+}
+
+
+test "iframe literal angles roundtrip without exempting attributes or body validation" {
+    var pa_arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer pa_arena.deinit();
+    const pa_alloc = pa_arena.allocator();
+    for ([_][]const u8{ "iframe" }) |pa_tag| {
+        const pa_source = try std.fmt.allocPrint(pa_alloc, "<{s}>[[Target|linked]]</{s}>", .{pa_tag, pa_tag});
+        var pa_report: Fallbacks = .{};
+        const pa_bytes = try compileReportedAlloc(pa_alloc, "entry", .language, "English", "en", pa_source, null, &pa_report);
+        const pa_stored = try codec.decodeAlloc(pa_alloc, pa_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqualSlices(u8, pa_bytes, try codec.encodeAlloc(pa_alloc, pa_stored));
+        var pa_visible: std.ArrayList(u8) = .empty;
+        var pa_actions: usize = 0;
+        for (pa_stored.entry.sections) |pa_section| for (pa_section.blocks) |pa_block| for (pa_block.spans) |pa_span| {
+            try pa_visible.appendSlice(pa_alloc, pa_span.text);
+            if (pa_span.kind == .link) {
+                pa_actions += 1;
+                try std.testing.expectEqualStrings("Target", pa_span.target);
+                try std.testing.expectEqualStrings("linked", pa_span.text);
+            } else try std.testing.expect(pa_span.kind == .text and pa_span.target.len == 0);
+        };
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(pa_alloc, "<{s}>linked</{s}>", .{pa_tag, pa_tag}), pa_visible.items);
+        try std.testing.expectEqual(@as(usize, 1), pa_actions);
+        try std.testing.expect(pa_report.unsupported_element);
+        // Protection belongs to the recognized tag token, never the ordinary body.
+        const pa_bad_body = try std.fmt.allocPrint(pa_alloc, "<{s}>before |}} after</{s}>", .{pa_tag, pa_tag});
+        try std.testing.expectError(error.UncompiledPresentation, compileAlloc(pa_alloc, "entry", .language, "English", "en", pa_bad_body, null));
+    }
+    // Existing disallowed-tag rejection contracts outside iframe are unchanged.
+    for ([_][]const u8{ "script", "style", "object", "embed" }) |pa_other_tag| {
+        const pa_other_source = try std.fmt.allocPrint(pa_alloc, "X <{s}>y</{s}> Z", .{pa_other_tag, pa_other_tag});
+        try std.testing.expectError(error.UncompiledPresentation, compileAlloc(pa_alloc, "entry", .language, "English", "en", pa_other_source, null));
+    }
+    for ([_][]const u8{
+        "<script>https://example.test</script>",
+        "<iframe data-note='{{deferred}}'></iframe>",
+        "<iframe data-note='before |} after'></iframe>",
+        "<iframe data-note='[https:// broken]'></iframe>",
+        "<iframe>before |} after</iframe>",
+    }) |pa_strict_source|
+        try std.testing.expectError(error.UncompiledPresentation, compileAlloc(pa_alloc, "entry", .language, "English", "en", pa_strict_source, null));
+    const pa_raw = [_]compiler.Span{.{ .text = "<iframe>" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(pa_alloc, &pa_raw, null));
+    try std.testing.expectError(error.UncompiledPresentation, compiler.requireCompiledText("<iframe>"));
+    var pa_supported_report: Fallbacks = .{};
+    const pa_supported_bytes = try compileReportedAlloc(pa_alloc, "entry", .language, "English", "en", "<b>bold</b><ref>note</ref>", null, &pa_supported_report);
+    const pa_supported = try codec.decodeAlloc(pa_alloc, pa_supported_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expect(!pa_supported_report.unsupported_element);
+    try std.testing.expectEqual(@as(usize, 1), pa_supported.entry.references.len);
+    var pa_bold_seen = false;
+    for (pa_supported.entry.sections) |pa_section| for (pa_section.blocks) |pa_block| for (pa_block.spans) |pa_span| {
+        if (std.mem.eql(u8, pa_span.text, "bold")) { pa_bold_seen = true; try std.testing.expect(pa_span.bold); }
+    };
+    try std.testing.expect(pa_bold_seen);
+}
