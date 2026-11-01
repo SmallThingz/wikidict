@@ -5041,3 +5041,68 @@ test "iframe literal angles roundtrip without exempting attributes or body valid
     };
     try std.testing.expect(pa_bold_seen);
 }
+
+
+test "restored display close survives codec without exempting outside text or targets" {
+    var nah_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer nah_arena.deinit();
+    const nah_a = nah_arena.allocator();
+    const nah_bytes = try compileAlloc(nah_a, "entry", .language, "English", "en", "''[[x|[label]]]]''", null);
+    const nah_record = try codec.decodeAlloc(nah_a, nah_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualSlices(u8, nah_bytes, try codec.encodeAlloc(nah_a, nah_record));
+    var nah_visible: std.ArrayList(u8) = .empty;
+    var nah_action: std.ArrayList(u8) = .empty;
+    var nah_outside: usize = 0;
+    for (nah_record.entry.sections) |nah_section| for (nah_section.blocks) |nah_block| for (nah_block.spans) |nah_span| {
+        try nah_visible.appendSlice(nah_a, nah_span.text);
+        try std.testing.expect(nah_span.italic);
+        if (nah_span.kind == .link) {
+            try std.testing.expectEqualStrings("x", nah_span.target);
+            try nah_action.appendSlice(nah_a, nah_span.text);
+        } else {
+            try std.testing.expectEqualStrings("]", nah_span.text);
+            try std.testing.expectEqualStrings("", nah_span.target);
+            nah_outside += 1;
+        }
+    };
+    try std.testing.expectEqualStrings("[label]]", nah_visible.items);
+    try std.testing.expectEqualStrings("[label]", nah_action.items);
+    try std.testing.expectEqual(@as(usize, 1), nah_outside);
+    // Same visible bytes, entirely parsed/authored and without parser evidence.
+    const nah_unowned = [_]compiler.Span{.{ .kind = .link, .target = "x", .text = "[label]" }, .{ .text = "]" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(nah_a, &nah_unowned, null));
+    try std.testing.expectError(error.UncompiledPresentation, compiler.requireCompiledText("]]"));
+    // The unchanged source parser diagnoses an orphan outside pair. It does
+    // not pass those two authored bytes to the final residual validator.
+    var nah_recovery_report: Fallbacks = .{};
+    const nah_recovery_bytes = try compileReportedAlloc(nah_a, "entry", .language, "English", "en", "[[x|[label]]]]]", null, &nah_recovery_report);
+    const nah_recovery_record = try codec.decodeAlloc(nah_a, nah_recovery_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualSlices(u8, nah_recovery_bytes, try codec.encodeAlloc(nah_a, nah_recovery_record));
+    var nah_recovery_visible: std.ArrayList(u8) = .empty;
+    var nah_recovery_action: std.ArrayList(u8) = .empty;
+    var nah_recovery_markers: usize = 0;
+    for (nah_recovery_record.entry.sections) |nah_recovery_section| for (nah_recovery_section.blocks) |nah_recovery_block| for (nah_recovery_block.spans) |nah_recovery_span| {
+        try nah_recovery_visible.appendSlice(nah_a, nah_recovery_span.text);
+        if (nah_recovery_span.kind == .link) {
+            try std.testing.expectEqualStrings("x", nah_recovery_span.target);
+            try nah_recovery_action.appendSlice(nah_a, nah_recovery_span.text);
+        } else {
+            try std.testing.expectEqualStrings(" [malformed link]", nah_recovery_span.text);
+            try std.testing.expectEqualStrings("", nah_recovery_span.target);
+            nah_recovery_markers += 1;
+        }
+    };
+    try std.testing.expectEqualStrings("[label] [malformed link]", nah_recovery_visible.items);
+    try std.testing.expectEqualStrings("[label]", nah_recovery_action.items);
+    try std.testing.expectEqual(@as(usize, 1), nah_recovery_markers);
+    try std.testing.expect(nah_recovery_report.literal_markup);
+    // An owned display byte still grants no exemption to a raw outside pair.
+    const nah_owned_then_raw = [_]compiler.Span{
+        .{ .kind = .link, .target = "x", .text = "[label" },
+        .{ .kind = .link, .target = "x", .text = "]", .provenance = .entity_literal },
+        .{ .text = "]]" },
+    };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(nah_a, &nah_owned_then_raw, null));
+    const nah_bad_target = [_]compiler.Span{.{ .kind = .link, .target = "{{unresolved}}", .text = "]", .provenance = .entity_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(nah_a, &nah_bad_target, null));
+}

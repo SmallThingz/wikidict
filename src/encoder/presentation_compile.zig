@@ -8309,15 +8309,36 @@ pub const Renderer = struct {
                             if (!token.link_has_pipe or generated_label) {
                                 // Decoded default and generated labels are title text, not another wikitext input.
                                 try self.text(label_value, action_style);
-                            } else if (destination.external) {
-                                // Captured map URLs are already semantic data, not
-                                // authored URL wikitext for entity decoding again.
-                                var mapped_style = action_style;
-                                mapped_style.kind = .external_link;
-                                mapped_style.target = destination.target;
-                                try self.inlineTextWithMissing(try missingSlice(self.a, prepared_missing, label_value), mapped_style, depth + 2);
                             } else {
-                                try self.linkWithMissing(try missingSlice(self.a, prepared_missing, label_value), destination.target, action_style, depth + 1, false);
+                                var restored_label_missing = try missingSlice(self.a, prepared_missing, label_value);
+                                // Only this local parser's exact returned display slice can
+                                // carry the closing-pair byte into recursive label parsing.
+                                // Entity spelling transports provenance; it decodes back to
+                                // one ] with the current action and formatting intact.
+                                const restored_link_end = it.cursor - token.trail.len;
+                                if (token.link_label_restored_close and label_value.len != 0 and
+                                    label_value.ptr == token.text.ptr and label_value.len == token.text.len and
+                                    restored_link_end >= 3 and restored_link_end <= input.len and
+                                    @intFromPtr(label_value.ptr) + label_value.len == @intFromPtr(input.ptr) + restored_link_end - 2 and
+                                    label_value[label_value.len - 1] == ']' and
+                                    std.mem.eql(u8, input[restored_link_end - 3 .. restored_link_end], "]]]"))
+                                {
+                                    var restored_transport: missing_dependency.Builder = .{};
+                                    defer restored_transport.deinit(self.a);
+                                    try restored_transport.appendSlice(self.a, restored_label_missing, 0, restored_label_missing.bytes.len - 1);
+                                    try restored_transport.append(self.a, missingEdit(restored_label_missing, restored_label_missing.bytes.len - 1, restored_label_missing.bytes.len, "&#93;"));
+                                    restored_label_missing = try restored_transport.finish(self.a);
+                                }
+                                if (destination.external) {
+                                    // Captured map URLs are already semantic data, not
+                                    // authored URL wikitext for entity decoding again.
+                                    var mapped_style = action_style;
+                                    mapped_style.kind = .external_link;
+                                    mapped_style.target = destination.target;
+                                    try self.inlineTextWithMissing(restored_label_missing, mapped_style, depth + 2);
+                                } else {
+                                    try self.linkWithMissing(restored_label_missing, destination.target, action_style, depth + 1, false);
+                                }
                             }
                             if (trail.len != 0) {
                                 try self.text(trail, action_style);
@@ -33017,4 +33038,68 @@ test "iframe literal angles preserve parsed attributes and ordinary body provena
             try std.testing.expectEqualStrings(try std.fmt.allocPrint(pa_alloc, "<{s} data-note='&'>linked  &{s}", .{pa_tag, pa_close}), try flattened(pa_alloc, pa_spans));
         }
     }
+}
+
+
+test "restored alternate label close retains one byte provenance actions and formatting" {
+    var nah_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer nah_arena.deinit();
+    const nah_a = nah_arena.allocator();
+    for ([_]struct { source: []const u8, visible: []const u8, entities: usize, italic: bool }{
+        .{ .source = "[[x|[label]]]]", .visible = "[label]]", .entities = 1, .italic = false },
+        .{ .source = "''[[x|[label]]]]''", .visible = "[label]]", .entities = 1, .italic = true },
+        .{ .source = "[[x|[label&#93;]]]]", .visible = "[label]]]", .entities = 2, .italic = false },
+        .{ .source = "[[x|[label]]]s", .visible = "[label]s", .entities = 1, .italic = false },
+    }) |nah_case| {
+        var nah_renderer: Renderer = .{ .a = nah_a, .context = .{} };
+        const nah_spans = try nah_renderer.parseSpans(nah_case.source, .{});
+        try std.testing.expectEqualStrings(nah_case.visible, try flattened(nah_a, nah_spans));
+        var nah_entity_bytes: usize = 0;
+        var nah_outside: usize = 0;
+        for (nah_spans) |nah_span| {
+            try std.testing.expectEqual(nah_case.italic, nah_span.flags.italic);
+            if (nah_span.kind == .link) {
+                try std.testing.expectEqualStrings("x", nah_span.target);
+                if (nah_span.provenance == .entity_literal) {
+                    for (nah_span.text) |nah_byte| try std.testing.expectEqual(@as(u8, ']'), nah_byte);
+                    nah_entity_bytes += nah_span.text.len;
+                }
+            } else if (std.mem.eql(u8, nah_span.text, "]")) {
+                try std.testing.expect(nah_span.provenance == .parsed and nah_span.target.len == 0);
+                nah_outside += 1;
+            }
+        }
+        try std.testing.expectEqual(nah_case.entities, nah_entity_bytes);
+        try std.testing.expectEqual(@as(usize, if (std.mem.endsWith(u8, nah_case.source, "s")) 0 else 1), nah_outside);
+    }
+    var nah_child: Renderer = .{ .a = nah_a, .context = .{} };
+    const nah_child_spans = try nah_child.parseSpans("[[x|[<i>label</i>]]]]", .{});
+    try std.testing.expectEqualStrings("[label]]", try flattened(nah_a, nah_child_spans));
+    var nah_child_seen = false;
+    for (nah_child_spans) |nah_span| {
+        if (std.mem.eql(u8, nah_span.text, "label")) { nah_child_seen = true; try std.testing.expect(nah_span.flags.italic); }
+        if (nah_span.provenance == .entity_literal) try std.testing.expect(!nah_span.flags.italic and nah_span.kind == .link);
+    }
+    try std.testing.expect(nah_child_seen);
+    // Keep the established malformed outer/valid child ownership oracle.
+    var nah_nested: Renderer = .{ .a = nah_a, .context = .{} };
+    const nah_nested_spans = try nah_nested.parseSpans("[[A|[[B]]]]", .{});
+    try std.testing.expectEqualStrings("A|B [malformed link]", try flattened(nah_a, nah_nested_spans));
+    var nah_nested_seen = false;
+    for (nah_nested_spans) |nah_span| if (nah_span.kind == .link) {
+        nah_nested_seen = true;
+        try std.testing.expectEqualStrings("B", nah_span.target);
+    };
+    try std.testing.expect(nah_nested_seen);
+    // Track the unchanged bytes and conservatively mark an edited occurrence.
+    const nah_tracked: MissingText = .{ .bytes = "[label]", .ranges = &.{.{ .start = 1, .end = 6, .occurrence = 1 }} };
+    var nah_builder: missing_dependency.Builder = .{};
+    defer nah_builder.deinit(nah_a);
+    try nah_builder.appendSlice(nah_a, nah_tracked, 0, 6);
+    try nah_builder.append(nah_a, missingEdit(nah_tracked, 6, 7, "&#93;"));
+    const nah_transport = try nah_builder.finish(nah_a);
+    try std.testing.expectEqualStrings("[label&#93;", nah_transport.bytes);
+    try std.testing.expectEqualDeep(nah_tracked.ranges, nah_transport.ranges);
+    try std.testing.expect(!nah_transport.unknown);
+    try std.testing.expect(missingEdit(.{ .bytes = "]", .ranges = &.{.{ .start = 0, .end = 1, .occurrence = 1 }} }, 0, 1, "&#93;").unknown);
 }

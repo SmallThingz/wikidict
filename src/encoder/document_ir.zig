@@ -122,6 +122,8 @@ pub const InlineSpan = struct {
     trail: []const u8 = "",
     link_has_pipe: bool = false,
     link_empty_label: bool = false,
+    // Parser-owned evidence for the one display byte returned from the closing pair.
+    link_label_restored_close: bool = false,
     external_label_prefix: []const u8 = "",
     literal_tail: bool = false,
     // Renderer-only evidence: text is the complete proved pair with an empty raw target.
@@ -214,6 +216,7 @@ pub const InlineIterator = struct {
             .trail = link.trail,
             .link_has_pipe = link.has_pipe,
             .link_empty_label = link.empty_label,
+            .link_label_restored_close = link.restored_label_close,
             .bold = self.bold,
             .italic = self.italic,
         };
@@ -558,6 +561,7 @@ const ParsedInlineLink = struct {
     trail: []const u8,
     has_pipe: bool,
     empty_label: bool,
+    restored_label_close: bool = false,
 };
 
 const InlineLinkParse = union(enum) {
@@ -892,6 +896,7 @@ fn parseInlineLinkAtPair(input: []const u8, start: usize, pair: syntax.Pair, lin
     const raw_label = if (pipe) |index| inside[index + 1 ..] else target;
     var label = if (raw_label.len == 0) target else raw_label;
     var close_end = pair.end;
+    var restored_label_close = false;
     // MediaWiki returns one leading extra ] to a nonempty alternate label
     // containing a phase-visible [. Protected bodies are still raw here.
     if (pipe != null and raw_label.len != 0 and close_end < input.len and input[close_end] == ']' and
@@ -899,6 +904,7 @@ fn parseInlineLinkAtPair(input: []const u8, start: usize, pair: syntax.Pair, lin
     {
         label = input[pair.inner_end - raw_label.len .. pair.inner_end + 1];
         close_end += 1;
+        restored_label_close = true;
     }
     const trail_end = link_trail.end(input, close_end);
     return .{ .link = .{
@@ -908,6 +914,7 @@ fn parseInlineLinkAtPair(input: []const u8, start: usize, pair: syntax.Pair, lin
         .trail = input[close_end..trail_end],
         .has_pipe = pipe != null,
         .empty_label = pipe != null and raw_label.len == 0,
+        .restored_label_close = restored_label_close,
     } };
 }
 
@@ -1452,4 +1459,54 @@ test "rejected external opener evidence is confined to raw LF and EOF failures" 
     }
     var ordinary: InlineIterator = .{ .input = "[https://example.test unfinished" };
     while (ordinary.next()) |span| try std.testing.expect(!span.rejected_external_opener);
+}
+
+
+test "alternate label restored closing byte evidence owns only its exact source slice" {
+    const NahLegacyInlineSpan = struct {
+    kind: InlineKind,
+    text: []const u8,
+    target: []const u8 = "",
+    trail: []const u8 = "",
+    link_has_pipe: bool = false,
+    link_empty_label: bool = false,
+    external_label_prefix: []const u8 = "",
+    literal_tail: bool = false,
+    // Renderer-only evidence: text is the complete proved pair with an empty raw target.
+    empty_target_link: bool = false,
+    // Renderer-only evidence: a valid free URL follows a raw opener rejected at LF/EOF.
+    rejected_external_opener: bool = false,
+    bold: bool = false,
+    italic: bool = false,
+    };
+    const NahLegacyParsedInlineLink = struct {
+    end: usize,
+    target: []const u8,
+    label: []const u8,
+    trail: []const u8,
+    has_pipe: bool,
+    empty_label: bool,
+    };
+    // Measured by the future admitted test, not inferred from field counts.
+    std.debug.print("NAH layout InlineSpan {d}->{d}, ParsedInlineLink {d}->{d}\n", .{ @sizeOf(NahLegacyInlineSpan), @sizeOf(InlineSpan), @sizeOf(NahLegacyParsedInlineLink), @sizeOf(ParsedInlineLink) });
+    for ([_][]const u8{
+        "[[x|[label]]]]", "[[x|[label]]]s", "[[x|[label&#93;]]]]",
+        "[[x|<i>[label</i>]]]]", "[[x|[label]]]]]",
+    }) |nah_source| {
+        var nah_it: InlineIterator = .{ .input = nah_source, .renderer_boundaries = true };
+        const nah_link = nah_it.next() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(nah_link.kind == .link and nah_link.link_label_restored_close);
+        const nah_end = nah_it.cursor - nah_link.trail.len;
+        try std.testing.expectEqualStrings("]]]", nah_source[nah_end - 3 .. nah_end]);
+        try std.testing.expectEqual(@intFromPtr(nah_source.ptr) + nah_end - 2, @intFromPtr(nah_link.text.ptr) + nah_link.text.len);
+        try std.testing.expectEqual(@as(u8, ']'), nah_link.text[nah_link.text.len - 1]);
+        while (nah_it.next()) |nah_tail| try std.testing.expect(!nah_tail.link_label_restored_close);
+    }
+    for ([_][]const u8{
+        "", "[", "[[", "[[x|", "[[x|label]]]]", "[[x|&#91;label]]]]",
+        "[[x|<nowiki>[label</nowiki>]]]]", "[[x|[label]]", "[[x|]]]]",
+    }) |nah_source| {
+        var nah_it: InlineIterator = .{ .input = nah_source, .renderer_boundaries = true };
+        while (nah_it.next()) |nah_token| try std.testing.expect(!nah_token.link_label_restored_close);
+    }
 }

@@ -5663,3 +5663,53 @@ test "Writer captured Punjabi act preserves escaped iframe and ordinary page act
     }
     try std.testing.expect(pa_unsupported and pa_lua_error and pa_rows.next() == null);
 }
+
+
+test "Writer captured Nahuatl Wolke retains restored IPA close and nested child ownership" {
+    var nah_tmp = std.testing.tmpDir(.{}); defer nah_tmp.cleanup();
+    var nah_arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer nah_arena.deinit();
+    const nah_a = nah_arena.allocator(); const nah_io = std.testing.io;
+    // Exact NAH p2503/r93751/ordinal516 retained input; no expansion replay.
+    const nah_raw = "{{-de-}}\n\n{{-noun-de-}}\n* [1] [[mixtli]]\n\n{{-pron-}}\n[[:es:AFI|AFI]] → {{IPA| [ 'vɔlkə ]}}; {{plural}}: {{IPA|[ 'vɔlkn̩ ]}}\n\n{{-ety-}}";
+    const nah_expanded = "[[Category:Alemaniatlahtolli]]__NOEDITSECTION__\n<br>\n== Alemaniatlahtolli ==\n\n=== Tlatocaxtiliztli ===\n[[Category:DE:Tlatocaxtiliztli]]\n[[Category:DE:Hueymachiyotlahtoliztli]]\n\n* [1] [[mixtli]]\n\n=== Tlatlaliliztli ===\n\n[[:es:AFI|AFI]] → <small></small>\n* IPA: <span style=\"font-family:lucida sans unicode\">[[Wiktionary:IPA|[ [ 'vɔlkə ]]]]</span>; <span style=\"font-size:95%;\">[[miaccayotl|Miaccayotl]]</span>: <small></small>\n* IPA: <span style=\"font-family:lucida sans unicode\">[[Wiktionary:IPA|[[ 'vɔlkn̩ ]]]]</span>\n\n=== Yollotlahtolli ===\n";
+    const nah_namespaces = "# wikidict-namespace-registry-v1\n# wiki\tnahwiktionary\n# dump-date\t20261001\n# content-language\tnah\n-2\tMēdiatl\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\tMedia\n-1\tNōncuahquīzqui\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\tEspecial\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\tTēixnāmiquiliztli\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDiscusión\n2\tTlatequitiltilīlli\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\tUsuario\n3\tTlatequitiltilīlli tēixnāmiquiliztli\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tUsuario Discusión\n4\tWiktionary\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\tWikipedia\n5\tWiktionary tēixnāmiquiliztli\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWikipedia Discusión\tWiktionary talk\n6\tĪxiptli\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\tImagen\n7\tĪxiptli tēixnāmiquiliztli\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tImage talk\tImagen Discusión\tImagen discusión\n8\tHuiquimedia\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\tMediaWiki\n9\tHuiquimedia tēixnāmiquiliztli\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tMediaWiki Discusión\n10\tNemachiyōtīlli\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tPlantilla\n11\tNemachiyōtīlli tēixnāmiquiliztli\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tPlantilla Discusión\n12\tTēpalēhuiliztli\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tAyuda\n13\tTēpalēhuiliztli tēixnāmiquiliztli\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tAyuda Discusión\n14\tNeneuhcāyōtl\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tCategoría\n15\tNeneuhcāyōtl tēixnāmiquiliztli\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tCategoría Discusión\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\tMódulo\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\tMódulo discusión\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\tEvento\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\tEvento discusión\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
+    var nah_ns = try namespace_registry.Registry.init(nah_a, nah_namespaces); defer nah_ns.deinit();
+    // Unbound language callbacks keep the unresolved owner separate from this
+    // presentation regression; the expanded heading grants no language trust.
+    const nah_codes: encoder.blob_builder.LanguageCodes = .{ .namespace_catalog = &nah_ns };
+    const nah_output = try std.fmt.allocPrint(nah_a, ".zig-cache/tmp/{s}/nah-restored-output", .{nah_tmp.sub_path});
+    var nah_writer = try encoder.blob_builder.Writer.init(nah_io, nah_a, nah_output); defer nah_writer.deinit();
+    nah_writer.language_codes = nah_codes;
+    try nah_writer.addExpandedPage(nah_a, .{ .id = 0, .kind = .language }, "Wolke", nah_expanded, nah_raw, null);
+    const nah_stats = try nah_writer.finish(nah_codes);
+    try std.testing.expectEqual(@as(usize, 1), nah_stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), nah_stats.fallback_pages);
+    // Existing helper verifies trusted index lookup and exact codec roundtrip.
+    const nah_entry = try GaHtmlLanguageBoundaryFixture.requiredEntry(nah_io, nah_a, nah_output, "Unclassified", "Wolke");
+    try std.testing.expectEqualDeep((try GaHtmlLanguageBoundaryFixture.whole(nah_a, "Wolke", nah_expanded, &nah_ns)).sections, nah_entry.sections);
+    var nah_ipa: std.ArrayList(u8) = .empty;
+    var nah_visible: std.ArrayList(u8) = .empty;
+    var nah_child_seen = false;
+    var nah_meaning_seen = false;
+    var nah_plural_seen = false;
+    var nah_afi_seen = false;
+    var nah_headings: usize = 0;
+    for (nah_entry.sections) |nah_section| {
+        for ([_][]const u8{ "Tlatocaxtiliztli", "Tlatlaliliztli", "Yollotlahtolli" }) |nah_heading| {
+            if (std.mem.eql(u8, nah_section.title, nah_heading)) nah_headings += 1;
+        }
+        for (nah_section.blocks) |nah_block| for (nah_block.spans) |nah_span| {
+            try nah_visible.appendSlice(nah_a, nah_span.text);
+            if (std.mem.eql(u8, nah_span.target, "Wiktionary:IPA")) try nah_ipa.appendSlice(nah_a, nah_span.text);
+            if (std.mem.eql(u8, nah_span.target, "mixtli")) nah_meaning_seen = true;
+            if (std.mem.eql(u8, nah_span.target, "miaccayotl")) nah_plural_seen = true;
+            if (std.mem.eql(u8, nah_span.target, "es:AFI")) nah_afi_seen = true;
+            if (std.mem.eql(u8, nah_span.target, "'vɔlkn̩")) nah_child_seen = true;
+        };
+    }
+    try std.testing.expectEqual(@as(usize, 3), nah_headings);
+    try std.testing.expectEqualStrings("[ [ 'vɔlkə ]", nah_ipa.items);
+    try std.testing.expect(nah_meaning_seen and nah_plural_seen and nah_afi_seen and nah_child_seen);
+    try std.testing.expect(std.mem.indexOf(u8, nah_visible.items, "[ [ 'vɔlkə ]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, nah_visible.items, "[malformed link]") != null);
+}
