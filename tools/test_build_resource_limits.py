@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import build_resource_limits as limits
 import build_wiktionaries as builder
@@ -368,6 +368,173 @@ class ResourceLimitsTest(unittest.TestCase):
             with self.assertRaisesRegex(limits.ContainmentUnavailable, 'Cannot inspect live threads'):
                 limits._live_mm_siblings(100)
 
+    def host_pressure_callback(self, reason, *, admission=False):
+        disk_check = limits._check_watchdog_disk_floor
+
+        def checked(report):
+            disk_check(report)
+            if ('child_pid' not in report) != admission:
+                return
+            report['host_pressure_guard'] = {
+                'last_check': 'admission' if admission else 'runtime',
+                'last_sample': {'mem_available_bytes': 1, 'psi_full_avg10': 99.0},
+                'stopped': True, 'stop_reason': reason,
+            }
+            raise limits.ContainmentUnavailable('Host pressure safety stop: ' + reason)
+
+        return checked
+
+    def test_runtime_ram_and_psi_pressure_are_telemetry(self):
+        for reason in ('host_ram_stop_reserve', 'host_memory_pressure'):
+            with self.subTest(reason=reason):
+                report = {'child_pid': 123, 'disk_space': []}
+                callback = self.host_pressure_callback(reason)
+                with patch.object(limits, '_check_watchdog_disk_floor', callback):
+                    limits._check_watchdog_runtime(report)
+                state = report['host_pressure_guard']
+                self.assertEqual(state['runtime_pressure_reason'], reason)
+                self.assertFalse(state['stopped'])
+                self.assertFalse(state['runtime_termination_enabled'])
+                self.assertNotIn('stop_reason', state)
+                self.assertEqual(state['last_sample']['mem_available_bytes'], 1)
+
+    def test_host_pressure_admission_still_refuses_before_launch(self):
+        for reason in ('host_ram_admission_reserve', 'host_pressure_admission'):
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as tmp:
+                callback = self.host_pressure_callback(reason, admission=True)
+                with patch.object(limits, '_check_watchdog_disk_floor', callback), \
+                     patch.object(limits.subprocess, 'Popen') as launch:
+                    with self.assertRaisesRegex(limits.ContainmentUnavailable, 'monitor_error'):
+                        limits.supervise_watchdog(
+                            argv=['-c', 'raise SystemExit(99)'],
+                            report_path=Path(tmp) / 'watchdog.json', wall_seconds=10,
+                            memory_limit_bytes=64 * 1024**2, max_tasks=4)
+                launch.assert_not_called()
+                report = json.loads((Path(tmp) / 'watchdog.json').read_text())
+                self.assertEqual(report['error'], 'Host pressure safety stop: ' + reason)
+                self.assertNotIn('child_pid', report)
+                self.assertTrue(report['host_pressure_guard']['stopped'])
+
+    def test_runtime_pressure_policy_preserves_other_failures(self):
+        errors = [limits._DiskFloorReached('Host pressure safety stop: host_ram_stop_reserve'),
+                  limits.ContainmentUnavailable('Cannot measure free disk space'),
+                  limits.ContainmentUnavailable('Host pressure observation failed: denied'),
+                  OSError('disk I/O'), RuntimeError('unknown callback failure')]
+        for error in errors:
+            with self.subTest(error=repr(error)):
+                # A stale previous pressure observation must not hide a new failure.
+                report = {'child_pid': 123, 'host_pressure_guard': {
+                    'last_check': 'runtime', 'stopped': True,
+                    'stop_reason': 'host_ram_stop_reserve'}}
+                with patch.object(limits, '_check_watchdog_disk_floor', side_effect=error):
+                    with self.assertRaises(type(error)) as caught:
+                        limits._check_watchdog_runtime(report)
+                self.assertIs(caught.exception, error)
+        for child in (None, 123):
+            report = {'host_pressure_guard': {'last_check': 'admission', 'stopped': True,
+                                             'stop_reason': 'host_ram_stop_reserve'}}
+            if child is not None:
+                report['child_pid'] = child
+            error = limits.ContainmentUnavailable('Host pressure safety stop: host_ram_stop_reserve')
+            with patch.object(limits, '_check_watchdog_disk_floor', side_effect=error):
+                with self.assertRaises(limits.ContainmentUnavailable):
+                    limits._check_watchdog_runtime(report)
+
+    def test_runtime_pressure_does_not_stop_a_started_child(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'watchdog.json'
+            callback = self.host_pressure_callback('host_memory_pressure')
+            with patch.object(limits, '_check_watchdog_disk_floor', callback):
+                status = limits.supervise_watchdog(
+                    argv=['-c', 'import time, build_resource_limits as l; assert l.inside_watchdog(); time.sleep(0.3)'],
+                    report_path=path, wall_seconds=10,
+                    memory_limit_bytes=64 * 1024**2, max_tasks=4)
+            report = json.loads(path.read_text())
+            self.assertEqual(status, 0)
+            self.assertEqual(report['termination_reason'], 'child_exit')
+            self.assertFalse(report['host_pressure_guard']['stopped'])
+            self.assertEqual(report['guardian_exit_status'], 0)
+
+    def test_runtime_pressure_does_not_weaken_own_memory_cap(self):
+        original_sample = limits._owned_sample
+
+        def over_budget(*args, **kwargs):
+            sample = original_sample(*args, **kwargs)
+            return {**sample, 'pss_bytes': 65 * 1024**2}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'watchdog.json'
+            callback = self.host_pressure_callback('host_ram_stop_reserve')
+            with patch.object(limits, '_check_watchdog_disk_floor', callback), \
+                 patch.object(limits, '_owned_sample', side_effect=over_budget):
+                with self.assertRaisesRegex(limits.ContainmentUnavailable, 'sampled_pss_limit'):
+                    limits.supervise_watchdog(
+                        argv=['-c', 'import time; time.sleep(5)'],
+                        report_path=path, wall_seconds=10,
+                        memory_limit_bytes=64 * 1024**2, max_tasks=4)
+            report = json.loads(path.read_text())
+            self.assertEqual(report['termination_reason'], 'sampled_pss_limit')
+            self.assertEqual(report['memory_limit_bytes'], 64 * 1024**2)
+            self.assertFalse(report['host_pressure_guard']['stopped'])
+            self.assertFalse(Path('/proc', str(report['child_pid'])).exists())
+
+    def test_guardian_child_birth_recovery_requires_exact_invocation(self):
+        record = dict(root_pid=200, root_start=12, supervisor_pid=100,
+                      supervisor_start=10, guardian_pid=101, status='observing')
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'guardian.json'
+            path.write_text(json.dumps(record))
+            self.assertEqual(limits._guardian_child_start(path, 200, 100, 10, 101), 12)
+            for delta in ({'root_pid': 201}, {'supervisor_pid': 99},
+                          {'supervisor_start': 9}, {'guardian_pid': 102},
+                          {'root_start': True}, {'root_start': 9},
+                          {'status': 'no_child_started'}):
+                with self.subTest(delta=delta):
+                    path.write_text(json.dumps({**record, **delta}))
+                    with self.assertRaises(limits.ContainmentUnavailable):
+                        limits._guardian_child_start(path, 200, 100, 10, 101)
+            path.unlink()
+            with self.assertRaises(limits.ContainmentUnavailable):
+                limits._guardian_child_start(path, 200, 100, 10, 101)
+
+    def test_missing_first_child_snapshot_uses_guardian_birth_for_cleanup(self):
+        real_popen, real_table = limits.subprocess.Popen, limits._process_table
+        children = []
+        hidden = False
+
+        def launch(*args, **kwargs):
+            child = real_popen(*args, **kwargs)
+            if kwargs.get('preexec_fn') is not None:
+                children.append(child)
+                child.kill = Mock(side_effect=AssertionError('Unverified PID kill'))
+            return child
+
+        def table():
+            nonlocal hidden
+            result = real_table()
+            if children and not hidden:
+                result.pop(children[0].pid, None)
+                hidden = True
+            return result
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'watchdog.json'
+            with patch.object(limits.subprocess, 'Popen', side_effect=launch), \
+                 patch.object(limits, '_process_table', side_effect=table):
+                with self.assertRaisesRegex(limits.ContainmentUnavailable, 'monitor_error'):
+                    limits.supervise_watchdog(
+                        argv=['-c', 'import time; time.sleep(5)'],
+                        report_path=path, wall_seconds=10,
+                        memory_limit_bytes=64 * 1024**2, max_tasks=4)
+            report = json.loads(path.read_text())
+            guardian = json.loads(path.with_name('watchdog-guardian.json').read_text())
+            self.assertEqual(report['error'], 'Cannot identify watchdog child')
+            self.assertTrue(hidden)
+            self.assertEqual(report['child_identity_source'], 'guardian_handshake')
+            self.assertEqual(report['child_start_time_ticks'], guardian['root_start'])
+            self.assertFalse(Path('/proc', str(report['child_pid'])).exists())
+            children[0].kill.assert_not_called()
+
     def test_watchdog_wall_limit_reaps_own_child(self):
         with tempfile.TemporaryDirectory() as tmp:
             report_path = Path(tmp) / 'watchdog.json'
@@ -422,6 +589,7 @@ class ResourceLimitsTest(unittest.TestCase):
             fixture.write_text(source.replace(original, replacement))
             real_popen = limits.subprocess.Popen
             guardians = []
+            guardian_starts = {}
 
             def launch(argv, *args, **kwargs):
                 if (isinstance(argv, list) and len(argv) > 2 and
@@ -432,6 +600,10 @@ class ResourceLimitsTest(unittest.TestCase):
                     kwargs['env'] = env
                     child = real_popen(argv, *args, **kwargs)
                     guardians.append(child)
+                    identity = limits._process_table()[child.pid]
+                    self.assertEqual(identity['pgrp'], child.pid)
+                    self.assertEqual(identity['session'], child.pid)
+                    guardian_starts[child.pid] = identity['start']
                     return child
                 return real_popen(argv, *args, **kwargs)
 
@@ -445,7 +617,8 @@ class ResourceLimitsTest(unittest.TestCase):
                     try:
                         guardian.wait(timeout=2)
                     except limits.subprocess.TimeoutExpired:
-                        guardian.kill()
+                        limits._signal_owned({guardian.pid: guardian_starts[guardian.pid]},
+                                             limits.signal.SIGKILL)
                         guardian.wait(timeout=5)
 
     def test_watchdog_normal_guardian_exit_after_five_seconds_is_reaped(self):

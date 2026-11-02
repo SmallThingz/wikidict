@@ -423,6 +423,27 @@ def _signal_owned(known, sig):
             os.close(pidfd)
 
 
+def _guardian_child_start(path, child_pid, supervisor_pid, supervisor_start, guardian_pid):
+    """Recover the private child's birth from the guardian's pre-exec ACK."""
+    try:
+        record = json.loads(path.read_text())
+        expected = {'root_pid': child_pid, 'supervisor_pid': supervisor_pid,
+                    'supervisor_start': supervisor_start, 'guardian_pid': guardian_pid}
+        if not isinstance(record, dict) or any(
+                type(record.get(key)) is not int or record[key] != value
+                for key, value in expected.items()):
+            raise ValueError('Guardian identity does not match this invocation')
+        start = record.get('root_start')
+        if (type(start) is not int or start < supervisor_start or start <= 0 or
+                child_pid in (supervisor_pid, guardian_pid) or
+                record.get('status') not in ('observing', 'cleanup', 'disarmed',
+                                             'owned_session_gone', 'cleanup_incomplete')):
+            raise ValueError('Guardian did not verify a private child session')
+        return start
+    except (OSError, ValueError, TypeError) as error:
+        raise ContainmentUnavailable(f'Cannot recover watchdog child identity: {error}') from error
+
+
 def _write_watchdog_report(path, report):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + '.part')
@@ -501,6 +522,29 @@ def _check_watchdog_disk_floor(report):
             raise _DiskFloorReached(
                 f'Free disk space below build reserve at {path}: '
                 f'{available} bytes available, {report["disk_floor_bytes"]} bytes required')
+
+
+def _check_watchdog_runtime(report):
+    """Retain disk checks; receipt-local RAM/PSI stops become runtime telemetry."""
+    try:
+        _check_watchdog_disk_floor(report)
+    except ContainmentUnavailable as error:
+        state = report.get('host_pressure_guard')
+        reason = state.get('stop_reason') if isinstance(state, dict) else None
+        # Old receipt-local callbacks share this exact exception/report contract.
+        # Do not suppress disk, observation, admission, or other callback failures.
+        if (type(error) is not ContainmentUnavailable or
+                type(report.get('child_pid')) is not int or report['child_pid'] <= 0 or
+                reason not in ('host_ram_stop_reserve', 'host_memory_pressure') or
+                state.get('last_check') != 'runtime' or state.get('stopped') is not True or
+                str(error) != 'Host pressure safety stop: ' + reason):
+            raise
+        state['runtime_pressure_reason'] = state.pop('stop_reason')
+        state['stopped'] = False
+    state = report.get('host_pressure_guard')
+    if isinstance(state, dict) and state.get('last_check') == 'runtime':
+        state['runtime_termination_enabled'] = False
+
 
 def _watchdog_cpu_set(max_cpus, available):
     if type(max_cpus) is not int or not 1 <= max_cpus <= 8:
@@ -744,7 +788,7 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
             report['peak_rss_bytes'] = max(report['peak_rss_bytes'], aggregate_rss)
             report['peak_tasks'] = max(report['peak_tasks'], aggregate_tasks)
             report['elapsed_seconds'] = elapsed
-            _check_watchdog_disk_floor(report)
+            _check_watchdog_runtime(report)
             if aggregate_pss > memory_limit_bytes:
                 reason = 'sampled_pss_limit'
             elif aggregate_tasks > max_tasks:
@@ -795,9 +839,15 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
                         finally:
                             _signal_owned(known, signal.SIGKILL)
                     elif child.poll() is None:
-                        # Popen still owns this unreaped PID, even if an early
-                        # /proc race prevented capture of its start time.
-                        child.kill()
+                        # The guardian persists the verified PID/birth before
+                        # ACKing child_setup. Never fall back to an unpinned PID.
+                        child_start = _guardian_child_start(
+                            guardian_report, child.pid, os.getpid(),
+                            supervisor_start, guardian.pid)
+                        known[child.pid] = child_start
+                        report['child_start_time_ticks'] = child_start
+                        report['child_identity_source'] = 'guardian_handshake'
+                        _signal_owned(known, signal.SIGKILL)
                 child.wait(timeout=2)
                 # Drain adopted children before dropping subreaper ownership.
                 if child.pid in known:

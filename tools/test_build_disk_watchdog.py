@@ -127,6 +127,9 @@ class DiskWatchdogTest(unittest.TestCase):
             report_path, ready = tmp / 'watchdog.json', tmp / 'ready'
             unrelated = subprocess.Popen([sys.executable, '-B', '-c', 'import time; time.sleep(10)'],
                                          start_new_session=True)
+            unrelated_identity = limits._process_table()[unrelated.pid]
+            self.assertEqual(unrelated_identity['pgrp'], unrelated.pid)
+            self.assertEqual(unrelated_identity['session'], unrelated.pid)
             child_code = (
                 'import time; from pathlib import Path; '
                 f'Path({str(ready)!r}).write_text("ready"); time.sleep(10)'
@@ -148,7 +151,8 @@ class DiskWatchdogTest(unittest.TestCase):
                 self.assertIsNone(unrelated.poll())
                 self.assertEqual(report['disk_space'][0]['minimum_available_bytes'], 4096)
             finally:
-                unrelated.terminate()
+                limits._signal_owned({unrelated.pid: unrelated_identity['start']},
+                                     limits.signal.SIGTERM)
                 unrelated.wait(timeout=2)
 
 
