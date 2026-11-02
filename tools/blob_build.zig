@@ -5713,3 +5713,94 @@ test "Writer captured Nahuatl Wolke retains restored IPA close and nested child 
     try std.testing.expect(std.mem.indexOf(u8, nah_visible.items, "[ [ 'vɔlkə ]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, nah_visible.items, "[malformed link]") != null);
 }
+
+// Append only to a private tools/blob_build.zig. Synthetic source, NOT captured
+// KY а/аалам output or raw-page equivalence. Uses the normal loader/callbacks,
+// Writer, language blob index and presentation codec already used by this file.
+fn kyCapitalizedWriterCodecControl(tsv: []const u8, heading: []const u8, expected_code: []const u8, expected_owner: []const u8) !void {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var namespaces = try namespace_registry.Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tkywiktionary\n# dump-date\t20261001\n# content-language\tky\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    // These deliberately minimal synthetic loader inputs provide no Lua name,
+    // source-banner template, category declaration or template corroboration.
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = tsv });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "\n" });
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces);
+    defer registry.deinit();
+    const codes = languageCodes(&registry, &namespaces);
+    const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const source = try std.fmt.allocPrint(a, "== {s} ==\n# Definition '''bold''' [[target|label]] and ''italic''.\n=== Examples ===\nKeep suffix.\n", .{heading});
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "synthetic-capitalization", source, source, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, if (expected_code.len == 0) 1 else 0), stats.fallback_pages);
+    var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+    const path = try std.fs.path.join(a, &.{ output, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(expected_owner, &filename) });
+    var mapped = try mmapPath(io, path);
+    defer mapped.deinit();
+    const blob = try encoder.blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings(expected_code, metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("synthetic-capitalization")) orelse return error.TestUnexpectedResult;
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    try std.testing.expectEqualStrings(expected_code, decoded.entry.language_code);
+    try std.testing.expectEqualStrings("synthetic-capitalization", decoded.entry.title);
+    var definitions: usize = 0;
+    var links: usize = 0;
+    var bold: usize = 0;
+    var italic: usize = 0;
+    var language_headings: usize = 0;
+    var examples: usize = 0;
+    var visible: std.ArrayList(u8) = .empty;
+    for (decoded.entry.sections) |section| {
+        if (section.level == 2 and std.mem.eql(u8, section.title, heading)) language_headings += 1;
+        if (section.level == 3 and std.mem.eql(u8, section.title, "Examples")) examples += 1;
+        for (section.blocks) |block| {
+            if (block.kind == .definition) definitions += 1;
+            for (block.spans) |span| {
+                try visible.appendSlice(a, span.text);
+                if (std.mem.eql(u8, span.target, "target")) {
+                    try std.testing.expect(span.kind == .link);
+                    try std.testing.expectEqualStrings("label", span.text);
+                    links += 1;
+                }
+                if (std.mem.eql(u8, span.text, "bold") and span.bold) bold += 1;
+                if (std.mem.eql(u8, span.text, "italic") and span.italic) italic += 1;
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), definitions);
+    try std.testing.expectEqual(@as(usize, 1), links);
+    try std.testing.expectEqual(@as(usize, 1), bold);
+    try std.testing.expectEqual(@as(usize, 1), italic);
+    try std.testing.expectEqual(@as(usize, 1), language_headings);
+    try std.testing.expectEqual(@as(usize, 1), examples);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Definition bold label and italic.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Keep suffix.") != null);
+}
+
+test "KY capitalized preferred ownership survives normal Writer and codec with exact body" {
+    try kyCapitalizedWriterCodecControl("# content-language\tky\n# mediawiki\nky\tкыргызча\tКыргызча\tky\tKirghiz\tkir\n", "Кыргызча", "ky", "кыргызча");
+    // The established ASCII contract still works through the same real path.
+    try kyCapitalizedWriterCodecControl("# content-language\tky\n# mediawiki\nky\tкыргызча\tКыргызча\tky\tKirghiz\tkir\nru\truso\tRuso\tru\n", "Ruso", "ru", "ruso");
+}
+
+test "KY absent and conflicting aliases preserve Unclassified body through Writer codec" {
+    try kyCapitalizedWriterCodecControl("# content-language\tky\n# mediawiki\nky\tкыргызча\tky\n", "Кыргызча", "", "Unclassified");
+    try kyCapitalizedWriterCodecControl("# content-language\tky\n# mediawiki\nky\tкыргызча\tКыргызча\tky\nen\tEnglish\tКыргызча\ten\n", "Кыргызча", "", "Unclassified");
+}
