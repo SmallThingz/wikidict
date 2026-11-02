@@ -5874,6 +5874,76 @@ private slots:
         QTRY_COMPARE(title(window), QStringLiteral("dog"));
     }
 
+    void documentBoundaryKeysRevealCursorAfterSectionScroll() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.resize(640, 600); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        QJsonObject response = QJsonDocument::fromJson(window.api_->lookup(QStringLiteral("cat"))).object();
+        QJsonObject entry = response.value(QStringLiteral("entries")).toArray().first().toObject();
+        const auto paragraph = [](const QString &text) {
+            return QJsonObject{{QStringLiteral("kind"), QStringLiteral("paragraph")},
+                {QStringLiteral("depth"), 0},
+                {QStringLiteral("spans"), QJsonArray{QJsonObject{
+                    {QStringLiteral("kind"), QStringLiteral("text")},
+                    {QStringLiteral("text"), text}}}}};
+        };
+        QJsonArray before;
+        for (int i = 0; i < 32; ++i)
+            before.append(paragraph(QStringLiteral("Boundary preface %1 with enough text to make the section destination scroll.").arg(i)));
+        entry.insert(QStringLiteral("sections"), QJsonArray{
+            QJsonObject{{QStringLiteral("title"), QStringLiteral("English")},
+                {QStringLiteral("level"), 2}, {QStringLiteral("blocks"), before}},
+            QJsonObject{{QStringLiteral("title"), QStringLiteral("Usage notes")},
+                {QStringLiteral("level"), 3},
+                {QStringLiteral("blocks"), QJsonArray{paragraph(QStringLiteral("Boundary destination."))}}}
+        });
+        response.insert(QStringLiteral("entries"), QJsonArray{entry});
+        window.renderResponse(QJsonDocument(response).toJson());
+        auto *browser = window.reading_;
+        window.jumpToSection(1);
+        QTRY_VERIFY(browser->hasFocus());
+        QTRY_VERIFY(browser->verticalScrollBar()->value() > browser->verticalScrollBar()->minimum());
+        // This is the observed normal section-jump state: viewport away from
+        // the start while the text cursor is already at the start.
+        QCOMPARE(browser->textCursor().position(), 0);
+        QVERIFY(!browser->textCursor().hasSelection());
+        QVERIFY(!browser->viewport()->rect().intersects(browser->cursorRect()));
+        const QString originalText = browser->toPlainText();
+        QTest::keyClick(browser, Qt::Key_Home, Qt::ControlModifier);
+        QTRY_COMPARE(browser->verticalScrollBar()->value(), browser->verticalScrollBar()->minimum());
+        QCOMPARE(browser->textCursor().position(), 0);
+        QVERIFY(!browser->textCursor().hasSelection());
+        QCOMPARE(browser->toPlainText(), originalText);
+
+        // Match the installed read-only reader: Home followed by End, with
+        // no test-only cursor repositioning to make the boundary check pass.
+        QVERIFY(browser->verticalScrollBar()->maximum() > browser->verticalScrollBar()->minimum());
+        QVERIFY(browser->textCursor().atStart());
+        QTest::keyClick(browser, Qt::Key_End, Qt::ControlModifier);
+        QTRY_COMPARE(browser->verticalScrollBar()->value(), browser->verticalScrollBar()->maximum());
+        QCOMPARE(browser->toPlainText(), originalText);
+
+        QTest::keyClick(browser, Qt::Key_Home, Qt::ControlModifier);
+        QTRY_COMPARE(browser->verticalScrollBar()->value(), browser->verticalScrollBar()->minimum());
+        QCOMPARE(browser->toPlainText(), originalText);
+
+        // The equivalent document-end boundary must reveal an already-final
+        // cursor without resetting selection or replacing Qt's key handling.
+        QTextCursor ending(browser->document()); ending.movePosition(QTextCursor::End);
+        browser->setTextCursor(ending);
+        browser->verticalScrollBar()->setValue(browser->verticalScrollBar()->minimum());
+        QTRY_COMPARE(browser->verticalScrollBar()->value(), browser->verticalScrollBar()->minimum());
+        QVERIFY(browser->textCursor().atEnd());
+        QVERIFY(!browser->viewport()->rect().intersects(browser->cursorRect()));
+        QTest::keyClick(browser, Qt::Key_End, Qt::ControlModifier);
+        QTRY_VERIFY(browser->verticalScrollBar()->value() > browser->verticalScrollBar()->minimum());
+        QVERIFY(browser->viewport()->rect().intersects(browser->cursorRect()));
+        QVERIFY(browser->textCursor().atEnd());
+        QVERIFY(!browser->textCursor().hasSelection());
+        QCOMPARE(browser->toPlainText(), originalText);
+    }
+
     void tableTextAccessibilityGeometryMatchesVisibleCursor() {
         MainWindow window(fixture_, QStringLiteral("cat")); window.resize(780, 480); window.show();
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);

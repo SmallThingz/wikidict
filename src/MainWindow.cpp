@@ -138,9 +138,18 @@ public:
 protected:
     void keyPressEvent(QKeyEvent *event) override {
         ++interaction;
+        const bool documentStart = event->matches(QKeySequence::MoveToStartOfDocument);
+        const bool documentEnd = event->matches(QKeySequence::MoveToEndOfDocument);
         keyboardActivation = event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter;
         QTextBrowser::keyPressEvent(event);
         keyboardActivation = false;
+        // Read-only browser navigation can leave the text cursor unchanged.
+        // Reveal the requested boundary without changing Qt's cursor or selection.
+        if (documentStart || documentEnd) {
+            auto *vertical = verticalScrollBar();
+            vertical->setValue(documentStart ? vertical->minimum() : vertical->maximum());
+            event->accept();
+        }
     }
     void mousePressEvent(QMouseEvent *event) override {
         ++interaction;
