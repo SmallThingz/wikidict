@@ -6933,6 +6933,46 @@ pub const Renderer = struct {
     fn htmlTag(self: *Renderer, input: []const u8, at: usize, style: Style, depth: usize, no_more_nowiki_close: ?*bool, opaque_scan: *syntax.OpaqueScan) Error!?usize {
         return self.htmlTagWithMissing(MissingText.untracked(input), at, style, depth, no_more_nowiki_close, opaque_scan, null);
     }
+    // Select the existing block pass only for an authored physical closer in
+    // this ordinary layout domain. Owned bodies and tag attributes cannot
+    // trigger a change to surrounding layout merely by containing LF + |}.
+    fn physicalLayoutTableClose(input: []const u8) bool {
+        var scan: syntax.OpaqueScan = .{};
+        var at: usize = 0;
+        while (at < input.len) {
+            if (at != 0 and input[at - 1] == '\n' and starts(input[at..], "|}")) return true;
+            if (starts(input[at..], "<!--")) {
+                const end = std.mem.indexOfPos(u8, input, at + 4, "-->") orelse return false;
+                at = end + 3;
+                continue;
+            }
+            if (input[at] == '<') if (scan.tagAt(input, at, null)) |tag| {
+                if (!tag.closing and (tag.isOpaque() or tag.html_pre or
+                    oneOf(tag.name, &.{ "nowiki", "pre", "ref", "references", "a", "script", "style", "iframe", "object", "embed" })))
+                {
+                    const pair = syntax.matchingTagWithOpaqueScan(input, tag, &scan) orelse return false;
+                    at = pair.end;
+                } else at = tag.end;
+                continue;
+            };
+            if (starts(input[at..], "[[") or starts(input[at..], "{{")) {
+                const pair = syntax.balancedWithOpaqueScan(input, at, &scan) orelse return false;
+                at = pair.end;
+                continue;
+            }
+            if (input[at] == '[') {
+                if (!ir.hasExternalProtocol(input[at + 1 ..])) return false;
+                var links: ir.InlineIterator = .{ .input = input[at..], .renderer_boundaries = true };
+                const token = links.next() orelse return false;
+                if (token.kind != .external_link) return false;
+                at += links.cursor;
+                continue;
+            }
+            at += 1;
+        }
+        return false;
+    }
+
     fn knownInlineHtmlName(name: []const u8) bool {
         return oneOf(name, &.{
             "b",         "strong", "i",    "em", "u",          "s",      "del", "strike", "ins", "sup",  "sub", "small", "big",
@@ -7525,9 +7565,17 @@ pub const Renderer = struct {
         const annotation_start = self.spans.items.len;
         const bidi_start = annotation_start;
         if (parenthetical) try self.text("（", s);
+        // A malformed outer layout can hide a physical orphan closer from the
+        // initial block pass. Recover through that same pass, with its actual
+        // inline first-line origin, instead of exempting raw delimiter bytes.
+        // Existing wiki-table bodies retain their original dispatch unchanged.
+        const physical_layout_close = oneOf(tag.name, &.{ "div", "table", "tr", "td", "th" }) and
+            s.provenance == .parsed and s.kind == .text and s.target.len == 0 and s.self_link_target == null and
+            self.body_link_target.len == 0 and !self.in_reference and !self.pre_block and !self.parsed_pre and
+            std.mem.indexOf(u8, content, "{|") == null and physicalLayoutTableClose(content);
         if (phonos_spans) |parsed| {
             try self.spans.appendSlice(self.a, parsed);
-        } else if (std.mem.indexOf(u8, content, "{|") != null) {
+        } else if (std.mem.indexOf(u8, content, "{|") != null or physical_layout_close) {
             // Nested wiki tables retain this ordinary inline wrapper's semantic
             // scope. Explicit child language/direction/formatting still wins.
             const parent_attributes = self.body_formatting_attributes;
@@ -7545,6 +7593,11 @@ pub const Renderer = struct {
                 // An inclusion wrapper does not create a physical line start.
                 // Preserve its first inline line, including an authored table
                 // opener, instead of dropping that text as a rowless table.
+                const previous_origin = self.orphan_close_inline_origin;
+                self.orphan_close_inline_origin = true;
+                defer self.orphan_close_inline_origin = previous_origin;
+                try self.blocksInline(try self.renderBodyWithMissingAndInlineStart(try missingSlice(self.a, tracked, content), true), s);
+            } else if (physical_layout_close) {
                 const previous_origin = self.orphan_close_inline_origin;
                 self.orphan_close_inline_origin = true;
                 defer self.orphan_close_inline_origin = previous_origin;
@@ -33102,4 +33155,28 @@ test "restored alternate label close retains one byte provenance actions and for
     try std.testing.expectEqualDeep(nah_tracked.ranges, nah_transport.ranges);
     try std.testing.expect(!nah_transport.unknown);
     try std.testing.expect(missingEdit(.{ .bytes = "]", .ranges = &.{.{ .start = 0, .end = 1, .occurrence = 1 }} }, 0, 1, "&#93;").unknown);
+}
+
+test "TL physical layout close selection excludes owned bodies and synthetic first lines" {
+    for ([_][]const u8{
+        "|} first inline line",
+        "first\ninline |} suffix",
+        "* literal<nowiki>\n|}\n</nowiki>",
+        "* literal<pre>\n|}\n</pre>",
+        "* literal<!--\n|}\n-->",
+        "* literal<ref>first\n|}\n</ref>",
+        "* literal<references>first\n|}\n</references>",
+        "* literal<a href=\"/wiki/Target\">first\n|}\n</a>",
+        "* literal[[Target|first\n|}\n]]",
+        "* literal[https://example.test first\n|}]",
+        "* literal{{template|first\n|}\n}}",
+        "* literal<div title=\"first\n|}\n\">body</div>",
+        "* literal<nowiki>unclosed\n|}",
+        "* literal[[unclosed\n|}",
+    }) |source| try std.testing.expect(!Renderer.physicalLayoutTableClose(source));
+    for ([_][]const u8{
+        "first\n|}suffix",
+        "* literal<nowiki>\n|}\n</nowiki>\n|} actual",
+        "<tr><td><div>\n* [[蕉麻]]\n|}</div>",
+    }) |source| try std.testing.expect(Renderer.physicalLayoutTableClose(source));
 }

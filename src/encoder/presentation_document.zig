@@ -5106,3 +5106,140 @@ test "restored display close survives codec without exempting outside text or ta
     const nah_bad_target = [_]compiler.Span{.{ .kind = .link, .target = "{{unresolved}}", .text = "]", .provenance = .entity_literal }};
     try std.testing.expectError(error.UncompiledTemplate, validateSpans(nah_a, &nah_bad_target, null));
 }
+
+const TlMalformedLayoutWitness = struct {
+    visible: std.ArrayList(u8) = .empty,
+    targets: std.ArrayList([]const u8) = .empty,
+    diagnostics: usize = 0,
+    tables: usize = 0,
+    bold: bool = false,
+    italic: bool = false,
+
+    fn spans(self: *@This(), a: A, values: []const types.Span) !void {
+        for (values) |span| {
+            if (span.kind == .line_break) try self.visible.append(a, '\n') else try self.visible.appendSlice(a, span.text);
+            if (span.kind == .link or span.kind == .external_link) try self.targets.append(a, span.target);
+            if (std.mem.eql(u8, span.text, "[malformed table]")) {
+                try std.testing.expect(span.kind == .text and span.target.len == 0);
+                self.diagnostics += 1;
+            }
+            if (std.mem.indexOf(u8, span.text, "bold") != null and span.bold) self.bold = true;
+            if (std.mem.indexOf(u8, span.text, "italic") != null and span.italic) self.italic = true;
+        }
+    }
+    fn table(self: *@This(), a: A, value: types.Table) anyerror!void {
+        self.tables += 1;
+        try self.spans(a, value.caption);
+        for (value.rows) |row| for (row.cells) |cell| {
+            if (cell.blocks) |children| try self.blocks(a, children) else if (cell.nested_table) |child| try self.table(a, child) else try self.spans(a, cell.spans);
+        };
+    }
+    fn blocks(self: *@This(), a: A, values: []const types.Block) anyerror!void {
+        for (values) |block| {
+            try self.spans(a, block.spans);
+            if (block.table) |value| try self.table(a, value);
+        }
+    }
+    fn hasTarget(self: @This(), wanted: []const u8) bool {
+        for (self.targets.items) |target| if (std.mem.eql(u8, target, wanted)) return true;
+        return false;
+    }
+};
+
+test "malformed TL layout preserves physical close diagnostics and translation actions through codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact structural shape of both captured abaka translation sections:
+    // the outer DIV and HTML table are unmatched, but the inner DIVs match.
+    const source =
+        "# prefix [[Before|before]]\n" ++
+        "<div class=\"NavFrame\"><div class=\"NavHead\">First gloss</div><div class=\"NavContent\"><table class=\"translations\"><tr><td>\n" ++
+        "<div class=\"references-small\">\n*[[Tsino]]: [[蕉麻]] (''italic'')\n*'''bold''' [[马尼拉麻]]\n|}</div></div>\n\n" ++
+        "<div class=\"NavFrame\"><div class=\"NavHead\">Second gloss</div><div class=\"NavContent\"><table class=\"translations\"><tr><td>\n" ++
+        "<div class=\"references-small\">\n*[[Tseko]]: [[manilské konopí]]\n|}</div></div>\n" ++
+        "# suffix [[After|after]]\n";
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "abaka", .language, "Tagalog", "tl", source, null, &report);
+    const decoded = try codec.decodeAlloc(a, bytes, "abaka", .language, .{ .code = "tl", .heading = "Tagalog" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+    var observed: TlMalformedLayoutWitness = .{};
+    for (decoded.entry.sections) |section| try observed.blocks(a, section.blocks);
+    try std.testing.expectEqual(@as(usize, 2), observed.diagnostics);
+    try std.testing.expect(report.malformed_table and report.literal_markup);
+    try std.testing.expect(observed.bold and observed.italic);
+    for ([_][]const u8{ "Before", "Tsino", "蕉麻", "马尼拉麻", "Tseko", "manilské konopí", "After" }) |target|
+        try std.testing.expect(observed.hasTarget(target));
+    for ([_][]const u8{ "prefix", "First gloss", "Second gloss", "suffix", "蕉麻", "manilské konopí" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, observed.visible.items, text) != null);
+    try std.testing.expect(std.mem.indexOf(u8, observed.visible.items, "|}") == null);
+}
+
+test "TL layout close routing keeps matched tables and protected action reference domains strict" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // A real matched table retains its cell and action; its following orphan
+    // closer still has an independently authored physical line boundary.
+    const matched = "<div><table><tr><td>[[Cell|cell]]</td></tr></table>\n|} suffix [[After|after]]\n</div>";
+    var table_report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", matched, null, &table_report);
+    const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    var observed: TlMalformedLayoutWitness = .{};
+    for (decoded.entry.sections) |section| try observed.blocks(a, section.blocks);
+    try std.testing.expectEqual(@as(usize, 1), observed.tables);
+    try std.testing.expectEqual(@as(usize, 1), observed.diagnostics);
+    try std.testing.expect(observed.hasTarget("Cell") and observed.hasTarget("After"));
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+    for ([_][]const u8{
+        "<div><nowiki>\n|}\n</nowiki></div>",
+        "<div><pre>\n|}\n</pre></div>",
+        "<div>\n&#124;}\n</div>",
+    }) |protected_source| {
+        var report: Fallbacks = .{};
+        const protected_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", protected_source, null, &report);
+        const protected_decoded = try codec.decodeAlloc(a, protected_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+        var protected: TlMalformedLayoutWitness = .{};
+        for (protected_decoded.entry.sections) |section| try protected.blocks(a, section.blocks);
+        try std.testing.expect(std.mem.indexOf(u8, protected.visible.items, "|}") != null);
+        try std.testing.expectEqual(@as(usize, 0), protected.diagnostics);
+        try std.testing.expect(!report.malformed_table);
+    }
+    for ([_][]const u8{
+        "<div>|} same line</div>",
+        "<div>first\ninline |} suffix</div>",
+        "[[Target|<div>first\n|} label</div>]]",
+        "<ref><div>first\n|} reference</div></ref>",
+        "<div>first\n|} <script>still strict</script></div>",
+    }) |strict_source| {
+        var report: Fallbacks = .{};
+        try std.testing.expectError(error.UncompiledPresentation, compileReportedAlloc(a, "entry", .language, "English", "en", strict_source, null, &report));
+    }
+    const leaked = [_]compiler.Span{.{ .text = "|}" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &leaked, null));
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("|}"));
+}
+
+test "TL protected-only layout does not promote tag-local list or heading markers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "* literal", "== literal ==" }) |first_line| {
+        for ([_]bool{ false, true }) |with_physical_close| {
+            const source = try std.fmt.allocPrint(a,
+                "<div><table><tr><td>{s}<nowiki>\n|}}\n</nowiki>{s}</div>",
+                .{ first_line, if (with_physical_close) "\n|} actual [[After|after]]" else "" });
+            var report: Fallbacks = .{};
+            const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report);
+            const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+            var observed: TlMalformedLayoutWitness = .{};
+            for (decoded.entry.sections) |section| try observed.blocks(a, section.blocks);
+            try std.testing.expect(std.mem.indexOf(u8, observed.visible.items, first_line) != null);
+            try std.testing.expect(std.mem.indexOf(u8, observed.visible.items, "|}") != null);
+            try std.testing.expectEqual(@as(usize, if (with_physical_close) 1 else 0), observed.diagnostics);
+            try std.testing.expectEqual(with_physical_close, report.malformed_table);
+            if (with_physical_close) try std.testing.expect(observed.hasTarget("After"));
+            try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+        }
+    }
+}

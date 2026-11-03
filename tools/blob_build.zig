@@ -47,8 +47,29 @@ const FirstFailureCaptureContext = struct {
     invocation_args: []const []const u8,
     invocation_id: ?[]const u8,
     attempted: bool = false,
+    continuous_output_active: bool = false,
 };
 var first_failure_capture_context: ?FirstFailureCaptureContext = null;
+
+// Continuous builds own the raw-shard container while this scope is active.
+// That container has no .incomplete marker; failed shard directories beneath
+// it are removed during unwinding, so diagnostics must stay in the container.
+const ContinuousFailureCaptureScope = struct {
+    context: ?*FirstFailureCaptureContext = null,
+    previous: bool = false,
+
+    fn begin(output_root: []const u8) ContinuousFailureCaptureScope {
+        const context = if (first_failure_capture_context) |*value| value else return .{};
+        if (!std.mem.eql(u8, context.output_root, output_root)) return .{};
+        const previous = context.continuous_output_active;
+        context.continuous_output_active = true;
+        return .{ .context = context, .previous = previous };
+    }
+
+    fn deinit(self: ContinuousFailureCaptureScope) void {
+        if (self.context) |context| context.continuous_output_active = self.previous;
+    }
+};
 
 fn invocationArgumentsHash(a: std.mem.Allocator, args: []const []const u8) ![]const u8 {
     var hash = std.crypto.hash.sha2.Sha256.init(.{});
@@ -64,24 +85,26 @@ fn invocationArgumentsHash(a: std.mem.Allocator, args: []const []const u8) ![]co
 }
 
 fn captureFirstPresentationFailure(err: anyerror, job: ExpansionJob, expanded: bundle_expander.Expansion) void {
-    if (err != error.UncompiledPresentation) return;
+    if (err != error.UncompiledPresentation and err != error.InvalidPreContext) return;
     const context = if (first_failure_capture_context) |*value| value else return;
     if (context.attempted) return;
     context.attempted = true;
-    writeFirstPresentationFailure(context.*, job, expanded) catch |capture_error| {
+    writeFirstPresentationFailure(err, context.*, job, expanded) catch |capture_error| {
         diagnostics.printLine("presentation failure capture unavailable: error={s}\n", .{@errorName(capture_error)});
     };
 }
 
-fn writeFirstPresentationFailure(context: FirstFailureCaptureContext, job: ExpansionJob, expanded: bundle_expander.Expansion) !void {
+fn writeFirstPresentationFailure(err: anyerror, context: FirstFailureCaptureContext, job: ExpansionJob, expanded: bundle_expander.Expansion) !void {
     var arena = std.heap.ArenaAllocator.init(context.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    // Use the top incomplete CLI output, not a shard's temporary Writer root:
-    // failed shard cleanup deletes that temporary directory during unwinding.
-    const marker = try std.fs.path.join(a, &.{ context.output_root, ".incomplete" });
-    const incomplete = try std.Io.Dir.cwd().openFile(context.io, marker, .{});
-    incomplete.close(context.io);
+    // Ordinary builds require their incomplete marker. Continuous builds arm
+    // only their exact CLI output root for the lifetime of runContinuous.
+    if (!context.continuous_output_active) {
+        const marker = try std.fs.path.join(a, &.{ context.output_root, ".incomplete" });
+        const marker_file = try std.Io.Dir.cwd().openFile(context.io, marker, .{});
+        marker_file.close(context.io);
+    }
     const root = try std.fs.path.join(a, &.{ context.output_root, ".presentation-first-failure" });
     try std.Io.Dir.cwd().createDir(context.io, root, .default_dir);
     try writeDiagnosticJson(context.io, a, root, "capture.json", .{
@@ -102,7 +125,7 @@ fn writeFirstPresentationFailure(context: FirstFailureCaptureContext, job: Expan
         .schema = "wikidict.presentation-first-failure.v1",
         .record_complete = true, .diagnostic_only = true,
         .publication_created = false, .semantic_acceptance = false,
-        .error_name = "UncompiledPresentation",
+        .error_name = @errorName(err),
         .ordinal = job.ordinal, .index_offset = job.index_offset, .namespace = job.ns.id,
         .namespace_kind = @tagName(job.ns.kind),
         .page_id = job.page_id, .revision_id = job.revision_id,
@@ -1658,6 +1681,8 @@ fn runContinuous(
     const shard_pages = options.shard_pages.?;
     const total = options.limit_pages.?;
     try std.Io.Dir.cwd().createDirPath(io, output_root);
+    const capture_scope = ContinuousFailureCaptureScope.begin(output_root);
+    defer capture_scope.deinit();
     const index_start = try pageIndexStart(page_index.bytes, options);
     var lines = std.mem.splitScalar(u8, index_start.bytes, '\n');
     var next_byte_offset = options.index_byte_offset.?;
@@ -5286,6 +5311,7 @@ test "first failure snapshot retains normal Writer error inputs and outer receip
     const row = try F.manifest(a, root);
     try std.testing.expect(row.object.get("record_complete").?.bool);
     try std.testing.expect(!row.object.get("publication_created").?.bool);
+    try std.testing.expectEqualStrings("UncompiledPresentation", row.object.get("error_name").?.string);
     try std.testing.expectEqualStrings(job.title, row.object.get("title").?.string);
     try std.testing.expectEqual(@as(i64, 17), row.object.get("ordinal").?.integer);
     try std.testing.expectEqual(@as(i64, 0), row.object.get("index_offset").?.integer);
@@ -5344,7 +5370,7 @@ test "first failure snapshot caps payloads with full hashes and bounded serializ
     const large = try a.alloc(u8, 2 * 1024 * 1024 + 1); @memset(large, 'e');
     const title = try a.alloc(u8, 1025); @memset(title, 't');
     const job: ExpansionJob = .{ .ordinal = 4, .index_offset = 0, .ns = .{ .id = 0, .kind = .language }, .title = title, .source = small, .index_line = small };
-    try writeFirstPresentationFailure(F.context(a, root), job, .{ .source = large, .display_title = small, .poem_metadata = small, .missing_dependency_metadata = small });
+    try writeFirstPresentationFailure(error.UncompiledPresentation, F.context(a, root), job, .{ .source = large, .display_title = small, .poem_metadata = small, .missing_dependency_metadata = small });
     const row = try F.manifest(a, root);
     try std.testing.expect(row.object.get("record_complete").?.bool);
     try std.testing.expect(row.object.get("title_truncated").?.bool);
@@ -5366,7 +5392,7 @@ test "first failure snapshot caps payloads with full hashes and bounded serializ
     alias_job.alias_record = .{ .source_namespace = 0, .source_kind = .language,
         .source_title = small, .source_key = small, .xml_target = small, .target_title = small,
         .target_namespace = null, .target_kind = null, .target_key = "", .fragment = "", .presentation = "" };
-    try std.testing.expectError(error.WriteFailed, writeFirstPresentationFailure(F.context(a, alias_root), alias_job, .{ .source = "reply" }));
+    try std.testing.expectError(error.WriteFailed, writeFirstPresentationFailure(error.UncompiledPresentation, F.context(a, alias_root), alias_job, .{ .source = "reply" }));
     try std.testing.expect(!(try F.manifest(a, alias_root)).object.get("record_complete").?.bool);
     try F.noPublication(a, alias_root);
     try F.noPublication(a, root);
@@ -5803,4 +5829,179 @@ test "KY capitalized preferred ownership survives normal Writer and codec with e
 test "KY absent and conflicting aliases preserve Unclassified body through Writer codec" {
     try kyCapitalizedWriterCodecControl("# content-language\tky\n# mediawiki\nky\tкыргызча\tky\n", "Кыргызча", "", "Unclassified");
     try kyCapitalizedWriterCodecControl("# content-language\tky\n# mediawiki\nky\tкыргызча\tКыргызча\tky\nen\tEnglish\tКыргызча\ten\n", "Кыргызча", "", "Unclassified");
+}
+
+test "continuous capture uses exact raw shard root and survives failed shard cleanup" {
+    const F = FirstFailureControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const root = try auditControlFreshRoot(a, "continuous-capture-root");
+    defer std.Io.Dir.cwd().deleteTree(F.io, root) catch {};
+    // Match the real CLI topology: args[2] IS the shard container, and no
+    // .incomplete marker is manufactured in it or in a parent fixture.
+    try F.absent(try std.fs.path.join(a, &.{ root, ".incomplete" }));
+    first_failure_capture_context = F.context(a, root); defer first_failure_capture_context = null;
+    const job: ExpansionJob = .{ .ordinal = 17, .index_offset = 9,
+        .ns = .{ .id = 0, .kind = .language }, .title = "Continuous fixture",
+        .source = "exact raw", .page_id = 71, .revision_id = 91,
+        .index_line = "exact index row" };
+    const expanded: bundle_expander.Expansion = .{ .source = "before |} after" };
+    {
+        const scope = ContinuousFailureCaptureScope.begin(root); defer scope.deinit();
+        var shard = try PendingShard.init(F.io, a, root, 0, 1, 0, .{});
+        var closed = false; defer if (!closed) shard.deinit();
+        const temporary = try a.dupe(u8, shard.temporary);
+        const final = try a.dupe(u8, shard.final);
+        try std.testing.expectError(error.UncompiledPresentation, consumeExpandedPage(&shard.writer.?, job, expanded, a, null));
+        shard.deinit(); closed = true;
+        try F.absent(temporary); try F.absent(final);
+        const row = try F.manifest(a, root);
+        try std.testing.expect(row.object.get("record_complete").?.bool);
+        try std.testing.expectEqualStrings(job.title, row.object.get("title").?.string);
+        try std.testing.expectEqual(@as(i64, 17), row.object.get("ordinal").?.integer);
+        try F.payload(a, row, "raw_source", job.source, 256 * 1024);
+        try F.payload(a, row, "expanded", expanded.source, 2 * 1024 * 1024);
+        try F.payload(a, row, "index_row", job.index_line, 256 * 1024);
+        try F.noPublication(a, root);
+    }
+    try std.testing.expect(!first_failure_capture_context.?.continuous_output_active);
+    const capture = try std.fs.path.join(a, &.{ root, ".presentation-first-failure", "capture.json" });
+    const before = try std.Io.Dir.cwd().readFileAlloc(F.io, capture, a, .limited(64 * 1024));
+    // A distinct invocation also cannot overwrite the retained first capture.
+    first_failure_capture_context = F.context(a, root);
+    {
+        const scope = ContinuousFailureCaptureScope.begin(root); defer scope.deinit();
+        var shard = try PendingShard.init(F.io, a, root, 0, 1, 0, .{}); defer shard.deinit();
+        try std.testing.expectError(error.UncompiledPresentation, consumeExpandedPage(&shard.writer.?, job, .{ .source = "[https:// broken" }, a, null));
+        try std.testing.expect(first_failure_capture_context.?.attempted);
+    }
+    const after = try std.Io.Dir.cwd().readFileAlloc(F.io, capture, a, .limited(64 * 1024));
+    try std.testing.expectEqualSlices(u8, before, after);
+    try std.testing.expect(!first_failure_capture_context.?.continuous_output_active);
+    try F.absent(try std.fs.path.join(a, &.{ root, ".incomplete" }));
+    try F.noPublication(a, root);
+}
+
+test "continuous capture scope rejects other roots and restores on every exit" {
+    const F = FirstFailureControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const root = try auditControlFreshRoot(a, "continuous-capture-scope");
+    defer std.Io.Dir.cwd().deleteTree(F.io, root) catch {};
+    first_failure_capture_context = F.context(a, root); defer first_failure_capture_context = null;
+    const other = try std.fs.path.join(a, &.{ root, "other" });
+    const job: ExpansionJob = .{ .ordinal = 0, .index_offset = 0,
+        .ns = .{ .id = 0, .kind = .language }, .title = "scope", .source = "raw" };
+    {
+        const wrong = ContinuousFailureCaptureScope.begin(other); defer wrong.deinit();
+        try std.testing.expect(!first_failure_capture_context.?.continuous_output_active);
+        try std.testing.expectError(error.FileNotFound, writeFirstPresentationFailure(error.UncompiledPresentation, first_failure_capture_context.?, job, .{ .source = "expanded" }));
+    }
+    const Probe = struct {
+        fn exit(root_path: []const u8, fail: bool) !void {
+            const scope = ContinuousFailureCaptureScope.begin(root_path); defer scope.deinit();
+            try std.testing.expect(first_failure_capture_context.?.continuous_output_active);
+            {
+                const nested = ContinuousFailureCaptureScope.begin(root_path); defer nested.deinit();
+                try std.testing.expect(first_failure_capture_context.?.continuous_output_active);
+            }
+            try std.testing.expect(first_failure_capture_context.?.continuous_output_active);
+            if (fail) return error.ControlledFailure;
+        }
+    };
+    try Probe.exit(root, false);
+    try std.testing.expect(!first_failure_capture_context.?.continuous_output_active);
+    try std.testing.expectError(error.ControlledFailure, Probe.exit(root, true));
+    try std.testing.expect(!first_failure_capture_context.?.continuous_output_active);
+    try std.testing.expectError(error.FileNotFound, writeFirstPresentationFailure(error.UncompiledPresentation, first_failure_capture_context.?, job, .{ .source = "expanded" }));
+    try F.absent(try std.fs.path.join(a, &.{ root, ".presentation-first-failure" }));
+    // Outside the active continuous scope the original marker contract remains.
+    try F.marker(a, root);
+    try writeFirstPresentationFailure(error.UncompiledPresentation, first_failure_capture_context.?, job, .{ .source = "expanded" });
+    try std.testing.expect((try F.manifest(a, root)).object.get("record_complete").?.bool);
+    try F.noPublication(a, root);
+}
+
+test "InvalidPreContext capture retains typed error and context without retry reclassification" {
+    const F = FirstFailureControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const root = try auditControlFreshRoot(a, "invalid-precontext-capture");
+    defer std.Io.Dir.cwd().deleteTree(F.io, root) catch {};
+    try F.marker(a, root);
+    try std.testing.expect(first_failure_capture_context == null and failure_receipt_context == null);
+    first_failure_capture_context = F.context(a, root); defer first_failure_capture_context = null;
+    const receipt = try std.fs.path.join(a, &.{ root, "outer-failure.json" });
+    failure_receipt_context = .{ .io = F.io, .a = a, .path = receipt,
+        .invocation_id = F.context(a, root).invocation_id.?, .invocation_args = &F.args };
+    defer failure_receipt_context = null;
+    const job: ExpansionJob = .{ .ordinal = 23, .index_offset = 19,
+        .ns = .{ .id = 0, .kind = .language }, .title = "Synthetic context failure",
+        .source = "exact raw fixture", .page_id = 31, .revision_id = 47,
+        .index_line = "exact synthetic index row" };
+    const expanded: bundle_expander.Expansion = .{ .source = "exact expanded fixture",
+        .display_title = "display fixture", .poem_metadata = "[]",
+        .missing_dependency_metadata = "{}" };
+    // This exercises the diagnostic boundary, not a claimed WA parser cause.
+    captureFirstPresentationFailure(error.OutOfMemory, job, expanded);
+    try std.testing.expect(!first_failure_capture_context.?.attempted);
+    try F.absent(try std.fs.path.join(a, &.{ root, ".presentation-first-failure" }));
+    captureFirstPresentationFailure(error.InvalidPreContext, job, expanded);
+    try std.testing.expect(first_failure_capture_context.?.attempted);
+    const row = try F.manifest(a, root);
+    try std.testing.expect(row.object.get("record_complete").?.bool);
+    try std.testing.expect(row.object.get("diagnostic_only").?.bool);
+    try std.testing.expect(!row.object.get("publication_created").?.bool);
+    try std.testing.expect(!row.object.get("semantic_acceptance").?.bool);
+    try std.testing.expectEqualStrings("InvalidPreContext", row.object.get("error_name").?.string);
+    try std.testing.expectEqualStrings(job.title, row.object.get("title").?.string);
+    try std.testing.expectEqual(@as(i64, 23), row.object.get("ordinal").?.integer);
+    try std.testing.expectEqual(@as(i64, 19), row.object.get("index_offset").?.integer);
+    try std.testing.expectEqual(@as(i64, 31), row.object.get("page_id").?.integer);
+    try std.testing.expectEqual(@as(i64, 47), row.object.get("revision_id").?.integer);
+    try F.payload(a, row, "raw_source", job.source, 256 * 1024);
+    try F.payload(a, row, "expanded", expanded.source, 2 * 1024 * 1024);
+    try F.payload(a, row, "index_row", job.index_line, 256 * 1024);
+    try F.payload(a, row, "display_title", expanded.display_title.?, 256 * 1024);
+    try F.payload(a, row, "poem_metadata", expanded.poem_metadata.?, 256 * 1024);
+    try F.payload(a, row, "missing_dependency_metadata", expanded.missing_dependency_metadata.?, 256 * 1024);
+    try std.testing.expect(recordPresentationFailure(error.InvalidPreContext, job) == error.InvalidPreContext);
+    try F.absent(receipt);
+    const capture_path = try std.fs.path.join(a, &.{ root, ".presentation-first-failure", "capture.json" });
+    const before = try std.Io.Dir.cwd().readFileAlloc(F.io, capture_path, a, .limited(64 * 1024));
+    captureFirstPresentationFailure(error.UncompiledPresentation, job, .{ .source = "replacement" });
+    const after = try std.Io.Dir.cwd().readFileAlloc(F.io, capture_path, a, .limited(64 * 1024));
+    try std.testing.expectEqualSlices(u8, before, after);
+    try F.noPublication(a, root);
+}
+
+test "InvalidPreContext capture IO refusal preserves error and existing capture" {
+    const F = FirstFailureControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    inline for (.{ "missing-marker", "existing-capture" }) |label| {
+        const root = try auditControlFreshRoot(a, "invalid-precontext-" ++ label);
+        defer std.Io.Dir.cwd().deleteTree(F.io, root) catch {};
+        const capture_path = try std.fs.path.join(a, &.{ root, ".presentation-first-failure" });
+        if (comptime std.mem.eql(u8, label, "existing-capture")) {
+            try F.marker(a, root);
+            try std.Io.Dir.cwd().writeFile(F.io, .{ .sub_path = capture_path, .data = "retained bytes" });
+        }
+        first_failure_capture_context = F.context(a, root); defer first_failure_capture_context = null;
+        const receipt = try std.fs.path.join(a, &.{ root, "outer-failure.json" });
+        failure_receipt_context = .{ .io = F.io, .a = a, .path = receipt,
+            .invocation_id = F.context(a, root).invocation_id.?, .invocation_args = &F.args };
+        defer failure_receipt_context = null;
+        const job: ExpansionJob = .{ .ordinal = 0, .index_offset = 0,
+            .ns = .{ .id = 0, .kind = .language }, .title = "IO control", .source = "raw" };
+        captureFirstPresentationFailure(error.InvalidPreContext, job, .{ .source = "expanded" });
+        try std.testing.expect(first_failure_capture_context.?.attempted);
+        try std.testing.expect(recordPresentationFailure(error.InvalidPreContext, job) == error.InvalidPreContext);
+        try F.absent(receipt);
+        if (comptime std.mem.eql(u8, label, "existing-capture")) {
+            const bytes = try std.Io.Dir.cwd().readFileAlloc(F.io, capture_path, a, .limited(64));
+            try std.testing.expectEqualStrings("retained bytes", bytes);
+        } else try F.absent(capture_path);
+        try F.noPublication(a, root);
+    }
 }
