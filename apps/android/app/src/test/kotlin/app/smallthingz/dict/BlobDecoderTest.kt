@@ -216,7 +216,8 @@ class BlobDecoderTest {
         assertEquals(1,Catalog.parse("asset://English.wikblb",true).size)
     }
     private fun explanationFixture(version: Int, background: String? = null, backgroundPresence: Int? = null, foreground: String? = null, foregroundPresence: Int? = null,
-        spanBackground: String? = null, spanBackgroundPresence: Int? = null, anchored: Boolean = false): ByteArray {
+        spanBackground: String? = null, spanBackgroundPresence: Int? = null, anchored: Boolean = false,
+        breton: Boolean = false, etymologyIndex: Int = -1, lexemeSection: Int = 2, hasLexeme: Boolean = true): ByteArray {
         val out = java.io.ByteArrayOutputStream()
         fun byte(v: Int) { out.write(v) }
         fun u32(v: Int) { repeat(4) { byte(v ushr (it * 8) and 255) } }
@@ -248,13 +249,83 @@ class BlobDecoderTest {
             }
             if (version >= 5) { string(""); string("") }
         }
-        out.write("DPR$version".toByteArray()); spans("display")
+        out.write("DPR$version".toByteArray())
+        if (breton) {
+            // The captured laezh-glas organization: language0, Gerdarzh1, noun2,
+            // related translations3. The native correction only changes null to1.
+            fun plainSpans(text: String) {
+                u32(1); byte(0); byte(0); byte(0)
+                listOf(text, "", "", "", "", "").forEach(::string)
+                if (version >= 3) string("")
+                if (version >= 4) byte(0)
+                if (version >= 6) byte(0)
+            }
+            fun plainBlock(kind: Int, text: String, depth: Int = 0, path: String = "") {
+                byte(kind); byte(depth); byte(0); plainSpans(text)
+                byte(0); string(path); string(""); byte(0)
+                if (version >= 5) { string(""); string("") }
+            }
+            fun heading(level: Int, title: String, blocks: Int) {
+                byte(level); string(title)
+                if (version >= 5) { string(title); string("") }
+                u32(blocks)
+            }
+            u32(0); u32(4)
+            heading(2, "Brezhoneg", 0)
+            heading(3, "Gerdarzh", 1)
+            plainBlock(7, "Ger kevrennek savet diwar an anv-kadarn laezh hag an anv-gwan glas", 1, ":")
+            heading(3, "Anv-kadarn", 4)
+            plainBlock(0, "laezh-glas /lɛzˈɡlɑːs/ hollek gourel")
+            plainBlock(2, "Laezh-bihan", 1, "#")
+            plainBlock(4, "First retained quotation", 1, "#:")
+            plainBlock(4, "Second retained quotation", 1, "#:")
+            heading(4, "Troidigezhioù", 1)
+            plainBlock(5, "galleg : petit-lait (fr)", 1, "*")
+            u32(0); u32(if (hasLexeme) 1 else 0)
+            if (hasLexeme) {
+                string("brezhoneg"); string("Noun"); u32(lexemeSection); u32(etymologyIndex)
+                u32(1); u32(1); u32(-1) // Definition block1, no parent sense.
+                u32(0); u32(2); u32(2); u32(3); u32(0); byte(0)
+                u32(1); u32(0); u32(0); u32(1); u32(3)
+            }
+            u32(if (hasLexeme) 2 else 4); u32(0); u32(1)
+            if (!hasLexeme) { u32(2); u32(3) } // With no owner, all sections remain unowned.
+            u32(0); u32(0) // References and media.
+            return out.toByteArray()
+        }
+        spans("display")
         u32(1); byte(3); string("Noun")
         if (version >= 5) { string(if (anchored) "Noun" else ""); string(if (anchored) "Noun_fallback" else "") }
         u32(2); block(false); block(true)
         spans("preamble"); u32(0); u32(0)
         u32(1); u32(1); u32(1); string(""); string(""); spans("reference"); u32(0)
         return out.toByteArray()
+    }
+    @Test fun typedBretonEtymologySurvivesDecodingAndDrivesOnlyItsOwnFold() {
+        for (version in 2..9) {
+            fun decode(index: Int = 1, owner: Int = 2, hasLexeme: Boolean = true) = BlobDecoder.decode(
+                explanationFixture(version, breton = true, etymologyIndex = index, lexemeSection = owner, hasLexeme = hasLexeme),
+                "laezh-glas", "language", "brezhoneg", "br")
+            val entry = decode()
+            assertEquals(setOf(1), entry.etymologySections)
+            assertEquals(listOf("Brezhoneg", "Gerdarzh", "Anv-kadarn", "Troidigezhioù"), entry.sections.map { it.title })
+            val folded = entry.readingRows.filter { initiallyFolded(it,
+                AppSettings(collapseEtymology = true, collapseOtherSections = false, collapseDetails = false)) }.map { it.key }.toSet()
+            assertEquals(setOf("heading-1"), folded)
+            val visible = visibleReadingRows(entry.readingRows, folded).mapNotNull { it.block }
+            assertEquals(entry.sections.drop(2).flatMap { it.blocks }, visible)
+            assertEquals("Laezh-bihan", textOf(visible[1].spans))
+            assertEquals(entry.etymologySections, entry.copy(title = "same typed body").etymologySections)
+            val unassociated = decode(-1)
+            assertTrue(unassociated.etymologySections.isEmpty())
+            assertFalse(initiallyFolded(unassociated.readingRows.first { it.key == "heading-1" },
+                AppSettings(collapseEtymology = true, collapseOtherSections = false)))
+            assertTrue(decode(hasLexeme = false).etymologySections.isEmpty())
+            for (invalid in listOf(4, -2)) {
+                assertThrows(IllegalArgumentException::class.java) { decode(invalid) }
+            }
+            assertThrows(IllegalArgumentException::class.java) { decode(owner = 4) }
+        }
     }
     @Test fun legacyAndExplainedWirePreserveAllSpanContainersAndCompactText() {
         val explained = BlobDecoder.decode(explanationFixture(3), "Word", "language", "English", "en")

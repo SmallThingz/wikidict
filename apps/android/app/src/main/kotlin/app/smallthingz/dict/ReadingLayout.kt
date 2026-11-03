@@ -120,15 +120,16 @@ internal fun sectionHeadingCompanion(section: Section): Block? {
 }
 
 /** Presentation-only rows. No source parsing: explicit semantic breaks are layout boundaries. */
-data class ReadingRow(val key: String, val heading: Section? = null, val block: Block? = null, val compact: Boolean = false, val sectionKey: String = "", val meaningSection: Boolean = false, val headingBlock: Block? = null)
+data class ReadingRow(val key: String, val heading: Section? = null, val block: Block? = null, val compact: Boolean = false, val sectionKey: String = "", val meaningSection: Boolean = false, val headingBlock: Block? = null, val etymologySection: Boolean = false)
 
-fun readingRows(sections: List<Section>, media: List<Media> = emptyList()): List<ReadingRow> = buildList {
+fun readingRows(sections: List<Section>, media: List<Media> = emptyList(), etymologySections: Set<Int> = emptySet()): List<ReadingRow> = buildList {
     val owners = MediaOwners(media)
     sections.forEachIndexed { sectionIndex, section ->
         val sectionKey = "heading-$sectionIndex"
         val meaningSection = section.blocks.any { it.kind == "definition" }
         val headingBlock = sectionHeadingCompanion(section)
-        add(ReadingRow(sectionKey, heading = section, meaningSection = meaningSection, headingBlock = headingBlock))
+        add(ReadingRow(sectionKey, heading = section, meaningSection = meaningSection, headingBlock = headingBlock,
+            etymologySection = sectionIndex in etymologySections))
         section.blocks.forEachIndexed { blockIndex, original ->
             if (blockIndex == 0 && headingBlock != null) return@forEachIndexed
             val block = compactBlock(original)
@@ -186,6 +187,7 @@ fun initiallyFolded(row: ReadingRow, settings: AppSettings): Boolean {
     val section = row.heading ?: return false
     if (section.title.isBlank()) return false
     return when {
+        row.etymologySection -> settings.collapseEtymology
         section.title.startsWith("Pronunciation", true) -> settings.collapsePronunciation
         section.title.startsWith("Etymology", true) -> settings.collapseEtymology
         row.meaningSection -> false

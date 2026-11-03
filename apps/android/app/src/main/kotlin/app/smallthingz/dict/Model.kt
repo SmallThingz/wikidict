@@ -94,10 +94,11 @@ data class Entry(
     val navigationLanguage: String? = language,
     // The body may come from a different immutable blob than the navigation origin.
     val contentDictionary: String? = null,
+    val etymologySections: Set<Int> = emptySet(),
 ) {
     val key: String = origin?.key ?: "$kind\u0000${language.orEmpty()}\u0000$title"
     // Constructed with the decoded entry on the import dispatcher.
-    val readingRows: List<ReadingRow> = readingRows(sections, media)
+    val readingRows: List<ReadingRow> = readingRows(sections, media, etymologySections)
     internal val abbreviations: List<Abbreviation> = entryAbbreviations(this)
     fun clue(): String {
         // Media controls belong in the reader, not a saved word's textual clue.

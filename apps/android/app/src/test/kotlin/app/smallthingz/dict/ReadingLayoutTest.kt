@@ -6,6 +6,42 @@ import androidx.compose.ui.unit.em
 
 class ReadingLayoutTest {
 
+    @Test fun typedEtymologyUsesItsOwnPreferenceWithoutGuessingOwnersOrHidingChildBodies() {
+        val etymology = Block("indent", 1, listOf(Span("text", "Savet diwar an anv-kadarn reol hag al lostger -iek")), listPath = ":")
+        val definition = Block("definition", 1, listOf(Span("text", "Adjective body")), listPath = "#")
+        val related = Block("list_item", 1, listOf(Span("text", "kantreol")), listPath = "*")
+        val sections = listOf(Section(2, "Brezhoneg", emptyList()), Section(3, "Gerdarzh", listOf(etymology)),
+            Section(3, "Anv-gwan", listOf(definition)), Section(4, "Gerioù kar dre o ster", listOf(related)))
+        val entry = Entry("reoliek", emptyList(), "language", "brezhoneg", "br", sections, emptyList(), etymologySections = setOf(1))
+        fun folds(value: Entry, etymology: Boolean, other: Boolean): Set<String> = value.readingRows.filter {
+            initiallyFolded(it, AppSettings(collapseEtymology = etymology, collapseOtherSections = other, collapseDetails = false))
+        }.map { it.key }.toSet()
+        assertEquals(setOf("heading-1"), folds(entry, true, false))
+        assertEquals(listOf(definition, related), visibleReadingRows(entry.readingRows, folds(entry, true, false)).mapNotNull { it.block })
+        val otherFolded = folds(entry, false, true)
+        assertFalse("heading-1" in otherFolded)
+        assertEquals(listOf(etymology, definition), visibleReadingRows(entry.readingRows, otherFolded).mapNotNull { it.block })
+        assertEquals(sections, entry.sections)
+
+        // Actual kuzhheolioù remains Unclassified with no lexemes. Neither its
+        // language label nor a localized heading may invent an etymology owner.
+        val unknown = Entry("kuzhheolioù", emptyList(), "language", "Unclassified", "", listOf(
+            Section(2, "Unclassified", listOf(Block("definition", 1, listOf(Span("text", "furm lies kuzh-heol."))))),
+            Section(4, "Gerioù heñvelster", listOf(related))), emptyList())
+        assertTrue(unknown.etymologySections.isEmpty())
+        assertEquals(listOf(unknown.sections[0].blocks.single(), related),
+            visibleReadingRows(unknown.readingRows, folds(unknown, true, false)).mapNotNull { it.block })
+        val unassociated = entry.copy(etymologySections = emptySet())
+        assertFalse("heading-1" in folds(unassociated, true, false))
+        assertTrue("heading-1" in folds(unassociated, false, true))
+
+        val bounded = readingRows(sections, etymologySections = setOf(-1, 1, 99))
+        assertEquals(listOf("heading-1"), bounded.filter { it.etymologySection }.map { it.key })
+        val blank = readingRows(listOf(Section(3, "", listOf(etymology))), etymologySections = setOf(0))
+        assertFalse(initiallyFolded(blank.first(), AppSettings(collapseEtymology = true)))
+        assertEquals(listOf(etymology), visibleReadingRows(blank, setOf("heading-0")).mapNotNull { it.block })
+    }
+
     @Test fun definitionlessLocalizedSectionsExposeBodyOnlyOnExplicitRequest() {
         // Captured AS assamese has an overview paragraph before two localized POS sections.
         val overview = Block("paragraph", 0, listOf(Span("text", "ইংৰাজী")))

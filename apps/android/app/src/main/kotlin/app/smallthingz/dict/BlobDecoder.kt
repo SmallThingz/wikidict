@@ -29,10 +29,12 @@ object BlobDecoder {
             Section(level, name, List(r.count(if (r.anchors) 25 else 17)) { r.block() }, anchor, fallback)
         }
         val preamble = r.spans()
-        // Validate semantic organization even though this renderer preserves section order.
+        // Preserve typed etymology ownership while retaining the authored section order.
+        val etymologySections = mutableSetOf<Int>()
         repeat(r.count(29)) {
             r.string(); r.string()
-            val section = r.index(sections.size); r.optionalIndex(sections.size)
+            val section = r.index(sections.size)
+            r.optionalIndex(sections.size)?.let(etymologySections::add)
             val blocks = sections[section].blocks.size
             repeat(r.count(18)) { sense ->
                 r.index(blocks); r.optionalIndex(sense)
@@ -61,7 +63,8 @@ object BlobDecoder {
         }
         val media = List(r.count(9)) { Media(r.string(), r.enum(listOf("image", "audio")), r.string()) }
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }
-        return Entry(title, display, kind, language, code, sections, references, preamble, media)
+        return Entry(title, display, kind, language, code, sections, references, preamble, media,
+            etymologySections = etymologySections.toSet())
     }
     private class Reader(bytes: ByteArray) {
         val buffer: ByteBuffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
@@ -91,7 +94,10 @@ object BlobDecoder {
         fun enum(values: List<String>): String = values.getOrNull(byte()) ?: error("Unknown presentation tag")
         fun presence(): Boolean = when(byte()) { 0 -> false; 1 -> true; else -> error("Invalid presence flag") }
         fun index(limit: Int): Int { val n = u32(); require(n < limit); return n.toInt() }
-        fun optionalIndex(limit: Int) { val n = u32(); require(n == 0xffffffffL || n < limit) }
+        fun optionalIndex(limit: Int): Int? {
+            val n = u32(); require(n == 0xffffffffL || n < limit)
+            return if (n == 0xffffffffL) null else n.toInt()
+        }
         fun indices(limit: Int) { repeat(count(4)) { index(limit) } }
         fun spans(): List<Span> = List(count(if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27)) {
             val kind = enum(inline); val role = enum(roles); val f = byte()
