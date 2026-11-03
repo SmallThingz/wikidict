@@ -119,14 +119,20 @@ def affinity_worker_budget():
     return affinity_worker_capacity(len(os.sched_getaffinity(0)),address_space_budget)
 
 
-def validate_affinity_workers(threads,jobs,expansion_workers=None):
+def validate_llvm_workers(llvm_workers):
+    if llvm_workers is not None and (type(llvm_workers) is not int or not 1 <= llvm_workers <= MAX_PIPELINE_WORKERS):
+        raise ValueError('LLVM workers must be one through four')
+
+
+def validate_affinity_workers(threads,jobs,expansion_workers=None,llvm_workers=None):
     expansion_workers=threads if expansion_workers is None else expansion_workers
+    llvm_workers=threads if llvm_workers is None else llvm_workers
     if type(jobs) is not int or jobs!=1:
         raise ValueError('Affinity admission requires exactly one edition job')
-    if any(type(n) is not int or not 1 <= n <= MAX_PIPELINE_WORKERS for n in (threads,expansion_workers)):
+    if any(type(n) is not int or not 1 <= n <= MAX_PIPELINE_WORKERS for n in (threads,expansion_workers,llvm_workers)):
         raise ValueError('Affinity admission requires one through four compiler and expansion workers')
     budget=affinity_worker_budget()
-    if max(threads,expansion_workers)>budget:
+    if max(threads,expansion_workers,llvm_workers)>budget:
         raise ValueError(f'Affinity workers exceed allowed affinity/address-space budget {budget}')
     return budget
 
@@ -1700,7 +1706,8 @@ def extraction_cache_args(cache_root, staged):
             '--verified-index-sha256',staged['index_sha256']]
 
 
-def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None, raw_shards_path=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical=None):
+def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None, raw_shards_path=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical=None, llvm_workers=None):
+    validate_llvm_workers(llvm_workers)
     if type(compress_shards) is not bool: raise ValueError('Invalid compressed shard mode')
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     if raw_shards_path is not None:
@@ -1711,6 +1718,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         cleanup_dead_private_shards(raw_shards_path)
     edition,date=items[0]['wiki'],items[0]['date']
     workers=min(workers,MAX_PIPELINE_WORKERS)
+    llvm_workers=workers if llvm_workers is None else llvm_workers
     expansion_workers=workers if expansion_workers is None else expansion_workers
     if type(expansion_workers) is not int or not 1 <= expansion_workers <= MAX_PAGE_EXPANSION_WORKERS:
         raise ValueError('Invalid page expansion worker count')
@@ -1724,7 +1732,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         timed_run([zig,'build','-j1','-Doptimize=fast','--summary','all','build-dictionary','--',str(dump),str(expander_build),
                      *(['--interwiki-map-snapshot',str(interwiki_snapshot)] if interwiki_snapshot else []),
                      *pipeline_snapshot_args(registry,auxiliary_snapshots,page_links_snapshot,page_redirects_snapshot),
-                     '--llvm-workers',str(workers),
+                     '--llvm-workers',str(llvm_workers),
                      '--parse-workers',str(min(workers,64)),'--page-workers',str(min(workers,16)),'--expander-only',
                      *extraction_cache_args(extraction_cache,staged)],
                   edition,date,'expander_build')
@@ -1891,7 +1899,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     cleanup_shard_workspace(workspace)
 
 
-def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None):
+def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None):
+    validate_llvm_workers(llvm_workers)
     artifact_path(output)
     if raw_shard_root is not None: artifact_path(raw_shard_root)
     validate_now_unix(now_unix)
@@ -1913,16 +1922,17 @@ def build(items, downloads, output, zig, compression_workers=None, expansion_wor
             # Legitimate producers share this edition lock; success still overrides.
             if (parent / date / 'complete.json').exists():
                 result['execution_mode']='existing_output'
-            mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}), **({'raw_shard_root':raw_shard_root} if raw_shard_root is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical_review=reviewed_nonlexical_review)
+            mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}), **({'raw_shard_root':raw_shard_root} if raw_shard_root is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical_review=reviewed_nonlexical_review, **({'llvm_workers':llvm_workers} if llvm_workers is not None else {}))
             result['execution_mode']=mode
             return mode
 
 
-def validate_fallback_report(path, namespace_counts=None):
+def validate_fallback_report(path, namespace_counts=None, reason_counts=None):
     if not path.is_file():
         raise ValueError(f'Missing fallback report: {path}')
     count = 0
     counts = {}
+    reasons_seen = {}
     seen = set()
     with path.open(encoding='utf-8') as lines:
         for line_number, line in enumerate(lines, 1):
@@ -1954,10 +1964,16 @@ def validate_fallback_report(path, namespace_counts=None):
             seen.add(key)
             count += 1
             counts[namespace] = counts.get(namespace, 0) + 1
+            for reason in reasons:
+                reasons_seen[reason] = reasons_seen.get(reason, 0) + 1
     if namespace_counts is not None:
         # Commit the output only after the complete report is valid.
         namespace_counts.clear()
         namespace_counts.update(counts)
+    if reason_counts is not None:
+        # Reasons overlap across pages; these counts are not an acceptance verdict.
+        reason_counts.clear()
+        reason_counts.update(reasons_seen)
     return count
 
 BUILD_IDENTITY_NAME = '.build-inputs.json'
@@ -2207,7 +2223,8 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     coverage=validate_page_coverage(staging,require_total=True)
     nonlexical.check_coverage(staging,build_identity)
     fallback_counts = {}
-    fallback_pages = validate_fallback_report(staging / 'fallback-pages.jsonl', fallback_counts)
+    fallback_reasons = {}
+    fallback_pages = validate_fallback_report(staging / 'fallback-pages.jsonl', fallback_counts, fallback_reasons)
     namespace_totals=validate_namespace_coverage(staging,coverage['pages_seen'],namespace_snapshot,fallback_counts,site_info_snapshot)
     if namespace_snapshot is not None and namespace_totals['fallback_pages']!=fallback_pages:raise ValueError('Namespace fallback totals differ from fallback report')
     for part in staging.rglob('*.xz.part'):
@@ -2240,6 +2257,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     metadata = {'edition':edition,'date':date,'dump_staging_version':DUMP_STAGING_VERSION,
         'dump_codec':'zstd','dump_stream_kind':'multistream-zstd',
         'status':'built' if compressed else 'empty', 'fallback_pages':fallback_pages,
+        'fallback_reason_counts':fallback_reasons,
         'fallback_report':'fallback-pages.jsonl', 'compression':'xz -0; 1 MiB blocks','blobs':len(compressed),
         'input_pages':coverage['pages_seen'],'page_coverage_report':'page-coverage.json',
         'namespace_coverage_report':'namespace-coverage.json','namespace_coverage_totals':namespace_totals,
@@ -2261,7 +2279,8 @@ def publish_verified_staging(staging, target, edition, date, compression_workers
         blobs,fallback_pages=_publish_verified_staging(staging,target,edition,date,compression_workers,interwiki_sha,auxiliary_hashes,build_identity,namespace_snapshot,site_info_snapshot)
         result.update(blobs=blobs,fallback_pages=fallback_pages)
 
-def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None):
+def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None):
+    validate_llvm_workers(llvm_workers)
     validate_now_unix(now_unix)
     if extraction_cache_root is not None:
         if not Path(extraction_cache_root).is_dir():raise ValueError('Explicit extraction cache root must exist')
@@ -2322,12 +2341,20 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         if type(metadata.get('input_pages')) is not int or metadata['input_pages']!=coverage['pages_seen']:
             raise ValueError('Existing output page total differs from coverage')
         fallback_counts = {}
-        fallback_pages=validate_fallback_report(target/'fallback-pages.jsonl', fallback_counts)
+        fallback_reasons = {}
+        fallback_pages=validate_fallback_report(target/'fallback-pages.jsonl', fallback_counts, fallback_reasons)
         namespace_totals=validate_namespace_coverage(target,metadata['input_pages'],namespace,fallback_counts,auxiliary_snapshots.get('site-info'))
         if (type(metadata.get('fallback_pages')) is not int or metadata['fallback_pages']!=fallback_pages or
                 namespace_totals['fallback_pages']!=fallback_pages or
                 metadata.get('namespace_coverage_totals')!=namespace_totals):
             raise ValueError('Existing output namespace or fallback totals differ from reports')
+        if 'fallback_reason_counts' in metadata:
+            recorded_reasons = metadata['fallback_reason_counts']
+            if (not isinstance(recorded_reasons, dict) or
+                    any(not isinstance(reason, str) or not reason or type(count) is not int or count <= 0
+                        for reason, count in recorded_reasons.items()) or
+                    recorded_reasons != fallback_reasons):
+                raise ValueError('Existing output fallback reason counts differ from report')
         for field,name in (('page_coverage_report','page-coverage.json'),
                            ('namespace_coverage_report','namespace-coverage.json'),
                            ('fallback_report','fallback-pages.jsonl')):
@@ -2365,6 +2392,8 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         print(f'Retrying incomplete build: {staging}', flush=True)
         remove_artifact_tree(staging)
     workers = min(compression_workers or default_build_threads(),MAX_PIPELINE_WORKERS)
+    llvm_explicit=llvm_workers is not None
+    llvm_workers=workers if llvm_workers is None else llvm_workers
     workspace=target.with_name(date+'.shards')
     expected=shard_state(items,registry,interwiki_snapshot=interwiki_snapshot,auxiliary_snapshots=auxiliary_snapshots,reviewed_nonlexical=reviewed)
     raw_shards_path=(Path(raw_shard_root).absolute()/edition/(date+'.raw-shards')) if raw_shard_root is not None else None
@@ -2392,12 +2421,12 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     # Reuse the verified repack for either path, retaining it after failures.
     if source_pages>SHARD_PAGES or reviewed is not None:
         print(f'Sharding {edition}: {source_pages:,} verified source pages in {SHARD_PAGES:,}-page chunks',flush=True)
-        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical=reviewed)
+        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical=reviewed, **({'llvm_workers':llvm_workers} if llvm_explicit else {}))
     else:
         timed_run([zig,'build','-j1','-Doptimize=fast','--summary','all','build-dictionary','--',str(dump),str(staging),
                      *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
                      *pipeline_snapshot_args(registry,aux_pinned,page_links_snapshot,page_redirects_snapshot),
-                     '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),
+                     '--llvm-workers',str(llvm_workers),'--parse-workers',str(min(workers,64)),
                      '--page-workers',str(min(workers,16)),'--now-unix',str(now_unix),*timeout_args,
                      *extraction_cache_args(extraction_cache_root,source_metadata)],edition,date,'dictionary_build')
         coverage=validate_page_coverage(staging,source_pages=source_pages)
@@ -2428,19 +2457,39 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     cleanup_shard_workspace(workspace)
     return 'pipeline_run_may_reuse_verified_inputs_or_shards'
 
-def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS, cpu_admission='load', raw_shard_root=None, adaptive_workers=False, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None):
+def smallest_first_group_key(entry):
+    """Order validated compressed XML bytes, then edition/date; never probe files."""
+    key, group = entry
+    try:
+        for item in group:
+            validate_item(item)
+        xml = [item for item in group if '.xml' in item['name']]
+        if not xml:
+            raise ValueError('No XML input')
+        size = sum(item['size'] for item in xml)
+    except (KeyError, TypeError, ValueError):
+        # main rejects malformed manifests before scheduling. Direct callers
+        # retain build's original per-edition rejection/continuation behavior;
+        # unknown sizes must not be treated as zero or displace valid work.
+        size = float('inf')
+    return size, key
+
+
+def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS, cpu_admission='load', raw_shard_root=None, adaptive_workers=False, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None):
     from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS
     validate_now_unix(now_unix)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     if type(admission_wait_seconds) is not int or not 1 <= admission_wait_seconds <= MAX_WATCHDOG_WALL_SECONDS:
         raise ValueError('Resource admission wait must be a positive finite number of seconds, up to seven days')
     if cpu_admission not in ('load','affinity'):raise ValueError('Unknown CPU admission policy')
-    if type(adaptive_workers) is not bool or (adaptive_workers and (cpu_admission!='load' or expansion_workers is not None)):
+    validate_llvm_workers(llvm_workers)
+    if type(adaptive_workers) is not bool or (adaptive_workers and (cpu_admission!='load' or expansion_workers is not None or llvm_workers is not None)):
         raise ValueError('Automatic worker reduction requires load admission and implicit expansion workers')
-    if cpu_admission=='affinity':validate_affinity_workers(threads,jobs,expansion_workers)
-    pending=list(sorted(groups.items()))
+    if cpu_admission=='affinity':validate_affinity_workers(threads,jobs,expansion_workers,llvm_workers)
+    pending=sorted(groups.items(), key=smallest_first_group_key)
     failures=[]
     admission_workers=threads if expansion_workers is None or expansion_workers>MAX_PIPELINE_WORKERS else max(threads,expansion_workers)
+    admission_workers=max(admission_workers,llvm_workers or threads)
     admission_deadline=None
     admission_report_at=0
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
@@ -2462,6 +2511,7 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
                 options={}
                 if reviewed_nonlexical_review is not None:options['reviewed_nonlexical_review']=reviewed_nonlexical_review
                 if expansion_workers is not None: options['expansion_workers']=expansion_workers
+                if llvm_workers is not None: options['llvm_workers']=llvm_workers
                 if expansion_timeout_ms is not None: options['expansion_timeout_ms']=expansion_timeout_ms
                 if now_unix is not None: options['now_unix']=now_unix
                 if raw_shard_root is not None: options['raw_shard_root']=raw_shard_root
@@ -2472,7 +2522,9 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
                 if edition_options is not None:
                     if key not in edition_options:raise ValueError(f'Missing edition inputs: {key}')
                     options.update(edition_options[key])
-                if cpu_admission=='affinity':validate_affinity_workers(threads,jobs,options.get('expansion_workers'))
+                if options.get('llvm_workers',llvm_workers)!=llvm_workers:
+                    raise ValueError('Edition inputs cannot override LLVM worker admission')
+                if cpu_admission=='affinity':validate_affinity_workers(threads,jobs,options.get('expansion_workers'),options.get('llvm_workers'))
                 future=pool.submit(build,group,downloads,output,zig,threads,**options)
                 active[future]=key
                 admission_deadline=None
@@ -2530,6 +2582,7 @@ def main():
     p.add_argument('--cpu-admission',choices=('load','affinity'),default='load',
                    help='CPU admission: load headroom (default), or fixed affinity sharing within a verified watchdog and one edition job')
     p.add_argument('--threads',type=int,help='Workers per edition (up to 4 within CPU load and fixed 8 GiB aggregate cap)')
+    p.add_argument('--llvm-workers',type=int,help='Native LLVM batch workers, 1 through 4; default follows --threads; parse/page workers stay unchanged')
     p.add_argument('--jobs',type=int,help='Concurrent editions (up to two within CPU load and capped aggregate worker budget)')
     p.add_argument('--expansion-workers',type=int,help='Workers per sharded page expansion; default follows --threads, opt-in 5-8 requires watchdog and one edition job')
     p.add_argument('--expansion-timeout-ms',type=int,help='Explicit per-page wall deadline, 1 through 3600000 ms; default 60000. Timeouts fail the build rather than publish empty pages.')
@@ -2557,7 +2610,7 @@ def main():
             p.error('Explicit build deadline requires watchdog mode and must be 1 through '+str(MAX_WATCHDOG_WALL_SECONDS)+' seconds')
     if a.cpu_admission=='affinity' and a.resource_mode!='watchdog':
         p.error('Affinity admission requires explicit watchdog mode')
-    adaptive_workers=a.cpu_admission=='load' and a.threads is None and a.expansion_workers is None
+    adaptive_workers=a.cpu_admission=='load' and a.threads is None and a.expansion_workers is None and a.llvm_workers is None
     if a.threads is None and a.cpu_admission=='load':a.threads=default_build_threads()
     try:budget=safe_worker_budget() if a.cpu_admission=='load' else safe_worker_budget(cpu_admission='affinity')
     except ValueError as error:p.error(str(error))
@@ -2568,6 +2621,9 @@ def main():
     if adaptive_workers and a.threads > worker_limit:
         a.threads=reduced_automatic_workers(a.threads,worker_limit)
     if not 1 <= a.threads <= worker_limit:p.error(f'Threads must be 1 through {worker_limit} on this host')
+    llvm_workers=a.threads if a.llvm_workers is None else a.llvm_workers
+    try:validate_llvm_workers(llvm_workers)
+    except ValueError as error:p.error(str(error))
     expansion_workers=a.threads if a.expansion_workers is None else a.expansion_workers
     if not 1 <= expansion_workers <= MAX_PAGE_EXPANSION_WORKERS:
         p.error(f'Expansion workers must be 1 through {MAX_PAGE_EXPANSION_WORKERS}')
@@ -2578,9 +2634,10 @@ def main():
         if expansion_workers>len(os.sched_getaffinity(0)):
             p.error('Expansion workers exceed the watchdog CPU affinity')
     admission_workers=a.threads if expansion_workers>MAX_PIPELINE_WORKERS else max(a.threads,expansion_workers)
+    admission_workers=max(admission_workers,llvm_workers)
     if a.jobs is None:a.jobs=1 if a.cpu_admission=='affinity' or expansion_workers>MAX_PIPELINE_WORKERS else min(2,max(1,budget//admission_workers))
     if a.cpu_admission=='affinity':
-        try:validate_affinity_workers(a.threads,a.jobs,expansion_workers)
+        try:validate_affinity_workers(a.threads,a.jobs,expansion_workers,llvm_workers)
         except ValueError as error:p.error(str(error))
     if expansion_workers>MAX_PIPELINE_WORKERS and a.jobs!=1:
         p.error('More than four expansion workers requires exactly one edition job')
@@ -2619,6 +2676,7 @@ def main():
         options['admission_wait_seconds']=a.build_timeout_seconds or WATCHDOG_WALL_SECONDS
     if a.expansion_timeout_ms is not None: options['expansion_timeout_ms']=a.expansion_timeout_ms
     if a.now_unix is not None: options['now_unix']=a.now_unix
+    if a.llvm_workers is not None: options['llvm_workers']=llvm_workers
     if a.raw_shard_root is not None: options['raw_shard_root']=a.raw_shard_root.absolute()
     if a.compress_shards: options['compress_shards']=True
     if a.extraction_cache_root is not None: options['extraction_cache_root']=a.extraction_cache_root.absolute()
@@ -2640,6 +2698,7 @@ def cli():
         route.add_argument('--cpu-admission',choices=('load','affinity'),default='load')
         route.add_argument('--artifact-root-spec')
         route.add_argument('--threads',type=int)
+        route.add_argument('--llvm-workers',type=int)
         route.add_argument('--jobs',type=int)
         route.add_argument('--expansion-workers',type=int)
         route.add_argument('--build-timeout-seconds',type=int)
@@ -2656,7 +2715,7 @@ def cli():
         if routing.cpu_admission=='affinity':
             if mode!='watchdog':raise ContainmentUnavailable('Affinity admission requires explicit watchdog mode')
             if routing.jobs not in (None,1):raise ContainmentUnavailable('Affinity admission requires exactly one edition job')
-            if any(n is not None and not 1 <= n <= MAX_PIPELINE_WORKERS for n in (routing.threads,routing.expansion_workers)):
+            if any(n is not None and not 1 <= n <= MAX_PIPELINE_WORKERS for n in (routing.threads,routing.expansion_workers,routing.llvm_workers)):
                 raise ContainmentUnavailable('Affinity admission allows one through four compiler and expansion workers')
         if routing.build_timeout_seconds is not None:
             from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS

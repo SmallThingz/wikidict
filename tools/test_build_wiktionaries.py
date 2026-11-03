@@ -801,6 +801,62 @@ class ProvenanceBindingTests(unittest.TestCase):
                 b.verified_auxiliary_hashes(pinned)
 
 
+class SmallestFirstSchedulerTests(unittest.TestCase):
+    @staticmethod
+    def item(wiki, date, size, suffix='pages-meta-current.xml.bz2'):
+        name = wiki+'-'+date+'-'+suffix
+        return dict(wiki=wiki, date=date, name=name, size=size, sha1='a'*40,
+                    url='https://dumps.wikimedia.org/'+wiki+'/'+date+'/'+name)
+
+    def test_scheduler_orders_xml_member_totals_then_edition_and_date(self):
+        specs = [('aawiktionary', '20261001', [90]),
+                 ('zzwiktionary', '20261001', [6, 4]),
+                 ('bbwiktionary', '20261002', [10]),
+                 ('bbwiktionary', '20261001', [10])]
+        groups = {}
+        for wiki, date, sizes in specs:
+            group = [self.item(wiki, date, size, 'pages-meta-current'+str(n)+'.xml.bz2')
+                     for n, size in enumerate(sizes)]
+            group.append(self.item(wiki, date, 1000000 if wiki == 'zzwiktionary' else 1, 'page.sql.gz'))
+            groups[(wiki, date)] = group
+        started = []
+        def build(group, *args, **kwargs):
+            key = group[0]['wiki'], group[0]['date']
+            started.append(key)
+            if key == ('bbwiktionary', '20261001'):
+                raise ValueError('preserve edition failure')
+        with patch.object(b, 'safe_worker_budget', return_value=1), \
+             patch.object(b, 'build', side_effect=build), \
+             patch.object(b.time, 'sleep', side_effect=AssertionError('unexpected admission wait')):
+            failures = b.build_groups(groups, Path('.'), Path('.'), 'zig', 1, 1)
+        self.assertEqual([('bbwiktionary', '20261001'), ('bbwiktionary', '20261002'),
+                          ('zzwiktionary', '20261001'), ('aawiktionary', '20261001')], started)
+        self.assertEqual([('bbwiktionary', '20261001')], failures)
+
+    def test_invalid_or_missing_manifest_size_retains_original_rejection(self):
+        good = self.item('zzwiktionary', '20261001', 20)
+        bad = self.item('aawiktionary', '20261001', 10)
+        for size in (None, 0, -1, '10', 1.5):
+            with self.subTest(size=size):
+                item = dict(bad)
+                if size is None:
+                    del item['size']
+                else:
+                    item['size'] = size
+                groups = {('aawiktionary', '20261001'): [item],
+                          ('zzwiktionary', '20261001'): [good]}
+                started = []
+                def build(group, *args, **kwargs):
+                    started.append(group[0]['wiki'])
+                    for value in group:
+                        b.validate_item(value)
+                with patch.object(b, 'safe_worker_budget', return_value=1), \
+                     patch.object(b, 'build', side_effect=build):
+                    failures = b.build_groups(groups, Path('.'), Path('.'), 'zig', 1, 1)
+                self.assertEqual(['zzwiktionary', 'aawiktionary'], started)
+                self.assertEqual([('aawiktionary', '20261001')], failures)
+
+
 class BuildTest(unittest.TestCase):
     def test_main_routes_interwiki_and_dated_auxiliary_snapshot_flags(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2318,6 +2374,58 @@ class FallbackNamespaceHistogramTests(unittest.TestCase):
             self.assertEqual({999: 37}, counts)
 
 
+    def test_fallback_reason_counts_overlap_in_one_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'fallback-pages.jsonl'
+            rows = [dict(namespace=0, title='one', reasons=['literal_markup', 'missing_language_heading']),
+                    dict(namespace=114, title='two', reasons=['literal_markup'])]
+            path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+            namespaces, reasons, opens = {999: 37}, {'old': 37}, []
+            original_open = Path.open
+            def opened(selected, *args, **kwargs):
+                if selected == path:
+                    opens.append(selected)
+                return original_open(selected, *args, **kwargs)
+            with patch.object(Path, 'open', opened):
+                self.assertEqual(2, b.validate_fallback_report(path, namespaces, reasons))
+            self.assertEqual([path], opens)
+            self.assertEqual({0: 1, 114: 1}, namespaces)
+            self.assertEqual({'literal_markup': 2, 'missing_language_heading': 1}, reasons)
+            self.assertEqual(3, sum(reasons.values()))
+
+    def test_fallback_reason_counts_empty_report_clears_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'fallback-pages.jsonl'
+            path.write_text('')
+            namespaces, reasons = {999: 37}, {'old': 37}
+            self.assertEqual(0, b.validate_fallback_report(path, namespaces, reasons))
+            self.assertEqual({}, namespaces)
+            self.assertEqual({}, reasons)
+
+    def test_fallback_reason_counts_rejections_do_not_commit_partial_counts(self):
+        good = dict(namespace=0, title='first', reasons=['literal_markup'])
+        prefix = json.dumps(good)+'\n'
+        bad_records = [good, None, dict(namespace=True, title='bad', reasons=['literal_markup']),
+                       dict(namespace=0, title='bad', reasons=[]),
+                       dict(namespace=0, title='bad', reasons=['']),
+                       dict(namespace=0, title='bad', reasons=[7]),
+                       dict(namespace=0, title='bad', reasons=['literal_markup', 'literal_markup'])]
+        for reason in ('expansion_error:Timeout', 'expansion_error:expand:OutOfMemory',
+                       'expansion_error:worker:Crash'):
+            bad_records.append(dict(namespace=0, title='bad', reasons=[reason]))
+        suffixes = ['{broken\n', '\n'] + [json.dumps(row)+'\n' for row in bad_records]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'fallback-pages.jsonl'
+            for suffix in suffixes:
+                with self.subTest(suffix=suffix):
+                    path.write_text(prefix+suffix)
+                    namespaces, reasons = {999: 37}, {'old': 37}
+                    with self.assertRaises(ValueError):
+                        b.validate_fallback_report(path, namespaces, reasons)
+                    self.assertEqual({999: 37}, namespaces)
+                    self.assertEqual({'old': 37}, reasons)
+
+
 class PublicationResumeTests(unittest.TestCase):
     def fallback_namespace_fixture(self, root):
         item, target, workspace = self.prepare(root, publish=False)
@@ -2398,6 +2506,71 @@ class PublicationResumeTests(unittest.TestCase):
                     native.assert_not_called()
                 self.assertEqual(before, complete.read_bytes())
                 self.assertEqual(sentinel.read_bytes(),b'owned recovery state after publication')
+
+    @staticmethod
+    def compress_reason_count_fixture(paths, block_size, workers):
+        # Count/publication metadata control: no external compressor process.
+        for path in paths:
+            raw = path.read_bytes()
+            assert raw == b'WIKBLB08fixture'
+            target = Path(str(path)+'.xz')
+            with target.open('xb') as out:
+                out.write(lzma.compress(raw, preset=0))
+            b.verify_round_trip(path, target)
+            path.unlink()
+
+    def test_fallback_reason_counts_publication_and_legacy_reuse(self):
+        for has_fallback in (False, True):
+            with self.subTest(has_fallback=has_fallback), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                with patch.object(b, 'PROJECT', root), \
+                     patch.object(b, 'compress_many', side_effect=self.compress_reason_count_fixture):
+                    if has_fallback:
+                        item, target, workspace, staging, namespace, hashes, identity = self.fallback_namespace_fixture(root)
+                        b._publish_verified_staging(staging, target, item['wiki'], item['date'], 1,
+                            auxiliary_hashes=hashes, build_identity=identity, namespace_snapshot=namespace)
+                    else:
+                        item, target, workspace = self.prepare(root)
+                    complete = target/'complete.json'
+                    metadata = json.loads(complete.read_text())
+                    self.assertEqual({'literal_markup': 1} if has_fallback else {}, metadata['fallback_reason_counts'])
+                    before = complete.read_bytes()
+                    with patch.object(b, 'run_checked') as native:
+                        self.assertEqual('existing_output', b.build([item], root, root/'output', 'zig', 1))
+                        native.assert_not_called()
+                    self.assertEqual(before, complete.read_bytes())
+                    del metadata['fallback_reason_counts']
+                    complete.write_text(json.dumps(metadata)+'\n')
+                    legacy = complete.read_bytes()
+                    with patch.object(b, 'run_checked') as native:
+                        self.assertEqual('existing_output', b.build([item], root, root/'output', 'zig', 1))
+                        native.assert_not_called()
+                    self.assertEqual(legacy, complete.read_bytes())
+
+    def test_fallback_reason_counts_mismatch_preserves_existing_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(b, 'PROJECT', root), \
+                 patch.object(b, 'compress_many', side_effect=self.compress_reason_count_fixture):
+                item, target, workspace, staging, namespace, hashes, identity = self.fallback_namespace_fixture(root)
+                b._publish_verified_staging(staging, target, item['wiki'], item['date'], 1,
+                    auxiliary_hashes=hashes, build_identity=identity, namespace_snapshot=namespace)
+                workspace.mkdir()
+                sentinel = workspace/'sentinel'; sentinel.write_bytes(b'preserve recovery state')
+                complete = target/'complete.json'; metadata = json.loads(complete.read_text())
+                for wrong in (None, [], {}, {'literal_markup': 2}, {'other': 1},
+                              {'literal_markup': True}, {'literal_markup': 1.0},
+                              {'literal_markup': 0}, {'literal_markup': -1}):
+                    with self.subTest(wrong=wrong):
+                        metadata['fallback_reason_counts'] = wrong
+                        complete.write_text(json.dumps(metadata)+'\n')
+                        before = complete.read_bytes()
+                        with patch.object(b, 'run_checked') as native:
+                            with self.assertRaisesRegex(ValueError, 'fallback reason counts differ'):
+                                b.build([item], root, root/'output', 'zig', 1)
+                            native.assert_not_called()
+                        self.assertEqual(before, complete.read_bytes())
+                        self.assertEqual(b'preserve recovery state', sentinel.read_bytes())
 
     def prepare(self, root, publish=True):
         folder=root/'testwiktionary/20260901'
@@ -3344,7 +3517,7 @@ class PageCountRoutingTests(unittest.TestCase):
     class RouteReached(RuntimeError):
         pass
 
-    def _check_route(self, pages, attempts=1):
+    def _check_route(self, pages, attempts=1, llvm_workers=None):
         # Real small compressed input and real verified repack: the branch must
         # depend on the staged source count, not compression ratio or file size.
         with tempfile.TemporaryDirectory() as tmp:
@@ -3369,6 +3542,8 @@ class PageCountRoutingTests(unittest.TestCase):
                 self.assertEqual(phase,'dictionary_build')
                 self.assertIn('build-dictionary',command)
                 self.assertNotIn('--expander-only',command)
+                self.assertEqual(command[command.index('--llvm-workers')+1],str(llvm_workers or 1))
+                for flag in ('--parse-workers','--page-workers'):self.assertEqual(command[command.index(flag)+1],'1')
                 actual=Path(command[command.index('--')+1])
                 calls.append(('one-shot',actual))
                 self.assertEqual(actual,dump)
@@ -3378,6 +3553,7 @@ class PageCountRoutingTests(unittest.TestCase):
                 calls.append(('sharded',Path(actual)))
                 self.assertEqual(Path(actual),dump)
                 self.assertEqual(actual_workspace,workspace)
+                self.assertEqual(kwargs.get('llvm_workers'),llvm_workers)
                 self.assertTrue(Path(actual).is_file())
                 raise self.RouteReached()
             real_prepare=b.prepare_shard_workspace
@@ -3393,7 +3569,7 @@ class PageCountRoutingTests(unittest.TestCase):
                  patch.object(b,'build_sharded',side_effect=stop_sharded):
                 for attempt in range(attempts):
                     with self.assertRaises(self.RouteReached):
-                        b.build([item],root,root/'output',str(tool),1)
+                        b.build([item],root,root/'output',str(tool),1, **({'llvm_workers':llvm_workers} if llvm_workers is not None else {}))
                     # A dispatch failure retains the same verified input for
                     # retry, and one-shot must never create a second repack.
                     self.assertEqual(prepare.call_count,attempt+1)
@@ -3407,6 +3583,10 @@ class PageCountRoutingTests(unittest.TestCase):
                     self.assertEqual(source['index_sha256'],b.sha256_file(dump.with_name('pages-index.txt.bz2')))
             expected='sharded' if pages>100_000 else 'one-shot'
             self.assertEqual(calls,[(expected,dump)]*attempts)
+
+    def test_explicit_llvm_workers_preserve_small_and_sharded_routes(self):
+        for pages in (1,100_001):
+            with self.subTest(pages=pages):self._check_route(pages,llvm_workers=2)
 
     def test_verified_source_page_count_boundary_routes_zero_and_exact_shard_once(self):
         self.assertEqual(b.SHARD_PAGES,100_000)
@@ -3725,3 +3905,58 @@ class ExplicitExtractionCacheTests(unittest.TestCase):
                 with self.assertRaises(SystemExit) as done:b.cli()
                 self.assertEqual(done.exception.code,0)
             watchdog.assert_called_once_with(wall_seconds=7200,disk_paths=(root/'.tmp',output,cache))
+
+class ExplicitLlvmWorkerTests(unittest.TestCase):
+    def test_invalid_llvm_workers_refuse_before_artifact_side_effects(self):
+        root=Path('/unused-invalid-llvm-control')
+        for value in (0,-1,5,True,1.5):
+            for entry,args in ((b.build,([],root,root/'out','zig')),
+                               (b.build_locked,([],root,root/'out','zig')),
+                               (b.build_sharded,(root/'dump',root/'staging',root/'work',root/'registry','zig',1,[],123))):
+                with self.subTest(value=value,entry=entry.__name__), \
+                     patch.object(b,'artifact_path') as artifact, \
+                     patch.object(b,'remove_artifact_tree') as cleanup, \
+                     patch.object(b,'cleanup_dead_private_shards') as reconcile, \
+                     patch.object(b,'external_raw_shards') as external, \
+                     patch.object(b,'timed_run') as native:
+                    with self.assertRaisesRegex(ValueError,'LLVM workers'):
+                        options={'raw_shards_path':root/'raw'} if entry is b.build_sharded else {}
+                        entry(*args,llvm_workers=value,**options)
+                    artifact.assert_not_called()
+                    cleanup.assert_not_called()
+                    reconcile.assert_not_called()
+                    external.assert_not_called()
+                    native.assert_not_called()
+
+    def test_sharded_llvm_override_preserves_other_workers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);work=root/'work';(work/'input').mkdir(parents=True)
+            (work/'input/.complete.json').write_text(json.dumps({'dump_sha256':'a'*64,'index_sha256':'b'*64}))
+            for chosen,expected in ((None,'1'),(2,'2')):
+                with patch.object(b,'expander_ready',return_value=False),patch.object(b,'pipeline_snapshot_args',return_value=[]),patch.object(b,'timed_run',side_effect=RuntimeError('stop')) as run:
+                    with self.assertRaisesRegex(RuntimeError,'stop'):
+                        b.build_sharded(root/'dump',root/'staging',work,root/'registry','zig',1,[{'wiki':'testwiktionary','date':'20261001'}],123,llvm_workers=chosen)
+                argv=run.call_args.args[0]
+                self.assertEqual(argv[argv.index('--llvm-workers')+1],expected)
+                for flag in ('--parse-workers','--page-workers'):self.assertEqual(argv[argv.index(flag)+1],'1')
+
+    def test_llvm_override_affinity_and_type_validation(self):
+        with patch.object(b,'safe_worker_budget',return_value=2),patch.object(b,'affinity_worker_budget',return_value=2):
+            b.validate_affinity_workers(1,1,1,2)
+            for value in (0,-1,5,True,1.5):
+                with self.subTest(value=value),self.assertRaises(ValueError):b.validate_affinity_workers(1,1,1,value)
+        with patch.object(b,'safe_worker_budget',return_value=1),patch.object(b,'affinity_worker_budget',return_value=1):
+            with self.assertRaises(ValueError):b.validate_affinity_workers(1,1,1,2)
+
+    def test_llvm_override_cli_and_scheduler_forwarding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);argv=['build_wiktionaries.py','--resource-mode=watchdog','--cpu-admission=affinity','--downloads',str(root),'--output',str(root/'out'),'--threads','1','--jobs','1','--llvm-workers','2']
+            write_test_manifest(root,{'files':[dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)]})
+            with patch.object(b,'PROJECT',root),patch.object(sys,'argv',argv),patch.object(b,'safe_worker_budget',return_value=2),patch.object(b,'affinity_worker_budget',return_value=2),patch.object(b,'build_groups',return_value=[]) as groups:b.main()
+            self.assertEqual(groups.call_args.kwargs['llvm_workers'],2)
+            self.assertEqual(groups.call_args.args[4],1)
+            with patch.object(b,'safe_worker_budget',return_value=2),patch.object(b,'affinity_worker_budget',return_value=2),patch.object(b,'build',return_value='built') as build:
+                b.build_groups({('testwiktionary','20261001'):['item']},root,root/'out','zig',1,1,cpu_admission='affinity',llvm_workers=2)
+            self.assertEqual(build.call_args.kwargs['llvm_workers'],2)
+            with patch.object(b,'PROJECT',root),patch.object(sys,'argv',argv),patch.object(b,'safe_worker_budget',return_value=1),patch.object(b,'affinity_worker_budget',return_value=1):
+                with self.assertRaises(SystemExit):b.main()
