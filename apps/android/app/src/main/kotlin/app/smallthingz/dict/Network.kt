@@ -12,7 +12,7 @@ object Network {
             require(uri.scheme == "https" && uri.host != null && uri.userInfo == null) { "Downloads require HTTPS" }
             val c = uri.toURL().openConnection() as HttpURLConnection
             c.connectTimeout = 15000; c.readTimeout = 20000; c.instanceFollowRedirects = false
-            c.setRequestProperty("User-Agent", "Wikidict-Android/0.3 (https://github.com/SmallThingz/wikidict-android)")
+            c.setRequestProperty("User-Agent", "Wikidict-Android/${BuildConfig.VERSION_NAME} (https://github.com/SmallThingz/wikidict)")
             try {
                 val status = c.responseCode
                 if (status in listOf(301,302,303,307,308)) {
