@@ -1,0 +1,28 @@
+{
+  "schema": "wikidict.native-abbreviation-fixture-provenance.v1",
+  "synthetic": true,
+  "producer_source_head": "dd0227966877e6aa7e171b15b21417ae91d3c15a",
+  "producer_source_fingerprint": "d96a740b191faee200e3338e939941c74558b3d40b6ac676d616851d294b01f9",
+  "producer": "ordinary zig build test-bundle; Writer.finish, full verify, Reader DPR3/DPR2 decode, ordinary CLI export, complete Entry deep equality",
+  "producer_receipt": {
+    "path": "data/build-receipts-20261011-recovery-loss02/apps/native-abbreviation-fixture102-component01/component-fixture.actual01.json",
+    "bytes": 5730,
+    "sha256": "2519501f522576069ac350173dce887e38b460f9bab25ad23b0e50db5af09dd9"
+  },
+  "qualification_closure_sha256": "18a33d1d65a9ab8bba8cdeb152c97cb46c446953620286d0f21e2621c244f0f9",
+  "assets": {
+    "languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb": {
+      "bytes": 1052,
+      "sha256": "aa63a97f00aa71aa1f171c24902dffdea264b98b17b2ba6c50f6ce48e9f43d30"
+    },
+    "annotated.export.json": {
+      "bytes": 9552,
+      "sha256": "4e80873a119f25470bb2fa62e37fb30edc8834d1153b00e11c2fe22c11065b66"
+    },
+    "legacy.export.json": {
+      "bytes": 3611,
+      "sha256": "49ea0fb05980118e93e405fc0cdfcfac1a4480433d1c080238876ac585fab88a"
+    }
+  },
+  "scope": "Interoperability fixture, not corpus acceptance. Byte copies of genuine generated outputs; no manually framed substitute."
+}
