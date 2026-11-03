@@ -640,5 +640,94 @@ class ObjectCacheTest(unittest.TestCase):
         self.assert_hits(first, "000")
 
 
+class IdentityProbeDeadlineTest(unittest.TestCase):
+    def test_actual_watchdog_child_environment_overrides_ambient_deadline(self):
+        import ast
+        source = Path(__file__).with_name('build_resource_limits.py').read_text()
+        compile(source, 'private-build-resource-limits', 'exec')
+        tree = ast.parse(source)
+        constants = {n.targets[0].id: ast.literal_eval(n.value) for n in tree.body
+            if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)
+            and n.targets[0].id in ('WATCHDOG_TOKEN', 'WATCHDOG_PARENT_PID', 'WATCHDOG_PROOF_FD', 'WATCHDOG_DEADLINE_MONOTONIC')}
+        fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'supervise_watchdog')
+        nodes = list(ast.walk(fn))
+        assign = next(n for n in nodes if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name) and n.targets[0].id == 'env')
+        update = next(n for n in nodes if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
+            and isinstance(n.value.func, ast.Attribute) and isinstance(n.value.func.value, ast.Name)
+            and n.value.func.value.id == 'env' and n.value.func.attr == 'update')
+        scope = dict(constants, os=cache.os, token='unit-token', proof_read=9, started=100, wall_seconds=120)
+        key = constants['WATCHDOG_DEADLINE_MONOTONIC']
+        with mock.patch.dict(cache.os.environ, {key: '999'}, clear=True), mock.patch.object(cache.os, 'getpid', return_value=42):
+            exec(compile(ast.fix_missing_locations(ast.Module(body=[assign, update], type_ignores=[])), 'actual-watchdog-environment', 'exec'), scope)
+        self.assertEqual(scope['env'][key], '220')
+        self.assertEqual(scope['env'][constants['WATCHDOG_PARENT_PID']], '42')
+        self.assertEqual(scope['env'][constants['WATCHDOG_PROOF_FD']], '9')
+        self.assertEqual(scope['env'][constants['WATCHDOG_TOKEN']], 'unit-token')
+
+    def native_probe(self):
+        from types import SimpleNamespace
+        return [SimpleNamespace(stdout='x86_64-linux-gnu\n'),
+                SimpleNamespace(stdout='clang fixture\n'),
+                SimpleNamespace(stderr='"-target-cpu" "fixture-cpu" "-target-feature" "+sse2" "-target-feature" "-avx512f"')]
+
+    def clang(self, responses, *, deadline=None, clock=None):
+        import contextlib
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(mock.patch.dict(cache.os.environ,
+            {} if deadline is None else {'WIKIDICT_BUILD_DEADLINE_MONOTONIC': deadline}, clear=True))
+        if clock is not None:
+            stack.enter_context(mock.patch.object(cache.time, 'monotonic', side_effect=clock))
+        stack.enter_context(mock.patch.object(cache.shutil, 'which', return_value='/clang'))
+        stack.enter_context(mock.patch.object(cache.Path, 'resolve', return_value=Path('/clang')))
+        stack.enter_context(mock.patch.object(cache, 'tool_identity', return_value={'unchanged': 'tool-and-libraries'}))
+        return stack.enter_context(mock.patch.object(cache.subprocess, 'run', side_effect=responses))
+
+    def test_identity_probe_uses_decreasing_real_job_budget_without_changing_identity(self):
+        run = self.clang(self.native_probe(), deadline='300', clock=[100, 110, 130])
+        observed = cache.clang_identity('clang', ['-march=native'])
+        self.assertEqual([c.kwargs['timeout'] for c in run.call_args_list], [200, 190, 170])
+        self.assertTrue(all(c.kwargs['check'] for c in run.call_args_list))
+        self.assertEqual(observed, {'tool': {'unchanged': 'tool-and-libraries'},
+            'target': 'x86_64-linux-gnu', 'version': 'clang fixture',
+            'resolved_native': {'cpu': 'fixture-cpu', 'features': ['+sse2', '-avx512f']}})
+        self.assertEqual(run.call_args.args[0], ['/clang', '-###', '-march=native', '-x', 'c', '-c', '/dev/null', '-o', '/dev/null'])
+
+    def test_standalone_identity_probe_keeps_original_timeout_and_schema(self):
+        run = self.clang(self.native_probe())
+        observed = cache.clang_identity('clang', ['-march=native'])
+        self.assertEqual([c.kwargs['timeout'] for c in run.call_args_list], [15, 15, 15])
+        self.assertEqual(set(observed), {'tool', 'target', 'version', 'resolved_native'})
+
+    def test_expired_or_malformed_deadline_refuses_before_probe(self):
+        for raw in ('100', '99', 'nan', 'inf', '-inf', 'not-a-number', str(100 + 7*24*60*60 + 1)):
+            with self.subTest(deadline=raw), mock.patch.dict(cache.os.environ, {'WIKIDICT_BUILD_DEADLINE_MONOTONIC': raw}), mock.patch.object(cache.time, 'monotonic', return_value=100), mock.patch.object(cache.shutil, 'which', return_value='/clang'), mock.patch.object(cache.Path, 'resolve', return_value=Path('/clang')), mock.patch.object(cache.subprocess, 'run') as run:
+                with self.assertRaises(ValueError):
+                    cache.clang_identity('clang', ['-march=native'])
+                run.assert_not_called()
+
+    def test_probe_timeout_and_real_tool_failure_propagate_without_retry(self):
+        for error in (cache.subprocess.TimeoutExpired(['/clang'], 40), cache.subprocess.CalledProcessError(1, ['/clang'])):
+            with self.subTest(error=type(error).__name__):
+                run = self.clang(error, deadline='200', clock=[100])
+                with self.assertRaises(type(error)):
+                    cache.clang_identity('clang', ['-march=native'])
+                self.assertEqual(run.call_count, 1)
+
+    def test_missing_tool_remains_fatal_without_generic_target(self):
+        with mock.patch.object(cache.shutil, 'which', return_value=None), mock.patch.object(cache.subprocess, 'run') as run:
+            with self.assertRaisesRegex(ValueError, 'Clang executable unavailable'):
+                cache.clang_identity('missing', ['-march=native'])
+            run.assert_not_called()
+
+    def test_malformed_native_features_remain_fatal(self):
+        responses = self.native_probe()
+        responses[-1].stderr = '"-target-cpu" "fixture-cpu"'
+        run = self.clang(responses, deadline='200', clock=[100, 101, 102])
+        with self.assertRaisesRegex(ValueError, 'Clang native CPU/features unavailable'):
+            cache.clang_identity('clang', ['-march=native'])
+        self.assertEqual(run.call_count, 3)
+
+
 if __name__ == "__main__":
     unittest.main()

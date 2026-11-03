@@ -6,6 +6,7 @@ dump marker. This helper does not reread the multigigabyte dump or stream index.
 """
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -74,11 +75,23 @@ def link_or_copy(source, destination):
         shutil.copyfile(source, destination)
 
 
+def identity_probe_timeout(default):
+    """Use the admitted job's remaining wall budget, not a host-idle timer."""
+    raw = os.environ.get('WIKIDICT_BUILD_DEADLINE_MONOTONIC')
+    if raw is None:
+        return default
+    deadline = float(raw)
+    remaining = deadline - time.monotonic()
+    if not math.isfinite(deadline) or not 0 < remaining <= 7 * 24 * 60 * 60:
+        raise ValueError("Invalid or expired build identity-probe deadline")
+    return remaining
+
+
 def tool_identity(executable):
     """Digest the emitted extractor and its resolved dynamic libraries."""
     regular(executable)
     result = subprocess.run(["ldd", str(executable)], capture_output=True,
-                            text=True, check=True, timeout=30)
+                            text=True, check=True, timeout=identity_probe_timeout(30))
     libraries = set()
     for line in result.stdout.splitlines():
         match = re.search(r"(?:=>\s*)?(/[^\s]+)\s*\(", line)
@@ -284,9 +297,9 @@ def clang_identity(command, flags=()):
         raise ValueError(f"Clang executable unavailable: {command}")
     executable = Path(resolved).resolve(strict=True)
     target = subprocess.run([str(executable), "-dumpmachine"], capture_output=True,
-                            text=True, check=True, timeout=15).stdout.strip()
+                            text=True, check=True, timeout=identity_probe_timeout(15)).stdout.strip()
     version = subprocess.run([str(executable), "--version"], capture_output=True,
-                             text=True, check=True, timeout=15).stdout.splitlines()[0]
+                             text=True, check=True, timeout=identity_probe_timeout(15)).stdout.splitlines()[0]
     if not target or not version:
         raise ValueError("Clang target/version unavailable")
     result = {"tool": tool_identity(executable), "target": target, "version": version}
@@ -296,7 +309,7 @@ def clang_identity(command, flags=()):
         command_line = [str(executable), "-###", "-march=native", "-x", "c",
                         "-c", "/dev/null", "-o", "/dev/null"]
         driver = subprocess.run(command_line, capture_output=True, text=True,
-                                check=True, timeout=15).stderr
+                                check=True, timeout=identity_probe_timeout(15)).stderr
         cpus = re.findall(r'"-target-cpu" "([^"]+)"', driver)
         features = re.findall(r'"-target-feature" "([+-][A-Za-z0-9_.-]+)"', driver)
         if len(cpus) != 1 or not re.fullmatch(r"[A-Za-z0-9_.-]+", cpus[0]) or not features:
@@ -313,9 +326,9 @@ def live_zig_observation(command):
     executable = Path(resolved).resolve(strict=True)
     regular(executable)
     version = subprocess.run([str(executable), "version"], capture_output=True,
-                             text=True, check=True, timeout=15).stdout.strip()
+                             text=True, check=True, timeout=identity_probe_timeout(15)).stdout.strip()
     environment = subprocess.run([str(executable), "env"], capture_output=True,
-                                 text=True, check=True, timeout=15).stdout
+                                 text=True, check=True, timeout=identity_probe_timeout(15)).stdout
     target = re.search(r'\.target = "([^"]+)"', environment)
     if not version or target is None:
         raise ValueError("Zig version/target unavailable")

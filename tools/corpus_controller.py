@@ -3,7 +3,9 @@
 
 A JSON configuration must explicitly be armed after current qualification and
 resolution of the production diagnostic. Run --phase pilot first, then supply
-its content-review receipt before --phase remaining. Failed editions can be
+its content-review receipt before --phase remaining. --phase all instead queues
+all selected editions smallest-first without the historical pilot prerequisite;
+qualification and publication/semantic checks remain unchanged. Failed editions can be
 retried with --retry-failed; existing accepted outputs are not charged again.
 The builder alone validates providers, resumes work, and verifies publication
 payloads. --revalidate asks that same CLI to verify previously accepted output.
@@ -1376,10 +1378,17 @@ def validate_history_context(start, row, context, transition=None, cfg=None):
                 'Carried publication build inputs differ')
 
 
-def selected_phase_editions(editions, phase, defer_english=False):
-    require(phase in ('pilot', 'remaining'), 'Unknown production phase')
-    require(not defer_english or phase == 'remaining', 'English deferral is only a remaining-phase selection')
-    selected = list(PILOT) if phase == 'pilot' else [x for x in edition_order(editions) if x not in PILOT]
+def selected_phase_editions(editions, phase, defer_english=False, manifest=None):
+    require(phase in ('pilot', 'remaining', 'all'), 'Unknown production phase')
+    require(not defer_english or phase in ('remaining', 'all'), 'English deferral requires remaining or all phase')
+    if phase == 'all':
+        require(len(editions) == len(set(editions)) and isinstance(manifest, dict)
+                and isinstance(manifest.get('files'), list), 'All-edition scheduling requires the selected manifest')
+        from build_wiktionaries import smallest_first_group_key
+        groups = [(edition, [item for item in manifest['files'] if item['wiki'] == edition]) for edition in editions]
+        selected = [edition for edition, items in sorted(groups, key=smallest_first_group_key)]
+    else:
+        selected = list(PILOT) if phase == 'pilot' else [x for x in edition_order(editions) if x not in PILOT]
     return [x for x in selected if not (defer_english and x == 'enwiktionary')]
 
 
@@ -1527,10 +1536,10 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True, type=Path)
-    parser.add_argument('--phase', choices=('pilot', 'remaining'), default='pilot')
+    parser.add_argument('--phase', choices=('pilot', 'remaining', 'all'), default='pilot')
     parser.add_argument('--retry-failed', action='store_true')
     parser.add_argument('--revalidate', action='store_true')
-    parser.add_argument('--defer-english', action='store_true', help='Remaining phase: preserve English as pending while its capture completes')
+    parser.add_argument('--defer-english', action='store_true', help='Remaining/all phase: preserve English as pending while its capture completes')
     args = parser.parse_args(argv)
     cfg = read_json(args.config)
     require(cfg.get('armed') is True, 'Configuration remains unarmed')
@@ -1560,7 +1569,7 @@ def main(argv=None):
             review = gate(cfg['pilot_review'], cfg, ('passed', 'passed-closed'))
             pilot_rows = [row for row in current['editions'] if row['edition'] in PILOT]
             validate_content_review(review, cfg['source'], pilot_rows, PILOT, scope='pilot')
-        selected = selected_phase_editions(editions, args.phase, args.defer_english)
+        selected = selected_phase_editions(editions, args.phase, args.defer_english, manifest=manifest)
         sequence = max((x['sequence'] for x in rows), default=0)
         for edition in selected:
             prior = [x for x in rows if x['edition'] == edition and not x.get('history_time_only')]

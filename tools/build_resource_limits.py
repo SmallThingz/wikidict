@@ -29,6 +29,7 @@ PIDS_PARENT_RESERVE = 16
 WATCHDOG_TOKEN = 'WIKIDICT_BUILD_WATCHDOG_TOKEN'
 WATCHDOG_PARENT_PID = 'WIKIDICT_BUILD_WATCHDOG_PARENT_PID'
 WATCHDOG_PROOF_FD = 'WIKIDICT_BUILD_WATCHDOG_PROOF_FD'
+WATCHDOG_DEADLINE_MONOTONIC = 'WIKIDICT_BUILD_DEADLINE_MONOTONIC'
 WATCHDOG_WALL_SECONDS = 2 * 60 * 60
 MAX_WATCHDOG_WALL_SECONDS = 7 * 24 * 60 * 60
 WATCHDOG_POLL_SECONDS = 0.2
@@ -814,7 +815,7 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
               'disk_floor_bytes': disk_floor_bytes, 'disk_space': disk_roots,
               'disk_sample_interval_seconds': WATCHDOG_POLL_SECONDS,
               'disk_limit': 'sampled free-space reserve; expansion and concurrent writes are not bounded',
-              'wall_seconds': wall_seconds, 'peak_pss_bytes': 0,
+              'wall_seconds': wall_seconds, 'deadline_monotonic': started + wall_seconds, 'peak_pss_bytes': 0,
               'peak_rss_bytes': 0, 'peak_tasks': 0, 'termination_reason': 'starting'}
     reason = None
     try:
@@ -834,7 +835,8 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
         proof_write = None
         env = os.environ.copy()
         env.update({WATCHDOG_TOKEN: token, WATCHDOG_PARENT_PID: str(os.getpid()),
-                    WATCHDOG_PROOF_FD: str(proof_read)})
+                    WATCHDOG_PROOF_FD: str(proof_read),
+                    WATCHDOG_DEADLINE_MONOTONIC: str(started + wall_seconds)})
         guardian_liveness_read, guardian_liveness_write = os.pipe()
         guardian_identity_read, guardian_identity_write = os.pipe()
         guardian_ack_read, guardian_ack_write = os.pipe()

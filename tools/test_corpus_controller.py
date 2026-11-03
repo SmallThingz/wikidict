@@ -2383,5 +2383,79 @@ class Source78PilotTimeHistoryTests(unittest.TestCase):
                             old, current, snapshot, dict(unrelated_registry_appends=changes))]
                         with self.assertRaises(ValueError): controller.load_preparations(current)
 
+
+class ControllerAllReadyTests(unittest.TestCase):
+    def editions(self):
+        return list(controller.PILOT)+['enwiktionary']+[f'toy{i:03d}wiktionary'for i in range(189)]
+
+    def manifest(self):
+        editions=self.editions();files=[]
+        for i,wiki in enumerate(editions):
+            name=wiki+'-20261001-pages-meta-current.xml.bz2'
+            files.append(dict(wiki=wiki,date='20261001',name=name,size=1 if wiki=='arwiktionary'else i+10,
+                sha1='a'*40,url='https://dumps.wikimedia.org/'+wiki+'/20261001/'+name))
+        return dict(requested_editions=editions,files=files)
+
+    def test_all_phase_orders_all_198_by_xml_size_without_changing_legacy_phases(self):
+        manifest=self.manifest();editions=manifest['requested_editions'];before=copy.deepcopy(manifest)
+        selected=controller.selected_phase_editions(editions,'all',manifest=manifest)
+        self.assertEqual(selected[0],'arwiktionary');self.assertEqual(len(selected),198);self.assertEqual(set(selected),set(editions))
+        self.assertEqual(manifest,before)
+        self.assertEqual(controller.selected_phase_editions(editions,'pilot'),list(controller.PILOT))
+        self.assertEqual(controller.selected_phase_editions(editions,'remaining')[0],'enwiktionary')
+        self.assertNotIn('enwiktionary',controller.selected_phase_editions(editions,'all',True,manifest))
+        with self.assertRaises(ValueError):controller.selected_phase_editions(editions,'all')
+
+    def run_main(self,root,cleanup=True):
+        manifest=self.manifest();cfg=dict(armed=True,source={'head':'a'*40,'fingerprint':'b'*64},
+            compiler={'path':str(root/'zig'),'bytes':1,'sha256':'c'*64},
+            manifest={'path':str(root/'downloads/manifest.json'),'bytes':1,'sha256':'d'*64},
+            downloads=str(root/'downloads'),output=str(root/'output'),raw_shard_root=str(root/'raw'),state_directory=str(root/'state'),
+            date='20261001',now_unix=1,expansion_timeout_ms=10,build_timeout_seconds=123,qualification={},diagnostic_disposition={})
+        seen=[];written=[];gates=[]
+        def execute(cfg,edition,workers,folder,sequence,context,locks,memory_limit_bytes):
+            seen.append(edition)
+            return (dict(attempt_id='attempt-'+str(sequence),edition=edition,sequence=sequence,
+                controller_interrupted=False,cleanup_proven=cleanup,elapsed_seconds=0.125,
+                execution_mode='pipeline_run_may_reuse_verified_inputs_or_shards',outcome='failed'if edition=='arwiktionary'else'passed',
+                accepted=None if edition=='arwiktionary'else dict(input_pages=10)),
+                dict(termination_reason='child_exit',memory_limit_bytes=memory_limit_bytes))
+        with mock.patch.object(controller,'read_json',return_value=cfg), \
+             mock.patch.object(controller,'read_ref',return_value=manifest), \
+             mock.patch.object(controller,'descriptor',return_value=cfg['compiler']), \
+             mock.patch.object(controller,'validate_pipeline_paths'), \
+             mock.patch.object(controller,'source_guard') as source_guard, \
+             mock.patch.object(controller,'gate',side_effect=lambda value,*args:gates.append(value)or{}), \
+             mock.patch.object(controller,'production_context',return_value='current-context'), \
+             mock.patch.object(controller,'history',return_value=[]), \
+             mock.patch.object(controller,'load_preparations',return_value=[]) as preparations, \
+             mock.patch.object(controller,'Lock'), \
+             mock.patch.object(controller.resource,'getrlimit',return_value=(controller.resource.RLIM_INFINITY,controller.resource.RLIM_INFINITY)), \
+             mock.patch.object(controller.os,'sched_getaffinity',return_value={0,2,4,6}), \
+             mock.patch.object(controller,'execute',side_effect=execute), \
+             mock.patch.object(controller,'write_json',side_effect=lambda path,value,**kw:written.append(value)), \
+             mock.patch('builtins.print'):
+            if not cleanup:
+                with self.assertRaisesRegex(ValueError,'Owned cleanup is unproven'):controller.main(['--config',str(root/'cfg.json'),'--phase','all'])
+                return seen
+            code=controller.main(['--config',str(root/'cfg.json'),'--phase','all'])
+        self.assertEqual(len(gates),2) # qualification+diagnostic, never bypassed; no pilot prerequisite
+        self.assertGreaterEqual(source_guard.call_count,199);preparations.assert_called_once()
+        return code,seen,written[-1]
+
+    def test_real_main_continues_after_closed_pilot_failure_once_without_semantic_credit(self):
+        with tempfile.TemporaryDirectory() as tmp:code,seen,summary=self.run_main(Path(tmp))
+        self.assertEqual(code,1);self.assertEqual(seen[0],'arwiktionary')
+        self.assertEqual(len(seen),198);self.assertEqual(len(set(seen)),198)
+        self.assertTrue(all(row['attempt_count']==1 for row in summary['editions']))
+        self.assertIsNone(next(row for row in summary['editions']if row['edition']=='arwiktionary')['accepted'])
+        self.assertFalse(summary['final_cohort_complete']);self.assertFalse(summary['residual_review_complete'])
+        self.assertEqual(summary['observed_cohort_build_seconds'],191*0.125)
+
+    def test_real_main_still_halts_before_next_edition_when_cleanup_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:seen=self.run_main(Path(tmp),False)
+        self.assertEqual(seen,['arwiktionary'])
+
+
 if __name__ == '__main__':
     unittest.main()
