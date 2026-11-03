@@ -1,0 +1,637 @@
+package app.smallthingz.dict
+
+import androidx.compose.ui.graphics.Color
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.Notes
+import androidx.compose.material.icons.outlined.VolumeUp
+import androidx.compose.material.icons.outlined.Stop
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.input.nestedscroll.*
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.collectionInfo
+import androidx.compose.ui.semantics.collectionItemInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.text.*
+import androidx.compose.ui.text.intl.Locale
+import androidx.compose.ui.text.intl.LocaleList
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.BaselineShift
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextDirection
+import androidx.compose.ui.text.style.TextIndent
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
+
+private val EgyptianFontFamily = FontFamily(Font(R.font.egyptian_hieroglyphs))
+private val spanClassWhitespace = Regex("\\s+")
+
+private class TextCache(val link: State<(String) -> Unit>) {
+    val values = java.util.IdentityHashMap<List<Span>, MutableMap<Triple<FontWeight?, LayoutDirection, String?>, AnnotatedString>>()
+}
+private val LocalEntryMedia = staticCompositionLocalOf<List<Media>> { emptyList() }
+private val LocalEntryEdition = staticCompositionLocalOf { "" }
+private val LocalReaderSettings = staticCompositionLocalOf { AppSettings() }
+private val LocalTextCache = staticCompositionLocalOf<TextCache?> { null }
+internal val LocalAuthoredBackground = staticCompositionLocalOf<String?> { null }
+private val LocalCellWeight = staticCompositionLocalOf<FontWeight?> { null }
+private class CellHeadingRequest(val path: String)
+private val LocalCellHeadingRequest = staticCompositionLocalOf<CellHeadingRequest?> { null }
+private val LocalCellHeadingReached = staticCompositionLocalOf<(CellHeadingRequest) -> Unit> { {} }
+
+@Composable
+private fun CellHeading(block: Block, path: String?, onLink: (String) -> Unit) {
+    val request = LocalCellHeadingRequest.current
+    val reached = LocalCellHeadingReached.current
+    val bringIntoView = remember { BringIntoViewRequester() }
+    LaunchedEffect(request, path) {
+        if (request != null && request.path == path) {
+            withFrameNanos { }
+            bringIntoView.bringIntoView()
+            reached(request)
+        }
+    }
+    StyledText(ordinaryInlineDisplaySpans(block), Modifier.fillMaxWidth()
+        .padding(start = blockIndentDp(block).dp).bringIntoViewRequester(bringIntoView)
+        .then(if (path == null) Modifier else Modifier.testTag("cell-heading-$path"))
+        .semantics { heading() }, style = MaterialTheme.typography.titleMedium, onLink = onLink)
+}
+
+@Composable
+internal fun EntryPronunciationButton(active: Boolean, onClick: () -> Unit) {
+    IconButton(onClick = onClick) {
+        Icon(if (active) Icons.Outlined.Stop else Icons.Outlined.VolumeUp,
+            if (active) "Stop pronunciation" else "Pronounce word offline", Modifier.size(22.dp))
+    }
+}
+
+/** A distinct request also permits repeated navigation to the same compiled anchor. */
+class EntryAnchorRequest(val entryKey: String, val target: String)
+
+/** In-memory state for one reader visit; never shared between same-title owners. */
+class EntryReadingState {
+    internal val scroll = androidx.compose.foundation.lazy.LazyListState()
+    internal var foldKey: List<Any?>? = null
+    internal var folds: androidx.compose.runtime.snapshots.SnapshotStateMap<String, Boolean>? = null
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink: (String) -> Unit = {}, settings: AppSettings = AppSettings(), onScrollDirection: (Boolean) -> Unit = {}, anchorRequest: EntryAnchorRequest? = null, onAnchorConsumed: (EntryAnchorRequest) -> Unit = {}, onNavigate: () -> Unit = {}, readingState: EntryReadingState? = null) {
+    val uri = LocalUriHandler.current
+    val context = LocalContext.current
+    DisposableEffect(entry.key) { onDispose { SpeechPlayback.stop() } }
+    val colors = MaterialTheme.colorScheme
+    CompositionLocalProvider(LocalEntryMedia provides entry.media, LocalEntryEdition provides entry.edition, LocalReaderSettings provides settings) {
+      key(entry.key) {
+        val scroll = readingState?.scroll ?: rememberLazyListState()
+        val reportScroll by rememberUpdatedState(onScrollDirection)
+        val threshold = with(LocalDensity.current) { 20.dp.toPx() }
+        val dockScroll = remember(scroll, threshold) {
+            object : NestedScrollConnection {
+                var movement = 0f
+                override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                    // Only actual finger-driven content movement counts, never relayout or overscroll.
+                    if (source == NestedScrollSource.UserInput && consumed.y != 0f) {
+                        if (movement * consumed.y < 0) movement = 0f
+                        movement += consumed.y
+                        if (kotlin.math.abs(movement) >= threshold) {
+                            reportScroll(movement < 0)
+                            movement = 0f
+                        }
+                        if (!scroll.canScrollBackward) reportScroll(false)
+                    }
+                    return Offset.Zero
+                }
+            }
+        }
+        val scope = rememberCoroutineScope()
+        var contents by remember { mutableStateOf(false) }
+        val foldKey = listOf(entry.key, settings.collapsePronunciation, settings.collapseEtymology, settings.collapseOtherSections, settings.collapseDetails)
+        val folded = remember(readingState, foldKey) {
+            readingState?.takeIf { it.foldKey == foldKey }?.folds ?: mutableStateMapOf<String, Boolean>().apply {
+                entry.readingRows.forEach { row -> row.heading?.let {
+                    this[row.key] = initiallyFolded(row, settings)
+                    if (row.meaningSection) this[row.key + "-details"] = settings.collapseDetails
+                } }
+                this["preamble"] = settings.collapseOtherSections && entry.kind != "alias"
+                this["references"] = settings.collapseOtherSections
+                this["media"] = settings.collapseOtherSections
+                this["abbreviations"] = settings.collapseDetails
+            }.also { readingState?.foldKey = foldKey; readingState?.folds = it }
+        }
+        val visibleRows = visibleEntryReadingRows(entry, folded.filterValues { it }.keys)
+        var cellHeadingRequest by remember { mutableStateOf<CellHeadingRequest?>(null) }
+        fun jumpToAnchor(target: String): Boolean {
+            val destination = headingDestination(entry, target)
+            val headingRow = entry.readingRows.firstOrNull { it.key == destination?.rowKey }
+            val compiledHeading = destination?.compiledId == true
+            cellHeadingRequest = null
+            // Authored heading IDs share the page namespace; generated references are a fallback.
+            val referenceIndex = when {
+                headingRow?.key == metadataReferenceHeadingKey(entry) && headingRow != null ->
+                    metadataReferencesStartIndex(entry, folded.filterValues { it }.keys)
+                compiledHeading -> null
+                else -> referenceScrollIndex(entry, target, folded.filterValues { it }.keys)
+            }
+            if (referenceIndex != null) {
+                folded["references"] = false
+                // Apply the destination in the next remeasure, after References opens.
+                scroll.requestScrollToItem(referenceIndex)
+            } else if (headingRow != null) {
+                val sectionKey = if (headingRow.heading != null) headingRow.key else headingRow.sectionKey
+                folded[sectionKey] = false
+                if (headingRow.heading == null && headingRow.meaningSection) folded[sectionKey + "-details"] = false
+                val headingIndex = visibleEntryReadingRows(entry, folded.filterValues { it }.keys)
+                    .indexOfFirst { it.key == headingRow.key }
+                if (headingIndex < 0) return false
+                cellHeadingRequest = destination?.path?.let(::CellHeadingRequest)
+                scroll.requestScrollToItem(headingIndex + entryReadingStartIndex(entry, folded.filterValues { it }.keys))
+            } else return false
+            return true
+        }
+        val readerLink: (String) -> Unit = { target ->
+            onNavigate()
+            if (!jumpToAnchor(target) && !target.startsWith("#")) onLink(target)
+        }
+        LaunchedEffect(entry.key, anchorRequest) {
+            anchorRequest?.takeIf { it.entryKey == entry.key }?.let {
+                jumpToAnchor(it.target)
+                // A missing fragment still opens the word; it is not a second lookup.
+                onAnchorConsumed(it)
+            }
+        }
+        val currentLink = rememberUpdatedState(readerLink)
+        val cache = remember(entry, colors.primary, colors.surfaceContainer) { TextCache(currentLink) }
+        val remainingMedia = remember(entry) {
+            val linkedFiles = inlineMediaFiles(entry)
+            entry.media.filter { it.file !in linkedFiles }
+        }
+        CompositionLocalProvider(LocalTextCache provides cache, LocalCellHeadingRequest provides cellHeadingRequest,
+            LocalCellHeadingReached provides { request -> if (cellHeadingRequest === request) cellHeadingRequest = null }) {
+        LazyColumn(Modifier.fillMaxSize().nestedScroll(dockScroll).testTag("entry-scroll"), state = scroll, contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 56.dp)) {
+            item("title", contentType = "title") {
+                Column(Modifier.padding(bottom = 6.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text((entry.language ?: entry.kind.replace('_', ' ')).uppercase(), Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        EntryPronunciationButton(SpeechPlayback.active == entry.title) { SpeechPlayback.play(context, entry.title, entry.languageCode) }
+                        Box {
+                            IconButton(onClick = { contents = true }) { Icon(Icons.AutoMirrored.Filled.List, "Sections", Modifier.size(22.dp)) }
+                            DropdownMenu(contents, { contents = false }, Modifier.heightIn(max = 340.dp)) {
+                                entry.readingRows.forEach { row -> row.heading?.let { section ->
+                                    if (section.title.isNotBlank() && section.title != entry.language) DropdownMenuItem(text = { Text(section.title) }, onClick = {
+                                        onNavigate()
+                                        contents = false
+                                        val referenceHeading = row.key == metadataReferenceHeadingKey(entry)
+                                        folded[if (referenceHeading) "references" else row.key] = false
+                                        val targetIndex = if (referenceHeading) {
+                                            metadataReferencesStartIndex(entry, folded.filterValues { it }.keys)
+                                        } else {
+                                            visibleEntryReadingRows(entry, folded.filterValues { it }.keys).indexOfFirst { it.key == row.key } +
+                                                entryReadingStartIndex(entry, folded.filterValues { it }.keys)
+                                        }
+                                        scope.launch {
+                                            androidx.compose.runtime.withFrameNanos { }
+                                            scroll.animateScrollToItem(targetIndex)
+                                        }
+                                    })
+                                } }
+                            }
+                        }
+                        IconButton(onClick = onBookmark) { Icon(if (bookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder, if (bookmarked) "Remove bookmark" else "Bookmark", Modifier.size(22.dp)) }
+                    }
+                    if (entry.displayTitle.isNotEmpty()) StyledText(entry.displayTitle, Modifier.fillMaxWidth().testTag("entry-title"), style = MaterialTheme.typography.displayMedium, onLink = readerLink)
+                    else Text(entry.title, Modifier.fillMaxWidth().testTag("entry-title"), style = MaterialTheme.typography.displayMedium.copy(textDirection=TextDirection.Content))
+                    if (entry.abbreviations.isNotEmpty()) {
+                        val closed = folded["abbreviations"] != false
+                        TextButton(onClick = { folded["abbreviations"] = !closed },
+                            modifier = Modifier.testTag("entry-abbreviations").semantics {
+                                stateDescription = if (closed) "Collapsed" else "Expanded"
+                            }) { Text("Abbreviations") }
+                    }
+                    entry.redirect?.let { redirect ->
+                        Text("${redirect.source} -> ${redirect.target}" + if (redirect.fragment.isEmpty()) "" else "#${redirect.fragment}",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    SpeechPlayback.error?.let { message ->
+                        Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = { runCatching { context.startActivity(android.content.Intent("com.android.settings.TTS_SETTINGS")) } }) { Text("Speech settings") }
+                    }
+                }
+            }
+            if (folded["abbreviations"] == false) items(entry.abbreviations.indices.toList(),
+                key = { "abbreviation-$it" },
+                contentType = { "abbreviation" }) { index ->
+                val abbreviation = entry.abbreviations[index]
+                Column(Modifier.padding(bottom = 8.dp)) {
+                    Text(abbreviation.label, style = MaterialTheme.typography.labelLarge)
+                    Text(abbreviation.explanation, style = MaterialTheme.typography.bodyMedium)
+                    if (index == 0 || entry.abbreviations[index - 1].context != abbreviation.context) {
+                        Text(abbreviation.context, style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            if (entry.preamble.isNotEmpty()) item("preamble", contentType = "paragraph") {
+                FoldHeading("About this entry", folded["preamble"] == true) { folded["preamble"] = folded["preamble"] != true }
+                if (folded["preamble"] != true) StyledText(compactSpans(entry.preamble), Modifier.padding(bottom = 4.dp), onLink = readerLink)
+            }
+            items(visibleRows, key = { it.key }, contentType = { if (it.heading != null) "heading" else it.block?.kind }) { row ->
+                Column(Modifier.animateItem()) {
+                row.heading?.let { section ->
+                    if (section.title.isNotBlank() && (section.title != entry.language || section.blocks.any { it.kind != "blank" })) {
+                        val richHeading = row.headingBlock
+                        val label = if (richHeading == null && section.title == entry.language) "Overview" else section.title
+                        val angle by animateFloatAsState(if (folded[row.key] == true) { if (LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl) 90f else -90f } else 0f, label = "Section fold")
+                        val toggle = { folded[row.key] = folded[row.key] != true }
+                        val headingModifier = if (richHeading == null) Modifier.clickable(onClick = toggle) else Modifier
+                        Row(Modifier.fillMaxWidth().padding(start = richHeading?.let { blockIndentDp(it).dp } ?: 0.dp).then(headingModifier).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                            val headingStyle = if (row.meaningSection) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium
+                            if (richHeading == null) Text(label, Modifier.weight(1f).semantics { heading() }, style = headingStyle)
+                            else StyledText(richHeading.spans, Modifier.weight(1f).semantics { heading() }, style = headingStyle, onLink = readerLink)
+                            if (row.meaningSection && section.blocks.any { it !== richHeading && it.kind !in setOf("definition", "blank") }) {
+                                IconToggleButton(checked = folded[row.key + "-details"] != true, onCheckedChange = { folded[row.key + "-details"] = !it }) {
+                                    Icon(Icons.Outlined.Notes, if (folded[row.key + "-details"] == true) "Show examples and notes for ${section.title}" else "Hide examples and notes for ${section.title}", Modifier.size(20.dp))
+                                }
+                            }
+                            if (richHeading == null) {
+                                Icon(Icons.Filled.ExpandMore, if (folded[row.key] == true) "Expand $label" else "Collapse $label", Modifier.size(20.dp).rotate(angle))
+                            } else IconButton(onClick = toggle) {
+                                Icon(Icons.Filled.ExpandMore, if (folded[row.key] == true) "Expand $label" else "Collapse $label", Modifier.size(20.dp).rotate(angle))
+                            }
+                        }
+                    }
+                }
+                row.block?.let { block ->
+                    Box(Modifier.padding(bottom = if (row.compact) 2.dp else 6.dp)) { BlockView(block, readerLink, path = row.key) }
+                }
+                }
+            }
+            if (entry.references.isNotEmpty()) item("references-heading") { FoldHeading("References", folded["references"] == true) { folded["references"] = folded["references"] != true } }
+            items(if (folded["references"] == true) emptyList() else entry.references, key = { "reference-${it.number}" }, contentType = { "reference" }) { ref ->
+                val label = referenceLabel(ref)
+                Row(Modifier.padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (label != null) Text(label, style = MaterialTheme.typography.labelMedium, color = colors.primary)
+                    StyledText(ref.spans, Modifier.weight(1f), onLink = readerLink)
+                }
+            }
+            if (remainingMedia.isNotEmpty()) item("media-heading") { FoldHeading("Media", folded["media"] == true) { folded["media"] = folded["media"] != true } }
+            (if (folded["media"] == true) emptyList() else remainingMedia).forEachIndexed { index, media -> item("media-$index", contentType = "media") {
+                MediaView(media, settings, edition=entry.edition)
+            } }
+            item("attribution") {
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = { uri.openUri(attributionUrl(entry)) }) { Text("Wiktionary contributors",style=MaterialTheme.typography.labelSmall) }
+                    TextButton(onClick = { uri.openUri("https://creativecommons.org/licenses/by-sa/4.0/") }) { Text("CC BY-SA 4.0",style=MaterialTheme.typography.labelSmall) }
+                }
+            }
+        }
+        }
+      }
+    }
+}
+
+
+@Composable
+private fun FoldHeading(title: String, folded: Boolean, onClick: () -> Unit) {
+    val angle by animateFloatAsState(if (folded) { if (LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl) 90f else -90f } else 0f, label = "Section fold")
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, Modifier.weight(1f).semantics { heading() }, style = MaterialTheme.typography.titleMedium)
+        Icon(Icons.Filled.ExpandMore, if (folded) "Expand $title" else "Collapse $title", Modifier.size(20.dp).rotate(angle))
+    }
+}
+
+@Composable
+private fun BlockView(block: Block, onLink: (String) -> Unit, path: String? = null, inCell: Boolean = false, gridPath: String = "root") {
+    when {
+        block.table != null -> Box(Modifier.padding(start = blockIndentDp(block).dp)) { RenderCompiledTable(block.table, block.feature, gridPath, inCell, path?.let { "$it/table" }.orEmpty(), onLink) }
+        block.kind == "heading" -> CellHeading(block, path, onLink)
+        block.kind == "rule" -> HorizontalDivider(color =
+            authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)?.let { Color(it) } ?: DividerDefaults.color)
+        block.kind == "preformatted" -> Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).horizontalScroll(rememberScrollState()).padding(12.dp)) {
+            CompositionLocalProvider(LocalAuthoredBackground provides null) {
+                StyledText(block.spans, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), onLink = onLink, preserveWhitespace = true)
+            }
+        }
+        else -> {
+            val prefix = blockPrefix(block)
+            Row(Modifier.padding(start = blockIndentDp(block).dp)) {
+                if (prefix.isNotEmpty()) Text(prefix, Modifier.widthIn(min = 28.dp).padding(top = 4.dp, end = 6.dp), color = canonicalColorArgb(LocalAuthoredBackground.current)?.let { Color(authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)!!) } ?: MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                StyledText(ordinaryInlineDisplaySpans(block), Modifier.weight(1f), weight = if (block.kind == "term") FontWeight.Bold else null, onLink = onLink)
+            }
+        }
+    }
+}
+
+@Composable
+internal fun CompiledTableView(table: Table, feature: Feature?, onLink: (String) -> Unit) =
+    RenderCompiledTable(table, feature, "root", false, "", onLink)
+
+@Composable
+private fun RenderCompiledTable(table: Table, feature: Feature?, path: String, nested: Boolean, semanticPath: String, onLink: (String) -> Unit) {
+    val sample = colorSwatch(feature)
+    if (sample == null) {
+        TableView(table, onLink, path, nested, semanticPath)
+    } else {
+        Row(Modifier.semantics(mergeDescendants = true) {},
+            horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Decorative sample: the visible label supplies its single accessible name.
+            Box(Modifier.size(40.dp).background(androidx.compose.ui.graphics.Color(sample.argb))
+                .testTag("compiled-color-swatch"))
+            StyledText(listOf(Span("text", "Color sample ${sample.hex}")))
+        }
+    }
+}
+
+@Composable
+private fun TableView(table: Table, onLink: (String) -> Unit, path: String = "root", nested: Boolean = false, semanticPath: String = "") {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (table.caption.isNotEmpty()) StyledText(table.caption, onLink = onLink)
+        if (nested) BoxWithConstraints(Modifier.fillMaxWidth()) {
+            TableGridView(table, onLink, path, constraints.maxWidth.takeIf { constraints.hasBoundedWidth }, semanticPath)
+        } else BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val viewportWidth = constraints.maxWidth.takeIf { constraints.hasBoundedWidth }
+            // A child grid belongs to the same scroll surface as its outer table.
+            Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                TableGridView(table, onLink, path, viewportWidth, semanticPath)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TableGridView(table: Table, onLink: (String) -> Unit, path: String, widthReference: Int? = null, semanticPath: String = "") {
+    val grid = remember(table) { tableGrid(table) }
+    val density = LocalDensity.current
+    val inheritedBackground = LocalAuthoredBackground.current
+    val inheritedColor = canonicalColorArgb(inheritedBackground)?.let { Color(it) }
+    val natural = remember(table, density.density) {
+        tableRenderMetrics(table, with(density) { 136.dp.roundToPx() }, with(density) { 10.dp.roundToPx() },
+            with(density) { 40.dp.roundToPx() }, density.density)
+    }
+    val authoredColors = remember(table) { grid.cells.map { placed ->
+        canonicalColorArgb(placed.cell.background)?.let { androidx.compose.ui.graphics.Color(it) }
+    } }
+    var unavailable by remember(table, density.density, density.fontScale, widthReference) { mutableStateOf(false) }
+    var drawingPixels by remember(table, density.density, density.fontScale, widthReference) { mutableStateOf<TablePixelLayout?>(null) }
+    val headerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+    val cellColor = MaterialTheme.colorScheme.surface
+    val borderColor = MaterialTheme.colorScheme.outline
+    if (unavailable || natural == null) {
+        val request = LocalCellHeadingRequest.current
+        val reached = LocalCellHeadingReached.current
+        LaunchedEffect(request, semanticPath) {
+            if (request != null && semanticPath.isNotEmpty() && request.path.startsWith("$semanticPath/")) reached(request)
+        }
+        Text("Table is too large to display.",
+            color = authoredSpanForegroundArgb(null, inheritedBackground)?.let { Color(it) } ?: Color.Unspecified)
+        return
+    }
+    Layout(modifier = Modifier.testTag(if (path == "root") "compiled-table-grid" else "compiled-table-grid-$path")
+        .semantics { collectionInfo = androidx.compose.ui.semantics.CollectionInfo(grid.rows, grid.columns) }
+        .drawBehind {
+            val pixels = drawingPixels ?: return@drawBehind
+            grid.cells.forEachIndexed { index, placed ->
+                val cellWidth = pixels.cellWidth(placed.colspan, placed.column)
+                val left = if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Ltr)
+                    pixels.cellLeft(placed.column)
+                else pixels.width - pixels.cellLeft(placed.column) - cellWidth
+                val top = pixels.cellTop(placed.row)
+                val bottom = pixels.cellBottom(placed.row, placed.cell.rowspan)
+                drawRect(authoredColors[index] ?: inheritedColor ?: if (placed.cell.header) headerColor else cellColor,
+                    topLeft = Offset(left.toFloat(), top.toFloat()), size = Size(cellWidth.toFloat(), (bottom - top).toFloat()))
+                if (pixels.borderWidth > 0) {
+                    val inset = pixels.borderWidth / 2f
+                    drawRect(borderColor, Offset(left + inset, top + inset),
+                        Size((cellWidth - pixels.borderWidth).toFloat(), (bottom - top - pixels.borderWidth).toFloat()),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(pixels.borderWidth.toFloat()))
+                }
+            }
+            if (pixels.borderWidth > 0 && pixels.width > 0 && pixels.height > 0) {
+                val inset = pixels.borderWidth / 2f
+                drawRect(borderColor, Offset(inset, inset),
+                    Size((pixels.width - pixels.borderWidth).toFloat(), (pixels.height - pixels.borderWidth).toFloat()),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(pixels.borderWidth.toFloat()))
+            }
+        }, content = {
+        grid.cells.forEachIndexed { index, placed ->
+            val padding = with(density) { (natural.cellPadding + natural.borderWidth).toDp() }
+            Box(Modifier.testTag("compiled-table-cell-$path-$index").semantics {
+                collectionItemInfo = androidx.compose.ui.semantics.CollectionItemInfo(
+                    placed.row, placed.cell.rowspan, placed.column, placed.colspan)
+                if (placed.cell.header) heading()
+            }.padding(padding)) {
+                CompositionLocalProvider(LocalAuthoredBackground provides (placed.cell.background ?: inheritedBackground),
+                    LocalCellWeight provides (if (placed.cell.header) FontWeight.SemiBold else LocalCellWeight.current)) {
+                    val cellPath = "$semanticPath/cell-$index"
+                    val blocks = placed.cell.blocks
+                    if (blocks != null) Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        blocks.forEachIndexed { blockIndex, block ->
+                            BlockView(block, onLink, "$cellPath/block-$blockIndex", inCell = true, gridPath = "$path/$index/block-$blockIndex")
+                        }
+                    } else {
+                        val child = placed.cell.nestedTable
+                        if (child == null) StyledText(placed.cell.spans, onLink = onLink)
+                        else TableView(child, onLink, "$path/$index", nested = true, semanticPath = "$cellPath/nested")
+                    }
+                }
+            }
+        }
+    }) { measurables, incoming ->
+        val reference = widthReference ?: incoming.maxWidth.takeIf { incoming.hasBoundedWidth }
+        val metrics = tableMetricsInWidth(table, natural, grid.columns, reference)
+        val heightLimit = metrics?.let { tableHeightLimit(it.width) }
+        // One measure per cell. Native Egyptian descendants do not support intrinsic queries.
+        val children = if (metrics == null || heightLimit == null) emptyList() else measurables.mapIndexed { index, measurable ->
+            val placed = grid.cells[index]
+            val width = metrics.cellWidth(placed.column, placed.colspan)
+            measurable.measure(Constraints(minWidth = width, maxWidth = width, minHeight = 0, maxHeight = heightLimit))
+        }
+        val pixels = if (metrics == null || heightLimit == null) null else tablePixelLayout(grid, metrics.columnWidth,
+            metrics.minRowHeight, IntArray(children.size) { children[it].height }, metrics.cellSpacing, metrics.borderWidth,
+            metrics.width, metrics.extraColumns)
+        if (pixels == null) {
+            drawingPixels = null
+            unavailable = true
+            layout(0, 0) {}
+        } else {
+            drawingPixels = pixels
+            layout(pixels.width, pixels.height) {
+                children.forEachIndexed { index, child ->
+                    val placed = grid.cells[index]
+                    child.placeRelative(pixels.cellLeft(placed.column), pixels.cellTop(placed.row))
+                }
+            }
+        }
+    }
+}
+
+/** Use the same explicit ownership for inline controls and the media footer. */
+private fun inlineMediaFiles(entry: Entry): Set<String> = buildSet {
+    val owners = MediaOwners(entry.media)
+    fun include(spans: List<Span>, preserveWhitespace: Boolean = false) {
+        val rendered = if (preserveWhitespace) spans else compactSpans(spans)
+        owners.embedded(rendered).forEach { add(it.file) }
+    }
+    include(entry.displayTitle)
+    include(entry.preamble)
+    entry.readingRows.forEach { row ->
+        row.headingBlock?.let { include(it.spans) }
+        row.block?.let { block ->
+            val table = block.table
+            when {
+                table != null -> {
+                    table.visitSpanRuns { spans, literal -> include(spans, literal) }
+                }
+                block.kind != "rule" -> include(block.spans, preserveWhitespace = block.kind == "preformatted")
+            }
+        }
+    }
+    entry.references.forEach { include(it.spans) }
+}
+
+@Composable
+internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null, style: TextStyle = MaterialTheme.typography.bodyLarge, onLink: (String) -> Unit = {}, preserveWhitespace: Boolean = false) {
+    val effectiveWeight = weight ?: LocalCellWeight.current
+    val spans = remember(source, preserveWhitespace) { if (preserveWhitespace) source else compactSpans(source) }
+    val availableMedia = LocalEntryMedia.current
+    val owners = remember(availableMedia) { MediaOwners(availableMedia) }
+    val embedded = owners.embedded(spans)
+    if (embedded.isNotEmpty()) {
+        Column(modifier) {
+            // Captions are compiled spans; the media record contains only a plain summary.
+            val text = remember(spans) { spans.map { if (it.hasClassToken("wikidict-media")) it.withoutClassToken("wikidict-media") else it } }
+            StyledText(text, weight = weight, style = style, onLink = onLink, preserveWhitespace = preserveWhitespace)
+            embedded.forEach { MediaView(it, LocalReaderSettings.current, showFileName = false, edition=LocalEntryEdition.current, showCaption = false) }
+        }
+        return
+    }
+    val linkColor = MaterialTheme.colorScheme.primary
+    val codeColor = MaterialTheme.colorScheme.surfaceContainer
+    val cache = LocalTextCache.current
+    val currentLink = rememberUpdatedState(onLink)
+    val layoutDirection = LocalLayoutDirection.current
+    val inheritedBackground = LocalAuthoredBackground.current
+    val cacheKey = Triple(effectiveWeight, layoutDirection, inheritedBackground)
+    val annotated = remember(spans, effectiveWeight, linkColor, codeColor, cache, layoutDirection, inheritedBackground) {
+        cache?.values?.get(spans)?.get(cacheKey) ?: buildAnnotatedString {
+            val appendedSpans = ArrayList<Pair<Span, IntRange>>(spans.size)
+            spans.forEach { span ->
+                val effectiveBackground = span.background ?: inheritedBackground.takeIf { !span.code }
+                val foreground = authoredSpanForegroundArgb(span.foreground, effectiveBackground)?.let { Color(it) }
+                val background = canonicalColorArgb(span.background)?.let { Color(it) }
+                val readableLinkFallback = canonicalColorArgb(span.foreground) == null && canonicalColorArgb(effectiveBackground) != null
+                val linkStyle = TextLinkStyles(style = SpanStyle(color = foreground ?: linkColor,
+                    textDecoration = if (readableLinkFallback) TextDecoration.Underline else null),
+                    pressedStyle = SpanStyle(textDecoration = TextDecoration.Underline))
+                val start = length
+                when (span.direction) {
+                    "rtl" -> append('\u2067')
+                    "ltr" -> append('\u2066')
+                    "auto" -> append('\u2068')
+                }
+                val displayText = if (span.kind == "line_break") "\n" else span.text
+                val contentStart = length
+                append(displayText)
+                append(span.trail)
+                if (span.direction in listOf("rtl", "ltr", "auto")) append('\u2069')
+                val end = length
+                appendedSpans.add(span to (start until end))
+                if (end > start) {
+                    val languageTag = spanLanguageTag(span.language)
+                    val fontFamily = when {
+                        span.code -> FontFamily.Monospace
+                        span.classes.split(spanClassWhitespace).any { it == "Egyp" } -> EgyptianFontFamily
+                        else -> null
+                    }
+                    if (foreground != null || languageTag != null || fontFamily != null || effectiveWeight != null || span.bold || span.italic || span.code || span.small || span.superscript || span.subscript || span.strike || span.underline) addStyle(SpanStyle(
+                        color = foreground ?: Color.Unspecified,
+                        localeList = languageTag?.let { LocaleList(Locale(it)) },
+                        fontWeight = if (span.bold) FontWeight.Bold else effectiveWeight,
+                        fontStyle = if (span.italic) FontStyle.Italic else null,
+                        fontFamily = fontFamily,
+                        letterSpacing = if (fontFamily == EgyptianFontFamily) 0.sp else TextUnit.Unspecified,
+                        fontSize = if (span.small || span.superscript || span.subscript) 0.8.em else 1.em,
+                        baselineShift = when { span.superscript -> BaselineShift.Superscript; span.subscript -> BaselineShift.Subscript; else -> null },
+                        background = if (background == null && span.code) codeColor else Color.Unspecified,
+                        textDecoration = when {
+                            span.strike && span.underline -> TextDecoration.combine(listOf(TextDecoration.LineThrough, TextDecoration.Underline))
+                            span.strike -> TextDecoration.LineThrough
+                            span.underline -> TextDecoration.Underline
+                            else -> null
+                        },
+                    ), start, end)
+                    if (background != null) {
+                        // Authored paint covers text and trails, without filling line breaks.
+                        var paintStart = start
+                        for ((relative, character) in (displayText + span.trail).withIndex()) {
+                            if (character == '\n') {
+                                val offset = contentStart + relative
+                                if (offset > paintStart) addStyle(SpanStyle(background = background), paintStart, offset)
+                                paintStart = offset + 1
+                            }
+                        }
+                        if (end > paintStart) addStyle(SpanStyle(background = background), paintStart, end)
+                    }
+                    if (span.kind == "link" && span.target.isNotBlank()) addLink(LinkAnnotation.Clickable(span.target, linkStyle) { (cache?.link?.value ?: currentLink.value)(span.target) }, start, end)
+                    else {
+                        val external = externalLinkUrl(span)
+                        if (external != null) addLink(LinkAnnotation.Url(external, linkStyle), start, end)
+                    }
+                }
+            }
+            poemParagraphs(toAnnotatedString().text, appendedSpans).forEach { paragraph ->
+                addStyle(ParagraphStyle(
+                    textIndent = TextIndent(paragraph.indent.em, paragraph.indent.em),
+                    textDirection = when (paragraph.direction) {
+                        "ltr" -> TextDirection.Ltr
+                        "rtl" -> TextDirection.Rtl
+                        else -> if (layoutDirection == LayoutDirection.Rtl) TextDirection.Rtl else TextDirection.Ltr
+                    }), paragraph.start, paragraph.end)
+            }
+        }.also { cache?.values?.getOrPut(spans) { mutableMapOf() }?.put(cacheKey, it) }
+    }
+    val egyptianRuns = remember(spans) { egyptianTextRuns(spans) }
+    SelectionContainer(modifier = modifier) {
+        EgyptianInlineText(annotated, egyptianRuns, Modifier, style.copy(textDirection = TextDirection.Content), linkColor)
+    }
+}

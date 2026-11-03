@@ -1,0 +1,10 @@
+.gradle/
+.kotlin/
+build/
+app/build/
+.tmp/
+local.properties
+*.apk
+*.aab
+artifacts/
+/app/.cxx/
