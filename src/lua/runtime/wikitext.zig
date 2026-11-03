@@ -8233,7 +8233,7 @@ test "normal file metadata host bridge retains absent provider title and origina
     var runtime = try rt.Context.initProgram(arena.allocator(), 0, 0);
     defer runtime.deinit();
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 0, .mw_slot = 0,
-        .provider = .{ .ctx = null, .get = TestProvider.get } };
+        .provider = .{ .ctx = null, .get = TestProvider.get, .exists = TestProvider.exists } };
     expander.attach();
     var fds: [2]linux.fd_t = undefined;
     if (linux.errno(linux.pipe2(&fds, .{ .CLOEXEC = true })) != .SUCCESS) return error.DiagnosticTestPipeFailed;
@@ -8279,7 +8279,7 @@ test "normal file metadata host bridge preserves positive negative and provider 
     defer runtime.deinit();
     var probe: Probe = .{};
     var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 0, .mw_slot = 0,
-        .provider = .{ .ctx = &probe, .get = TestProvider.get, .file_metadata = Probe.file } };
+        .provider = .{ .ctx = &probe, .get = TestProvider.get, .exists = TestProvider.exists, .file_metadata = Probe.file } };
     expander.attach();
     const get = expander.host.file_metadata.?;
     const positive = try get(expander.host.ctx, "File:Present.ogg");

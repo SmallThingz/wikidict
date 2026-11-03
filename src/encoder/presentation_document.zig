@@ -5944,7 +5944,7 @@ test "retained HE supplementary documentation excludes implementation and keeps 
     // Compare every semantic body/table/heading/style/action field, not a few
     // substrings. The independent reference is the authored visible docs only.
     try std.testing.expectEqualSlices(u8, expected, bytes);
-    const stored = try codec.decodeAlloc(a, bytes, title, .supplemental, .{ .code = "", .heading = "" });
+    const stored = try codec.decodeAlloc(a, bytes, title, .supplemental, null);
     try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
     var tables: usize = 0;
     var preformatted: usize = 0;

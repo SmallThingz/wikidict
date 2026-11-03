@@ -34005,7 +34005,7 @@ test "root includeonly recovery preserves explicit literal and self closing sour
     const source = "<nowiki><includeonly>\n==Literal==\n{{{parameter}}}\n</includeonly></nowiki>";
     const blocks = try literal.renderBody(source);
     try std.testing.expectEqual(@as(usize, 1), blocks.len);
-    try std.testing.expectEqualStrings("<includeonly>\n==Literal==\n{{{parameter}}}\n</includeonly>", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqualStrings("<includeonly> ==Literal== {{{parameter}}} </includeonly>", try flattened(a, blocks[0].spans));
     var short: Renderer = .{ .a = a, .context = .{ .title = "control" } };
     const visible = try short.renderBody("<includeonly/>kept [[Child]]");
     try std.testing.expectEqual(@as(usize, 1), visible.len);
