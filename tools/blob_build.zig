@@ -6,6 +6,7 @@ const xml_decode = @import("xml_decode");
 const dump_source = @import("wikimedia_dump");
 const language_registry = @import("language_registry.zig");
 const source_language_banner = @import("source_language_banner.zig");
+const source_category_language = @import("source_category_language.zig");
 const bundle_expander = @import("bundle_expander.zig");
 const expansion_deadline = @import("expansion_deadline.zig");
 const reviewed_nonlexical = @import("reviewed_nonlexical.zig");
@@ -85,7 +86,7 @@ fn invocationArgumentsHash(a: std.mem.Allocator, args: []const []const u8) ![]co
 }
 
 fn captureFirstPresentationFailure(err: anyerror, job: ExpansionJob, expanded: bundle_expander.Expansion) void {
-    if (err != error.UncompiledPresentation and err != error.InvalidPreContext) return;
+    if (err != error.UncompiledPresentation and err != error.InvalidPreContext and err != error.InvalidHeadingProjection) return;
     const context = if (first_failure_capture_context) |*value| value else return;
     if (context.attempted) return;
     context.attempted = true;
@@ -316,25 +317,32 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
     defer a.free(manifest_path);
     var manifest = try mmapPath(io, manifest_path);
     defer manifest.deinit();
-    const modules = [_]struct { marker: []const u8, local_names: bool }{
-        .{ .marker = "\"title\":\"Module:languages/canonical names\"", .local_names = false },
-        .{ .marker = "\"title\":\"Module:sprǣcnaman\"", .local_names = true },
+    const modules = [_]struct { name: []const u8, local_names: bool }{
+        .{ .name = "languages/canonical names", .local_names = false },
+        .{ .name = "sprǣcnaman", .local_names = true },
     };
     for (modules) |module| {
-        const marker = std.mem.indexOf(u8, manifest.bytes, module.marker) orelse continue;
-        const line_start = if (std.mem.lastIndexOfScalar(u8, manifest.bytes[0..marker], '\n')) |newline| newline + 1 else 0;
-        const line_end = std.mem.indexOfScalarPos(u8, manifest.bytes, marker, '\n') orelse manifest.bytes.len;
-        const line = manifest.bytes[line_start..line_end];
-        const page_prefix = "{\"page_id\":";
-        if (!std.mem.startsWith(u8, line, page_prefix)) return error.InvalidModuleManifest;
-        const comma = std.mem.indexOfScalarPos(u8, line, page_prefix.len, ',') orelse return error.InvalidModuleManifest;
-        const page_id = std.fmt.parseInt(u64, line[page_prefix.len..comma], 10) catch return error.InvalidModuleManifest;
-        const module_path = try std.fmt.allocPrint(a, "{s}/modules/{d}.lua", .{ expander_root, page_id });
-        defer a.free(module_path);
-        const source = try std.Io.Dir.cwd().readFileAlloc(io, module_path, a, .limited(64 * 1024 * 1024));
-        defer a.free(source);
-        if (module.local_names) try out.addLocalNamesLua(source) else try out.addLua(source);
+        var rows = std.mem.splitScalar(u8, manifest.bytes, '\n');
+        var found = false;
+        while (rows.next()) |line| {
+            if (line.len == 0) continue;
+            const parsed = try std.json.parseFromSlice(struct { page_id: u64, title: []const u8, sha256: []const u8 = "" }, a, line, .{ .ignore_unknown_fields = true });
+            defer parsed.deinit();
+            const title = namespaces.ofTitle(parsed.value.title);
+            if (title.id != 828 or !std.mem.eql(u8, title.text, module.name)) continue;
+            if (found) return error.DuplicateLanguageMetadataModule;
+            found = true;
+            const module_path = try std.fmt.allocPrint(a, "{s}/modules/{d}.lua", .{ expander_root, parsed.value.page_id });
+            defer a.free(module_path);
+            const source = try std.Io.Dir.cwd().readFileAlloc(io, module_path, a, .limited(64 * 1024 * 1024));
+            defer a.free(source);
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+            if (!std.mem.eql(u8, parsed.value.sha256, &std.fmt.bytesToHex(digest, .lower))) return error.LanguageSourceIdentityMismatch;
+            if (module.local_names) try out.addLocalNamesLua(source) else try out.addLua(source);
+        }
     }
+    try loadPositionalLanguageModules(io, a, expander_root, namespaces, manifest.bytes, &out);
     if (std.mem.eql(u8, out.content_code orelse "", "ar")) {
         try loadArabicLanguageModules(io, a, expander_root, namespaces, manifest.bytes, &out);
         try loadLiteralLanguageTemplates(io, a, expander_root, namespaces, &out, .arabic);
@@ -344,7 +352,81 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
         try loadLiteralLanguageTemplates(io, a, expander_root, namespaces, &out, .documented_literal);
     }
     try loadSourceLanguageBanners(io, a, expander_root, namespaces, &out);
+    const names_path = try std.fs.path.join(a, &.{ expander_root, "language-names.tsv" });
+    defer a.free(names_path);
+    const names = std.Io.Dir.cwd().readFileAlloc(io, names_path, a, .limited(32 * 1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+    if (names) |bytes| {
+        defer a.free(bytes);
+        try out.trustAutonymSnapshot(bytes, namespaces.wiki, namespaces.dump_date, namespaces.content_language);
+    }
     return out;
+}
+
+fn isPositionalLanguageModule(title: []const u8) bool {
+    if (std.mem.eql(u8, title, "languages/data/2")) return true;
+    const prefix = "languages/data/3/";
+    return title.len == prefix.len + 1 and std.mem.startsWith(u8, title, prefix) and
+        title[prefix.len] >= 'a' and title[prefix.len] <= 'z';
+}
+
+fn loadPositionalLanguageModules(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, manifest: []const u8, registry: *language_registry.Registry) !void {
+    const Record = struct { page_id: u64, title: []const u8, sha256: []const u8 = "" };
+    var provider_page: ?u64 = null;
+    var provider_digest: [64]u8 = undefined;
+    var provider_count: usize = 0;
+    var has_data = false;
+    var rows = std.mem.splitScalar(u8, manifest, '\n');
+    while (rows.next()) |line| {
+        if (line.len == 0) continue;
+        const parsed = try std.json.parseFromSlice(Record, a, line, .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
+        const title = namespaces.ofTitle(parsed.value.title);
+        if (title.id != 828) continue;
+        if (isPositionalLanguageModule(title.text)) has_data = true;
+        if (!std.mem.eql(u8, title.text, "languages")) continue;
+        provider_count += 1;
+        if (parsed.value.sha256.len != provider_digest.len) continue;
+        @memcpy(&provider_digest, parsed.value.sha256);
+        provider_page = parsed.value.page_id;
+    }
+    if (!has_data) return;
+    const page = provider_page orelse return;
+    if (provider_count != 1) return error.DuplicateLanguageMetadataModule;
+    const provider_path = try std.fmt.allocPrint(a, "{s}/modules/{d}.lua", .{ root, page });
+    defer a.free(provider_path);
+    const provider_source = try std.Io.Dir.cwd().readFileAlloc(io, provider_path, a, .limited(64 * 1024 * 1024));
+    defer a.free(provider_source);
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(provider_source, &hash, .{});
+    if (!std.mem.eql(u8, &provider_digest, &std.fmt.bytesToHex(hash, .lower))) return error.LanguageSourceIdentityMismatch;
+    const provider_proof = (try language_registry.Registry.provePositionalLanguageProvider(a, provider_source)) orelse return;
+    var names: std.StringHashMap(void) = .init(a);
+    defer {
+        var keys = names.keyIterator();
+        while (keys.next()) |key| a.free(key.*);
+        names.deinit();
+    }
+    rows = std.mem.splitScalar(u8, manifest, '\n');
+    while (rows.next()) |line| {
+        if (line.len == 0) continue;
+        const parsed = try std.json.parseFromSlice(Record, a, line, .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
+        const title = namespaces.ofTitle(parsed.value.title);
+        if (title.id != 828 or !isPositionalLanguageModule(title.text)) continue;
+        if (names.contains(title.text)) return error.DuplicateLanguageMetadataModule;
+        const owned_name = try a.dupe(u8, title.text);
+        names.put(owned_name, {}) catch |err| { a.free(owned_name); return err; };
+        const path = try std.fmt.allocPrint(a, "{s}/modules/{d}.lua", .{ root, parsed.value.page_id });
+        defer a.free(path);
+        const source = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(2 * 1024 * 1024));
+        defer a.free(source);
+        std.crypto.hash.sha2.Sha256.hash(source, &hash, .{});
+        if (!std.mem.eql(u8, parsed.value.sha256, &std.fmt.bytesToHex(hash, .lower))) return error.LanguageSourceIdentityMismatch;
+        try registry.addPositionalLanguageDataLua(source, provider_proof, title.text);
+    }
 }
 
 fn isArabicCanonicalLanguageModule(title: []const u8) bool {
@@ -669,6 +751,10 @@ fn auditFileStamp(io: std.Io, a: std.mem.Allocator, path: []const u8) !AuditFile
 
 // This is a diagnostic sink around the existing Writer, never a publication path.
 // Its initial incomplete summary survives aborts, OOM and external termination.
+fn auditablePresentationError(err: anyerror) bool {
+    return err == error.UncompiledPresentation or err == error.InvalidPreContext or err == error.InvalidHeadingProjection;
+}
+
 const PresentationAudit = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -789,7 +875,9 @@ const PresentationAudit = struct {
         self.succeeded += 1;
     }
 
-    fn recordFailure(self: *PresentationAudit, job: ExpansionJob, expanded: bundle_expander.Expansion) !void {
+    fn recordFailure(self: *PresentationAudit, err: anyerror, job: ExpansionJob, expanded: bundle_expander.Expansion) !void {
+        // Reject nonselected errors before any counter, allocation or file edit.
+        if (!auditablePresentationError(err)) return err;
         self.compile_attempts += 1;
         self.failed += 1;
         var arena = std.heap.ArenaAllocator.init(self.allocator);
@@ -800,7 +888,7 @@ const PresentationAudit = struct {
         const alias_bytes = if (job.alias_record) |alias| try std.json.Stringify.valueAlloc(a, alias, .{}) else null;
         const row = .{
             .schema = "wikidict.presentation-audit.failure.v1",
-            .error_name = "UncompiledPresentation",
+            .error_name = @errorName(err),
             .ordinal = job.ordinal,
             .namespace = job.ns.id,
             .namespace_kind = @tagName(job.ns.kind),
@@ -875,28 +963,28 @@ fn discardAuditPage(writer: *encoder.blob_builder.Writer, a: std.mem.Allocator) 
     writer.stats = .{};
 }
 
+// Shared post-Writer error seam. Only the explicit diagnostic audit class may
+// discard one failed page and continue; ordinary builds return the original error.
+fn consumePresentationFailure(writer: *encoder.blob_builder.Writer, job: ExpansionJob, expanded: bundle_expander.Expansion, a: std.mem.Allocator, audit: ?*PresentationAudit, err: anyerror) !bool {
+    if (audit) |value| if (auditablePresentationError(err)) {
+        try value.recordFailure(err, job, expanded);
+        try discardAuditPage(writer, a);
+        return false;
+    };
+    captureFirstPresentationFailure(err, job, expanded);
+    return recordPresentationFailure(err, job);
+}
+
 fn consumeExpandedPage(writer: *encoder.blob_builder.Writer, job: ExpansionJob, expanded: bundle_expander.Expansion, a: std.mem.Allocator, audit: ?*PresentationAudit) !bool {
     const extra_reasons: []const []const u8 = if (expanded.unsupported_parser_function) &.{"unsupported_parser_function"} else &.{};
     if (job.alias_record) |alias| {
         writer.addAliasExpandedWithPhases(a, alias, expanded.source, expanded.display_title, .{}, extra_reasons, expanded.poem_metadata, expanded.missing_dependency_metadata) catch |err| {
-            if (audit) |value| if (err == error.UncompiledPresentation) {
-                try value.recordFailure(job, expanded);
-                try discardAuditPage(writer, a);
-                return false;
-            };
-            captureFirstPresentationFailure(err, job, expanded);
-            return recordPresentationFailure(err, job);
+            return consumePresentationFailure(writer, job, expanded, a, audit, err);
         };
     } else {
         writer.addExpandedPageWithReasonsAndPhases(a, job.ns, job.title, expanded.source, job.source, expanded.display_title, extra_reasons, expanded.poem_metadata, expanded.missing_dependency_metadata) catch |err| {
             diagnostics.printLine("blob add failed title={s} ordinal={d} ns={d} source_bytes={d} expanded_bytes={d} error={s}\n", .{ job.title, job.ordinal, job.ns.id, job.source.len, expanded.source.len, @errorName(err) });
-            if (audit) |value| if (err == error.UncompiledPresentation) {
-                try value.recordFailure(job, expanded);
-                try discardAuditPage(writer, a);
-                return false;
-            };
-            captureFirstPresentationFailure(err, job, expanded);
-            return recordPresentationFailure(err, job);
+            return consumePresentationFailure(writer, job, expanded, a, audit, err);
         };
     }
     if (audit) |value| {
@@ -1848,6 +1936,15 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
         if (dump_source.isMultistream(page_index_kind)) stream_index_path else null,
     );
     defer dump.deinit();
+
+    // Lazy proof reads borrow the same authenticated normal input/index and
+    // remain alive through Writer/worker completion. No corpus-wide preload.
+    var category_languages: source_category_language.Context = .{
+        .allocator = a, .registry = &registry, .namespace_catalog = &namespaces,
+        .source = &dump, .page_index = page_index.bytes, .title_index = title_index,
+    };
+    codes.source_category_ctx = &category_languages;
+    codes.source_category_fn = source_category_language.Context.callback;
 
     // Jobs borrow their titles from page_index. Join every worker before
     // releasing those mapped bytes, including fatal expansion-error unwinds
@@ -6186,4 +6283,804 @@ test "root linked HTML H1 owners use normal trusted registry and keep repeated l
         "<h1>[[English]]</h1>[[:Category:English]]\n",
     }) |heading| try ocH1WriterControl(registry, null, heading ++ first,
         &.{.{ .code = "", .heading = "Unclassified", .targets = &.{"english-one"} }});
+}
+
+
+const TeCategoryCaptured = @import("te-category-owner-captured-inputs.zig");
+const TeCategoryCase = struct {
+    category_source: ?[]const u8 = TeCategoryCaptured.category,
+    template_source: ?[]const u8 = TeCategoryCaptured.topic_template,
+    category_namespace: u32 = 14,
+    category_model: []const u8 = "wikitext",
+    template_model: []const u8 = "wikitext",
+    raw: []const u8 = TeCategoryCaptured.raw,
+    expanded: []const u8 = TeCategoryCaptured.expanded,
+    extra_category: ?[]const u8 = null,
+    owned: bool = false,
+};
+const TeCategoryFixture = struct {
+    a: std.mem.Allocator,
+    source: std.ArrayList(u8) = .empty,
+    index: std.ArrayList(u8) = .empty,
+    next_id: u64 = 1,
+    fn page(self: *@This(), title: []const u8, ns: u32, text: []const u8, model: []const u8) !void {
+        const offset = self.source.items.len;
+        try self.source.appendSlice(self.a, text);
+        const row = try std.fmt.allocPrint(self.a, "{d}\t{d}\t{s}\t\t{d}\t{d}\t2026-10-01T00:00:00Z\tfixture\t{s}\t{d}\t1\t0\n", .{ offset, text.len, title, self.next_id, self.next_id, model, ns });
+        try self.index.appendSlice(self.a, row);
+        self.next_id += 1;
+    }
+};
+fn teCategoryOwnerCase(value: TeCategoryCase) !void {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var ns = try namespace_registry.Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\ttewiktionary\n# dump-date\t20261001\n# content-language\tte\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tమూస\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tవర్గం\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer ns.deinit();
+    var fixture: TeCategoryFixture = .{ .a = a };
+    if (value.template_source) |source| try fixture.page("మూస:topic cat", 10, source, value.template_model);
+    if (value.category_source) |source| try fixture.page("వర్గం:తెలుగు పదాలు", value.category_namespace, source, value.category_model);
+    if (value.extra_category) |source| try fixture.page("వర్గం:English పదాలు", 14, source, "wikitext");
+    const input_path = try std.fs.path.join(a, &.{ root, "input.xml" });
+    const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    const title_path = try std.fs.path.join(a, &.{ root, dump_source.page_title_index_filename });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = input_path, .data = fixture.source.items });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = fixture.index.items });
+    try dump_source.buildPageTitleIndex(io, a, index_path, title_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = "# content-language\tte\n# mediawiki\nte\tతెలుగు\tte\tTelugu\nen\tEnglish\n" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "\n" });
+    var registry = try loadLanguageRegistry(io, a, root, &ns);
+    defer registry.deinit();
+    var index = try mmapPath(io, index_path);
+    defer index.deinit();
+    var title_storage = try mmapPath(io, title_path);
+    defer title_storage.deinit();
+    const titles = try dump_source.PageTitleIndex.init(title_storage.bytes);
+    var reader = try dump_source.SourceReader.open(io, a, a, input_path, .raw_xml, null);
+    defer reader.deinit();
+    var proof: source_category_language.Context = .{ .allocator = a, .registry = &registry, .namespace_catalog = &ns, .source = &reader, .page_index = index.bytes, .title_index = titles };
+    var codes = languageCodes(&registry, &ns);
+    codes.source_category_ctx = &proof;
+    codes.source_category_fn = source_category_language.Context.callback;
+    if (value.owned) {
+        // A resolve call destroys its own scratch arena before returning. Both
+        // cached owner slices must point into immutable registry storage.
+        const first = (try proof.resolve("వర్గం:తెలుగు పదాలు")) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(first.code.ptr == registry.codes.getKey("te").?.ptr);
+        try std.testing.expect(first.heading.ptr == registry.headings.get("te").?.ptr);
+        const key = proof.cache[0].?.title;
+        const base = @intFromPtr(index.bytes.ptr);
+        const pointer = @intFromPtr(key.ptr);
+        try std.testing.expect(pointer >= base and pointer - base <= index.bytes.len and key.len <= index.bytes.len - (pointer - base));
+        const noise = try a.alloc(u8, 8192);
+        @memset(noise, 0xa5);
+        const again = (try proof.resolve("వర్గం:తెలుగు పదాలు")) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(first.code.ptr == again.code.ptr and first.heading.ptr == again.heading.ptr);
+        try std.testing.expectEqualStrings("te", again.code);
+        var mismatch = proof;
+        mismatch.title_index.page_index_size += 1;
+        try std.testing.expectError(error.PageTitleIndexMismatch, mismatch.resolve("వర్గం:తెలుగు పదాలు"));
+    }
+    const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "బంకముచ్చు", value.expanded, value.raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    const expected = if (value.owned) registry.resolveTrusted("తెలుగు").? else language_registry.Resolved{ .code = "", .heading = "Unclassified" };
+    var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+    const path = try std.fs.path.join(a, &.{ output, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(expected.heading, &filename) });
+    var mapped = try mmapPath(io, path);
+    defer mapped.deinit();
+    const blob = try encoder.blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings(expected.code, metadata.code);
+    var blob_index = try blob.buildTrustedIndexAlloc(a);
+    defer blob_index.deinit(a);
+    const record = (try blob_index.find("బంకముచ్చు")) orelse return error.TestUnexpectedResult;
+    const stored = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, stored));
+    try std.testing.expectEqualStrings(expected.code, stored.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.organization.lexemes.len);
+    const Seen = struct {
+        text: std.ArrayList(u8) = .empty,
+        links: std.StringHashMap(void),
+        tables: usize = 0,
+        fn visit(self: *@This(), alloc: std.mem.Allocator, comptime T: type, item: T) anyerror!void {
+            if (T == encoder.presentation_types.Span) {
+                try self.text.appendSlice(alloc, item.text);
+                if (item.kind == .link or item.kind == .external_link) try self.links.put(item.target, {});
+                return;
+            }
+            if (T == encoder.presentation_types.Table) self.tables += 1;
+            if (T == encoder.presentation_types.Cell) {
+                if (item.blocks) |blocks| return self.visit(alloc, @TypeOf(blocks), blocks);
+                if (item.nested_table) |table| return self.visit(alloc, @TypeOf(table), table);
+                return self.visit(alloc, @TypeOf(item.spans), item.spans);
+            }
+            switch (@typeInfo(T)) {
+                .@"struct" => |info| inline for (info.field_names) |name| try self.visit(alloc, @TypeOf(@field(item, name)), @field(item, name)),
+                .pointer => |info| {
+                    if (info.size != .slice) @compileError("Unsupported TE category witness pointer");
+                    if (info.child != u8) for (item) |child| try self.visit(alloc, info.child, child);
+                },
+                .optional => |info| if (item) |child| { try self.visit(alloc, info.child, child); },
+                .array => |info| for (item) |child| try self.visit(alloc, info.child, child),
+                .@"enum", .int, .bool => {},
+                else => @compileError("Unhandled TE category witness type: " ++ @typeName(T)),
+            }
+        }
+    };
+    var seen: Seen = .{ .links = std.StringHashMap(void).init(a) };
+    try seen.visit(a, @TypeOf(stored.entry), stored.entry);
+    try std.testing.expectEqual(@as(usize, 1), seen.tables);
+    for ([_][]const u8{ "ఇంగ్లీషు", "ఫ్రెంచి", "చైనీస్", "సంస్కృతం", "హిందీ", "అస్సామీ", "పంజాబీ", "తమిళం", "కన్నడం", "మలయాళం", "మరాఠీ", "గుజరాతీ", "ఒరియా", "బెంగాలి" }) |target| try std.testing.expect(seen.links.contains(target));
+    try std.testing.expect(std.mem.indexOf(u8, seen.text.items, "| width=1% |") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, seen.text.items, "|}"));
+}
+
+test "TE category owner requires current source language declaration and preserves captured zero-lexeme body" {
+    try std.testing.expect(source_category_language.topicTemplateForwardsLanguage(TeCategoryCaptured.topic_template));
+    try teCategoryOwnerCase(.{ .owned = true });
+    try teCategoryOwnerCase(.{ .category_source = null });
+    try teCategoryOwnerCase(.{ .template_source = null });
+    try teCategoryOwnerCase(.{ .category_namespace = 0 });
+    try teCategoryOwnerCase(.{ .category_model = "text" });
+    try teCategoryOwnerCase(.{ .template_model = "text" });
+    try teCategoryOwnerCase(.{ .category_source = "{{topic cat|en|తెలుగు పదాలు}}" });
+    try teCategoryOwnerCase(.{ .category_source = "{{topic cat|te|Forged పదాలు}}" });
+    try teCategoryOwnerCase(.{ .category_source = "<!--{{topic cat|te|తెలుగు పదాలు}}-->" });
+    try teCategoryOwnerCase(.{ .category_source = "<nowiki>{{topic cat|te|తెలుగు పదాలు}}</nowiki>" });
+    try teCategoryOwnerCase(.{ .category_source = "[[Target|{{topic cat|te|తెలుగు పదాలు}}]]" });
+    try teCategoryOwnerCase(.{ .category_source = "{{topic cat|te|తెలుగు పదాలు}}{{topic cat|en|తెలుగు పదాలు}}" });
+    try teCategoryOwnerCase(.{ .template_source = "<noinclude>doc</noinclude><includeonly>{{topic cat description|lang={{{2|}}}}}{{topic cat parents|lang={{{1|}}}}}</includeonly>" });
+    const raw_without_category = TeCategoryCaptured.raw[0 .. std.mem.indexOf(u8, TeCategoryCaptured.raw, "[[వర్గం:తెలుగు పదాలు]]").?];
+    try teCategoryOwnerCase(.{ .raw = raw_without_category });
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const other = "\n[[వర్గం:English పదాలు]]";
+    try teCategoryOwnerCase(.{ .raw = try std.mem.concat(a, u8, &.{ TeCategoryCaptured.raw, other }), .expanded = try std.mem.concat(a, u8, &.{ TeCategoryCaptured.expanded, other }), .extra_category = "{{topic cat|en|English పదాలు}}" });
+    try teCategoryOwnerCase(.{ .raw = try std.mem.concat(a, u8, &.{ "==Unknown topic==\n", TeCategoryCaptured.raw }) });
+    // A fresh context cannot inherit the earlier positive resolver's proof.
+    try teCategoryOwnerCase(.{ .category_source = "{{topic cat|en|తెలుగు పదాలు}}" });
+    try teCategoryOwnerCase(.{ .owned = true });
+}
+
+
+const ChrLiteralCodeBannerTest = struct {
+    // Foreign content-language fixture proves that neither edition nor UI language owns the page.
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tcategories\n";
+    const registry = "# content-language\ten\n# mediawiki\nen\tEnglish\ntr\tᎠᎬᎾ\tTürkçe\ttr\tTurkish\ttur\nfr\tFrench\nchr\tᏣᎳᎩ\tchr\tCherokee\n";
+    const heading = "<div id=\"toc\" class=\"toccolours\" ><big>[[ᏚᎸᎩ]] <small><small>(tr)</small></small></big></div>";
+    // XML encoding of the observed Template:-tr- p2282/r777320 body, used as a
+    // synthetic normal-loader fixture. This is not a new captured expansion.
+    const template_raw = "&lt;includeonly&gt;[[Category:ᏚᎸᎩ]]&lt;/includeonly&gt;__NOEDITSECTION__\n&lt;br&gt;\n=&lt;div id=\"toc\" class=\"toccolours\" &gt;&lt;big&gt;[[ᏚᎸᎩ]] &lt;small&gt;&lt;small&gt;(tr)&lt;/small&gt;&lt;/small&gt;&lt;/big&gt;&lt;/div&gt;=\n&lt;br&gt;&lt;noinclude&gt;\n&lt;!--[[Category:Language headings]] Please translate \"language headings\" and remove this warning--&gt;\n\n[[Category:Wiktionary/translate]]\n\n\n&lt;/noinclude&gt;";
+    const raw = "{{-tr-}}\n'''elma''' \n\n:[1] [[ᏒᎦᏔ]] (sv-ga-ta)";
+    const expanded = "[[Category:ᏚᎸᎩ]]__NOEDITSECTION__\n<br>\n=" ++ heading ++ "=\n<br>\n'''elma''' \n\n:[1] [[ᏒᎦᏔ]] (sv-ga-ta)";
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8) !void {
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = registry });
+        const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = "0\t0\tTemplate:-tr-\t\t2282\t777320\t2021-08-03T10:16:49Z\tA\twikitext\t10\t1\t1\n" });
+        var writer = try dump_source.TemplateSourceWriter.init(io, a, root); defer writer.deinit();
+        try writer.append(0, 2282, 777320, template_raw); try writer.finish(index_path);
+    }
+};
+
+test "indexed literal code banner admits exact static template without registering localized name" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try ChrLiteralCodeBannerTest.install(io, a, root);
+    var namespaces = try namespace_registry.Registry.init(a, ChrLiteralCodeBannerTest.namespaces); defer namespaces.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+    const decoded = try xml_decode.decodeSinglePassAlloc(a, ChrLiteralCodeBannerTest.template_raw);
+    const proof = source_language_banner.parse(decoded, &namespaces, null, &registry, "tr").?;
+    try std.testing.expect(proof.authority == .literal_code);
+    try std.testing.expectEqualStrings(ChrLiteralCodeBannerTest.heading, proof.heading);
+    try std.testing.expect(registry.matchesSourceLanguageBanner("tr", proof.heading, 1));
+    try std.testing.expect(registry.resolve("ᏚᎸᎩ") == null);
+    try std.testing.expect(registry.resolveTrusted("ᏚᎸᎩ") == null);
+    try std.testing.expect(!registry.isLanguageBoundary("ᏚᎸᎩ"));
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("tr", "ᏚᎸᎩ (tr)", 1));
+    try registry.addLocalAlias("ᏚᎸᎩ", "fr");
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("tr", proof.heading, 1));
+}
+
+test "literal code static banner rejects hidden projected conflicting and incomplete authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var namespaces = try namespace_registry.Registry.init(a, ChrLiteralCodeBannerTest.namespaces); defer namespaces.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(ChrLiteralCodeBannerTest.registry);
+    const H = ChrLiteralCodeBannerTest.heading;
+    for ([_][]const u8{
+        "=" ++ H ++ "=\nvisible extra",
+        "=" ++ H ++ "=\n=" ++ H ++ "=",
+        "prefix=" ++ H ++ "=",
+        "<nowiki>=" ++ H ++ "=</nowiki>",
+        "<ref>=" ++ H ++ "=</ref>",
+        "{|\n|\n=" ++ H ++ "=\n|}",
+        "{{outer|\n=" ++ H ++ "=\n}}",
+        "<div>\n=" ++ H ++ "=\n</div>",
+        "<onlyinclude>=" ++ H ++ "=</onlyinclude>",
+        "<includeonly>[[Category:ᏚᎸᎩ]]</includeonly>",
+        "=<div id=\"toc\" class=\"toccolours\" ><big>[[ᏚᎸᎩ]] <small>(fr)</small></big></div>=",
+        "=<div id=\"toc\" class=\"toccolours\" ><big>[[ᏚᎸᎩ]] <small>(tr) (fr)</small></big></div>=",
+        "=<div id=\"toc\" class=\"toccolours\" ><big>[[ᏚᎸᎩ]] <small>({{{1|tr}}})</small></big></div>=",
+        "=<div id=\"toc\" class=\"toccolours\" ><big>[[English]] <small>(tr)</small></big></div>=",
+        "=<div id=\"toc\" class=\"toccolours\" ><big>[[ᏚᎸᎩ|English]] <small>(tr)</small></big></div>=",
+        "=<div id=\"toc\" class=\"toccolours\" style=\"display:none\"><big>[[ᏚᎸᎩ]] <small>(tr)</small></big></div>=",
+        "=<div id=\"toc\" class=\"hidden\"><big>[[ᏚᎸᎩ]] <small>(tr)</small></big></div>=",
+        "=<div id=\"toc\" class=\"toccolours\" ><big>[[ᏚᎸᎩ]] <small>(tr)</big></div>=",
+        "=" ++ H ++ "=\n<noinclude><!--broken</noinclude>",
+        "=" ++ H ++ "=\n<noinclude><onlyinclude>wrong</onlyinclude></noinclude>",
+        "=" ++ H ++ "=\n<noinclude>excluded</noinclude>emitted",
+        "__TOC__\n=" ++ H ++ "=",
+    }) |source| try std.testing.expect(source_language_banner.parse(source, &namespaces, null, &registry, "tr") == null);
+    var absent = language_registry.Registry.empty(a); defer absent.deinit(); try absent.addTsv("# content-language\ten\n# mediawiki\nen\tEnglish\nfr\tFrench\ttr\n");
+    const decoded = try xml_decode.decodeSinglePassAlloc(a, ChrLiteralCodeBannerTest.template_raw);
+    try std.testing.expect(source_language_banner.parse(decoded, &namespaces, null, &absent, "tr") == null);
+    try registry.addTsv("fr\tFrench\tᏚᎸᎩ\n");
+    try std.testing.expect(source_language_banner.parse(decoded, &namespaces, null, &registry, "tr") == null);
+}
+
+test "Writer literal code banner requires exact root invocation and preserves typed body without inferred POS" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}); try ChrLiteralCodeBannerTest.install(io, a, root);
+    var namespaces = try namespace_registry.Registry.init(a, ChrLiteralCodeBannerTest.namespaces); defer namespaces.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit(); const codes = languageCodes(&registry, &namespaces);
+    const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    // Synthetic expansion from the observed static template, not a saved Worker reply.
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "elma", ChrLiteralCodeBannerTest.expanded, ChrLiteralCodeBannerTest.raw, null);
+    const raw_controls = [_][]const u8{
+        "", "{{-en-}}\n", "{{-tr-|parameter}}\n", "prefix\n{{-tr-}}\n",
+        "<!--{{-tr-}}-->\n", "<nowiki>{{-tr-}}</nowiki>\n", "<ref>{{-tr-}}</ref>\n",
+        "{|\n|{{-tr-}}\n|}\n", "{{outer|{{-tr-}}}}\n",
+    };
+    for (raw_controls, 0..) |raw, i| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, try std.fmt.allocPrint(a, "root-negative-{d}", .{i}), ChrLiteralCodeBannerTest.expanded, raw, null);
+    const headerless = "'''Ꮢ''' ''(sv)''\n\n*[[ᏒᎦᏔ]]";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "headerless", headerless, headerless, null);
+    _ = try writer.finish(codes);
+    var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+    var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename("ᎠᎬᎾ", &filename) })); defer mapped.deinit();
+    const blob = try encoder.blob_format.inspect(mapped.bytes); const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("tr", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+    const record = (try index.find("elma")).?;
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    try std.testing.expectEqualStrings("tr", decoded.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 0), decoded.entry.organization.lexemes.len);
+    try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    var report: encoder.presentation_document.Fallbacks = .{};
+    const whole_payload = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, "elma", .language, "Unclassified", "", ChrLiteralCodeBannerTest.expanded, null, .{}, &namespaces, &report);
+    const whole = try encoder.presentation_codec.decodeAlloc(a, whole_payload, "elma", .language, .{ .code = "", .heading = "Unclassified" });
+    var preserved: usize = 0;
+    for (decoded.entry.sections) |section| if (section.level == 1 and std.mem.eql(u8, section.title, "ᏚᎸᎩ (tr)")) {
+        for (whole.entry.sections) |original| if (original.level == 1 and std.mem.eql(u8, original.title, section.title)) {
+            try std.testing.expectEqualDeep(original, section); preserved += 1;
+        };
+    };
+    try std.testing.expectEqual(@as(usize, 1), preserved);
+    for (raw_controls, 0..) |_, i| try std.testing.expect(try index.find(try std.fmt.allocPrint(a, "root-negative-{d}", .{i})) == null);
+    try std.testing.expect(try index.find("headerless") == null);
+    var unclassified = try mmapPath(io, try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename("Unclassified", &filename) })); defer unclassified.deinit();
+    const other_blob = try encoder.blob_format.inspect(unclassified.bytes); const other_metadata = try other_blob.languageMetadata();
+    try std.testing.expectEqualStrings("", other_metadata.code);
+    var other_index = try other_blob.buildTrustedIndexAlloc(a); defer other_index.deinit(a);
+    for (raw_controls, 0..) |_, i| try std.testing.expect(try other_index.find(try std.fmt.allocPrint(a, "root-negative-{d}", .{i})) != null);
+    try std.testing.expect(try other_index.find("headerless") != null);
+    // Any separately retained pre-heading prefix may contain only its original
+    // whitespace/breaks, never a duplicate lexical body or a second owner claim.
+    if (try other_index.find("elma")) |prefix_record| {
+        const prefix = try encoder.presentation_codec.decodeAlloc(a, prefix_record.payload, prefix_record.title, .language, other_metadata);
+        for (prefix.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span|
+            try std.testing.expect(span.target.len == 0 and std.mem.trim(u8, span.text, " \t\r\n").len == 0);
+        try std.testing.expectEqual(@as(usize, 0), prefix.entry.organization.lexemes.len);
+    }
+}
+
+// Append to tools/blob_build.zig after diagnostic-capture.patch.
+// Synthetic diagnostic boundaries, not a reproduction of the unavailable UK page.
+test "heading projection capture preserves complete identity and refuses IO replacement" {
+    const F = FirstFailureControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    inline for (.{ "complete", "missing-marker", "existing-capture" }) |mode| {
+        const root = try auditControlFreshRoot(a, "projection-capture-" ++ mode);
+        defer std.Io.Dir.cwd().deleteTree(F.io, root) catch {};
+        const capture_root = try std.fs.path.join(a, &.{ root, ".presentation-first-failure" });
+        if (comptime !std.mem.eql(u8, mode, "missing-marker")) try F.marker(a, root);
+        if (comptime std.mem.eql(u8, mode, "existing-capture"))
+            try std.Io.Dir.cwd().writeFile(F.io, .{ .sub_path = capture_root, .data = "retained first capture" });
+        try std.testing.expect(first_failure_capture_context == null and failure_receipt_context == null);
+        first_failure_capture_context = F.context(a, root);
+        defer first_failure_capture_context = null;
+        const receipt = try std.fs.path.join(a, &.{ root, "outer-failure.json" });
+        failure_receipt_context = .{ .io = F.io, .a = a, .path = receipt,
+            .invocation_id = F.context(a, root).invocation_id.?, .invocation_args = &F.args };
+        defer failure_receipt_context = null;
+        const job: ExpansionJob = .{ .ordinal = 23, .index_offset = 19,
+            .ns = .{ .id = 0, .kind = .language }, .title = "Synthetic projection failure",
+            .source = "exact raw fixture", .page_id = 31, .revision_id = 47,
+            .index_line = "exact synthetic index row" };
+        const expanded: bundle_expander.Expansion = .{ .source = "exact expanded fixture",
+            .display_title = "display fixture", .poem_metadata = "[]", .missing_dependency_metadata = "{}" };
+        var writer = try encoder.blob_builder.Writer.init(F.io, a, try std.fs.path.join(a, &.{ root, "writer" }));
+        defer writer.deinit();
+        captureFirstPresentationFailure(error.OutOfMemory, job, expanded);
+        try std.testing.expect(!first_failure_capture_context.?.attempted);
+        try std.testing.expectError(error.InvalidHeadingProjection, consumePresentationFailure(&writer, job, expanded, a, null, error.InvalidHeadingProjection));
+        try std.testing.expect(first_failure_capture_context.?.attempted);
+        try std.testing.expect(recordPresentationFailure(error.InvalidHeadingProjection, job) == error.InvalidHeadingProjection);
+        try F.absent(receipt);
+        if (comptime std.mem.eql(u8, mode, "complete")) {
+            const row = try F.manifest(a, root);
+            try std.testing.expect(row.object.get("record_complete").?.bool and row.object.get("diagnostic_only").?.bool);
+            try std.testing.expect(!row.object.get("publication_created").?.bool and !row.object.get("semantic_acceptance").?.bool);
+            try std.testing.expectEqualStrings("InvalidHeadingProjection", row.object.get("error_name").?.string);
+            try std.testing.expectEqualStrings(job.title, row.object.get("title").?.string);
+            try std.testing.expectEqual(@as(i64, 23), row.object.get("ordinal").?.integer);
+            try std.testing.expectEqual(@as(i64, 19), row.object.get("index_offset").?.integer);
+            try std.testing.expectEqual(@as(i64, 31), row.object.get("page_id").?.integer);
+            try std.testing.expectEqual(@as(i64, 47), row.object.get("revision_id").?.integer);
+            try F.payload(a, row, "raw_source", job.source, 256 * 1024);
+            try F.payload(a, row, "expanded", expanded.source, 2 * 1024 * 1024);
+            try F.payload(a, row, "index_row", job.index_line, 256 * 1024);
+            try F.payload(a, row, "display_title", expanded.display_title.?, 256 * 1024);
+            try F.payload(a, row, "poem_metadata", expanded.poem_metadata.?, 256 * 1024);
+            try F.payload(a, row, "missing_dependency_metadata", expanded.missing_dependency_metadata.?, 256 * 1024);
+            const path = try std.fs.path.join(a, &.{ capture_root, "capture.json" });
+            const before = try std.Io.Dir.cwd().readFileAlloc(F.io, path, a, .limited(64 * 1024));
+            captureFirstPresentationFailure(error.UncompiledPresentation, job, .{ .source = "replacement" });
+            const after = try std.Io.Dir.cwd().readFileAlloc(F.io, path, a, .limited(64 * 1024));
+            try std.testing.expectEqualSlices(u8, before, after);
+        } else if (comptime std.mem.eql(u8, mode, "existing-capture")) {
+            const bytes = try std.Io.Dir.cwd().readFileAlloc(F.io, capture_root, a, .limited(64));
+            try std.testing.expectEqualStrings("retained first capture", bytes);
+        } else try F.absent(capture_root);
+        try F.noPublication(a, root);
+    }
+}
+
+fn projectionAuditPayload(a: std.mem.Allocator, row: std.json.Value, name: []const u8, original: []const u8) !void {
+    const value = row.object.get(name).?;
+    try std.testing.expect(value.object.get("present").?.bool);
+    try std.testing.expect(!value.object.get("truncated").?.bool and !value.object.get("unretained").?.bool);
+    try std.testing.expectEqual(@as(i64, @intCast(original.len)), value.object.get("bytes").?.integer);
+    try std.testing.expectEqual(@as(i64, @intCast(original.len)), value.object.get("retained_bytes").?.integer);
+    try std.testing.expectEqualStrings(try auditControlHash(a, original), value.object.get("sha256").?.string);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, value.object.get("path").?.string, a, .limited(4096));
+    try std.testing.expectEqualStrings(original, bytes);
+}
+
+test "audit records three presentation errors for page and alias boundaries and discards scratch state" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const inputs = try auditControlInputs(a, "three-presentation-errors", 4096);
+    defer std.Io.Dir.cwd().deleteTree(io, inputs.root) catch {};
+    var audit = try PresentationAudit.init(io, a, inputs.audit_root, inputs.context);
+    defer audit.deinit();
+    var writer = try encoder.blob_builder.Writer.init(io, a, inputs.writer_root);
+    defer writer.deinit();
+    writer.language_codes = .{ .get_fn = auditControlLanguages, .boundary_fn = auditControlBoundary };
+    const seed: ExpansionJob = .{ .index_offset = 0, .ordinal = 1, .ns = .{ .id = 0, .kind = .language },
+        .title = "scratch", .source = "==English==\n# retained [[child]]" };
+    try std.testing.expect(try consumeExpandedPage(&writer, seed, .{ .source = seed.source }, a, &audit));
+    try auditControlEmptySpools(&writer);
+    for ([_]bool{ false, true }) |is_alias| {
+        var job: ExpansionJob = .{ .index_offset = 29, .ordinal = 17, .ns = .{ .id = 0, .kind = .language },
+            .title = "diagnostic boundary", .source = "{{raw request}}", .page_id = 31, .revision_id = 47,
+            .index_line = "synthetic exact index row" };
+        if (is_alias) job.alias_record = .{ .source_namespace = 0, .source_kind = .language,
+            .source_title = job.title, .source_key = job.title, .xml_target = "Destination", .target_title = "Destination",
+            .target_namespace = null, .target_kind = null, .target_key = "", .fragment = "", .presentation = "" };
+        // Real Writer failure reaches each actual catch site, not just the helper.
+        try std.testing.expect(!try consumeExpandedPage(&writer, job, .{ .source = "before |} after" }, a, &audit));
+        try auditControlEmptySpools(&writer);
+        for ([_]anyerror{ error.UncompiledPresentation, error.InvalidPreContext, error.InvalidHeadingProjection }) |err| {
+            // Seed partial work before the common post-Writer boundary. The two
+            // invariant errors are injected here; no UK parser reproduction is claimed.
+            try std.testing.expect(try consumeExpandedPage(&writer, seed, .{ .source = seed.source }, a, null));
+            try std.testing.expect(writer.stats.language_records != 0);
+            try std.testing.expect(!try consumePresentationFailure(&writer, job, .{ .source = "expanded boundary fixture",
+                .display_title = "display", .poem_metadata = "[]", .missing_dependency_metadata = "{}" }, a, &audit, err));
+            try auditControlEmptySpools(&writer);
+            try std.testing.expectEqual(@as(usize, 0), writer.stats.alias_records);
+            try std.testing.expectEqual(@as(usize, 0), writer.stats.main_pages);
+        }
+    }
+    try std.testing.expect(try consumeExpandedPage(&writer, seed, .{ .source = seed.source }, a, &audit));
+    try auditControlEmptySpools(&writer);
+    try std.testing.expectEqual(@as(usize, 10), audit.compile_attempts);
+    try std.testing.expectEqual(@as(usize, 2), audit.succeeded);
+    try std.testing.expectEqual(@as(usize, 8), audit.failed);
+    try std.testing.expectEqual(@as(usize, 8), audit.failure_records);
+    audit.selected = 10; audit.dispatched = 10; audit.consumed = 10;
+    try audit.finish(true, true);
+    const summary = try auditControlSummary(a, inputs.audit_root);
+    try std.testing.expect(summary.object.get("inventory_complete").?.bool and summary.object.get("diagnostic_only").?.bool);
+    try std.testing.expect(!summary.object.get("semantic_acceptance").?.bool and !summary.object.get("publication_created").?.bool);
+    try std.testing.expectEqual(@as(i64, 8), summary.object.get("failed").?.integer);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ inputs.audit_root, "failures.jsonl" }), a, .limited(256 * 1024));
+    var lines = std.mem.splitScalar(u8, bytes, '\n');
+    for ([_]bool{ false, true }) |is_alias| {
+        for ([_][]const u8{ "UncompiledPresentation", "UncompiledPresentation", "InvalidPreContext", "InvalidHeadingProjection" }, 0..) |name, index| {
+            const row = try std.json.parseFromSliceLeaky(std.json.Value, a, lines.next().?, .{});
+            try std.testing.expectEqualStrings(name, row.object.get("error_name").?.string);
+            try std.testing.expectEqual(is_alias, row.object.get("alias").?.bool);
+            try std.testing.expectEqualStrings("diagnostic boundary", row.object.get("title").?.string);
+            try std.testing.expectEqual(@as(i64, 17), row.object.get("ordinal").?.integer);
+            try std.testing.expectEqual(@as(i64, 0), row.object.get("namespace").?.integer);
+            try std.testing.expectEqual(@as(i64, 31), row.object.get("page_id").?.integer);
+            try std.testing.expectEqual(@as(i64, 47), row.object.get("revision_id").?.integer);
+            try projectionAuditPayload(a, row, "raw_source", "{{raw request}}");
+            try projectionAuditPayload(a, row, "expanded", if (index == 0) "before |} after" else "expanded boundary fixture");
+            try projectionAuditPayload(a, row, "index_row", "synthetic exact index row");
+            if (index != 0) {
+                try projectionAuditPayload(a, row, "display_title", "display");
+                try projectionAuditPayload(a, row, "poem_metadata", "[]");
+                try projectionAuditPayload(a, row, "missing_dependency_metadata", "{}");
+            }
+            const alias_payload = row.object.get("alias_record").?;
+            try std.testing.expectEqual(is_alias, alias_payload.object.get("present").?.bool);
+            if (is_alias) {
+                const retained = try std.Io.Dir.cwd().readFileAlloc(io, alias_payload.object.get("path").?.string, a, .limited(4096));
+                try std.testing.expectEqualStrings(try auditControlHash(a, retained), alias_payload.object.get("sha256").?.string);
+                const alias = try std.json.parseFromSliceLeaky(std.json.Value, a, retained, .{});
+                try std.testing.expectEqualStrings("diagnostic boundary", alias.object.get("source_title").?.string);
+                try std.testing.expectEqualStrings("Destination", alias.object.get("target_title").?.string);
+            }
+        }
+    }
+    try std.testing.expectEqualStrings("", lines.next().?);
+    try std.testing.expect(lines.next() == null);
+    try auditControlNoPublishedFiles(a, inputs.writer_root);
+}
+
+test "audit refuses nonpresentation errors without mutating records or scratch work" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const inputs = try auditControlInputs(a, "nonpresentation-errors", 4096);
+    defer std.Io.Dir.cwd().deleteTree(io, inputs.root) catch {};
+    var audit = try PresentationAudit.init(io, a, inputs.audit_root, inputs.context);
+    defer audit.deinit();
+    var writer = try encoder.blob_builder.Writer.init(io, a, inputs.writer_root);
+    defer writer.deinit();
+    writer.language_codes = .{ .get_fn = auditControlLanguages, .boundary_fn = auditControlBoundary };
+    const job: ExpansionJob = .{ .ordinal = 1, .index_offset = 0, .ns = .{ .id = 0, .kind = .language },
+        .title = "operational boundary", .source = "==English==\n# [[retained]]" };
+    try std.testing.expect(try consumeExpandedPage(&writer, job, .{ .source = job.source }, a, null));
+    const stats = writer.stats;
+    const spool_count = writer.spools.language.len;
+    try std.testing.expect(stats.language_records != 0 and spool_count != 0);
+    const first_offset = writer.spools.language[0].offset;
+    const first_size = (try writer.spools.language[0].file.stat(io)).size;
+    const report = try std.fs.path.join(a, &.{ inputs.audit_root, "failures.jsonl" });
+    const before = try std.Io.Dir.cwd().readFileAlloc(io, report, a, .limited(64));
+    for ([_]anyerror{ error.OutOfMemory, error.Canceled, error.FileNotFound, error.WriteFailed,
+        error.Timeout, error.ExpansionWorkerDied, error.InvalidPoemMetadata, error.InvalidPresentation,
+        error.RenderLimit, error.PageIndexChanged, error.AuditReportLimitExceeded }) |err| {
+        try std.testing.expect(!auditablePresentationError(err));
+        try std.testing.expectError(err, audit.recordFailure(err, job, .{ .source = job.source }));
+        try std.testing.expectError(err, consumePresentationFailure(&writer, job, .{ .source = job.source }, a, &audit, err));
+        try std.testing.expectEqual(@as(usize, 0), audit.compile_attempts);
+        try std.testing.expectEqual(@as(usize, 0), audit.failed);
+        try std.testing.expectEqual(@as(usize, 0), audit.failure_records);
+        try std.testing.expectEqual(@as(usize, 0), audit.payload_bytes);
+        try std.testing.expectEqual(@as(usize, 0), audit.report_bytes);
+        try std.testing.expectEqualDeep(stats, writer.stats);
+        try std.testing.expectEqual(spool_count, writer.spools.language.len);
+        try std.testing.expectEqual(first_offset, writer.spools.language[0].offset);
+        try std.testing.expectEqual(first_size, (try writer.spools.language[0].file.stat(io)).size);
+    }
+    const after = try std.Io.Dir.cwd().readFileAlloc(io, report, a, .limited(64));
+    try std.testing.expectEqualSlices(u8, before, after);
+    audit.abort(error.Canceled);
+    const summary = try auditControlSummary(a, inputs.audit_root);
+    try std.testing.expect(!summary.object.get("inventory_complete").?.bool);
+    try std.testing.expectEqualStrings("Canceled", summary.object.get("error_name").?.string);
+    try auditControlNoPublishedFiles(a, inputs.writer_root);
+}
+
+test "audit capture IO failure propagates and retains incomplete inventory and partial spool" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const inputs = try auditControlInputs(a, "projection-capture-io", 4096);
+    defer std.Io.Dir.cwd().deleteTree(io, inputs.root) catch {};
+    var audit = try PresentationAudit.init(io, a, inputs.audit_root, inputs.context);
+    defer audit.deinit();
+    var writer = try encoder.blob_builder.Writer.init(io, a, inputs.writer_root);
+    defer writer.deinit();
+    writer.language_codes = .{ .get_fn = auditControlLanguages, .boundary_fn = auditControlBoundary };
+    const job: ExpansionJob = .{ .ordinal = 7, .index_offset = 0, .ns = .{ .id = 0, .kind = .language },
+        .title = "IO boundary", .source = "==English==\n# [[retained]]" };
+    try std.testing.expect(try consumeExpandedPage(&writer, job, .{ .source = job.source }, a, null));
+    const stats = writer.stats;
+    const first_offset = writer.spools.language[0].offset;
+    // A directory at the exact first payload pathname makes ordinary writeFile
+    // fail. The error must leave the page undiscarded and the inventory incomplete.
+    const obstruction = try std.fs.path.join(a, &.{ inputs.audit_root, "failure-00000001-raw.wikitext" });
+    try std.Io.Dir.cwd().createDir(io, obstruction, .default_dir);
+    if (consumePresentationFailure(&writer, job, .{ .source = job.source }, a, &audit, error.InvalidHeadingProjection)) |_| {
+        return error.TestUnexpectedResult;
+    } else |err| {
+        try std.testing.expect(!auditablePresentationError(err));
+        audit.abort(err);
+        const summary = try auditControlSummary(a, inputs.audit_root);
+        try std.testing.expect(!summary.object.get("inventory_complete").?.bool);
+        try std.testing.expectEqualStrings(@errorName(err), summary.object.get("error_name").?.string);
+    }
+    try std.testing.expectEqual(@as(usize, 1), audit.compile_attempts);
+    try std.testing.expectEqual(@as(usize, 1), audit.failed);
+    try std.testing.expectEqual(@as(usize, 0), audit.failure_records);
+    try std.testing.expectEqual(@as(usize, 0), audit.payload_bytes);
+    try std.testing.expectEqualDeep(stats, writer.stats);
+    try std.testing.expectEqual(first_offset, writer.spools.language[0].offset);
+    const report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ inputs.audit_root, "failures.jsonl" }), a, .limited(64));
+    try std.testing.expectEqual(@as(usize, 0), report.len);
+    try auditControlNoPublishedFiles(a, inputs.writer_root);
+}
+
+const AutonymLoaderTest = struct {
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tskrwiktionary\n# dump-date\t20261001\n# content-language\tskr\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n";
+    const registry = "# content-language\tskr\n# mediawiki\nskr\tسرائیکی\nur\tUrdu\tاردو\tاُردو\tUnreviewed alias\n";
+    const header = "# wikidict-language-names-v1\n# wiki\tskrwiktionary\n# dump-date\t20261001\n# content-language\tskr\n";
+    const names = header ++ "C\t-\tsingle\t1\nN\t-\tsingle\tur\tاردو\n";
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8, table: ?[]const u8) !void {
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = registry });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "\n" });
+        if (table) |bytes| try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-names.tsv" }), .data = bytes });
+    }
+};
+
+test "normal language loader imports only complete same-source autonym heading evidence" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var namespaces = try namespace_registry.Registry.init(a, AutonymLoaderTest.namespaces); defer namespaces.deinit();
+    try AutonymLoaderTest.install(io, a, root, null);
+    {
+        var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+        try std.testing.expect(registry.resolveTrusted("اردو") == null);
+    }
+    try AutonymLoaderTest.install(io, a, root, AutonymLoaderTest.names);
+    {
+        var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+        const resolved = registry.resolveTrusted("اردو") orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("ur", resolved.code);
+        try std.testing.expectEqualStrings("Urdu", resolved.heading);
+        try std.testing.expect(registry.resolveTrusted("اُردو") == null);
+        try std.testing.expect(registry.resolveTrusted("Unreviewed alias") == null);
+    }
+    try AutonymLoaderTest.install(io, a, root, AutonymLoaderTest.header ++ "C\t-\tsingle\t2\nN\t-\tsingle\tur\tاردو\n");
+    try std.testing.expectError(error.IncompleteLanguageNameProfile, loadLanguageRegistry(io, a, root, &namespaces));
+}
+
+test "normal Writer autonym heading preserves display body actions and codec without edition ownership" {
+    for ([_]bool{ false, true }) |attested| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+        const a = arena.allocator(); const io = std.testing.io;
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        var namespaces = try namespace_registry.Registry.init(a, AutonymLoaderTest.namespaces); defer namespaces.deinit();
+        try AutonymLoaderTest.install(io, a, root, if (attested) AutonymLoaderTest.names else null);
+        var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+        const codes = languageCodes(&registry, &namespaces);
+        const output = try std.fs.path.join(a, &.{ root, "blobs" });
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+        writer.language_codes = codes;
+        const source = "== اردو ==\n# Definition '''bold''' [[target|label]].\n";
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "synthetic-autonym", source, source, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const owner = if (attested) "Urdu" else "Unclassified";
+        const expected_code = if (attested) "ur" else "";
+        const path = try std.fs.path.join(a, &.{ output, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(owner, &filename) });
+        var mapped = try mmapPath(io, path); defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(expected_code, metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find("synthetic-autonym")) orelse return error.TestUnexpectedResult;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(expected_code, decoded.entry.language_code);
+        try std.testing.expectEqualStrings("synthetic-autonym", decoded.entry.title);
+        var headings: usize = 0; var definitions: usize = 0; var links: usize = 0; var bold: usize = 0;
+        for (decoded.entry.sections) |section| {
+            if (section.level == 2 and std.mem.eql(u8, section.title, "اردو")) headings += 1;
+            for (section.blocks) |block| {
+                if (block.kind == .definition) definitions += 1;
+                for (block.spans) |span| {
+                    if (std.mem.eql(u8, span.target, "target")) {
+                        try std.testing.expect(span.kind == .link);
+                        try std.testing.expectEqualStrings("label", span.text);
+                        links += 1;
+                    }
+                    if (std.mem.eql(u8, span.text, "bold") and span.bold) bold += 1;
+                }
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), headings);
+        try std.testing.expectEqual(@as(usize, 1), definitions);
+        try std.testing.expectEqual(@as(usize, 1), links);
+        try std.testing.expectEqual(@as(usize, 1), bold);
+        const encoded = try encoder.presentation_codec.encodeAlloc(a, decoded);
+        try std.testing.expectEqualSlices(u8, record.payload, encoded);
+    }
+}
+
+const LocalizedModuleTest = struct {
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tmywiktionary\n# dump-date\t20261001\n# content-language\tmy\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tတမ်းပလိတ်\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\n" ++
+        "828\tမော်ဂျူး\tModule\tcase-sensitive\t1\t0\t0\tScribunto\tcompile_only\tmodules\n" ++
+        "829\tမော်ဂျူး ဆွေးနွေးချက်\tModule talk\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\ttalk\n";
+    const registry = "# content-language\tmy\n# mediawiki\nmy\tမြန်မာဘာသာ\nru\tရုရှ\nbe\tဘီလာရုစ်\nuk\tယူကရိန်း\nsh\tSerbo-Croatian\nfr\tFrench\n";
+    const source = "return { [\"မြန်မာ\"] = \"my\", [\"ရုရှား\"] = \"ru\", [\"Belarusian\"] = \"be\", [\"Ukrainian\"] = \"uk\", [\"Serbo-Croatian\"] = \"sh\" }";
+    fn row(a: std.mem.Allocator, title: []const u8, module_source: []const u8) ![]const u8 {
+        var hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(module_source, &hash, .{});
+        const encoded = std.fmt.bytesToHex(hash, .lower);
+        // JSON formatting is immaterial; namespace identity supplies the selector.
+        return std.json.Stringify.valueAlloc(a, .{ .title = title, .revision_id = @as(u64, 941151), .page_id = @as(u64, 127617), .sha256 = encoded[0..] }, .{ .whitespace = .minified });
+    }
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8, title: []const u8, module_source: []const u8) !void {
+        try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{ root, "modules" }));
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = registry });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "modules", "127617.lua" }), .data = module_source });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = try row(a, title, module_source) });
+    }
+};
+
+test "normal language metadata loader resolves localized and canonical Module namespace titles" {
+    for ([_][]const u8{ "မော်ဂျူး:languages/canonical names", "Module:languages/canonical names" }) |title| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        var namespaces = try namespace_registry.Registry.init(a, LocalizedModuleTest.namespaces); defer namespaces.deinit();
+        try LocalizedModuleTest.install(io, a, root, title, LocalizedModuleTest.source);
+        var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+        for ([_]struct { label: []const u8, code_value: []const u8 }{
+            .{ .label = "မြန်မာ", .code_value = "my" }, .{ .label = "ရုရှား", .code_value = "ru" },
+        }) |expected| {
+            const actual = registry.resolveStrong(expected.label) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings(expected.code_value, actual.code);
+            try std.testing.expectEqualStrings(expected.label, actual.heading);
+        }
+        try std.testing.expectEqualStrings("be", registry.resolveTrusted("ဘီလာရုစ်").?.code);
+        try std.testing.expectEqualStrings("Belarusian", registry.resolve("be").?.heading);
+        try std.testing.expectEqualStrings("Ukrainian", registry.resolve("uk").?.heading);
+        // Canonical module does not attest the localized sh spelling.
+        try std.testing.expect(registry.resolve("ဆာဘို-ခရိုအေးရှား") == null);
+    }
+}
+
+test "language metadata selector excludes nonmodule wrong base and duplicate normalized module roles" {
+    for ([_][]const u8{ "languages/canonical names", "တမ်းပလိတ်:languages/canonical names", "Module talk:languages/canonical names", "မော်ဂျူး:languages/canonical names/doc", "Unknown:languages/canonical names" }) |title| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        var namespaces = try namespace_registry.Registry.init(a, LocalizedModuleTest.namespaces); defer namespaces.deinit();
+        try LocalizedModuleTest.install(io, a, root, title, LocalizedModuleTest.source);
+        var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+        try std.testing.expect(registry.resolve("မြန်မာ") == null);
+        try std.testing.expectEqualStrings("မြန်မာဘာသာ", registry.resolve("my").?.heading);
+    }
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var namespaces = try namespace_registry.Registry.init(a, LocalizedModuleTest.namespaces); defer namespaces.deinit();
+    try LocalizedModuleTest.install(io, a, root, "မော်ဂျူး:languages/canonical names", LocalizedModuleTest.source);
+    const duplicate = try std.fmt.allocPrint(a, "{s}\n{s}\n", .{
+        try LocalizedModuleTest.row(a, "မော်ဂျူး:languages/canonical names", LocalizedModuleTest.source),
+        try LocalizedModuleTest.row(a, "Module:languages/canonical names", LocalizedModuleTest.source),
+    });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = duplicate });
+    try std.testing.expectError(error.DuplicateLanguageMetadataModule, loadLanguageRegistry(io, a, root, &namespaces));
+}
+
+test "localized module authority retains source identity and reserved code conflict failures" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var namespaces = try namespace_registry.Registry.init(a, LocalizedModuleTest.namespaces); defer namespaces.deinit();
+    try LocalizedModuleTest.install(io, a, root, "မော်ဂျူး:languages/canonical names", LocalizedModuleTest.source);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "modules", "127617.lua" }), .data = "return {}" });
+    try std.testing.expectError(error.LanguageSourceIdentityMismatch, loadLanguageRegistry(io, a, root, &namespaces));
+    try LocalizedModuleTest.install(io, a, root, "မော်ဂျူး:languages/canonical names", "return { [\"fr\"] = \"ru\" }");
+    try std.testing.expectError(error.ConflictingLanguageHeading, loadLanguageRegistry(io, a, root, &namespaces));
+}
+
+const PositionalModuleTest = struct {
+    const data = "local m = {}\nm[\"sh\"] = {\"ဆာဘို-ခရိုအေးရှား\", 9301, \"zls\"}\nreturn require(\"Module:languages\").finalizeData(m, \"language\")";
+    fn row(a: std.mem.Allocator, title: []const u8, page: u64, source: []const u8) ![]const u8 {
+        var hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(source, &hash, .{});
+        const digest = std.fmt.bytesToHex(hash, .lower);
+        return std.json.Stringify.valueAlloc(a, .{ .title = title, .page_id = page, .sha256 = digest[0..] }, .{ .whitespace = .minified });
+    }
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8, provider_title: ?[]const u8, data_title: []const u8, provider_source: []const u8) !void {
+        try LocalizedModuleTest.install(io, a, root, "မော်ဂျူး:languages/canonical names", LocalizedModuleTest.source);
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "modules", "127326.lua" }), .data = provider_source });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "modules", "132659.lua" }), .data = data });
+        const manifest = try std.fmt.allocPrint(a, "{s}\n{s}\n{s}\n", .{
+            try LocalizedModuleTest.row(a, "မော်ဂျူး:languages/canonical names", LocalizedModuleTest.source),
+            if (provider_title) |title| try row(a, title, 127326, provider_source) else "",
+            try row(a, data_title, 132659, data),
+        });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = manifest });
+    }
+};
+
+test "normal positional language loader uses localized module provider proof and live registry conflicts" {
+    for ([_][]const u8{ "မော်ဂျူး", "Module" }) |prefix| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+        const a = arena.allocator(); const io = std.testing.io;
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        var namespaces = try namespace_registry.Registry.init(a, LocalizedModuleTest.namespaces); defer namespaces.deinit();
+        try PositionalModuleTest.install(io, a, root,
+            try std.fmt.allocPrint(a, "{s}:languages", .{prefix}),
+            try std.fmt.allocPrint(a, "{s}:languages/data/2", .{prefix}), language_registry.PositionalProviderSchema.source);
+        var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+        const sh = registry.resolveTrusted("ဆာဘို-ခရိုအေးရှား") orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("sh", sh.code);
+        try std.testing.expectEqualStrings("Serbo-Croatian", sh.heading);
+        try std.testing.expectEqualStrings("my", registry.resolveStrong("မြန်မာ").?.code);
+        try std.testing.expectEqualStrings("ru", registry.resolveStrong("ရုရှား").?.code);
+        try registry.addTsv("# mediawiki\nfr\tFrench\tဆာဘို-ခရိုအေးရှား\n");
+        try std.testing.expectEqualStrings("fr", registry.resolve("ဆာဘို-ခရိုအေးရှား").?.code);
+        try std.testing.expect(registry.resolveTrusted("ဆာဘို-ခရိုအေးရှား") == null);
+    }
+}
+
+test "normal positional language loader declines absent foreign or unproved provider and retains source hash guard" {
+    for ([_]?[]const u8{ null, "တမ်းပလိတ်:languages", "languages", "Unknown:languages" }) |provider_title| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+        const a = arena.allocator(); const io = std.testing.io;
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        var namespaces = try namespace_registry.Registry.init(a, LocalizedModuleTest.namespaces); defer namespaces.deinit();
+        try PositionalModuleTest.install(io, a, root, provider_title, "မော်ဂျူး:languages/data/2", language_registry.PositionalProviderSchema.source);
+        var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+        try std.testing.expect(registry.resolve("ဆာဘို-ခရိုအေးရှား") == null);
+    }
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var namespaces = try namespace_registry.Registry.init(a, LocalizedModuleTest.namespaces); defer namespaces.deinit();
+    const wrong_getter = try std.mem.replaceOwned(u8, a, language_registry.PositionalProviderSchema.source, "self._data[1]", "self._data[2]");
+    try PositionalModuleTest.install(io, a, root, "မော်ဂျူး:languages", "မော်ဂျူး:languages/data/2", wrong_getter);
+    var declined = try loadLanguageRegistry(io, a, root, &namespaces); defer declined.deinit();
+    try std.testing.expect(declined.resolve("ဆာဘို-ခရိုအေးရှား") == null);
+    try PositionalModuleTest.install(io, a, root, "မော်ဂျူး:languages", "မော်ဂျူး:languages/data/4", language_registry.PositionalProviderSchema.source);
+    var wrong_family = try loadLanguageRegistry(io, a, root, &namespaces); defer wrong_family.deinit();
+    try std.testing.expect(wrong_family.resolve("ဆာဘို-ခရိုအေးရှား") == null);
+    try PositionalModuleTest.install(io, a, root, "မော်ဂျူး:languages", "မော်ဂျူး:languages/data/2", language_registry.PositionalProviderSchema.source);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "modules", "132659.lua" }), .data = "return {}" });
+    try std.testing.expectError(error.LanguageSourceIdentityMismatch, loadLanguageRegistry(io, a, root, &namespaces));
 }

@@ -30,6 +30,15 @@ const speech = [_][]const u8{
     "Romanization", "Logogram",       "Determinative",
 };
 pub fn partOfSpeech(title: []const u8) ?[]const u8 {
+    // MY Module:headword/data p127525/r939704 explicitly labels this as noun;
+    // all six retained MY noun sections use this exact spelling.
+    if (std.mem.eql(u8, title, "နာမ်")) return "Noun";
+    // Exact BR heading terms; Office public de la langue bretonne, Meurgorf:
+    // https://niverel.brezhoneg.bzh/fr/meurgorf/1727 (substantif)
+    // https://niverel.brezhoneg.bzh/fr/meurgorf/1722 (adjectif)
+    // POS only: preserve the supplied owner, original title and sense relations.
+    if (std.mem.eql(u8, title, "Anv-kadarn")) return "Noun";
+    if (std.mem.eql(u8, title, "Anv-gwan")) return "Adjective";
     // Exact observed TL POS label; primary entry explicitly translates it as noun:
     // https://tl.wiktionary.org/w/index.php?title=pangngalan&oldid=150530
     // This classifies a section only; the caller still supplies any language owner.
@@ -120,7 +129,9 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
     for (sections, 0..) |section, i| {
         const kind = if (unclassified and section.level == 2) null else partOfSpeech(section.title);
         // Modèl:-etim- p1091/r219080 emits this exact localized heading.
-        const etymology = part.named(section.title, "Etymology") or std.mem.eql(u8, section.title, "Etimologia");
+        // Exact MY source heading for inherited/derived material in retained
+        // p2617/r939601 and origin statements in p122417/r905431,p124492/r907881.
+        const etymology = part.named(section.title, "Etymology") or std.mem.eql(u8, section.title, "Etimologia") or std.mem.eql(u8, section.title, "ရင်းမြစ်");
         // Owned records can contain several H1 source regions. A recognized H2
         // POS belongs to the preceding etymology, but a new region cannot inherit it.
         if (owner != null and section.level == 1) origin = null;
@@ -444,4 +455,145 @@ test "Pangngalan layout rejects lookalikes and does not promote an unknown langu
     const literal = try buildOwned(a, &protected, "Declared owner");
     try std.testing.expectEqual(@as(usize, 0), literal.lexemes.len);
     try std.testing.expectEqualSlices(usize, &.{0}, literal.other_sections);
+}
+
+
+test "Breton exact noun and adjective headings preserve independent owner and sense associations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "control", .language = "Declared owner" } };
+    const noun_blocks = try renderer.renderBody("'''laezh-glas'''\n# [[laezh-bihan|Laezh-bihan]]\n#* ''First quotation.''\n#* ''Second quotation.''\n");
+    const adjective_blocks = try renderer.renderBody("'''reoliek'''\n# [[ordinal|Ordinal]].\n#* ''First quotation.''\n# A second [[rule|rule]].\n#* ''Second quotation.''\n");
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "Declared owner", .level = 2 },
+        .{ .title = "Anv-kadarn", .level = 3, .blocks = noun_blocks },
+        .{ .title = "Translations", .level = 4 },
+        .{ .title = "Anv-gwan", .level = 3, .blocks = adjective_blocks },
+        .{ .title = "Related terms", .level = 4 },
+        .{ .title = "Unknown boundary", .level = 2 },
+    };
+    const layout = try buildOwned(a, &sections, "Declared owner");
+    try std.testing.expectEqual(@as(usize, 2), layout.lexemes.len);
+    const noun = layout.lexemes[0];
+    const adjective = layout.lexemes[1];
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqualStrings("Adjective", adjective.kind);
+    try std.testing.expectEqual(@as(usize, 1), noun.section);
+    try std.testing.expectEqual(@as(usize, 3), adjective.section);
+    try std.testing.expectEqualStrings("Anv-kadarn", sections[noun.section].title);
+    try std.testing.expectEqualStrings("Anv-gwan", sections[adjective.section].title);
+    try std.testing.expectEqualSlices(usize, &.{2}, noun.related_sections);
+    try std.testing.expectEqualSlices(usize, &.{4}, adjective.related_sections);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 5 }, layout.other_sections);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+    try std.testing.expectEqual(@as(usize, 2), noun.definitions[0].quotations.len);
+    try std.testing.expectEqual(@as(usize, 2), adjective.definitions.len);
+    for (adjective.definitions) |sense| try std.testing.expectEqual(@as(usize, 1), sense.quotations.len);
+    for (layout.lexemes) |lexeme| {
+        try std.testing.expectEqualStrings("Declared owner", lexeme.language);
+        const blocks = sections[lexeme.section].blocks;
+        for (lexeme.definitions) |sense| {
+            try std.testing.expect(sense.form == null);
+            try std.testing.expect(blocks[sense.block].kind == .definition);
+            for (sense.quotations) |quote| try std.testing.expect(blocks[quote].kind == .quotation);
+        }
+    }
+    const different = try buildOwned(a, &sections, "Another declared owner");
+    for (different.lexemes, layout.lexemes) |actual, expected| {
+        try std.testing.expectEqualStrings("Another declared owner", actual.language);
+        try std.testing.expectEqualDeep(expected.definitions, actual.definitions);
+        try std.testing.expectEqual(expected.section, actual.section);
+    }
+}
+
+test "Breton POS labels do not create language ownership or promote protected and unknown headings" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "anv-kadarn", "ANV-KADARN", "Anv-kadarn 2", "Anv-gwan 2", "Anv-gwan-verb", "Anv", "Regional vocabulary", "furm lies kuzh-heol." }) |label|
+        try std.testing.expect(partOfSpeech(label) == null);
+    try std.testing.expectEqualStrings("Noun", partOfSpeech("Noun").?);
+    try std.testing.expectEqualStrings("Adjective", partOfSpeech("Adjective").?);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "Unclassified", .level = 2 },
+        .{ .title = "Anv-kadarn", .level = 2, .blocks = &.{.{ .kind = .definition, .list_path = "#" }} },
+        .{ .title = "Regional vocabulary", .level = 2 },
+        .{ .title = "Anv-gwan", .level = 3, .blocks = &.{.{ .kind = .definition, .list_path = "#" }} },
+    };
+    const unresolved = try buildUnclassified(a, &sections);
+    try std.testing.expectEqual(@as(usize, 1), unresolved.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 3), unresolved.lexemes[0].section);
+    try std.testing.expectEqualStrings("", unresolved.lexemes[0].language);
+    try std.testing.expectEqualStrings("Adjective", unresolved.lexemes[0].kind);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, unresolved.other_sections);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "control" } };
+    const blocks = try renderer.renderBody("<nowiki>===Anv-kadarn===</nowiki>\n<pre>===Anv-gwan===</pre>\n# furm lies kuzh-heol.\n");
+    const protected = [_]Section{.{ .title = "Notes", .level = 3, .blocks = blocks }};
+    const layout = try buildOwned(a, &protected, "Declared owner");
+    try std.testing.expectEqual(@as(usize, 0), layout.lexemes.len);
+    try std.testing.expectEqualSlices(usize, &.{0}, layout.other_sections);
+}
+
+test "MY exact noun and etymology labels preserve supplied owner senses examples and reference boundary" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "အထမ်းသမား", .language = "မြန်မာ" } };
+    const blocks = try renderer.renderBody("'''အထမ်းသမား'''\n# ဝန်ကိုပခုံးဖြင့်သယ်ဆောင်သူ။\n#: ကူလီအထမ်းသမား စာပို့သမား။\n");
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "မြန်မာ", .level = 2 },
+        .{ .title = "ရင်းမြစ်", .level = 3 },
+        .{ .title = "အသံထွက်", .level = 3 },
+        .{ .title = "နာမ်", .level = 3, .blocks = blocks },
+        .{ .title = "အရေအတွက်", .level = 4 },
+        .{ .title = "ဘာသာပြန်", .level = 3 },
+        .{ .title = "ကိုးကား", .level = 2 },
+        .{ .title = "နာမ်", .level = 3, .blocks = blocks },
+    };
+    const layout = try buildOwned(a, &sections, "ru"); // Label must not impose my ownership.
+    try std.testing.expectEqual(@as(usize, 2), layout.lexemes.len);
+    const first = layout.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", first.kind);
+    try std.testing.expectEqualStrings("ru", first.language);
+    try std.testing.expectEqual(@as(usize, 3), first.section);
+    try std.testing.expectEqual(@as(?usize, 1), first.etymology);
+    try std.testing.expectEqual(@as(usize, 1), first.definitions.len);
+    try std.testing.expectEqualSlices(usize, &.{2}, first.definitions[0].examples);
+    try std.testing.expect(first.definitions[0].form == null);
+    try std.testing.expectEqualSlices(usize, &.{4}, first.related_sections);
+    try std.testing.expectEqualSlices(usize, &.{0}, first.introduction);
+    try std.testing.expectEqual(@as(?usize, null), layout.lexemes[1].etymology);
+    try std.testing.expectEqualStrings("ru", layout.lexemes[1].language);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 5, 6 }, layout.other_sections);
+    try std.testing.expectEqualStrings("နာမ်", sections[3].title);
+    try std.testing.expectEqualStrings("ကိုးကား", sections[6].title);
+}
+
+test "MY layout labels stay exact and cannot create owner or lexicalize protected body text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "နာမ်များ", "နာမ် ", "Unknown နာမ်", "ရင်းမြစ်", "ကိုးကား" }) |label|
+        try std.testing.expect(partOfSpeech(label) == null);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "control" } };
+    const protected = try renderer.renderBody("<nowiki>===နာမ်===</nowiki>\n<nowiki>===ရင်းမြစ်===</nowiki>\n");
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const no_headings = [_]Section{.{ .title = "", .level = 0, .blocks = protected }};
+    try std.testing.expectEqual(@as(usize, 0), (try buildOwned(a, &no_headings, "my")).lexemes.len);
+    const unresolved = [_]Section{
+        .{ .title = "နာမ်", .level = 2 },
+        .{ .title = "ရင်းမြစ်", .level = 3 },
+        .{ .title = "နာမ်", .level = 3, .blocks = &.{.{ .kind = .definition, .list_path = "#" }} },
+    };
+    const unknown = try buildUnclassified(a, &unresolved);
+    try std.testing.expectEqual(@as(usize, 1), unknown.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 2), unknown.lexemes[0].section);
+    try std.testing.expectEqualStrings("", unknown.lexemes[0].language);
+    try std.testing.expectEqual(@as(?usize, 1), unknown.lexemes[0].etymology);
+    const ordinary = [_]Section{ .{ .title = "Etymology", .level = 3 }, .{ .title = "Noun", .level = 3 } };
+    const existing = try buildOwned(a, &ordinary, "en");
+    try std.testing.expectEqualStrings("Noun", existing.lexemes[0].kind);
+    try std.testing.expectEqual(@as(?usize, 0), existing.lexemes[0].etymology);
 }

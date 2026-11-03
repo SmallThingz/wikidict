@@ -48,7 +48,10 @@ const DerivedPreferredName = struct {
     code: []const u8,
 };
 
-pub const SourceLanguageBanner = struct { heading: []const u8, level: u8, target: []const u8, label: []const u8 };
+pub const SourceLanguageBanner = struct {
+    heading: []const u8, level: u8, target: []const u8, label: []const u8,
+    authority: enum { known_names, literal_code } = .known_names,
+};
 
 pub const Registry = struct {
     arena: std.heap.ArenaAllocator,
@@ -57,6 +60,7 @@ pub const Registry = struct {
     language_boundaries: std.StringHashMapUnmanaged(void) = .empty,
     codes: std.StringHashMapUnmanaged(void) = .empty,
     trusted_names: std.StringHashMapUnmanaged(void) = .empty,
+    autonym_headings: std.StringHashMapUnmanaged(?[]const u8) = .empty,
     preferred_capitalizations: std.StringHashMapUnmanaged([]const u8) = .empty,
     strong_names: std.StringHashMapUnmanaged(void) = .empty,
     canonical_names: std.StringHashMapUnmanaged([]const u8) = .empty,
@@ -81,6 +85,7 @@ pub const Registry = struct {
         self.language_boundaries.deinit(self.arena.allocator());
         self.codes.deinit(self.arena.allocator());
         self.trusted_names.deinit(self.arena.allocator());
+        self.autonym_headings.deinit(self.arena.allocator());
         self.preferred_capitalizations.deinit(self.arena.allocator());
         self.strong_names.deinit(self.arena.allocator());
         self.canonical_names.deinit(self.arena.allocator());
@@ -118,7 +123,7 @@ pub const Registry = struct {
         // preferred labels. Admit that exact existing alias for the same owner;
         // other ordinary aliases, code aliases, and conflicts retain their trust.
         if (self.names.get(value)) |owner| {
-            if (!self.trusted_names.contains(value)) {
+            if (!self.trusted_names.contains(value) and !self.isTrustedAutonym(value, owner)) {
                 const preferred = self.headings.get(owner) orelse return null;
                 const preferred_owner = self.names.get(preferred) orelse return null;
                 if (!self.trusted_names.contains(preferred) or
@@ -193,6 +198,14 @@ pub const Registry = struct {
     /// ASCII case tolerance belongs only to an authenticated source-banner proof.
     /// Code aliases and any competing/ambiguous folded spelling provide no proof.
     pub fn sourceBannerNameMatches(self: *const Registry, code_value: []const u8, value: []const u8) bool {
+        return self.sourceBannerNameAllowed(code_value, value, true);
+    }
+    /// Only an authenticated static banner's explicit literal code may use an
+    /// unknown local label. This grants no ordinary alias or heading boundary.
+    pub fn sourceBannerLiteralCodeNameCompatible(self: *const Registry, code_value: []const u8, value: []const u8) bool {
+        return self.sourceBannerNameAllowed(code_value, value, false);
+    }
+    fn sourceBannerNameAllowed(self: *const Registry, code_value: []const u8, value: []const u8, require_known: bool) bool {
         if (!self.codes.contains(code_value) or value.len == 0) return false;
         var found = false;
         var names = self.names.iterator();
@@ -210,13 +223,18 @@ pub const Registry = struct {
             const owner = entry.value_ptr.* orelse return false;
             if (!std.mem.eql(u8, owner, code_value)) return false;
         }
-        return found;
+        return found or !require_known;
+    }
+    fn sourceBannerNamesAllowed(self: *const Registry, code_value: []const u8, proof: SourceLanguageBanner) bool {
+        const require_known = proof.authority == .known_names;
+        return self.sourceBannerNameAllowed(code_value, proof.target, require_known) and
+            self.sourceBannerNameAllowed(code_value, proof.label, require_known);
     }
     pub fn addSourceLanguageBanner(self: *Registry, code_value: []const u8, proof: SourceLanguageBanner) !void {
-        if (!self.sourceBannerNameMatches(code_value, proof.target) or !self.sourceBannerNameMatches(code_value, proof.label)) return;
+        if (!self.sourceBannerNamesAllowed(code_value, proof)) return;
         if (self.source_banners.getPtr(code_value)) |stored| {
             if (stored.*) |previous| {
-                if (previous.level != proof.level or !std.mem.eql(u8, previous.heading, proof.heading) or
+                if (previous.authority != proof.authority or previous.level != proof.level or !std.mem.eql(u8, previous.heading, proof.heading) or
                     !std.mem.eql(u8, previous.target, proof.target) or !std.mem.eql(u8, previous.label, proof.label)) stored.* = null;
             }
             return;
@@ -225,12 +243,13 @@ pub const Registry = struct {
         try self.source_banners.put(a, try a.dupe(u8, code_value), .{
             .heading = try a.dupe(u8, proof.heading), .level = proof.level,
             .target = try a.dupe(u8, proof.target), .label = try a.dupe(u8, proof.label),
+            .authority = proof.authority,
         });
     }
     pub fn matchesSourceLanguageBanner(self: *const Registry, code_value: []const u8, heading: []const u8, level: u8) bool {
         const proof = (self.source_banners.get(code_value) orelse return false) orelse return false;
         return proof.level == level and std.mem.eql(u8, proof.heading, heading) and
-            self.sourceBannerNameMatches(code_value, proof.target) and self.sourceBannerNameMatches(code_value, proof.label);
+            self.sourceBannerNamesAllowed(code_value, proof);
     }
 
     pub fn content(self: *const Registry) ?Resolved {
@@ -720,15 +739,164 @@ pub const Registry = struct {
     /// Curated edition-local evidence may promote an existing exact label,
     /// never create an alias, change its owner or make unrelated ISO names trusted.
     fn trustLocalHeading(self: *Registry, code_value: []const u8, label: []const u8) !void {
-        if (!validLocalHeading(label) or !self.codes.contains(code_value) or self.ambiguous.contains(label))
-            return error.InvalidLanguageRegistry;
-        const owner = self.names.get(label) orelse return error.InvalidLanguageRegistry;
-        if (!std.mem.eql(u8, owner, code_value)) return error.InvalidLanguageRegistry;
-        if (self.local_aliases.get(label)) |candidate| {
-            const local_code = candidate orelse return error.InvalidLanguageRegistry;
-            if (!std.mem.eql(u8, local_code, code_value)) return error.InvalidLanguageRegistry;
-        }
+        if (!self.localHeadingMatches(code_value, label)) return error.InvalidLanguageRegistry;
         try self.trustAlias(label);
+    }
+
+    fn localHeadingMatches(self: *const Registry, code_value: []const u8, label: []const u8) bool {
+        if (!validLocalHeading(label) or !self.codes.contains(code_value) or self.ambiguous.contains(label)) return false;
+        const owner = self.names.get(label) orelse return false;
+        if (!std.mem.eql(u8, owner, code_value)) return false;
+        if (self.local_aliases.get(label)) |candidate| {
+            const local_code = candidate orelse return false;
+            if (!std.mem.eql(u8, local_code, code_value)) return false;
+        }
+        return true;
+    }
+
+    fn isTrustedAutonym(self: *const Registry, label: []const u8, owner: []const u8) bool {
+        const attested = (self.autonym_headings.get(label) orelse return false) orelse return false;
+        return std.mem.eql(u8, attested, owner) and self.localHeadingMatches(attested, label);
+    }
+
+    /// Promote only exact installed aliases independently present in the captured
+    /// null-display autonym profile. Translated UI profiles are not heading proof.
+    pub fn trustAutonymSnapshot(self: *Registry, source: []const u8, wiki: []const u8, date: []const u8, language: []const u8) !void {
+        if (source.len > 32 * 1024 * 1024 or !std.unicode.utf8ValidateSlice(source)) return error.InvalidLanguageNameSnapshot;
+        if (!std.mem.eql(u8, self.content_code orelse "", language)) return error.InvalidLanguageNameSnapshot;
+        var temporary = std.heap.ArenaAllocator.init(self.arena.child_allocator);
+        defer temporary.deinit();
+        const a = temporary.allocator();
+        var lines = std.mem.splitScalar(u8, source, '\n');
+        const expected_headers = [_][]const u8{
+            "# wikidict-language-names-v1",
+            try std.fmt.allocPrint(a, "# wiki\t{s}", .{wiki}),
+            try std.fmt.allocPrint(a, "# dump-date\t{s}", .{date}),
+            try std.fmt.allocPrint(a, "# content-language\t{s}", .{language}),
+        };
+        for (expected_headers) |expected| {
+            if (!std.mem.eql(u8, lines.next() orelse return error.InvalidLanguageNameSnapshot, expected)) return error.InvalidLanguageNameSnapshot;
+        }
+        var expected_count: ?usize = null;
+        var count: usize = 0;
+        var codes: std.StringHashMapUnmanaged(void) = .empty;
+        var names: std.StringHashMapUnmanaged(?[]const u8) = .empty;
+        var pending: std.ArrayList(struct { code: []const u8, name: []const u8 }) = .empty;
+        while (lines.next()) |line| {
+            if (line.len == 0 and lines.peek() == null) break;
+            var fields = std.mem.splitScalar(u8, line, '\t');
+            const tag = fields.next() orelse return error.InvalidLanguageNameSnapshot;
+            const display = fields.next() orelse return error.InvalidLanguageNameSnapshot;
+            const scope = fields.next() orelse return error.InvalidLanguageNameSnapshot;
+            if (std.mem.eql(u8, tag, "D")) {
+                if (fields.next() != null or !autonymCodeValid(display) or
+                    (!std.mem.eql(u8, scope, "ltr") and !std.mem.eql(u8, scope, "rtl"))) return error.InvalidLanguageNameSnapshot;
+                continue;
+            }
+            const autonym = std.mem.eql(u8, display, "-") and std.mem.eql(u8, scope, "single");
+            const direction = std.mem.eql(u8, display, "-") and std.mem.eql(u8, scope, "dir") and std.mem.eql(u8, tag, "C");
+            if (!autonym and !direction and (!autonymCodeValid(display) or
+                (!std.mem.eql(u8, scope, "all") and !std.mem.eql(u8, scope, "mw") and !std.mem.eql(u8, scope, "single")))) return error.InvalidLanguageNameSnapshot;
+            if (std.mem.eql(u8, tag, "C")) {
+                const value = fields.next() orelse return error.InvalidLanguageNameSnapshot;
+                if (fields.next() != null) return error.InvalidLanguageNameSnapshot;
+                const n = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLanguageNameSnapshot;
+                if (n > 20031) return error.InvalidLanguageNameSnapshot;
+                if (autonym) {
+                    if (expected_count != null) return error.DuplicateLanguageNameProfile;
+                    expected_count = n;
+                }
+            } else if (std.mem.eql(u8, tag, "N")) {
+                const code_value = fields.next() orelse return error.InvalidLanguageNameSnapshot;
+                const raw_name = fields.next() orelse return error.InvalidLanguageNameSnapshot;
+                if (fields.next() != null or !autonymCodeValid(code_value)) return error.InvalidLanguageNameSnapshot;
+                if (!autonym) continue;
+                const n = expected_count orelse return error.IncompleteLanguageNameProfile;
+                if (count >= n) return error.IncompleteLanguageNameProfile;
+                count += 1;
+                const seen = try codes.getOrPut(a, code_value);
+                if (seen.found_existing) return error.DuplicateLanguageName;
+                const name = try decodeAutonymName(a, raw_name);
+                if (name.len == 0) continue;
+                const known = try names.getOrPut(a, name);
+                if (known.found_existing) {
+                    if (known.value_ptr.*) |owner| {
+                        if (!std.mem.eql(u8, owner, code_value)) known.value_ptr.* = null;
+                    }
+                } else known.value_ptr.* = code_value;
+                try pending.append(a, .{ .code = code_value, .name = name });
+            } else return error.InvalidLanguageNameSnapshot;
+        }
+        if (expected_count) |n| {
+            if (count != n) return error.IncompleteLanguageNameProfile;
+        } else return; // Older captures have no null-display profile.
+        // Validate the complete selected profile before changing any trust.
+        // A code alias, missing label, ambiguous name or later local conflict
+        // cannot acquire authority from this independent spelling evidence.
+        for (pending.items) |row| {
+            if (!validLocalHeading(row.name) or !self.codes.contains(row.code) or self.ambiguous.contains(row.name)) continue;
+            const profile_owner = names.get(row.name).? orelse continue;
+            if (!std.mem.eql(u8, profile_owner, row.code)) continue;
+            const owner = self.names.get(row.name) orelse continue;
+            if (!std.mem.eql(u8, owner, row.code)) continue;
+            if (self.local_aliases.get(row.name)) |local| {
+                const local_owner = local orelse continue;
+                if (!std.mem.eql(u8, local_owner, row.code)) continue;
+            }
+            if (!self.localHeadingMatches(row.code, row.name)) continue;
+            if (self.autonym_headings.getPtr(row.name)) |proof| {
+                if (proof.*) |previous| {
+                    if (!std.mem.eql(u8, previous, row.code)) proof.* = null;
+                }
+            } else {
+                const owned = self.arena.allocator();
+                const key = try owned.dupe(u8, row.name);
+                errdefer owned.free(key);
+                const code_value = try owned.dupe(u8, row.code);
+                errdefer owned.free(code_value);
+                try self.autonym_headings.put(owned, key, code_value);
+            }
+        }
+    }
+
+    fn autonymCodeValid(code_value: []const u8) bool {
+        if (code_value.len < 2 or code_value.len > 128) return false;
+        for (code_value) |ch| if (!std.ascii.isLower(ch) and !std.ascii.isDigit(ch) and ch != '-') return false;
+        return true;
+    }
+
+    fn decodeAutonymName(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
+        if (raw.len > 8192 or std.mem.indexOfScalar(u8, raw, 0) != null) return error.InvalidLanguageNameSnapshot;
+        var out: std.ArrayList(u8) = .empty;
+        var i: usize = 0;
+        while (i < raw.len) : (i += 1) {
+            if (raw[i] != '\\') {
+                try out.append(a, raw[i]);
+                continue;
+            }
+            i += 1;
+            if (i == raw.len) return error.InvalidLanguageNameSnapshot;
+            try out.append(a, switch (raw[i]) {
+                '\\' => '\\', 't' => '\t', 'n' => '\n', 'r' => '\r',
+                else => return error.InvalidLanguageNameSnapshot,
+            });
+        }
+        if (out.items.len > 4096) return error.InvalidLanguageNameSnapshot;
+        return try out.toOwnedSlice(a);
+    }
+
+    /// Positional records are names only when the actual normal provider proves
+    /// the getter, exported table and field-one-preserving finalizer contract.
+    pub const PositionalLanguageProvider = enum { canonical_field_one };
+
+    pub fn provePositionalLanguageProvider(a: std.mem.Allocator, source: []const u8) !?PositionalLanguageProvider {
+        return if (try positionalLanguageProviderProof(a, source)) .canonical_field_one else null;
+    }
+
+    // The normal loader obtains this immutable proof once from the authenticated
+    // provider source, then independently authenticates each data module.
+    pub fn addPositionalLanguageDataLua(self: *Registry, source: []const u8, _: PositionalLanguageProvider, module_base: []const u8) !void {
+        try positionalLanguageDataImport(self, source, module_base);
     }
 
     /// Read only the literal records in the two pinned language-data shapes.
@@ -2155,4 +2323,798 @@ test "KBD exact curated language heading cannot override existing or later confl
     try later.addTsv("# mediawiki\nfr\tFrench\tАДЫГЭБЗЭ (КЪЭБЭРДЕЙ-ШЭРДЖЭСЫБЗЭ)\n");
     try std.testing.expectEqualStrings("fr", later.resolve(label).?.code);
     try std.testing.expect(later.resolveTrusted(label) == null);
+}
+
+
+test "literal code source banners preserve unknown names and recheck live owner conflicts" {
+    var registry = Registry.empty(std.testing.allocator);
+    defer registry.deinit();
+    try registry.addTsv("# content-language\ten\n# mediawiki\nen\tEnglish\ntr\tTurkish\nfr\tFrench\nde\tGerman\n");
+    const proof: SourceLanguageBanner = .{ .heading = "decorated exact source (tr)", .level = 1, .target = "Unknown local label", .label = "Unknown local label", .authority = .literal_code };
+    try registry.addSourceLanguageBanner("tr", proof);
+    try std.testing.expect(registry.matchesSourceLanguageBanner("tr", proof.heading, 1));
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("tr", proof.heading, 2));
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("en", proof.heading, 1));
+    try std.testing.expect(registry.resolve(proof.label) == null);
+    try std.testing.expect(registry.resolveTrusted(proof.label) == null);
+    try std.testing.expect(!registry.isLanguageBoundary(proof.label));
+    try std.testing.expect(!registry.sourceBannerNameMatches("tr", proof.label));
+    // A later same-owner alias need not invalidate a proof, but another owner must.
+    try registry.addTsv("tr\tTurkish\tUnknown local label\n");
+    try std.testing.expect(registry.matchesSourceLanguageBanner("tr", proof.heading, 1));
+    try registry.addTsv("fr\tFrench\tUnknown local label\n");
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("tr", proof.heading, 1));
+
+    var local = Registry.empty(std.testing.allocator);
+    defer local.deinit();
+    try local.addTsv("# content-language\ten\n# mediawiki\nen\tEnglish\ntr\tTurkish\nfr\tFrench\n");
+    try local.addSourceLanguageBanner("tr", proof);
+    try local.addLocalAlias(proof.label, "fr");
+    try std.testing.expect(!local.matchesSourceLanguageBanner("tr", proof.heading, 1));
+}
+
+test "literal code banner requires an installed code and does not override known names or contradictory proofs" {
+    var registry = Registry.empty(std.testing.allocator);
+    defer registry.deinit();
+    try registry.addTsv("# content-language\ten\n# mediawiki\nen\tEnglish\nfr\tFrench\ttr\n");
+    const proof: SourceLanguageBanner = .{ .heading = "exact source (tr)", .level = 1, .target = "Unknown local label", .label = "Unknown local label", .authority = .literal_code };
+    try std.testing.expectEqualStrings("fr", registry.resolve("tr").?.code);
+    try registry.addSourceLanguageBanner("tr", proof);
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("tr", proof.heading, 1));
+
+    var installed = Registry.empty(std.testing.allocator);
+    defer installed.deinit();
+    try installed.addTsv("# content-language\ten\n# mediawiki\nen\tEnglish\ntr\tTurkish\nfr\tFrench\n");
+    var conflict = proof;
+    conflict.label = "English";
+    try installed.addSourceLanguageBanner("tr", conflict);
+    try std.testing.expect(!installed.matchesSourceLanguageBanner("tr", proof.heading, 1));
+    var known_only = proof;
+    known_only.authority = .known_names;
+    try installed.addSourceLanguageBanner("tr", known_only);
+    try std.testing.expect(!installed.matchesSourceLanguageBanner("tr", proof.heading, 1));
+    try installed.addSourceLanguageBanner("tr", proof);
+    try std.testing.expect(installed.matchesSourceLanguageBanner("tr", proof.heading, 1));
+    var contradictory = proof;
+    contradictory.heading = "different exact source (tr)";
+    try installed.addSourceLanguageBanner("tr", contradictory);
+    try std.testing.expect(!installed.matchesSourceLanguageBanner("tr", proof.heading, 1));
+    try std.testing.expect(!installed.matchesSourceLanguageBanner("tr", contradictory.heading, 1));
+}
+
+const AutonymHeadingTest = struct {
+    const header = "# wikidict-language-names-v1\n# wiki\tskrwiktionary\n# dump-date\t20261001\n# content-language\tskr\n";
+    const registry = "# content-language\tskr\n# mediawiki\nskr\tسرائیکی\nen\tسرائیکی ► skr\tEnglish\nenx\tOther\nur\tUrdu\tاردو\tUndifferentiated alias\tاُردو\n";
+    fn apply(r: *Registry, source: []const u8) !void {
+        try r.trustAutonymSnapshot(source, "skrwiktionary", "20261001", "skr");
+    }
+};
+
+test "captured autonym profile trusts exact installed heading without rewriting preferred display" {
+    var r = Registry.empty(std.testing.allocator); defer r.deinit();
+    try r.addTsv(AutonymHeadingTest.registry);
+    try std.testing.expect(r.resolve("اردو") != null);
+    try std.testing.expect(r.resolveTrusted("اردو") == null);
+    try AutonymHeadingTest.apply(&r, AutonymHeadingTest.header ++
+        "C\tskr\tsingle\t1\nN\tskr\tsingle\tenx\tUndifferentiated alias\n" ++
+        "C\t-\tsingle\t2\nN\t-\tsingle\tur\tاردو\nN\t-\tsingle\ten\tEnglish\n");
+    const ur = r.resolveTrusted("اردو") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("ur", ur.code);
+    try std.testing.expectEqualStrings("Urdu", ur.heading);
+    try std.testing.expectEqualStrings("سرائیکی ► skr", r.resolveTrusted("English").?.heading);
+    try std.testing.expect(r.resolveTrusted("Undifferentiated alias") == null);
+    try std.testing.expect(r.resolveTrusted("اُردو") == null);
+    try std.testing.expect(r.resolveTrusted("اردو ") == null);
+    try std.testing.expect(r.resolveTrusted("اردُو") == null);
+}
+
+test "autonym heading evidence preserves missing codes aliases and live conflicts" {
+    for ([_][]const u8{
+        "# content-language\tskr\nskr\tسرائیکی\nfr\tFrench\tur\tاردو\n", // ur is only an alias of fr.
+        "# content-language\tskr\nskr\tسرائیکی\nur\tUrdu\n", // No installed label.
+        "# content-language\tskr\nskr\tسرائیکی\nur\tUrdu\tاردو\nfr\tFrench\tاردو\n", // Ambiguous.
+    }) |source| {
+        var r = Registry.empty(std.testing.allocator); defer r.deinit();
+        try r.addTsv(source);
+        try AutonymHeadingTest.apply(&r, AutonymHeadingTest.header ++ "C\t-\tsingle\t1\nN\t-\tsingle\tur\tاردو\n");
+        try std.testing.expect(r.resolveTrusted("اردو") == null);
+    }
+    var r = Registry.empty(std.testing.allocator); defer r.deinit();
+    try r.addTsv(AutonymHeadingTest.registry ++ "fr\tFrench\n");
+    try r.addLocalAlias("اردو", "fr");
+    try AutonymHeadingTest.apply(&r, AutonymHeadingTest.header ++ "C\t-\tsingle\t1\nN\t-\tsingle\tur\tاردو\n");
+    try std.testing.expect(r.resolveTrusted("اردو") == null);
+    var late = Registry.empty(std.testing.allocator); defer late.deinit();
+    try late.addTsv(AutonymHeadingTest.registry);
+    try AutonymHeadingTest.apply(&late, AutonymHeadingTest.header ++ "C\t-\tsingle\t1\nN\t-\tsingle\tur\tاردو\n");
+    try std.testing.expect(late.resolveTrusted("اردو") != null);
+    try late.addTsv("fr\tFrench\tاردو\n");
+    try std.testing.expect(late.resolveTrusted("اردو") == null);
+    var duplicate = Registry.empty(std.testing.allocator); defer duplicate.deinit();
+    try duplicate.addTsv(AutonymHeadingTest.registry ++ "fr\tFrench\n");
+    try AutonymHeadingTest.apply(&duplicate, AutonymHeadingTest.header ++ "C\t-\tsingle\t2\nN\t-\tsingle\tur\tاردو\nN\t-\tsingle\tfr\tاردو\n");
+    try std.testing.expect(duplicate.resolveTrusted("اردو") == null);
+    for ([_]bool{ false, true }) |make_ambiguous| {
+        var live = Registry.empty(std.testing.allocator); defer live.deinit();
+        try live.addTsv(AutonymHeadingTest.registry ++ "fr\tFrench\n");
+        try AutonymHeadingTest.apply(&live, AutonymHeadingTest.header ++ "C\t-\tsingle\t1\nN\t-\tsingle\tur\tاردو\n");
+        try std.testing.expect(live.resolveTrusted("اردو") != null);
+        if (make_ambiguous) try live.addLocalAlias("اردو", "ur");
+        try live.addLocalAlias("اردو", "fr");
+        try std.testing.expectEqualStrings("ur", live.resolve("اردو").?.code);
+        try std.testing.expect(live.resolveTrusted("اردو") == null);
+        // Do not retroactively weaken trust originating in the original TSV.
+        try live.addLocalAlias("Urdu", "fr");
+        try std.testing.expectEqualStrings("ur", live.resolveTrusted("Urdu").?.code);
+    }
+}
+
+test "autonym trust requires complete exact identity profile before mutation" {
+    const Case = struct { body: []const u8, err: anyerror };
+    for ([_]Case{
+        .{ .body = "C\t-\tall\t1\nN\t-\tall\tur\tاردو\n", .err = error.InvalidLanguageNameSnapshot },
+        .{ .body = "N\t-\tsingle\tur\tاردو\n", .err = error.IncompleteLanguageNameProfile },
+        .{ .body = "C\t-\tsingle\t2\nN\t-\tsingle\tur\tاردو\n", .err = error.IncompleteLanguageNameProfile },
+        .{ .body = "C\t-\tsingle\t1\nC\t-\tsingle\t1\n", .err = error.DuplicateLanguageNameProfile },
+        .{ .body = "C\t-\tsingle\t2\nN\t-\tsingle\tur\tاردو\nN\t-\tsingle\tur\tOther\n", .err = error.DuplicateLanguageName },
+        .{ .body = "C\t-\tsingle\t2\nN\t-\tsingle\tur\tاردو\nN\t-\tsingle\ten\tbad\\q\n", .err = error.InvalidLanguageNameSnapshot },
+    }) |case| {
+        var r = Registry.empty(std.testing.allocator); defer r.deinit();
+        try r.addTsv(AutonymHeadingTest.registry);
+        const source = try std.fmt.allocPrint(std.testing.allocator, "{s}{s}", .{ AutonymHeadingTest.header, case.body });
+        defer std.testing.allocator.free(source);
+        try std.testing.expectError(case.err, AutonymHeadingTest.apply(&r, source));
+        try std.testing.expect(r.resolveTrusted("اردو") == null);
+    }
+    var r = Registry.empty(std.testing.allocator); defer r.deinit();
+    try r.addTsv(AutonymHeadingTest.registry);
+    const source = AutonymHeadingTest.header ++ "C\t-\tsingle\t1\nN\t-\tsingle\tur\tاردو\n";
+    try std.testing.expectError(error.InvalidLanguageNameSnapshot, r.trustAutonymSnapshot(source, "enwiktionary", "20261001", "skr"));
+    try std.testing.expectError(error.InvalidLanguageNameSnapshot, r.trustAutonymSnapshot(source, "skrwiktionary", "20261002", "skr"));
+    try std.testing.expectError(error.InvalidLanguageNameSnapshot, r.trustAutonymSnapshot(source, "skrwiktionary", "20261001", "en"));
+    try AutonymHeadingTest.apply(&r, AutonymHeadingTest.header ++ "C\tskr\tsingle\t1\nN\tskr\tsingle\tur\tاردو\n");
+    try std.testing.expect(r.resolveTrusted("اردو") == null); // Legacy profile remains optional.
+}
+
+// Private source-only candidate. Append beside the existing lua_parser import.
+// This proves positional interpretation and local provider identity, not purity
+// of arbitrary later callers of getData() or inherited language objects.
+fn positionalLanguageProviderProof(a: std.mem.Allocator, source: []const u8) !bool {
+    if (source.len > 256 * 1024) return false;
+    var actual = lua_parser.parse(a, source) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return false,
+    };
+    defer actual.deinit();
+    var expected = try lua_parser.parse(a, PositionalProviderSchema.source);
+    defer expected.deinit();
+    var proof = PositionalProviderContract{ .expected = expected.body };
+    if (!proof.block(actual.body, 0, true)) return false;
+    return proof.export_init == 1 and proof.language_init == 1 and proof.export_return == 1 and
+        proof.getter == 1 and proof.selector == 1 and proof.finalizer == 1 and proof.constructor == 1 and
+        proof.dependencies == 0b1111111 and proof.libraries == 0b11;
+}
+
+const PositionalProviderContract = struct {
+    const Expr = lua_parser.Expr;
+    const Stmt = lua_parser.Stmt;
+    expected: lua_parser.Block,
+    export_init: usize = 0,
+    language_init: usize = 0,
+    export_return: usize = 0,
+    getter: usize = 0,
+    selector: usize = 0,
+    finalizer: usize = 0,
+    constructor: usize = 0,
+    dependencies: u8 = 0,
+    libraries: u2 = 0,
+    function_depth: usize = 0,
+
+    fn eq(comptime T: type, left: T, right: T) bool {
+        if (T == lua_parser.Span) return true;
+        return switch (@typeInfo(T)) {
+            .@"struct" => blk: {
+                inline for (@typeInfo(T).@"struct".field_names) |name| {
+                    if (!eq(@TypeOf(@field(left, name)), @field(left, name), @field(right, name))) break :blk false;
+                }
+                break :blk true;
+            },
+            .@"union" => blk: {
+                if (std.meta.activeTag(left) != std.meta.activeTag(right)) break :blk false;
+                inline for (@typeInfo(T).@"union".field_names) |name| {
+                    if (std.meta.activeTag(left) == @field(std.meta.Tag(T), name))
+                        break :blk eq(@TypeOf(@field(left, name)), @field(left, name), @field(right, name));
+                }
+                unreachable;
+            },
+            .pointer => |p| switch (p.size) {
+                .one => eq(p.child, left.*, right.*),
+                .slice => blk: {
+                    if (left.len != right.len) break :blk false;
+                    for (left, right) |x, y| if (!eq(p.child, x, y)) break :blk false;
+                    break :blk true;
+                },
+                else => @compileError("unsupported provider AST pointer"),
+            },
+            .optional => |o| if (left) |x| (if (right) |y| eq(o.child, x, y) else false) else right == null,
+            .bool, .int, .@"enum" => left == right,
+            else => @compileError("unsupported provider AST value"),
+        };
+    }
+    fn isName(e: *const Expr, name: []const u8) bool {
+        return e.* == .name and std.mem.eql(u8, e.name.value, name);
+    }
+    fn sensitive(name: []const u8) bool {
+        return std.mem.eql(u8, name, "export") or std.mem.eql(u8, name, "Language") or
+            std.mem.eql(u8, name, "string") or std.mem.eql(u8, name, "table");
+    }
+    fn environment(name: []const u8) bool {
+        const names = [_][]const u8{ "_G", "_ENV", "getfenv", "setfenv", "load", "loadstring", "loadfile", "dofile", "debug", "package" };
+        for (names) |n| if (std.mem.eql(u8, name, n)) return true;
+        return false;
+    }
+    fn dependency(name: []const u8) ?u3 {
+        const names = [_][]const u8{ "next", "insert", "gsub", "type", "match", "require", "setmetatable" };
+        for (names, 0..) |n, i| if (std.mem.eql(u8, name, n)) return @intCast(i);
+        return null;
+    }
+    fn expectedFunction(self: *const @This(), expected_target: lua_parser.LValue) ?*const Stmt {
+        for (self.expected) |s| if (s.* == .function_assign and eq(lua_parser.LValue, s.function_assign.target, expected_target)) return s;
+        return null;
+    }
+    fn expectedDependency(self: *const @This(), s: *const Stmt) bool {
+        for (self.expected) |e| if (e.* == .local_assign and eq(Stmt, s.*, e.*)) return true;
+        return false;
+    }
+    fn target(self: *@This(), t: lua_parser.LValue, depth: usize) bool {
+        return switch (t) {
+            .name => |n| !sensitive(n) and !environment(n) and dependency(n) == null,
+            .index => |i| blk: {
+                if (isName(i.object, "string") or isName(i.object, "table")) break :blk false;
+                if (i.key.* == .string) {
+                    const key = i.key.string.value;
+                    // The authoritative declaration is handled before target().
+                    // Unknown roots may be a recovered language prototype.
+                    if (std.mem.eql(u8, key, "getCanonicalName")) break :blk false;
+                    if (isName(i.object, "Language") and (std.mem.eql(u8, key, "getCanonicalName") or
+                        std.mem.eql(u8, key, "_name") or std.mem.eql(u8, key, "_data") or std.mem.eql(u8, key, "__index"))) break :blk false;
+                    if (isName(i.object, "export") and (std.mem.eql(u8, key, "finalizeData") or
+                        std.mem.eql(u8, key, "getDataModuleName") or std.mem.eql(u8, key, "makeObject"))) break :blk false;
+                }
+                break :blk self.index(i.object, i.key, depth);
+            },
+        };
+    }
+    fn index(self: *@This(), object: *const Expr, key: *const Expr, depth: usize) bool {
+        if (object.* == .name and sensitive(object.name.value)) {
+            if (key.* != .string) return false;
+            // The constructor installs Language itself at this slot. Reading it
+            // would provide an untracked mutable alias of the prototype.
+            if (isName(object, "Language") and std.mem.eql(u8, key.string.value, "__index")) return false;
+            return true;
+        }
+        return self.expr(object, depth + 1) and self.expr(key, depth + 1);
+    }
+    fn expr(self: *@This(), e: *const Expr, depth: usize) bool {
+        if (depth > 128) return false;
+        return switch (e.*) {
+            .name => |n| !sensitive(n.value) and !environment(n.value),
+            .nil_lit, .bool_lit, .number, .string, .vararg => true,
+            .paren => |p| self.expr(p.expr, depth + 1),
+            .index => |i| self.index(i.object, i.key, depth),
+            .unary => |u| self.expr(u.expr, depth + 1),
+            .binary => |b| self.expr(b.lhs, depth + 1) and self.expr(b.rhs, depth + 1),
+            .call => |c| blk: {
+                // At module evaluation no arbitrary helper may execute before
+                // export. Lazy ordinary method bodies are not evaluated here.
+                if (self.function_depth == 0) {
+                    if (!isName(c.callee, "require") or c.args.len != 1) break :blk false;
+                    if (self.libraries != 0b11 or self.dependencies != 0b1111111) break :blk false;
+                    if (c.args[0].* != .string and c.args[0].* != .name) break :blk false;
+                }
+                break :blk self.expr(c.callee, depth + 1) and self.exprs(c.args, depth + 1);
+            },
+            .method_call => |c| self.function_depth != 0 and self.expr(c.object, depth + 1) and self.exprs(c.args, depth + 1),
+            .function => |f| self.function(f, depth + 1),
+            .table => |t| blk: {
+                for (t.fields) |field| switch (field) {
+                    .list => |v| if (!self.expr(v, depth + 1)) break :blk false,
+                    .named => |v| if (!self.expr(v.value, depth + 1)) break :blk false,
+                    .keyed => |v| if (!self.expr(v.key, depth + 1) or !self.expr(v.value, depth + 1)) break :blk false,
+                };
+                break :blk true;
+            },
+        };
+    }
+    fn exprs(self: *@This(), es: []const *Expr, depth: usize) bool {
+        for (es) |e| if (!self.expr(e, depth)) return false;
+        return true;
+    }
+    fn function(self: *@This(), f: lua_parser.FunctionExpr, depth: usize) bool {
+        for (f.params) |p| if (sensitive(p) or environment(p)) return false;
+        self.function_depth += 1;
+        defer self.function_depth -= 1;
+        return self.block(f.body, depth + 1, false);
+    }
+    fn block(self: *@This(), body: lua_parser.Block, depth: usize, admit_contract: bool) bool {
+        if (depth > 128) return false;
+        for (body, 0..) |s, position| {
+            switch (s.*) {
+                .empty, .break_stmt => {},
+                .local_assign => |v| {
+                    var special = false;
+                    for (v.names) |n| {
+                        if (environment(n)) return false;
+                        if (std.mem.eql(u8, n, "string") or std.mem.eql(u8, n, "table")) {
+                            if (depth != 0 or v.names.len != 1 or v.values.len != 1 or !isName(v.values[0], n)) return false;
+                            const bit: u2 = if (std.mem.eql(u8, n, "string")) 1 else 2;
+                            if (self.libraries & bit != 0) return false;
+                            self.libraries |= bit;
+                            special = true;
+                        } else if (sensitive(n)) {
+                            if (depth != 0 or v.names.len != 1 or v.values.len != 1 or v.values[0].* != .table or v.values[0].table.fields.len != 0) return false;
+                            if (std.mem.eql(u8, n, "export")) self.export_init += 1 else self.language_init += 1;
+                            special = true;
+                        } else if (dependency(n)) |bit| {
+                            // A method-local shadow cannot replace the outer alias.
+                            if (self.function_depth == 0) {
+                                if (depth != 0 or self.libraries != 0b11 or !self.expectedDependency(s) or self.dependencies & (@as(u8, 1) << bit) != 0) return false;
+                                self.dependencies |= @as(u8, 1) << bit;
+                                special = true;
+                            }
+                        }
+                    }
+                    if (!special and !self.exprs(v.values, depth + 1)) return false;
+                },
+                .assign => |v| {
+                    for (v.targets) |t| if (!self.target(t, depth + 1)) return false;
+                    if (!self.exprs(v.values, depth + 1)) return false;
+                },
+                .function_assign => |v| {
+                    if (self.expectedFunction(v.target)) |expected| {
+                        if (!admit_contract) return false;
+                        if (self.export_init != 1 or self.language_init != 1 or self.dependencies != 0b1111111 or self.libraries != 0b11) return false;
+                        if (!eq(Stmt, s.*, expected.*)) return false;
+                        if (v.target != .index or v.target.index.key.* != .string) return false;
+                        const name = v.target.index.key.string.value;
+                        if (std.mem.eql(u8, name, "getCanonicalName")) self.getter += 1 else if (std.mem.eql(u8, name, "getDataModuleName")) self.selector += 1 else if (std.mem.eql(u8, name, "finalizeData")) self.finalizer += 1 else self.constructor += 1;
+                    } else {
+                        if (!self.target(v.target, depth + 1) or !self.expr(v.function, depth + 1)) return false;
+                    }
+                },
+                .local_function => |v| {
+                    if (sensitive(v.name) or environment(v.name) or (self.function_depth == 0 and dependency(v.name) != null) or !self.expr(v.function, depth + 1)) return false;
+                },
+                .return_stmt => |v| {
+                    if (self.function_depth == 0) {
+                        if (depth != 0 or position + 1 != body.len or v.values.len != 1 or !isName(v.values[0], "export")) return false;
+                        self.export_return += 1;
+                    } else if (!self.exprs(v.values, depth + 1)) return false;
+                },
+                .call => |v| if (!self.expr(v.expr, depth + 1)) return false,
+                .do_block => |v| if (!self.block(v.body, depth + 1, admit_contract)) return false,
+                .while_loop => |v| if (!self.expr(v.cond, depth + 1) or !self.block(v.body, depth + 1, false)) return false,
+                .repeat_loop => |v| if (!self.expr(v.cond, depth + 1) or !self.block(v.body, depth + 1, false)) return false,
+                .if_stmt => |v| {
+                    for (v.branches) |branch| if (!self.expr(branch.cond, depth + 1) or !self.block(branch.body, depth + 1, false)) return false;
+                    if (v.else_body) |b| if (!self.block(b, depth + 1, false)) return false;
+                },
+                .numeric_for => |v| {
+                    if (sensitive(v.name) or environment(v.name) or !self.expr(v.start, depth + 1) or !self.expr(v.limit, depth + 1)) return false;
+                    if (v.step) |step| if (!self.expr(step, depth + 1)) return false;
+                    if (!self.block(v.body, depth + 1, false)) return false;
+                },
+                .generic_for => |v| {
+                    for (v.names) |n| if (sensitive(n) or environment(n)) return false;
+                    if (!self.exprs(v.values, depth + 1) or !self.block(v.body, depth + 1, false)) return false;
+                },
+            }
+        }
+        return true;
+    }
+};
+
+// Shared finite production schema. Unrelated provider methods are deliberately not
+// required: only these four public contracts plus stable built-in bindings.
+pub const PositionalProviderSchema = struct {
+    pub const source =
+        \\local export = {}
+        \\local Language = {}
+        \\local string = string
+        \\local table = table
+        \\local next = next
+        \\local insert = table.insert
+        \\local gsub = string.gsub
+        \\local type = type
+        \\local match = string.match
+        \\local require = require
+        \\local setmetatable = setmetatable
+        \\function Language:getCanonicalName()
+        \\ local name = self._name
+        \\ if name == nil then
+        \\  name = self._data[1]
+        \\  self._name = name
+        \\ end
+        \\ return name
+        \\end
+        \\function export.getDataModuleName(code)
+        \\ local letter = match(code, "^(%l)%l%l?$")
+        \\ return "Module:" .. (letter == nil and "languages/data/exceptional" or #code == 2 and "languages/data/2" or "languages/data/3/" .. letter)
+        \\end
+        \\function export.makeObject(code, data, dontCanonicalizeAliases)
+        \\ local data_type = type(data)
+        \\ if data_type ~= "table" then error(("bad argument #2 to 'makeObject' (table expected, got %s)"):format(data_type)) end
+        \\ local input_code = code
+        \\ code = normalize_code(code)
+        \\ input_code = dontCanonicalizeAliases and input_code or code
+        \\ local parent
+        \\ if data.parent then parent = get_by_code(data.parent, nil, true, true) else parent = Language end
+        \\ parent.__index = parent
+        \\ local lang = {_code = input_code}
+        \\ if code ~= input_code then lang._mainCode = code end
+        \\ local parent_data = parent._data
+        \\ if parent_data == nil then lang._fullCode = parent._code or code else
+        \\  lang._fullCode = parent._fullCode
+        \\  local stack = get_stack(parent_data)
+        \\  if stack == nil then parent_data, stack = make_stack(parent_data) end
+        \\  local n = stack[make_stack] + 1
+        \\  data, stack[n], stack[make_stack] = parent_data, data, n
+        \\ end
+        \\ lang._data = data
+        \\ return setmetatable(lang, parent)
+        \\end
+        \\function export.finalizeData(data, main_type, variety)
+        \\ local fields = {"type"}
+        \\ if main_type == "language" then
+        \\  insert(fields, 4)
+        \\  insert(fields, "ancestors")
+        \\  insert(fields, "link_tr")
+        \\  insert(fields, "override_translit")
+        \\  insert(fields, "wikimedia_codes")
+        \\ elseif main_type == "script" then insert(fields, 3) end
+        \\ local fields_len = #fields
+        \\ for _, entity in next, data do
+        \\  if variety then entity.parent, entity[3], entity.family = entity[3], entity.family
+        \\  elseif not (entity.type or entity.parent) then entity.type = "regular" end
+        \\  for i = 1, fields_len do
+        \\   local key = fields[i]
+        \\   local field = entity[key]
+        \\   if field and type(field) == "string" then entity[key] = gsub(field, "%s*,%s*", ",") end
+        \\  end
+        \\ end
+        \\ return data
+        \\end
+        \\return export
+    ;
+};
+
+test "positional provider proves finite getter finalizer selector and local identity" {
+    try std.testing.expect(try positionalLanguageProviderProof(std.testing.allocator, PositionalProviderSchema.source));
+    const unrelated = try std.mem.replaceOwned(u8, std.testing.allocator, PositionalProviderSchema.source, "return export", "function Language:getDataModuleName() return self._dataModuleName end\nlocal mt = {}\nmt.__index = function() return nil end\nreturn export");
+    defer std.testing.allocator.free(unrelated);
+    try std.testing.expect(try positionalLanguageProviderProof(std.testing.allocator, unrelated));
+    const changes = [_][2][]const u8{
+        .{ "self._data[1]", "self._data[2]" },
+        .{ "return data\nend\nreturn export", "return {}\nend\nreturn export" },
+        .{ "insert(fields, 4)", "insert(fields, 1)" },
+        .{ "return export", "export.finalizeData = function(data) return data end\nreturn export" },
+        .{ "return export", "local alias = Language\nreturn export" },
+        .{ "return export", "local alias = Language.__index\nreturn export" },
+        .{ "return export", "local object = export.makeObject('sh', {})\nreturn export" },
+        .{ "return export", "mutate(export)\nreturn export" },
+        .{ "return export", "Language[unknown] = function() end\nreturn export" },
+        .{ "return export", "next = evil\nreturn export" },
+        .{ "local string = string", "local string = evil" },
+        .{ "local next = next", "_G.next = function(...) return nil end\nlocal next = next" },
+        .{ "local next = next", "local x = require('mutator')\nlocal next = next" },
+        .{ "local insert = table.insert", "_G.table.insert = evil\nlocal insert = table.insert" },
+        .{ "local insert = table.insert", "(_ENV)['table'].insert = evil\nlocal insert = table.insert" },
+        .{ "local next = next", "local env = (getfenv)()\nlocal next = next" },
+        .{ "local next = next", "local env = (_G)\nlocal next = next" },
+        .{ "local next = next", "local f = loadstring('return 1')\nlocal next = next" },
+        .{ "return export", "local p = package.loaded\nreturn export" },
+        .{ "return export", "local d = (debug)['getupvalue']\nreturn export" },
+        .{ "local insert = table.insert", "table.insert = evil\nlocal insert = table.insert" },
+        .{ "return export", "escape(string)\nreturn export" },
+        .{ "return export", "Language.__index = evil\nreturn export" },
+        .{ "return export", "Language._data = {'wrong'}\nreturn export" },
+        .{ "return export", "if unknown then return {} end\nreturn export" },
+        .{ "return export", "return Language" },
+    };
+    for (changes) |change| {
+        const modified = try std.mem.replaceOwned(u8, std.testing.allocator, PositionalProviderSchema.source, change[0], change[1]);
+        defer std.testing.allocator.free(modified);
+        try std.testing.expect(!try positionalLanguageProviderProof(std.testing.allocator, modified));
+    }
+    try std.testing.expect(!try positionalLanguageProviderProof(std.testing.allocator, "function ???"));
+}
+
+// Finite positional-table proof; never evaluate Lua or follow aliases.
+// Commit names only after proving the complete literal table and export.
+fn positionalLanguageDataImport(registry: *Registry, source: []const u8, module_base: []const u8) !void {
+    var chunk = lua_parser.parse(registry.arena.child_allocator, source) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return,
+    };
+    defer chunk.deinit();
+    const temporary = chunk.arena.allocator();
+    var pending: std.ArrayList(LocalName) = .empty;
+    var seen: std.ArrayList([]const u8) = .empty;
+    var initialized = false;
+    var exported = false;
+    for (chunk.body) |stmt| {
+        if (stmt.* == .empty) continue;
+        if (exported) return;
+        switch (stmt.*) {
+            .local_assign => |assignment| {
+                var relevant = false;
+                for (assignment.names) |name| if (std.mem.eql(u8, name, "m")) { relevant = true; };
+                if (!relevant) {
+                    if (!positionalDataStatementSafe(stmt, false)) return;
+                    continue;
+                }
+                if (initialized or assignment.names.len != 1 or assignment.values.len != 1) return;
+                const fields = literalTable(assignment.values[0]) orelse return;
+                if (fields.len != 0) return;
+                initialized = true;
+            },
+            .assign => |assignment| {
+                var relevant = false;
+                for (assignment.targets) |target| if (languageDataTarget(target, .canonical_assignments)) { relevant = true; };
+                if (!relevant) {
+                    if (!positionalDataStatementSafe(stmt, false)) return;
+                    continue;
+                }
+                if (!initialized or assignment.targets.len != 1 or assignment.values.len != 1) return;
+                const target = switch (assignment.targets[0]) { .index => |index| index, else => return };
+                if (!literalName(target.object, "m")) return;
+                const key = literalString(target.key) orelse return;
+                if (!positionalDataExpressionSafe(assignment.values[0])) return;
+                for (seen.items) |previous| if (std.mem.eql(u8, previous, key)) return;
+                try seen.append(temporary, key);
+                if (!registry.codes.contains(key) or !positionalDataCodeMatches(module_base, key)) continue;
+                const fields = literalTable(assignment.values[0]) orelse return;
+                var first: ?[]const u8 = null;
+                var list_seen = false;
+                var named: ?[]const u8 = null;
+                for (fields) |field| switch (field) {
+                    .list => |value| {
+                        if (list_seen) continue;
+                        list_seen = true;
+                        first = literalString(value) orelse return;
+                        if (!validLocalLabel(first.?)) return;
+                    },
+                    .named => |value| if (std.mem.eql(u8, value.name, "canonicalName")) {
+                        if (named != null) return;
+                        named = literalString(value.value) orelse return;
+                    },
+                    .keyed => |value| {
+                        // A numeric/computed key could replace positional 1.
+                        const key_name = literalString(value.key) orelse return;
+                        if (std.mem.eql(u8, key_name, "canonicalName")) {
+                            if (named != null) return;
+                            named = literalString(value.value) orelse return;
+                        }
+                    },
+                };
+                const label = first orelse return;
+                if (named) |name| if (!std.mem.eql(u8, name, label)) return;
+                try pending.append(temporary, .{ .key = key, .value = label });
+            },
+            .return_stmt => |statement| {
+                if (!initialized or statement.values.len != 1 or !positionalLanguageDataExport(statement.values[0])) return;
+                exported = true;
+            },
+            else => if (!positionalDataStatementSafe(stmt, false)) return,
+        }
+    }
+    if (!exported) return;
+    for (pending.items) |entry| try registry.addLocalAlias(entry.value, entry.key);
+}
+
+fn positionalDataCodeMatches(module_base: []const u8, code_value: []const u8) bool {
+    for (code_value) |byte| if (byte < 'a' or byte > 'z') return false;
+    if (std.mem.eql(u8, module_base, "languages/data/2")) return code_value.len == 2;
+    const prefix = "languages/data/3/";
+    return code_value.len == 3 and module_base.len == prefix.len + 1 and
+        std.mem.startsWith(u8, module_base, prefix) and module_base[prefix.len] == code_value[0];
+}
+
+fn positionalLanguageDataExport(expression: *const lua_parser.Expr) bool {
+    const call = switch (expression.*) { .call => |value| value, else => return false };
+    if (call.args.len != 2 or !literalName(call.args[0], "m") or
+        !std.mem.eql(u8, literalString(call.args[1]) orelse return false, "language")) return false;
+    const member = switch (call.callee.*) { .index => |value| value, else => return false };
+    if (!std.mem.eql(u8, literalString(member.key) orelse return false, "finalizeData")) return false;
+    const require_call = switch (member.object.*) { .call => |value| value, else => return false };
+    return literalName(require_call.callee, "require") and require_call.args.len == 1 and
+        std.mem.eql(u8, literalString(require_call.args[0]) orelse return false, "Module:languages");
+}
+
+fn positionalDataProtectedName(name: []const u8) bool {
+    for ([_][]const u8{ "m", "require", "_G", "_ENV", "package", "debug", "setfenv", "getfenv", "load", "loadstring" }) |protected|
+        if (std.mem.eql(u8, name, protected)) return true;
+    return false;
+}
+
+fn positionalDataExpressionSafe(expression: *const lua_parser.Expr) bool {
+    return switch (expression.*) {
+        .name => |value| !positionalDataProtectedName(value.value),
+        .string => |value| !std.mem.eql(u8, value.value, "Module:languages"),
+        .paren => |value| positionalDataExpressionSafe(value.expr),
+        .index => |value| positionalDataExpressionSafe(value.object) and positionalDataExpressionSafe(value.key),
+        .unary => |value| positionalDataExpressionSafe(value.expr),
+        .binary => |value| positionalDataExpressionSafe(value.lhs) and positionalDataExpressionSafe(value.rhs),
+        .call => |value| blk: {
+            if (literalName(value.callee, "require")) {
+                if (value.args.len != 1) break :blk false;
+                const module_name = literalString(value.args[0]) orelse break :blk false;
+                break :blk !std.mem.eql(u8, module_name, "Module:languages");
+            }
+            if (!positionalDataExpressionSafe(value.callee)) break :blk false;
+            for (value.args) |argument| if (!positionalDataExpressionSafe(argument)) break :blk false;
+            break :blk true;
+        },
+        .method_call => |value| blk: {
+            if (!positionalDataExpressionSafe(value.object)) break :blk false;
+            for (value.args) |argument| if (!positionalDataExpressionSafe(argument)) break :blk false;
+            break :blk true;
+        },
+        .table => |value| blk: {
+            for (value.fields) |field| switch (field) {
+                .list => |item| if (!positionalDataExpressionSafe(item)) break :blk false,
+                .named => |item| if (!positionalDataExpressionSafe(item.value)) break :blk false,
+                .keyed => |item| if (!positionalDataExpressionSafe(item.key) or !positionalDataExpressionSafe(item.value)) break :blk false,
+            };
+            break :blk true;
+        },
+        .function => |value| blk: {
+            for (value.params) |name| if (positionalDataProtectedName(name)) break :blk false;
+            for (value.body) |statement| if (!positionalDataStatementSafe(statement, true)) break :blk false;
+            break :blk true;
+        },
+        else => true,
+    };
+}
+
+fn positionalDataTargetSafe(target: lua_parser.LValue) bool {
+    return switch (target) {
+        .name => |name| !positionalDataProtectedName(name),
+        .index => |index| positionalDataExpressionSafe(index.object) and positionalDataExpressionSafe(index.key),
+    };
+}
+
+fn positionalDataStatementSafe(statement: *const lua_parser.Stmt, in_function: bool) bool {
+    switch (statement.*) {
+        .assign => |value| {
+            for (value.targets) |target| if (!positionalDataTargetSafe(target)) return false;
+            for (value.values) |expression| if (!positionalDataExpressionSafe(expression)) return false;
+        },
+        .local_assign => |value| {
+            for (value.names) |name| if (positionalDataProtectedName(name)) return false;
+            for (value.values) |expression| if (!positionalDataExpressionSafe(expression)) return false;
+        },
+        .call => |value| return positionalDataExpressionSafe(value.expr),
+        .function_assign => |value| return positionalDataTargetSafe(value.target) and positionalDataExpressionSafe(value.function),
+        .local_function => |value| return !positionalDataProtectedName(value.name) and positionalDataExpressionSafe(value.function),
+        .do_block => |value| { for (value.body) |inner| if (!positionalDataStatementSafe(inner, in_function)) return false; },
+        .while_loop => |value| {
+            if (!positionalDataExpressionSafe(value.cond)) return false;
+            for (value.body) |inner| if (!positionalDataStatementSafe(inner, in_function)) return false;
+        },
+        .repeat_loop => |value| {
+            if (!positionalDataExpressionSafe(value.cond)) return false;
+            for (value.body) |inner| if (!positionalDataStatementSafe(inner, in_function)) return false;
+        },
+        .numeric_for => |value| {
+            if (positionalDataProtectedName(value.name) or !positionalDataExpressionSafe(value.start) or !positionalDataExpressionSafe(value.limit)) return false;
+            if (value.step) |step| if (!positionalDataExpressionSafe(step)) return false;
+            for (value.body) |inner| if (!positionalDataStatementSafe(inner, in_function)) return false;
+        },
+        .generic_for => |value| {
+            for (value.names) |name| if (positionalDataProtectedName(name)) return false;
+            for (value.values) |expression| if (!positionalDataExpressionSafe(expression)) return false;
+            for (value.body) |inner| if (!positionalDataStatementSafe(inner, in_function)) return false;
+        },
+        .if_stmt => |value| {
+            for (value.branches) |branch| {
+                if (!positionalDataExpressionSafe(branch.cond)) return false;
+                for (branch.body) |inner| if (!positionalDataStatementSafe(inner, in_function)) return false;
+            }
+            if (value.else_body) |body| for (body) |inner| if (!positionalDataStatementSafe(inner, in_function)) return false;
+        },
+        .return_stmt => |value| {
+            // An early module return bypasses the proved terminal export.
+            if (!in_function) return false;
+            for (value.values) |expression| if (!positionalDataExpressionSafe(expression)) return false;
+        },
+        .empty, .break_stmt => {},
+    }
+    return true;
+}
+
+const PositionalDataTest = struct {
+    const table = "local m = {}\nm[\"sh\"] = { \"ဆာဘို-ခရိုအေးရှား\", 9301, \"zls\", \"Latn, Cyrl\" }\n";
+    const finish = "return require(\"Module:languages\").finalizeData(m, \"language\")";
+    const registry = "# mediawiki\nsh\tSerbo-Croatian\nfr\tFrench\n";
+};
+
+test "positional language data preserves installed code canonical display and live conflicts" {
+    var registry = Registry.empty(std.testing.allocator); defer registry.deinit();
+    try registry.addTsv(PositionalDataTest.registry);
+    try positionalLanguageDataImport(&registry, PositionalDataTest.table ++ PositionalDataTest.finish, "languages/data/2");
+    const actual = registry.resolveTrusted("ဆာဘို-ခရိုအေးရှား") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("sh", actual.code);
+    try std.testing.expectEqualStrings("Serbo-Croatian", actual.heading);
+    try std.testing.expectEqualStrings("Serbo-Croatian", registry.resolve("sh").?.heading);
+    try registry.addTsv("# mediawiki\nfr\tFrench\tဆာဘို-ခရိုအေးရှား\n");
+    try std.testing.expectEqualStrings("fr", registry.resolve("ဆာဘို-ခရိုအေးရှား").?.code);
+    try std.testing.expect(registry.resolveTrusted("ဆာဘို-ခရိုအေးရှား") == null);
+
+    var missing = Registry.empty(std.testing.allocator); defer missing.deinit();
+    try missing.addTsv("# mediawiki\nfr\tFrench\tsh\n");
+    try positionalLanguageDataImport(&missing, PositionalDataTest.table ++ PositionalDataTest.finish, "languages/data/2");
+    try std.testing.expect(missing.resolve("ဆာဘို-ခရိုအေးရှား") == null);
+
+    var conflict = Registry.empty(std.testing.allocator); defer conflict.deinit();
+    try conflict.addTsv("# mediawiki\nsh\tSerbo-Croatian\nfr\tFrench\tဆာဘို-ခရိုအေးရှား\n");
+    try positionalLanguageDataImport(&conflict, PositionalDataTest.table ++ PositionalDataTest.finish, "languages/data/2");
+    try std.testing.expectEqualStrings("fr", conflict.resolve("ဆာဘို-ခရိုအေးရှား").?.code);
+    try std.testing.expect(conflict.resolveTrusted("ဆာဘို-ခရိုအေးရှား") == null);
+
+    var local_conflict = Registry.empty(std.testing.allocator); defer local_conflict.deinit();
+    try local_conflict.addTsv(PositionalDataTest.registry);
+    try positionalLanguageDataImport(&local_conflict, PositionalDataTest.table ++ PositionalDataTest.finish, "languages/data/2");
+    try local_conflict.addLocalAlias("ဆာဘို-ခရိုအေးရှား", "fr");
+    try std.testing.expect(local_conflict.resolve("ဆာဘို-ခရိုအေးရှား") == null);
+
+    for ([_][]const u8{ "languages/data/3/s", "languages/data/2/doc", "other/data/2" }) |wrong_module| {
+        var wrong = Registry.empty(std.testing.allocator); defer wrong.deinit();
+        try wrong.addTsv(PositionalDataTest.registry);
+        try positionalLanguageDataImport(&wrong, PositionalDataTest.table ++ PositionalDataTest.finish, wrong_module);
+        try std.testing.expect(wrong.resolve("ဆာဘို-ခရိုအေးရှား") == null);
+    }
+    try std.testing.expect(positionalDataCodeMatches("languages/data/3/s", "skr"));
+    try std.testing.expect(!positionalDataCodeMatches("languages/data/3/m", "skr"));
+    try std.testing.expect(!positionalDataCodeMatches("languages/data/3/s", "SKR"));
+}
+
+test "positional language data rejects root escapes early exports mutations and conflicting field one" {
+    const invalid = [_][]const u8{
+        PositionalDataTest.table,
+        PositionalDataTest.table ++ "return m",
+        PositionalDataTest.table ++ "return require(\"Module:other\").finalizeData(m, \"language\")",
+        PositionalDataTest.table ++ "return require(\"Module:languages\").finalizeData(m, \"script\")",
+        PositionalDataTest.table ++ "return require(\"Module:languages\").finalizeData({}, \"language\")",
+        PositionalDataTest.table ++ "m[\"sh\"][1] = \"replacement\"\n" ++ PositionalDataTest.finish,
+        PositionalDataTest.table ++ "local alias = m; alias[\"sh\"][1] = \"replacement\"\n" ++ PositionalDataTest.finish,
+        PositionalDataTest.table ++ "if true then m[\"sh\"][1] = \"replacement\" end\n" ++ PositionalDataTest.finish,
+        PositionalDataTest.table ++ "mutate(m)\n" ++ PositionalDataTest.finish,
+        PositionalDataTest.table ++ "local function get() return m end; local alias = get(); alias[\"sh\"][1] = \"replacement\"\n" ++ PositionalDataTest.finish,
+        PositionalDataTest.table ++ "for _, row in pairs(m) do row[1] = \"replacement\" end\n" ++ PositionalDataTest.finish,
+        PositionalDataTest.table ++ "for _, row in ipairs(m) do row[1] = \"replacement\" end\n" ++ PositionalDataTest.finish,
+        PositionalDataTest.table ++ "sink[mutate(m)] = true\n" ++ PositionalDataTest.finish,
+        PositionalDataTest.table ++ "if true then return {} end\n" ++ PositionalDataTest.finish,
+        PositionalDataTest.table ++ "do return {} end\n" ++ PositionalDataTest.finish,
+        "local require = replacement; " ++ PositionalDataTest.table ++ PositionalDataTest.finish,
+        PositionalDataTest.table ++ "require = replacement; " ++ PositionalDataTest.finish,
+        PositionalDataTest.table ++ "do _G.require = replacement end; " ++ PositionalDataTest.finish,
+        "local provider = require(\"Module:languages\"); provider.finalizeData = replacement; " ++ PositionalDataTest.table ++ PositionalDataTest.finish,
+        PositionalDataTest.table ++ "require(\"Module:languages\").finalizeData = replacement; " ++ PositionalDataTest.finish,
+        PositionalDataTest.table ++ "m[\"sh\"] = {\"different\"}\n" ++ PositionalDataTest.finish,
+        "local m = {}; m[\"sh\"] = { getName(), 9301 }; " ++ PositionalDataTest.finish,
+        "local m = {}; m[\"sh\"] = { \"ဆာဘို-ခရိုအေးရှား\", canonicalName = \"different\" }; " ++ PositionalDataTest.finish,
+        "local m = {}; m[\"sh\"] = { \"ဆာဘို-ခရိုအေးရှား\", [1] = \"different\" }; " ++ PositionalDataTest.finish,
+    };
+    for (invalid) |source| {
+        var registry = Registry.empty(std.testing.allocator); defer registry.deinit();
+        try registry.addTsv(PositionalDataTest.registry);
+        try positionalLanguageDataImport(&registry, source, "languages/data/2");
+        try std.testing.expect(registry.resolve("ဆာဘို-ခရိုအေးရှား") == null);
+    }
+    // An unrelated helper's local return does not bypass the module export.
+    var valid = Registry.empty(std.testing.allocator); defer valid.deinit();
+    try valid.addTsv(PositionalDataTest.registry);
+    try positionalLanguageDataImport(&valid, "local function unrelated() return {} end; " ++ PositionalDataTest.table ++ PositionalDataTest.finish, "languages/data/2");
+    try std.testing.expectEqualStrings("sh", valid.resolveTrusted("ဆာဘို-ခရိုအေးရှား").?.code);
 }

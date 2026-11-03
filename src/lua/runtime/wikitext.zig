@@ -433,7 +433,10 @@ pub const Expander = struct {
 
     fn hostFileMetadata(raw: ?*anyopaque, title: []const u8) anyerror!host_api.FileMetadata {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
-        const get = self.provider.file_metadata orelse return error.NotImplemented;
+        const get = self.provider.file_metadata orelse {
+            work_stats.logLine("warning: file metadata missing: title={s}\n", .{title});
+            return error.NotImplemented;
+        };
         return get(self.provider.ctx, title);
     }
 
@@ -8221,4 +8224,73 @@ test "stored redirect identity errors cross invoke envelopes without semantic fa
             try std.testing.expect(expander.host.page_identity_failure == null);
         }
     }
+}
+
+test "normal file metadata host bridge retains absent provider title and original error" {
+    const linux = std.os.linux;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 0, 0);
+    defer runtime.deinit();
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 0, .mw_slot = 0,
+        .provider = .{ .ctx = null, .get = TestProvider.get } };
+    expander.attach();
+    var fds: [2]linux.fd_t = undefined;
+    if (linux.errno(linux.pipe2(&fds, .{ .CLOEXEC = true })) != .SUCCESS) return error.DiagnosticTestPipeFailed;
+    defer _ = linux.close(fds[0]);
+    defer _ = linux.close(fds[1]);
+    const saved_raw = linux.dup(2);
+    if (linux.errno(saved_raw) != .SUCCESS) return error.DiagnosticTestDupFailed;
+    const saved: linux.fd_t = @intCast(saved_raw);
+    defer _ = linux.close(saved);
+    var redirected = false;
+    defer if (redirected) { _ = linux.dup2(saved, 2); };
+    if (linux.errno(linux.dup2(fds[1], 2)) != .SUCCESS) return error.DiagnosticTestDupFailed;
+    redirected = true;
+    const title = "קובץ:צליל & exact.ogg";
+    try std.testing.expectError(error.NotImplemented, expander.host.file_metadata.?(expander.host.ctx, title));
+    if (linux.errno(linux.dup2(saved, 2)) != .SUCCESS) return error.DiagnosticTestDupFailed;
+    redirected = false;
+    // One bounded synchronous diagnostic is already available; no EOF wait.
+    var ready = [_]std.posix.pollfd{.{ .fd = fds[0], .events = std.posix.POLL.IN, .revents = 0 }};
+    if (try std.posix.poll(&ready, 5_000) == 0) return error.DiagnosticTestTimeout;
+    var buffer: [4096]u8 = undefined;
+    const count = linux.read(fds[0], &buffer, buffer.len);
+    if (linux.errno(count) != .SUCCESS) return error.DiagnosticTestReadFailed;
+    const expected = try std.fmt.allocPrint(arena.allocator(), "pid={d} warning: file metadata missing: title={s}\n", .{ linux.getpid(), title });
+    try std.testing.expectEqualStrings(expected, buffer[0..count]);
+    try std.testing.expectError(error.MissingWikitextHost, Expander.hostFileMetadata(null, title));
+}
+
+test "normal file metadata host bridge preserves positive negative and provider errors" {
+    const Probe = struct {
+        calls: usize = 0,
+        fn file(raw: ?*anyopaque, title: []const u8) !Provider.FileMetadata {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            self.calls += 1;
+            if (std.mem.eql(u8, title, "File:Present.ogg")) return .{ .exists = true, .width = 42, .height = 24, .media_type = .AUDIO, .canonical_title = "File:Canonical.ogg" };
+            if (std.mem.eql(u8, title, "File:Absent.ogg")) return .{ .exists = false };
+            return error.FileMetadataSnapshotMissing;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 0, 0);
+    defer runtime.deinit();
+    var probe: Probe = .{};
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 0, .mw_slot = 0,
+        .provider = .{ .ctx = &probe, .get = TestProvider.get, .file_metadata = Probe.file } };
+    expander.attach();
+    const get = expander.host.file_metadata.?;
+    const positive = try get(expander.host.ctx, "File:Present.ogg");
+    try std.testing.expect(positive.exists);
+    try std.testing.expectEqual(@as(u32, 42), positive.width);
+    try std.testing.expectEqual(@as(u32, 24), positive.height);
+    try std.testing.expect(positive.media_type.? == .AUDIO);
+    try std.testing.expectEqualStrings("File:Canonical.ogg", positive.canonical_title.?);
+    const negative = try get(expander.host.ctx, "File:Absent.ogg");
+    try std.testing.expect(!negative.exists);
+    try std.testing.expect(negative.media_type == null and negative.canonical_title == null);
+    try std.testing.expectError(error.FileMetadataSnapshotMissing, get(expander.host.ctx, "File:Unknown.ogg"));
+    try std.testing.expectEqual(@as(usize, 3), probe.calls);
 }

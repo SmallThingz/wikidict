@@ -2873,6 +2873,11 @@ const HeadingSourceAlias = struct { copied: []const u8, original: []const u8 };
 const HeadingSourceCopy = struct { start: usize, original: []const u8 };
 const CitationLocal = struct { plan: *const CitationPlan, indices: []?usize };
 
+const InlineSourceDomain = struct {
+    source: []const u8,
+    parent: ?*const InlineSourceDomain,
+};
+
 pub const Renderer = struct {
     heading_source: ?[]const u8 = null,
     // Enabled only by the full-page heading observation, never by a reader.
@@ -2884,6 +2889,7 @@ pub const Renderer = struct {
     // their explicit copy builder supplied a new map. Never a pointer registry.
     body_missing: ?MissingText = null,
     inline_missing: ?MissingText = null,
+    inline_source_domain: ?*const InlineSourceDomain = null,
     heading_source_aliases: std.ArrayList(HeadingSourceAlias) = .empty,
     rendered_templates: usize = 0,
     unresolved_templates: usize = 0,
@@ -7033,8 +7039,8 @@ pub const Renderer = struct {
         var scan: usize = 0;
         var opaque_scan: syntax.OpaqueScan = .{};
         // Raw template arguments retain modifier syntax until their existing
-        // handlers consume it. The colon-angle recovery applies only outside
-        // complete template/parameter scopes; legacy angle handling is unchanged.
+        // handlers consume it. Complete unknown-name recovery applies only
+        // outside these scopes; known-tag and extension dispatch is unchanged.
         const boundaries = QuoteBoundaries.init(input);
         var template_end: usize = 0;
         // Lookahead must not publish opaque misses into the earlier angle scan.
@@ -7077,26 +7083,10 @@ pub const Renderer = struct {
                 scan = tag.end;
             } else {
                 scan = at + 1;
-                if (at >= template_end) if (colonHtmlNameEnd(input, at)) |end| {
+                if (at >= template_end) if (completeUnknownHtmlTokenEnd(input, at)) |end| {
                     literal_end = end;
                     self.fallbacks.literal_markup = true;
                 };
-                if (at >= template_end) if (quotedColonProseEnd(input, at)) |end| {
-                    literal_end = end;
-                    self.fallbacks.literal_markup = true;
-                };
-                if (at >= template_end) if (dottedHtmlNameEnd(input, at)) |end| {
-                    literal_end = end;
-                    self.fallbacks.literal_markup = true;
-                };
-                if (at >= template_end) if (underscoreShortHtmlNameEnd(input, at)) |end| {
-                    literal_end = end;
-                    self.fallbacks.literal_markup = true;
-                };
-                if (doubleQuotedHtmlNameEnd(input, at)) |end| {
-                    literal_end = end;
-                    self.fallbacks.literal_markup = true;
-                }
                 const rest = input[at..];
                 // Exactly the adjacent-slash boundary refused by the scanner.
                 if (rest.len > "<nowiki/".len and std.ascii.startsWithIgnoreCase(rest, "<nowiki/") and rest["<nowiki/".len] != '>') {
@@ -7123,137 +7113,61 @@ pub const Renderer = struct {
         try out.appendSlice(self.a, tracked, emitted, input.len);
         return try out.finish(self.a);
     }
-    // A complete, attribute-free colon name cannot identify an HTML element:
-    // tagAt requires whitespace, slash or '>' after its ASCII name. Preserve
-    // its angles as authored literals without splitting the surrounding inline
-    // link/quote stream. Deliberately exclude attributes, URLs and partial names.
-    fn colonHtmlNameEnd(input: []const u8, at: usize) ?usize {
+    // Recover a complete unknown atomic name; the caller owns protected/template domains.
+    // MediaWiki REL1_43 Sanitizer::ELEMENT_BITS_REGEX supplies the atomic boundary;
+    // established protocol and terminal-dot domains remain outside this recovery.
+    fn completeUnknownHtmlTokenEnd(input: []const u8, at: usize) ?usize {
         if (at >= input.len or input[at] != '<') return null;
+        var preceding = at;
+        while (preceding != 0) {
+            preceding -= 1;
+            if (input[preceding] == '<') return null;
+            if (input[preceding] == '>') break;
+        }
         var cursor = at + 1;
         if (cursor < input.len and input[cursor] == '/') cursor += 1;
         const name_start = cursor;
+        // A quote-leading unknown angle form fails the upstream element regex and
+        // is escaped there as text. Keep earned BR quote-phase behavior explicitly.
+        while (cursor < input.len and input[cursor] == '\'') : (cursor += 1) {}
         if (cursor >= input.len or !std.ascii.isAlphabetic(input[cursor])) return null;
-        while (cursor < input.len and (std.ascii.isAlphanumeric(input[cursor]) or input[cursor] == '-')) : (cursor += 1) {}
-        if (cursor >= input.len or input[cursor] != ':') return null;
-        if (ir.hasExternalProtocolScheme(input[name_start..cursor])) return null;
-        cursor += 1;
-        const suffix_start = cursor;
-        while (cursor < input.len) {
-            const ch = input[cursor];
-            if (ch == '>') return if (cursor > suffix_start) cursor + 1 else null;
-            if (ch < 0x80) {
-                if (!std.ascii.isAlphanumeric(ch) and ch != '-') return null;
-                cursor += 1;
-                continue;
-            }
-            const width = std.unicode.utf8ByteSequenceLength(ch) catch return null;
-            if (width > input.len - cursor) return null;
-            const cp = std.unicode.utf8Decode(input[cursor .. cursor + width]) catch return null;
-            // Keep Unicode whitespace/control spellings outside this finite
-            // recovery, just as ASCII attribute separators are excluded above.
-            if (cp <= 0x00a0 or cp == 0x1680 or (cp >= 0x2000 and cp <= 0x200f) or
-                (cp >= 0x2028 and cp <= 0x202f) or (cp >= 0x205f and cp <= 0x206f) or
-                cp == 0x3000 or cp == 0xfeff or cp == 0xfffd) return null;
-            cursor += width;
-        }
-        return null;
-    }
-    // An unregistered colon name followed by quoted prose is escaped by the
-    // sanitizer. Protect only its raw angle boundaries; quotes and wiki actions
-    // in the prose remain in the surrounding inline parser domain.
-    fn quotedColonProseEnd(input: []const u8, at: usize) ?usize {
-        if (at >= input.len or input[at] != '<') return null;
-        var cursor = at + 1;
-        const name_start = cursor;
-        if (cursor >= input.len or !std.ascii.isAlphabetic(input[cursor])) return null;
-        while (cursor < input.len and (std.ascii.isAlphanumeric(input[cursor]) or input[cursor] == '-')) : (cursor += 1) {}
-        if (cursor >= input.len or input[cursor] != ':') return null;
-        const name = input[name_start..cursor];
-        if (recognizedInlineHtmlName(name) or ir.hasExternalProtocolScheme(name)) return null;
-        cursor += 1;
-        while (cursor < input.len and (input[cursor] == ' ' or input[cursor] == '\t')) : (cursor += 1) {}
-        if (cursor >= input.len or (input[cursor] != '\'' and input[cursor] != '"')) return null;
-        const quote = input[cursor];
-        cursor += 1;
-        const end = std.mem.indexOfAnyPos(u8, input, cursor, "<>\r\n") orelse return null;
-        if (input[end] != '>' or std.mem.indexOfScalar(u8, input[cursor..end], quote) == null) return null;
-        return end + 1;
-    }
-
-    // A complete attribute-free dotted name is not an HTML element. Preserve
-    // only its authored angle boundaries; label actions and quote styles keep
-    // their ordinary parser domain. No URL, attribute or incomplete recovery.
-    fn dottedHtmlNameEnd(input: []const u8, at: usize) ?usize {
-        if (at >= input.len or input[at] != '<') return null;
-        var cursor = at + 1;
-        if (cursor < input.len and input[cursor] == '/') cursor += 1;
-        if (cursor >= input.len or !std.ascii.isAlphabetic(input[cursor])) return null;
-        var dotted = false;
-        while (cursor < input.len) {
-            if (!std.ascii.isAlphanumeric(input[cursor])) return null;
-            while (cursor < input.len and (std.ascii.isAlphanumeric(input[cursor]) or input[cursor] == '-')) : (cursor += 1) {}
-            if (input[cursor - 1] == '-' or cursor == input.len) return null;
-            if (input[cursor] == '>') return if (dotted) cursor + 1 else null;
-            if (input[cursor] != '.') return null;
-            dotted = true;
-            cursor += 1;
-        }
-        return null;
-    }
-
-    // A complete self-closing underscore name is not a registered HTML or
-    // extension name. Preserve its angles, not an invented reference or opaque
-    // attribute region; interior wiki actions keep the ordinary inline phases.
-    // MediaWiki Sanitizer::ELEMENT_BITS_REGEX includes '_' in the atomic name.
-    fn underscoreShortHtmlNameEnd(input: []const u8, at: usize) ?usize {
-        if (at >= input.len or input[at] != '<') return null;
-        var cursor = at + 1;
-        const name_start = cursor;
-        if (cursor >= input.len or !std.ascii.isAlphabetic(input[cursor])) return null;
-        while (cursor < input.len and (std.ascii.isAlphanumeric(input[cursor]) or input[cursor] == '-')) : (cursor += 1) {}
-        if (cursor >= input.len or input[cursor] != '_') return null;
-        cursor += 1;
-        const suffix_start = cursor;
-        while (cursor < input.len) {
-            const ch = input[cursor];
-            if (ch < 0x80) {
-                if (!std.ascii.isAlphanumeric(ch) and ch != '-' and ch != '_') break;
-                cursor += 1;
-                continue;
-            }
-            const width = std.unicode.utf8ByteSequenceLength(ch) catch return null;
-            if (width > input.len - cursor) return null;
-            const cp = std.unicode.utf8Decode(input[cursor .. cursor + width]) catch return null;
-            if (cp <= 0x00a0 or cp == 0x1680 or (cp >= 0x2000 and cp <= 0x200f) or
-                (cp >= 0x2028 and cp <= 0x202f) or (cp >= 0x205f and cp <= 0x206f) or
-                cp == 0x3000 or cp == 0xfeff or cp == 0xfffd) return null;
-            cursor += width;
-        }
-        if (cursor == suffix_start or recognizedInlineHtmlName(input[name_start..cursor])) return null;
-        if (cursor >= input.len or (input[cursor] != ' ' and input[cursor] != '\t' and input[cursor] != '/')) return null;
-        const end = std.mem.indexOfAnyPos(u8, input, cursor, "<>\r\n\x00\x0b\x0c") orelse return null;
-        if (input[end] != '>' or end == cursor or input[end - 1] != '/') return null;
-        return end + 1;
-    }
-
-    // Double quotes are part of the sanitizer's atomic name, not attributes.
-    // Such names cannot identify HTML elements. Keep this finite recovery free
-    // of attributes and apostrophes, which need their own quote-phase proof.
-    fn doubleQuotedHtmlNameEnd(input: []const u8, at: usize) ?usize {
-        var cursor = at + 1;
-        if (cursor < input.len and input[cursor] == '/') cursor += 1;
-        if (cursor >= input.len or !std.ascii.isAlphabetic(input[cursor])) return null;
-        var quoted = false;
         while (cursor < input.len) : (cursor += 1) {
             const ch = input[cursor];
-            if (std.ascii.isAlphanumeric(ch) or ch == '-') continue;
-            if (ch == '"') {
-                quoted = true;
-                continue;
-            }
-            return if (ch == '>' and quoted) cursor + 1 else null;
+            if (ch == '<' or ch == 0 or ch == '\r' or ch == '\n' or ch == 0x0b or ch == 0x0c) return null;
+            if (ch == ' ' or ch == '\t' or ch == '/' or ch == '>') break;
         }
-        return null;
+        if (cursor == input.len) return null;
+        const name = input[name_start..cursor];
+        // Ordinary ASCII names already belong to tagAt and its existing dispatch,
+        // including table/extension and ordinary unknown-attribute handling.
+        if (ordinaryHtmlName(name)) return null;
+        if (!std.unicode.utf8ValidateSlice(name) or recognizedInlineHtmlName(name) or oneOf(name, &.{ "a", "img" })) return null;
+        // Terminal-dot names retain their existing ordinary-nonaction proof, which
+        // deliberately differs from this pre-quote complete-token provenance.
+        if (std.mem.endsWith(u8, name, ".")) return null;
+        const protocol_end = std.mem.indexOfScalar(u8, name, ':') orelse name.len;
+        if (ir.hasExternalProtocolScheme(name[0..protocol_end])) return null;
+        // Unknown names have no recognized attribute owner. Preserve the suffix
+        // verbatim until the first raw >; its wiki quote/actions run normally later.
+        while (cursor < input.len and input[cursor] != '>') : (cursor += 1) {
+            const ch = input[cursor];
+            if (ch == '<' or ch == 0 or ch == '\r' or ch == '\n' or ch == 0x0b or ch == 0x0c) return null;
+        }
+        if (cursor == input.len) return null;
+        const token = input[at + 1 .. cursor];
+        if (!std.unicode.utf8ValidateSlice(token)) return null;
+        // Retain existing conservative control/format-space exclusions rather than
+        // giving malformed Unicode new literal authority during consolidation.
+        var byte: usize = 0;
+        while (byte < token.len) {
+            const width = std.unicode.utf8ByteSequenceLength(token[byte]) catch return null;
+            const cp = std.unicode.utf8Decode(token[byte .. byte + width]) catch return null;
+            if ((cp < 0x20 and cp != '\t') or (cp >= 0x7f and cp <= 0x00a0) or cp == 0x1680 or
+                (cp >= 0x2000 and cp <= 0x200f) or (cp >= 0x2028 and cp <= 0x202f) or
+                (cp >= 0x205f and cp <= 0x206f) or cp == 0x3000 or cp == 0xfeff or cp == 0xfffd) return null;
+            byte += width;
+        }
+        return cursor + 1;
     }
     // A complete unregistered alphabetic abbreviation ending in one dot is
     // authored text, not an HTML tag. Use only in ordinary parsed nonaction
@@ -7862,6 +7776,45 @@ pub const Renderer = struct {
             try self.text(trail, nonaction);
         }
     }
+    // Quote normalization precedes external links. A formatting boundary
+    // between '[' and a bare URL rejects only the bracketed wrapper.
+    fn formattingInterruptedExternalOpener(input: []const u8, start: usize) bool {
+        if (start >= input.len or input[start] != '[' or (start != 0 and input[start - 1] == '[')) return false;
+        var cursor = start + 1;
+        var boundaries: usize = 0;
+        while (cursor < input.len and input[cursor] == '<' and boundaries < 4) {
+            const tag = syntax.tagAt(input, cursor) orelse return false;
+            if (tag.self_closing or !oneOf(tag.name, &.{ "i", "b" }) or tag.attrs.len != 0) return false;
+            cursor = tag.end;
+            boundaries += 1;
+        }
+        if (boundaries == 0 or cursor == input.len or starts(input[cursor..], "//")) return false;
+        var child: ir.InlineIterator = .{ .input = input[cursor..], .renderer_boundaries = true };
+        const token = child.next() orelse return false;
+        return token.kind == .external_link and token.target.len != 0 and
+            std.mem.eql(u8, token.text, token.target);
+    }
+
+    fn formattingInterruptedExternalInDomain(self: *const Renderer, input: []const u8, start: usize) bool {
+        if (start >= input.len or input[start] != '[') return false;
+        var domain = self.inline_source_domain;
+        var remaining: usize = max_depth + 1;
+        while (domain) |current| {
+            if (remaining == 0) return false;
+            remaining -= 1;
+            const base = @intFromPtr(current.source.ptr);
+            const child = @intFromPtr(input.ptr);
+            if (child >= base) {
+                const relative = child - base;
+                if (relative <= current.source.len and input.len <= current.source.len - relative) {
+                    if (formattingInterruptedExternalOpener(current.source, relative + start)) return true;
+                }
+            }
+            domain = current.parent;
+        }
+        return false;
+    }
+
     // A newline ends a bracketed external label. Prove its later literal
     // closer in the same plain run before giving only the orphan '[' origin.
     // Stop at the next opener/domain, so failed candidates never rescan it.
@@ -7904,6 +7857,12 @@ pub const Renderer = struct {
         defer self.context.external_links_prepared = numbering_before;
         const prepared_missing = try self.literalHtmlAnglesSourceWithMissing(if (self.navigation_target_probe != null) numbered else try self.externalSourceControlsWithMissing(try self.prepareUnmatchedOpaqueWithMissing(numbered)));
         const input = prepared_missing.bytes;
+        // Matched formatting bodies borrow slices of this normalized source.
+        // Keep its lookahead available while nested bodies are parsed, and
+        // restore it before this stack frame or its source can be released.
+        const source_domain: InlineSourceDomain = .{ .source = input, .parent = self.inline_source_domain };
+        self.inline_source_domain = &source_domain;
+        defer self.inline_source_domain = source_domain.parent;
         const previous_missing = self.inline_missing;
         self.inline_missing = prepared_missing;
         defer self.inline_missing = previous_missing;
@@ -8081,7 +8040,9 @@ pub const Renderer = struct {
                 it.cursor += 2;
                 continue;
             }
-            if (s.provenance == .parsed and it.recognize_external_links and closedNewlineExternalOpener(input, it.cursor)) {
+            if (s.provenance == .parsed and it.recognize_external_links and
+                (self.formattingInterruptedExternalInDomain(input, it.cursor) or closedNewlineExternalOpener(input, it.cursor)))
+            {
                 try self.protectedLiteral("[", s);
                 self.fallbacks.literal_markup = true;
                 it.cursor += 1;
@@ -8116,7 +8077,19 @@ pub const Renderer = struct {
             s.bold = token.bold;
             s.italic = token.italic;
             switch (token.kind) {
-                .text => if (token.rejected_external_opener and s.provenance == .parsed) {
+                .text => if (s.provenance == .parsed and it.recognize_external_links and
+                    token.text.len != 0 and it.cursor <= input.len and token.text.len <= it.cursor and
+                    token.text.ptr == input[it.cursor - token.text.len .. it.cursor].ptr and
+                    token.text[token.text.len - 1] == '[' and
+                    self.formattingInterruptedExternalInDomain(input, it.cursor - 1))
+                {
+                    // next() may consume emphasis before returning this text.
+                    // Its endpoint and exact borrowed slice prove only the raw
+                    // bracket; formatting transitions keep their ordinary state.
+                    _ = try self.plainWithMagicLinks(token.text[0 .. token.text.len - 1], s, "");
+                    try self.protectedLiteral("[", s);
+                    self.fallbacks.literal_markup = true;
+                } else if (token.rejected_external_opener and s.provenance == .parsed) {
                     try self.protectedLiteral(token.text, s);
                     self.fallbacks.literal_markup = true;
                 } else if (token.empty_target_link and s.provenance == .parsed) {
@@ -8606,6 +8579,9 @@ pub const Renderer = struct {
         return self.parseSpansWithMissing(MissingText.untracked(source), style);
     }
     pub fn parseSpansWithMissing(self: *Renderer, tracked: MissingText, style: Style) Error![]const Span {
+        const previous_source_domain = self.inline_source_domain;
+        self.inline_source_domain = null;
+        defer self.inline_source_domain = previous_source_domain;
         const previous_citations = self.context.citations;
         defer self.context.citations = previous_citations;
         const numbered_missing = try self.prepareNumberedWithMissing(tracked, style);
@@ -9955,9 +9931,15 @@ pub const Renderer = struct {
                 null;
             const table_line = noinclude_table_line orelse clean;
             const table_indent: ?[]const u8 = if (anchored_inline) null else wikiTableIndent(table_line);
+            // A root includeonly body is hidden before its internal physical
+            // headings/tables can become independent blocks. Match the original
+            // remaining source, not this opening-only logical line.
+            const hidden_include_root = !anchored_inline and !self.pre_block and !self.parsed_pre and
+                !link_label_scope and !self.in_reference and self.body_link_target.len == 0;
             const html_tag = if (noinclude_table_line != null) null else if (try self.semanticTagAt(clean, 0)) |tag| (if (!tag.closing and
-                (oneOf(tag.name, &.{ "table", "div", "blockquote", "p", "ul", "ol", "dl", "center", "noinclude" }) or htmlHeadingLevel(tag) != null) and
-                blockWrapperPair(if (tag.is("p")) input[@intFromPtr(clean.ptr) - @intFromPtr(input.ptr) ..] else clean, tag, self.behaviorControlMatcher()) != null) tag else null) else null;
+                (oneOf(tag.name, &.{ "table", "div", "blockquote", "p", "ul", "ol", "dl", "center", "noinclude" }) or
+                    (hidden_include_root and tag.is("includeonly")) or htmlHeadingLevel(tag) != null) and
+                blockWrapperPair(if (tag.is("p") or tag.is("includeonly")) input[@intFromPtr(clean.ptr) - @intFromPtr(input.ptr) ..] else clean, tag, self.behaviorControlMatcher()) != null) tag else null) else null;
             const protected_tag = if (try self.semanticTagAt(clean, 0)) |tag| (if (!tag.closing and
                 (tag.is("pre") or tag.is("source") or tag.is("syntaxhighlight"))) tag else null) else null;
             // Horizontal rules precede behavior-control removal and require an
@@ -10135,9 +10117,11 @@ pub const Renderer = struct {
                 // Logical lines stop at the ordinary HTML pair. A DIV/table
                 // crossing must be proved against the remaining source, and
                 // every pair-relative slice must use that same source domain.
-                const wrapper_source = if (tag.is("div") or tag.is("p")) input[@intFromPtr(clean.ptr) - @intFromPtr(input.ptr) ..] else clean;
+                const wrapper_source = if (tag.is("div") or tag.is("p") or tag.is("includeonly")) input[@intFromPtr(clean.ptr) - @intFromPtr(input.ptr) ..] else clean;
                 const pair = blockWrapperPair(wrapper_source, tag, self.behaviorControlMatcher()).?;
-                if (try self.htmlDisplayNone(tag)) {
+                if (tag.is("includeonly")) {
+                    // Do not render or register effects from an excluded body.
+                } else if (try self.htmlDisplayNone(tag)) {
                     if (body_quotes == null) body_quotes = QuoteBoundaryScan.initWithContext(input, initial_quote, self.context);
                     try self.observeHiddenHtml(input, origin, @intFromPtr(wrapper_source.ptr) - @intFromPtr(input.ptr), tag, pair);
                     try self.consumeHiddenHtml(wrapper_source[tag.end..pair.inner_end], self.bodyFormattingStyle(.{}), self.body_depth);
@@ -30480,33 +30464,25 @@ test "quoted colon prose keeps literal angles and ordinary quote and link phases
         if (std.mem.indexOf(u8, span.text, "italic") != null) italic = span.flags.italic;
     }
     try std.testing.expect(linked and italic);
-    for ([_][]const u8{ "<ref:'word'>", "<span: 'word'>", "<https:'word'>", "<Usage:'word", "<Usage:'word\n'>", "<Usage:'word'<b>x</b>>", "<Usage:plain prose>" }) |source|
-        try std.testing.expect(Renderer.quotedColonProseEnd(source, 0) == null);
+    // Complete unknown names are no longer excluded merely for a known prefix.
+    for ([_][]const u8{ "<ref:'word'>", "<span: 'word'>", "<Usage:plain prose>" }) |source|
+        try std.testing.expectEqual(@as(?usize, source.len), Renderer.completeUnknownHtmlTokenEnd(source, 0));
+    for ([_][]const u8{ "<https:'word'>", "<Usage:'word", "<Usage:'word\n'>", "<Usage:'word'<b>x</b>>" }) |source|
+        try std.testing.expect(Renderer.completeUnknownHtmlTokenEnd(source, 0) == null);
 }
 
-test "colon angle recovery excludes attributes URLs and incomplete names" {
-    for ([_][]const u8{ "<tr:āg>", "</tr:āg>", "<custom:term>", "</custom:term>" }) |source|
-        try std.testing.expectEqual(@as(?usize, source.len), Renderer.colonHtmlNameEnd(source, 0));
+test "complete atomic recovery preserves protocol Unicode and incomplete boundary exclusions" {
     for ([_][]const u8{
-        "<tr>",                   "</tr>",                   "<span>",          "<tr:>",          "</tr:>",
-        "<tr:āg",
-        "</tr:āg",
-        "<tr:āg title=x>",
-        "</tr:āg title=x>",
-        "<tr:āg'word>",
-        "</tr:āg'word>",
-        "<tr:āg\"word>",
-        "<tr:āg/> options",
-        "</tr:āg/>",
-        "<https://example.test>", "</https://example.test>", "<http:broken>",   "</http:broken>", "<HTTP:broken>",
-        "</HTTP:broken>",         "<https:broken>",          "</https:broken>", "<mailto:word>",  "</mailto:word>",
-        "<MAILTO:word>",          "</MAILTO:word>",
-        "<tr:āg\n>",
-        "<tr:āg >",
-        "<tr:āg[[Target]]>",
-        "<tr:āg&amp;x>",
-        "<tr:āg:more>",
-    }) |source| try std.testing.expect(Renderer.colonHtmlNameEnd(source, 0) == null);
+        "<tr:āg>", "</tr:āg>", "<custom:term>", "</custom:term>", "<tr:>", "</tr:>",
+        "<tr:āg title=x>", "</tr:āg title=x>", "<tr:āg'word>", "</tr:āg'word>",
+        "<tr:āg\"word>", "<tr:āg/>", "</tr:āg/>", "<tr:āg[[Target]]>", "<tr:āg&amp;x>", "<tr:āg:more>",
+    }) |source| try std.testing.expectEqual(@as(?usize, source.len), Renderer.completeUnknownHtmlTokenEnd(source, 0));
+    for ([_][]const u8{
+        "<tr>", "</tr>", "<span>", "<tr:āg", "</tr:āg",
+        "<https://example.test>", "</https://example.test>", "<http:broken>", "</http:broken>", "<HTTP:broken>",
+        "</HTTP:broken>", "<https:broken>", "</https:broken>", "<mailto:word>", "</mailto:word>",
+        "<MAILTO:word>", "</MAILTO:word>", "<tr:āg\n>", "<tr:āg >",
+    }) |source| try std.testing.expect(Renderer.completeUnknownHtmlTokenEnd(source, 0) == null);
 }
 
 test "escaped unknown tags preserve whole inline quote and link domains" {
@@ -33186,10 +33162,10 @@ test "complete dotted source names preserve external label provenance and styles
     var dotted_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer dotted_arena.deinit();
     const dotted_a = dotted_arena.allocator();
-    for ([_][]const u8{ "<nisanyansozluk.com>", "</example.test>", "<sub.example-test2.test>" }) |dotted_source|
-        try std.testing.expectEqual(@as(?usize, dotted_source.len), Renderer.dottedHtmlNameEnd(dotted_source, 0));
-    for ([_][]const u8{ "<b>", "<ref>", "<a.>", "<.a>", "<a..b>", "<a-.b>", "<a.b", "<a.b x='y'>", "<a.b/>", "<https://example.test>", "<a.b\n>", "<a.b[child]>" }) |dotted_source|
-        try std.testing.expectEqual(@as(?usize, null), Renderer.dottedHtmlNameEnd(dotted_source, 0));
+    for ([_][]const u8{ "<nisanyansozluk.com>", "</example.test>", "<sub.example-test2.test>", "<a..b>", "<a-.b>", "<a.b x='y'>", "<a.b/>", "<a.b[child]>" }) |dotted_source|
+        try std.testing.expectEqual(@as(?usize, dotted_source.len), Renderer.completeUnknownHtmlTokenEnd(dotted_source, 0));
+    for ([_][]const u8{ "<b>", "<ref>", "<a.>", "<.a>", "<a.b", "<https://example.test>", "<a.b\n>" }) |dotted_source|
+        try std.testing.expectEqual(@as(?usize, null), Renderer.completeUnknownHtmlTokenEnd(dotted_source, 0));
     var dotted_renderer: Renderer = .{ .a = dotted_a, .context = .{} };
     const dotted_spans = try dotted_renderer.parseSpans("<b>[http://www.nisanyansozluk.com ''<nisanyansozluk.com>'']</b>", .{});
     try std.testing.expectEqualStrings("<nisanyansozluk.com>", try flattened(dotted_a, dotted_spans));
@@ -33485,8 +33461,8 @@ test "terminal dot abbreviation proof is confined to parsed nonaction text" {
         try std.testing.expect(Renderer.terminalDotUnregisteredHtmlNameEnd(hr_dot_source, 0) == null);
     try std.testing.expect(Renderer.terminalDotUnregisteredHtmlNameEnd("<<Sv.>>", 1) == null);
     try std.testing.expect(Renderer.terminalDotUnregisteredHtmlNameEnd("<broken <Sv.>", 8) == null);
-    // The old domain-name helper and its explicitly retained negative are unchanged.
-    try std.testing.expect(Renderer.dottedHtmlNameEnd("<a.>", 0) == null);
+    // The pre-quote atomic handler leaves this ordinary-nonaction domain alone.
+    try std.testing.expect(Renderer.completeUnknownHtmlTokenEnd("<a.>", 0) == null);
     var hr_dot_renderer: Renderer = .{ .a = hr_dot_a, .context = .{} };
     const hr_dot_spans = try hr_dot_renderer.parseSpans("''(<Sv.> 4.)'' [[Child|kept]]", .{});
     try std.testing.expectEqualStrings("(<Sv.> 4.) kept", try flattened(hr_dot_a, hr_dot_spans));
@@ -33645,11 +33621,12 @@ test "underscore short unknown tags preserve literal angles and independent inli
 test "underscore short name proof excludes real references incomplete tokens and nested angles" {
     for ([_][]const u8{
         "<ref name=n/>", "<ref>note</ref>", "<nowiki/>", "<script/>",
-        "<ref_/>", "<ref_custom>", "</ref_custom>", "<ref_custom", "<ref_custom\n/>",
+        "<ref_custom", "<ref_custom\n/>",
         "<ref_custom note=<span>/>", "<ref_custom\x00/>", "<ref_\xff/>",
-        "<ref_\xe2\x80\x8b/>", "<ref_custom:other/>", "<https://example.test/>",
-    }) |source| try std.testing.expect(Renderer.underscoreShortHtmlNameEnd(source, 0) == null);
-    try std.testing.expectEqual(@as(?usize, 9), Renderer.underscoreShortHtmlNameEnd("<x_name/>", 0));
+        "<ref_\xe2\x80\x8b/>", "<https://example.test/>",
+    }) |source| try std.testing.expect(Renderer.completeUnknownHtmlTokenEnd(source, 0) == null);
+    for ([_][]const u8{ "<x_name/>", "<ref_/>", "<ref_custom>", "</ref_custom>", "<ref_custom:other/>" }) |source|
+        try std.testing.expectEqual(@as(?usize, source.len), Renderer.completeUnknownHtmlTokenEnd(source, 0));
     // A valid supported reference and protected text retain their own semantics.
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -33668,4 +33645,369 @@ test "underscore short name proof excludes real references incomplete tokens and
         try std.testing.expectEqualStrings(source, prepared.bytes);
         try std.testing.expect(!scoped.fallbacks.literal_markup);
     }
+}
+
+
+test "quote interrupted external opener keeps literal bracket and independent URL" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "[''https://example.test ]", "''before [''https://example.test ] after [[Child]]", "[<i>https://example.test ]</i>" }) |source| {
+        errdefer std.debug.print("interrupted external opener case: {s}\n", .{source});
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(source, .{});
+        var literals: usize = 0;
+        for (spans) |span| if (std.mem.eql(u8, span.text, "[") and span.provenance == .protected_literal and span.kind == .text and span.target.len == 0) { literals += 1; };
+        try std.testing.expectEqual(@as(usize, 1), literals);
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .external_link, "https://example.test"));
+        if (std.mem.indexOf(u8, source, "[[Child]]") != null) try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "Child"));
+        try std.testing.expect(renderer.fallbacks.literal_markup);
+        const blocks = try renderer.renderBody(source);
+        _ = try FormattingScopeTest.encode(a, &renderer, blocks);
+    }
+    for ([_][]const u8{ "[https://example.test label]", "<nowiki>[''https://example.test ]</nowiki>", "&#91;''https://example.test ]" }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        _ = try renderer.parseSpans(source, .{});
+        try std.testing.expect(!renderer.fallbacks.literal_markup);
+    }
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("[https://example.test unfinished"));
+    try std.testing.expect(!Renderer.formattingInterruptedExternalOpener("[<i>{{unresolved}} ]", 0));
+    var empty_host: ir.InlineIterator = .{ .input = "https:// ]", .renderer_boundaries = true };
+    const empty_token = empty_host.next() orelse return error.TestUnexpectedResult;
+    try std.testing.expect(empty_token.kind != .external_link);
+    try std.testing.expect(!Renderer.formattingInterruptedExternalOpener("[<i>https:// ]", 0));
+    for ([_][]const u8{ "[[<i>https://example.test ]]", "[[''https://example.test ]]", "[<i class=x>https://example.test ]", "[<b title=x>https://example.test ]", "[<i><b></b></i><i>https://example.test ]" }) |source| {
+        try std.testing.expect(!Renderer.formattingInterruptedExternalOpener(source, 0));
+        if (starts(source, "[[")) try std.testing.expect(!Renderer.formattingInterruptedExternalOpener(source, 1));
+    }
+    for ([_][]const u8{ "[[<i>https://example.test ]]", "[[''https://example.test ]]" }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(source, .{});
+        for (spans) |span| try std.testing.expect(!(span.provenance == .protected_literal and std.mem.eql(u8, span.text, "[")));
+    }
+}
+
+
+test "apostrophe angle tokens preserve provenance across wiki quotes and actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, reference: []const u8 }{
+        .{ .source = "<br''>tail'' [[Target|link]]", .reference = "&lt;br''&gt;tail'' [[Target|link]]" },
+        .{ .source = "''before''<bR''>tail'' [[Target|link]]", .reference = "''before''&lt;bR''&gt;tail'' [[Target|link]]" },
+        .{ .source = "<custom'word> [[Target|link]]", .reference = "&lt;custom'word&gt; [[Target|link]]" },
+        .{ .source = "<x'''y>bold''' [[Target|link]]", .reference = "&lt;x'''y&gt;bold''' [[Target|link]]" },
+        .{ .source = "<x'''''>both''''' [[Target|link]]", .reference = "&lt;x'''''&gt;both''''' [[Target|link]]" },
+        .{ .source = "</x''>tail'' [[Target|link]]", .reference = "&lt;/x''&gt;tail'' [[Target|link]]" },
+        .{ .source = "<''skouer''> [[Target|link]]", .reference = "&lt;''skouer''&gt; [[Target|link]]" },
+        .{ .source = "<'''sample'''> [[Target|link]]", .reference = "&lt;'''sample'''&gt; [[Target|link]]" },
+        .{ .source = "[[Target|<br''>label'']]", .reference = "[[Target|&lt;br''&gt;label'']]" },
+        .{ .source = "[https://example.org <br''>label''] [[Target|link]]", .reference = "[https://example.org &lt;br''&gt;label''] [[Target|link]]" },
+    };
+    for (cases) |case| {
+        var actual: Renderer = .{ .a = a, .context = .{} };
+        var reference: Renderer = .{ .a = a, .context = .{} };
+        const spans = try actual.parseSpans(case.source, .{});
+        const expected = try reference.parseSpans(case.reference, .{});
+        try std.testing.expectEqualDeep(expected, spans);
+        try std.testing.expect(actual.fallbacks.literal_markup);
+        var target = false;
+        for (spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "Target")) { target = true; };
+        try std.testing.expect(target);
+    }
+    var example: Renderer = .{ .a = a, .context = .{} };
+    const spans = try example.parseSpans("<br''>tail'' [[Target|link]]", .{});
+    try std.testing.expectEqualStrings("<br>tail link", try flattened(a, spans));
+    var italic: std.ArrayList(u8) = .empty;
+    var angles: usize = 0;
+    for (spans) |span| {
+        if (span.flags.italic) try italic.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.text, "<") or std.mem.eql(u8, span.text, ">")) {
+            angles += 1;
+            try std.testing.expect(span.kind == .text and span.target.len == 0 and span.provenance == .entity_literal);
+        }
+    }
+    try std.testing.expectEqualStrings(">tail", italic.items);
+    try std.testing.expectEqual(@as(usize, 2), angles);
+    var quoted_word: Renderer = .{ .a = a, .context = .{} };
+    const word_spans = try quoted_word.parseSpans("<''skouer''>", .{});
+    try std.testing.expectEqualStrings("<skouer>", try flattened(a, word_spans));
+    var word_italic: std.ArrayList(u8) = .empty;
+    for (word_spans) |span| if (span.flags.italic) { try word_italic.appendSlice(a, span.text); };
+    try std.testing.expectEqualStrings("skouer", word_italic.items);
+    var real_break: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings("before\nafter", try flattened(a, try real_break.parseSpans("before<br>after", .{})));
+    try std.testing.expect(!real_break.fallbacks.literal_markup);
+}
+
+test "apostrophe angle recovery leaves template protected and attribute domains unchanged" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "<br>", "<br''", "<''>", "<'9br>", "<br''\n>", "<br''<x>>", "<https://x''>",
+    }) |source| try std.testing.expect(Renderer.completeUnknownHtmlTokenEnd(source, 0) == null);
+    // The complete unknown name includes the apostrophes. Its suffix is literal
+    // source rather than an attribute owner for a recognized br element.
+    for ([_][]const u8{ "<br''/>", "<br'' class=x>" }) |source|
+        try std.testing.expectEqual(@as(?usize, source.len), Renderer.completeUnknownHtmlTokenEnd(source, 0));
+    for ([_][]const u8{
+        "{{unexpanded|<br''>}}", "{{{parameter|<br''>}}}",
+        "<nowiki><br''>literal''</nowiki>", "<syntaxhighlight><br''>literal''</syntaxhighlight>",
+        "<!-- <br''> -->", "<includeonly><br''>hidden''</includeonly>",
+        "<span title=\"apostrophe''\">body</span>", "<br title=\"apostrophe''\">",
+        "<span title=\"<br''>\">", "<<''sample''>>",
+    }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const mapped = try renderer.literalHtmlAnglesSourceWithMissing(MissingText.untracked(source));
+        try std.testing.expectEqualStrings(source, mapped.bytes);
+        try std.testing.expect(!renderer.fallbacks.literal_markup);
+    }
+    var literal: Renderer = .{ .a = a, .context = .{} };
+    const literal_spans = try literal.parseSpans("<nowiki><br''>literal''</nowiki> [[Target|link]]", .{});
+    try std.testing.expectEqualStrings("<br''>literal'' link", try flattened(a, literal_spans));
+    for (literal_spans) |span| try std.testing.expect(!span.flags.italic and !span.flags.bold);
+    try std.testing.expect(!literal.fallbacks.literal_markup);
+    try std.testing.expect(Renderer.completeUnknownHtmlTokenEnd("<span title=\"<br''>\">", 13) == null);
+    try std.testing.expect(Renderer.completeUnknownHtmlTokenEnd("<<''sample''>>", 1) == null);
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("<br''>"));
+}
+
+test "source text prefix cannot bypass interrupted external opener proof" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "prefix [<i>https://example.test ]</i> tail [[Child]]", "''prefix [''https://example.test ] tail [[Child]]", "α prefix [<b>https://example.test ]</b> tail [[Child]]" }) |source| {
+        errdefer std.debug.print("interrupted opener prefix case: {s}\n", .{source});
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(source, .{});
+        var brackets: usize = 0;
+        for (spans) |span| if (span.provenance == .protected_literal and std.mem.eql(u8, span.text, "[")) {
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+            brackets += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 1), brackets);
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .external_link, "https://example.test"));
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "Child"));
+        try std.testing.expect(std.mem.indexOf(u8, try flattened(a, spans), "prefix [https://example.test ] tail Child") != null);
+        _ = try FormattingScopeTest.encode(a, &renderer, try renderer.renderBody(source));
+    }
+    for ([_][]const u8{ "prefix &#91;<i>https://example.test ]</i>", "<nowiki>prefix [<i>https://example.test ]</i></nowiki>", "[[Target|prefix [<i>https://example.test ]</i>]]", "prefix [[<i>https://example.test ]]", "prefix [[''https://example.test ]]", "prefix [<i class=x>https://example.test ]</i>" }) |source| {
+        errdefer std.debug.print("interrupted opener negative case: {s}\n", .{source});
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(source, .{});
+        for (spans) |span| try std.testing.expect(!(span.provenance == .protected_literal and std.mem.eql(u8, span.text, "[")));
+    }
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("[https://example.test unfinished"));
+}
+
+// Proposed controls for the separate shared atomic-name consolidation; UNRUN.
+test "complete unknown atomic names preserve UTF8 parentheses and existing quote action phases" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Check = struct {
+        fn at(spans: []const Span, offset: usize) !Span {
+            var position: usize = 0;
+            for (spans) |span| {
+                if (offset >= position and offset - position < span.text.len) return span;
+                position += span.text.len;
+            }
+            return error.TestUnexpectedResult;
+        }
+    };
+    const cases = [_]struct { source: []const u8, reference: []const u8 }{
+        .{ .source = "<Mon-သမာ>", .reference = "&lt;Mon-သမာ&gt;" },
+        .{ .source = "<youzhagui(n)>", .reference = "&lt;youzhagui(n)&gt;" },
+        .{ .source = "</Mon-သမာ>", .reference = "&lt;/Mon-သမာ&gt;" },
+        .{ .source = "<custom_名>", .reference = "&lt;custom_名&gt;" },
+        .{ .source = "<a..b>", .reference = "&lt;a..b&gt;" },
+        .{ .source = "<tr:āg>", .reference = "&lt;tr:āg&gt;" },
+        .{ .source = "<sub.example-test2.test>", .reference = "&lt;sub.example-test2.test&gt;" },
+        .{ .source = "<br''>tail''", .reference = "&lt;br''&gt;tail''" },
+        .{ .source = "<br''/>", .reference = "&lt;br''/&gt;" },
+        .{ .source = "<br'' class=x>", .reference = "&lt;br'' class=x&gt;" },
+        .{ .source = "<''skouer''>", .reference = "&lt;''skouer''&gt;" },
+        .{ .source = "<x\"word>", .reference = "&lt;x\"word&gt;" },
+        .{ .source = "<ref_ଅଜନ୍ତା ଓଡ଼ିଆ ଅଭିଧାନ ପୃଷ୍ଠା ୫୫୩=\"\"/>", .reference = "&lt;ref_ଅଜନ୍ତା ଓଡ଼ିଆ ଅଭିଧାନ ପୃଷ୍ଠା ୫୫୩=\"\"/&gt;" },
+        .{ .source = "<custom_name note=\"[[Target|''word'']]\"/>", .reference = "&lt;custom_name note=\"[[Target|''word'']]\"/&gt;" },
+        .{ .source = "<Usage: 'label' ''italic'' [[Target|child]]>", .reference = "&lt;Usage: 'label' ''italic'' [[Target|child]]&gt;" },
+        .{ .source = "<ref:'word'>", .reference = "&lt;ref:'word'&gt;" },
+        .{ .source = "<span: 'word'>", .reference = "&lt;span: 'word'&gt;" },
+        .{ .source = "<tr:āg[[Target|child]]>", .reference = "&lt;tr:āg[[Target|child]]&gt;" },
+    };
+    for (cases) |case| {
+        var actual: Renderer = .{ .a = a, .context = .{} };
+        var oracle: Renderer = .{ .a = a, .context = .{} };
+        const source = try std.fmt.allocPrint(a, "''before'' {s} [[After|kept]]", .{case.source});
+        const reference = try std.fmt.allocPrint(a, "''before'' {s} [[After|kept]]", .{case.reference});
+        const spans = try actual.parseSpans(source, .{});
+        const expected = try oracle.parseSpans(reference, .{});
+        const visible = try flattened(a, spans);
+        try std.testing.expectEqualStrings(try flattened(a, expected), visible);
+        for (visible, 0..) |_, offset| {
+            const got = try Check.at(spans, offset);
+            const want = try Check.at(expected, offset);
+            try std.testing.expectEqual(want.kind, got.kind);
+            try std.testing.expectEqual(want.flags, got.flags);
+            try std.testing.expectEqual(want.provenance, got.provenance);
+            try std.testing.expectEqualStrings(want.target, got.target);
+        }
+        try std.testing.expect(actual.fallbacks.literal_markup);
+        var after = false;
+        for (spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "After") and std.mem.eql(u8, span.text, "kept")) { after = true; };
+        try std.testing.expect(after);
+    }
+}
+
+test "complete atomic name recovery retains known protected template protocol and terminal dot domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "<br>", "<ref name=x/>", "<span title=x>", "<a>", "<img>",
+        "<tbody>", "<thead>", "<colgroup>", "<custom note='x'>", "</custom>",
+        "<Mon-သမာ", "<youzhagui(n)", "<x_\xff>", "<x_\xe2\x80\x8b>",
+        "<x\n>", "<x_\x00>", "<x_\r>", "<x_<b>>", "<'9name>", "<''>",
+        "<https://example.test>", "<mailto:word>", "<HTTPS:word>",
+        "<Sv.>", "<a.>", "</Sv.>",
+    }) |source| try std.testing.expect(Renderer.completeUnknownHtmlTokenEnd(source, 0) == null);
+    try std.testing.expect(Renderer.completeUnknownHtmlTokenEnd("<span title=\"<Mon-သမာ>\">", 13) == null);
+    try std.testing.expect(Renderer.completeUnknownHtmlTokenEnd("<<youzhagui(n)>>", 1) == null);
+    for ([_][]const u8{
+        "{{T|<Mon-သမာ>}}", "{{{p|<youzhagui(n)>}}}",
+        "<nowiki><Mon-သမာ></nowiki>", "<syntaxhighlight><youzhagui(n)></syntaxhighlight>",
+        "<!-- <Mon-သမာ> -->", "<includeonly><youzhagui(n)></includeonly>",
+        "<span title=\"<Mon-သမာ>\">",
+    }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const mapped = try renderer.literalHtmlAnglesSourceWithMissing(MissingText.untracked(source));
+        try std.testing.expectEqualStrings(source, mapped.bytes);
+        try std.testing.expect(!renderer.fallbacks.literal_markup);
+    }
+    var known: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings("before\nafter", try flattened(a, try known.parseSpans("before<br>after", .{})));
+    try std.testing.expect(!known.fallbacks.literal_markup);
+    // Ordinary unknown ASCII tags keep the established tagAt route; this
+    // consolidation does not take over their attributes or inline children.
+    var ordinary: Renderer = .{ .a = a, .context = .{} };
+    const ordinary_spans = try ordinary.parseSpans("<quechua note='x'>[[Target|child]]</quechua>", .{});
+    try std.testing.expectEqualStrings("<quechua note='x'>child</quechua>", try flattened(a, ordinary_spans));
+    try std.testing.expect(ordinary.fallbacks.literal_markup);
+    var ordinary_child = false;
+    for (ordinary_spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "Target")) { ordinary_child = true; };
+    try std.testing.expect(ordinary_child);
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("<Mon-သမာ>"));
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("<youzhagui(n)>"));
+}
+
+test "inline iterator emphasis prefix preserves exact returned text endpoint identity" {
+    const source = "''before [''https://example.test ] after [[Child]]";
+    var iterator: ir.InlineIterator = .{ .input = source, .renderer_boundaries = true };
+    const dispatch_start = iterator.cursor;
+    const token = iterator.next() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(ir.InlineKind.text, token.kind);
+    try std.testing.expectEqualStrings("before [", token.text);
+    try std.testing.expect(token.italic and !token.bold);
+    try std.testing.expect(token.text.ptr != source[dispatch_start..].ptr);
+    try std.testing.expect(iterator.cursor <= source.len and token.text.len <= iterator.cursor);
+    const start = iterator.cursor - token.text.len;
+    try std.testing.expectEqual(@as(usize, 2), start);
+    try std.testing.expect(token.text.ptr == source[start..iterator.cursor].ptr);
+    try std.testing.expectEqualStrings(token.text, source[start..iterator.cursor]);
+    try std.testing.expectEqual(@as(u8, '['), source[iterator.cursor - 1]);
+    try std.testing.expectEqualStrings("''https://example.test ] after [[Child]]", source[iterator.cursor..]);
+}
+
+test "normalized parent source proves interrupted opener through nested formatting slices" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "''before [''https://example.test ] after [[Child]]",
+        "<i><b>before [</b></i>https://example.test ] after [[Child]]",
+        "<span class=outer><i><b>before [</b></i>https://example.test ] after [[Child]]</span>",
+    }) |source| {
+        errdefer std.debug.print("parent source case: {s}\n", .{source});
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(source, .{});
+        try std.testing.expect(renderer.inline_source_domain == null);
+        var brackets: usize = 0;
+        var urls: usize = 0;
+        for (spans) |span| {
+            if (span.provenance == .protected_literal and std.mem.eql(u8, span.text, "[")) {
+                try std.testing.expect(span.kind == .text and span.target.len == 0 and span.flags.italic);
+                try std.testing.expect(span.flags.bold == (std.mem.indexOf(u8, source, "<b>") != null));
+                brackets += 1;
+            }
+            if (span.kind == .external_link) {
+                try std.testing.expectEqualStrings("https://example.test", span.target);
+                try std.testing.expectEqualStrings("https://example.test", span.text);
+                try std.testing.expect(!span.flags.italic and !span.flags.bold);
+                urls += 1;
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), brackets);
+        try std.testing.expectEqual(@as(usize, 1), urls);
+        try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "Child"));
+        try std.testing.expectEqualStrings("before [https://example.test ] after Child", try flattened(a, spans));
+        _ = try FormattingScopeTest.encode(a, &renderer, try renderer.renderBody(source));
+        try std.testing.expect(renderer.inline_source_domain == null);
+    }
+}
+
+test "interrupted opener parent proof rejects copied input and isolates nested span domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<i>before [</i>https://example.test ]";
+    const child = source[3..11];
+    try std.testing.expectEqualStrings("before [", child);
+    const domain: InlineSourceDomain = .{ .source = source, .parent = null };
+    var renderer: Renderer = .{ .a = a, .context = .{}, .inline_source_domain = &domain };
+    try std.testing.expect(renderer.formattingInterruptedExternalInDomain(child, child.len - 1));
+    const copied = try a.dupe(u8, child);
+    try std.testing.expect(!renderer.formattingInterruptedExternalInDomain(copied, copied.len - 1));
+    const spans = try renderer.parseSpans(child, .{});
+    for (spans) |span| try std.testing.expect(!(span.provenance == .protected_literal and std.mem.eql(u8, span.text, "[")));
+    try std.testing.expect(renderer.inline_source_domain == &domain);
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("[https://example.test unfinished"));
+}
+
+test "root includeonly suppresses physical headings tables parameters and effects before visible docs" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const cases = [_][]const u8{
+        "<includeonly>\n=={{{hidden}}}==\n{|\n| {{{cell}}}\n|}\n[[File:Hidden.ogg]]<ref>hidden</ref>\n</includeonly>\n==Visible==\nkept [[Child]]",
+        "<INCLUDEONLY>\n=={{{hidden}}}==\n{|\n| {{{cell}}}\n|}\n</INCLUDEONLY><noinclude>\n==Visible==\nkept [[Child]]</noinclude>",
+        "<includeonly class=example>\n{{{hidden}}}\n</includeonly><noinclude>\n==Visible==\nkept [[Child]]</noinclude>",
+    };
+    for (cases) |source| {
+        errdefer std.debug.print("includeonly root case: {s}\n", .{source});
+        var renderer: Renderer = .{ .a = alloc, .context = .{ .title = "control" } };
+        const blocks = try renderer.renderBody(source);
+        try std.testing.expectEqual(@as(usize, 2), blocks.len);
+        try std.testing.expectEqual(Kind.heading, blocks[0].kind);
+        try std.testing.expectEqualStrings("Visible", try flattened(alloc, blocks[0].spans));
+        try std.testing.expectEqualStrings("kept Child", try flattened(alloc, blocks[1].spans));
+        try std.testing.expectEqual(@as(usize, 0), renderer.media.items.len);
+        try std.testing.expectEqual(@as(usize, 0), (try renderer.finishReferences()).len);
+    }
+}
+
+test "root includeonly recovery preserves explicit literal and self closing source domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var literal: Renderer = .{ .a = a, .context = .{ .title = "control" } };
+    const source = "<nowiki><includeonly>\n==Literal==\n{{{parameter}}}\n</includeonly></nowiki>";
+    const blocks = try literal.renderBody(source);
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expectEqualStrings("<includeonly>\n==Literal==\n{{{parameter}}}\n</includeonly>", try flattened(a, blocks[0].spans));
+    var short: Renderer = .{ .a = a, .context = .{ .title = "control" } };
+    const visible = try short.renderBody("<includeonly/>kept [[Child]]");
+    try std.testing.expectEqual(@as(usize, 1), visible.len);
+    try std.testing.expectEqualStrings("kept Child", try flattened(a, visible[0].spans));
 }

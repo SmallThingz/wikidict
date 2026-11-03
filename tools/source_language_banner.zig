@@ -32,10 +32,15 @@ fn hiddenCategory(source: []const u8, ns: *const namespaces.Registry, behavior: 
     return category.id == 14 and std.mem.trim(u8, category.text, " ").len != 0;
 }
 
-/// Conservative subset of ordinary transclusion: empty controls, fully excluded
-/// documentation, one hidden category wrapper, and one literal physical banner.
-/// No onlyinclude, additional HTML, parameters or emitted prose are projected.
+/// Conservative static source proofs. The known-name branch retains its
+/// original grammar; the literal-code branch admits one finite neutral wrapper
+/// shape only. Neither branch projects dynamic parameters or emitted prose.
 pub fn parse(source: []const u8, ns: *const namespaces.Registry, behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8) ?languages.SourceLanguageBanner {
+    return parseKnownNames(source, ns, behavior, registry, code) orelse
+        parseLiteralCode(source, ns, behavior, registry, code);
+}
+
+fn parseKnownNames(source: []const u8, ns: *const namespaces.Registry, behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8) ?languages.SourceLanguageBanner {
     if (source.len > 4096 or !registry.codes.contains(code)) return null;
     // Ordinary transclusion selects onlyinclude globally before control removal.
     // This proof admits no such projection, including inside captured aliases.
@@ -95,6 +100,123 @@ pub fn parse(source: []const u8, ns: *const namespaces.Registry, behavior: ?*con
             if (!plain(explanation) or std.mem.indexOfAny(u8, explanation, "()") != null) return null;
         }
         result = .{ .heading = label, .level = heading.level, .target = target, .label = visible };
+        cursor = end;
+    }
+    return result;
+}
+
+// A separate finite proof for retained static banners containing an explicit
+// registered literal code. Ordinary registry names and the known-name grammar
+// above stay unchanged. No rendered-text stripping supplies this authority.
+fn unwrapNeutral(input: []const u8, name: []const u8) ?[]const u8 {
+    const tag = syntax.tagAt(input, 0) orelse return null;
+    if (!tag.is(name) or tag.closing or tag.self_closing or
+        std.mem.trim(u8, tag.attrs, " \t\r\n").len != 0) return null;
+    const pair = syntax.matchingTag(input, tag) orelse return null;
+    if (pair.end != input.len) return null;
+    return std.mem.trim(u8, input[tag.end..pair.inner_end], " \t");
+}
+
+fn literalCodeHeading(heading: []const u8, level: u8, behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8) ?languages.SourceLanguageBanner {
+    if (containsControl(behavior, heading)) return null;
+    const div = syntax.tagAt(heading, 0) orelse return null;
+    // The source-observed neutral presentation attributes are exact. In
+    // particular no arbitrary class, hidden/style attribute or nested div.
+    if (!div.is("div") or div.closing or div.self_closing or
+        !std.mem.eql(u8, std.mem.trim(u8, div.attrs, " \t"), "id=\"toc\" class=\"toccolours\"")) return null;
+    const pair = syntax.matchingTag(heading, div) orelse return null;
+    if (pair.end != heading.len) return null;
+    const inner = std.mem.trim(u8, heading[div.end..pair.inner_end], " \t");
+    const body = unwrapNeutral(inner, "big") orelse return null;
+    if (!std.mem.startsWith(u8, body, "[[")) return null;
+    const link = syntax.balanced(body, 0) orelse return null;
+    const label_body = body[2..link.inner_end];
+    const pipe = std.mem.indexOfScalar(u8, label_body, '|');
+    const target = std.mem.trim(u8, label_body[0..pipe orelse label_body.len], " ");
+    const visible = std.mem.trim(u8, if (pipe) |at| label_body[at + 1 ..] else label_body, " ");
+    if (!plain(target) or !plain(visible) or std.mem.indexOfAny(u8, target, ":#") != null or
+        !registry.sourceBannerLiteralCodeNameCompatible(code, target) or
+        !registry.sourceBannerLiteralCodeNameCompatible(code, visible)) return null;
+    var tail = std.mem.trim(u8, body[link.end..], " \t");
+    // Only the source-observed one/two nested small presentation wrappers.
+    tail = unwrapNeutral(tail, "small") orelse return null;
+    if (std.mem.startsWith(u8, tail, "<")) tail = unwrapNeutral(tail, "small") orelse return null;
+    if (tail.len != code.len + 2 or tail[0] != '(' or tail[tail.len - 1] != ')' or
+        !std.mem.eql(u8, tail[1 .. tail.len - 1], code)) return null;
+    return .{ .heading = heading, .level = level, .target = target, .label = visible, .authority = .literal_code };
+}
+
+fn excludedDocumentationEnd(source: []const u8, start: usize) ?usize {
+    const begin = start + "<noinclude>".len;
+    const close = std.mem.indexOfPos(u8, source, begin, "</noinclude>") orelse return null;
+    // Normal transclusion ends at the first closing inclusion tag, without
+    // nesting (wikitext/preprocess.zig). Admit plain excluded documentation
+    // plus complete comments only; reject other tag/closing interpretations.
+    var cursor = begin;
+    while (std.mem.indexOfScalarPos(u8, source[0..close], cursor, '<')) |at| {
+        if (!std.mem.startsWith(u8, source[at..], "<!--")) return null;
+        const end = syntax.protectedEnd(source, at) orelse return null;
+        if (end > close or end < at + 7 or !std.mem.endsWith(u8, source[at..end], "-->")) return null;
+        if (std.mem.indexOfAny(u8, source[at + 4 .. end - 3], "<>") != null) return null;
+        cursor = end;
+    }
+    return close + "</noinclude>".len;
+}
+
+fn parseLiteralCode(source: []const u8, ns: *const namespaces.Registry, behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8) ?languages.SourceLanguageBanner {
+    if (source.len > 4096 or !registry.codes.contains(code) or
+        std.mem.indexOf(u8, source, "<onlyinclude>") != null or
+        std.mem.indexOf(u8, source, "</onlyinclude>") != null) return null;
+    var cursor: usize = 0;
+    var result: ?languages.SourceLanguageBanner = null;
+    var category = false;
+    var leading_break = false;
+    var trailing_break = false;
+    var documentation = false;
+    while (cursor < source.len) {
+        if (std.ascii.isWhitespace(source[cursor])) { cursor += 1; continue; }
+        if (documentation) return null;
+        if (controlAt(behavior, source, cursor) catch return null) |end| {
+            if (std.mem.indexOfAny(u8, source[cursor..end], "[]{}<>&|=\"'") != null) return null;
+            const toc = if (behavior) |captured| captured.tocMatchAt(std.heap.page_allocator, source, cursor) catch return null else if (std.ascii.eqlIgnoreCase(source[cursor..end], "__TOC__")) end else null;
+            if (toc != null) return null;
+            cursor = end;
+            continue;
+        }
+        if (std.mem.startsWith(u8, source[cursor..], "<includeonly>")) {
+            if (result != null or category or leading_break) return null;
+            const begin = cursor + "<includeonly>".len;
+            const close = std.mem.indexOfPos(u8, source, begin, "</includeonly>") orelse return null;
+            if (!hiddenCategory(source[begin..close], ns, behavior)) return null;
+            category = true;
+            cursor = close + "</includeonly>".len;
+            continue;
+        }
+        if (std.mem.startsWith(u8, source[cursor..], "<noinclude>")) {
+            if (result == null) return null;
+            cursor = excludedDocumentationEnd(source, cursor) orelse return null;
+            documentation = true;
+            continue;
+        }
+        if (syntax.tagAt(source, cursor)) |tag| if (tag.is("br") and !tag.closing and
+            std.mem.trim(u8, tag.attrs, " \t").len == 0) {
+            if (result == null) {
+                if (leading_break) return null;
+                leading_break = true;
+            } else {
+                if (trailing_break) return null;
+                trailing_break = true;
+            }
+            cursor = tag.end;
+            continue;
+        };
+        if (result != null or source[cursor] != '=' or
+            (cursor != 0 and source[cursor - 1] != '\n')) return null;
+        const end = std.mem.indexOfScalarPos(u8, source, cursor, '\n') orelse source.len;
+        const line = std.mem.trimEnd(u8, source[cursor..end], " \t\r");
+        const parsed = syntax.controlHeading(line, null) orelse return null;
+        if (parsed.level < 1 or parsed.level > 2) return null;
+        result = literalCodeHeading(parsed.title, parsed.level, behavior, registry, code) orelse return null;
         cursor = end;
     }
     return result;

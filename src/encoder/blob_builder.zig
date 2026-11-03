@@ -48,6 +48,8 @@ pub const LanguageCodes = struct {
     content_fn: ?*const fn (?*const anyopaque) ?ResolvedLanguage = null,
     boundary_fn: ?*const fn (?*const anyopaque, []const u8) bool = null,
     source_banner_fn: ?*const fn (?*const anyopaque, []const u8, []const u8, u8) bool = null,
+    source_category_ctx: ?*anyopaque = null,
+    source_category_fn: ?*const fn (?*anyopaque, []const u8) anyerror!?ResolvedLanguage = null,
     link_trail: blobs.document_ir.LinkTrail = .{},
 
     pub fn code(self: LanguageCodes, heading: []const u8) ?[]const u8 {
@@ -1876,6 +1878,37 @@ fn arabicMeaningsSupportCategoryLanguage(codes: LanguageCodes, source: []const u
     return raw_language;
 }
 
+// TE's captured grammar form has no language heading or populated POS field.
+// Its authored category can supply an owner only with current source evidence;
+// empty support fields never acquire a lexical sense or POS here.
+fn teluguSupportCategoryLanguage(codes: LanguageCodes, source: []const u8, raw_source: ?[]const u8, raw_sections: []const language_source.Section, page_sections: []const language_source.Section) !?ResolvedLanguage {
+    const ns = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, ns.content_language, "te")) return null;
+    const corroborate = codes.source_category_fn orelse return null;
+    const raw = raw_source orelse return null;
+    const scaffold = [_][]const u8{ "వ్యాకరణ విశేషాలు", "అర్థ వివరణ", "పదాలు", "పద ప్రయోగాలు", "అనువాదాలు", "మూలాలు, వనరులు", "బయటి లింకులు" };
+    if (raw_sections.len != scaffold.len or page_sections.len < 5 or page_sections.len > scaffold.len) return null;
+    for (raw_sections, scaffold) |section, heading| if (!std.mem.eql(u8, std.mem.trim(u8, section.heading, " \t\r\n"), heading)) return null;
+    for (page_sections, 0..) |section, i| if (!std.mem.eql(u8, std.mem.trim(u8, section.heading, " \t\r\n"), scaffold[i])) return null;
+    const Observe = struct {
+        fn owner(value: LanguageCodes, text: []const u8, catalog: *const @import("namespace_registry").Registry, callback: *const fn (?*anyopaque, []const u8) anyerror!?ResolvedLanguage) !?ResolvedLanguage {
+            var categories: language_source.CategoryIterator = .{ .source = text };
+            var found: ?ResolvedLanguage = null;
+            while (categories.next()) |target| {
+                const title = catalog.ofTitle(target);
+                if (title.id != 14 or !(std.mem.endsWith(u8, title.text, " పదాలు") or std.mem.endsWith(u8, title.text, "_పదాలు"))) continue;
+                const language = (try callback(value.source_category_ctx, target)) orelse return null;
+                if (found) |previous| if (!std.mem.eql(u8, previous.code, language.code)) return null;
+                found = language;
+            }
+            return found;
+        }
+    };
+    const authored = (try Observe.owner(codes, raw, ns, corroborate)) orelse return null;
+    const expanded = (try Observe.owner(codes, source, ns, corroborate)) orelse return null;
+    return if (std.mem.eql(u8, authored.code, expanded.code)) authored else null;
+}
+
 // The pinned Bulgarian Noun/Verb/Adjective/Adverb templates have no language
 // heading. Their category uses the expanded language-name parameter. Resolve
 // only those exact edition-local wrappers through the trusted registry.
@@ -2953,7 +2986,8 @@ fn processMain(
         // expanded category authority and preserve the whole entry body.
         const support = amharicSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items) orelse
             arabicMeaningsSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items) orelse
-            assameseSupportLanguage(codes, source, raw_source);
+            assameseSupportLanguage(codes, source, raw_source) orelse
+            (try teluguSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items));
         const explicit = if (page_sections.items.len == 0)
             unsectionedLanguage(codes, raw_source orelse source) orelse unsectionedExpandedLanguage(codes, source) orelse unsectionedAfrikaansExpandedLanguage(codes, source)
         else

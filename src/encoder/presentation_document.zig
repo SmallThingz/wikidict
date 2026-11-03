@@ -5768,3 +5768,192 @@ test "underscore literal source proof cannot authorize parsed residual markup or
     for (decoded.entry.references[0].spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "Target")) { link = true; };
     try std.testing.expect(link);
 }
+
+
+test "retained kuzhheoliou quote before protocol preserves literal wrapper and bare action" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "\n'''kuzhheolioù''' \n# furm lies kuzh-heol.\n#* ''Warlene, d’ar c’houlz bloaz-mañ, hevelep '''kuzh-heolioù''' Ne zegasent ket soñj din-me a vrezelioù. [''https://web.archive.org/web/20220102191405/http://www.daskor.bzh/auguste-bocher-hirvoudou-wreg-yaouank?language=fr ]\n\n==== <span title=\"Sterioù heñvel ouzh re « kuzhheolioù »\">Gerioù heñvelster</span> ====\n*[[kuzhioù-heol]]";
+    try std.testing.expectEqual(@as(usize, 392), source.len);
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "kuzhheolioù", .language, "Unclassified", "", source, null, &report);
+    const decoded = try codec.decodeAlloc(a, bytes, "kuzhheolioù", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+    const target = "https://web.archive.org/web/20220102191405/http://www.daskor.bzh/auguste-bocher-hirvoudou-wreg-yaouank?language=fr";
+    var visible: std.ArrayList(u8) = .empty;
+    var urls: usize = 0;
+    var synonym = false;
+    var bold_word = false;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        if (span.kind == .external_link) {
+            try std.testing.expectEqualStrings(target, span.target);
+            try std.testing.expectEqualStrings(target, span.text);
+            try std.testing.expect(!span.italic);
+            urls += 1;
+        }
+        if (span.kind == .link and std.mem.eql(u8, span.target, "kuzhioù-heol")) synonym = true;
+        if (span.bold and std.mem.eql(u8, span.text, "kuzh-heolioù")) bold_word = true;
+    };
+    try std.testing.expectEqual(@as(usize, 1), urls);
+    try std.testing.expect(synonym and bold_word and report.literal_markup);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "furm lies kuzh-heol.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "a vrezelioù. [https://web.archive.org/") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "language=fr ]") != null);
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("[https://example.test unfinished"));
+}
+
+
+test "apostrophe angle quotation keeps captured style links and block path through codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact local quote stream from complete laezh-glas expanded line13.
+    const before = "==English==\n# [[Definition|definition]]\n#* ''Re [[Treger|Dreger]] a zo mat o blaz,''";
+    const after = "Blaz [[krampouezh|krampouez]] fritet ha '''laez glas''' ;''<br>''Me re [[Gwened|Wened]] ha re [[Kemper|Gemper]],''\n";
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "quote-token", .language, "English", "en", before ++ "<br''>" ++ after, null, &report);
+    const expected = try compileAlloc(a, "quote-token", .language, "English", "en", before ++ "&lt;br''&gt;" ++ after, null);
+    try std.testing.expectEqualSlices(u8, expected, bytes);
+    const stored = try codec.decodeAlloc(a, bytes, "quote-token", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    var quotations: usize = 0;
+    var definitions: usize = 0;
+    var targets: std.StringHashMap(void) = .init(a);
+    var bold_italic = false;
+    for (stored.entry.sections) |section| for (section.blocks) |block| {
+        if (block.kind == .definition) definitions += 1;
+        if (block.kind == .quotation) {
+            quotations += 1;
+            try std.testing.expectEqualStrings("#*", block.list_path);
+            var visible: std.ArrayList(u8) = .empty;
+            for (block.spans) |span| {
+                try visible.appendSlice(a, span.text);
+                if (span.kind == .link) try targets.put(span.target, {});
+                if (std.mem.eql(u8, span.text, "laez glas") and span.bold and span.italic) bold_italic = true;
+            }
+            try std.testing.expect(std.mem.indexOf(u8, visible.items, "Re Dreger a zo mat o blaz,<br>Blaz krampouez fritet ha laez glas ;") != null);
+            try std.testing.expect(std.mem.indexOf(u8, visible.items, "Me re Wened ha re Gemper,") != null);
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), quotations);
+    try std.testing.expectEqual(@as(usize, 1), definitions);
+    try std.testing.expect(bold_italic and report.literal_markup);
+    for ([_][]const u8{ "Treger", "krampouezh", "Gwened", "Kemper" }) |target| try std.testing.expect(targets.contains(target));
+}
+
+test "quote leading angle examples preserve literal brackets without relaxing residual validators" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Both authored example forms from complete reoliek expanded lines30/32.
+    const source = "==English==\n# [[First]]\n#* <skouer>\n# [[Second]]\n#* <''skouer''>\n";
+    const reference = "==English==\n# [[First]]\n#* &lt;skouer&gt;\n# [[Second]]\n#* &lt;''skouer''&gt;\n";
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "examples", .language, "English", "en", source, null, &report);
+    const expected = try compileAlloc(a, "examples", .language, "English", "en", reference, null);
+    try std.testing.expectEqualSlices(u8, expected, bytes);
+    const stored = try codec.decodeAlloc(a, bytes, "examples", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    var quotations: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| if (block.kind == .quotation) {
+        try std.testing.expectEqualStrings("#*", block.list_path);
+        var visible: std.ArrayList(u8) = .empty;
+        var italic: std.ArrayList(u8) = .empty;
+        for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            if (span.italic) try italic.appendSlice(a, span.text);
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+        }
+        try std.testing.expectEqualStrings("<skouer>", visible.items);
+        try std.testing.expectEqualStrings(if (quotations == 0) "" else "skouer", italic.items);
+        quotations += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 2), quotations);
+    try std.testing.expect(report.literal_markup);
+    const raw = [_]compiler.Span{.{ .text = "<br''>" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+    const target = [_]compiler.Span{.{ .text = "<", .kind = .link, .target = "{{unexpanded}}", .provenance = .entity_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &target, null));
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("<skouer>"));
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("<br''>"));
+}
+
+test "complete unknown atomic names retain lexical body and strict target guards through codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "==English==\n===Noun===\n* Myan-အ(part)+ထမ်း(v)+<Mon-သမာ>သမား(part)\n* Chin<youzhagui(n)>အီကြာကွေး(n)\n# ''definition'' [[Target|child]]\n#: exact example\n";
+    const reference = "==English==\n===Noun===\n* Myan-အ(part)+ထမ်း(v)+&lt;Mon-သမာ&gt;သမား(part)\n* Chin&lt;youzhagui(n)&gt;အီကြာကွေး(n)\n# ''definition'' [[Target|child]]\n#: exact example\n";
+    var report: Fallbacks = .{};
+    const payload = try compileReportedAlloc(a, "atomic-names", .language, "English", "en", source, null, &report);
+    const expected = try compileAlloc(a, "atomic-names", .language, "English", "en", reference, null);
+    try std.testing.expectEqualSlices(u8, expected, payload);
+    const stored = try codec.decodeAlloc(a, payload, "atomic-names", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualSlices(u8, payload, try codec.encodeAlloc(a, stored));
+    var visible: std.ArrayList(u8) = .empty;
+    var definitions: usize = 0;
+    var examples: usize = 0;
+    var lists: usize = 0;
+    var child = false;
+    var italic = false;
+    var noun = false;
+    for (stored.entry.sections) |section| {
+        if (section.level == 3 and std.mem.eql(u8, section.title, "Noun")) noun = true;
+        for (section.blocks) |block| {
+            if (block.kind == .definition) definitions += 1;
+            if (block.kind == .example) {
+                examples += 1;
+                try std.testing.expectEqualStrings("#:", block.list_path);
+            }
+            if (block.kind == .list_item) lists += 1;
+            for (block.spans) |span| {
+                try visible.appendSlice(a, span.text);
+                if (span.kind == .link and std.mem.eql(u8, span.target, "Target") and std.mem.eql(u8, span.text, "child")) child = true;
+                if (span.italic and std.mem.eql(u8, span.text, "definition")) italic = true;
+            }
+        }
+    }
+    try std.testing.expect(noun and child and italic and report.literal_markup);
+    try std.testing.expectEqual(@as(usize, 2), lists);
+    try std.testing.expectEqual(@as(usize, 1), definitions);
+    try std.testing.expectEqual(@as(usize, 1), examples);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Myan-အ(part)+ထမ်း(v)+<Mon-သမာ>သမား(part)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Chin<youzhagui(n)>အီကြာကွေး(n)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "exact example") != null);
+    const raw = [_]compiler.Span{.{ .text = "<Mon-သမာ>" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+    const target = [_]compiler.Span{.{ .text = "<", .kind = .link, .target = "{{unexpanded}}", .provenance = .entity_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &target, null));
+}
+
+test "retained HE supplementary documentation excludes implementation and keeps complete visible body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<includeonly>\n\n==={{{כותרת}}}[[תמונה:Vraagteken-2.svg|15px]]===\n{| class=\"toccolours\" border=\"1\" style=\"clear: both; float: left; margin-right: 0.5em; width:193px; font-size: 95%; border: gray solid 1px; border-collapse: collapse;\"\n!colspan=\"2\" | '''סימוכין'''\n|-\n|colspan=\"2\"|{{{סימוכין}}}\n|-\n!colspan=\"2\" | '''ראו גם'''\n|-\n| '''שיבושים דומים''' || {{{דומים}}}\n|-\n| '''עוד''' || {{{ראו גם}}}\n|}\n\n{{{פירוט}}}<br />\n[[תמונה:X mark.svg|15px|איקס]] - '''{{{שגוי}}}'''<br />\n[[קובץ:Yes check.svg|15px|וי]] - '''{{{נכון}}}'''<br />\n{{{הסבר}}}\n</includeonly><noinclude>\n\n==הוראות שימוש==\n\n===תחביר===\n<pre>\n{{/תבנית\n|כותרת=\n|סימוכין=\n|דומים=\n|ראו גם=\n|פירוט=\n|שגוי=\n|נכון=\n|הסבר=\n}}\n</pre>\n\n==דוגמה==\n\n===קוד===\n<pre>\n{{/תבנית\n|כותרת= איך הוגים 'נמלים' (רבים של [[נמל]])\n|סימוכין= * [http://www.safa-ivrit.org/pronounce/namel.php נמל (נמלים)]  באתר [[האקדמיה ללשון העברית]]\n|דומים= [[#באם|באם]]\n|ראו גם= [[משקל קְטָלָה]], [[נמל]], [[נמלה]]\n|פירוט= הנמל מקום מעגן לאניות או לסירות. הוא מנקד נָמֵל.\n|שגוי= נְמָלִים\n|נכון= נְמֵלִים\n|הסבר= נְמֵלִים (ר' של נְמָלָה) היא פרט ממשפחת חרקים המתשייכת לסדרת הדבוראים.\n}}\n</pre>\n===תוצאה===\n\n===איך הוגים 'נמלים' (רבים של [[נמל]])[[תמונה:Vraagteken-2.svg|15px]]===\n{| class=\"toccolours\" border=\"1\" style=\"clear: both; float: left; margin-right: 0.5em; width:193px; font-size: 95%; border: gray solid 1px; border-collapse: collapse;\"\n!colspan=\"2\" | '''סימוכין'''\n|-\n|colspan=\"2\"| * [http://www.safa-ivrit.org/pronounce/namel.php נמל (נמלים)]  באתר [[האקדמיה ללשון העברית]]\n|-\n!colspan=\"2\" | '''ראו גם'''\n|-\n| '''שיבושים דומים''' || [[#באם|באם]]\n|-\n| '''עוד''' || [[משקל קְטָלָה]], [[נמל]], [[נמלה]]\n|}\n\nהנמל מקום מעגן לאניות או לסירות. הוא מנקד נָמֵל.<br />\n[[תמונה:X mark.svg|15px|איקס]] - '''נְמָלִים'''<br />\n[[קובץ:Yes check.svg|15px|וי]] - '''נְמֵלִים'''<br />\nנְמֵלִים (ר' של נְמָלָה) פרט ממשפחת חרקים המתשייכת לסדרת הדבוראים.\n</noinclude>";
+    try std.testing.expectEqual(@as(usize, 2495), source.len);
+    const documentation_start = (std.mem.indexOf(u8, source, "<noinclude>") orelse return error.TestUnexpectedResult) + "<noinclude>".len;
+    const documentation_end = std.mem.lastIndexOf(u8, source, "</noinclude>") orelse return error.TestUnexpectedResult;
+    const reference = source[documentation_start..documentation_end];
+    const title = "נספח:שיבושי הגייה/תבנית";
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, title, .supplemental, "", "", source, null, &report);
+    const expected = try compileAlloc(a, title, .supplemental, "", "", reference, null);
+    // Compare every semantic body/table/heading/style/action field, not a few
+    // substrings. The independent reference is the authored visible docs only.
+    try std.testing.expectEqualSlices(u8, expected, bytes);
+    const stored = try codec.decodeAlloc(a, bytes, title, .supplemental, .{ .code = "", .heading = "" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    var tables: usize = 0;
+    var preformatted: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| {
+        if (block.table != null) tables += 1;
+        if (block.kind == .preformatted) preformatted += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), tables);
+    try std.testing.expectEqual(@as(usize, 2), preformatted);
+    const raw = [_]compiler.Span{.{ .text = "{{{כותרת}}}" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+}
