@@ -12,11 +12,11 @@ Wikimedia dumps + pinned site data
    MediaWiki/Scribunto build pipeline
               |
               v
-       WIKBLB08 + DPR2 data
-          /          \
-     CLI / TUI       C ABI
-                       |
-                 Android / Qt
+    WIKBLB08 + DPR2-DPR9 data
+       /          |          \
+  CLI / TUI     C ABI     Android decoder
+                  |          |
+               Qt GUI     Compose UI
 ```
 
 Lua, templates and wikitext are build inputs. Readers only consume compiled semantic
@@ -26,16 +26,31 @@ shipped in a dictionary.
 ## What is here
 
 - **Compiler/bundler** for Wiktionary XML, templates and Scribunto modules.
-- **WIKBLB08/DPR2** encoder and decoder.
+- **WIKBLB08/DPR2-DPR9** encoder and decoder.
 - **CLI/TUI reader** with search, history, saved words and study modes.
 - **C ABI** used by the native desktop application.
 - **Raw and seekable XZ storage** with derived random-access indexes.
 - **Corpus tooling** for downloading, building, verifying and publishing editions.
 
-The Android and desktop applications live in separate repositories:
+The applications share this repository:
 
-- [wikidict-android](https://github.com/SmallThingz/wikidict-android)
-- [wikidict-desktop](https://github.com/SmallThingz/wikidict-desktop)
+| Directory | Contents |
+| --- | --- |
+| `src/` | Zig compiler, semantic encoder/decoder, CLI/TUI and C ABI |
+| `tools/` | Corpus builds, verification and development utilities |
+| [apps/desktop](apps/desktop/) | Native Qt desktop application and its tests |
+| [apps/android](apps/android/) | Native Compose Android application and its tests |
+| `docs/` | Format and development documentation |
+| `data/` | Local inputs and dictionary outputs, excluded from Git |
+| `.tmp/` | Owned development scratch and qualification evidence, excluded from Git |
+
+Both application repositories were merged with their original commit histories.
+Their build systems remain independent. Desktop uses the core C ABI; Android
+decodes semantic records on demand and renders with Compose, with native shaping
+for Egyptian glyphs. Neither application executes dictionary source code.
+
+The application remains under development. Release publication requires explicit
+user approval.
 
 ## Build
 
@@ -64,6 +79,25 @@ zig build ffi -Doptimize=fast
 ```
 
 The public header is installed as `zig-out/include/dict/dict.h`.
+
+Build the desktop application from the repository root after building the core:
+
+```sh
+zig build cli ffi -Doptimize=fast
+cmake -S apps/desktop -B .tmp/desktop-build -DCMAKE_BUILD_TYPE=Release
+cmake --build .tmp/desktop-build --parallel 1
+```
+
+The desktop install provides `wikidict` and the relative `wikidict-gio` symlink.
+The executable selects the GUI when invoked through that name.
+
+Build Android using its own Gradle root:
+
+```sh
+./apps/android/gradlew -p apps/android :app:assembleDebug
+```
+
+See each application's README for platform dependencies and qualification steps.
 
 ## Build a dictionary
 
@@ -118,6 +152,12 @@ run: rebuild into a new output directory to requalify them against the full dump
 
 The corpus builder is intentionally conservative on developer machines:
 
+Correctness jobs require their configured RAM allocation plus host reserve before
+starting. Memory pressure is recorded but does not require an otherwise idle host.
+After admission, host RAM and pressure changes are telemetry; the job's own memory,
+CPU, task and deadline limits still apply. Matched benchmarks use separate quiet-host
+conditions so contention is not mistaken for a performance regression.
+
 - a project lock allows one corpus supervisor at a time, preventing concurrent
   corpus invocations from claiming the same build allocation;
 - a private Linux cgroup v2 bounds the complete builder/compiler/compressor
@@ -137,7 +177,7 @@ The corpus builder is intentionally conservative on developer machines:
 - controller-generated `zig build` commands use `-j1`, serializing compilation
   of the build tools before those runtime worker limits take effect;
 - LLVM bitcode/object scratch is removed before page expansion, snapshot inputs
-  are linked instead of copied when possible, and verified shard trees are
+  use independent copy-on-write clones where supported, and verified shard trees are
   removed immediately after merge;
 - release compression uses 1 MiB XZ blocks at preset `-6`; higher presets did
   not improve block utilization enough to justify their CPU cost.

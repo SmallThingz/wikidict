@@ -7,11 +7,12 @@
 - Do not publish GitHub releases, including prereleases, until the user explicitly approves publication again. The application is not production-ready until the user says it is; passing tests or packaging artifacts does not grant release approval.
 - Corpus builds budget 8 GiB independently of host free RAM. The default requires private cgroup limits; explicit `--resource-mode=watchdog` uses sampled best-effort memory/task limits, bounded CPU affinity and a finite deadline when the user accepts that fallback.
 - Check shared-host available RAM and memory pressure before admitting a job. Once admitted, host RAM/PSI changes are telemetry only and must not terminate the job. Preserve the job's own memory, CPU, task and time limits; queue subsequent work instead of killing an admitted job because another workload consumed RAM.
+- For correctness builds and tests, require the selected job's RAM allocation plus its host reserve; record PSI as advisory rather than requiring an idle host. Matched performance measurements may require a quiet host. Reuse one finite admission queue and avoid repeating unchanged setup or validation.
 - Cleanup may signal only individually verified task-owned PIDs with matching start times and exclusive job ownership. Never signal process groups, ancestors, RD, plugins, servers, tunnels or shared infrastructure. Preserve an unknown cleanup outcome rather than targeting an unverified process.
 - Make regular, small commits after coherent validated steps. Stage only files owned by the current task; preserve unrelated shared dirty work.
 - Keep temporary files under `.tmp/` and remove them before finishing.
 - `.tmp/` is shared by long-running qualification jobs. Never delete it wholesale; remove only task-owned paths after checking that no live process owns them and that any required acceptance audit has completed.
-- Keep product code under `src/` and build/integration utilities under `tools/`.
+- Keep shared core, compiler and CLI/TUI code under `src/`, native applications under `apps/desktop/` and `apps/android/`, and build/integration utilities under `tools/`. Preserve the imported application histories and follow their local instructions.
 - Delete dead experiments and compatibility layers instead of parking alternate architectures in the repository.
 
 ## Product / bundle boundary

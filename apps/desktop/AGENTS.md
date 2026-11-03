@@ -7,12 +7,12 @@ Shared-host RAM/PSI is an admission check only; do not stop an admitted job for 
 host pressure. Preserve its own resource limits. Cleanup must verify each task-owned
 PID and start time; never signal process groups, ancestors or shared infrastructure.
 Use rtk for shell commands. Keep temporary work under .tmp/ and remove it before finishing.
-Qt product code is under src/, web under web/. The core decoder is maintained in
-https://github.com/SmallThingz/wikidict; configure CMake with WIKIDICT_CORE pointing to its checkout.
+Qt product code is under src/, web under web/. The core decoder is under ../../src/.
+WIKIDICT_CORE defaults to the Wikidict repository root; keep build outputs under its .tmp/.
 Readers consume compiled presentation only; never execute Lua, templates or wikitext.
 Preserve the compact themed reading surface. Validate real blob lookup and rendered layout.
 
-Native UX checks run with `ctest --test-dir build --output-on-failure` after the Qt build.
+From the repository root, run `ctest --test-dir .tmp/desktop-build --output-on-failure` after the Qt build.
 Use the committed compiled fixture under tests/fixtures; tests copy it before opening.
 Before any UI test or smoke process, set XDG_CONFIG_HOME, XDG_CACHE_HOME and
 XDG_DATA_HOME to a test-specific directory under .tmp. Isolate QSettings NativeFormat

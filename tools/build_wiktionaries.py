@@ -201,13 +201,24 @@ def read_snapshot_sha(path):
 
 
 def copy_verified_snapshot(source, destination, expected_sha):
-    """Pin small external configuration bytes for the entire edition build."""
+    """Pin external snapshot bytes for the entire edition build."""
     if destination.is_symlink(): raise ValueError(f'Unsafe external snapshot path: {destination}')
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary=destination.with_name(destination.name+'.part')
     if temporary.exists() or temporary.is_symlink(): raise ValueError(f'Unsafe external snapshot path: {temporary}')
     try:
-        shutil.copyfile(source,temporary)
+        cloned=False
+        if sys.platform=='linux':
+            try:
+                # FICLONE shares extents while retaining an independent inode.
+                # Keep the byte check and ordinary-copy fallback on every filesystem.
+                with Path(source).open('rb') as original,temporary.open('xb') as pinned:
+                    fcntl.ioctl(pinned.fileno(),0x40049409,original.fileno())
+                cloned=True
+            except OSError:
+                unlink_artifact(temporary, missing_ok=True)
+        if not cloned:
+            shutil.copyfile(source,temporary)
         if sha256_file(temporary)!=expected_sha:
             raise ValueError('External snapshot changed while copying')
         os.replace(temporary,destination)

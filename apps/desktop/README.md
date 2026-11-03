@@ -1,18 +1,17 @@
 # Wikidict Desktop
 
-Desktop readers for dictionaries produced by
-[wikidict](https://github.com/SmallThingz/wikidict).
+Desktop readers in the
+[Wikidict project](../../README.md).
 
-This repository contains:
+This directory contains:
 
 - the native Qt 6 component of the unified `wikidict` application;
 - a browser reader under `web/`.
 
-The native Qt 0.4.0 reader and browser reader support compiled WIKBLB08
-presentation in DPR2 and DPR3 formats, including DPR3 abbreviation explanations.
-Older app versions do not support DPR3 dictionaries; update the app before
-importing them. Lua, templates and wikitext remain build-time concerns in the core
-repository.
+The native Qt reader uses the core decoder for compiled WIKBLB08 presentation,
+including DPR2 through DPR9. The browser reader has its own decoder and validation.
+Older app versions may refuse newer dictionary formats. Lua, templates and
+wikitext remain build-time concerns in the core project.
 
 ## Native Qt reader
 
@@ -22,24 +21,17 @@ repository.
 - C++20 compiler
 - Qt 6.5+ with Core, Gui, Widgets, Concurrent, Network and Multimedia
 - Zig 0.17.0 for the core and fixture generator
-- a built [wikidict](https://github.com/SmallThingz/wikidict) checkout
+- a built Wikidict core CLI and C ABI from this repository
 
-Point `CORE` at a wikidict checkout and build its CLI and C ABI first:
-
-```sh
-CORE=/path/to/wikidict
-(cd "$CORE" && zig build cli ffi -Doptimize=fast)
-```
-
-Then, from this repository, build the desktop application against that checkout:
+From the Wikidict repository root, build the core and desktop application:
 
 ```sh
-cmake -S . -B build \
-  -DWIKIDICT_CORE="$CORE" \
+zig build cli ffi -Doptimize=fast
+cmake -S apps/desktop -B .tmp/desktop-build \
   -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel
-cmake --install build --prefix "$PWD/build/install"
-./build/install/bin/wikidict-gio
+cmake --build .tmp/desktop-build --parallel
+cmake --install .tmp/desktop-build --prefix "$PWD/.tmp/desktop-install"
+./.tmp/desktop-install/bin/wikidict-gio
 ```
 
 `wikidict` is the single executable. `wikidict-gio` is a relative symlink to it;
@@ -89,12 +81,12 @@ of manually named files remain readable; use a new folder for named releases.
 ## Native validation
 
 ```sh
-cmake --build build --parallel
-ctest --test-dir build --output-on-failure
+cmake --build .tmp/desktop-build --parallel
+ctest --test-dir .tmp/desktop-build --output-on-failure
 ```
 
 The CTest suite uses compiled dictionary fixtures and isolates application settings
-under the repository's `.tmp/` directory. Fixture provenance is documented in
+under the owned build directory. Fixture provenance is documented in
 [tests/README.md](tests/README.md).
 
 ## Web reader
@@ -103,7 +95,7 @@ The browser reader imports raw and compressed dictionaries directly, keeps dicti
 data and derived indexes in IndexedDB, and decodes entries in a worker.
 
 ```sh
-cd web
+cd apps/desktop/web
 pnpm install
 pnpm build
 ```
@@ -119,5 +111,5 @@ See [web/README.md](web/README.md) for browser-specific behavior and validation.
 
 ## Related
 
-- [wikidict](https://github.com/SmallThingz/wikidict): compiler, blob format, CLI and C ABI
-- [wikidict-android](https://github.com/SmallThingz/wikidict-android): native Android reader
+- [Wikidict core](../../README.md): compiler, blob format, CLI and C ABI
+- [Android app](../android/README.md): native Android reader

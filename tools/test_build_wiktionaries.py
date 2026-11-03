@@ -1638,6 +1638,35 @@ class BuildTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'changed while copying'):
                     b.copy_verified_snapshot(source,root/'bad.tsv',initial['interwiki_map_sha256'])
 
+    def test_snapshot_clone_and_copy_fallback_keep_private_verified_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);source=root/'source.tsv';source.write_bytes(b'original snapshot\n')
+            expected=hashlib.sha256(source.read_bytes()).hexdigest()
+            def clone(destination_fd,request,source_fd):
+                self.assertEqual(request,0x40049409)
+                b.os.write(destination_fd,b.os.read(source_fd,1024))
+            for supported in (True,False):
+                destination=root/('clone.tsv' if supported else 'copy.tsv')
+                effect=clone if supported else OSError('reflink unavailable')
+                with patch.object(b.sys,'platform','linux'),patch.object(b.fcntl,'ioctl',side_effect=effect) as ioctl:
+                    if supported:
+                        with patch.object(b.shutil,'copyfile',side_effect=AssertionError('unexpected full copy')):
+                            b.copy_verified_snapshot(source,destination,expected)
+                    else:
+                        b.copy_verified_snapshot(source,destination,expected)
+                    ioctl.assert_called_once()
+                self.assertEqual(destination.read_bytes(),source.read_bytes())
+                self.assertNotEqual(destination.stat().st_ino,source.stat().st_ino)
+                self.assertFalse(destination.with_name(destination.name+'.part').exists())
+            source.write_bytes(b'changed source\n')
+            self.assertEqual((root/'clone.tsv').read_bytes(),b'original snapshot\n')
+            target=root/'clone.tsv'
+            with patch.object(b.sys,'platform','linux'),patch.object(b.fcntl,'ioctl',side_effect=clone):
+                with self.assertRaisesRegex(ValueError,'changed while copying'):
+                    b.copy_verified_snapshot(source,target,expected)
+            self.assertEqual(target.read_bytes(),b'original snapshot\n')
+            self.assertFalse(target.with_name(target.name+'.part').exists())
+
     def test_dated_auxiliary_manifest_binds_bytes_edition_and_date(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
