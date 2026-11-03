@@ -7,6 +7,7 @@ Neither mode changes limits on an existing, possibly shared cgroup.
 import os
 from pathlib import Path
 import ctypes
+import fcntl
 import json
 import math
 import resource
@@ -524,26 +525,147 @@ def _check_watchdog_disk_floor(report):
                 f'{available} bytes available, {report["disk_floor_bytes"]} bytes required')
 
 
-def _check_watchdog_runtime(report):
-    """Retain disk checks; receipt-local RAM/PSI stops become runtime telemetry."""
-    try:
-        _check_watchdog_disk_floor(report)
-    except ContainmentUnavailable as error:
-        state = report.get('host_pressure_guard')
-        reason = state.get('stop_reason') if isinstance(state, dict) else None
-        # Old receipt-local callbacks share this exact exception/report contract.
-        # Do not suppress disk, observation, admission, or other callback failures.
-        if (type(error) is not ContainmentUnavailable or
-                type(report.get('child_pid')) is not int or report['child_pid'] <= 0 or
-                reason not in ('host_ram_stop_reserve', 'host_memory_pressure') or
-                state.get('last_check') != 'runtime' or state.get('stopped') is not True or
-                str(error) != 'Host pressure safety stop: ' + reason):
-            raise
-        state['runtime_pressure_reason'] = state.pop('stop_reason')
-        state['stopped'] = False
-    state = report.get('host_pressure_guard')
-    if isinstance(state, dict) and state.get('last_check') == 'runtime':
-        state['runtime_termination_enabled'] = False
+
+
+def sample_host_memory():
+    """Observe RAM/swap/PSI without changing admission or process ownership."""
+    memory = {}
+    for line in Path('/proc/meminfo').read_text().splitlines():
+        key, value = line.split(':', 1)
+        fields = value.split()
+        if key in ('MemTotal', 'MemAvailable', 'SwapTotal', 'SwapFree'):
+            if len(fields) != 2 or fields[1] != 'kB':
+                raise ValueError('Unexpected host memory units')
+            memory[key] = int(fields[0]) * 1024
+    pressure = {}
+    for line in Path('/proc/pressure/memory').read_text().splitlines():
+        fields = line.split()
+        pressure[fields[0]] = dict(x.split('=', 1) for x in fields[1:])
+    return dict(mem_total_bytes=memory['MemTotal'],
+                mem_available_bytes=memory['MemAvailable'],
+                swap_total_bytes=memory['SwapTotal'], swap_free_bytes=memory['SwapFree'],
+                psi_some_avg10=float(pressure['some']['avg10']),
+                psi_full_avg10=float(pressure['full']['avg10']), observed_unix=time.time())
+
+
+class HostMemoryObservation:
+    """Explicit opt-in RAM admission; runtime pressure is diagnostic only."""
+    def __init__(self, policy, sampler=sample_host_memory):
+        # The caller binds the complete reviewed receipt policy; no global hook.
+        self.policy = dict(policy)
+        if (type(policy['admission_mem_available_bytes']) is not int or
+                policy['admission_mem_available_bytes'] <= 0 or
+                policy['admission_pressure_advisory'] is not True or
+                policy['runtime_termination_enabled'] is not False or
+                policy['swap_counted_as_ram_headroom'] is not False or
+                policy['poll_seconds'] != WATCHDOG_POLL_SECONDS):
+            raise ValueError('Invalid host observation policy')
+        self.sampler = sampler
+
+    def sample(self):
+        value = self.sampler()
+        self.validate_sample(value)
+        return value
+
+    @staticmethod
+    def validate_sample(value):
+        for key in ('mem_total_bytes', 'mem_available_bytes', 'swap_total_bytes', 'swap_free_bytes'):
+            if type(value[key]) is not int or value[key] < 0:
+                raise ValueError('Invalid host memory sample: ' + key)
+        if not 0 < value['mem_total_bytes'] or value['mem_available_bytes'] > value['mem_total_bytes']:
+            raise ValueError('Invalid available host memory')
+        if value['swap_free_bytes'] > value['swap_total_bytes']:
+            raise ValueError('Invalid available swap')
+        for key in ('psi_some_avg10', 'psi_full_avg10'):
+            if not math.isfinite(value[key]) or not 0 <= value[key] <= 100:
+                raise ValueError('Invalid memory pressure sample: ' + key)
+
+    def admission_reason(self, sample):
+        self.validate_sample(sample)
+        if sample['mem_available_bytes'] < self.policy['admission_mem_available_bytes']:
+            return 'host_ram_admission_reserve'
+        return None
+
+    def __call__(self, report):
+        state = report.setdefault('host_pressure_guard', dict(policy=dict(self.policy), stopped=False))
+        admission = 'child_pid' not in report
+        try:
+            current = self.sample()
+            stop = self.admission_reason(current) if admission else None
+            state.update(last_sample=current, last_check='admission' if admission else 'runtime')
+            state['minimum_mem_available_bytes'] = min(state.get('minimum_mem_available_bytes', current['mem_available_bytes']), current['mem_available_bytes'])
+            state['maximum_full_psi_avg10'] = max(state.get('maximum_full_psi_avg10', current['psi_full_avg10']), current['psi_full_avg10'])
+        except (OSError, ValueError, KeyError, IndexError, TypeError, OverflowError) as error:
+            state.update(observation_error=str(error), last_check='admission' if admission else 'runtime')
+            if admission:
+                state.update(stopped=True, stop_reason='host_pressure_observation_failed')
+                raise ContainmentUnavailable('Host pressure observation failed: ' + str(error)) from error
+            return
+        if stop:
+            state.update(stopped=True, stop_reason=stop)
+            raise ContainmentUnavailable('Host pressure safety stop: ' + stop)
+
+
+def _check_watchdog_observation(report, host_observation=None):
+    # Disk failures precede host telemetry at admission and during execution.
+    _check_watchdog_disk_floor(report)
+    if host_observation is not None:
+        host_observation(report)
+
+
+class AdmissionRefused(ContainmentUnavailable):
+    def __init__(self, reason, sample=None):
+        super().__init__(reason)
+        self.reason, self.sample = reason, sample
+
+
+def wait_for_build_admission(*, deadline_unix, locks, host_observation,
+                             final_guard, record_refusal, once=False, poll_seconds=60):
+    """Return held lock FDs and fresh sample; caller owns release after admission.
+
+    record_refusal receives (reason, sample); it owns durable numbering/writes.
+    No child, guardian, monitor, retry owner or source policy is created here.
+    """
+    if (type(deadline_unix) not in (int, float) or not math.isfinite(deadline_unix) or
+            type(poll_seconds) not in (int, float) or not math.isfinite(poll_seconds) or
+            poll_seconds <= 0 or type(once) is not bool or not locks):
+        raise ValueError('Invalid finite admission parameters')
+    while time.time() < deadline_unix:
+        sample = host_observation.sample()
+        reason = host_observation.admission_reason(sample)
+        fds = []
+        admitted = False
+        try:
+            if reason is None:
+                for lock in locks:
+                    fd = os.open(lock['path'], os.O_RDWR | os.O_NOFOLLOW)
+                    fds.append(fd)
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        reason = 'shared_resource_owner'
+                        break
+                    info = os.fstat(fd)
+                    if (info.st_dev, info.st_ino) != (lock['dev'], lock['ino']):
+                        raise ContainmentUnavailable('Admission lock identity changed')
+                if reason is None:
+                    final_guard()
+                    sample = host_observation.sample()
+                    reason = host_observation.admission_reason(sample)
+                    if reason is None:
+                        if time.time() >= deadline_unix:
+                            raise AdmissionRefused('deadline-before-admission', sample)
+                        admitted = True
+                        return fds, sample
+        finally:
+            if not admitted:
+                for fd in fds:
+                    os.close(fd)
+        record_refusal(reason, sample)
+        if once:
+            raise AdmissionRefused(reason, sample)
+        time.sleep(min(poll_seconds, max(0, deadline_unix - time.time())))
+    raise AdmissionRefused('deadline-before-admission')
 
 
 def _watchdog_cpu_set(max_cpus, available):
@@ -574,6 +696,16 @@ def _watchdog_cpu_set(max_cpus, available):
     return available[:slots]
 
 
+def watchdog_open_files_limit(requested, inherited_hard):
+    """Validate a finite request and never raise the inherited hard limit."""
+    if type(requested) is not int or not 1 <= requested <= sys.maxsize:
+        raise ContainmentUnavailable('Watchdog open-file limit must be a finite positive integer')
+    effective = requested if inherited_hard == resource.RLIM_INFINITY else min(requested, inherited_hard)
+    if effective <= 0:
+        raise ContainmentUnavailable('Inherited open-file limit admits no descriptors')
+    return effective
+
+
 def _watchdog_child_nice(requested, inherited):
     """Preserve legacy relative +15, or require an explicit nonnegative target."""
     if requested is None:
@@ -588,9 +720,12 @@ def _watchdog_child_nice(requested, inherited):
 def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WALL_SECONDS,
                        memory_limit_bytes=MAX_BUILD_MEMORY, max_tasks=MAX_BUILD_PIDS, max_cpus=4,
                        address_space_limit_bytes=None, disk_paths=None,
-                       disk_floor_bytes=BUILD_DISK_RESERVE_BYTES, child_nice=None):
+                       disk_floor_bytes=BUILD_DISK_RESERVE_BYTES, child_nice=None,
+                       host_observation=None, max_open_files=512):
     """Opt-in sampled fallback. Its aggregate cap is best effort, not a cgroup."""
     inherited_nice = os.getpriority(os.PRIO_PROCESS, 0)
+    effective_open_files = watchdog_open_files_limit(
+        max_open_files, resource.getrlimit(resource.RLIMIT_NOFILE)[1])
     expected_child_nice = _watchdog_child_nice(child_nice, inherited_nice)
     if type(wall_seconds) not in (int, float) or not 0 < wall_seconds <= MAX_WATCHDOG_WALL_SECONDS:
         raise ContainmentUnavailable('Invalid watchdog wall limit')
@@ -630,6 +765,7 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
               'cpus': cpus, 'max_cpus': max_cpus,
               'requested_child_nice': child_nice, 'inherited_nice': inherited_nice,
               'expected_child_nice': expected_child_nice, 'child_nice': None,
+              'requested_max_open_files': max_open_files, 'max_open_files': effective_open_files,
               'disk_floor_bytes': disk_floor_bytes, 'disk_space': disk_roots,
               'disk_sample_interval_seconds': WATCHDOG_POLL_SECONDS,
               'disk_limit': 'sampled free-space reserve; expansion and concurrent writes are not bounded',
@@ -638,7 +774,7 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
     reason = None
     try:
         # Refuse before creating a child when the reserve is already spent.
-        _check_watchdog_disk_floor(report)
+        _check_watchdog_observation(report, host_observation)
         # The supervisor and guardian share the build's selected CPU set.
         os.sched_setaffinity(0, cpus)
         if libc.prctl(37, ctypes.byref(was_subreaper), 0, 0, 0) != 0 or \
@@ -720,7 +856,7 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
             else:
                 bound_rlimit(resource.RLIMIT_AS, address_space_limit_bytes)
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-            bound_rlimit(resource.RLIMIT_NOFILE, 512)
+            bound_rlimit(resource.RLIMIT_NOFILE, max_open_files)
             cpu_limit = max(1, min(MAX_WATCHDOG_WALL_SECONDS, int(wall_seconds)))
             bound_rlimit(resource.RLIMIT_CPU, cpu_limit)
             child_stat = Path('/proc/self/stat').read_text()
@@ -788,7 +924,7 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
             report['peak_rss_bytes'] = max(report['peak_rss_bytes'], aggregate_rss)
             report['peak_tasks'] = max(report['peak_tasks'], aggregate_tasks)
             report['elapsed_seconds'] = elapsed
-            _check_watchdog_runtime(report)
+            _check_watchdog_observation(report, host_observation)
             if aggregate_pss > memory_limit_bytes:
                 reason = 'sampled_pss_limit'
             elif aggregate_tasks > max_tasks:

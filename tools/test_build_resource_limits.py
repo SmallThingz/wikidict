@@ -368,92 +368,86 @@ class ResourceLimitsTest(unittest.TestCase):
             with self.assertRaisesRegex(limits.ContainmentUnavailable, 'Cannot inspect live threads'):
                 limits._live_mm_siblings(100)
 
-    def host_pressure_callback(self, reason, *, admission=False):
-        disk_check = limits._check_watchdog_disk_floor
-
-        def checked(report):
-            disk_check(report)
-            if ('child_pid' not in report) != admission:
-                return
-            report['host_pressure_guard'] = {
-                'last_check': 'admission' if admission else 'runtime',
-                'last_sample': {'mem_available_bytes': 1, 'psi_full_avg10': 99.0},
-                'stopped': True, 'stop_reason': reason,
-            }
-            raise limits.ContainmentUnavailable('Host pressure safety stop: ' + reason)
-
-        return checked
-
     def test_runtime_ram_and_psi_pressure_are_telemetry(self):
-        for reason in ('host_ram_stop_reserve', 'host_memory_pressure'):
-            with self.subTest(reason=reason):
-                report = {'child_pid': 123, 'disk_space': []}
-                callback = self.host_pressure_callback(reason)
-                with patch.object(limits, '_check_watchdog_disk_floor', callback):
-                    limits._check_watchdog_runtime(report)
-                state = report['host_pressure_guard']
-                self.assertEqual(state['runtime_pressure_reason'], reason)
-                self.assertFalse(state['stopped'])
-                self.assertFalse(state['runtime_termination_enabled'])
-                self.assertNotIn('stop_reason', state)
-                self.assertEqual(state['last_sample']['mem_available_bytes'], 1)
+        observer = self.explicit_host_observer()
+        observer.sample()  # Consume the adequate admission observation.
+        report = {'child_pid': 123}
+        with patch.object(limits, '_check_watchdog_disk_floor') as disk:
+            limits._check_watchdog_observation(report, observer)
+        disk.assert_called_once_with(report)
+        state = report['host_pressure_guard']
+        self.assertFalse(state['stopped'])
+        self.assertFalse(state['policy']['runtime_termination_enabled'])
+        self.assertNotIn('stop_reason', state)
+        self.assertEqual(state['last_sample']['mem_available_bytes'], 1)
+        self.assertEqual(state['last_sample']['psi_full_avg10'], 99.0)
 
     def test_host_pressure_admission_still_refuses_before_launch(self):
-        for reason in ('host_ram_admission_reserve', 'host_pressure_admission'):
-            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as tmp:
-                callback = self.host_pressure_callback(reason, admission=True)
-                with patch.object(limits, '_check_watchdog_disk_floor', callback), \
-                     patch.object(limits.subprocess, 'Popen') as launch:
-                    with self.assertRaisesRegex(limits.ContainmentUnavailable, 'monitor_error'):
-                        limits.supervise_watchdog(
-                            argv=['-c', 'raise SystemExit(99)'],
-                            report_path=Path(tmp) / 'watchdog.json', wall_seconds=10,
-                            memory_limit_bytes=64 * 1024**2, max_tasks=4)
-                launch.assert_not_called()
-                report = json.loads((Path(tmp) / 'watchdog.json').read_text())
-                self.assertEqual(report['error'], 'Host pressure safety stop: ' + reason)
-                self.assertNotIn('child_pid', report)
-                self.assertTrue(report['host_pressure_guard']['stopped'])
+        observer = self.explicit_host_observer()
+        observer.sample()
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(limits.subprocess, 'Popen') as launch:
+                with self.assertRaisesRegex(limits.ContainmentUnavailable, 'monitor_error'):
+                    limits.supervise_watchdog(
+                        argv=['-c', 'raise SystemExit(99)'],
+                        report_path=Path(tmp) / 'watchdog.json', wall_seconds=10,
+                        memory_limit_bytes=64 * 1024**2, max_tasks=4,
+                        host_observation=observer)
+            launch.assert_not_called()
+            report = json.loads((Path(tmp) / 'watchdog.json').read_text())
+            self.assertEqual(report['error'], 'Host pressure safety stop: host_ram_admission_reserve')
+            self.assertNotIn('child_pid', report)
+            self.assertTrue(report['host_pressure_guard']['stopped'])
 
     def test_runtime_pressure_policy_preserves_other_failures(self):
-        errors = [limits._DiskFloorReached('Host pressure safety stop: host_ram_stop_reserve'),
+        errors = [limits._DiskFloorReached('reserve exhausted'),
                   limits.ContainmentUnavailable('Cannot measure free disk space'),
-                  limits.ContainmentUnavailable('Host pressure observation failed: denied'),
-                  OSError('disk I/O'), RuntimeError('unknown callback failure')]
+                  OSError('disk I/O'), RuntimeError('unknown disk failure')]
         for error in errors:
             with self.subTest(error=repr(error)):
-                # A stale previous pressure observation must not hide a new failure.
-                report = {'child_pid': 123, 'host_pressure_guard': {
-                    'last_check': 'runtime', 'stopped': True,
-                    'stop_reason': 'host_ram_stop_reserve'}}
+                observer = Mock()
+                report = {'child_pid': 123}
                 with patch.object(limits, '_check_watchdog_disk_floor', side_effect=error):
                     with self.assertRaises(type(error)) as caught:
-                        limits._check_watchdog_runtime(report)
+                        limits._check_watchdog_observation(report, observer)
                 self.assertIs(caught.exception, error)
-        for child in (None, 123):
-            report = {'host_pressure_guard': {'last_check': 'admission', 'stopped': True,
-                                             'stop_reason': 'host_ram_stop_reserve'}}
-            if child is not None:
-                report['child_pid'] = child
-            error = limits.ContainmentUnavailable('Host pressure safety stop: host_ram_stop_reserve')
-            with patch.object(limits, '_check_watchdog_disk_floor', side_effect=error):
-                with self.assertRaises(limits.ContainmentUnavailable):
-                    limits._check_watchdog_runtime(report)
+                observer.assert_not_called()
+
+    def explicit_host_observer(self):
+        # Adequate admission RAM, then exhausted host RAM throughout execution.
+        observations = 0
+        def sample():
+            nonlocal observations
+            observations += 1
+            return dict(mem_total_bytes=16 * 1024**3,
+                        mem_available_bytes=6 * 1024**3 if observations == 1 else 1,
+                        swap_total_bytes=0, swap_free_bytes=0,
+                        psi_some_avg10=99.0, psi_full_avg10=99.0,
+                        observed_unix=observations)
+        return limits.HostMemoryObservation(dict(
+            job_memory_ceiling_bytes=64 * 1024**2,
+            admission_mem_available_bytes=5 * 1024**3,
+            admission_pressure_advisory=True, runtime_termination_enabled=False,
+            swap_allowed=True, swap_counted_as_ram_headroom=False,
+            poll_seconds=0.2, kernel_hard_cap=False), sample)
 
     def test_runtime_pressure_does_not_stop_a_started_child(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'watchdog.json'
-            callback = self.host_pressure_callback('host_memory_pressure')
-            with patch.object(limits, '_check_watchdog_disk_floor', callback):
-                status = limits.supervise_watchdog(
-                    argv=['-c', 'import time, build_resource_limits as l; assert l.inside_watchdog(); time.sleep(0.3)'],
-                    report_path=path, wall_seconds=10,
-                    memory_limit_bytes=64 * 1024**2, max_tasks=4)
+            status = limits.supervise_watchdog(
+                argv=['-c', 'import time, build_resource_limits as l; assert l.inside_watchdog(); time.sleep(0.3)'],
+                report_path=path, wall_seconds=10,
+                memory_limit_bytes=64 * 1024**2, max_tasks=4,
+                host_observation=self.explicit_host_observer())
             report = json.loads(path.read_text())
             self.assertEqual(status, 0)
             self.assertEqual(report['termination_reason'], 'child_exit')
             self.assertFalse(report['host_pressure_guard']['stopped'])
             self.assertEqual(report['guardian_exit_status'], 0)
+            self.assertEqual(report['host_pressure_guard']['last_sample']['mem_available_bytes'], 1)
+            self.assertEqual(report['memory_limit_bytes'], 64 * 1024**2)
+            remaining = limits._process_table().get(report['child_pid'])
+            self.assertTrue(remaining is None or remaining['start'] != report['child_start_time_ticks'])
 
     def test_runtime_pressure_does_not_weaken_own_memory_cap(self):
         original_sample = limits._owned_sample
@@ -464,19 +458,23 @@ class ResourceLimitsTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'watchdog.json'
-            callback = self.host_pressure_callback('host_ram_stop_reserve')
-            with patch.object(limits, '_check_watchdog_disk_floor', callback), \
-                 patch.object(limits, '_owned_sample', side_effect=over_budget):
+            with patch.object(limits, '_owned_sample', side_effect=over_budget), \
+                 patch.object(limits, '_signal_owned', wraps=limits._signal_owned) as cleanup_signals:
                 with self.assertRaisesRegex(limits.ContainmentUnavailable, 'sampled_pss_limit'):
                     limits.supervise_watchdog(
                         argv=['-c', 'import time; time.sleep(5)'],
                         report_path=path, wall_seconds=10,
-                        memory_limit_bytes=64 * 1024**2, max_tasks=4)
+                        memory_limit_bytes=64 * 1024**2, max_tasks=4,
+                        host_observation=self.explicit_host_observer())
             report = json.loads(path.read_text())
             self.assertEqual(report['termination_reason'], 'sampled_pss_limit')
             self.assertEqual(report['memory_limit_bytes'], 64 * 1024**2)
             self.assertFalse(report['host_pressure_guard']['stopped'])
-            self.assertFalse(Path('/proc', str(report['child_pid'])).exists())
+            self.assertEqual(report['host_pressure_guard']['last_sample']['mem_available_bytes'], 1)
+            self.assertTrue(any(call.args[0].get(report['child_pid']) == report['child_start_time_ticks']
+                                for call in cleanup_signals.call_args_list))
+            remaining = limits._process_table().get(report['child_pid'])
+            self.assertTrue(remaining is None or remaining['start'] != report['child_start_time_ticks'])
 
     def test_guardian_child_birth_recovery_requires_exact_invocation(self):
         record = dict(root_pid=200, root_start=12, supervisor_pid=100,
@@ -766,6 +764,230 @@ class ResourceLimitsTest(unittest.TestCase):
             report=json.loads(report_path.read_text())
             self.assertEqual(inherited,report['requested_child_nice'])
             self.assertEqual(inherited,report['child_nice'])
+
+
+# Append before the existing unittest.main block in tools/test_build_resource_limits.py.
+class ExplicitAdmissionTest(unittest.TestCase):
+    @staticmethod
+    def policy():
+        return dict(admission_mem_available_bytes=5 * 1024**3,
+                    admission_pressure_advisory=True, runtime_termination_enabled=False,
+                    swap_counted_as_ram_headroom=False, poll_seconds=0.2)
+
+    @staticmethod
+    def sample(available=6 * 1024**3):
+        return dict(mem_total_bytes=16 * 1024**3, mem_available_bytes=available,
+                    swap_total_bytes=8 * 1024**3, swap_free_bytes=8 * 1024**3,
+                    psi_some_avg10=99.0, psi_full_avg10=99.0, observed_unix=1.0)
+
+    def observer(self, *samples):
+        return limits.HostMemoryObservation(self.policy(), Mock(side_effect=samples))
+
+    def test_swap_and_psi_do_not_supply_ram_or_veto_sufficient_ram(self):
+        obs = self.observer(self.sample(), self.sample(1))
+        self.assertIsNone(obs.admission_reason(obs.sample()))
+        self.assertEqual(obs.admission_reason(obs.sample()), 'host_ram_admission_reserve')
+
+    def test_admission_observation_failure_refuses_but_runtime_failure_is_recorded(self):
+        obs = self.observer(OSError('unreadable'), OSError('unreadable'))
+        report = {}
+        with self.assertRaises(limits.ContainmentUnavailable):
+            obs(report)
+        self.assertEqual(report['host_pressure_guard']['stop_reason'], 'host_pressure_observation_failed')
+        running = {'child_pid': 123}
+        obs(running)
+        self.assertEqual(running['host_pressure_guard']['observation_error'], 'unreadable')
+        self.assertFalse(running['host_pressure_guard']['stopped'])
+
+    def test_runtime_low_ram_does_not_stop_and_retains_extrema(self):
+        obs = self.observer(self.sample(2), self.sample(1))
+        report = {'child_pid': 123}
+        obs(report)
+        obs(report)
+        state = report['host_pressure_guard']
+        self.assertEqual(state['minimum_mem_available_bytes'], 1)
+        self.assertEqual(state['maximum_full_psi_avg10'], 99.0)
+        self.assertFalse(state['stopped'])
+        self.assertNotIn('stop_reason', state)
+
+    def test_disk_failure_precedes_observer_at_both_check_sites(self):
+        obs = Mock()
+        with patch.object(limits, '_check_watchdog_disk_floor', side_effect=limits.ContainmentUnavailable('disk')):
+            with self.assertRaisesRegex(limits.ContainmentUnavailable, 'disk'):
+                limits._check_watchdog_observation({}, obs)
+        obs.assert_not_called()
+        events = []
+        with patch.object(limits, '_check_watchdog_disk_floor', side_effect=lambda report: events.append('disk/runtime')):
+            limits._check_watchdog_observation({'child_pid': 123}, lambda report: events.append('host'))
+        self.assertEqual(events, ['disk/runtime', 'host'])
+
+    def test_malformed_sample_and_runtime_stop_policy_are_rejected(self):
+        bad = self.sample()
+        bad['mem_available_bytes'] = True
+        with self.assertRaises(ValueError):
+            self.observer(bad).sample()
+        policy = self.policy()
+        policy['runtime_termination_enabled'] = True
+        with self.assertRaises(ValueError):
+            limits.HostMemoryObservation(policy)
+
+    def admission(self, observer, *, guard=None, record=None, once=True, deadline=100):
+        return limits.wait_for_build_admission(
+            deadline_unix=deadline,
+            locks=[dict(path='/owned/lock' + str(i), dev=1, ino=i) for i in range(4)],
+            host_observation=observer, final_guard=guard or Mock(),
+            record_refusal=record or Mock(), once=once)
+
+    def test_low_ram_does_not_open_locks_or_hash_and_records_original_reason(self):
+        guard, record = Mock(), Mock()
+        with patch.object(limits.time, 'time', return_value=1), patch.object(limits.os, 'open') as opened:
+            with self.assertRaises(limits.AdmissionRefused) as caught:
+                self.admission(self.observer(self.sample(1)), guard=guard, record=record)
+        opened.assert_not_called()
+        guard.assert_not_called()
+        self.assertEqual(caught.exception.reason, 'host_ram_admission_reserve')
+        self.assertEqual(record.call_args.args[0], 'host_ram_admission_reserve')
+
+    def lock_mocks(self, stack, events, blocking=False, changed=False):
+        from types import SimpleNamespace
+        stack.enter_context(patch.object(limits.os, 'open', side_effect=lambda path, flags: events.append(('open', path)) or (10 + int(path[-1]))))
+        def flock(fd, flags):
+            events.append(('lock', fd))
+            if blocking and fd == 11:
+                raise BlockingIOError()
+        stack.enter_context(patch.object(limits.fcntl, 'flock', side_effect=flock))
+        stack.enter_context(patch.object(limits.os, 'fstat', side_effect=lambda fd: SimpleNamespace(st_dev=2 if changed else 1, st_ino=fd - 10)))
+        return stack.enter_context(patch.object(limits.os, 'close', side_effect=lambda fd: events.append(('close', fd))))
+
+    def test_four_locks_precede_guard_fresh_sample_and_held_fds_transfer(self):
+        events = []
+        def sample():
+            events.append('sample')
+            return self.sample()
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(limits.time, 'time', return_value=1))
+            closed = self.lock_mocks(stack, events)
+            fds, sample_value = self.admission(limits.HostMemoryObservation(self.policy(), sample), guard=lambda: events.append('guard'))
+        self.assertEqual(fds, [10, 11, 12, 13])
+        self.assertEqual(events[-2:], ['guard', 'sample'])
+        self.assertEqual(sum(isinstance(e, tuple) and e[0] == 'lock' for e in events), 4)
+        closed.assert_not_called()
+        self.assertEqual(sample_value, self.sample())
+
+    def test_contended_lock_closes_partial_set_without_guard(self):
+        events, guard = [], Mock()
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(limits.time, 'time', return_value=1))
+            closed = self.lock_mocks(stack, events, blocking=True)
+            with self.assertRaises(limits.AdmissionRefused) as caught:
+                self.admission(self.observer(self.sample()), guard=guard)
+        guard.assert_not_called()
+        self.assertEqual(caught.exception.reason, 'shared_resource_owner')
+        self.assertEqual([call.args[0] for call in closed.call_args_list], [10, 11])
+
+    def test_guard_blocking_io_propagates_without_refusal_or_sleep(self):
+        events, record = [], Mock(side_effect=AssertionError('unexpected refusal'))
+        error = BlockingIOError('source guard read failed')
+        observer = self.observer(self.sample())
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(limits.time, 'time', return_value=1))
+            slept = stack.enter_context(patch.object(limits.time, 'sleep', side_effect=AssertionError('unexpected retry')))
+            closed = self.lock_mocks(stack, events)
+            with self.assertRaises(BlockingIOError) as caught:
+                self.admission(observer, guard=Mock(side_effect=error), record=record, once=False)
+        self.assertIs(caught.exception, error)
+        self.assertEqual([call.args[0] for call in closed.call_args_list], [10, 11, 12, 13])
+        observer.sampler.assert_called_once()
+        record.assert_not_called()
+        slept.assert_not_called()
+
+    def test_guard_error_and_lock_identity_mismatch_close_without_retry(self):
+        for changed in (False, True):
+            events, record = [], Mock()
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(patch.object(limits.time, 'time', return_value=1))
+                closed = self.lock_mocks(stack, events, changed=changed)
+                with self.assertRaises((RuntimeError, limits.ContainmentUnavailable)):
+                    self.admission(self.observer(self.sample()), guard=Mock(side_effect=RuntimeError('source changed')), record=record)
+            record.assert_not_called()
+            self.assertEqual(closed.call_count, 1 if changed else 4)
+
+    def test_postguard_ram_refusal_closes_all_and_deadline_poll_is_clamped(self):
+        events, record = [], Mock()
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(limits.time, 'time', side_effect=[1, 95, 100]))
+            slept = stack.enter_context(patch.object(limits.time, 'sleep'))
+            closed = self.lock_mocks(stack, events)
+            with self.assertRaises(limits.AdmissionRefused) as caught:
+                self.admission(self.observer(self.sample(), self.sample(1)), record=record, once=False)
+        self.assertEqual(caught.exception.reason, 'deadline-before-admission')
+        self.assertEqual(closed.call_count, 4)
+        slept.assert_called_once_with(5)
+        self.assertEqual(record.call_count, 1)
+
+
+# Append before existing unittest.main in tools/test_build_resource_limits.py.
+class WatchdogOpenFilesTest(unittest.TestCase):
+    def test_open_files_rejects_invalid_requests_before_launch(self):
+        for value in (True, False, 0, -1, 1.5, float('inf'), '8192', None, sys.maxsize + 1):
+            with self.subTest(value=value), patch.object(limits.subprocess, 'Popen') as launch:
+                with self.assertRaisesRegex(limits.ContainmentUnavailable, 'finite positive integer'):
+                    limits.supervise_watchdog(max_open_files=value)
+                launch.assert_not_called()
+
+    def test_open_files_preserves_inherited_hard_limit(self):
+        self.assertEqual(limits.watchdog_open_files_limit(8192, 1024), 1024)
+        self.assertEqual(limits.watchdog_open_files_limit(512, 1024), 512)
+        self.assertEqual(limits.watchdog_open_files_limit(8192, limits.resource.RLIM_INFINITY), 8192)
+        with self.assertRaises(limits.ContainmentUnavailable):
+            limits.watchdog_open_files_limit(8192, 0)
+
+    def run_child_open_files(self, request=None):
+        requested = 512 if request is None else request
+        inherited = limits.resource.getrlimit(limits.resource.RLIMIT_NOFILE)[1]
+        expected = requested if inherited == limits.resource.RLIM_INFINITY else min(requested, inherited)
+        if request == 8192:
+            self.assertEqual(expected, 8192, 'Android lifecycle prerequisite: inherited NOFILE hard limit must permit8192')
+        # Prove the explicit Android setting can actually exceed the old512 cap
+        # when inherited hard limits permit, without changing the parent's limit.
+        count = 600 if expected >= 632 else 0
+        with tempfile.TemporaryDirectory() as tmp:
+            report_path = Path(tmp) / 'watchdog.json'
+            observed_path = Path(tmp) / 'child.json'
+            code = (
+                'import os,sys,json,resource,build_resource_limits as limits; '
+                'assert limits.inside_watchdog(); '
+                'expected=int(sys.argv[1]); count=int(sys.argv[2]); '
+                'soft,hard=resource.getrlimit(resource.RLIMIT_NOFILE); '
+                'assert (soft,hard)==(expected,expected),(soft,hard,expected); '
+                'fds=[os.open("/dev/null",os.O_RDONLY) for _ in range(count)]; '
+                'observed=dict(soft=soft,hard=hard,opened=len(fds)); '
+                '[os.close(fd) for fd in fds]; '
+                'open(sys.argv[3],"x").write(json.dumps(observed))'
+            )
+            kwargs = {} if request is None else dict(max_open_files=request)
+            status = limits.supervise_watchdog(
+                argv=['-c', code, str(expected), str(count), str(observed_path)],
+                report_path=report_path, memory_limit_bytes=64 * 1024**2,
+                max_tasks=4, wall_seconds=10, **kwargs)
+            report = json.loads(report_path.read_text())
+            self.assertEqual(status, 0)
+            self.assertEqual(json.loads(observed_path.read_text()), dict(soft=expected, hard=expected, opened=count))
+            self.assertEqual(report['requested_max_open_files'], requested)
+            self.assertEqual(report['max_open_files'], expected)
+            self.assertEqual(report['memory_limit_bytes'], 64 * 1024**2)
+            self.assertEqual(report['max_tasks'], 4)
+            self.assertEqual(report['wall_seconds'], 10)
+            self.assertEqual(report['termination_reason'], 'child_exit')
+            self.assertEqual(report['guardian_exit_status'], 0)
+            remaining = limits._process_table().get(report['child_pid'])
+            self.assertTrue(remaining is None or remaining['start'] != report['child_start_time_ticks'])
+
+    def test_watchdog_real_child_default_open_files_512(self):
+        self.run_child_open_files()
+
+    def test_watchdog_real_child_android_open_files_8192(self):
+        self.run_child_open_files(8192)
 
 
 if __name__ == '__main__':

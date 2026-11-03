@@ -71,6 +71,9 @@ zig build test-reader
 zig build test-storage
 ```
 
+The Reader/PTY and storage checks require Python 3 with `pyte` installed in the
+selected test environment.
+
 Build just the reader or C ABI:
 
 ```sh
