@@ -86,7 +86,7 @@ fn invocationArgumentsHash(a: std.mem.Allocator, args: []const []const u8) ![]co
 }
 
 fn captureFirstPresentationFailure(err: anyerror, job: ExpansionJob, expanded: bundle_expander.Expansion) void {
-    if (err != error.UncompiledPresentation and err != error.InvalidPreContext and err != error.InvalidHeadingProjection) return;
+    if (err != error.UncompiledPresentation and err != error.UncompiledTemplate and err != error.InvalidPreContext and err != error.InvalidHeadingProjection) return;
     const context = if (first_failure_capture_context) |*value| value else return;
     if (context.attempted) return;
     context.attempted = true;
@@ -362,6 +362,7 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
         defer a.free(bytes);
         try out.trustAutonymSnapshot(bytes, namespaces.wiki, namespaces.dump_date, namespaces.content_language);
     }
+    try loadSourceEquivalentLanguageTemplates(io, a, expander_root, namespaces, &out);
     return out;
 }
 
@@ -594,6 +595,119 @@ fn loadSourceLanguageBanners(io: std.Io, a: std.mem.Allocator, root: []const u8,
         defer if (decoded) |value| a.free(value);
         if (source_language_banner.parse(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code)) |proof|
             try registry.addSourceLanguageBanner(code, proof);
+    }
+}
+
+// A trusted language-named template and another parameter-independent template
+// may share one authenticated wrapper. Import only that source equivalence, not
+// an arbitrary code-named literal template as a new language authority.
+const SourceEquivalentTemplate = struct { row: dump_source.IndexedPage, ordinal: u64 };
+
+fn sourceEquivalentTerminal(rows: []const SourceEquivalentTemplate, names: *const std.StringHashMapUnmanaged(usize), namespaces: *const namespace_registry.Registry, start: usize) ?usize {
+    var current = start;
+    var seen: [8]usize = undefined;
+    var count: usize = 0;
+    while (true) {
+        for (seen[0..count]) |before| if (before == current) return null;
+        if (count == seen.len) return null;
+        seen[count] = current;
+        count += 1;
+        const row = rows[current].row;
+        const redirect = row.redirect orelse return if (row.has_source and std.mem.eql(u8, row.content_model, "wikitext")) current else null;
+        const target = namespaces.ofTitle(redirect);
+        if (target.id != 10 or std.mem.indexOfAny(u8, target.text, "#|") != null) return null;
+        current = names.get(target.text) orelse return null;
+    }
+}
+
+fn sourceEquivalentWrapperCode(source: []const u8, namespaces: *const namespace_registry.Registry) ?[]const u8 {
+    const raw = std.mem.trim(u8, source, " \t\r\n");
+    const prefix = "[[{{";
+    const separator = "}}]]<includeonly>[[";
+    if (!std.mem.startsWith(u8, raw, prefix)) return null;
+    const split = std.mem.indexOfPos(u8, raw, prefix.len, separator) orelse return null;
+    const code = raw[prefix.len..split];
+    if (code.len == 0 or std.mem.indexOfAny(u8, code, "{}[]<>|=:# \t\r\n") != null) return null;
+    var rest = raw[split + separator.len ..];
+    const included_end = std.mem.indexOf(u8, rest, "]]</includeonly><noinclude>[[") orelse return null;
+    const category = rest[0..included_end];
+    const call = std.mem.indexOf(u8, category, "{{") orelse return null;
+    if (!std.mem.endsWith(u8, category, "}}") or category.len != call + code.len + 4 or
+        !std.mem.eql(u8, category[call + 2 .. category.len - 2], code) or
+        std.mem.indexOfAny(u8, category[0..call], "{}[]<>|\r\n") != null or
+        namespaces.ofTitle(category[0..call]).id != 14) return null;
+    rest = rest[included_end + "]]</includeonly><noinclude>[[".len ..];
+    const suffix = "]]</noinclude>";
+    if (!std.mem.endsWith(u8, rest, suffix)) return null;
+    const documentation = rest[0 .. rest.len - suffix.len];
+    if (std.mem.indexOfAny(u8, documentation, "{}[]<>|\r\n") != null or namespaces.ofTitle(documentation).id != 14) return null;
+    return code;
+}
+
+fn sourceEquivalentLiteral(source: []const u8) bool {
+    const raw = std.mem.trim(u8, source, " \t\r\n");
+    if (raw.len == 0 or !std.mem.eql(u8, raw, source) or std.mem.indexOfAny(u8, raw, "{}[]<>|=&#:\r\n\t'\"_~*;!") != null) return false;
+    for (raw) |byte| if (byte < 0x20 or byte == 0x7f) return false;
+    return true;
+}
+
+fn loadSourceEquivalentLanguageTemplates(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, registry: *language_registry.Registry) !void {
+    const path = try std.fs.path.join(a, &.{ root, "page-index.tsv" }); defer a.free(path);
+    var index = mmapPath(io, path) catch |err| switch (err) { error.FileNotFound => return, else => return err };
+    defer index.deinit();
+    var templates: ?dump_source.TemplateSource = null;
+    defer if (templates) |*value| value.deinit();
+    var rows: std.ArrayList(SourceEquivalentTemplate) = .empty; defer rows.deinit(a);
+    var names: std.StringHashMapUnmanaged(usize) = .empty; defer names.deinit(a);
+    var lines = std.mem.splitScalar(u8, index.bytes, '\n');
+    var ordinal: u64 = 0;
+    const kind = dump_source.pageIndexKind(index.bytes);
+    while (lines.next()) |line| {
+        if (line.len == 0 or line[0] == '#') continue;
+        const row = try dump_source.parsePageIndexLine(kind, line);
+        const current = ordinal; ordinal += 1;
+        if (row.ns != 10) continue;
+        const title = namespaces.ofTitle(row.title);
+        if (title.id != 10) continue;
+        const entry = try names.getOrPut(a, title.text);
+        if (entry.found_existing) return error.DuplicateLanguageTemplateSource;
+        entry.value_ptr.* = rows.items.len;
+        try rows.append(a, .{ .row = row, .ordinal = current });
+    }
+    var owners: std.AutoHashMapUnmanaged(usize, ?[]const u8) = .empty; defer owners.deinit(a);
+    var proven: std.AutoHashMapUnmanaged(usize, void) = .empty; defer proven.deinit(a);
+    // Finish all trusted seeds before adding aliases; a new alias cannot seed
+    // another proof, and competing original owners make the wrapper ambiguous.
+    for (rows.items, 0..) |entry, i| {
+        const title = namespaces.ofTitle(entry.row.title);
+        const trusted = registry.resolveStrong(title.text) orelse registry.resolveTrusted(title.text) orelse continue;
+        const terminal = sourceEquivalentTerminal(rows.items, &names, namespaces, i) orelse continue;
+        const owner = try owners.getOrPut(a, terminal);
+        if (!owner.found_existing) owner.value_ptr.* = trusted.code else if (owner.value_ptr.*) |before| {
+            if (!std.mem.eql(u8, before, trusted.code)) owner.value_ptr.* = null;
+        }
+        const wrapper = rows.items[terminal];
+        if (templates == null) templates = (try dump_source.TemplateSource.open(io, a, root, index.bytes)) orelse return;
+        const raw = (try templates.?.lookup(wrapper.ordinal, wrapper.row.page_id, wrapper.row.revision_id)) orelse return error.MissingLanguageTemplateSource;
+        if (raw.len > 4096) continue;
+        const decoded = if (wrapper.row.source_needs_decode) try xml_decode.decodeSinglePassAlloc(a, raw) else null; defer if (decoded) |value| a.free(value);
+        const code = sourceEquivalentWrapperCode(decoded orelse raw, namespaces) orelse continue;
+        if (!std.mem.eql(u8, code, trusted.code)) continue;
+        const leaf_index = names.get(code) orelse continue;
+        const leaf = rows.items[leaf_index];
+        if (leaf.row.redirect != null or !leaf.row.has_source or !std.mem.eql(u8, leaf.row.content_model, "wikitext")) continue;
+        const leaf_raw = (try templates.?.lookup(leaf.ordinal, leaf.row.page_id, leaf.row.revision_id)) orelse return error.MissingLanguageTemplateSource;
+        if (leaf_raw.len > 4096) continue;
+        const leaf_decoded = if (leaf.row.source_needs_decode) try xml_decode.decodeSinglePassAlloc(a, leaf_raw) else null; defer if (leaf_decoded) |value| a.free(value);
+        if (!sourceEquivalentLiteral(leaf_decoded orelse leaf_raw)) continue;
+        try proven.put(a, terminal, {});
+    }
+    for (rows.items, 0..) |entry, i| {
+        const terminal = sourceEquivalentTerminal(rows.items, &names, namespaces, i) orelse continue;
+        if (!proven.contains(terminal)) continue;
+        const code = (owners.get(terminal) orelse continue) orelse continue;
+        const title = namespaces.ofTitle(entry.row.title);
+        try registry.addLocalAlias(title.text, code);
     }
 }
 
@@ -7083,4 +7197,289 @@ test "normal positional language loader declines absent foreign or unproved prov
     try PositionalModuleTest.install(io, a, root, "မော်ဂျူး:languages", "မော်ဂျူး:languages/data/2", language_registry.PositionalProviderSchema.source);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "modules", "132659.lua" }), .data = "return {}" });
     try std.testing.expectError(error.LanguageSourceIdentityMismatch, loadLanguageRegistry(io, a, root, &namespaces));
+}
+
+const KyFlagBannerTest = struct {
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tkywiktionary\n# dump-date\t20261001\n# content-language\tky\n0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n6\tФайл\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tfiles\n10\tКалып\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n14\tКатегория\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tcategories\n";
+    const registry = "# content-language\tky\n# mediawiki\nky\tкыргызча\tКыргызча\tky\tKirghiz\tkir\nen\tEnglish\n";
+    // Exact XML text bytes of retained Калып:-ky-, page82285/revision203294.
+    const template_raw = "==[[File:Flag of Kyrgyzstan.svg|50px]] Кыргызча==\n\n&lt;includeonly&gt;[[Category:Кыргыз тили]]&lt;/includeonly&gt;";
+    const heading = "[[File:Flag of Kyrgyzstan.svg|50px]] Кыргызча";
+    // Synthetic body exercises nested definitions and stored links; this is not
+    // an actual аалам expansion capture or a native producer acceptance claim.
+    const expanded = "==[[File:Flag of Kyrgyzstan.svg|50px]] Кыргызча==\n[[Category:Кыргыз тили]]\n=== Семантикалык касиеттери ===\n==== Мааниси ====\n# [[дүйнө]], дүйнө жүзү.\n# Асман мейкиндиги.\n";
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8, source: []const u8) !void {
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = registry });
+        const index = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index, .data = "0\t0\tКалып:-ky-\t\t82285\t203294\t2025-01-01T00:00:00Z\tA\twikitext\t10\t1\t1\n" });
+        var writer = try dump_source.TemplateSourceWriter.init(io, a, root); defer writer.deinit();
+        try writer.append(0, 82285, 203294, source); try writer.finish(index);
+    }
+};
+
+test "source flagged language banner requires literal neutral icon and known exact name" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var namespaces = try namespace_registry.Registry.init(a, KyFlagBannerTest.namespaces); defer namespaces.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(KyFlagBannerTest.registry);
+    const source = try xml_decode.decodeSinglePassAlloc(a, KyFlagBannerTest.template_raw);
+    const proof = source_language_banner.parse(source, &namespaces, null, &registry, "ky").?;
+    try std.testing.expectEqualStrings(KyFlagBannerTest.heading, proof.heading);
+    try std.testing.expectEqual(@as(u8, 2), proof.level);
+    try std.testing.expect(source_language_banner.parse(try std.mem.concat(a, u8, &.{ "\n", source }), &namespaces, null, &registry, "ky") != null);
+    for ([_][]const u8{ " ", "\t", "\n ", "\n\t" }) |indent|
+        try std.testing.expect(source_language_banner.parse(try std.mem.concat(a, u8, &.{ indent, source }), &namespaces, null, &registry, "ky") == null);
+    for ([_][]const u8{
+        "==[[File:Flag of Kyrgyzstan.svg|50px]] English==\n<includeonly>[[Category:Кыргыз тили]]</includeonly>",
+        "==[[File:Flag of Kyrgyzstan.svg|50px]] Unknown==\n<includeonly>[[Category:Кыргыз тили]]</includeonly>",
+        "==[[English|50px]] Кыргызча==\n<includeonly>[[Category:Кыргыз тили]]</includeonly>",
+        "==[[File:Flag.svg|50px|link=English]] Кыргызча==\n<includeonly>[[Category:Кыргыз тили]]</includeonly>",
+        "==[[File:Flag.svg|thumb]] Кыргызча==\n<includeonly>[[Category:Кыргыз тили]]</includeonly>",
+        "==[[File:{{{1}}}|50px]] Кыргызча==\n<includeonly>[[Category:Кыргыз тили]]</includeonly>",
+        "==[[File:Flag.svg|50px]] Кыргызча==\n<includeonly>[[:Category:Кыргыз тили]]</includeonly>",
+        "==[[File:Flag.svg|50px]] Кыргызча==\n<includeonly>[[Category:Кыргыз тили]]</includeonly>prose",
+        "<onlyinclude>==[[File:Flag.svg|50px]] Кыргызча==</onlyinclude>\n<includeonly>[[Category:Кыргыз тили]]</includeonly>",
+    }) |bad| try std.testing.expect(source_language_banner.parse(bad, &namespaces, null, &registry, "ky") == null);
+    try registry.addTsv("xx\tOther\tКыргызча\n");
+    try std.testing.expect(source_language_banner.parse(source, &namespaces, null, &registry, "ky") == null);
+}
+
+test "Writer source flagged banner owns exact root and preserves complete typed body" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try KyFlagBannerTest.install(io, a, root, KyFlagBannerTest.template_raw);
+    var namespaces = try namespace_registry.Registry.init(a, KyFlagBannerTest.namespaces); defer namespaces.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+    try std.testing.expect(registry.matchesSourceLanguageBanner("ky", KyFlagBannerTest.heading, 2));
+    try std.testing.expect(registry.resolveTrusted(KyFlagBannerTest.heading) == null);
+    const codes = languageCodes(&registry, &namespaces); const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    const roots = [_][]const u8{ "{{-ky-}}\n# body", "", "{{-en-}}\n", "{{-ky-|parameter}}\n", "prefix\n{{-ky-}}\n", "<!--{{-ky-}}-->\n", "<nowiki>{{-ky-}}</nowiki>\n" };
+    for (roots, 0..) |raw, i| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, try std.fmt.allocPrint(a, "flag-control-{d}", .{i}), KyFlagBannerTest.expanded, raw, null);
+    const stats = try writer.finish(codes); try std.testing.expectEqual(@as(usize, roots.len), stats.language_records);
+    for (roots, 0..) |_, i| {
+        const owner = if (i == 0) "кыргызча" else "Unclassified";
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename(owner, &filename) })); defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes); const metadata = try blob.languageMetadata(); var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const title = try std.fmt.allocPrint(a, "flag-control-{d}", .{i}); const record = (try index.find(title)).?;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(if (i == 0) "ky" else "", decoded.entry.language_code);
+        var report: encoder.presentation_document.Fallbacks = .{};
+        const whole_payload = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, title, .language, owner, metadata.code, KyFlagBannerTest.expanded, null, .{}, &namespaces, &report);
+        const whole = try encoder.presentation_codec.decodeAlloc(a, whole_payload, title, .language, metadata);
+        try std.testing.expectEqualDeep(whole.entry.sections, decoded.entry.sections);
+        try std.testing.expectEqualDeep(whole.entry.references, decoded.entry.references);
+        try std.testing.expectEqualDeep(whole.entry.media, decoded.entry.media);
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    }
+}
+
+const SourceEquivalentLanguageTest = struct {
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tmadwiktionary\n# dump-date\t20261001\n# content-language\tmad\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tBhengkek\tFile\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tfiles\n" ++
+        "10\tCèṭa'an\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tBhângsa\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n";
+    const registry = "# content-language\tmad\n# mediawiki\nmad\tMadhurâ\tmad\tMadurese\nen\tEnglish\ten\n";
+    // Exact retained p6033/r27385 and p6034/r14091; the redirect identities
+    // below are retained p6035/r14092 and p6037/r14094.
+    const wrapper = "[[{{mad}}]]<includeonly>[[Category:Oca' {{mad}}]]</includeonly><noinclude>[[Category:Cèta'an]]</noinclude>";
+    const leaf = "Bhâsa Madhurâ";
+    const Variant = enum { ordinary, wrong, missing, cycle, wrapper_parameter, leaf_parameter, leaf_markup, conflicting_seed, conflicting_alias, no_seed };
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8, variant: Variant) !void {
+        const registry_text = switch (variant) {
+            .conflicting_seed => registry ++ "fr\tFrench\tFrench\n",
+            .conflicting_alias => registry ++ "fr\tFrench\tMadura\n",
+            .no_seed => "# content-language\tmad\n# mediawiki\nmad\tOther Madurese\nen\tEnglish\ten\n",
+            else => registry,
+        };
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = registry_text });
+        const wrapper_source = if (variant == .wrapper_parameter) "[[{{mad|{{{1}}}}}]]<includeonly>[[Category:Oca' {{mad}}]]</includeonly><noinclude>[[Category:Cèta'an]]</noinclude>" else wrapper;
+        const leaf_source = switch (variant) { .leaf_parameter => "Bhâsa {{{1|Madhurâ}}}", .leaf_markup => "'''Bhâsa Madhurâ'''", else => leaf };
+        const alias_target = switch (variant) { .wrong => "Cèṭa'an:other", .missing => "Cèṭa'an:absent", .cycle => "Cèṭa'an:Madura", else => "Cèṭa'an:madura" };
+        var index: std.ArrayList(u8) = .empty;
+        try index.appendSlice(a, "0\t0\tCèṭa'an:madura\t\t6033\t27385\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t0\n");
+        try index.appendSlice(a, "0\t0\tCèṭa'an:mad\t\t6034\t14091\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t0\n");
+        try index.appendSlice(a, "0\t0\tCèṭa'an:Madhurâ\tCèṭa'an:madura\t6035\t14092\t2026-10-01T00:00:00Z\tA\twikitext\t10\t0\t0\n");
+        try index.appendSlice(a, try std.fmt.allocPrint(a, "0\t0\tCèṭa'an:Madura\t{s}\t6037\t14094\t2026-10-01T00:00:00Z\tA\twikitext\t10\t0\t0\n", .{alias_target}));
+        try index.appendSlice(a, "0\t0\tCèṭa'an:other\t\t9001\t9001\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t0\n");
+        if (variant == .conflicting_seed) try index.appendSlice(a, "0\t0\tCèṭa'an:French\tCèṭa'an:madura\t9000\t9000\t2026-10-01T00:00:00Z\tA\twikitext\t10\t0\t0\n");
+        var writer = try dump_source.TemplateSourceWriter.init(io, a, root);
+        defer writer.deinit();
+        try writer.append(0, 6033, 27385, wrapper_source);
+        try writer.append(1, 6034, 14091, leaf_source);
+        try writer.append(4, 9001, 9001, wrapper_source);
+        const path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = index.items });
+        try writer.finish(path);
+    }
+};
+
+test "source-equivalent language templates require trusted seed wrapper leaf and acyclic redirects" {
+    for (std.meta.tags(SourceEquivalentLanguageTest.Variant)) |variant| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+        const a = arena.allocator(); const io = std.testing.io;
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        try SourceEquivalentLanguageTest.install(io, a, root, variant);
+        var namespaces = try namespace_registry.Registry.init(a, SourceEquivalentLanguageTest.namespaces); defer namespaces.deinit();
+        var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+        switch (variant) {
+            .ordinary => {
+                try std.testing.expectEqualStrings("mad", registry.resolveTrusted("Madura").?.code);
+                try std.testing.expectEqualStrings("mad", registry.resolveTrusted("madura").?.code);
+                try std.testing.expectEqualStrings("mad", registry.resolveTrusted("Madhurâ").?.code);
+                try std.testing.expect(registry.resolveTrusted("Bhâsa Madhurâ") == null);
+                try registry.addLocalAlias("Madura", "en");
+                try registry.addLocalAlias("Madura", "mad");
+                try std.testing.expect(registry.resolveTrusted("Madura") == null);
+            },
+            .conflicting_alias => try std.testing.expectEqualStrings("fr", registry.resolve("Madura").?.code),
+            else => try std.testing.expect(registry.resolve("Madura") == null),
+        }
+        try std.testing.expectEqualStrings("en", registry.resolveTrusted("English").?.code);
+        try std.testing.expect(registry.resolve("Unrelated") == null);
+    }
+}
+
+test "source-equivalent MAD headings retain both real aliases unrelated owners and full compiled bodies" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try SourceEquivalentLanguageTest.install(io, a, root, .ordinary);
+    var namespaces = try namespace_registry.Registry.init(a, SourceEquivalentLanguageTest.namespaces); defer namespaces.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+    const codes = languageCodes(&registry, &namespaces);
+    const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    writer.language_codes = codes;
+    // Complete retained adsak p118/r26802 body after its language heading.
+    const raw_body = "\n\n=== Carakan ===\n[[ꦲꦢ꧀ꦱꦏ꧀]]\n\n=== Oca' lako ===\n\n=== Keccap ===\n[[Bhengkek:LL-Q36213 (mad)-WiniSJ-adsak.wav|jmpl|nir]]\n\n; Pertalan\n\n* bhâsa Indonesia: datang\n\n; Conto\n\n# Hj. Maimunah '''adsak''' dâri umroh\n\n== Sombher ==\nPrawitra, Adrian. \"Kamus Lengkap Bahasa Madura Indonesia\".Dian Rakyat. 2009. hal. 6";
+    const expanded = "== [[Bhâsa Madhurâ]][[Category:Oca' Bhâsa Madhurâ]] ==" ++ raw_body;
+    for ([_][]const u8{ "Madura", "Madhurâ" }) |name| {
+        const raw = try std.fmt.allocPrint(a, "== {{{{{s}}}}} =={s}", .{ name, raw_body });
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, name, expanded, raw, null);
+    }
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "unrelated", "==English==\n===Noun===\n# unrelated owner body\n", "==English==\n===Noun===\n# unrelated owner body\n", null);
+    _ = try writer.finish(codes);
+    for ([_][]const u8{ "mad", "en" }) |code| {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename(if (std.mem.eql(u8, code, "mad")) "Madhurâ" else "English", &filename) })); defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        if (std.mem.eql(u8, code, "mad")) {
+            const new_record = (try index.find("Madura")).?;
+            const trusted_record = (try index.find("Madhurâ")).?;
+            const actual = try encoder.presentation_codec.decodeAlloc(a, new_record.payload, new_record.title, .language, metadata);
+            var expected = try encoder.presentation_codec.decodeAlloc(a, trusted_record.payload, trusted_record.title, .language, metadata);
+            // Record identity is the sole intentional difference. Deep equality
+            // covers all sections, block/list/layout relations, styles, link
+            // actions, references, media, display title, preamble and metadata.
+            expected.entry.title = actual.entry.title;
+            try std.testing.expectEqualDeep(expected, actual);
+            var bold_adsak: usize = 0;
+            var audio: usize = 0;
+            var visible: std.ArrayList(u8) = .empty;
+            for (actual.entry.sections) |section| {
+                try visible.appendSlice(a, section.title);
+                for (section.blocks) |block| for (block.spans) |span| {
+                    try visible.appendSlice(a, span.text);
+                    if (std.mem.eql(u8, span.text, "adsak")) {
+                        try std.testing.expect(span.bold);
+                        bold_adsak += 1;
+                    }
+                    try std.testing.expect(!std.mem.startsWith(u8, span.target, "Category:"));
+                    try std.testing.expect(!std.mem.startsWith(u8, span.target, "Bhângsa:"));
+                };
+            }
+            for (actual.entry.media) |media| {
+                if (std.mem.eql(u8, media.file, "LL-Q36213 (mad)-WiniSJ-adsak.wav")) audio += 1;
+            }
+            try std.testing.expectEqual(@as(usize, 1), bold_adsak);
+            try std.testing.expectEqual(@as(usize, 1), audio);
+            try std.testing.expect(std.mem.indexOf(u8, visible.items, "Prawitra, Adrian. \"Kamus Lengkap Bahasa Madura Indonesia\".Dian Rakyat. 2009. hal. 6") != null);
+            try std.testing.expect(std.mem.indexOf(u8, visible.items, "Oca' Bhâsa Madhurâ") == null);
+        }
+        for ([_][]const u8{ "Madura", "Madhurâ", "unrelated" }) |title| {
+            const record = try index.find(title);
+            const expected = std.mem.eql(u8, code, if (std.mem.eql(u8, title, "unrelated")) "en" else "mad");
+            try std.testing.expectEqual(expected, record != null);
+            if (record) |value| {
+                const decoded = try encoder.presentation_codec.decodeAlloc(a, value.payload, value.title, .language, metadata);
+                try std.testing.expectEqualStrings(code, decoded.entry.language_code);
+                const bodies: []const []const u8 = if (std.mem.eql(u8, code, "mad")) &.{ "datang", "Hj. Maimunah", "dâri umroh", "Prawitra, Adrian." } else &.{"unrelated owner body"};
+                for (bodies) |text|
+                    try std.testing.expect(std.mem.indexOf(u8, value.payload, text) != null);
+            }
+        }
+    }
+}
+
+// Synthetic diagnostic boundary; does not reconstruct the lost YI expansion.
+test "UncompiledTemplate capture preserves exact payload and propagation without retry reclassification" {
+    const F = FirstFailureControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    inline for (.{ "complete", "missing-marker", "existing-capture" }) |mode| {
+        const root = try auditControlFreshRoot(a, "uncompiled-template-capture-" ++ mode);
+        defer std.Io.Dir.cwd().deleteTree(F.io, root) catch {};
+        const capture_root = try std.fs.path.join(a, &.{ root, ".presentation-first-failure" });
+        if (comptime !std.mem.eql(u8, mode, "missing-marker")) try F.marker(a, root);
+        if (comptime std.mem.eql(u8, mode, "existing-capture"))
+            try std.Io.Dir.cwd().writeFile(F.io, .{ .sub_path = capture_root, .data = "retained first capture" });
+        try std.testing.expect(first_failure_capture_context == null and failure_receipt_context == null);
+        first_failure_capture_context = F.context(a, root);
+        defer first_failure_capture_context = null;
+        const receipt = try std.fs.path.join(a, &.{ root, "outer-failure.json" });
+        failure_receipt_context = .{ .io = F.io, .a = a, .path = receipt,
+            .invocation_id = F.context(a, root).invocation_id.?, .invocation_args = &F.args };
+        defer failure_receipt_context = null;
+        const job: ExpansionJob = .{ .ordinal = 23, .index_offset = 19,
+            .ns = .{ .id = 0, .kind = .language }, .title = "Synthetic uncompiled template failure",
+            .source = "raw {{fixture|x}}\n[[target|label]]", .page_id = 31, .revision_id = 47,
+            .index_line = "exact synthetic index row" };
+        const expanded: bundle_expander.Expansion = .{ .source = "expanded {{unexpanded|x}}\n[[target|label]]",
+            .display_title = "display fixture", .poem_metadata = "[]", .missing_dependency_metadata = "{}" };
+        var writer = try encoder.blob_builder.Writer.init(F.io, a, try std.fs.path.join(a, &.{ root, "writer" }));
+        defer writer.deinit();
+        try std.testing.expect(!auditablePresentationError(error.UncompiledTemplate));
+        captureFirstPresentationFailure(error.OutOfMemory, job, expanded);
+        try std.testing.expect(!first_failure_capture_context.?.attempted);
+        try std.testing.expectError(error.UncompiledTemplate, consumePresentationFailure(&writer, job, expanded, a, null, error.UncompiledTemplate));
+        try std.testing.expect(first_failure_capture_context.?.attempted);
+        try std.testing.expect(recordPresentationFailure(error.UncompiledTemplate, job) == error.UncompiledTemplate);
+        try F.absent(receipt);
+        if (comptime std.mem.eql(u8, mode, "complete")) {
+            const row = try F.manifest(a, root);
+            try std.testing.expect(row.object.get("record_complete").?.bool and row.object.get("diagnostic_only").?.bool);
+            try std.testing.expect(!row.object.get("publication_created").?.bool and !row.object.get("semantic_acceptance").?.bool);
+            try std.testing.expectEqualStrings("UncompiledTemplate", row.object.get("error_name").?.string);
+            try std.testing.expectEqualStrings(job.title, row.object.get("title").?.string);
+            try std.testing.expectEqual(@as(i64, 23), row.object.get("ordinal").?.integer);
+            try std.testing.expectEqual(@as(i64, 19), row.object.get("index_offset").?.integer);
+            try std.testing.expectEqual(@as(i64, 31), row.object.get("page_id").?.integer);
+            try std.testing.expectEqual(@as(i64, 47), row.object.get("revision_id").?.integer);
+            try F.payload(a, row, "raw_source", job.source, 256 * 1024);
+            try F.payload(a, row, "expanded", expanded.source, 2 * 1024 * 1024);
+            try F.payload(a, row, "index_row", job.index_line, 256 * 1024);
+            try F.payload(a, row, "display_title", expanded.display_title.?, 256 * 1024);
+            try F.payload(a, row, "poem_metadata", expanded.poem_metadata.?, 256 * 1024);
+            try F.payload(a, row, "missing_dependency_metadata", expanded.missing_dependency_metadata.?, 256 * 1024);
+            const path = try std.fs.path.join(a, &.{ capture_root, "capture.json" });
+            const before = try std.Io.Dir.cwd().readFileAlloc(F.io, path, a, .limited(64 * 1024));
+            captureFirstPresentationFailure(error.UncompiledPresentation, job, .{ .source = "replacement" });
+            const after = try std.Io.Dir.cwd().readFileAlloc(F.io, path, a, .limited(64 * 1024));
+            try std.testing.expectEqualSlices(u8, before, after);
+        } else if (comptime std.mem.eql(u8, mode, "existing-capture")) {
+            const bytes = try std.Io.Dir.cwd().readFileAlloc(F.io, capture_root, a, .limited(64));
+            try std.testing.expectEqualStrings("retained first capture", bytes);
+        } else try F.absent(capture_root);
+        try F.noPublication(a, root);
+    }
 }

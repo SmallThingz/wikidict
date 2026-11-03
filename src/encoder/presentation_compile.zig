@@ -5492,10 +5492,14 @@ pub const Renderer = struct {
                     label_style.kind = span.kind;
                     label_style.target = span.target;
                 }
-                if (span.generated_diagnostic)
-                    try self.generatedDiagnostic(span.text, label_style)
-                else
-                    try self.text(span.text, label_style);
+                if (span.generated_diagnostic) {
+                    // A missing parameter inside an authored caption link keeps
+                    // that independently resolved action during reconstruction.
+                    if (authored_caption and (span.kind == .link or span.kind == .external_link))
+                        try self.diagnosticText(span.text, label_style)
+                    else
+                        try self.generatedDiagnostic(span.text, label_style);
+                } else try self.text(span.text, label_style);
             }
             // Keep DOM eligibility and generated-boundary identity across reconstruction.
             if (span.bidi_auto_excluded or span.generated_bidi_boundary) for (self.spans.items[emitted_start..]) |*emitted| {
@@ -7644,8 +7648,13 @@ pub const Renderer = struct {
         diagnostic.kind = .text;
         diagnostic.target = "";
         diagnostic.self_link_target = null;
+        try self.diagnosticText(value, diagnostic);
+    }
+    // Mark only emitted diagnostic bytes. The existing boundary pass may space
+    // their brackets without granting authored text a provenance exemption.
+    fn diagnosticText(self: *Renderer, value: []const u8, style: Style) Error!void {
         const first = self.spans.items.len;
-        try self.text(value, diagnostic);
+        try self.text(value, style);
         // textRaw appends (never coalesces) and ignores empty emissions. Poem
         // may add an actual break; it is not a diagnostic character boundary.
         for (self.spans.items[first..]) |*span| if (span.kind != .line_break) {
@@ -7997,7 +8006,7 @@ pub const Renderer = struct {
                         // and classify it in reported build diagnostics as well.
                         self.unresolved_templates += 1;
                         self.fallbacks.missing_template = true;
-                        try self.text("[missing parameter]", s);
+                        try self.diagnosticText("[missing parameter]", s);
                     }
                 } else {
                     try self.resolveTemplate(body, s, depth);
@@ -34010,4 +34019,80 @@ test "root includeonly recovery preserves explicit literal and self closing sour
     const visible = try short.renderBody("<includeonly/>kept [[Child]]");
     try std.testing.expectEqual(@as(usize, 1), visible.len);
     try std.testing.expectEqualStrings("kept Child", try flattened(a, visible[0].spans));
+}
+
+test "missing parameter diagnostics retain bracket boundaries styles and authored actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, visible: []const u8, target: []const u8 = "", kind: ir.InlineKind = .text, italic: bool = false, restored_close: bool = false }{
+        .{ .source = "[{{{stem}}}]", .visible = "[ [missing parameter] ]" },
+        .{ .source = "[{{{stem}}}", .visible = "[ [missing parameter]" },
+        .{ .source = "{{{stem}}}]", .visible = "[missing parameter] ]" },
+        .{ .source = "''[{{{stem}}}]''", .visible = "[ [missing parameter] ]", .italic = true },
+        .{ .source = "[[Target|[{{{stem}}}]]]", .visible = "[ [missing parameter]]", .target = "Target", .kind = .link, .restored_close = true },
+        .{ .source = "[https://example.test [{{{stem}}}]]", .visible = "[ [missing parameter] ]", .target = "https://example.test", .kind = .external_link },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("missing parameter boundary case: {s}\n", .{case.source});
+        var renderer: Renderer = .{ .a = a, .context = .{ .title = "entry" } };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
+        try std.testing.expectEqual(@as(usize, 1), renderer.unresolved_templates);
+        try std.testing.expect(renderer.fallbacks.missing_template);
+        var markers: usize = 0;
+        for (spans, 0..) |span, index| {
+            // The existing alternate-label parser returns one authored ] using
+            // entity transport; only parsed boundaries need diagnostic spacing.
+            if (case.restored_close and index == spans.len - 1) {
+                try std.testing.expectEqual(Provenance.entity_literal, span.provenance);
+                try std.testing.expectEqualStrings("]", span.text);
+            } else try std.testing.expectEqual(Provenance.parsed, span.provenance);
+            try std.testing.expect(span.flags.italic == case.italic);
+            if (span.generated_diagnostic or span.kind != .text) {
+                try std.testing.expect(span.kind == case.kind);
+                try std.testing.expectEqualStrings(case.target, span.target);
+            } else try std.testing.expectEqualStrings("", span.target);
+            if (span.generated_diagnostic) {
+                markers += 1;
+                try std.testing.expect(std.mem.indexOf(u8, span.text, "[missing parameter]") != null);
+            } else try std.testing.expect(std.mem.indexOf(u8, span.text, "missing parameter") == null);
+        }
+        try std.testing.expectEqual(@as(usize, 1), markers);
+        if (case.restored_close) {
+            try std.testing.expectEqual(@as(usize, 3), spans.len);
+            try std.testing.expectEqualStrings("[", spans[0].text);
+            try std.testing.expectEqualStrings(" [missing parameter]", spans[1].text);
+            try std.testing.expect(spans[1].generated_diagnostic);
+        }
+        const unchanged = try flattened(a, spans);
+        try separateGeneratedDiagnosticBoundaries(a, @constCast(spans));
+        try std.testing.expectEqualStrings(unchanged, try flattened(a, spans));
+    }
+    for ([_][]const u8{ "[[Child|[{{{stem}}}]]]", "[https://example.test [{{{stem}}}]]" }) |caption| {
+        var renderer: Renderer = .{ .a = a, .context = .{ .title = "entry" } };
+        const spans = try renderer.parseSpans(try std.fmt.allocPrint(a, "[[File:Example.png|thumb|{s}]]", .{caption}), .{});
+        const external = std.mem.startsWith(u8, caption, "[https:");
+        var markers: usize = 0;
+        for (spans) |span| if (span.generated_diagnostic) {
+            markers += 1;
+            try std.testing.expect(span.kind == (if (external) ir.InlineKind.external_link else .link));
+            try std.testing.expectEqualStrings(if (external) "https://example.test" else "Child", span.target);
+            try std.testing.expect(std.mem.indexOf(u8, span.text, "[missing parameter]") != null);
+            try std.testing.expect(span.provenance == .parsed);
+        };
+        try std.testing.expectEqual(@as(usize, 1), markers);
+    }
+    for ([_]struct { source: []const u8, visible: []const u8 }{
+        .{ .source = "[{{{stem|kept}}}]", .visible = "[kept]" },
+        .{ .source = "<nowiki>[{{{stem}}}]</nowiki>", .visible = "[{{{stem}}}]" },
+        .{ .source = "&#91;[missing parameter]&#93;", .visible = "[[missing parameter]]" },
+    }) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
+        try std.testing.expectEqual(@as(usize, 0), renderer.unresolved_templates);
+        for (spans) |span| try std.testing.expect(!span.generated_diagnostic);
+    }
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("[[missing parameter]]"));
 }

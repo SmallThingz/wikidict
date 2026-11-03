@@ -37,7 +37,46 @@ fn hiddenCategory(source: []const u8, ns: *const namespaces.Registry, behavior: 
 /// shape only. Neither branch projects dynamic parameters or emitted prose.
 pub fn parse(source: []const u8, ns: *const namespaces.Registry, behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8) ?languages.SourceLanguageBanner {
     return parseKnownNames(source, ns, behavior, registry, code) orelse
+        parseFlaggedName(source, ns, behavior, registry, code) orelse
         parseLiteralCode(source, ns, behavior, registry, code);
+}
+
+// A source-authenticated literal banner may prefix its known language name
+// with one neutral file icon. The icon itself contributes no language evidence.
+fn parseFlaggedName(source: []const u8, ns: *const namespaces.Registry, behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8) ?languages.SourceLanguageBanner {
+    if (source.len > 4096 or !registry.codes.contains(code)) return null;
+    // Blank lines may precede a banner, but indentation cannot create an H2.
+    const input = std.mem.trimStart(u8, source, "\r\n");
+    if (input.len == 0 or input[0] != '=') return null;
+    const end = std.mem.indexOfScalar(u8, input, '\n') orelse return null;
+    const heading = syntax.controlHeading(std.mem.trimEnd(u8, input[0..end], " \t\r"), null) orelse return null;
+    if (heading.level != 2 or containsControl(behavior, heading.title) or
+        !std.mem.startsWith(u8, heading.title, "[[")) return null;
+    const close = std.mem.indexOf(u8, heading.title, "]]") orelse return null;
+    const image = heading.title[2..close];
+    const pipe = std.mem.indexOfScalar(u8, image, '|') orelse return null;
+    const target = image[0..pipe];
+    if (std.mem.indexOfAny(u8, target, "[]{}<>&#\r\n") != null) return null;
+    const file = ns.ofTitle(target);
+    if (file.id != 6 or std.mem.trim(u8, file.text, " \t").len == 0) return null;
+    const option = image[pipe + 1 ..];
+    if (!std.mem.endsWith(u8, option, "px") or option.len < 3) return null;
+    const digits = option[0 .. option.len - 2];
+    for (digits) |digit| if (digit < '0' or digit > '9') return null;
+    const width = std.fmt.parseInt(u16, digits, 10) catch return null;
+    if (width == 0 or width > 4096) return null;
+    const suffix = heading.title[close + 2 ..];
+    if (suffix.len == 0 or suffix[0] != ' ') return null;
+    const label = std.mem.trim(u8, suffix, " ");
+    if (!plain(label) or !registry.sourceBannerNameMatches(code, label)) return null;
+    // This observed declaration emits only its heading and a hidden category;
+    // parameters, projection tags, controls and extra prose cannot supply proof.
+    const tail = std.mem.trim(u8, input[end + 1 ..], " \t\r\n");
+    if (!std.mem.startsWith(u8, tail, "<includeonly>") or
+        !std.mem.endsWith(u8, tail, "</includeonly>")) return null;
+    const category = tail["<includeonly>".len .. tail.len - "</includeonly>".len];
+    if (!hiddenCategory(category, ns, behavior)) return null;
+    return .{ .heading = heading.title, .level = heading.level, .target = label, .label = label };
 }
 
 fn parseKnownNames(source: []const u8, ns: *const namespaces.Registry, behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8) ?languages.SourceLanguageBanner {

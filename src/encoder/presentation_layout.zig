@@ -30,6 +30,17 @@ const speech = [_][]const u8{
     "Romanization", "Logogram",       "Determinative",
 };
 pub fn partOfSpeech(title: []const u8) ?[]const u8 {
+    // Exact ZGH heading-template p3117/r9844 labels (alias p3119/r9214).
+    // IRCAM, Vocabulaire grammatical, English index pp103/119:
+    // https://biblio.ircam.ma/pmb/uploads/publications/134.pdf
+    // Section kind only: the caller retains its independently established owner.
+    if (std.mem.eql(u8, title, "ⵉⵙⵎ")) return "Noun";
+    if (std.mem.eql(u8, title, "ⴰⵎⵔⵏⵓ")) return "Adverb";
+    // Retained MAD -subjudul- p9327/r34033 maps v/adj to these exact labels;
+    // -v- p9330/r33638 and -adj- p9331/r33639 document verba/adjektiva.
+    // Classify POS only; language ownership remains supplied by the caller.
+    if (std.mem.eql(u8, title, "Oca' lako")) return "Verb";
+    if (std.mem.eql(u8, title, "Oca' sèpat")) return "Adjective";
     // MY Module:headword/data p127525/r939704 explicitly labels this as noun;
     // all six retained MY noun sections use this exact spelling.
     if (std.mem.eql(u8, title, "နာမ်")) return "Noun";
@@ -131,7 +142,9 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
         // Modèl:-etim- p1091/r219080 emits this exact localized heading.
         // Exact MY source heading for inherited/derived material in retained
         // p2617/r939601 and origin statements in p122417/r905431,p124492/r907881.
-        const etymology = part.named(section.title, "Etymology") or std.mem.eql(u8, section.title, "Etimologia") or std.mem.eql(u8, section.title, "ရင်းမြစ်");
+        // BR Patrom:-etim- p1929/r381015 emits Gerdarzh (Orin hag istor),
+        // called by laezh-glas p46208/r382620 and reoliek p46674/r238569.
+        const etymology = part.named(section.title, "Etymology") or std.mem.eql(u8, section.title, "Etimologia") or std.mem.eql(u8, section.title, "ရင်းမြစ်") or std.mem.eql(u8, section.title, "Gerdarzh");
         // Owned records can contain several H1 source regions. A recognized H2
         // POS belongs to the preceding etymology, but a new region cannot inherit it.
         if (owner != null and section.level == 1) origin = null;
@@ -596,4 +609,298 @@ test "MY layout labels stay exact and cannot create owner or lexicalize protecte
     const existing = try buildOwned(a, &ordinary, "en");
     try std.testing.expectEqualStrings("Noun", existing.lexemes[0].kind);
     try std.testing.expectEqual(@as(?usize, 0), existing.lexemes[0].etymology);
+}
+
+test "MAD exact source POS labels preserve supplied owner and sibling body boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "lèjhâ'", .language = "mad" } };
+    const body = try renderer.renderBody("#akalèjhâ'\n");
+    const example = try renderer.renderBody("# Alhamdulilla, kocèngnga ghi' aka'''lèjhâ'''', Nom.\n");
+    const reference = try renderer.renderBody("Pawitra, Adrian. Kamus Lengkap Bahasa Madura Indonesia. 2009. hal. 366.\n");
+    const body_before = try a.dupe(wiki.Block, body);
+    const example_before = try a.dupe(wiki.Block, example);
+    const reference_before = try a.dupe(wiki.Block, reference);
+    // The retained page puts the gloss and example in sibling sections.
+    // A POS mapping must not invent a relation across those boundaries.
+    const sections = [_]Section{
+        .{ .title = "Bhâsa Madhurâ", .level = 2 },
+        .{ .title = "Oca' sèpat", .level = 3 },
+        .{ .title = "Lèjhâ'", .level = 3, .blocks = body },
+        .{ .title = "Conto", .level = 3, .blocks = example },
+        .{ .title = "Sombher", .level = 2, .blocks = reference },
+        .{ .title = "Oca' lako", .level = 3 },
+    };
+    for ([_][]const u8{ "mad", "en" }) |owner| {
+        const layout = try buildOwned(a, &sections, owner);
+        try std.testing.expectEqual(@as(usize, 2), layout.lexemes.len);
+        try std.testing.expectEqualStrings("Adjective", layout.lexemes[0].kind);
+        try std.testing.expectEqualStrings("Verb", layout.lexemes[1].kind);
+        try std.testing.expectEqual(@as(usize, 1), layout.lexemes[0].section);
+        try std.testing.expectEqual(@as(usize, 5), layout.lexemes[1].section);
+        for (layout.lexemes) |lexeme| {
+            try std.testing.expectEqualStrings(owner, lexeme.language);
+            try std.testing.expectEqual(@as(usize, 0), lexeme.definitions.len);
+            try std.testing.expectEqual(@as(?usize, null), lexeme.etymology);
+        }
+        try std.testing.expectEqualSlices(usize, &.{ 0, 2, 3, 4 }, layout.other_sections);
+    }
+    try std.testing.expectEqualStrings("Oca' sèpat", sections[1].title);
+    try std.testing.expectEqualStrings("Oca' lako", sections[5].title);
+    try std.testing.expectEqualDeep(body_before, sections[2].blocks);
+    try std.testing.expectEqualDeep(example_before, sections[3].blocks);
+    try std.testing.expectEqualDeep(reference_before, sections[4].blocks);
+}
+
+test "MAD POS labels stay exact and cannot create owner or lexicalize protected body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "oca' lako", "Oca' lako ", "Oca' lako 2", "Oca' sèpat 2", "Oca' s'''è'''pat", "Oca' lako; Oca' sèpat", "Unknown Oca' lako", "Conto", "Sombher" }) |label|
+        try std.testing.expect(partOfSpeech(label) == null);
+    try std.testing.expectEqualStrings("Verb", partOfSpeech("Verb").?);
+    try std.testing.expectEqualStrings("Adjective", partOfSpeech("Adjective").?);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "Oca' lako", .level = 2 },
+        .{ .title = "Oca' sèpat", .level = 3 },
+    };
+    const unresolved = try buildUnclassified(a, &sections);
+    try std.testing.expectEqual(@as(usize, 1), unresolved.lexemes.len);
+    try std.testing.expectEqualStrings("", unresolved.lexemes[0].language);
+    try std.testing.expectEqualStrings("Adjective", unresolved.lexemes[0].kind);
+    try std.testing.expectEqual(@as(usize, 1), unresolved.lexemes[0].section);
+    try std.testing.expectEqualSlices(usize, &.{0}, unresolved.other_sections);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "control" } };
+    const protected = try renderer.renderBody("<nowiki>===Oca' lako===</nowiki>\n<pre>===Oca' sèpat===</pre>\n");
+    const body_only = [_]Section{.{ .title = "Notes", .level = 3, .blocks = protected }};
+    const layout = try buildOwned(a, &body_only, "mad");
+    try std.testing.expectEqual(@as(usize, 0), layout.lexemes.len);
+    try std.testing.expectEqualSlices(usize, &.{0}, layout.other_sections);
+}
+
+
+// Append to src/encoder/presentation_layout.zig with layout.patch in the selected
+// private qualification candidate. These are layout controls, not a saved-page
+// or production/GUI replay. Exact heading authority: Patrom:-etim- p1929/r381015.
+test "BR Gerdarzh associates etymology without changing retained lexical structure" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Case = struct { title: []const u8, pos: []const u8, etymology: []const u8, body: []const u8, senses: usize };
+    const cases = [_]Case{
+        .{ .title = "laezh-glas", .pos = "Anv-kadarn", .etymology = ":[[ger|Ger]] [[kevrennek]] [[savet]] [[diwar]] an [[anv-kadarn]] ''[[laezh]]'' [[hag]] an [[anv-gwan]] ''[[glas]]''\n", .body = "'''laezh-glas'''\n#[[laezh-bihan|Laezh-bihan]]\n", .senses = 1 },
+        .{ .title = "reoliek", .pos = "Anv-gwan", .etymology = ":[[savet|Savet]] [[diwar]] an [[anv-kadarn]] ''[[reol]]'' [[hag]] al [[lostger]] ''[[-iek]]''\n", .body = "'''reoliek'''\n# [[ordinal|Ordinal]]. a c'hoarvez en un doare [[boutin]], ha n'eo ket [[digustum]].\n# A c'hoarvez en un [[heuliañ]] [[reolennoù]], naturel pe gevredadel.\n", .senses = 2 },
+    };
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    for (cases) |case| {
+        var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = case.title, .language = "Brezhoneg" } };
+        const origin_blocks = try renderer.renderBody(case.etymology);
+        const lexical_blocks = try renderer.renderBody(case.body);
+        const sections = [_]Section{
+            .{ .title = "Brezhoneg", .level = 2 },
+            .{ .title = "Gerdarzh", .level = 3, .blocks = origin_blocks },
+            .{ .title = case.pos, .level = 3, .blocks = lexical_blocks },
+            .{ .title = "Troidigezhioù", .level = 4 },
+        };
+        var prior_sections = sections;
+        prior_sections[1].title = "Unrecognized origin heading";
+        const prior = try buildOwned(a, &prior_sections, "Brezhoneg");
+        const actual = try buildOwned(a, &sections, "Brezhoneg");
+        try std.testing.expectEqual(@as(usize, 1), actual.lexemes.len);
+        try std.testing.expectEqual(@as(?usize, 1), actual.lexemes[0].etymology);
+        try std.testing.expectEqual(case.senses, actual.lexemes[0].definitions.len);
+        try std.testing.expectEqualStrings("Brezhoneg", actual.lexemes[0].language);
+        // Only the compiled origin reference changes: sense/block indices,
+        // introduction, related sections and lexical kind retain their values.
+        var without_origin = actual.lexemes[0];
+        without_origin.etymology = null;
+        try std.testing.expectEqualDeep(prior.lexemes[0], without_origin);
+        try std.testing.expectEqualDeep(prior.other_sections, actual.other_sections);
+        try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, actual.other_sections);
+        try std.testing.expectEqualDeep(origin_blocks, sections[1].blocks);
+        try std.testing.expectEqualDeep(lexical_blocks, sections[2].blocks);
+        const other_owner = try buildOwned(a, &sections, "Independent owner");
+        try std.testing.expectEqualStrings("Independent owner", other_owner.lexemes[0].language);
+        try std.testing.expectEqual(@as(?usize, 1), other_owner.lexemes[0].etymology);
+        const unknown = try buildUnclassified(a, &sections);
+        try std.testing.expectEqualStrings("", unknown.lexemes[0].language);
+        try std.testing.expectEqual(@as(?usize, 1), unknown.lexemes[0].etymology);
+    }
+}
+
+test "BR Gerdarzh preserves source region boundaries and does not invent a language" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "Brezhoneg", .level = 2 },
+        .{ .title = "Gerdarzh", .level = 3 },
+        .{ .title = "Anv-kadarn", .level = 3 },
+        .{ .title = "Unknown region", .level = 2 },
+        .{ .title = "Anv-gwan", .level = 3 },
+        .{ .title = "Gerdarzh", .level = 3 },
+        .{ .title = "Anv-kadarn", .level = 3 },
+        .{ .title = "Brezhoneg", .level = 1 },
+        .{ .title = "Anv-gwan", .level = 3 },
+    };
+    const owned = try buildOwned(a, &sections, "Independent owner");
+    try std.testing.expectEqual(@as(usize, 4), owned.lexemes.len);
+    const expected = [_]?usize{ 1, null, 5, null };
+    for (owned.lexemes, expected) |lexeme, origin| {
+        try std.testing.expectEqual(origin, lexeme.etymology);
+        try std.testing.expectEqualStrings("Independent owner", lexeme.language);
+    }
+    // In the legacy non-owned path a localized etymology H2 cannot replace the
+    // preceding language with its own label. Unclassified ownership stays empty.
+    const l2 = [_]Section{
+        .{ .title = "Brezhoneg", .level = 2 },
+        .{ .title = "Gerdarzh", .level = 2 },
+        .{ .title = "Anv-kadarn", .level = 3 },
+    };
+    const legacy = try build(a, &l2);
+    try std.testing.expectEqualStrings("Brezhoneg", legacy.lexemes[0].language);
+    try std.testing.expectEqual(@as(?usize, 1), legacy.lexemes[0].etymology);
+    const unknown = try buildUnclassified(a, &l2);
+    try std.testing.expectEqualStrings("", unknown.lexemes[0].language);
+    try std.testing.expect(partOfSpeech("Gerdarzh") == null);
+}
+
+test "BR etymology matching stays exact and protected body text is not a heading" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    for ([_][]const u8{ "gerdarzh", "GERDARZH", "Gerdarzh 2", "Gerdarzh ", "Unknown Gerdarzh" }) |title| {
+        const sections = [_]Section{ .{ .title = title, .level = 3 }, .{ .title = "Anv-kadarn", .level = 3 } };
+        const layout = try buildOwned(a, &sections, "Independent owner");
+        try std.testing.expect(layout.lexemes[0].etymology == null);
+        try std.testing.expectEqualStrings("Independent owner", layout.lexemes[0].language);
+    }
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "control" } };
+    const blocks = try renderer.renderBody("<nowiki>===Gerdarzh===</nowiki>\n<pre>===Gerdarzh===</pre>\n");
+    const protected = [_]Section{ .{ .title = "Notes", .level = 3, .blocks = blocks }, .{ .title = "Anv-kadarn", .level = 3 } };
+    const layout = try buildOwned(a, &protected, "Independent owner");
+    try std.testing.expect(layout.lexemes[0].etymology == null);
+    try std.testing.expectEqualDeep(blocks, protected[0].blocks);
+    for ([_][]const u8{ "Etymology", "Etimologia", "ရင်းမြစ်" }) |title| {
+        const sections = [_]Section{ .{ .title = title, .level = 3 }, .{ .title = "Noun", .level = 3 } };
+        const legacy = try buildOwned(a, &sections, "Independent owner");
+        try std.testing.expectEqual(@as(?usize, 0), legacy.lexemes[0].etymology);
+    }
+}
+
+
+// Append to the existing presentation_layout.zig module in private qualification.
+// Scoped raw-source controls: actual full Reader trees remain separate evidence.
+test "ZGH exact POS headings retain independently declared owners and source sense associations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Case = struct { title: []const u8, owner: []const u8, label: []const u8, kind: []const u8, body: []const u8, definitions: usize };
+    const cases = [_]Case{
+        .{ .title = "Land", .owner = "ⵜⴰⵏⴳⵍⵉⵣⵜ", .label = "ⵉⵙⵎ", .kind = "Noun", .body = "* '''Land'''\n# [[ⵜⴰⵎⴰⵣⵉⵔⵜ#zgh|ⵜⴰⵎⴰⵣⵉⵔⵜ]]\n", .definitions = 1 },
+        .{ .title = "hola", .owner = "ⵜⴰⵙⴱⵏⵢⵓⵍⵉⵜ", .label = "ⵉⵙⵎ", .kind = "Noun", .body = "'''hola'''\n# [[ⴰⵣⵓⵍ#zgh|ⴰⵣⵓⵍ]]\n", .definitions = 1 },
+        .{ .title = "hola", .owner = "Catalan", .label = "ⵉⵙⵎ", .kind = "Noun", .body = "'''hola'''\n# [[ⴰⵣⵓⵍ#zgh|ⴰⵣⵓⵍ]]\n", .definitions = 1 },
+        .{ .title = "hola", .owner = "Basque", .label = "ⴰⵎⵔⵏⵓ", .kind = "Adverb", .body = "'''hola'''\n# [[ⴰⵎ ⵉⵎⴽⵉ#zgh|ⴰⵎ ⵉⵎⴽⵉ]]\n# [[ⵙ ⵜⵖⴰⵔⴰⵙⵜ ⴰ#zgh|ⵙ ⵜⵖⴰⵔⴰⵙⵜ ⴰ]]\n", .definitions = 2 },
+    };
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    for (cases) |case| {
+        var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = case.title, .language = case.owner } };
+        const blocks = try renderer.renderBody(case.body);
+        const sections = [_]Section{
+            .{ .title = case.owner, .level = 2 },
+            .{ .title = case.label, .level = 3, .blocks = blocks },
+            .{ .title = "ⵜⵉⵙⵓⵖⴰⵍ", .level = 4 },
+        };
+        // English canonical kind is the existing layout behavior oracle. Only
+        // recognition of the localized heading is new; source data is not moved.
+        var canonical = sections;
+        canonical[1].title = case.kind;
+        const expected = try buildOwned(a, &canonical, case.owner);
+        const actual = try buildOwned(a, &sections, case.owner);
+        try std.testing.expectEqualDeep(expected, actual);
+        try std.testing.expectEqual(@as(usize, 1), actual.lexemes.len);
+        const lexeme = actual.lexemes[0];
+        try std.testing.expectEqualStrings(case.owner, lexeme.language);
+        try std.testing.expectEqualStrings(case.kind, lexeme.kind);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.section);
+        try std.testing.expectEqual(case.definitions, lexeme.definitions.len);
+        try std.testing.expect(lexeme.etymology == null);
+        try std.testing.expectEqualSlices(usize, &.{2}, lexeme.related_sections);
+        try std.testing.expectEqualStrings(case.label, sections[1].title);
+        try std.testing.expectEqualDeep(blocks, sections[1].blocks);
+        for (lexeme.definitions) |sense| {
+            try std.testing.expect(blocks[sense.block].kind == .definition);
+            try std.testing.expect(sense.form == null);
+        }
+        const different = try buildOwned(a, &sections, "Independent other owner");
+        try std.testing.expectEqualStrings("Independent other owner", different.lexemes[0].language);
+        try std.testing.expectEqualDeep(lexeme.definitions, different.lexemes[0].definitions);
+    }
+}
+
+test "ZGH layout preserves unclassified preamble and does not promote a POS label into ownership" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "ⴰⵏⴰⵎⴽ" } };
+    // Actual authored Markdown-like preamble. Its two definition blocks must
+    // remain unclassified content; an edition or later POS is not their owner.
+    const preamble = try renderer.renderBody("# Tamazight Dictionary Entries\n\n## Entry 1: ⴰⵏⴰⵎⴽ (anamk) - المعنى\n");
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const unknown_sections = [_]Section{.{ .title = "Unclassified", .level = 2, .blocks = preamble }};
+    const unknown = try buildUnclassified(a, &unknown_sections);
+    try std.testing.expectEqual(@as(usize, 0), unknown.lexemes.len);
+    try std.testing.expectEqualSlices(usize, &.{0}, unknown.other_sections);
+    try std.testing.expectEqualDeep(preamble, unknown_sections[0].blocks);
+    const unknown_pos = [_]Section{
+        .{ .title = "ⵉⵙⵎ", .level = 2, .blocks = preamble },
+        .{ .title = "ⴰⵎⵔⵏⵓ", .level = 3, .blocks = &.{.{ .kind = .definition, .list_path = "#" }} },
+    };
+    const unresolved = try buildUnclassified(a, &unknown_pos);
+    try std.testing.expectEqual(@as(usize, 1), unresolved.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 1), unresolved.lexemes[0].section);
+    try std.testing.expectEqualStrings("", unresolved.lexemes[0].language);
+    // Separate actual zgh-owned region: table stays other material and only
+    // the three definition blocks become senses. No table-to-sense conversion.
+    const body = [_]wiki.Block{
+        .{ .kind = .table }, .{ .kind = .paragraph },
+        .{ .kind = .definition, .list_path = "#" },
+        .{ .kind = .definition, .list_path = "#" },
+        .{ .kind = .definition, .list_path = "#" },
+    };
+    const owned_sections = [_]Section{
+        .{ .title = "ⵜⴰⵎⴰⵣⵉⵖⵜ ⵜⴰⵏⴰⵡⴰⵢⵜ", .level = 2 },
+        .{ .title = "ⵉⵙⵎ", .level = 3, .blocks = &body },
+        .{ .title = "ⵉⴽⵏⵉⵡⵏ", .level = 2 },
+    };
+    const owned = try buildOwned(a, &owned_sections, "ⵜⴰⵎⴰⵣⵉⵖⵜ ⵜⴰⵏⴰⵡⴰⵢⵜ");
+    try std.testing.expectEqual(@as(usize, 1), owned.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 3), owned.lexemes[0].definitions.len);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, owned.lexemes[0].introduction);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 2 }, owned.other_sections);
+    try std.testing.expectEqualDeep(@as([]const wiki.Block, &body), owned_sections[1].blocks);
+}
+
+test "ZGH POS labels reject lookalikes support labels and protected literal text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "ⵉⵙⵎ ", "ⵉⵙⵎ 2", "ⵉⵙⵎ ⵉⵥⵍⵉⵏ", "ⵉⵙⵎⴰⵡⵏ", "ⴰⵎⵔⵏⵓ 2", "Unknown ⴰⵎⵔⵏⵓ", "ⵉⵎⵔⵏⵓⵜⵏ", "ⵉⴽⵏⵉⵡⵏ", "ⴰⵙⵓⵙⵔⵓ", "ⵜⵉⵙⵓⵖⴰⵍ" }) |title|
+        try std.testing.expect(partOfSpeech(title) == null);
+    try std.testing.expectEqualStrings("Noun", partOfSpeech("ⵉⵙⵎ").?);
+    try std.testing.expectEqualStrings("Adverb", partOfSpeech("ⴰⵎⵔⵏⵓ").?);
+    try std.testing.expectEqualStrings("Noun", partOfSpeech("Noun").?);
+    try std.testing.expectEqualStrings("Adverb", partOfSpeech("Adverb").?);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "control" } };
+    const blocks = try renderer.renderBody("<nowiki>===ⵉⵙⵎ===</nowiki>\n<pre>===ⴰⵎⵔⵏⵓ===</pre>\n");
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{.{ .title = "Notes", .level = 3, .blocks = blocks }};
+    const literal = try buildOwned(a, &sections, "Independent owner");
+    try std.testing.expectEqual(@as(usize, 0), literal.lexemes.len);
+    try std.testing.expectEqualSlices(usize, &.{0}, literal.other_sections);
 }
