@@ -1721,7 +1721,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         if expander_build.exists(): remove_artifact_tree(expander_build)
         staged=json.loads((workspace/'input/.complete.json').read_text())
         extraction_cache=Path(extraction_cache_root) if extraction_cache_root is not None else workspace/'input'/'extraction-cache'
-        timed_run([zig,'build','-j1','-Doptimize=fast','build-dictionary','--',str(dump),str(expander_build),
+        timed_run([zig,'build','-j1','-Doptimize=fast','--summary','all','build-dictionary','--',str(dump),str(expander_build),
                      *(['--interwiki-map-snapshot',str(interwiki_snapshot)] if interwiki_snapshot else []),
                      *pipeline_snapshot_args(registry,auxiliary_snapshots,page_links_snapshot,page_redirects_snapshot),
                      '--llvm-workers',str(workers),
@@ -2394,7 +2394,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         print(f'Sharding {edition}: {source_pages:,} verified source pages in {SHARD_PAGES:,}-page chunks',flush=True)
         build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical=reviewed)
     else:
-        timed_run([zig,'build','-j1','-Doptimize=fast','build-dictionary','--',str(dump),str(staging),
+        timed_run([zig,'build','-j1','-Doptimize=fast','--summary','all','build-dictionary','--',str(dump),str(staging),
                      *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
                      *pipeline_snapshot_args(registry,aux_pinned,page_links_snapshot,page_redirects_snapshot),
                      '--llvm-workers',str(workers),'--parse-workers',str(min(workers,64)),

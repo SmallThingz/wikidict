@@ -2680,7 +2680,7 @@ fn processMain(
     // The precheck supplies no admission: only actual renderer scopes do that.
     var heading_arena = std.heap.ArenaAllocator.init(page_allocator);
     defer heading_arena.deinit();
-    const early_heading_observation: ?presentation_document.HeadingObservation = if (language_source.mayHavePlainLineHtmlH2(source))
+    const early_heading_observation: ?presentation_document.HeadingObservation = if (language_source.mayHaveLanguageHtmlHeading(source, codes.namespace_catalog))
         try presentation_document.observeHeadingAnchorsAlloc(
         heading_arena.allocator(),
         title,
@@ -2708,7 +2708,8 @@ fn processMain(
     var sections = languageSections(source, &expanded_markers);
     if (early_heading_observation) |observation| {
         if (observation.page_html_source) |observed_source|
-            sections.html_headings = .{ .source = observed_source, .openings = observation.page_html_openings };
+            sections.html_headings = .{ .source = observed_source, .openings = observation.page_html_openings,
+                .namespace_catalog = codes.namespace_catalog, .linked_h1_filter = sections.heading_filter };
     }
     if (may_cross_link) sections.link_headings = .{ .source = source, .openings = expanded_link_openings };
     while (sections.next()) |section| try appendClassifiedSection(page_allocator, codes, &page_sections, &owned_headings, section);

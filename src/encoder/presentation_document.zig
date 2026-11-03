@@ -5243,3 +5243,186 @@ test "TL protected-only layout does not promote tag-local list or heading marker
         }
     }
 }
+
+
+test "orphan gallery close survives codec with matched media table and bibliography action" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const prefix = "==Heading==\n<Gallery>\nFile:Cat.jpg|caption\n</Gallery>\n<div class=NavFrame><div class=NavContent>\n{| class=wikitable\n| '''cell''' || [[Cell|linked]]\n|}\n</div></div>\n preformatted body\n\n'''Bibliography'''\n[[Bibliography|bibliography]]''";
+    const suffix = "'' [[Tail|suffix]]";
+    const source = try std.mem.concat(a, u8, &.{ prefix, "</Gallery>", suffix });
+    const reference = try std.mem.concat(a, u8, &.{ prefix, "&lt;/Gallery>", suffix });
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "entry", .language, "Unclassified", "", source, null, &report);
+    const expected = try compileAlloc(a, "entry", .language, "Unclassified", "", reference, null);
+    try std.testing.expectEqualSlices(u8, expected, bytes);
+    const stored = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    try std.testing.expect(report.literal_markup);
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.media.len);
+    var heading = false;
+    var bibliography = false;
+    var tail = false;
+    var close_text: std.ArrayList(u8) = .empty;
+    for (stored.entry.sections) |section| {
+        if (std.mem.eql(u8, section.title, "Heading")) heading = true;
+        for (section.blocks) |block| for (block.spans) |span| {
+            if (span.kind == .link and std.mem.eql(u8, span.target, "Bibliography")) {
+                bibliography = true;
+                try std.testing.expectEqualStrings("bibliography", span.text);
+            }
+            if (span.kind == .link and std.mem.eql(u8, span.target, "Tail")) {
+                tail = true;
+                try std.testing.expectEqualStrings("suffix", span.text);
+            }
+            if (span.italic and span.kind == .text) try close_text.appendSlice(a, span.text);
+        };
+    }
+    try std.testing.expect(heading and bibliography and tail);
+    try std.testing.expectEqualStrings("</Gallery>", close_text.items);
+    // Existing malformed-link recovery remains visible and non-actionable.
+    // Neither an unmatched opener nor an invalid title is an unconditional
+    // publication failure: their existing recovery paths clear action state.
+    const recovered_cases = [_]struct { source: []const u8, visible: []const u8 }{
+        .{ .source = "</Gallery> [[broken", .visible = "</Gallery> [malformed link] broken" },
+        .{ .source = "[[</Gallery>|label]]", .visible = "[[</Gallery>|label]]" },
+    };
+    for (recovered_cases) |case| {
+        var recovered_report: Fallbacks = .{};
+        const recovered_bytes = try compileReportedAlloc(a, "entry", .language, "Unclassified", "", case.source, null, &recovered_report);
+        const recovered = try codec.decodeAlloc(a, recovered_bytes, "entry", .language, .{ .code = "", .heading = "Unclassified" });
+        try std.testing.expectEqualSlices(u8, recovered_bytes, try codec.encodeAlloc(a, recovered));
+        var visible: std.ArrayList(u8) = .empty;
+        for (recovered.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+        };
+        try std.testing.expectEqualStrings(case.visible, visible.items);
+        try std.testing.expect(recovered_report.literal_markup);
+    }
+    // An escaped display token never exempts unrelated residuals or targets.
+    for ([_][]const u8{
+        "</Gallery> before |} after",
+        "</Gallery x>",
+        "</Gallery/>",
+        "[https://example.test </Gallery>]",
+    }) |rejected| try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "Unclassified", "", rejected, null));
+    const raw = [_]compiler.Span{.{ .text = "</Gallery>" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+    try std.testing.expectError(error.UncompiledPresentation, compiler.requireCompiledText("</Gallery>"));
+    // Display provenance cannot exempt unresolved action targets. This
+    // validator rejects template syntax, independently of angle-token rules.
+    const unresolved_target = [_]compiler.Span{.{ .kind = .link, .text = "label", .target = "{{missing}}", .provenance = .protected_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &unresolved_target, null));
+}
+
+test "malformed template cell keeps later Cite planning heading observation and complete codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<h2>Heading</h2>\n{|\n| before<ref group=N name=before>first [[First|one]]</ref><references group=N/>\n|}\n{|\n| {{trad|fr|mettre} des bottes} [[Kept|''kept'']]<ref group=N name=after>''later'' [[Later|two]]</ref>\n|}\n<references group=N/>";
+    const prepared = try compiler.preparePageExternalLinksAlloc(a, source, .{});
+    var reference_context = try referenceDefinitionsWithMissingAlloc(a, prepared.missing);
+    reference_context.citations = prepared.citations;
+    const observation = try observeHeadingAnchorsAlloc(a, "entry", prepared.missing, .{}, null, null, null, reference_context, prepared.poem_phase);
+    try std.testing.expect(observation.items.len != 0);
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "entry", .language, "Unclassified", "", source, null, &report);
+    const stored = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    try std.testing.expectEqual(@as(usize, 2), stored.entry.references.len);
+    try std.testing.expectEqualStrings("before", stored.entry.references[0].name);
+    try std.testing.expectEqualStrings("after", stored.entry.references[1].name);
+    try std.testing.expectEqualStrings("N", stored.entry.references[0].group);
+    try std.testing.expectEqualStrings("N", stored.entry.references[1].group);
+    const Witness = struct {
+        visible: std.ArrayList(u8) = .empty,
+        kept: bool = false,
+        fn spans(self: *@This(), alloc: A, values: []const types.Span) !void {
+            for (values) |span| {
+                try self.visible.appendSlice(alloc, span.text);
+                if (span.kind == .link and std.mem.eql(u8, span.target, "Kept")) {
+                    try std.testing.expectEqualStrings("kept", span.text);
+                    try std.testing.expect(span.italic);
+                    self.kept = true;
+                }
+            }
+        }
+    };
+    var witness: Witness = .{};
+    var tables: usize = 0;
+    var heading = false;
+    for (stored.entry.sections) |section| {
+        if (std.mem.eql(u8, section.title, "Heading")) heading = true;
+        for (section.blocks) |block| {
+            try witness.spans(a, block.spans);
+            if (block.table) |table| {
+                tables += 1;
+                for (table.rows) |row| for (row.cells) |cell| try witness.spans(a, cell.spans);
+            }
+        }
+    }
+    try std.testing.expect(heading and tables == 2 and witness.kept);
+    try std.testing.expect(std.mem.indexOf(u8, witness.visible.items, "[malformed template]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, witness.visible.items, "des bottes}") != null);
+    try std.testing.expect(report.literal_markup);
+    var first_action = false;
+    var later_action = false;
+    var later_italic = false;
+    for (stored.entry.references[0].spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "First")) { first_action = true; };
+    for (stored.entry.references[1].spans) |span| {
+        if (span.kind == .link and std.mem.eql(u8, span.target, "Later")) later_action = true;
+        if (span.italic and std.mem.eql(u8, span.text, "later")) later_italic = true;
+    }
+    try std.testing.expect(first_action and later_action and later_italic);
+    // Valid but unexpanded invocations remain rejected by strict publication.
+    try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "entry", .language, "Unclassified", "", "{{unexpanded|x}}<ref>note</ref><references/>", null));
+    try std.testing.expectError(error.UncompiledPresentation, compiler.requireCompiledText("{{trad|fr|mettre} des bottes}"));
+}
+
+
+test "linked HTML H1 owner observation preserves original root and protected domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try NamespaceRegistry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategoria\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const heading = "<h1>[[English|English]]</h1>[[Categoria:English]]";
+    const positives = [_][]const u8{ heading ++ "\n# body", heading ++ "\r\n# body", "prefix\n" ++ heading ++ "\n# body", "<h2>English</h2>\n# body" };
+    for (positives) |source| {
+        const prepared = try compiler.preparePageExternalLinksAlloc(a, source, .{ .namespace_catalog = &namespaces });
+        var refs = try referenceDefinitionsWithMissingAlloc(a, prepared.missing);
+        refs.citations = prepared.citations;
+        const observed = try observeHeadingAnchorsAlloc(a, "entry", prepared.missing, .{}, &namespaces, null, null, refs, prepared.poem_phase);
+        try std.testing.expectEqual(@as(usize, 1), observed.page_html_openings.len);
+        const opening = observed.page_html_openings[0];
+        try std.testing.expect(std.mem.startsWith(u8, prepared.source[opening..], if (std.mem.startsWith(u8, source, "<h2>")) "<h2>" else "<h1>"));
+        try std.testing.expect(observed.page_html_source.?.ptr == prepared.source.ptr);
+    }
+    for ([_][]const u8{
+        "<nowiki>\n" ++ heading ++ "\n</nowiki>",
+        "<!--\n" ++ heading ++ "\n-->",
+        "<pre>\n" ++ heading ++ "\n</pre>",
+        "<blockquote>\n" ++ heading ++ "\n</blockquote>",
+        "<div>\n" ++ heading ++ "\n</div>",
+        "{|\n|\n" ++ heading ++ "\n|}",
+        "<ref>\n" ++ heading ++ "\n</ref><references/>",
+        "[[target|" ++ heading ++ "]]",
+        "prefix " ++ heading,
+        "<h1>[[English]]</h1>[[:Category:English]]",
+        "<h1>[[File:English|English]]</h1>",
+        "<h2>[[English]]</h2>",
+    }) |source| {
+        const prepared = try compiler.preparePageExternalLinksAlloc(a, source, .{ .namespace_catalog = &namespaces });
+        var refs = try referenceDefinitionsWithMissingAlloc(a, prepared.missing);
+        refs.citations = prepared.citations;
+        const observed = try observeHeadingAnchorsAlloc(a, "entry", prepared.missing, .{}, &namespaces, null, null, refs, prepared.poem_phase);
+        if (observed.page_html_openings.len != 0) std.debug.print("unexpected H1 root ownership scope: {s}\n", .{source});
+        try std.testing.expectEqual(@as(usize, 0), observed.page_html_openings.len);
+    }
+}

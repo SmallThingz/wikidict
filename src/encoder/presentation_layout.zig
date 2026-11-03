@@ -30,6 +30,15 @@ const speech = [_][]const u8{
     "Romanization", "Logogram",       "Determinative",
 };
 pub fn partOfSpeech(title: []const u8) ?[]const u8 {
+    // Retained ocwiki Modèl:-vèrb- p1133/r309551 and -flex-verb- p2910/r50049.
+    // A form heading is not evidence for a particular lemma or inflection relation.
+    if (std.mem.eql(u8, title, "Vèrb")) return "Verb";
+    if (std.mem.eql(u8, title, "Forma de vèrb")) return "Verb form";
+    // Exact emitted KBD template p21/r212 label; its positional code is unused.
+    // The named value is the uppercase noun term documented at this revision:
+    // https://en.wiktionary.org/w/index.php?title=щыӏэцӏэ&oldid=89577699
+    // Match this complete label only, without changing section titles or bodies.
+    if (std.mem.eql(u8, title, "ПСАЛЪЭ ЛЪЭПКЪЫГЪУЭ: ЩЫӀЭЦӀЭ")) return "Noun";
     for (speech) |name| if (part.named(title, name)) return name;
     return null;
 }
@@ -106,9 +115,13 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
     var related: std.ArrayList(usize) = .empty;
     for (sections, 0..) |section, i| {
         const kind = if (unclassified and section.level == 2) null else partOfSpeech(section.title);
-        const etymology = part.named(section.title, "Etymology");
+        // Modèl:-etim- p1091/r219080 emits this exact localized heading.
+        const etymology = part.named(section.title, "Etymology") or std.mem.eql(u8, section.title, "Etimologia");
+        // Owned records can contain several H1 source regions. A recognized H2
+        // POS belongs to the preceding etymology, but a new region cannot inherit it.
+        if (owner != null and section.level == 1) origin = null;
         if (section.level == 2) {
-            origin = null;
+            if (owner == null or kind == null) origin = null;
             if (owner == null and !unclassified and kind == null and !etymology) current_language = section.title;
         }
         if (active) |previous| {
@@ -249,4 +262,115 @@ test "classified layout owner survives support labels without changing lexical s
     try std.testing.expectEqualStrings("Suna", legacy.lexemes[0].language);
     try std.testing.expectEqualStrings("Unknown support", legacy.lexemes[1].language);
     try std.testing.expectEqualDeep(legacy.other_sections, owned.other_sections);
+}
+// Append to src/encoder/presentation_layout.zig in a private source only.
+test "KBD exact localized noun heading preserves owner and descendant section evidence" {
+    const title = "ПСАЛЪЭ ЛЪЭПКЪЫГЪУЭ: ЩЫӀЭЦӀЭ";
+    try std.testing.expectEqualStrings("Noun", partOfSpeech(title).?);
+    for ([_][]const u8{ "ЩЫӀЭЦӀЭ", "ПСАЛЪЭ ЛЪЭПКЪЫГЪУЭ: щыӏэцӏэ", "ПСАЛЪЭ ЛЪЭПКЪЫГЪУЭ: ЩЫӀЭЦӀЭ 2", "ПСАЛЪЭ ЛЪЭПКЪЫГЪУЭ: UNKNOWN", "ПСАЛЪЭ ЛЪЭПКЪЫГЪУЭ:  ЩЫӀЭЦӀЭ" }) |other|
+        try std.testing.expect(partOfSpeech(other) == null);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "АДЫГЭБЗЭ (КЪЭБЭРДЕЙ-ШЭРДЖЭСЫБЗЭ)", .level = 2 },
+        .{ .title = title, .level = 3 },
+        .{ .title = "МЫХЬЭНЭ", .level = 4, .blocks = &.{.{ .kind = .definition, .list_path = "#" }} },
+        .{ .title = "ЩАПХЪЭХЭР", .level = 4, .blocks = &.{.{ .kind = .list_item, .list_path = "*" }} },
+    };
+    const owned = try buildOwned(a, &sections, "record-owner");
+    try std.testing.expectEqual(@as(usize, 1), owned.lexemes.len);
+    try std.testing.expectEqualStrings("Noun", owned.lexemes[0].kind);
+    try std.testing.expectEqualStrings("record-owner", owned.lexemes[0].language);
+    try std.testing.expectEqual(@as(usize, 1), owned.lexemes[0].section);
+    try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, owned.lexemes[0].related_sections);
+    // Existing layout keeps descendant blocks addressable; it does not relocate
+    // their definitions into the POS section's direct-block sense list.
+    try std.testing.expectEqual(@as(usize, 0), owned.lexemes[0].definitions.len);
+    try std.testing.expectEqualStrings(title, sections[1].title);
+    try std.testing.expect(sections[2].blocks[0].kind == .definition);
+    const unknown = try buildUnclassified(a, &sections);
+    try std.testing.expectEqual(@as(usize, 1), unknown.lexemes.len);
+    try std.testing.expectEqualStrings("", unknown.lexemes[0].language);
+}
+
+
+test "OC exact verb and verb-form layout retains owned etymology and region boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "Occitan", .level = 1 },
+        .{ .title = "Etimologia", .level = 3, .blocks = &.{.{ .kind = .paragraph }} },
+        .{ .title = "Prononciacion", .level = 3 },
+        .{ .title = "Vèrb", .level = 2, .blocks = &.{
+            .{ .kind = .paragraph }, .{ .kind = .definition, .list_path = "#" },
+            .{ .kind = .example, .list_path = "#:" },
+        } },
+        .{ .title = "Conjugason", .level = 3, .blocks = &.{.{ .kind = .paragraph }} },
+        // A later same-owner source region without etymology must not inherit it.
+        .{ .title = "Occitan", .level = 1 },
+        .{ .title = "Forma de vèrb", .level = 2, .blocks = &.{.{ .kind = .definition, .list_path = "#" }} },
+        .{ .title = "Etimologia", .level = 3 },
+        .{ .title = "Vèrb", .level = 2 },
+        // An unknown L2 remains a boundary; it cannot extend etymology scope.
+        .{ .title = "Unknown", .level = 2 },
+        .{ .title = "Vèrb", .level = 2 },
+    };
+    const layout = try buildOwned(a, &sections, "Declared owner");
+    try std.testing.expectEqual(@as(usize, 4), layout.lexemes.len);
+    const verb = layout.lexemes[0];
+    try std.testing.expectEqualStrings("Verb", verb.kind);
+    try std.testing.expectEqual(@as(usize, 3), verb.section);
+    try std.testing.expectEqual(@as(?usize, 1), verb.etymology);
+    try std.testing.expectEqualSlices(usize, &.{0}, verb.introduction);
+    try std.testing.expectEqual(@as(usize, 1), verb.definitions.len);
+    try std.testing.expectEqual(@as(usize, 1), verb.definitions[0].block);
+    try std.testing.expectEqualSlices(usize, &.{2}, verb.definitions[0].examples);
+    try std.testing.expectEqualSlices(usize, &.{4}, verb.related_sections);
+    const form = layout.lexemes[1];
+    try std.testing.expectEqualStrings("Verb form", form.kind);
+    try std.testing.expectEqualStrings("Forma de vèrb", sections[form.section].title);
+    try std.testing.expect(form.etymology == null);
+    try std.testing.expectEqual(@as(usize, 1), form.definitions.len);
+    try std.testing.expect(form.definitions[0].form == null);
+    try std.testing.expectEqual(@as(?usize, 7), layout.lexemes[2].etymology);
+    try std.testing.expect(layout.lexemes[3].etymology == null);
+    for (layout.lexemes) |lexeme| try std.testing.expectEqualStrings("Declared owner", lexeme.language);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 5, 7, 9 }, layout.other_sections);
+}
+
+test "OC localized labels do not infer unresolved owner or broaden matching and legacy scopes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "vèrb", "Vèrb 2", "Forma de vèrb 2", "Forma de vèrb extra", "Prefix Vèrb" }) |title|
+        try std.testing.expect(partOfSpeech(title) == null);
+    try std.testing.expectEqualStrings("Verb", partOfSpeech("Verb").?);
+    try std.testing.expectEqualStrings("Verb", partOfSpeech("VERB").?);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "English", .level = 1 },
+        .{ .title = "Etymology", .level = 3 },
+        .{ .title = "Verb", .level = 2 },
+        .{ .title = "Etimologia", .level = 3 },
+        .{ .title = "Forma de vèrb", .level = 2 },
+    };
+    const legacy = try build(a, &sections);
+    try std.testing.expectEqual(@as(usize, 2), legacy.lexemes.len);
+    for (legacy.lexemes) |lexeme| try std.testing.expect(lexeme.etymology == null);
+    const unresolved = try buildUnclassified(a, &sections);
+    try std.testing.expectEqual(@as(usize, 0), unresolved.lexemes.len);
+    const owned = try buildOwned(a, &sections, "English");
+    try std.testing.expectEqual(@as(?usize, 1), owned.lexemes[0].etymology);
+    try std.testing.expectEqual(@as(?usize, 3), owned.lexemes[1].etymology);
+    // Protected text is blocks, not an admitted heading; layout cannot promote it.
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "test", .language = "English" } };
+    const blocks = try renderer.renderBody("<nowiki>==Vèrb==</nowiki>\n<pre>==Forma de vèrb==</pre>\n");
+    const protected = [_]Section{.{ .title = "Notes", .level = 3, .blocks = blocks }};
+    const literal = try buildOwned(a, &protected, "English");
+    try std.testing.expectEqual(@as(usize, 0), literal.lexemes.len);
+    try std.testing.expectEqualSlices(usize, &.{0}, literal.other_sections);
 }

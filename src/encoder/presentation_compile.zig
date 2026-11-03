@@ -2629,6 +2629,14 @@ const PageExternalNumbering = struct {
                 }
                 continue;
             }
+            // The renderer rejects only an unbalanced invocation prefix and
+            // resumes ordinary children. Do not let the shared iterator hide
+            // later citation sites by treating the whole page tail as text.
+            // This advances the collector only; authored bytes stay unchanged.
+            if (starts(input[at..], "{{") and syntax.balancedWithOpaqueScan(input, at, &opaque_scan) == null) {
+                it.cursor += if (starts(input[at..], "{{{")) @as(usize, 3) else 2;
+                continue;
+            }
             if (input[at] == '<') {
                 if (starts(input[at..], "<!--")) {
                     it.cursor = opaque_scan.protectedEnd(input, at, null) orelse input.len;
@@ -7468,6 +7476,18 @@ pub const Renderer = struct {
         // Sanitizer recognizes closing pre as HTML even without an opening
         // scope in this local domain. Protected/opaque bodies returned above.
         if (tag.closing and tag.is("pre")) return tag.end;
+        // A matched gallery is consumed by its opening opaque scope. An
+        // otherwise unowned exact close is escaped display text by Sanitizer,
+        // not ordinary HTML to discard. Protect only its opening delimiter;
+        // the remaining bytes and following body retain normal validation.
+        if (style.provenance == .parsed and style.kind == .text and
+            style.target.len == 0 and style.self_link_target == null and
+            std.ascii.eqlIgnoreCase(input[at..tag.end], "</gallery>"))
+        {
+            self.fallbacks.literal_markup = true;
+            try self.protectedLiteral(input[at .. at + 1], style);
+            return at + 1;
+        }
         if (!knownInlineHtmlName(tag.name)) return null;
         if (tag.closing or tag.self_closing) return tag.end;
         // Wiktionary's senseid emits an intentionally unclosed li inside a
@@ -10048,9 +10068,9 @@ pub const Renderer = struct {
                         try self.bodyRawBlock(&blocks, input, item_body, &body_quotes, .heading, ":", "", level);
                     } else try self.bodyRawBlock(&blocks, input, heading_body, &body_quotes, .heading, "", "", level);
                     blocks.items[blocks.items.len - 1].heading_authored_id = try self.headingAuthoredId(tag);
-                    if (level == 2 and self.body_depth == 1 and !anchored_inline and
+                    if ((level == 1 or level == 2) and self.body_depth == 1 and !anchored_inline and
                         !self.in_reference and !self.pre_block and !self.parsed_pre and
-                        self.body_link_target.len == 0 and end == physical_end and
+                        self.body_link_target.len == 0 and
                         (start == 0 or input[start - 1] == '\n'))
                     {
                         if (self.page_html_heading_openings) |openings| if (self.heading_source) |root| {
@@ -10058,7 +10078,8 @@ pub const Renderer = struct {
                             // lend its local heading to the original page.
                             if (input.ptr == root.ptr and input.len == root.len and
                                 @intFromPtr(wrapper_source.ptr) == @intFromPtr(line.ptr) and
-                                @import("language_source.zig").plainLineHtmlH2(line) != null)
+                                ((level == 2 and end == physical_end and @import("language_source.zig").plainLineHtmlH2(line) != null) or
+                                (level == 1 and @import("language_source.zig").linkedLineHtmlH1(std.mem.trimEnd(u8, input[start..physical_end], "\r"), self.context.namespace_catalog) != null)))
                                 try openings.append(self.a, start);
                         };
                     }
@@ -33179,4 +33200,139 @@ test "TL physical layout close selection excludes owned bodies and synthetic fir
         "* literal<nowiki>\n|}\n</nowiki>\n|} actual",
         "<tr><td><div>\n* [[蕉麻]]\n|}</div>",
     }) |source| try std.testing.expect(Renderer.physicalLayoutTableClose(source));
+}
+
+
+test "orphan gallery close protects only its ordinary opening delimiter" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "</gallery>", "</Gallery>", "</GALLERY>" }) |closer| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const source = try std.fmt.allocPrint(a, "''{s}'' [[Tail|suffix]]", .{closer});
+        const spans = try r.parseSpans(source, .{});
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "{s} suffix", .{closer}), try flattened(a, spans));
+        var protected_openings: usize = 0;
+        var actions: usize = 0;
+        for (spans) |span| {
+            if (std.mem.eql(u8, span.text, "<")) {
+                protected_openings += 1;
+                try std.testing.expect(span.provenance == .protected_literal and span.flags.italic);
+                try std.testing.expect(span.kind == .text and span.target.len == 0);
+            }
+            if (std.mem.eql(u8, span.text, closer[1..])) {
+                try std.testing.expect(span.provenance == .parsed and span.flags.italic);
+            }
+            if (span.kind == .link) {
+                actions += 1;
+                try std.testing.expectEqualStrings("Tail", span.target);
+                try std.testing.expectEqualStrings("suffix", span.text);
+                try std.testing.expect(!span.flags.italic);
+            }
+        }
+        try std.testing.expect(protected_openings == 1 and actions == 1 and r.fallbacks.literal_markup);
+    }
+    // The opening scope owns its real closer and retains gallery media.
+    const matched = "<Gallery>\nFile:Cat.jpg|caption\n</Gallery>";
+    var owned: Renderer = .{ .a = a, .context = .{} };
+    _ = try owned.parseSpans(matched, .{});
+    try std.testing.expect(owned.media.items.len == 1 and !owned.fallbacks.literal_markup);
+    var orphan: Renderer = .{ .a = a, .context = .{} };
+    const both = try orphan.parseSpans(try std.fmt.allocPrint(a, "{s}</Gallery>", .{matched}), .{});
+    try std.testing.expectEqualDeep(owned.media.items, orphan.media.items);
+    try std.testing.expect(std.mem.endsWith(u8, try flattened(a, both), "</Gallery>"));
+    try std.testing.expect(orphan.fallbacks.literal_markup);
+    for ([_][]const u8{ "<nowiki></Gallery></nowiki>", "&lt;/Gallery>" }) |source| {
+        var protected: Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expectEqualStrings("</Gallery>", try flattened(a, try protected.parseSpans(source, .{})));
+        try std.testing.expect(!protected.fallbacks.literal_markup);
+    }
+    // Attribute-bearing, malformed, other extension and action domains do
+    // not acquire this proof. The test inspects provenance, not a fallback.
+    for ([_][]const u8{ "</gallery x>", "</gallery/>", "</ref>", "</gallery" }) |source| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const spans = try r.parseSpans(source, .{});
+        for (spans) |span| try std.testing.expect(!(std.mem.eql(u8, span.text, "<") and span.provenance == .protected_literal));
+    }
+    for ([_]Style{
+        .{ .kind = .link, .target = "Target" },
+        .{ .kind = .external_link, .target = "https://example.test" },
+        .{ .self_link_target = "entry" },
+    }) |style| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const spans = try r.parseSpans("</Gallery>", style);
+        for (spans) |span| try std.testing.expect(span.provenance == .parsed);
+        try std.testing.expect(!r.fallbacks.literal_markup);
+    }
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("</Gallery>"));
+}
+
+test "Cite collection resumes after malformed invocation before same-cell and later-table notes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "{{trad|fr|mettre} des bottes}", "{{{parameter des bottes" }) |malformed| {
+        for ([_]bool{ false, true }) |later_table| {
+            const separation = if (later_table) "\n|}\n{|\n| " else " ";
+            const source = try std.mem.concat(a, u8, &.{
+                "<h2>Heading</h2>\n{|\n| before<ref group=N name=before>first [[First|one]]</ref><references group=N/>\n|}\n{|\n| ",
+                malformed, separation,
+                "after<ref group=N name=after>''later'' [[Later|two]]</ref>\n|}\n<references group=N/>",
+            });
+            const original = try a.dupe(u8, source);
+            const prepared = try preparePageExternalLinksAlloc(a, source, .{});
+            try std.testing.expectEqualStrings(original, source);
+            const plan = prepared.citations orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 4), plan.events.items.len);
+            try std.testing.expectEqual(@as(usize, 2), plan.items.items.len);
+            const after_tag = try std.fmt.allocPrint(a, "<ref {s}=\"2\" group=N name=after>", .{plan.attribute});
+            try std.testing.expect(std.mem.indexOf(u8, prepared.source, after_tag) != null);
+            try std.testing.expect(std.mem.indexOf(u8, prepared.source, malformed) != null);
+            // Reusing immutable annotated input must neither renumber nor append.
+            const copied = try a.dupe(u8, prepared.source);
+            const again = try preparePageExternalLinksAlloc(a, copied, .{ .citations = plan });
+            try std.testing.expect(again.citations == plan);
+            try std.testing.expectEqualStrings(copied, again.source);
+            var renderer: Renderer = .{ .a = a, .context = .{ .citations = plan, .external_links_prepared = true } };
+            _ = try renderer.renderBody(prepared.source);
+            const refs = try renderer.finishReferences();
+            try std.testing.expectEqual(@as(usize, 2), refs.len);
+            try std.testing.expectEqualStrings("before", refs[0].name);
+            try std.testing.expectEqualStrings("after", refs[1].name);
+            try std.testing.expectEqualStrings("N", refs[0].group);
+            try std.testing.expectEqualStrings("N", refs[1].group);
+            try std.testing.expectEqualStrings("first one", try flattened(a, refs[0].spans));
+            try std.testing.expectEqualStrings("later two", try flattened(a, refs[1].spans));
+            var first_action = false;
+            var later_action = false;
+            var later_italic = false;
+            for (refs[0].spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "First")) { first_action = true; };
+            for (refs[1].spans) |span| {
+                if (span.kind == .link and std.mem.eql(u8, span.target, "Later")) later_action = true;
+                if (span.flags.italic and std.mem.eql(u8, span.text, "later")) later_italic = true;
+            }
+            try std.testing.expect(first_action and later_action and later_italic);
+            var missing: Renderer = .{ .a = a, .context = .{ .citations = plan, .external_links_prepared = true } };
+            try std.testing.expectError(error.InvalidPreContext, missing.renderBody("<ref group=N>unannotated</ref>"));
+            var forged: Renderer = .{ .a = a, .context = .{ .citations = plan, .external_links_prepared = true } };
+            const invalid = try std.fmt.allocPrint(a, "<ref {s}=\"999999\"/>", .{plan.attribute});
+            try std.testing.expectError(error.InvalidPreContext, forged.renderBody(invalid));
+        }
+    }
+    // Protected and balanced invocation domains are not newly traversed.
+    const protected_source = "<nowiki>{{broken <ref>hidden</ref></nowiki><!-- {{broken <ref>hidden</ref> --><ref name=n>visible</ref><references/>";
+    const protected = try preparePageExternalLinksAlloc(a, protected_source, .{});
+    try std.testing.expectEqual(@as(usize, 2), protected.citations.?.events.items.len);
+    try std.testing.expectEqual(@as(usize, 1), protected.citations.?.items.items.len);
+    const balanced = try preparePageExternalLinksAlloc(a, "{{unexpanded|<ref>hidden</ref>}}<ref name=n>visible</ref><references/>", .{});
+    try std.testing.expectEqual(@as(usize, 2), balanced.citations.?.events.items.len);
+    try std.testing.expectEqualStrings("visible", balanced.citations.?.items.items[0].body.?.bytes);
+    // A bare URL in the discarded contiguous prefix is not an auto-numbered
+    // bracketed action; the later visible bracketed URL still receives [1].
+    const url_source = "{{https://hidden.example/path later [https://visible.example/path]<ref>note</ref><references/>";
+    const numbered = try preparePageExternalLinksAlloc(a, url_source, .{});
+    try std.testing.expect(std.mem.indexOf(u8, numbered.source, "{{https://hidden.example/path later ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, numbered.source, "https://visible.example/path <nowiki>[1]</nowiki>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, numbered.source, "<nowiki>[2]</nowiki>") == null);
+    try std.testing.expectEqual(@as(usize, 2), numbered.citations.?.events.items.len);
 }

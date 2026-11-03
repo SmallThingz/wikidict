@@ -654,6 +654,12 @@ pub const Registry = struct {
         if (std.mem.eql(u8, self.content_code orelse "", "af")) {
             try self.addLocalAlias("Samies (Noord-)", "se");
         }
+        // Exact retained KBD template p28/r283 emits this heading. Meta explicitly
+        // identifies its name with installed code kbd (not an edition default):
+        // https://meta.wikimedia.org/w/index.php?title=Requests_for_new_languages/Wiktionary_Kabardian&oldid=27638979
+        // Existing aliases, canonical owners and ambiguities retain precedence.
+        if (self.codes.contains("kbd"))
+            try self.addLocalAlias("АДЫГЭБЗЭ (КЪЭБЭРДЕЙ-ШЭРДЖЭСЫБЗЭ)", "kbd");
         if (self.content_code) |code_value| {
             if (self.resolve(code_value) == null) return error.InvalidLanguageRegistry;
         }
@@ -2090,4 +2096,63 @@ test "preferred capitalization survives later alias installation and rechecks co
     try std.testing.expect(r.isAmbiguous("Кыргызча"));
     try std.testing.expect(r.resolveTrusted("Кыргызча") == null);
     try std.testing.expectEqualStrings("ky", r.resolveTrusted("кыргызча").?.code);
+}
+// Append to tools/language_registry.zig in a private qualification source.
+// No test execution is claimed by this source artifact.
+test "KBD exact curated language heading requires installed code and preserves canonical name" {
+    const label = "АДЫГЭБЗЭ (КЪЭБЭРДЕЙ-ШЭРДЖЭСЫБЗЭ)";
+    var r = Registry.empty(std.testing.allocator);
+    defer r.deinit();
+    // Deliberately not KBD content-language: the named authority is independent
+    // of edition inference. This reproduces the actual captured kbd row.
+    try r.addTsv("# content-language\ten\n# mediawiki\nen\tEnglish\nkbd\tадыгэбзэ\tАдыгэбзэ\tkbd\tKabardian\n");
+    try std.testing.expectEqualStrings("kbd", r.resolveTrusted(label).?.code);
+    try std.testing.expectEqualStrings("адыгэбзэ", r.resolveTrusted(label).?.heading);
+    try std.testing.expectEqualStrings("адыгэбзэ", r.resolve("kbd").?.heading);
+    try std.testing.expect(r.resolveStrong(label) == null);
+    for ([_][]const u8{ "АДЫГЭБЗЭ", "АДЫГЭБЗЭ (OTHER)", "Адыгэбзэ (Къэбэрдей-Шэрджэсыбзэ)", "АДЫГЭБЗЭ (КЪЭБЭРДЕЙ-ШЭРДЖЭСЫБЗЭ) 2" }) |other|
+        try std.testing.expect(r.resolveTrusted(other) == null);
+    var absent = Registry.empty(std.testing.allocator);
+    defer absent.deinit();
+    try absent.addTsv("# content-language\ten\n# mediawiki\nen\tEnglish\n");
+    try std.testing.expect(absent.resolve(label) == null);
+    try std.testing.expect(absent.resolveTrusted(label) == null);
+    // A three-letter alias on another code is not an installed kbd code.
+    try absent.addTsv("# mediawiki\nfr\tFrench\tkbd\n");
+    try std.testing.expectEqualStrings("fr", absent.resolve("kbd").?.code);
+    try std.testing.expect(absent.resolve(label) == null);
+    try std.testing.expect(absent.resolveTrusted(label) == null);
+}
+
+test "KBD exact curated language heading cannot override existing or later conflicts" {
+    const label = "АДЫГЭБЗЭ (КЪЭБЭРДЕЙ-ШЭРДЖЭСЫБЗЭ)";
+    const cases = [_]struct { source: []const u8, ordinary: ?[]const u8, trusted: ?[]const u8 }{
+        .{ .source = "# mediawiki\nkbd\tадыгэбзэ\nfr\tАДЫГЭБЗЭ (КЪЭБЭРДЕЙ-ШЭРДЖЭСЫБЗЭ)\n", .ordinary = "fr", .trusted = "fr" },
+        .{ .source = "# mediawiki\nkbd\tадыгэбзэ\nfr\tFrench\tАДЫГЭБЗЭ (КЪЭБЭРДЕЙ-ШЭРДЖЭСЫБЗЭ)\n", .ordinary = "fr", .trusted = null },
+        .{ .source = "# mediawiki\nkbd\tадыгэбзэ\tАДЫГЭБЗЭ (КЪЭБЭРДЕЙ-ШЭРДЖЭСЫБЗЭ)\n", .ordinary = "kbd", .trusted = null },
+        .{ .source = "# mediawiki\nkbd\tадыгэбзэ\nfr\tFrench\tАДЫГЭБЗЭ (КЪЭБЭРДЕЙ-ШЭРДЖЭСЫБЗЭ)\nen\tEnglish\tАДЫГЭБЗЭ (КЪЭБЭРДЕЙ-ШЭРДЖЭСЫБЗЭ)\n", .ordinary = null, .trusted = null },
+        .{ .source = "# mediawiki\nkbd\tадыгэбзэ\nfr\tFrench\n# local-alias\tfr\tАДЫГЭБЗЭ (КЪЭБЭРДЕЙ-ШЭРДЖЭСЫБЗЭ)\n", .ordinary = null, .trusted = null },
+    };
+    for (cases) |case| {
+        var r = Registry.empty(std.testing.allocator);
+        defer r.deinit();
+        try r.addTsv(case.source);
+        const ordinary = r.resolve(label);
+        if (case.ordinary) |code| {
+            try std.testing.expect(ordinary != null);
+            try std.testing.expectEqualStrings(code, ordinary.?.code);
+        } else try std.testing.expect(ordinary == null);
+        const trusted = r.resolveTrusted(label);
+        if (case.trusted) |code| {
+            try std.testing.expect(trusted != null);
+            try std.testing.expectEqualStrings(code, trusted.?.code);
+        } else try std.testing.expect(trusted == null);
+    }
+    var later = Registry.empty(std.testing.allocator);
+    defer later.deinit();
+    try later.addTsv("# mediawiki\nkbd\tадыгэбзэ\n");
+    try std.testing.expectEqualStrings("kbd", later.resolveTrusted(label).?.code);
+    try later.addTsv("# mediawiki\nfr\tFrench\tАДЫГЭБЗЭ (КЪЭБЭРДЕЙ-ШЭРДЖЭСЫБЗЭ)\n");
+    try std.testing.expectEqualStrings("fr", later.resolve(label).?.code);
+    try std.testing.expect(later.resolveTrusted(label) == null);
 }

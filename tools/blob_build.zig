@@ -6005,3 +6005,185 @@ test "InvalidPreContext capture IO refusal preserves error and existing capture"
         try F.noPublication(a, root);
     }
 }
+// Append to tools/blob_build.zig privately. Synthetic normal-loader/Writer/codec
+// controls; actual captured кхъухь must separately pass its saved-page oracle.
+fn kbdHeadingPosWriterControl(tsv: []const u8, raw: []const u8, expanded: []const u8, expected_code: []const u8, expected_owner: []const u8, lexeme_count: usize) !void {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    // A different edition rules out content-language inference. Every TSV has en
+    // to satisfy the strict normal loader, even when kbd is deliberately absent.
+    var namespaces = try namespace_registry.Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = tsv });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "\n" });
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces);
+    defer registry.deinit();
+    const codes = languageCodes(&registry, &namespaces);
+    const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "synthetic-kbd-declarations", expanded, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+    const path = try std.fs.path.join(a, &.{ output, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(expected_owner, &filename) });
+    var mapped = try mmapPath(io, path);
+    defer mapped.deinit();
+    const blob = try encoder.blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings(expected_code, metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("synthetic-kbd-declarations")) orelse return error.TestUnexpectedResult;
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    try std.testing.expectEqualStrings(expected_code, decoded.entry.language_code);
+    try std.testing.expect(decoded.entry.language != null);
+    try std.testing.expectEqualStrings(expected_owner, decoded.entry.language.?);
+    try std.testing.expectEqual(lexeme_count, decoded.entry.organization.lexemes.len);
+    for (decoded.entry.organization.lexemes) |lexeme| {
+        try std.testing.expectEqualStrings("Noun", lexeme.kind);
+        try std.testing.expectEqualStrings(if (expected_code.len == 0) "" else expected_owner, lexeme.language);
+        try std.testing.expectEqualStrings("ПСАЛЪЭ ЛЪЭПКЪЫГЪУЭ: ЩЫӀЭЦӀЭ", decoded.entry.sections[lexeme.section].title);
+    }
+    var definitions: usize = 0;
+    var targets: usize = 0;
+    var bold: usize = 0;
+    var italic: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| {
+        if (block.kind == .definition) definitions += 1;
+        for (block.spans) |span| {
+            if (std.mem.eql(u8, span.target, "target")) {
+                try std.testing.expect(span.kind == .link);
+                try std.testing.expectEqualStrings("label", span.text);
+                targets += 1;
+            }
+            if (std.mem.eql(u8, span.text, "bold") and span.bold) bold += 1;
+            if (std.mem.eql(u8, span.text, "italic") and span.italic) italic += 1;
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), definitions);
+    try std.testing.expectEqual(@as(usize, 1), targets);
+    try std.testing.expectEqual(@as(usize, 1), bold);
+    try std.testing.expectEqual(@as(usize, 1), italic);
+}
+const kbdHeadingPosBody = "# Definition '''bold''' [[target|label]] and ''italic''.\n";
+const kbdHeadingPosExpanded = "=='''АДЫГЭБЗЭ (КЪЭБЭРДЕЙ-ШЭРДЖЭСЫБЗЭ)'''==\n===ПСАЛЪЭ ЛЪЭПКЪЫГЪУЭ: ЩЫӀЭЦӀЭ===\n====МЫХЬЭНЭ====\n" ++ kbdHeadingPosBody;
+const kbdHeadingPosRaw = "{{псалъащхьэ}}\n{{псалъ-лъэпкъ|kbd|лъэпкъыгъуэ=ЩЫӀЭЦӀЭ}}\n====МЫХЬЭНЭ====\n" ++ kbdHeadingPosBody;
+const kbdHeadingPosRegistry = "# content-language\ten\n# mediawiki\nen\tEnglish\nkbd\tадыгэбзэ\tАдыгэбзэ\tkbd\tKabardian\n";
+
+test "KBD exact curated owner and noun survive normal Writer codec without edition default" {
+    try kbdHeadingPosWriterControl(kbdHeadingPosRegistry, kbdHeadingPosRaw, kbdHeadingPosExpanded, "kbd", "адыгэбзэ", 1);
+}
+
+test "KBD normal Writer preserves absence and competing language authority" {
+    try kbdHeadingPosWriterControl("# content-language\ten\n# mediawiki\nen\tEnglish\n", kbdHeadingPosRaw, kbdHeadingPosExpanded, "", "Unclassified", 1);
+    try kbdHeadingPosWriterControl(kbdHeadingPosRegistry ++ "fr\tFrench\tАДЫГЭБЗЭ (КЪЭБЭРДЕЙ-ШЭРДЖЭСЫБЗЭ)\n", kbdHeadingPosRaw, kbdHeadingPosExpanded, "", "Unclassified", 1);
+    try kbdHeadingPosWriterControl(kbdHeadingPosRegistry ++ "fr\tАДЫГЭБЗЭ (КЪЭБЭРДЕЙ-ШЭРДЖЭСЫБЗЭ)\n", kbdHeadingPosRaw, kbdHeadingPosExpanded, "fr", "АДЫГЭБЗЭ (КЪЭБЭРДЕЙ-ШЭРДЖЭСЫБЗЭ)", 1);
+}
+
+test "KBD literal protected headings cannot create owner or noun lexeme" {
+    const headings = "==АДЫГЭБЗЭ (КЪЭБЭРДЕЙ-ШЭРДЖЭСЫБЗЭ)==\n===ПСАЛЪЭ ЛЪЭПКЪЫГЪУЭ: ЩЫӀЭЦӀЭ===\n";
+    const nowiki = "<nowiki>\n" ++ headings ++ "</nowiki>\n" ++ kbdHeadingPosBody;
+    try kbdHeadingPosWriterControl(kbdHeadingPosRegistry, nowiki, nowiki, "", "Unclassified", 0);
+    const pre = "<pre>\n" ++ headings ++ "</pre>\n" ++ kbdHeadingPosBody;
+    try kbdHeadingPosWriterControl(kbdHeadingPosRegistry, pre, pre, "", "Unclassified", 0);
+}
+
+
+const OcH1ExpectedOwner = struct { code: []const u8, heading: []const u8, targets: []const []const u8 };
+fn ocH1WriterControl(registry_tsv: []const u8, raw: ?[]const u8, expanded: []const u8, expected: []const OcH1ExpectedOwner) !void {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var namespaces = try namespace_registry.Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategoria\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = registry_tsv });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "\n" });
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces);
+    defer registry.deinit();
+    const codes = languageCodes(&registry, &namespaces);
+    const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "html-language-owner", expanded, raw orelse expanded, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(expected.len, stats.language_records);
+    for (expected) |owner| {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{ output, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(owner.heading, &filename) });
+        var mapped = try mmapPath(io, path);
+        defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(owner.code, metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("html-language-owner")) orelse return error.TestUnexpectedResult;
+        const stored = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, stored));
+        try std.testing.expectEqualStrings(owner.code, stored.entry.language_code);
+        try std.testing.expectEqualStrings(owner.heading, stored.entry.language.?);
+        var matched = std.StringHashMap(void).init(a);
+        var definitions: usize = 0;
+        var bold = false;
+        var italic = false;
+        for (stored.entry.sections) |section| for (section.blocks) |block| {
+            if (block.kind == .definition) definitions += 1;
+            for (block.spans) |span| {
+                if (span.bold and std.mem.eql(u8, span.text, "bold")) bold = true;
+                if (span.italic and std.mem.eql(u8, span.text, "italic")) italic = true;
+                if (span.kind == .link) for (expected) |candidate| for (candidate.targets) |target| {
+                    if (!std.mem.eql(u8, span.target, target)) continue;
+                    try std.testing.expectEqualStrings(owner.code, candidate.code);
+                    try matched.put(target, {});
+                };
+            }
+        };
+        try std.testing.expect(definitions >= owner.targets.len and bold and italic);
+        try std.testing.expectEqual(owner.targets.len, @as(usize, matched.count()));
+        for (owner.targets) |target| try std.testing.expect(matched.contains(target));
+    }
+}
+
+test "root linked HTML H1 owners use normal trusted registry and keep repeated language bodies separate" {
+    const registry = "# content-language\ten\n# mediawiki\nen\tEnglish\nfr\tFrench\n";
+    const english = "<h1>[[English|English]]</h1>[[Categoria:English]]\n";
+    const french = "<h1>[[French|French]]</h1>[[Category:French|entry]]\n";
+    const first = "# '''bold''' [[english-one|one]] ''italic''.\n";
+    const second = "# '''bold''' [[french-one|deux]] ''italic''.\n";
+    const third = "# '''bold''' [[english-two|three]] ''italic''.\n";
+    try ocH1WriterControl(registry, "{{=en=}}\n" ++ first ++ "{{=fr=}}\n" ++ second ++ "{{=en=}}\n" ++ third,
+        english ++ first ++ french ++ second ++ english ++ third,
+        &.{ .{ .code = "en", .heading = "English", .targets = &.{ "english-one", "english-two" } }, .{ .code = "fr", .heading = "French", .targets = &.{"french-one"} } });
+    // A trusted linked heading does not depend on a raw template-name guess.
+    try ocH1WriterControl(registry, null, french ++ second, &.{.{ .code = "fr", .heading = "French", .targets = &.{"french-one"} }});
+    // Unknown linked H1 support under an established owner is not promoted to
+    // a new language boundary; its original typed heading/body remain intact.
+    try ocH1WriterControl(registry, null, english ++ first ++ "<h1>[[Regional vocabulary]]</h1>[[Category:Words]]\n" ++ third,
+        &.{.{ .code = "en", .heading = "English", .targets = &.{ "english-one", "english-two" } }});
+    inline for ([_][]const u8{
+        "<h1>[[Unknown]]</h1>[[Category:Unknown]]\n",
+        "<h1>[[English|French]]</h1>[[Category:English]]\n",
+        "<h1>[[English]]</h1>[[:Category:English]]\n",
+    }) |heading| try ocH1WriterControl(registry, null, heading ++ first,
+        &.{.{ .code = "", .heading = "Unclassified", .targets = &.{"english-one"} }});
+}

@@ -163,12 +163,17 @@ pub const LinkHeadingScopes = struct {
 pub const HtmlHeadingScopes = struct {
     source: []const u8,
     openings: []const usize,
+    namespace_catalog: ?*const @import("namespace_registry").Registry = null,
+    linked_h1_filter: ?Iterator.MarkerFilter = null,
 
     fn heading(self: HtmlHeadingScopes, source: []const u8, start: usize, line: []const u8) ?ParsedHeading {
         const scope: LinkHeadingScopes = .{ .source = self.source, .openings = self.openings };
         if (!scope.admits(source, start)) return null;
-        const label = plainLineHtmlH2(line) orelse return null;
-        return .{ .level = 2, .title = label };
+        if (plainLineHtmlH2(line)) |label| return .{ .level = 2, .title = label };
+        const linked = linkedLineHtmlH1(line, self.namespace_catalog) orelse return null;
+        const filter = self.linked_h1_filter orelse return null;
+        if (!filter.accepts(filter.ctx, linked)) return null;
+        return .{ .level = 1, .title = linked };
     }
 };
 
@@ -191,6 +196,54 @@ pub fn mayHavePlainLineHtmlH2(source: []const u8) bool {
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
         if (plainLineHtmlH2(std.mem.trimEnd(u8, line, "\r")) != null) return true;
+    }
+    return false;
+}
+
+/// A borrowed linked H1 label with only nonvisible category controls after it.
+/// Syntax and namespaces do not supply an owner: the caller also needs the
+/// original renderer scope and its normal trusted language-heading resolver.
+pub fn linkedLineHtmlH1(line: []const u8, namespaces: ?*const @import("namespace_registry").Registry) ?[]const u8 {
+    const catalog = namespaces orelse return null;
+    if (line.len == 0 or line[0] != '<' or std.mem.indexOfAny(u8, line, "\r\n") != null) return null;
+    const tag = syntax.tagAt(line, 0) orelse return null;
+    if (!tag.is("h1") or tag.closing or tag.self_closing) return null;
+    const pair = syntax.matchingTag(line, tag) orelse return null;
+    const heading = std.mem.trim(u8, line[tag.end..pair.inner_end], " \t");
+    if (!std.mem.startsWith(u8, heading, "[[")) return null;
+    const link = syntax.balanced(heading, 0) orelse return null;
+    if (link.end != heading.len) return null;
+    const body = heading[2..link.inner_end];
+    if (std.mem.indexOfAny(u8, body, "[]{}<>&\r\n") != null) return null;
+    const pipe = std.mem.indexOfScalar(u8, body, '|') orelse body.len;
+    const target = std.mem.trim(u8, body[0..pipe], " \t");
+    if (target.len == 0 or std.mem.indexOfAny(u8, target, ":#") != null or catalog.ofTitle(target).id != 0) return null;
+    if (pipe != body.len) {
+        const label = std.mem.trim(u8, body[pipe + 1 ..], " \t");
+        if (label.len == 0 or std.mem.indexOfScalar(u8, label, '|') != null) return null;
+    }
+    var tail = std.mem.trim(u8, line[pair.end..], " \t");
+    while (tail.len != 0) {
+        if (!std.mem.startsWith(u8, tail, "[[")) return null;
+        const category = syntax.balanced(tail, 0) orelse return null;
+        const fields = tail[2..category.inner_end];
+        if (std.mem.indexOfAny(u8, fields, "[]{}<>&\r\n") != null) return null;
+        const delimiter = std.mem.indexOfScalar(u8, fields, '|') orelse fields.len;
+        const title = std.mem.trim(u8, fields[0..delimiter], " \t");
+        if (title.len == 0 or title[0] == ':' or std.mem.indexOfScalar(u8, title, '#') != null) return null;
+        const resolved = catalog.ofTitle(title);
+        if (resolved.id != 14 or std.mem.trim(u8, resolved.text, " \t").len == 0) return null;
+        if (delimiter != fields.len and std.mem.indexOfScalar(u8, fields[delimiter + 1 ..], '|') != null) return null;
+        tail = std.mem.trim(u8, tail[category.end..], " \t");
+    }
+    return heading;
+}
+
+pub fn mayHaveLanguageHtmlHeading(source: []const u8, namespaces: ?*const @import("namespace_registry").Registry) bool {
+    if (mayHavePlainLineHtmlH2(source)) return true;
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (linkedLineHtmlH1(std.mem.trimEnd(u8, line, "\r"), namespaces) != null) return true;
     }
     return false;
 }
@@ -1354,4 +1407,48 @@ test "HTML heading precheck includes renderer physical line normalization" {
         "<h2>Béarla</h2>suffix",
         "<h2>Béarla",
     }) |source| try std.testing.expect(!mayHavePlainLineHtmlH2(source));
+}
+
+
+test "linked HTML H1 language syntax requires ordinary links and nonvisible namespace categories" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategoria\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const line = "<h1 style='clear:both'>[[english|English]]</h1>[[Categoria:English]]";
+    try std.testing.expectEqualStrings("[[english|English]]", linkedLineHtmlH1(line, &namespaces).?);
+    try std.testing.expectEqualStrings("[[English]]", linkedLineHtmlH1("<H1>[[English]]</H1> [[Category:English|entry]] [[Categoria:Words]]", &namespaces).?);
+    try std.testing.expect(mayHaveLanguageHtmlHeading(line ++ "\r\n# body", &namespaces));
+    try std.testing.expect(linkedLineHtmlH1(line, null) == null);
+    for ([_][]const u8{
+        "<h1>[[File:English|English]]</h1>", "<h1>[[Media:English|English]]</h1>",
+        "<h1>[[:Category:English|English]]</h1>", "<h1>[[en:English|English]]</h1>",
+        "<h1>[[English#part|English]]</h1>", "<h1>[[English|English|caption]]</h1>",
+        "<h1>[[English|<span>English</span>]]</h1>", "<h1>[[English]] prose</h1>",
+        "<h1>[[English]]</h1>[[File:Icon.svg|caption]]", "<h1>[[English]]</h1>[[:Category:English]]",
+        "<h1>[[English]]</h1>[[Category:]]", "<h1>[[English]]</h1>[[Category:English|{{sort}}]]",
+        "<h1>[[English]]</h1>[[Category:English|a|b]]", "<h1>[[English]]</h1> trailing prose",
+        "<h1>[[English]]", " <h1>[[English]]</h1>", "<h2>[[English]]</h2>",
+    }) |invalid| try std.testing.expect(linkedLineHtmlH1(invalid, &namespaces) == null);
+    // Syntax alone cannot confer a language owner, and copied source offsets
+    // cannot borrow the original renderer observation.
+    const source = line ++ "\n# body";
+    const offsets = [_]usize{0};
+    const Filter = struct {
+        fn accepts(_: ?*const anyopaque, value: []const u8) bool { return std.mem.eql(u8, value, "[[english|English]]"); }
+    };
+    var scopes: HtmlHeadingScopes = .{ .source = source, .openings = &offsets, .namespace_catalog = &namespaces };
+    try std.testing.expect(scopes.heading(source, 0, line) == null);
+    scopes.linked_h1_filter = .{ .ctx = null, .accepts = Filter.accepts };
+    try std.testing.expectEqual(@as(u8, 1), scopes.heading(source, 0, line).?.level);
+    const copy = try a.dupe(u8, source);
+    try std.testing.expect(scopes.heading(copy, 0, line) == null);
+    try std.testing.expect(scopes.heading(source, 1, line) == null);
+    try std.testing.expectEqualStrings("English", plainLineHtmlH2("<h2>English</h2>").?);
+    try std.testing.expect(plainLineHtmlH2("<h2>[[English]]</h2>") == null);
 }
