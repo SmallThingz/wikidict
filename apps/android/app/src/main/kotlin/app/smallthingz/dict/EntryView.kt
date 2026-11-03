@@ -158,7 +158,9 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 this["abbreviations"] = settings.collapseDetails
             }.also { readingState?.foldKey = foldKey; readingState?.folds = it }
         }
-        val visibleRows = visibleEntryReadingRows(entry, folded.filterValues { it }.keys)
+        val foldedKeys = folded.filterValues { it }.keys
+        val visibleRows = visibleEntryReadingRows(entry, foldedKeys)
+        val entryTextSections = remember(entry, foldedKeys) { foldedEntryTextSections(entry.readingRows, foldedKeys) }
         var cellHeadingRequest by remember { mutableStateOf<CellHeadingRequest?>(null) }
         fun jumpToAnchor(target: String): Boolean {
             val destination = headingDestination(entry, target)
@@ -240,6 +242,10 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                     }
                     if (entry.displayTitle.isNotEmpty()) StyledText(entry.displayTitle, Modifier.fillMaxWidth().testTag("entry-title"), style = MaterialTheme.typography.displayMedium, onLink = readerLink)
                     else Text(entry.title, Modifier.fillMaxWidth().testTag("entry-title"), style = MaterialTheme.typography.displayMedium.copy(textDirection=TextDirection.Content))
+                    if (entryTextSections.isNotEmpty()) {
+                        TextButton(onClick = { entryTextSections.forEach { folded[it] = false } },
+                            modifier = Modifier.testTag("show-entry-text")) { Text("Show entry text") }
+                    }
                     if (entry.abbreviations.isNotEmpty()) {
                         val closed = folded["abbreviations"] != false
                         TextButton(onClick = { folded["abbreviations"] = !closed },

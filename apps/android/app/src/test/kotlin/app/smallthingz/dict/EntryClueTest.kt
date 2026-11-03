@@ -4,6 +4,57 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class EntryClueTest {
+
+    @Test fun definitionClueKeepsPriorityWithoutSplittingSupplementaryTextAtCap() {
+        val prose = Block("paragraph", 0, listOf(Span("text", "Fallback before the definition")))
+        val text = "a".repeat(419) + "😀tail"
+        val definition = Block("definition", 1, listOf(Span("text", text)))
+        val clue = entry(prose, definition).clue()
+        assertEquals("a".repeat(419), clue)
+        assertTrue(clue.length <= 420)
+        assertFalse(Character.isHighSurrogate(clue.last()))
+        assertEquals(text, textOf(definition.spans))
+    }
+
+    @Test fun capturedAsBodyRemainsDiscoverableAfterHeadwordAndLanguageParagraphs() {
+        fun paragraph(text: String) = Block("paragraph", 0, listOf(Span("text", text)))
+        fun meaning() = Block("list_item", 2, listOf(Span("link", "অসমীয়া ", target = "অসমীয়া")), listPath = ":#", number = "1")
+        val father = Entry("father", emptyList(), "language", "ইংৰাজী", "en", listOf(
+            Section(1, "ইংৰাজী", emptyList()), Section(2, "নাম", listOf(paragraph("father"),
+                Block("list_item", 2, listOf(Span("link", "জনক", target = "জনক")), listPath = ":#", number = "1")))), emptyList())
+        val assamese = Entry("assamese", emptyList(), "language", "Unclassified", "", listOf(
+            Section(2, "Unclassified", listOf(paragraph("ইংৰাজী"))),
+            Section(2, "নাম", listOf(paragraph("assamese"), meaning())),
+            Section(2, "বিশেষণ", listOf(paragraph("assamese"), meaning()))), emptyList())
+        val before = listOf(father.sections, assamese.sections)
+        assertEquals("father · জনক", father.clue())
+        assertEquals("ইংৰাজী · assamese · অসমীয়া · assamese · অসমীয়া", assamese.clue())
+        assertEquals(before, listOf(father.sections, assamese.sections))
+        assertTrue(before.flatten().flatMap { it.blocks }.none { it.kind == "definition" })
+    }
+
+    @Test fun fallbackOmitsOnlyExplicitCompanionHeadingsAndMediaControls() {
+        val heading = Block("heading", 0, listOf(Span("text", "নাম", bold = true)), level = 2)
+        val control = Block("paragraph", 0, listOf(Span("link", "audio.wav", classes = "wikidict-media")))
+        val headword = Block("paragraph", 0, listOf(Span("text", "headword")))
+        val body = Block("list_item", 2, listOf(Span("text", "meaning")), listPath = ";#")
+        val value = Entry("headword", emptyList(), "language", "Language", "und",
+            listOf(Section(2, "নাম", listOf(heading, control, headword, body))), emptyList())
+        assertSame(heading, sectionHeadingCompanion(value.sections.single()))
+        assertEquals("headword · meaning", value.clue())
+        assertEquals(listOf(heading, control, headword, body), value.sections.single().blocks)
+    }
+
+    @Test fun fallbackStopsAtItsExistingCapWithoutSplittingSupplementaryText() {
+        val first = Block("paragraph", 0, listOf(Span("text", "a".repeat(410))))
+        val second = Block("list_item", 1, listOf(Span("text", "😀".repeat(10))), listPath = "*")
+        val last = Block("paragraph", 0, listOf(Span("text", "later body")))
+        val clue = entry(first, second, last).clue()
+        assertEquals("a".repeat(410) + " · " + "😀".repeat(3), clue)
+        assertTrue(clue.length <= 420)
+        assertFalse(Character.isHighSurrogate(clue.last()))
+        assertFalse(clue.contains("later body"))
+    }
     private fun actualAfEntry(): Entry = BlobDecoder.decode(
         requireNotNull(javaClass.getResourceAsStream("/af-spinal-cord.dpr2")).use { it.readBytes() },
         "spinal cord", "language", "Engels", "en"

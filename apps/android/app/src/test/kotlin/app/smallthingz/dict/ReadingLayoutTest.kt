@@ -6,6 +6,50 @@ import androidx.compose.ui.unit.em
 
 class ReadingLayoutTest {
 
+    @Test fun definitionlessLocalizedSectionsExposeBodyOnlyOnExplicitRequest() {
+        // Captured AS assamese has an overview paragraph before two localized POS sections.
+        val overview = Block("paragraph", 0, listOf(Span("text", "ইংৰাজী")))
+        val noun = Block("list_item", 2, listOf(Span("text", "noun body")), listPath = ":#")
+        val adjective = Block("list_item", 2, listOf(Span("text", "adjective body")), listPath = ":#")
+        val rows = readingRows(listOf(Section(2, "Unclassified", listOf(overview)),
+            Section(2, "নাম", listOf(noun)), Section(2, "বিশেষণ", listOf(adjective))))
+        val preferences = AppSettings(collapseOtherSections = true)
+        val folds = rows.filter { initiallyFolded(it, preferences) }.associate { it.key to true }.toMutableMap()
+        folds["preamble"] = true; folds["references"] = true; folds["media"] = true; folds["abbreviations"] = true
+        val before = folds.toMap()
+        val keys = foldedEntryTextSections(rows, folds.filterValues { it }.keys)
+        assertEquals(listOf("heading-0", "heading-1", "heading-2"), keys)
+        assertEquals(before, folds) // Merely offering the action never overrides saved/manual folds.
+        assertTrue(visibleReadingRows(rows, folds.filterValues { it }.keys).none { it.block != null })
+        keys.forEach { folds[it] = false } // Explicit button action.
+        assertEquals(listOf(overview, noun, adjective), visibleReadingRows(rows, folds.filterValues { it }.keys).mapNotNull { it.block })
+        assertTrue(foldedEntryTextSections(rows, folds.filterValues { it }.keys).isEmpty())
+        for (key in listOf("preamble", "references", "media", "abbreviations")) assertEquals(true, folds[key])
+        assertTrue(preferences.collapseOtherSections)
+        folds["heading-1"] = true // Manual collapse still wins and the action becomes available again.
+        assertEquals(listOf("heading-1"), foldedEntryTextSections(rows, folds.filterValues { it }.keys))
+        assertFalse(visibleReadingRows(rows, folds.filterValues { it }.keys).any { it.block == noun })
+    }
+
+    @Test fun recognizedDefinitionsKeepSupportingSectionPolicy() {
+        val definition = Block("definition", 1, listOf(Span("text", "Meaning")))
+        val support = Block("paragraph", 0, listOf(Span("text", "Support")))
+        val rows = readingRows(listOf(Section(3, "Noun", listOf(definition)), Section(3, "Notes", listOf(support))))
+        val folded = rows.filter { initiallyFolded(it, AppSettings()) }.map { it.key }.toSet()
+        assertTrue(foldedEntryTextSections(rows, folded).isEmpty())
+        assertEquals(listOf(definition), visibleReadingRows(rows, folded).mapNotNull { it.block })
+    }
+
+    @Test fun bodyActionRequiresAnActuallyFoldedNamedBody() {
+        val body = Block("list_item", 2, listOf(Span("text", "Body")), listPath = ";#")
+        val rows = readingRows(listOf(Section(2, "", listOf(body)), Section(3, "References", emptyList())))
+        assertTrue(foldedEntryTextSections(rows, setOf("heading-0", "heading-1", "references")).isEmpty())
+        val named = readingRows(listOf(Section(3, "নাম", listOf(body))))
+        assertTrue(foldedEntryTextSections(named, emptySet()).isEmpty())
+        val openDefaults = named.filter { initiallyFolded(it, AppSettings(collapseOtherSections = false)) }.map { it.key }.toSet()
+        assertTrue(foldedEntryTextSections(named, openDefaults).isEmpty())
+    }
+
     @Test fun plainNestedHeadingCompanionUsesExplicitMetadataWithoutDuplicatingItsLabel() {
         val heading = Block("heading", 1, listOf(Span("text", "Plain nested heading")), listPath = ":", level = 4)
         val body = Block("paragraph", 0, listOf(Span("text", "Following body")))

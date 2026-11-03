@@ -174,6 +174,14 @@ fun visibleReadingRows(rows: List<ReadingRow>, folded: Set<String>): List<Readin
 }
 
 
+/** Offer explicit access to body text when no recognized definitions guide initial folding. */
+internal fun foldedEntryTextSections(rows: List<ReadingRow>, folded: Set<String>): List<String> {
+    if (rows.any { it.meaningSection }) return emptyList()
+    val namedSections = rows.filter { it.heading?.title?.isNotBlank() == true }.map { it.key }.toSet()
+    return rows.asSequence().filter { it.block != null && it.sectionKey in namedSections && it.sectionKey in folded }
+        .map { it.sectionKey }.distinct().toList()
+}
+
 fun initiallyFolded(row: ReadingRow, settings: AppSettings): Boolean {
     val section = row.heading ?: return false
     if (section.title.isBlank()) return false

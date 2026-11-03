@@ -65,6 +65,8 @@ object BlobDecoder {
     }
     private class Reader(bytes: ByteArray) {
         val buffer: ByteBuffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        private val utf8 = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
         var remainingItems = 1_000_000
         var explanations = false
         var colors = false
@@ -81,8 +83,10 @@ object BlobDecoder {
         }
         fun string(): String {
             val n = u32(); require(n <= 32*1024*1024 && n <= buffer.remaining())
+            if (n == 0L) return ""
             val slice = buffer.slice(); slice.limit(n.toInt()); buffer.position(buffer.position() + n.toInt())
-            return Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).decode(slice).toString()
+            // decode(ByteBuffer) resets the decoder for each independent field.
+            return utf8.decode(slice).toString()
         }
         fun enum(values: List<String>): String = values.getOrNull(byte()) ?: error("Unknown presentation tag")
         fun presence(): Boolean = when(byte()) { 0 -> false; 1 -> true; else -> error("Invalid presence flag") }

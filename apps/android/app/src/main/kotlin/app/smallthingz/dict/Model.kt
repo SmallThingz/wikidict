@@ -106,9 +106,31 @@ data class Entry(
         })
         val blocks = sections.asSequence().flatMap { it.blocks.asSequence() }
         val definition = blocks.filter { it.kind == "definition" }.map(::preview).firstOrNull { it.isNotBlank() }
-        val fallback = definition ?: blocks.filter { it.kind !in setOf("blank", "rule") }
-            .map(::preview).firstOrNull { it.isNotBlank() }
-        return (fallback ?: "Definition unavailable.").take(420)
+        if (definition != null) {
+            var end = minOf(definition.length, 420)
+            if (end < definition.length && end > 0 && Character.isHighSurrogate(definition[end - 1]) &&
+                Character.isLowSurrogate(definition[end])) end--
+            return definition.take(end)
+        }
+        // A headword or language paragraph can precede useful unclassified body text.
+        // Reuse rendered rows so an explicit companion heading is not repeated.
+        val fallback = StringBuilder(420)
+        for (row in readingRows) {
+            val block = row.block ?: continue
+            if (block.kind in setOf("blank", "rule")) continue
+            val separator = if (fallback.isEmpty()) "" else " · "
+            val available = 420 - fallback.length - separator.length
+            if (available <= 0) break
+            val text = preview(block)
+            if (text.isBlank()) continue
+            var end = minOf(text.length, available)
+            if (end < text.length && end > 0 && Character.isHighSurrogate(text[end - 1]) &&
+                Character.isLowSurrogate(text[end])) end--
+            if (end == 0) break
+            fallback.append(separator).append(text, 0, end)
+            if (end < text.length) break
+        }
+        return fallback.toString().ifEmpty { "Definition unavailable." }
     }
 }
 

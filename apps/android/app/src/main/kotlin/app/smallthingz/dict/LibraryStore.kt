@@ -271,6 +271,14 @@ internal suspend fun publishLibrarySnapshot(db: SQLiteDatabase, publish: (List<D
     currentCoroutineContext().ensureActive()
 }
 
+// Entry.copy rebuilds reading rows and abbreviations, so origin binding stays on IO too.
+internal suspend fun readEntryOnIo(hit: WordHit, resolve: () -> Entry): Entry =
+    withContext(Dispatchers.IO) {
+        val entry = resolve()
+        currentCoroutineContext().ensureActive()
+        entry.copy(origin = hit)
+    }
+
 class LibraryStore private constructor(private val context: Context) {
     companion object {
         @Volatile private var instance: LibraryStore? = null
@@ -655,13 +663,13 @@ class LibraryStore private constructor(private val context: Context) {
         return (if(dictionary.kind == "alias") AliasDecoder.decode(payload(hit),hit.recordKey).entry()
             else BlobDecoder.decode(payload(hit),hit.title,hit.kind,if(hit.kind=="language")hit.language else null,dictionary.code)).copy(edition=dictionary.edition,contentDictionary=dictionary.id)
     }
-    suspend fun read(hit: WordHit): Entry = withContext(Dispatchers.IO) {
+    suspend fun read(hit: WordHit): Entry = readEntryOnIo(hit) {
         val dictionary = dictionaries.firstOrNull { it.id == hit.dictionary } ?: error("Dictionary was removed")
-        if (dictionary.kind != "alias") return@withContext plain(hit)
+        if (dictionary.kind != "alias") return@readEntryOnIo plain(hit)
         val alias = AliasDecoder.decode(payload(hit),hit.recordKey)
         val own = alias.entry().copy(redirect=alias.redirect(false),edition=dictionary.edition,contentDictionary=dictionary.id,
             navigationKind=alias.sourceKind,navigationLanguage=hit.language.takeIf { alias.sourceKind == "language" && it.isNotEmpty() })
-        val kind = alias.targetKind ?: return@withContext own
+        val kind = alias.targetKind ?: return@readEntryOnIo own
         // Follow only one edge. Another redirect (including a cycle) stays a compiled redirect page.
         val targetKey = "${blobKinds.indexOf(kind)+1}\t${alias.targetKey}"
         helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE dictionary=? AND record_key=? LIMIT 1",arrayOf(hit.dictionary,targetKey)).use { c ->
@@ -669,20 +677,20 @@ class LibraryStore private constructor(private val context: Context) {
                 val nextHit = hit(c)
                 val next = AliasDecoder.decode(payload(nextHit),nextHit.recordKey)
                 require(next.sourceNamespace == alias.targetNamespace && next.sourceTitle == alias.targetTitle && next.sourceKind == kind)
-                return@withContext next.entry().copy(redirect=alias.redirect(true),edition=dictionary.edition,contentDictionary=dictionary.id,
+                return@readEntryOnIo next.entry().copy(redirect=alias.redirect(true),edition=dictionary.edition,contentDictionary=dictionary.id,
                     navigationKind=next.sourceKind,navigationLanguage=hit.language.takeIf { hit.kind == "language" && next.sourceKind == "language" && it.isNotEmpty() })
             }
         }
-        if (dictionary.edition.isEmpty()) return@withContext own
+        if (dictionary.edition.isEmpty()) return@readEntryOnIo own
         val targetDictionary = if (kind == "language") {
-            if (hit.kind != "language") return@withContext own
+            if (hit.kind != "language") return@readEntryOnIo own
             dictionaries.firstOrNull { it.id == hit.contextDictionary && it.edition == dictionary.edition && it.kind == kind }
         } else dictionaries.singleOrNull { it.edition == dictionary.edition && it.kind == kind }
-        targetDictionary ?: return@withContext own
+        targetDictionary ?: return@readEntryOnIo own
         helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE dictionary=? AND title=substr(?,2) LIMIT 1",arrayOf(targetDictionary.id,sqlText(alias.targetKey))).use { c ->
             if (c.moveToFirst()) plain(hit(c)).copy(redirect=alias.redirect(true)) else own
         }
-    }.copy(origin=hit)
+    }
     suspend fun savedWord(word: SavedWord): WordHit? = withContext(Dispatchers.IO) {
         if (word.dictionary == null) return@withContext legacySelection(word.title,word.language,word.kind,word.edition.orEmpty())
         helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE dictionary=? AND record_key=substr(?,2) AND COALESCE(context_dictionary,'')=? LIMIT 1",
@@ -742,10 +750,26 @@ class LibraryStore private constructor(private val context: Context) {
     }
 }
 private fun compareUtf8(a: ByteArray,b: ByteArray): Int { for(i in 0 until minOf(a.size,b.size)){val d=(a[i].toInt() and 255)-(b[i].toInt() and 255);if(d!=0)return d};return a.size-b.size }
-private class CountingInput(input: InputStream): FilterInputStream(input) {
+internal class CountingInput(input: InputStream): FilterInputStream(input) {
     var position=0L;private set
     override fun read():Int = super.read().also { if(it>=0)position++ }
-    fun bytes(n:Int):ByteArray { val b=ByteArray(n);for(i in b.indices){val x=read();require(x>=0){"Truncated dictionary"};b[i]=x.toByte()};return b }
+    fun bytes(n:Int):ByteArray {
+        val b=ByteArray(n)
+        var offset=0
+        while(offset<n) {
+            val count=`in`.read(b,offset,n-offset)
+            require(count>=0) { "Truncated dictionary" }
+            if(count==0) {
+                val x=read()
+                require(x>=0) { "Truncated dictionary" }
+                b[offset++]=x.toByte()
+            } else {
+                position+=count
+                offset+=count
+            }
+        }
+        return b
+    }
     fun nul():String { val b=ByteArrayOutputStream();while(true){val x=read();require(x>=0 && b.size()<65536){"Invalid title"};if(x==0)break;b.write(x)};return b.toByteArray().decodeToString(throwOnInvalidSequence=true) }
     fun varuint():Long { var value=0L;var shift=0;while(true){val x=read();require(x>=0 && shift<63);value=value or ((x and 127).toLong() shl shift);if(x and 128==0){require(shift==0||x!=0);return value};shift+=7} }
     fun skipFully(n:Long){var left=n;while(left>0){val skipped=`in`.skip(left);if(skipped==0L){require(read()>=0);left--}else{position+=skipped;left-=skipped}}}
