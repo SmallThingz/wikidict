@@ -5426,3 +5426,345 @@ test "linked HTML H1 owner observation preserves original root and protected dom
         try std.testing.expectEqual(@as(usize, 0), observed.page_html_openings.len);
     }
 }
+
+test "terminal dot abbreviation preserves the captured HER reference through codec" {
+    var hr_ref_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer hr_ref_arena.deinit();
+    const hr_ref_a = hr_ref_arena.allocator();
+    // Exact expanded bolnica line49 reference body, with an independently authored
+    // entity-reference spelling at its sole terminal-dot token. This is a focused
+    // reference regression, not a substitute for the original full4311 Writer case.
+    const hr_ref_before = "==English==\n# [[Child|definition]]<ref name=\"HER\">Ljiljana Jojić, [[w:Ranko Matasović|Ranko Matasović]], gl. ur., ''Hrvatski enciklopedijski rječnik'', 4. sv. : Gra – J, Zagreb : EPH : Novi Liber, 2004., ISBN 953-6045-28-1 (cjelina), ISBN 953-6045-33-8 (";
+    const hr_ref_after = " 4.), str. 140.</ref> [[hospitalac|hospitálac]]<ref name=\"HER\"/> [[špitalac|špítàlac]]\n<references/>\n";
+    var hr_ref_report: Fallbacks = .{};
+    const hr_ref_payload = try compileReportedAlloc(hr_ref_a, "reference-abbreviation", .language, "English", "en", hr_ref_before ++ "<Sv.>" ++ hr_ref_after, null, &hr_ref_report);
+    const hr_ref_expected = try compileAlloc(hr_ref_a, "reference-abbreviation", .language, "English", "en", hr_ref_before ++ "&lt;Sv.>" ++ hr_ref_after, null);
+    try std.testing.expectEqualSlices(u8, hr_ref_expected, hr_ref_payload);
+    try std.testing.expect(hr_ref_report.literal_markup);
+    const hr_ref_stored = try codec.decodeAlloc(hr_ref_a, hr_ref_payload, "reference-abbreviation", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualSlices(u8, hr_ref_payload, try codec.encodeAlloc(hr_ref_a, hr_ref_stored));
+    try std.testing.expectEqual(@as(usize, 1), hr_ref_stored.entry.references.len);
+    const hr_ref_note = hr_ref_stored.entry.references[0];
+    try std.testing.expectEqualStrings("HER", hr_ref_note.name);
+    var hr_ref_text: std.ArrayList(u8) = .empty;
+    var hr_ref_ranko: usize = 0;
+    var hr_ref_italic: bool = false;
+    for (hr_ref_note.spans) |hr_ref_span| {
+        try hr_ref_text.appendSlice(hr_ref_a, hr_ref_span.text);
+        if (std.mem.eql(u8, hr_ref_span.text, "Ranko Matasović") and hr_ref_span.target.len != 0) hr_ref_ranko += 1;
+        if (std.mem.indexOf(u8, hr_ref_span.text, "Hrvatski enciklopedijski rječnik") != null and hr_ref_span.italic) hr_ref_italic = true;
+    }
+    try std.testing.expectEqual(@as(usize, 1), hr_ref_ranko);
+    try std.testing.expect(hr_ref_italic);
+    try std.testing.expect(std.mem.indexOf(u8, hr_ref_text.items, "(<Sv.> 4.), str. 140.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hr_ref_text.items, "ISBN 953-6045-28-1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hr_ref_text.items, "ISBN 953-6045-33-8") != null);
+}
+
+test "terminal dot abbreviation does not exempt parsed leftovers or action targets" {
+    var hr_strict_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer hr_strict_arena.deinit();
+    const hr_strict_a = hr_strict_arena.allocator();
+    try std.testing.expectError(error.UncompiledPresentation, compiler.requireCompiledText("<Sv.>"));
+    const hr_strict_raw = [_]compiler.Span{ .{ .text = "<Sv.>" } };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(hr_strict_a, &hr_strict_raw, null));
+    const hr_strict_after = [_]compiler.Span{
+        .{ .text = "<", .provenance = .protected_literal },
+        .{ .text = "Sv.> [[" },
+    };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(hr_strict_a, &hr_strict_after, null));
+    const hr_strict_target = [_]compiler.Span{
+        .{ .text = "<", .kind = .link, .target = "{{unresolved}}", .provenance = .protected_literal },
+    };
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(hr_strict_a, &hr_strict_target, null));
+    const hr_strict_label = [_]compiler.Span{
+        .{ .text = "<Sv.>", .kind = .link, .target = "Target" },
+    };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(hr_strict_a, &hr_strict_label, null));
+}
+
+// Append to presentation_document.zig after the unchanged terminal-dot patch.
+test "Breton terminal dot example keeps italic body actions headings and complete codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const before = "==Brezhoneg==\n===Furm araogenn===\n# ''[[furm|Furm]] an [[araogenn]] ''[[kenetre]]'', [[displeget]] [[en]] [[eil]] [[gour]] [[lies]]''\n#* ''";
+    const after = "''\n====Troidigezhioù====\n* [[galleg]]\n";
+    var report: Fallbacks = .{};
+    const payload = try compileReportedAlloc(a, "kenetrezoc'h", .language, "Unclassified", "", before ++ "<skouer.>" ++ after, null, &report);
+    const reference = try compileAlloc(a, "kenetrezoc'h", .language, "Unclassified", "", before ++ "&lt;skouer.>" ++ after, null);
+    try std.testing.expectEqualSlices(u8, reference, payload);
+    const stored = try codec.decodeAlloc(a, payload, "kenetrezoc'h", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqualSlices(u8, payload, try codec.encodeAlloc(a, stored));
+    var italic_example: std.ArrayList(u8) = .empty;
+    var actions = std.StringHashMap(void).init(a);
+    var definition = false;
+    var quotation_examples: usize = 0;
+    var pos_heading = false;
+    var translations_heading = false;
+    for (stored.entry.sections) |section| {
+        if (std.mem.eql(u8, section.title, "Furm araogenn")) pos_heading = true;
+        if (std.mem.eql(u8, section.title, "Troidigezhioù")) translations_heading = true;
+        for (section.blocks) |block| {
+            if (block.kind == .definition) definition = true;
+            if (block.kind == .quotation and std.mem.eql(u8, block.list_path, "#*")) {
+                var quotation: std.ArrayList(u8) = .empty;
+                for (block.spans) |span| {
+                    try std.testing.expect(span.kind == .text and span.target.len == 0);
+                    if (std.mem.trim(u8, span.text, " \t").len != 0) try std.testing.expect(span.italic);
+                    try quotation.appendSlice(a, span.text);
+                }
+                try std.testing.expectEqualStrings("<skouer.>", std.mem.trim(u8, quotation.items, " \t"));
+                quotation_examples += 1;
+            }
+            for (block.spans) |span| {
+                if (span.kind == .text and span.target.len == 0 and span.italic) try italic_example.appendSlice(a, span.text);
+                if (span.kind == .link) {
+                    try actions.put(span.target, {});
+                    if (std.mem.eql(u8, span.target, "kenetre")) try std.testing.expect(!span.italic);
+                    if (std.mem.eql(u8, span.target, "furm") or std.mem.eql(u8, span.target, "araogenn") or std.mem.eql(u8, span.target, "displeget")) try std.testing.expect(span.italic);
+                }
+            }
+        }
+    }
+    try std.testing.expect(pos_heading and translations_heading and definition and report.literal_markup);
+    try std.testing.expectEqual(@as(usize, 1), quotation_examples);
+    try std.testing.expect(std.mem.indexOf(u8, italic_example.items, "<skouer.>") != null);
+    for ([_][]const u8{ "furm", "araogenn", "kenetre", "displeget", "en", "eil", "gour", "lies", "galleg" }) |target| try std.testing.expect(actions.contains(target));
+    try std.testing.expectError(error.UncompiledPresentation, compiler.requireCompiledText("<skouer.>"));
+}
+
+
+test "Norwegian translation list tail survives wrapper recovery and complete codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source =
+        "==Norsk==\n===Verb===\n# [[fokusere|focus]]\n" ++
+        "<div class=\"NavFrame\">\n<div class=\"NavHead\">samle</div>\n<div class=\"NavContent\">\n" ++
+        "{| class=\"translations\"\n|-\n| width=48% |\n* [[First|first]]\n| width=1% |\n| width=48% |\n" ++
+        "* <span class=\"mallang\">tysk</span>: [[konzentrieren#Tysk|<span lang=\"de\">konzentrieren</span>]]<span class=\"tunk\"> [[Other|<span>other</span>]]</span>|}</div></div>\n" ++
+        "|}</div></div>\n====After====\n# [[After|after]]\n";
+    const literal_at = std.mem.indexOf(u8, source, "|}</div></div>").?;
+    // The reference owns exactly the same two literal bytes; the format's }}
+    // escapes one closing brace rather than changing the authored delimiter.
+    const reference = try std.fmt.allocPrint(a, "{s}<nowiki>|}}</nowiki>{s}", .{ source[0..literal_at], source[literal_at + 2 ..] });
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "entry", .language, "Norsk", "no", source, null, &report);
+    const expected = try compileAlloc(a, "entry", .language, "Norsk", "no", reference, null);
+    try std.testing.expectEqualSlices(u8, expected, bytes);
+    const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "no", .heading = "Norsk" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+    const Witness = struct {
+        tables: usize = 0,
+        marker: usize = 0,
+        diagnostic: usize = 0,
+        german: bool = false,
+        first: bool = false,
+        other: bool = false,
+        after: bool = false,
+        focus: bool = false,
+        fn spans(self: *@This(), values: []const types.Span) void {
+            for (values) |span| {
+                if (std.mem.eql(u8, span.text, "|}") and span.kind == .text and span.target.len == 0) self.marker += 1;
+                if (std.mem.eql(u8, span.text, "[malformed table]") and span.kind == .text and span.target.len == 0) self.diagnostic += 1;
+                if (span.kind == .link) {
+                    if (std.mem.eql(u8, span.target, "konzentrieren#Tysk") and std.mem.eql(u8, span.text, "konzentrieren") and std.mem.eql(u8, span.language, "de")) self.german = true;
+                    if (std.mem.eql(u8, span.target, "First")) self.first = true;
+                    if (std.mem.eql(u8, span.target, "Other")) self.other = true;
+                    if (std.mem.eql(u8, span.target, "After")) self.after = true;
+                    if (std.mem.eql(u8, span.target, "fokusere")) self.focus = true;
+                }
+            }
+        }
+        fn blocks(self: *@This(), values: []const types.Block) void {
+            for (values) |block| {
+                self.spans(block.spans);
+                if (block.table) |table| {
+                    self.tables += 1;
+                    self.spans(table.caption);
+                    for (table.rows) |row| for (row.cells) |cell| {
+                        if (cell.blocks) |children| self.blocks(children) else self.spans(cell.spans);
+                    };
+                }
+            }
+        }
+    };
+    var witness: Witness = .{};
+    var after_heading = false;
+    for (decoded.entry.sections) |section| {
+        if (section.level == 4 and std.mem.eql(u8, section.title, "After")) after_heading = true;
+        witness.blocks(section.blocks);
+    }
+    try std.testing.expectEqual(@as(usize, 1), witness.tables);
+    try std.testing.expectEqual(@as(usize, 1), witness.marker);
+    try std.testing.expectEqual(@as(usize, 1), witness.diagnostic);
+    try std.testing.expect(witness.german and witness.first and witness.other and witness.after and witness.focus and after_heading);
+    try std.testing.expect(report.malformed_table and report.literal_markup);
+    for ([_][]const u8{
+        "before |}", "* before |} after", "* |} suffix |}",
+        "* before |}<!-- hidden |}", "* before |}<includeonly>hidden |}",
+        "[[Target|label |}]]",
+    }) |strict| try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "Norsk", "no", strict, null));
+    const raw = [_]compiler.Span{.{ .text = "|}" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+    // Entity and protected authorship keep their existing literal contracts;
+    // their span segmentation need not match each other.
+    for ([_][]const u8{ "* [[Target]]<nowiki>|}</nowiki>", "* [[Target]]&#124;}" }) |literal| {
+        const literal_bytes = try compileAlloc(a, "entry", .language, "Norsk", "no", literal, null);
+        const literal_stored = try codec.decodeAlloc(a, literal_bytes, "entry", .language, .{ .code = "no", .heading = "Norsk" });
+        var visible: std.ArrayList(u8) = .empty;
+        var target = false;
+        for (literal_stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            if (span.kind == .link and std.mem.eql(u8, span.target, "Target")) target = true;
+        };
+        try std.testing.expect(target and std.mem.endsWith(u8, visible.items, "|}"));
+        try std.testing.expectEqualSlices(u8, literal_bytes, try codec.encodeAlloc(a, literal_stored));
+    }
+}
+
+
+test "TE retained translation list tails preserve literal separators later headings actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Complete retained expanded TE page1862/rev851370 (ce48803c), not a
+    // corrected template expansion. The inline separator and close stay text.
+    const source = "==వ్యాకరణ విశేషాలు== \n;భాషాభాగం:\n\n;వ్యుత్పత్తి:\n\n;బహువచనం లేక ఏక వచనం:\n\n==అర్థ వివరణ==\n\n==పదాలు==\n;నానార్థాలు:\n\n;సంబంధిత పదాలు:\n\n;వ్యతిరేక పదాలు:\n\n==పద ప్రయోగాలు==\n\n==అనువాదాలు==\n{| border=\"0\" width=\"100%\" class=\"translations\"\n|-\n| bgcolor=\"#FFFFE0\" valign=\"top\" width=\"48%\" |\n*[[ఇంగ్లీషు]]:*[[ఫ్రెంచి]]:*[[చైనీస్]]:*[[సంస్కృతం]]:*[[హిందీ]]:*[[అస్సామీ]]:*[[పంజాబీ]]:| width=1% |\n|bgcolor=\"#FFFFE0\" valign=top width=48%|\n*[[తమిళం]]:*[[కన్నడం]]:*[[మలయాళం]]:*[[మరాఠీ]]:*[[గుజరాతీ]]:*[[ఒరియా]]:*[[బెంగాలి]]:|}\n\n==మూలాలు, వనరులు==\n*[[wikipedia:india|india]]\n*[[w:తెవీకీ|తెవీకీ]]\n\n==బయటి లింకులు==\n*\n\n:__NOTOC__\n\n[[వర్గం:తెలుగు పదాలు]]";
+    var namespaces = try NamespaceRegistry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\ttewiktionary\n# dump-date\t20261001\n# content-language\tte\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tవర్గం\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedWithLinkTrailAlloc(a, "బంకముచ్చు", .language, "తెలుగు", "te", source, null, .{}, &namespaces, &report);
+    const stored = try codec.decodeAlloc(a, bytes, "బంకముచ్చు", .language, .{ .code = "te", .heading = "తెలుగు" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    const Witness = struct {
+        visible: std.ArrayList(u8) = .empty,
+        targets: std.StringHashMap(void),
+        headings: std.StringHashMap(void),
+        tables: usize = 0,
+        rows: usize = 0,
+        cells: usize = 0,
+        terms: usize = 0,
+        lists: usize = 0,
+        painted_cells: usize = 0,
+        fn visit(self: *@This(), alloc: A, comptime T: type, value: T) anyerror!void {
+            if (T == types.Span) {
+                try self.visible.appendSlice(alloc, value.text);
+                if (value.kind == .link) try self.targets.put(value.target, {});
+                return;
+            }
+            if (T == types.Section) try self.headings.put(value.title, {});
+            if (T == types.Block) {
+                if (value.kind == .term) self.terms += 1;
+                if (value.kind == .list_item) self.lists += 1;
+                if (value.kind == .heading) {
+                    var label: std.ArrayList(u8) = .empty;
+                    for (value.spans) |span| try label.appendSlice(alloc, span.text);
+                    try self.headings.put(try label.toOwnedSlice(alloc), {});
+                }
+            }
+            if (T == types.Table) {
+                self.tables += 1;
+                self.rows += value.rows.len;
+                for (value.rows) |row| self.cells += row.cells.len;
+            }
+            if (T == types.Cell) {
+                if (value.background) |paint| if (std.mem.eql(u8, paint, "#ffffe0")) { self.painted_cells += 1; };
+                if (value.blocks) |blocks| return self.visit(alloc, @TypeOf(blocks), blocks);
+                if (value.nested_table) |table| return self.visit(alloc, @TypeOf(table), table);
+                return self.visit(alloc, @TypeOf(value.spans), value.spans);
+            }
+            switch (@typeInfo(T)) {
+                .@"struct" => |info| inline for (info.field_names) |name| try self.visit(alloc, @TypeOf(@field(value, name)), @field(value, name)),
+                .pointer => |info| {
+                    if (info.size != .slice) @compileError("Unsupported TE witness pointer");
+                    if (info.child != u8) for (value) |child| try self.visit(alloc, info.child, child);
+                },
+                .optional => |info| if (value) |child| { try self.visit(alloc, info.child, child); },
+                .array => |info| for (value) |child| try self.visit(alloc, info.child, child),
+                .@"enum", .int, .bool => {},
+                else => @compileError("Unhandled TE witness type: " ++ @typeName(T)),
+            }
+        }
+    };
+    var witness: Witness = .{ .targets = std.StringHashMap(void).init(a), .headings = std.StringHashMap(void).init(a) };
+    try witness.visit(a, @TypeOf(stored.entry), stored.entry);
+    try std.testing.expect(witness.tables == 1 and witness.rows == 1 and witness.cells == 2 and witness.painted_cells == 2);
+    // Six semicolon terms and the authored bullet bodies remain typed content;
+    // this page has no # definition source and does not invent lexical senses.
+    try std.testing.expect(witness.terms >= 6 and witness.lists >= 4);
+    for ([_][]const u8{ "ఇంగ్లీషు", "ఫ్రెంచి", "చైనీస్", "సంస్కృతం", "హిందీ", "అస్సామీ", "పంజాబీ", "తమిళం", "కన్నడం", "మలయాళం", "మరాఠీ", "గుజరాతీ", "ఒరియా", "బెంగాలి", "wikipedia:india", "w:తెవీకీ" }) |target|
+        try std.testing.expect(witness.targets.contains(target));
+    for ([_][]const u8{ "వ్యాకరణ విశేషాలు", "అర్థ వివరణ", "పదాలు", "పద ప్రయోగాలు", "అనువాదాలు", "మూలాలు, వనరులు", "బయటి లింకులు" }) |heading|
+        try std.testing.expect(witness.headings.contains(heading));
+    try std.testing.expect(std.mem.indexOf(u8, witness.visible.items, "| width=1% |") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, witness.visible.items, "|}"));
+    try std.testing.expect(std.mem.indexOf(u8, witness.visible.items, "__NOTOC__") == null);
+    try std.testing.expect(report.malformed_table);
+    try std.testing.expectError(error.UncompiledPresentation, compiler.requireCompiledText("|}"));
+}
+
+
+test "OR exact jghana kupa body preserves malformed bibliography as literal through codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Captured ns0 p3082/r156367, raw and expanded both288B/d44c9de7.
+    const source = "ସର୍ବନାମ,[[ବିଶେଷ୍ୟ]]\n" ++
+        "*ସୁନ୍ଦରୀ ସ୍ତ୍ରୀମାନଙ୍କର କଟିଦେଶର ପଛ ପାଖରେ ଥିବା ଭଉଁରୀଦ୍ଵୟ<ref_ଅଜନ୍ତା ଓଡ଼ିଆ ଅଭିଧାନ ପୃଷ୍ଟା ୫୫୩=\"\"/>";
+    const bibliography = "<ref_ଅଜନ୍ତା ଓଡ଼ିଆ ଅଭିଧାନ ପୃଷ୍ଟା ୫୫୩=\"\"/>";
+    try std.testing.expectEqual(@as(usize, 288), source.len);
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "ଜଘନ କୂପ", .language, "Unclassified", "", source, null, &report);
+    const decoded = try codec.decodeAlloc(a, bytes, "ଜଘନ କୂପ", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+    var visible: std.ArrayList(u8) = .empty;
+    var links: usize = 0;
+    var bullets: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| {
+        if (block.kind == .list_item) bullets += 1;
+        for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            if (span.kind == .link) {
+                try std.testing.expectEqualStrings("ବିଶେଷ୍ୟ", span.target);
+                try std.testing.expectEqualStrings("ବିଶେଷ୍ୟ", span.text);
+                links += 1;
+            }
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), links);
+    try std.testing.expectEqual(@as(usize, 1), bullets);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, visible.items, bibliography));
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "ସର୍ବନାମ,ବିଶେଷ୍ୟ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "ସୁନ୍ଦରୀ ସ୍ତ୍ରୀମାନଙ୍କର କଟିଦେଶର ପଛ ପାଖରେ ଥିବା ଭଉଁରୀଦ୍ଵୟ") != null);
+    try std.testing.expectEqual(@as(usize, 0), decoded.entry.references.len);
+    try std.testing.expectEqualStrings("", decoded.entry.language_code);
+    try std.testing.expect(report.literal_markup);
+    try std.testing.expect(!report.unclosed_formatting);
+}
+
+test "underscore literal source proof cannot authorize parsed residual markup or alter valid refs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const leaked = [_]compiler.Span{.{ .text = "<ref_custom note=\"text\"/>" }};
+    const split = [_]compiler.Span{ .{ .text = "<ref_" }, .{ .text = "custom/>" } };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &leaked, null));
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &split, null));
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("<ref_custom/>"));
+    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "<script>word</script>", null));
+    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "<ref_custom>word", null));
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", "word<ref name=n>[[Target]]</ref><references/>", null, &report);
+    const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.references.len);
+    try std.testing.expect(!report.literal_markup);
+    var link = false;
+    for (decoded.entry.references[0].spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "Target")) { link = true; };
+    try std.testing.expect(link);
+}

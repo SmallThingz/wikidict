@@ -7089,6 +7089,10 @@ pub const Renderer = struct {
                     literal_end = end;
                     self.fallbacks.literal_markup = true;
                 };
+                if (at >= template_end) if (underscoreShortHtmlNameEnd(input, at)) |end| {
+                    literal_end = end;
+                    self.fallbacks.literal_markup = true;
+                };
                 if (doubleQuotedHtmlNameEnd(input, at)) |end| {
                     literal_end = end;
                     self.fallbacks.literal_markup = true;
@@ -7197,6 +7201,41 @@ pub const Renderer = struct {
         return null;
     }
 
+    // A complete self-closing underscore name is not a registered HTML or
+    // extension name. Preserve its angles, not an invented reference or opaque
+    // attribute region; interior wiki actions keep the ordinary inline phases.
+    // MediaWiki Sanitizer::ELEMENT_BITS_REGEX includes '_' in the atomic name.
+    fn underscoreShortHtmlNameEnd(input: []const u8, at: usize) ?usize {
+        if (at >= input.len or input[at] != '<') return null;
+        var cursor = at + 1;
+        const name_start = cursor;
+        if (cursor >= input.len or !std.ascii.isAlphabetic(input[cursor])) return null;
+        while (cursor < input.len and (std.ascii.isAlphanumeric(input[cursor]) or input[cursor] == '-')) : (cursor += 1) {}
+        if (cursor >= input.len or input[cursor] != '_') return null;
+        cursor += 1;
+        const suffix_start = cursor;
+        while (cursor < input.len) {
+            const ch = input[cursor];
+            if (ch < 0x80) {
+                if (!std.ascii.isAlphanumeric(ch) and ch != '-' and ch != '_') break;
+                cursor += 1;
+                continue;
+            }
+            const width = std.unicode.utf8ByteSequenceLength(ch) catch return null;
+            if (width > input.len - cursor) return null;
+            const cp = std.unicode.utf8Decode(input[cursor .. cursor + width]) catch return null;
+            if (cp <= 0x00a0 or cp == 0x1680 or (cp >= 0x2000 and cp <= 0x200f) or
+                (cp >= 0x2028 and cp <= 0x202f) or (cp >= 0x205f and cp <= 0x206f) or
+                cp == 0x3000 or cp == 0xfeff or cp == 0xfffd) return null;
+            cursor += width;
+        }
+        if (cursor == suffix_start or recognizedInlineHtmlName(input[name_start..cursor])) return null;
+        if (cursor >= input.len or (input[cursor] != ' ' and input[cursor] != '\t' and input[cursor] != '/')) return null;
+        const end = std.mem.indexOfAnyPos(u8, input, cursor, "<>\r\n\x00\x0b\x0c") orelse return null;
+        if (input[end] != '>' or end == cursor or input[end - 1] != '/') return null;
+        return end + 1;
+    }
+
     // Double quotes are part of the sanitizer's atomic name, not attributes.
     // Such names cannot identify HTML elements. Keep this finite recovery free
     // of attributes and apostrophes, which need their own quote-phase proof.
@@ -7216,6 +7255,26 @@ pub const Renderer = struct {
         }
         return null;
     }
+    // A complete unregistered alphabetic abbreviation ending in one dot is
+    // authored text, not an HTML tag. Use only in ordinary parsed nonaction
+    // text after tagAt declined; do not rewrite target or attribute domains.
+    fn terminalDotUnregisteredHtmlNameEnd(input: []const u8, at: usize) ?usize {
+        if (at >= input.len or input[at] != '<') return null;
+        var cursor = at + 1;
+        const name_start = cursor;
+        while (cursor < input.len and std.ascii.isAlphabetic(input[cursor])) : (cursor += 1) {}
+        if (cursor == name_start or input.len - cursor < 2 or input[cursor] != '.' or input[cursor + 1] != '>') return null;
+        const name = input[name_start..cursor];
+        if (recognizedInlineHtmlName(name) or oneOf(name, &.{ "a", "img" }) or ir.hasExternalProtocolScheme(name)) return null;
+        var preceding = at;
+        while (preceding != 0) {
+            preceding -= 1;
+            if (input[preceding] == '<') return null;
+            if (input[preceding] == '>') break;
+        }
+        return cursor + 2;
+    }
+
     // A second raw opener cannot be part of this unregistered ASCII tag name.
     // Protect only the first angle: child HTML and wiki actions keep their phases.
     // No attribute, quote, closing-tag, or opaque/registered-name recovery here.
@@ -7916,6 +7975,17 @@ pub const Renderer = struct {
                     continue;
                 }
                 if (opaque_scan.tagAt(input, it.cursor, &no_more_nowiki_close) == null) {
+                    if (s.provenance == .parsed and s.kind == .text and s.target.len == 0 and
+                        s.self_link_target == null and !s.missing_nonaction and
+                        terminalDotUnregisteredHtmlNameEnd(input, it.cursor) != null)
+                    {
+                        // Only the proved opening byte needs literal provenance.
+                        // The abbreviation, closer and surrounding body stay parsed.
+                        self.fallbacks.literal_markup = true;
+                        try self.protectedLiteral("<", s);
+                        it.cursor += 1;
+                        continue;
+                    }
                     if (s.provenance == .parsed and interruptedUnregisteredHtmlName(input, it.cursor)) {
                         self.fallbacks.literal_markup = true;
                         try self.protectedLiteral("<", s);
@@ -9319,11 +9389,74 @@ pub const Renderer = struct {
         try self.block(blocks, kind, raw, path, number, level);
     }
 
+    // A single physical list line cannot close a wiki table at its end.
+    // Prove the raw tail is ordinary text, not a nested or stripped token.
+    fn ordinaryWikiListTableTail(raw: []const u8) bool {
+        if (!std.mem.endsWith(u8, raw, "|}") or std.mem.indexOfAny(u8, raw, "\r\n") != null) return false;
+        const tail = raw.len - 2;
+        var at: usize = 0;
+        var opaque_scan: syntax.OpaqueScan = .{};
+        var no_more_nowiki_close = false;
+        while (at < tail) {
+            if (starts(raw[at..], "<!--")) {
+                const close = std.mem.indexOfPos(u8, raw, at + 4, "-->") orelse return false;
+                if (close + 3 > tail) return false;
+                at = close + 3;
+                continue;
+            }
+            if (raw[at] == '<') {
+                const tag = opaque_scan.tagAt(raw, at, &no_more_nowiki_close) orelse return false;
+                if (tag.html_pre) return false;
+                // Even non-opaque handlers such as includeonly can consume an
+                // unclosed remainder. Require a complete opening scope here.
+                const end = if (!tag.closing)
+                    (syntax.matchingTagWithOpaqueScan(raw, tag, &opaque_scan) orelse return false).end
+                else
+                    tag.end;
+                if (end > tail) return false;
+                at = end;
+                continue;
+            }
+            if (starts(raw[at..], "[[") or starts(raw[at..], "{{")) {
+                const pair = syntax.balancedWithOpaqueScan(raw, at, &opaque_scan) orelse return false;
+                if (pair.end > tail) return false;
+                at = pair.end;
+                continue;
+            }
+            // Single-bracket action/recovery domains retain their existing rules.
+            if (raw[at] == '[') return false;
+            at += 1;
+        }
+        return at == tail;
+    }
+
+    fn literalWikiListTableTail(self: *Renderer, blocks: *std.ArrayList(Block), first_block: usize, raw: []const u8) Error!void {
+        if (blocks.items.len != first_block + 1 or !ordinaryWikiListTableTail(raw)) return;
+        const spans = blocks.items[first_block].spans;
+        if (spans.len == 0) return;
+        const last = spans[spans.len - 1];
+        if (last.kind != .text or last.provenance != .parsed or last.target.len != 0 or
+            !std.mem.endsWith(u8, last.text, "|}")) return;
+        const extra: usize = @intFromBool(last.text.len > 2);
+        const literal_spans = try self.a.alloc(Span, spans.len + extra);
+        @memcpy(literal_spans[0 .. spans.len - 1], spans[0 .. spans.len - 1]);
+        if (extra != 0) {
+            literal_spans[spans.len - 1] = last;
+            literal_spans[spans.len - 1].text = last.text[0 .. last.text.len - 2];
+        }
+        const marker = &literal_spans[literal_spans.len - 1];
+        marker.* = last;
+        marker.text = last.text[last.text.len - 2 ..];
+        marker.provenance = .protected_literal;
+        blocks.items[first_block].spans = literal_spans;
+    }
+
     // Table parsing precedes BlockLevelPass. After a wiki list prefix has
     // been consumed, its leading |} is visible item text, not a table close.
     // Isolate only that literal delimiter; the complete suffix stays strict.
     fn literalWikiListTableClose(self: *Renderer, blocks: *std.ArrayList(Block), first_block: usize, raw: []const u8) Error!void {
-        if (!starts(raw, "|}") or blocks.items.len != first_block + 1) return;
+        if (!starts(raw, "|}")) return self.literalWikiListTableTail(blocks, first_block, raw);
+        if (blocks.items.len != first_block + 1) return;
         const spans = blocks.items[first_block].spans;
         if (spans.len == 0) return;
         const first = spans[0];
@@ -33335,4 +33468,204 @@ test "Cite collection resumes after malformed invocation before same-cell and la
     try std.testing.expect(std.mem.indexOf(u8, numbered.source, "https://visible.example/path <nowiki>[1]</nowiki>") != null);
     try std.testing.expect(std.mem.indexOf(u8, numbered.source, "<nowiki>[2]</nowiki>") == null);
     try std.testing.expectEqual(@as(usize, 2), numbered.citations.?.events.items.len);
+}
+
+test "terminal dot abbreviation proof is confined to parsed nonaction text" {
+    var hr_dot_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer hr_dot_arena.deinit();
+    const hr_dot_a = hr_dot_arena.allocator();
+    for ([_][]const u8{ "<Sv.>", "<Vol.>", "<Etc.>" }) |hr_dot_source|
+        try std.testing.expectEqual(@as(?usize, hr_dot_source.len), Renderer.terminalDotUnregisteredHtmlNameEnd(hr_dot_source, 0));
+    for ([_][]const u8{
+        "", "<", "<S", "<Sv.", "<.>", "<Sv..>", "<Sv.x>", "<Sv-xyz.>", "<Sv2.>",
+        "</Sv.>", "<Sv./>", "<Sv. >", "<Sv.\n>", "<Sv. title='x'>", "<Sv.[[Child]]>",
+        "<a.>", "<img.>", "<B.>", "<div.>", "<ref.>", "<math.>", "<script.>",
+        "<http.>", "<https://example.test>", "&lt;Sv.&gt;",
+    }) |hr_dot_source|
+        try std.testing.expect(Renderer.terminalDotUnregisteredHtmlNameEnd(hr_dot_source, 0) == null);
+    try std.testing.expect(Renderer.terminalDotUnregisteredHtmlNameEnd("<<Sv.>>", 1) == null);
+    try std.testing.expect(Renderer.terminalDotUnregisteredHtmlNameEnd("<broken <Sv.>", 8) == null);
+    // The old domain-name helper and its explicitly retained negative are unchanged.
+    try std.testing.expect(Renderer.dottedHtmlNameEnd("<a.>", 0) == null);
+    var hr_dot_renderer: Renderer = .{ .a = hr_dot_a, .context = .{} };
+    const hr_dot_spans = try hr_dot_renderer.parseSpans("''(<Sv.> 4.)'' [[Child|kept]]", .{});
+    try std.testing.expectEqualStrings("(<Sv.> 4.) kept", try flattened(hr_dot_a, hr_dot_spans));
+    var hr_dot_openings: usize = 0;
+    for (hr_dot_spans) |hr_dot_span| {
+        if (hr_dot_span.provenance == .protected_literal) {
+            hr_dot_openings += 1;
+            try std.testing.expectEqualStrings("<", hr_dot_span.text);
+            try std.testing.expect(hr_dot_span.kind == .text and hr_dot_span.target.len == 0 and hr_dot_span.flags.italic);
+        }
+        if (hr_dot_span.kind == .link) {
+            try std.testing.expectEqualStrings("Child", hr_dot_span.target);
+            try std.testing.expectEqualStrings("kept", hr_dot_span.text);
+            try std.testing.expectEqual(Provenance.parsed, hr_dot_span.provenance);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), hr_dot_openings);
+    try std.testing.expect(hr_dot_renderer.fallbacks.literal_markup);
+    // Inherited action labels and self-link displays are outside this proof.
+    for ([_]Style{
+        .{ .kind = .link, .target = "Target" },
+        .{ .kind = .external_link, .target = "https://example.test" },
+        .{ .self_link_target = "Target" },
+    }) |hr_dot_style| {
+        var hr_dot_action: Renderer = .{ .a = hr_dot_a, .context = .{} };
+        const hr_dot_action_spans = try hr_dot_action.parseSpans("<Sv.>", hr_dot_style);
+        for (hr_dot_action_spans) |hr_dot_span| try std.testing.expect(hr_dot_span.provenance != .protected_literal);
+    }
+    var hr_dot_protected: Renderer = .{ .a = hr_dot_a, .context = .{} };
+    try std.testing.expectEqualStrings("<Sv.>", try flattened(hr_dot_a, try hr_dot_protected.parseSpans("<nowiki><Sv.></nowiki>", .{})));
+    try std.testing.expect(!hr_dot_protected.fallbacks.literal_markup);
+    var hr_dot_entity: Renderer = .{ .a = hr_dot_a, .context = .{} };
+    try std.testing.expectEqualStrings("<Sv.>", try flattened(hr_dot_a, try hr_dot_entity.parseSpans("&lt;Sv.&gt;", .{})));
+    try std.testing.expect(!hr_dot_entity.fallbacks.literal_markup);
+    var hr_dot_supported: Renderer = .{ .a = hr_dot_a, .context = .{} };
+    const hr_dot_supported_spans = try hr_dot_supported.parseSpans("<b>kept</b>", .{});
+    try std.testing.expectEqualStrings("kept", try flattened(hr_dot_a, hr_dot_supported_spans));
+    for (hr_dot_supported_spans) |hr_dot_span| try std.testing.expect(hr_dot_span.flags.bold);
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("<Sv.>"));
+}
+
+
+test "ordinary list tail table marker has exact source and nonaction provenance" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "before|}",
+        "[[Keep|kept]] <span class='label'>tail</span>|}",
+        "<nowiki>literal</nowiki> [[Keep]]:|}",
+        "<!-- hidden -->[[Keep]]|}",
+    }) |raw| try std.testing.expect(Renderer.ordinaryWikiListTableTail(raw));
+    for ([_][]const u8{
+        "before |} after",
+        "before\n|}",
+        "before\r|}",
+        "[[Keep|label|}",
+        "{{unclosed|}",
+        "[https://example.test label|}",
+        "<span title='unfinished |}",
+        "before |}<!--hidden |}",
+        "<nowiki>unclosed |}",
+        "<source>unclosed |}",
+        "<ref>unclosed |}",
+        "before |}<includeonly>hidden |}",
+        "before |}<span style='display:none'>hidden |}",
+        "<span title='|}'>after",
+    }) |raw| try std.testing.expect(!Renderer.ordinaryWikiListTableTail(raw));
+
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody("* [[Keep|kept]] <i>tail</i>|}\n");
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expectEqual(Kind.list_item, blocks[0].kind);
+    try std.testing.expectEqualStrings("*", blocks[0].list_path);
+    var link = false;
+    var italic = false;
+    var marker: usize = 0;
+    for (blocks[0].spans) |span| {
+        if (span.kind == .link and std.mem.eql(u8, span.target, "Keep") and std.mem.eql(u8, span.text, "kept")) link = true;
+        if (std.mem.eql(u8, span.text, "tail") and span.flags.italic) italic = true;
+        if (std.mem.eql(u8, span.text, "|}")) {
+            marker += 1;
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+            try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+            try std.testing.expect(!span.generated_diagnostic and !span.flags.italic);
+        }
+    }
+    try std.testing.expect(link and italic);
+    try std.testing.expectEqual(@as(usize, 1), marker);
+    try std.testing.expect(!renderer.fallbacks.malformed_table);
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("|}"));
+
+    // A nested action cannot acquire literal authority from its label's suffix.
+    var action: Renderer = .{ .a = a, .context = .{} };
+    const action_spans = try action.parseSpans("[[Target|label |}]]", .{});
+    var parsed_action_marker = false;
+    for (action_spans) |span| {
+        if (std.mem.indexOf(u8, span.text, "|}") != null) {
+            parsed_action_marker = span.kind == .link and std.mem.eql(u8, span.target, "Target") and span.provenance == .parsed;
+        }
+    }
+    try std.testing.expect(parsed_action_marker);
+}
+
+
+test "underscore short unknown tags preserve literal angles and independent inline actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Check = struct {
+        fn at(spans: []const Span, offset: usize) !Span {
+            var position: usize = 0;
+            for (spans) |span| {
+                if (offset >= position and offset - position < span.text.len) return span;
+                position += span.text.len;
+            }
+            return error.TestUnexpectedResult;
+        }
+    };
+    const cases = [_]struct { source: []const u8, escaped: []const u8 }{
+        .{ .source = "<ref_ଅଜନ୍ତା ଓଡ଼ିଆ ଅଭିଧାନ ପୃଷ୍ଟା ୫୫୩=\"\"/>", .escaped = "&lt;ref_ଅଜନ୍ତା ଓଡ଼ିଆ ଅଭିଧାନ ପୃଷ୍ଟା ୫୫୩=\"\"/&gt;" },
+        .{ .source = "<custom_name note=\"[[Target|''word'']]\"/> tail", .escaped = "&lt;custom_name note=\"[[Target|''word'']]\"/&gt; tail" },
+        .{ .source = "''before<ref_custom note=\"''\"/>after", .escaped = "''before&lt;ref_custom note=\"''\"/&gt;after" },
+    };
+    for (cases) |case| {
+        var actual: Renderer = .{ .a = a, .context = .{} };
+        var oracle: Renderer = .{ .a = a, .context = .{} };
+        const spans = try actual.parseSpans(case.source, .{});
+        const expected = try oracle.parseSpans(case.escaped, .{});
+        const visible = try flattened(a, spans);
+        try std.testing.expectEqualStrings(try flattened(a, expected), visible);
+        for (visible, 0..) |byte, offset| {
+            const got = try Check.at(spans, offset);
+            const want = try Check.at(expected, offset);
+            try std.testing.expectEqual(want.kind, got.kind);
+            try std.testing.expectEqual(want.flags, got.flags);
+            try std.testing.expectEqual(want.provenance, got.provenance);
+            try std.testing.expectEqualStrings(want.target, got.target);
+            if (byte == '<' or byte == '>') try std.testing.expect(got.provenance == .entity_literal);
+        }
+        try std.testing.expect(actual.fallbacks.literal_markup);
+        try std.testing.expect(!oracle.fallbacks.literal_markup);
+    }
+    var linked: Renderer = .{ .a = a, .context = .{} };
+    const spans = try linked.parseSpans(cases[1].source, .{});
+    var found = false;
+    for (spans) |span| if (span.kind == .link) {
+        try std.testing.expectEqualStrings("Target", span.target);
+        try std.testing.expectEqualStrings("word", span.text);
+        try std.testing.expect(span.flags.italic);
+        found = true;
+    };
+    try std.testing.expect(found);
+}
+
+test "underscore short name proof excludes real references incomplete tokens and nested angles" {
+    for ([_][]const u8{
+        "<ref name=n/>", "<ref>note</ref>", "<nowiki/>", "<script/>",
+        "<ref_/>", "<ref_custom>", "</ref_custom>", "<ref_custom", "<ref_custom\n/>",
+        "<ref_custom note=<span>/>", "<ref_custom\x00/>", "<ref_\xff/>",
+        "<ref_\xe2\x80\x8b/>", "<ref_custom:other/>", "<https://example.test/>",
+    }) |source| try std.testing.expect(Renderer.underscoreShortHtmlNameEnd(source, 0) == null);
+    try std.testing.expectEqual(@as(?usize, 9), Renderer.underscoreShortHtmlNameEnd("<x_name/>", 0));
+    // A valid supported reference and protected text retain their own semantics.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var protected: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    const spans = try protected.parseSpans("<nowiki><ref_name note=\"[[Target]]\"/></nowiki>", .{});
+    for (spans) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
+    try std.testing.expect(!protected.fallbacks.literal_markup);
+    // Complete template and parameter arguments belong to their existing
+    // handlers. The outer angle pass must preserve their exact raw bytes.
+    for ([_][]const u8{
+        "{{T|<ref_custom note=\"[[Target]]\"/>}}",
+        "{{{p|<ref_custom note=\"[[Target]]\"/>}}}",
+    }) |source| {
+        var scoped: Renderer = .{ .a = arena.allocator(), .context = .{} };
+        const prepared = try scoped.literalHtmlAnglesSourceWithMissing(MissingText.untracked(source));
+        try std.testing.expectEqualStrings(source, prepared.bytes);
+        try std.testing.expect(!scoped.fallbacks.literal_markup);
+    }
 }

@@ -30,6 +30,10 @@ const speech = [_][]const u8{
     "Romanization", "Logogram",       "Determinative",
 };
 pub fn partOfSpeech(title: []const u8) ?[]const u8 {
+    // Exact observed TL POS label; primary entry explicitly translates it as noun:
+    // https://tl.wiktionary.org/w/index.php?title=pangngalan&oldid=150530
+    // This classifies a section only; the caller still supplies any language owner.
+    if (std.mem.eql(u8, title, "Pangngalan")) return "Noun";
     // Retained ocwiki Modèl:-vèrb- p1133/r309551 and -flex-verb- p2910/r50049.
     // A form heading is not evidence for a particular lemma or inflection relation.
     if (std.mem.eql(u8, title, "Vèrb")) return "Verb";
@@ -371,6 +375,73 @@ test "OC localized labels do not infer unresolved owner or broaden matching and 
     const blocks = try renderer.renderBody("<nowiki>==Vèrb==</nowiki>\n<pre>==Forma de vèrb==</pre>\n");
     const protected = [_]Section{.{ .title = "Notes", .level = 3, .blocks = blocks }};
     const literal = try buildOwned(a, &protected, "English");
+    try std.testing.expectEqual(@as(usize, 0), literal.lexemes.len);
+    try std.testing.expectEqualSlices(usize, &.{0}, literal.other_sections);
+}
+
+
+test "Pangngalan layout retains an independently owned noun and exact source associations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "abaka", .language = "Declared owner" } };
+    const blocks = try renderer.renderBody("'''abaka'''\n# A [[fiber|fiber]] meaning.\n#: An ''example''.\n# Another meaning.\n");
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "Declared owner", .level = 2 },
+        .{ .title = "Pangngalan", .level = 3, .blocks = blocks },
+        .{ .title = "Mga salin", .level = 4 },
+        .{ .title = "Regional vocabulary", .level = 2 },
+    };
+    const layout = try buildOwned(a, &sections, "Declared owner");
+    try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+    const noun = layout.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqualStrings("Declared owner", noun.language);
+    try std.testing.expectEqual(@as(usize, 1), noun.section);
+    try std.testing.expectEqualStrings("Pangngalan", sections[noun.section].title);
+    try std.testing.expectEqual(@as(usize, 2), noun.definitions.len);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions[0].examples.len);
+    try std.testing.expectEqualSlices(usize, &.{2}, noun.related_sections);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 3 }, layout.other_sections);
+    for (noun.definitions) |sense| {
+        try std.testing.expect(sense.block < blocks.len);
+        try std.testing.expect(blocks[sense.block].kind == .definition);
+        try std.testing.expect(sense.form == null);
+        for (sense.examples) |example| try std.testing.expect(blocks[example].kind == .example);
+    }
+    // The localized POS name cannot supply or override the entry language.
+    const other_owner = try buildOwned(a, &sections, "A different independently declared owner");
+    try std.testing.expectEqualStrings("A different independently declared owner", other_owner.lexemes[0].language);
+    try std.testing.expectEqual(noun.section, other_owner.lexemes[0].section);
+    try std.testing.expectEqualDeep(noun.definitions, other_owner.lexemes[0].definitions);
+}
+
+test "Pangngalan layout rejects lookalikes and does not promote an unknown language boundary" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "pangngalan", "PANGNGALAN", "Pangngalan 2", "Pangngalang pantangi", "Unknown Pangngalan", "Regional vocabulary" }) |label|
+        try std.testing.expect(partOfSpeech(label) == null);
+    try std.testing.expectEqualStrings("Noun", partOfSpeech("Noun").?);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "Unclassified", .level = 2 },
+        .{ .title = "Pangngalan", .level = 2, .blocks = &.{.{ .kind = .definition, .list_path = "#" }} },
+        .{ .title = "Regional vocabulary", .level = 2 },
+        .{ .title = "Pangngalan", .level = 3, .blocks = &.{.{ .kind = .definition, .list_path = "#" }} },
+    };
+    const unresolved = try buildUnclassified(a, &sections);
+    // Existing policy retains nested POS structure with an unknown owner; it
+    // does not turn the unverified L2 label into a language or a second noun.
+    try std.testing.expectEqual(@as(usize, 1), unresolved.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 3), unresolved.lexemes[0].section);
+    try std.testing.expectEqualStrings("", unresolved.lexemes[0].language);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, unresolved.other_sections);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "test" } };
+    const protected_blocks = try renderer.renderBody("<nowiki>===Pangngalan===</nowiki>\n<pre>===Pangngalan===</pre>\n");
+    const protected = [_]Section{.{ .title = "Notes", .level = 3, .blocks = protected_blocks }};
+    const literal = try buildOwned(a, &protected, "Declared owner");
     try std.testing.expectEqual(@as(usize, 0), literal.lexemes.len);
     try std.testing.expectEqualSlices(usize, &.{0}, literal.other_sections);
 }
