@@ -2427,7 +2427,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
                      *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
                      *pipeline_snapshot_args(registry,aux_pinned,page_links_snapshot,page_redirects_snapshot),
                      '--llvm-workers',str(llvm_workers),'--parse-workers',str(min(workers,64)),
-                     '--page-workers',str(min(workers,16)),'--now-unix',str(now_unix),*timeout_args,
+                     '--page-workers',str(expansion_workers if expansion_workers is not None else min(workers,16)),'--now-unix',str(now_unix),*timeout_args,
                      *extraction_cache_args(extraction_cache_root,source_metadata)],edition,date,'dictionary_build')
         coverage=validate_page_coverage(staging,source_pages=source_pages)
         coverage['expected_input_pages']=source_pages

@@ -3517,7 +3517,7 @@ class PageCountRoutingTests(unittest.TestCase):
     class RouteReached(RuntimeError):
         pass
 
-    def _check_route(self, pages, attempts=1, llvm_workers=None):
+    def _check_route(self, pages, attempts=1, llvm_workers=None, expansion_workers=None):
         # Real small compressed input and real verified repack: the branch must
         # depend on the staged source count, not compression ratio or file size.
         with tempfile.TemporaryDirectory() as tmp:
@@ -3543,7 +3543,8 @@ class PageCountRoutingTests(unittest.TestCase):
                 self.assertIn('build-dictionary',command)
                 self.assertNotIn('--expander-only',command)
                 self.assertEqual(command[command.index('--llvm-workers')+1],str(llvm_workers or 1))
-                for flag in ('--parse-workers','--page-workers'):self.assertEqual(command[command.index(flag)+1],'1')
+                self.assertEqual(command[command.index('--parse-workers')+1],'1')
+                self.assertEqual(command[command.index('--page-workers')+1],str(expansion_workers or 1))
                 actual=Path(command[command.index('--')+1])
                 calls.append(('one-shot',actual))
                 self.assertEqual(actual,dump)
@@ -3554,6 +3555,7 @@ class PageCountRoutingTests(unittest.TestCase):
                 self.assertEqual(Path(actual),dump)
                 self.assertEqual(actual_workspace,workspace)
                 self.assertEqual(kwargs.get('llvm_workers'),llvm_workers)
+                self.assertEqual(args[5],expansion_workers)
                 self.assertTrue(Path(actual).is_file())
                 raise self.RouteReached()
             real_prepare=b.prepare_shard_workspace
@@ -3569,7 +3571,7 @@ class PageCountRoutingTests(unittest.TestCase):
                  patch.object(b,'build_sharded',side_effect=stop_sharded):
                 for attempt in range(attempts):
                     with self.assertRaises(self.RouteReached):
-                        b.build([item],root,root/'output',str(tool),1, **({'llvm_workers':llvm_workers} if llvm_workers is not None else {}))
+                        b.build([item],root,root/'output',str(tool),1, **({'llvm_workers':llvm_workers} if llvm_workers is not None else {}), **({'expansion_workers':expansion_workers} if expansion_workers is not None else {}))
                     # A dispatch failure retains the same verified input for
                     # retry, and one-shot must never create a second repack.
                     self.assertEqual(prepare.call_count,attempt+1)
@@ -3583,6 +3585,11 @@ class PageCountRoutingTests(unittest.TestCase):
                     self.assertEqual(source['index_sha256'],b.sha256_file(dump.with_name('pages-index.txt.bz2')))
             expected='sharded' if pages>100_000 else 'one-shot'
             self.assertEqual(calls,[(expected,dump)]*attempts)
+
+    def test_explicit_page_workers_forward_small_and_sharded_without_widening_compiler(self):
+        self._check_route(1)
+        for pages in (1,100_001):
+            with self.subTest(pages=pages):self._check_route(pages,llvm_workers=2,expansion_workers=4)
 
     def test_explicit_llvm_workers_preserve_small_and_sharded_routes(self):
         for pages in (1,100_001):
