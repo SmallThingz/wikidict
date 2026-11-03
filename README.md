@@ -155,8 +155,12 @@ run: rebuild into a new output directory to requalify them against the full dump
 
 The corpus builder is intentionally conservative on developer machines:
 
-Correctness jobs require their configured RAM allocation plus host reserve before
-starting. Memory pressure is recorded but does not require an otherwise idle host.
+Correctness jobs require their configured allocation plus host reserve before
+starting. Callers may explicitly count available RAM plus free swap verified on
+non-virtual block devices; swap files, zram and unknown backing contribute no
+headroom. The default remains RAM-only. This host admission accounting does not
+change the job's own memory or swap limits. Memory pressure is recorded but does
+not require an otherwise idle host.
 After admission, host RAM and pressure changes are telemetry; the job's own memory,
 CPU, task and deadline limits still apply. Matched benchmarks use separate quiet-host
 conditions so contention is not mistaken for a performance regression.

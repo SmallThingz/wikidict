@@ -768,6 +768,51 @@ class ResourceLimitsTest(unittest.TestCase):
 
 # Append before the existing unittest.main block in tools/test_build_resource_limits.py.
 class ExplicitAdmissionTest(unittest.TestCase):
+    def test_backed_swap_opt_in_reaches_original_threshold(self):
+        policy = self.policy()
+        policy['swap_counted_as_ram_headroom'] = True
+        value = self.sample(2 * 1024**3)
+        value['backed_swap_free_bytes'] = 3 * 1024**3
+        obs = limits.HostMemoryObservation(policy)
+        self.assertIsNone(obs.admission_reason(value))
+        value['backed_swap_free_bytes'] -= 1
+        self.assertEqual(obs.admission_reason(value), 'host_ram_admission_reserve')
+        del value['backed_swap_free_bytes']
+        self.assertEqual(obs.admission_reason(value), 'host_ram_admission_reserve')
+
+    def test_backed_swap_validation_and_default_ram_only(self):
+        value = self.sample(1)
+        value['backed_swap_free_bytes'] = value['swap_free_bytes']
+        self.assertEqual(self.observer().admission_reason(value), 'host_ram_admission_reserve')
+        for bad in (True, -1, 1.5, value['swap_free_bytes'] + 1):
+            value['backed_swap_free_bytes'] = bad
+            with self.assertRaises(ValueError):
+                limits.HostMemoryObservation.validate_sample(value)
+
+    def test_only_verified_physical_swap_partitions_count(self):
+        from types import SimpleNamespace
+        import stat
+        rows = 'Filename Type Size Used Priority\n/dev/disk partition 100 20 -2\n/dev/zram0 partition 200 0 -3\n/swapfile file 300 0 -4\n/dev/unknown partition 400 0 -5\n'
+        def device(path):
+            if str(path) == '/dev/unknown':
+                raise PermissionError()
+            return SimpleNamespace(st_mode=stat.S_IFBLK, st_rdev=os.makedev(8, 1 if str(path) == '/dev/disk' else 2))
+        def backing(path, strict=False):
+            return Path('/sys/devices/pci/block/disk' if str(path).endswith('8:1') else '/sys/devices/virtual/block/zram0')
+        with patch.object(Path, 'read_text', return_value=rows), patch.object(Path, 'stat', device), patch.object(Path, 'resolve', backing), patch.object(Path, 'is_dir', return_value=True):
+            self.assertEqual(limits._backed_swap_free_bytes(), 80 * 1024)
+
+    def test_hidden_device_node_requires_matching_physical_sysfs_indexes(self):
+        rows = 'Filename Type Size Used Priority\n/dev/nvme0n1p10 partition 100 20 -1\n'
+        def read(path):
+            return rows if str(path) == '/proc/swaps' else '259:8\n'
+        def resolve(path, strict=False):
+            return Path('/sys/devices/pci/block/nvme0n1/nvme0n1p10')
+        with patch.object(Path, 'read_text', read), patch.object(Path, 'stat', side_effect=FileNotFoundError), patch.object(Path, 'resolve', resolve), patch.object(Path, 'is_dir', return_value=True):
+            self.assertEqual(limits._backed_swap_free_bytes(), 80 * 1024)
+            with patch.object(Path, 'resolve', side_effect=[Path('/sys/devices/pci/block/disk'), Path('/sys/devices/virtual/block/zram0')]):
+                self.assertEqual(limits._backed_swap_free_bytes(), 0)
+
     @staticmethod
     def policy():
         return dict(admission_mem_available_bytes=5 * 1024**3,

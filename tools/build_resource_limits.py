@@ -527,6 +527,43 @@ def _check_watchdog_disk_floor(report):
 
 
 
+def _backed_swap_free_bytes():
+    """Count only active swap on verified non-virtual block devices.
+
+    Swap files and unknown/virtual backing (including zram) are conservative
+    exclusions; their capacity must not be counted twice as available RAM.
+    """
+    available = 0
+    for line in Path('/proc/swaps').read_text().splitlines()[1:]:
+        fields = line.split()
+        if len(fields) != 5 or fields[1] != 'partition':
+            continue
+        size, used = int(fields[2]), int(fields[3])
+        if not 0 <= used <= size:
+            raise ValueError('Invalid swap device accounting')
+        try:
+            try:
+                info = Path(fields[0]).stat()
+            except FileNotFoundError:
+                # A container may hide /dev nodes while exposing the host's
+                # active swap and sysfs. Cross-check both kernel sysfs indexes.
+                device = Path('/sys/class/block', Path(fields[0]).name)
+                backing = device.resolve(strict=True)
+                major, minor = map(int, (device / 'dev').read_text().strip().split(':'))
+                if Path('/sys/dev/block', f'{major}:{minor}').resolve(strict=True) != backing:
+                    continue
+            else:
+                if not stat.S_ISBLK(info.st_mode):
+                    continue
+                backing = Path('/sys/dev/block', f'{os.major(info.st_rdev)}:{os.minor(info.st_rdev)}').resolve(strict=True)
+            if 'virtual' in backing.parts or not backing.is_dir():
+                continue
+        except OSError:
+            continue
+        available += (size - used) * 1024
+    return available
+
+
 def sample_host_memory():
     """Observe RAM/swap/PSI without changing admission or process ownership."""
     memory = {}
@@ -541,15 +578,17 @@ def sample_host_memory():
     for line in Path('/proc/pressure/memory').read_text().splitlines():
         fields = line.split()
         pressure[fields[0]] = dict(x.split('=', 1) for x in fields[1:])
+    backed_swap = min(memory['SwapFree'], _backed_swap_free_bytes())
     return dict(mem_total_bytes=memory['MemTotal'],
                 mem_available_bytes=memory['MemAvailable'],
                 swap_total_bytes=memory['SwapTotal'], swap_free_bytes=memory['SwapFree'],
+                backed_swap_free_bytes=backed_swap,
                 psi_some_avg10=float(pressure['some']['avg10']),
                 psi_full_avg10=float(pressure['full']['avg10']), observed_unix=time.time())
 
 
 class HostMemoryObservation:
-    """Explicit opt-in RAM admission; runtime pressure is diagnostic only."""
+    """Explicit RAM/backed-swap admission; runtime pressure is diagnostic only."""
     def __init__(self, policy, sampler=sample_host_memory):
         # The caller binds the complete reviewed receipt policy; no global hook.
         self.policy = dict(policy)
@@ -557,7 +596,7 @@ class HostMemoryObservation:
                 policy['admission_mem_available_bytes'] <= 0 or
                 policy['admission_pressure_advisory'] is not True or
                 policy['runtime_termination_enabled'] is not False or
-                policy['swap_counted_as_ram_headroom'] is not False or
+                type(policy['swap_counted_as_ram_headroom']) is not bool or
                 policy['poll_seconds'] != WATCHDOG_POLL_SECONDS):
             raise ValueError('Invalid host observation policy')
         self.sampler = sampler
@@ -576,13 +615,19 @@ class HostMemoryObservation:
             raise ValueError('Invalid available host memory')
         if value['swap_free_bytes'] > value['swap_total_bytes']:
             raise ValueError('Invalid available swap')
+        backed = value.get('backed_swap_free_bytes', 0)
+        if type(backed) is not int or not 0 <= backed <= value['swap_free_bytes']:
+            raise ValueError('Invalid backed swap headroom')
         for key in ('psi_some_avg10', 'psi_full_avg10'):
             if not math.isfinite(value[key]) or not 0 <= value[key] <= 100:
                 raise ValueError('Invalid memory pressure sample: ' + key)
 
     def admission_reason(self, sample):
         self.validate_sample(sample)
-        if sample['mem_available_bytes'] < self.policy['admission_mem_available_bytes']:
+        available = sample['mem_available_bytes']
+        if self.policy['swap_counted_as_ram_headroom']:
+            available += sample.get('backed_swap_free_bytes', 0)
+        if available < self.policy['admission_mem_available_bytes']:
             return 'host_ram_admission_reserve'
         return None
 
