@@ -469,6 +469,85 @@ private slots:
         }
     }
 
+    void localizedDefaultFoldingUsesCompiledEtymologyAndRetainsExplicitUnfold() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const auto previous = window.learning_.settings();
+        auto restore = qScopeGuard([&] {
+            window.learning_.setCollapseEtymology(previous.collapseEtymology);
+            window.learning_.setCollapsePronunciation(previous.collapsePronunciation);
+        });
+        window.learning_.setCollapseEtymology(true);
+        window.learning_.setCollapsePronunciation(true);
+        auto section = [](const QString &heading, const QString &body) {
+            const QJsonArray spans{QJsonObject{{"kind", "text"}, {"text", body}}};
+            const QJsonArray blocks{QJsonObject{{"kind", "paragraph"}, {"spans", spans}}};
+            return QJsonObject{{"title", heading}, {"level", 3}, {"blocks", blocks}};
+        };
+        // Synthetic control uses the retained Portuguese botar section labels
+        // and compiled etymology relation, without claiming a new corpus fixture.
+        QJsonObject entry = window.currentEntry_;
+        entry.insert(QStringLiteral("sections"), QJsonArray{
+            section(QStringLiteral("Portugués"), QStringLiteral("owner body")),
+            section(QStringLiteral("Etimologia"), QStringLiteral("etymology body witness")),
+            section(QStringLiteral("Prononciacion"), QStringLiteral("pronunciation body witness")),
+            section(QStringLiteral("Forma de vèrb"), QStringLiteral("definition body witness"))});
+        entry.insert(QStringLiteral("organization"), QJsonObject{{"lexemes", QJsonArray{
+            QJsonObject{{"section", 3}, {"etymology", 1}}}}});
+        window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false);
+        QCOMPARE(window.collapsedSections_, (QSet<int>{1, 2}));
+        QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("etymology body witness")));
+        QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("pronunciation body witness")));
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("definition body witness")));
+
+        // Explicit navigation unfolds this entry without changing its defaults.
+        window.jumpToSection(1);
+        QCOMPARE(window.collapsedSections_, (QSet<int>{2}));
+        window.refreshReading();
+        QCOMPARE(window.collapsedSections_, (QSet<int>{2}));
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("etymology body witness")));
+        QVERIFY(window.learning_.settings().collapseEtymology);
+        QVERIFY(window.learning_.settings().collapsePronunciation);
+
+        window.learning_.setCollapseEtymology(false);
+        window.resetFolding();
+        QCOMPARE(window.collapsedSections_, (QSet<int>{2}));
+        window.learning_.setCollapsePronunciation(false);
+        window.resetFolding();
+        QVERIFY(window.collapsedSections_.isEmpty());
+        window.learning_.setCollapseEtymology(true);
+        window.resetFolding();
+        QCOMPARE(window.collapsedSections_, (QSet<int>{1}));
+
+        // Semantic identity works independently of the displayed translation.
+        auto sections = window.currentEntry_.value(QStringLiteral("sections")).toArray();
+        auto translated = sections[1].toObject();
+        translated.insert(QStringLiteral("title"), QStringLiteral("Origin in another source language"));
+        sections[1] = translated;
+        window.currentEntry_.insert(QStringLiteral("sections"), sections);
+        window.resetFolding();
+        QCOMPARE(window.collapsedSections_, (QSet<int>{1}));
+
+        // Null/missing/out-of-range indices must not accidentally fold section0.
+        window.currentEntry_.insert(QStringLiteral("organization"), QJsonObject{{"lexemes", QJsonArray{
+            QJsonObject{}, QJsonObject{{"etymology", QJsonValue::Null}},
+            QJsonObject{{"etymology", -1}}, QJsonObject{{"etymology", 99}}}}});
+        window.resetFolding();
+        QVERIFY(window.collapsedSections_.isEmpty());
+
+        // Existing English numbered headings remain compatible; unrelated
+        // headings are not matched by a guessed localized prefix.
+        window.learning_.setCollapsePronunciation(true);
+        window.currentEntry_.insert(QStringLiteral("sections"), QJsonArray{
+            section(QStringLiteral("Etymology 2"), QStringLiteral("english etymology")),
+            section(QStringLiteral("Pronunciation 2"), QStringLiteral("english pronunciation")),
+            section(QStringLiteral("Prononciacion examples"), QStringLiteral("unrelated body"))});
+        window.currentEntry_.insert(QStringLiteral("organization"), QJsonObject{});
+        window.resetFolding();
+        QCOMPARE(window.collapsedSections_, (QSet<int>{0, 1}));
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("unrelated body")));
+    }
     void keyboardFoldRetainsItsActivationAnchor() {
         MainWindow window(fixture_, QStringLiteral("cat"));
         window.learning_.setCollapseEtymology(false);

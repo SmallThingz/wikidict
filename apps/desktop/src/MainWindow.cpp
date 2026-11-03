@@ -1579,9 +1579,22 @@ void MainWindow::refreshReading() {
 void MainWindow::resetFolding() {
     collapsedSections_.clear();
     const QJsonArray sections = currentEntry_.value(QStringLiteral("sections")).toArray();
+    if (learning_.settings().collapseEtymology) {
+        const QJsonArray lexemes = currentEntry_.value(QStringLiteral("organization")).toObject()
+            .value(QStringLiteral("lexemes")).toArray();
+        for (const QJsonValue &lexeme : lexemes) {
+            const int section = lexeme.toObject().value(QStringLiteral("etymology")).toInt(-1);
+            if (section >= 0 && section < sections.size()) collapsedSections_.insert(section);
+        }
+    }
     for (qsizetype i = 0; i < sections.size(); ++i) {
         const QString title = sections[i].toObject().value(QStringLiteral("title")).toString();
-        if ((learning_.settings().collapsePronunciation && title.startsWith(QStringLiteral("Pronunciation"), Qt::CaseInsensitive)) ||
+        // The current presentation model identifies etymology sections above, but
+        // has no section-level pronunciation role. Retain the English fallback
+        // and the exact heading emitted by the observed Occitan source template.
+        const bool pronunciation = title.startsWith(QStringLiteral("Pronunciation"), Qt::CaseInsensitive) ||
+            title.compare(QStringLiteral("Prononciacion"), Qt::CaseInsensitive) == 0;
+        if ((learning_.settings().collapsePronunciation && pronunciation) ||
             (learning_.settings().collapseEtymology && title.startsWith(QStringLiteral("Etymology"), Qt::CaseInsensitive))) collapsedSections_.insert(i);
     }
     refreshReading();

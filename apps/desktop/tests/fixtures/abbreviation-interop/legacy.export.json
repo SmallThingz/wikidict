@@ -47,11 +47,15 @@
         {
           "level": 2,
           "title": "English",
+          "anchor": "",
+          "anchor_fallback": "",
           "blocks": []
         },
         {
           "level": 3,
           "title": "Noun",
+          "anchor": "",
+          "anchor_fallback": "",
           "blocks": [
             {
               "kind": "definition",
@@ -66,6 +70,7 @@
                   "classes": "",
                   "direction": "",
                   "explanation": "",
+                  "foreground": null,
                   "bold": false,
                   "italic": false,
                   "code": false,
@@ -85,6 +90,7 @@
                   "classes": "",
                   "direction": "",
                   "explanation": "",
+                  "foreground": null,
                   "bold": false,
                   "italic": false,
                   "code": false,
@@ -104,6 +110,7 @@
                   "classes": "",
                   "direction": "",
                   "explanation": "",
+                  "foreground": null,
                   "bold": false,
                   "italic": false,
                   "code": false,
@@ -119,6 +126,8 @@
               "list_path": "#",
               "number": "1",
               "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
               "table": null
             }
           ]

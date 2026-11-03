@@ -16,13 +16,49 @@
       "sha256": "aa63a97f00aa71aa1f171c24902dffdea264b98b17b2ba6c50f6ce48e9f43d30"
     },
     "annotated.export.json": {
-      "bytes": 9552,
-      "sha256": "4e80873a119f25470bb2fa62e37fb30edc8834d1153b00e11c2fe22c11065b66"
+      "bytes": 10225,
+      "sha256": "eaaf92cbf71570e8c627ac4f296b4d9c389ea5c43e2c7b06a6afd6ef73f869f8"
     },
     "legacy.export.json": {
-      "bytes": 3611,
-      "sha256": "49ea0fb05980118e93e405fc0cdfcfac1a4480433d1c080238876ac585fab88a"
+      "bytes": 3904,
+      "sha256": "2766aa3ca453865a67c220f6b1f6cf859cae5fa4bfbfabec0b3b48361fc16703"
     }
   },
-  "scope": "Interoperability fixture, not corpus acceptance. Byte copies of genuine generated outputs; no manually framed substitute."
+  "export_refresh": {
+    "scope": "Current reader exports of the unchanged original DPR3/DPR2 blob; not a new producer, blob-format migration or corpus qualification. Original producer fields above describe the original fixture generation.",
+    "reader_source_head": "60b6b0fbb0f7e3020e11750bdd2461b4f1232766",
+    "reader_source_fingerprint": "01899e1b78c0624e42ed035b49af8a7a22f7c0fe4bb5dde9e84f4c11f5d6b978",
+    "reader_qualification": {
+      "path": ".tmp/renderer-core-oct28/br-no-te-or-normal-integration01/normal-run01/independent-closure01.json",
+      "bytes": 71783,
+      "sha256": "7a6861f441667705354de544ecb4338e65c1fb01265651c3f5cfde06d182e701"
+    },
+    "reader_binary_sha256": "919128f34ed22f4ac259f4fe7f62b98f4a05767c970d146bd0b1e457fe70b3c4",
+    "same_blob_export_receipt": {
+      "path": ".tmp/desktop-monorepo-import01/localized-fold-qualification01/committed-fixture-reader01/result.json",
+      "bytes": 2800,
+      "sha256": "e93287583695c6def600f1b665b90a076ff79718d4dda4ea61e05860b3803d9e"
+    },
+    "original_export_assets": {
+      "annotated.export.json": {
+        "bytes": 9552,
+        "sha256": "4e80873a119f25470bb2fa62e37fb30edc8834d1153b00e11c2fe22c11065b66"
+      },
+      "legacy.export.json": {
+        "bytes": 3611,
+        "sha256": "49ea0fb05980118e93e405fc0cdfcfac1a4480433d1c080238876ac585fab88a"
+      }
+    },
+    "complete_entry_difference_review": {
+      "annotated_additions": 19,
+      "legacy_additions": 9,
+      "section_and_block_added_fields": {"anchor": "", "anchor_fallback": ""},
+      "span_added_fields": {"foreground": null},
+      "all_existing_fields_and_array_lengths_equal": true,
+      "removed_fields": 0,
+      "changed_existing_values": 0,
+      "full_entry_equality_assertion_unchanged": true
+    }
+  },
+  "scope": "Interoperability fixture, not corpus acceptance. Original generated blob retained byte-for-byte; expected JSON is exact normal current-reader output from that same blob, with separately reviewed additive defaults. No manually framed substitute."
 }
