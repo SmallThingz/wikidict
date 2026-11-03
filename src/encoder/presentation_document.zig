@@ -3713,6 +3713,52 @@ test "angle URL classification leaves HTML and unresolved delimiters strict" {
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &split, null));
 }
 
+// Complete unknown names are escaped before quote/link parsing. A recognized
+// prefix such as li/ref does not turn the complete name into that HTML element.
+// REL1_43 Sanitizer::ELEMENT_BITS_REGEX and internalRemoveHtmlTags define this
+// boundary; direct parsed spans still have no source-literal proof.
+fn expectUnknownAtomicSourceLiteral(a: std.mem.Allocator, source: []const u8, escaped_reference: []const u8, expected_visible: []const u8) !void {
+    errdefer std.debug.print("unknown atomic source case: {s}\n", .{source});
+    const direct = [_]compiler.Span{.{ .text = source }};
+    const split = [_]compiler.Span{ .{ .text = source[0..1] }, .{ .text = source[1..] } };
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(source));
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &direct, null));
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &split, null));
+    for ([_]bool{ false, true }) |with_child| {
+        const suffix = if (with_child) " ''[[Target|kept]]''" else "";
+        const input = try std.mem.concat(a, u8, &.{ source, suffix });
+        const reference = try std.mem.concat(a, u8, &.{ escaped_reference, suffix });
+        var report: Fallbacks = .{};
+        const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", input, null, &report);
+        const expected = try compileAlloc(a, "entry", .language, "English", "en", reference, null);
+        try std.testing.expectEqualSlices(u8, expected, bytes);
+        const stored = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+        try std.testing.expect(report.literal_markup);
+        try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+        try std.testing.expectEqual(@as(usize, 0), stored.entry.media.len);
+        var visible: std.ArrayList(u8) = .empty;
+        var actions: usize = 0;
+        for (stored.entry.sections) |section| for (section.blocks) |block| {
+            try std.testing.expect(block.table == null);
+            for (block.spans) |span| {
+                try visible.appendSlice(a, span.text);
+                try visible.appendSlice(a, span.trail);
+                if (span.kind == .link) {
+                    try std.testing.expect(with_child);
+                    try std.testing.expectEqualStrings("Target", span.target);
+                    try std.testing.expectEqualStrings("kept", span.text);
+                    try std.testing.expect(span.italic and !span.bold);
+                    actions += 1;
+                } else try std.testing.expect(span.kind == .text and span.target.len == 0);
+            }
+        };
+        try std.testing.expectEqual(@as(usize, @intFromBool(with_child)), actions);
+        const visible_reference = try std.mem.concat(a, u8, &.{ expected_visible, if (with_child) " kept" else "" });
+        try std.testing.expectEqualStrings(visible_reference, visible.items);
+    }
+}
+
 test "captured malformed quoted li preserves literal spelling dictionary text and translation actions" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -3792,9 +3838,9 @@ test "captured malformed quoted li preserves literal spelling dictionary text an
     // Only proved source angles are escaped; raw parsed markup stays strict.
     const raw = [_]compiler.Span{.{ .text = "<li\">" }};
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
-    // Apostrophes and malformed attributes are outside this finite token family.
-    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "<li'>word</li>", null));
-    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "<li\" attr=x>word</li>", null));
+    // Whole unknown names retain their spelling rather than becoming li elements.
+    try expectUnknownAtomicSourceLiteral(a, "<li'>word</li>", "&lt;li'&gt;word</li>", "<li'>word");
+    try expectUnknownAtomicSourceLiteral(a, "<li\" attr=x>word</li>", "&lt;li\" attr=x&gt;word</li>", "<li\" attr=x>word");
 }
 
 test "qichwa citation language names remain visible through reference compilation and codec" {
@@ -3825,7 +3871,7 @@ test "qichwa citation language names remain visible through reference compilatio
     // Only the proven sanitizer emission receives literal provenance.
     const raw = [_]compiler.Span{.{ .text = "<quechua>" }};
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
-    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "<li'>word</li>", null));
+    try expectUnknownAtomicSourceLiteral(a, "<li'>word</li>", "&lt;li'&gt;word</li>", "<li'>word");
 }
 
 test "nested-only table cells participate in strict document span validation" {
@@ -4073,8 +4119,10 @@ test "literal malformed reference recovery leaves valid reference compilation an
     const split = [_]compiler.Span{ .{ .text = "<" }, .{ .text = "reالميلاد " }, .{ .text = "</ref>" } };
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &direct, null));
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &split, null));
-    for ([_][]const u8{ "<li'>word</li>", "<li\" attr=x>word</li>", "before |} after", "<reالميلاد>" }) |strict|
-        try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", strict, null));
+    try expectUnknownAtomicSourceLiteral(a, "<li'>word</li>", "&lt;li'&gt;word</li>", "<li'>word");
+    try expectUnknownAtomicSourceLiteral(a, "<li\" attr=x>word</li>", "&lt;li\" attr=x&gt;word</li>", "<li\" attr=x>word");
+    try expectUnknownAtomicSourceLiteral(a, "<reالميلاد>", "&lt;reالميلاد&gt;", "<reالميلاد>");
+    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "before |} after", null));
     const protected_bytes = try compileAlloc(a, "entry", .language, "English", "en", "<nowiki><reالميلاد [[التاريخ]]</ref></nowiki>", null);
     const protected = try codec.decodeAlloc(a, protected_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
     for (protected.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span|
@@ -4782,7 +4830,7 @@ test "invalid title literal delimiters do not authorize deferred or parsed HTML 
     const parsed_template = [_]compiler.Span{.{ .text = "{{deferred}}" }};
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &parsed_template, null));
     try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "entry", .language, "English", "en", "[[<span>{{missing}}</span>]]", null));
-    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "[[<li'>word</li>]]", null));
+    try expectUnknownAtomicSourceLiteral(a, "[[<li'>word</li>]]", "[[&lt;li'&gt;word</li>]]", "[[<li'>word]]");
     _ = try compileAlloc(a, "entry", .language, "English", "en", "[[&lt;span lang=ar&gt;حاسوب&lt;/span&gt;]]", null);
 }
 
@@ -5758,7 +5806,7 @@ test "underscore literal source proof cannot authorize parsed residual markup or
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &split, null));
     try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("<ref_custom/>"));
     try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "<script>word</script>", null));
-    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "<ref_custom>word", null));
+    try expectUnknownAtomicSourceLiteral(a, "<ref_custom>word", "&lt;ref_custom&gt;word", "<ref_custom>word");
     var report: Fallbacks = .{};
     const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", "word<ref name=n>[[Target]]</ref><references/>", null, &report);
     const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });

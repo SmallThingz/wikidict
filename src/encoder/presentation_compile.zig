@@ -33801,7 +33801,7 @@ test "source text prefix cannot bypass interrupted external opener proof" {
     try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("[https://example.test unfinished"));
 }
 
-// Proposed controls for the separate shared atomic-name consolidation; UNRUN.
+// Complete atomic-name recovery controls preserve source boundaries and normal quote/action phases.
 test "complete unknown atomic names preserve UTF8 parentheses and existing quote action phases" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
