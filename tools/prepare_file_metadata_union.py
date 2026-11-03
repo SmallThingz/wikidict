@@ -16,7 +16,6 @@ import tarfile
 import tempfile
 
 import prepare_file_metadata_v2 as v2
-import file_metadata_producer_compatibility as producer_compatibility
 
 SCHEMA = 'wikidict.file-metadata-union.v1'
 MANIFEST, COMPLETE, EVIDENCE = v2.MANIFEST, v2.COMPLETE, v2.EVIDENCE
@@ -211,7 +210,9 @@ def read_manifest(root, require_complete=True):
     manifest = v2.decode(raw)
     require(isinstance(manifest, dict) and manifest.get('schema') == SCHEMA
             and manifest.get('header_version') == 2, 'Union schema mismatch')
-    require(producer_compatibility.matches(manifest, producer(), 'union', v2.REPO), 'Union producer changed')
+    require(isinstance(manifest.get('generator_sha256'), str)
+            and re.fullmatch('[0-9a-f]{64}', manifest['generator_sha256']), 'Invalid union producer provenance')
+    v2.validate_provenance(manifest.get('capture_producer'))
     require(manifest.get('dump_date') is None
             and manifest.get('temporal_scope') == 'current-api-observation'
             and manifest.get('source_url') == v2.wiktionary_api(manifest['wiki'])

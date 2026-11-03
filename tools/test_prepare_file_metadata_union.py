@@ -89,6 +89,37 @@ class UnionTest(unittest.TestCase):
                          (250000, 10000, 64 * 1024 * 1024))
         self.assertEqual(self.calls, 2)
 
+    def test_historical_children_and_union_replay_without_restamping(self):
+        child = self.capture(['File:A.ogg'])
+        child_manifest = v2.decode((child / v2.MANIFEST).read_bytes())
+        child_manifest['generator_sha256'] = 'a' * 64
+        child_manifest['dependency_sha256'] = {key: 'b' * 64 for key in child_manifest['dependency_sha256']}
+        raw = v2.encoded(child_manifest)
+        (child / v2.MANIFEST).write_bytes(raw)
+        (child / v2.COMPLETE).write_bytes(v2.encoded({'schema': v2.SCHEMA, 'manifest_sha256': v2.digest(raw)}))
+        self.inventory(['ملف:A.ogg'])
+        manifest = union.compose([child], self.inv, self.out, WIKI, DATE)
+        manifest['generator_sha256'] = 'c' * 64
+        manifest['capture_producer'] = {key: child_manifest[key] for key in ('generator_sha256', 'dependency_sha256')}
+        raw = v2.encoded(manifest)
+        (self.out / union.MANIFEST).write_bytes(raw)
+        (self.out / union.COMPLETE).write_bytes(v2.encoded({'schema': union.SCHEMA, 'manifest_sha256': v2.digest(raw)}))
+        self.assertEqual(union.verify(self.out), manifest)
+        self.assertEqual((self.out / union.MANIFEST).read_bytes(), raw)
+        self.assertEqual(self.calls, 1)
+        path = self.out / union.TSV
+        path.write_bytes(path.read_bytes().replace(b'\tAUDIO\t', b'\tVIDEO\t'))
+        self.rehash_outer()
+        with self.assertRaisesRegex(ValueError, 'differs from replayed'):
+            union.verify(self.out)
+
+    def test_missing_child_producer_provenance_rejected(self):
+        manifest = self.prepare()
+        manifest['capture_producer'] = {'generator_sha256': 'a' * 64}
+        (self.out / union.MANIFEST).write_bytes(v2.encoded(manifest))
+        with self.assertRaisesRegex(ValueError, 'producer provenance'):
+            union.verify(self.out)
+
     def test_duplicate_capture_reference_refused(self):
         root = self.capture(['File:A.ogg'])
         self.inventory(['ملف:A.ogg'])
@@ -139,7 +170,7 @@ class UnionTest(unittest.TestCase):
         manifest = v2.decode((self.out / union.MANIFEST).read_bytes())
         manifest['generator_sha256'] = '0' * 64
         (self.out / union.MANIFEST).write_bytes(v2.encoded(manifest))
-        with self.assertRaisesRegex(ValueError, 'producer changed'):
+        with self.assertRaisesRegex(ValueError, 'completion mismatch'):
             union.verify(self.out)
 
     def test_coherently_rehashed_union_data_still_requires_child_replay(self):
