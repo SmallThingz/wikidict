@@ -404,6 +404,7 @@ def summarize(attempt_results, editions, preparations=()):
         for seconds in measured:
             require(seconds is None or (type(seconds) in (int, float) and math.isfinite(seconds) and seconds >= 0), 'Invalid interval')
         timing_unknown = any(x is None for x in measured)
+        known_build_seconds = sum(seconds for seconds in measured if seconds is not None)
         own_preparations = [x for x in preparation_by_id.values() if x['edition'] == edition]
         preparation_seconds = sum(x['elapsed_seconds'] for x in own_preparations)
         accepted_value = accepted.get(edition)
@@ -414,22 +415,25 @@ def summarize(attempt_results, editions, preparations=()):
             unknown.append(edition)
         rows.append(dict(edition=edition, timing_excluded=edition in EXCLUDED,
             attempt_count=len(history), accepted=current,
-            observed_build_seconds=None if edition in EXCLUDED or timing_unknown else sum(measured),
+            known_production_seconds=None if edition in EXCLUDED else known_build_seconds,
+            observed_build_seconds=None if edition in EXCLUDED or timing_unknown else known_build_seconds,
             production_preparations=own_preparations,
             observed_preparation_seconds=None if edition in EXCLUDED else preparation_seconds,
-            observed_total_seconds=None if edition in EXCLUDED or timing_unknown else sum(measured) + preparation_seconds,
+            observed_total_seconds=None if edition in EXCLUDED or timing_unknown else known_build_seconds + preparation_seconds,
             verification_seconds=None if edition in EXCLUDED else sum(x['elapsed_seconds'] or 0 for x in history if x.get('execution_mode') == 'existing_output'),
             original_build_time_unknown=original_unknown, latest_outcome=latest.get(edition, {}).get('outcome')))
     cohort = [x for x in rows if not x['timing_excluded']]
     complete = len(rows) == 198 and len(cohort) == 191 and all(x['accepted'] is not None for x in rows)
     pages = sum(x['accepted']['input_pages'] for x in cohort if x['accepted'])
-    build_elapsed = sum(x['observed_build_seconds'] or 0 for x in cohort)
+    build_elapsed = sum(x['known_production_seconds'] or 0 for x in cohort)
     preparation_elapsed = sum(x['observed_preparation_seconds'] or 0 for x in cohort)
     elapsed = build_elapsed + preparation_elapsed
     return dict(schema='wikidict.corpus-controller-summary.v1', editions=rows,
         required_editions=len(editions), timing_cohort_editions=191, accepted_cohort_editions=sum(x['accepted'] is not None for x in cohort),
         final_cohort_complete=complete, accepted_cohort_input_pages=pages,
-        observed_cohort_seconds=elapsed, observed_cohort_build_seconds=build_elapsed,
+        known_cohort_seconds=elapsed, known_cohort_build_seconds=build_elapsed,
+        observed_cohort_seconds=None if unknown else elapsed,
+        observed_cohort_build_seconds=None if unknown else build_elapsed,
         observed_cohort_preparation_seconds=preparation_elapsed, unknown_timing_editions=unknown,
         final_observed_pages_per_second=pages / elapsed if complete and not unknown and elapsed > 0 else None,
         lost_historical_seconds=None, historical_timings_reconstructed=False,

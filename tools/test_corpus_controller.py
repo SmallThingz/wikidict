@@ -131,6 +131,34 @@ class ControllerPureTests(unittest.TestCase):
         self.assertFalse(incomplete['final_cohort_complete'])
         self.assertIsNone(incomplete['final_observed_pages_per_second'])
 
+    def test_mixed_known_unknown_retries_preserve_known_subtotal_across_editions(self):
+        editions=all_editions()
+        rows=[attempt('initial-'+edition,i+1,edition=edition,seconds=2,pages=10) for i,edition in enumerate(editions)]
+        rows.extend([attempt('en-interrupted',199,seconds=None,accepted=False),
+                     attempt('en-retry',200,seconds=7,pages=10),
+                     attempt('ar-failed',201,edition='arwiktionary',seconds=3,accepted=False),
+                     attempt('ar-retry',202,edition='arwiktionary',seconds=5,pages=10),
+                     attempt('en-verify',203,seconds=11,pages=10,mode='existing_output'),
+                     attempt('aa-unknown-excluded',204,edition='aawiktionary',seconds=None,accepted=False),
+                     attempt('aa-retry-excluded',205,edition='aawiktionary',seconds=999,pages=10)])
+        for row in rows:row['controller_elapsed_seconds']=1000000
+        result=controller.summarize(rows,editions)
+        by_edition={row['edition']:row for row in result['editions']}
+        self.assertEqual(by_edition['enwiktionary']['known_production_seconds'],9)
+        self.assertIsNone(by_edition['enwiktionary']['observed_build_seconds'])
+        self.assertEqual(by_edition['enwiktionary']['verification_seconds'],11)
+        self.assertEqual(by_edition['arwiktionary']['known_production_seconds'],10)
+        self.assertEqual(by_edition['arwiktionary']['observed_build_seconds'],10)
+        self.assertIsNone(by_edition['aawiktionary']['known_production_seconds'])
+        self.assertEqual(result['known_cohort_build_seconds'],397)
+        self.assertEqual(result['known_cohort_seconds'],397)
+        self.assertIsNone(result['observed_cohort_build_seconds'])
+        self.assertIsNone(result['observed_cohort_seconds'])
+        self.assertEqual(result['unknown_timing_editions'],['enwiktionary'])
+        self.assertTrue(result['final_cohort_complete'])
+        self.assertEqual(result['accepted_cohort_input_pages'],1910)
+        self.assertIsNone(result['final_observed_pages_per_second'])
+
     def test_unknown_build_interval_blocks_rate_without_discarding_acceptance(self):
         editions = all_editions()
         rows = [attempt(str(i), i, edition=e) for i, e in enumerate(editions)]
