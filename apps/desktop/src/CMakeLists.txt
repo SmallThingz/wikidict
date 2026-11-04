@@ -4,8 +4,9 @@ project(DictQt VERSION 0.1.0 LANGUAGES CXX)
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Concurrent Network Multimedia)
 qt_standard_project_setup()
 
-add_library(wikidict-gui SHARED
-    main.cpp
+# Compile product code once under the shipped GUI's compilation contract.
+# Tests link these objects; the fake-voice MediaPanel variant stays separate.
+add_library(wikidict-product STATIC
     DictApi.cpp
     LearningStore.cpp
     MainWindow.cpp
@@ -13,6 +14,7 @@ add_library(wikidict-gui SHARED
     LibraryStore.cpp
     MediaPanel.cpp
 )
+add_library(wikidict-gui SHARED main.cpp)
 qt_add_resources(wikidict-gui reader_font PREFIX "/fonts"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/../web"
     FILES "${CMAKE_CURRENT_SOURCE_DIR}/../web/reader.ttf")
@@ -32,7 +34,20 @@ find_library(DICT_FFI_LIBRARY
     REQUIRED
 )
 
-target_link_libraries(wikidict-gui PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Concurrent Qt6::Network Qt6::Multimedia "${DICT_FFI_LIBRARY}")
+target_compile_features(wikidict-product PRIVATE cxx_std_20)
+target_compile_options(wikidict-product PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_definitions(wikidict-product PRIVATE wikidict_gui_EXPORTS)
+target_include_directories(wikidict-product PRIVATE "${WIKIDICT_CORE}/src/ffi")
+set_target_properties(wikidict-product PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES
+)
+# PRIVATE static-library dependencies remain link requirements without adding
+# their compile definitions to the existing test-driver translation units.
+target_link_libraries(wikidict-product PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Concurrent Qt6::Network Qt6::Multimedia "${DICT_FFI_LIBRARY}")
+
+target_link_libraries(wikidict-gui PRIVATE wikidict-product Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Concurrent Qt6::Network Qt6::Multimedia "${DICT_FFI_LIBRARY}")
 get_filename_component(dict_ffi_directory "${DICT_FFI_LIBRARY}" DIRECTORY)
 if(APPLE)
     set(gui_install_rpath "@loader_path")
@@ -78,7 +93,7 @@ if(BUILD_TESTING)
         set_tests_properties(native-unified-entry PROPERTIES
             WORKING_DIRECTORY "${CMAKE_BINARY_DIR}" TIMEOUT 300)
     endif()
-    add_executable(dict-qt-tests ../tests/MainWindowTest.cpp DictApi.cpp LearningStore.cpp MainWindow.cpp LibraryDialog.cpp LibraryStore.cpp MediaPanel.cpp)
+    add_executable(dict-qt-tests ../tests/MainWindowTest.cpp)
     if(CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$" AND NOT CMAKE_GENERATOR STREQUAL "Xcode")
         # Avoid optimizing the large test driver; all product translation units
         # and the shipped application retain their normal Release options.
@@ -93,7 +108,7 @@ if(BUILD_TESTING)
     target_compile_features(dict-qt-tests PRIVATE cxx_std_20)
     target_compile_options(dict-qt-tests PRIVATE -Wall -Wextra -Wpedantic)
     target_include_directories(dict-qt-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${WIKIDICT_CORE}/src/ffi")
-    target_link_libraries(dict-qt-tests PRIVATE Qt6::Widgets Qt6::Test Qt6::Concurrent Qt6::Network Qt6::Multimedia "${DICT_FFI_LIBRARY}")
+    target_link_libraries(dict-qt-tests PRIVATE wikidict-product Qt6::Widgets Qt6::Test Qt6::Concurrent Qt6::Network Qt6::Multimedia "${DICT_FFI_LIBRARY}")
     qt_add_resources(dict-qt-tests test_reader_font PREFIX "/fonts"
         BASE "${CMAKE_CURRENT_SOURCE_DIR}/../web"
         FILES "${CMAKE_CURRENT_SOURCE_DIR}/../web/reader.ttf")
@@ -112,18 +127,18 @@ if(BUILD_TESTING)
     target_link_libraries(dict-media-tests PRIVATE Qt6::Widgets Qt6::Network Qt6::Multimedia Qt6::Test)
     add_test(NAME native-media-ux COMMAND dict-media-tests)
     set_tests_properties(native-media-ux PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}" ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-    add_executable(dict-library-tests ../tests/LibraryStoreTests.cpp LibraryStore.cpp DictApi.cpp)
+    add_executable(dict-library-tests ../tests/LibraryStoreTests.cpp)
     target_compile_features(dict-library-tests PRIVATE cxx_std_20)
     target_include_directories(dict-library-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${WIKIDICT_CORE}/src/ffi")
-    target_link_libraries(dict-library-tests PRIVATE Qt6::Core "${DICT_FFI_LIBRARY}")
+    target_link_libraries(dict-library-tests PRIVATE wikidict-product Qt6::Core "${DICT_FFI_LIBRARY}")
     add_test(NAME native-library-storage COMMAND dict-library-tests)
     set_tests_properties(native-library-storage PROPERTIES
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
         ENVIRONMENT "DICT_TEST_ROOT=${CMAKE_SOURCE_DIR}/tests/fixtures")
-    add_executable(dict-library-ui-tests ../tests/LibraryDialogTests.cpp LibraryDialog.cpp LibraryStore.cpp DictApi.cpp)
+    add_executable(dict-library-ui-tests ../tests/LibraryDialogTests.cpp)
     target_compile_features(dict-library-ui-tests PRIVATE cxx_std_20)
     target_include_directories(dict-library-ui-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${WIKIDICT_CORE}/src/ffi")
-    target_link_libraries(dict-library-ui-tests PRIVATE Qt6::Widgets Qt6::Network Qt6::Test "${DICT_FFI_LIBRARY}")
+    target_link_libraries(dict-library-ui-tests PRIVATE wikidict-product Qt6::Widgets Qt6::Network Qt6::Test "${DICT_FFI_LIBRARY}")
     add_test(NAME native-library-ux COMMAND dict-library-ui-tests
         "${CMAKE_SOURCE_DIR}/tests/fixtures/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb")
     set_tests_properties(native-library-ux PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}" ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
