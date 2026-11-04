@@ -25,11 +25,12 @@ internal fun ordinaryInlineDisplaySpans(block: Block): List<Span> {
             result.add(span)
             continue
         }
+        if (span.image != null) inAsciiSpace = false
         val text = display(span.text)
         val trail = display(span.trail)
         // An entirely collapsed whitespace-only span must not leave an invisible
         // direction-isolate/link annotation. Surviving spans retain every flag/target.
-        if (text.isNotEmpty() || trail.isNotEmpty() || (span.text.isEmpty() && span.trail.isEmpty())) {
+        if (span.image != null || text.isNotEmpty() || trail.isNotEmpty() || (span.text.isEmpty() && span.trail.isEmpty())) {
             result.add(if (text == span.text && trail == span.trail) span else span.copy(text = text, trail = trail))
         }
     }

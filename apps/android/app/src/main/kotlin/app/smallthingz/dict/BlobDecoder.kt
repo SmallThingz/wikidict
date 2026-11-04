@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2-DPRB decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2-DPRC decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
@@ -13,10 +13,12 @@ object BlobDecoder {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val magicVersion = r.byte()
-        require(magicVersion in 50..57 || magicVersion in 65..66) { "Unsupported presentation format" }
-        val version = if (magicVersion in 65..66) 57 else magicVersion
-        r.fontScales = magicVersion in 65..66
-        r.fontScaleBases = magicVersion == 66
+        require(magicVersion in 50..57 || magicVersion in 65..67) { "Unsupported presentation format" }
+        val version = if (magicVersion in 65..67) 57 else magicVersion
+        r.fontScales = magicVersion in 65..67
+        r.fontScaleBases = magicVersion in 66..67
+        r.tableStyles = magicVersion == 67
+        r.inlineImages = magicVersion == 67
         r.explanations = version >= 51
         r.colors = version >= 52
         r.anchors = version >= 53
@@ -47,7 +49,7 @@ object BlobDecoder {
             r.indices(blocks); r.indices(blocks); r.indices(sections.size)
         }
         r.indices(sections.size)
-        val references = List(r.count(if (version >= 57) 13 else 20)) {
+        val references = List(r.count(if (magicVersion == 67) 14 else if (version >= 57) 13 else 20)) {
             val referenceKind = if (version < 57) ReferenceKind.Note else when (r.byte()) {
                 0 -> ReferenceKind.Note
                 1 -> ReferenceKind.Fragment
@@ -62,7 +64,9 @@ object BlobDecoder {
                 ordinal
             } else null
             val group = r.string()
-            Reference(number, groupNumber, group, r.spans(), referenceKind)
+            val spans = r.spans()
+            val blocks = if (magicVersion == 67 && r.presence()) List(r.count(25)) { r.block() } else null
+            Reference(number, groupNumber, group, spans, referenceKind, blocks)
         }
         val media = List(r.count(9)) { Media(r.string(), r.enum(listOf("image", "audio")), r.string()) }
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }
@@ -82,6 +86,8 @@ object BlobDecoder {
         var cellBlocks = false
         var fontScales = false
         var fontScaleBases = false
+        var tableStyles = false
+        var inlineImages = false
         fun byte(): Int { require(buffer.remaining() >= 1); return buffer.get().toInt() and 255 }
         fun u16(): Int { require(buffer.remaining() >= 2); return buffer.short.toInt() and 65535 }
         fun u32(): Long { require(buffer.remaining() >= 4); return buffer.int.toLong() and 0xffffffffL }
@@ -104,7 +110,7 @@ object BlobDecoder {
             return if (n == 0xffffffffL) null else n.toInt()
         }
         fun indices(limit: Int) { repeat(count(4)) { index(limit) } }
-        fun spans(): List<Span> = List(count(if (fontScales) 34 else if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27)) {
+        fun spans(): List<Span> = List(count(if (inlineImages) 35 else if (fontScales) 34 else if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27)) {
             val kind = enum(inline); val role = enum(roles); val f = byte()
             val text = string(); val target = string(); val trail = string()
             val language = string(); val classes = string(); val direction = string()
@@ -125,9 +131,50 @@ object BlobDecoder {
                 else -> error("Invalid span font scale basis")
             } else FontScaleBasis.Context
             val fontScale = rawScale?.takeUnless { it == 1f && basis == FontScaleBasis.Context }
+            val image = if (inlineImages && presence()) {
+                val file = string(); val flags = byte()
+                require(flags and 0xf0 == 0) { "Unknown inline image flags" }
+                InlineImage(file, if (flags and 1 != 0) u32() else null, if (flags and 2 != 0) u32() else null,
+                    if (flags and 4 != 0) string() else null, if (flags and 8 != 0) string() else null)
+            } else null
             Span(kind, text, target, trail, language, classes, direction,
                 bold=f and 1 != 0, italic=f and 2 != 0, code=f and 4 != 0, small=f and 8 != 0,
-                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis)
+                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image)
+        }
+        private fun styleLength(): StyleLength {
+            val unit = when (byte()) { 0 -> StyleLengthUnit.Px; 1 -> StyleLengthUnit.Em; else -> error("Unknown style length unit") }
+            require(buffer.remaining() >= 4) { "Truncated style length" }
+            return StyleLength(unit, buffer.float)
+        }
+        private fun styleEdges() = StyleEdges(styleLength(), styleLength(), styleLength(), styleLength())
+        private fun styleRgb(): String = string().also { require(Regex("#[0-9a-f]{6}").matches(it)) { "Invalid style RGB" } }
+        private fun styleBorder(): StyleBorder = when (byte()) {
+            0 -> StyleBorder.None
+            1 -> StyleBorder.Solid(styleLength(), styleRgb())
+            else -> error("Unknown style border")
+        }
+        private fun cellStyle(): CellStyle? {
+            if (!tableStyles || !presence()) return null
+            val flags = byte(); require(flags in 1..7) { "Invalid cell style flags" }
+            val border = if (flags and 1 != 0) styleBorder() else null
+            val padding = if (flags and 2 != 0) styleEdges() else null
+            val align = if (flags and 4 != 0) when (byte()) {
+                0 -> CellTextAlign.Left; 1 -> CellTextAlign.Center; 2 -> CellTextAlign.Right
+                else -> error("Unknown cell text alignment")
+            } else null
+            return CellStyle(border, padding, align)
+        }
+        private fun tableStyle(): TableStyle? {
+            if (!tableStyles || !presence()) return null
+            val flags = byte(); require(flags in 1..15) { "Invalid table style flags" }
+            val background = if (flags and 1 != 0) styleRgb() else null
+            val border = if (flags and 2 != 0) styleBorder() else null
+            val collapse = if (flags and 4 != 0) when (byte()) {
+                0 -> TableCollapse.Separate; 1 -> TableCollapse.Collapse
+                else -> error("Unknown border collapse")
+            } else null
+            val margins = if (flags and 8 != 0) styleEdges() else null
+            return TableStyle(background, border, collapse, margins)
         }
         private fun table(depth: Int): Table? {
             if (!presence()) return null
@@ -147,7 +194,7 @@ object BlobDecoder {
                 if (flags == 0) null else TableGeometry(border, spacing, padding, width)
             }
             val caption = spans()
-            val rows = List(count(4)) { List(count(if (cellBlocks) 12 else if (nestedTables) 11 else if (colors) 10 else 9)) {
+            val rows = List(count(4)) { List(count(if (tableStyles) 13 else if (cellBlocks) 12 else if (nestedTables) 11 else if (colors) 10 else 9)) {
                 val header = presence(); val cols = u16(); val rowspan = u16()
                 require(cols in 1..100 && rowspan in 1..100) { "Invalid table span" }
                 val background = if (colors && presence()) string().also {
@@ -156,9 +203,9 @@ object BlobDecoder {
                 val content = spans()
                 val child = if (nestedTables) table(depth + 1) else null
                 val blocks = if (cellBlocks && presence()) List(count(25)) { block(depth) } else null
-                Cell(content, header, cols, rowspan, background, child, blocks)
+                Cell(content, header, cols, rowspan, background, child, blocks, cellStyle())
             } }
-            return Table(caption, rows, geometry).also { tableGrid(it) }
+            return Table(caption, rows, geometry, tableStyle()).also { tableGrid(it) }
         }
         fun block(tableDepth: Int = 0): Block {
             val kind = enum(kinds); val depth = byte(); val level = byte()

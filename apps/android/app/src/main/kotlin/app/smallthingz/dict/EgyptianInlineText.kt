@@ -51,6 +51,7 @@ internal fun egyptianTextRuns(spans: List<Span>): List<EgyptianTextRun> {
     for (span in spans) {
         val isolated = span.direction in listOf("rtl", "ltr", "auto")
         if (isolated) offset++
+        if (span.image != null) offset += InlineImageReplacement.length
         val text = if (span.kind == "line_break") "\n" else span.text
         // Zero remains original annotated text, never a positive-size shaping
         // request or an error placeholder. Its Compose layout needs qualification.
@@ -120,12 +121,13 @@ internal val EgyptianShapedRunCount = SemanticsPropertyKey<Int>("EgyptianShapedR
 internal val EgyptianVisibleScales = SemanticsPropertyKey<List<Float>>("EgyptianVisibleScales")
 
 @Composable
-internal fun EgyptianInlineText(original: AnnotatedString, runs: List<EgyptianTextRun>, modifier: Modifier, style: TextStyle, linkColor: Color) {
+internal fun EgyptianInlineText(original: AnnotatedString, runs: List<EgyptianTextRun>, modifier: Modifier, style: TextStyle, linkColor: Color,
+    extraInlineContent: Map<String, InlineTextContent> = emptyMap()) {
     if (Build.VERSION.SDK_INT < 31 || runs.isEmpty()) {
-        Text(original, modifier = modifier, style = style)
+        Text(original, modifier = modifier, style = style, inlineContent = extraInlineContent)
         return
     }
-    EgyptianInlineTextApi31(original, runs, modifier, style, linkColor)
+    EgyptianInlineTextApi31(original, runs, modifier, style, linkColor, extraInlineContent)
 }
 
 @RequiresApi(31)
@@ -147,7 +149,8 @@ private data class PreparedEgyptianText(val request: Any, val runs: Map<String, 
 
 @RequiresApi(31)
 @Composable
-private fun EgyptianInlineTextApi31(original: AnnotatedString, runs: List<EgyptianTextRun>, modifier: Modifier, style: TextStyle, linkColor: Color) {
+private fun EgyptianInlineTextApi31(original: AnnotatedString, runs: List<EgyptianTextRun>, modifier: Modifier, style: TextStyle, linkColor: Color,
+    extraInlineContent: Map<String, InlineTextContent>) {
     val context = LocalContext.current.applicationContext
     val density = LocalDensity.current
     val fallbackRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
@@ -273,7 +276,7 @@ private fun EgyptianInlineTextApi31(original: AnnotatedString, runs: List<Egypti
             }
         }
         val failed = prepared.values.any { it.isFailure }
-        Text(annotated, style = style, inlineContent = content, modifier = Modifier.semantics {
+        Text(annotated, style = style, inlineContent = content + extraInlineContent, modifier = Modifier.semantics {
             this[EgyptianShapedRunCount] = prepared.values.count { it.isSuccess }
             this[EgyptianVisibleScales] = scales
             if (failed) stateDescription = "Egyptian glyph layout unavailable"

@@ -23,15 +23,53 @@ data class Span(
     val background: String? = null,
     val fontScale: Float? = null,
     val fontScaleBasis: FontScaleBasis = FontScaleBasis.Context,
+    val image: InlineImage? = null,
 ) {
     init {
         require(fontScaleBasis != FontScaleBasis.NormalBody || fontScale != null) {
             "Normal-body font scale requires a value"
         }
+        require(image == null || when (kind) {
+            "text" -> target.isEmpty()
+            "link", "external_link" -> target.isNotEmpty()
+            else -> false
+        }) { "Invalid inline image action" }
+        require(image == null || (text.isEmpty() && trail.isEmpty())) { "Inline image occurrences cannot also contain text" }
     }
 }
 
 enum class FontScaleBasis { Context, NormalBody }
+
+data class InlineImage(val file: String, val widthPx: Long? = null, val heightPx: Long? = null,
+    val alt: String? = null, val tooltip: String? = null) {
+    init {
+        require(file.isNotEmpty() && validInlineImageString(file) && file.first() != ' ' && file.last() != ' ' &&
+            file.none { it.code < 32 || it.code == 127 || it.code in 0x80..0x9f || it in "[]{}<>|#_" }) { "Invalid inline image file" }
+        require(widthPx == null || widthPx in 1L..0xffff_ffffL) { "Invalid inline image width" }
+        require(heightPx == null || heightPx in 1L..0xffff_ffffL) { "Invalid inline image height" }
+        require(alt == null || validInlineImageString(alt)) { "Invalid inline image alt" }
+        require(tooltip == null || validInlineImageString(tooltip)) { "Invalid inline image tooltip" }
+    }
+}
+private fun validInlineImageString(value: String): Boolean {
+    var bytes = 0L
+    var index = 0
+    while (index < value.length) {
+        val char = value[index++]
+        bytes += when {
+            Character.isHighSurrogate(char) -> {
+                if (index == value.length || !Character.isLowSurrogate(value[index++])) return false
+                4
+            }
+            Character.isLowSurrogate(char) -> return false
+            char.code < 0x80 -> 1
+            char.code < 0x800 -> 2
+            else -> 3
+        }
+        if (bytes > 32L * 1024 * 1024) return false
+    }
+    return true
+}
 
 /** Relative to the caller's typography; legacy reduction is applied only once. */
 internal fun spanFontScale(span: Span): Float =
@@ -56,14 +94,40 @@ enum class TableWidthUnit { Px, Percent }
 data class TableWidth(val unit: TableWidthUnit, val value: Long)
 data class TableGeometry(val border: Int? = null, val cellSpacing: Int? = null,
                          val cellPadding: Int? = null, val width: TableWidth? = null)
+enum class StyleLengthUnit { Px, Em }
+data class StyleLength(val unit: StyleLengthUnit, val value: Float) {
+    init { require(value.isFinite() && value >= 0f) { "Invalid table style length" } }
+}
+data class StyleEdges(val top: StyleLength, val right: StyleLength, val bottom: StyleLength, val left: StyleLength)
+sealed interface StyleBorder {
+    data object None : StyleBorder
+    data class Solid(val width: StyleLength, val color: String) : StyleBorder {
+        init { require(Regex("#[0-9a-f]{6}").matches(color)) { "Invalid table border RGB" } }
+    }
+}
+enum class TableCollapse { Separate, Collapse }
+enum class CellTextAlign { Left, Center, Right }
+data class TableStyle(val background: String? = null, val border: StyleBorder? = null,
+    val collapse: TableCollapse? = null, val margins: StyleEdges? = null) {
+    init {
+        require(background != null || border != null || collapse != null || margins != null) { "Empty table style" }
+        require(background == null || Regex("#[0-9a-f]{6}").matches(background)) { "Invalid table background RGB" }
+    }
+}
+data class CellStyle(val border: StyleBorder? = null, val padding: StyleEdges? = null,
+    val textAlign: CellTextAlign? = null) {
+    init { require(border != null || padding != null || textAlign != null) { "Empty cell style" } }
+}
 data class Cell(val spans: List<Span>, val header: Boolean, val colspan: Int, val rowspan: Int,
-                val background: String? = null, val nestedTable: Table? = null, val blocks: List<Block>? = null) {
+                val background: String? = null, val nestedTable: Table? = null, val blocks: List<Block>? = null,
+                val style: CellStyle? = null) {
     init {
         require(nestedTable == null || spans.isEmpty()) { "A nested table cell cannot also contain spans" }
         require(blocks == null || (spans.isEmpty() && nestedTable == null)) { "Ordered cell blocks cannot also contain legacy content" }
     }
 }
-data class Table(val caption: List<Span>, val rows: List<List<Cell>>, val geometry: TableGeometry? = null)
+data class Table(val caption: List<Span>, val rows: List<List<Cell>>, val geometry: TableGeometry? = null,
+    val style: TableStyle? = null)
 
 /** Visit authoritative content exactly once, retaining literal block whitespace policy. */
 internal fun Block.visitSpanRuns(visit: (List<Span>, Boolean) -> Unit) {
@@ -96,13 +160,19 @@ data class Section(val level: Int, val title: String, val blocks: List<Block>, v
 data class Media(val file: String, val kind: String, val caption: String)
 enum class ReferenceKind { Note, Fragment }
 data class Reference(val number: Long, val groupNumber: Long?, val group: String, val spans: List<Span>,
-    val kind: ReferenceKind = ReferenceKind.Note) {
+    val kind: ReferenceKind = ReferenceKind.Note, val blocks: List<Block>? = null) {
     init {
+        require(blocks == null || spans.isEmpty()) { "Ordered reference blocks cannot also contain legacy spans" }
         require(number in 1L..0xffff_fffeL) { "Reference item identity is outside the wire range" }
         require(if (kind == ReferenceKind.Note) groupNumber != null && groupNumber in 1L..0xffff_fffeL else groupNumber == null) {
             "Only numbered notes have a valid wire group ordinal"
         }
     }
+}
+internal fun Reference.visitSpanRuns(visit: (List<Span>, Boolean) -> Unit) {
+    val content = blocks
+    if (content != null) content.forEach { it.visitSpanRuns(visit) }
+    else visit(spans, false)
 }
 data class Entry(
     val title: String,
@@ -123,9 +193,24 @@ data class Entry(
     val contentDictionary: String? = null,
     val etymologySections: Set<Int> = emptySet(),
 ) {
+    internal val inlineImages: List<InlineImage> = inlineImageOccurrences(this)
+    init {
+        val occurrences = inlineImages
+        if (occurrences.isNotEmpty()) {
+            require(media.size <= 128) { "Too many inline image assets" }
+            val byFile = media.groupBy { it.file }
+            occurrences.forEach { image ->
+                val matching = byFile[image.file]
+                require(matching != null && matching.size == 1 && matching.single().kind == "image") { "Inline image asset is absent or ambiguous" }
+            }
+        }
+    }
     val key: String = origin?.key ?: "$kind\u0000${language.orEmpty()}\u0000$title"
     // Constructed with the decoded entry on the import dispatcher.
     val readingRows: List<ReadingRow> = readingRows(sections, media, etymologySections)
+    internal val legacyImageCaptions: Map<String, Set<String>> = legacyEmbeddedImageCaptions(this)
+    internal val legacyImageFiles: Set<String> = legacyImageCaptions.keys
+    internal val separateImageCaptionFiles: Set<String> = media.filter { distinctTypedImageCaption(this, it) }.map { it.file }.toSet()
     internal val abbreviations: List<Abbreviation> = entryAbbreviations(this)
     fun clue(): String {
         // Media controls belong in the reader, not a saved word's textual clue.
@@ -160,6 +245,23 @@ data class Entry(
         }
         return fallback.toString().ifEmpty { "Definition unavailable." }
     }
+}
+
+/** Every serialized span sink participates in asset validation, even an empty
+ * occurrence. Plain text/heading authority still uses Span.text and trail only. */
+internal fun inlineImageOccurrences(entry: Entry): List<InlineImage> = buildList {
+    fun include(spans: List<Span>) { spans.forEach { it.image?.let(::add) } }
+    lateinit var block: (Block) -> Unit
+    fun table(value: Table) {
+        include(value.caption)
+        value.rows.forEach { row -> row.forEach { cell ->
+            include(cell.spans); cell.nestedTable?.let(::table); cell.blocks?.forEach { block(it) }
+        } }
+    }
+    block = { value -> include(value.spans); value.table?.let(::table) }
+    include(entry.displayTitle); include(entry.preamble)
+    entry.sections.forEach { section -> section.blocks.forEach { block(it) } }
+    entry.references.forEach { reference -> include(reference.spans); reference.blocks?.forEach { block(it) } }
 }
 
 internal fun WordHit.isInstalled(installed: (String) -> Boolean): Boolean =
@@ -233,6 +335,9 @@ internal fun entryAbbreviations(entry: Entry): List<Abbreviation> {
         section.blocks.forEach { includeBlock(it, location) }
     }
 
-    entry.references.forEach { include(it.spans, if (it.kind == ReferenceKind.Note) "References ${it.number}" else "References") }
+    entry.references.forEach { reference ->
+        val location = if (reference.kind == ReferenceKind.Note) "References ${reference.number}" else "References"
+        reference.visitSpanRuns { spans, _ -> include(spans, location) }
+    }
     return result.toList()
 }

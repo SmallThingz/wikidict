@@ -38,6 +38,35 @@ internal class MediaOwners(media: List<Media>) {
         spans.mapNotNull { file(it)?.let(files::get) }.distinctBy { it.file }
 }
 
+internal fun legacyEmbeddedImageCaptions(entry: Entry): Map<String, Set<String>> {
+    if (entry.media.isEmpty()) return emptyMap()
+    val captions = linkedMapOf<String, MutableSet<String>>()
+    val owners = MediaOwners(entry.media)
+    fun include(spans: List<Span>) {
+        val visible = spans.filter { it.image == null }
+        owners.embedded(visible).filter { it.kind == "image" }.forEach { media ->
+            val caption = textOf(visible.filter { owners.file(it) == media.file })
+            val values = captions.getOrPut(media.file) { linkedSetOf() }
+            if (caption.isNotEmpty()) values.add(caption)
+        }
+    }
+    include(entry.displayTitle); include(entry.preamble)
+    entry.sections.forEach { section -> section.blocks.forEach { block -> block.visitSpanRuns { spans, _ -> include(spans) } } }
+    entry.references.forEach { reference -> reference.visitSpanRuns { spans, _ -> include(spans) } }
+    return captions.mapValues { it.value.toSet() }
+}
+
+/** Unframed descriptions are alt/tooltip, not visible captions. A different
+ * catalogue caption remains visible without repeating the already-inline asset. */
+internal fun distinctTypedImageCaption(entry: Entry, media: Media): Boolean {
+    if (media.kind != "image") return false
+    val caption = media.caption.replace(compiledClassWhitespace, " ").trim().takeIf { it.isNotEmpty() && it != media.file } ?: return false
+    if (caption in entry.legacyImageCaptions[media.file].orEmpty()) return false
+    val occurrences = entry.inlineImages.filter { it.file == media.file }
+    fun normalized(value: String?) = value?.replace(compiledClassWhitespace, " ")?.trim()
+    return occurrences.isNotEmpty() && occurrences.none { normalized(it.alt) == caption || normalized(it.tooltip) == caption }
+}
+
 internal data class PoemParagraph(val start: Int, val end: Int, val indent: Int, val direction: String?)
 private data class PoemMetadata(val indent: Int, val direction: String?)
 
@@ -107,7 +136,7 @@ internal fun sectionHeadingCompanion(section: Section): Block? {
     if (section.title.isBlank() || block.kind != "heading" || block.level != section.level) return null
     if (block.spans.any { it.kind == "line_break" && it.trail.isNotEmpty() }) return null
     val nestedHeading = block.depth > 0 && block.listPath.isNotBlank()
-    if (!nestedHeading && block.spans.none { (it.explanation.isNotEmpty() ||
+    if (!nestedHeading && block.spans.none { it.image != null || (it.explanation.isNotEmpty() ||
             (it.kind in setOf("link", "external_link") && it.target.isNotEmpty()) ||
             (it.kind == "text" && it.text.isNotEmpty() && it.target.isEmpty() &&
                 (it.bold || it.italic || it.code || it.small || it.superscript || it.subscript ||
@@ -195,8 +224,8 @@ fun initiallyFolded(row: ReadingRow, settings: AppSettings): Boolean {
     }
 }
 
-private fun Span.hasPaintedInlineContent(): Boolean = background != null &&
-    ((kind != "line_break" && text.any { it != '\n' }) || trail.any { it != '\n' })
+private fun Span.hasPaintedInlineContent(): Boolean = image != null || (background != null &&
+    ((kind != "line_break" && text.any { it != '\n' }) || trail.any { it != '\n' }))
 
 /** Compact ordinary spacing; compiled poem and literal preformatted spacing is semantic. */
 fun compactSpans(spans: List<Span>): List<Span> {
@@ -234,30 +263,40 @@ internal fun blockIndentDp(block: Block): Int =
     (if (block.kind == "heading") block.depth else block.depth - 1).coerceIn(0, 8) * 7
 
 /** A nested destination is owned by one lazy row and an authored-index path, never pixels. */
-internal data class HeadingDestination(val rowKey: String, val path: String?, val compiledId: Boolean)
+internal data class HeadingDestination(val rowKey: String, val path: String?, val compiledId: Boolean,
+    val referenceIndex: Int? = null)
 private data class HeadingCandidate(val destination: HeadingDestination, val anchor: String, val fallback: String, val label: String)
 internal fun headingDestination(entry: Entry, target: String): HeadingDestination? {
     if (!target.startsWith("#") || target.length == 1) return null
     val headings = mutableListOf<HeadingCandidate>()
-    entry.readingRows.forEach { row ->
-        row.heading?.let { heading -> headings.add(HeadingCandidate(HeadingDestination(row.key, null,
-            heading.anchor.isNotEmpty() || heading.anchorFallback.isNotEmpty()), heading.anchor, heading.anchorFallback, heading.title)) }
+    fun includeContent(rowKey: String, blocks: List<Pair<Block, String>>, referenceIndex: Int? = null) {
         lateinit var includeBlock: (Block, String, Boolean) -> Unit
         fun includeTable(table: Table, path: String) {
             var index = 0
             table.rows.forEach { cells -> cells.forEach { cell ->
                 val cellPath = "$path/cell-${index++}"
-                val blocks = cell.blocks
-                if (blocks != null) blocks.forEachIndexed { blockIndex, block -> includeBlock(block, "$cellPath/block-$blockIndex", true) }
+                val content = cell.blocks
+                if (content != null) content.forEachIndexed { blockIndex, block -> includeBlock(block, "$cellPath/block-$blockIndex", true) }
                 else cell.nestedTable?.let { includeTable(it, "$cellPath/nested") }
             } }
         }
         includeBlock = { block, path, nested ->
-            if (block.kind == "heading") headings.add(HeadingCandidate(HeadingDestination(row.key, path.takeIf { nested },
-                block.anchor.isNotEmpty() || block.anchorFallback.isNotEmpty()), block.anchor, block.anchorFallback, textOf(block.spans)))
+            if (block.kind == "heading") headings.add(HeadingCandidate(HeadingDestination(rowKey, path.takeIf { nested },
+                block.anchor.isNotEmpty() || block.anchorFallback.isNotEmpty(), referenceIndex), block.anchor, block.anchorFallback, textOf(block.spans)))
             block.table?.let { includeTable(it, "$path/table") }
         }
-        row.block?.let { includeBlock(it, row.key, false) }
+        blocks.forEach { (block, path) -> includeBlock(block, path, referenceIndex != null) }
+    }
+    entry.readingRows.forEach { row ->
+        row.heading?.let { heading -> headings.add(HeadingCandidate(HeadingDestination(row.key, null,
+            heading.anchor.isNotEmpty() || heading.anchorFallback.isNotEmpty()), heading.anchor, heading.anchorFallback, heading.title)) }
+        row.block?.let { includeContent(row.key, listOf(it to row.key)) }
+    }
+    entry.references.forEachIndexed { index, reference ->
+        reference.blocks?.let { blocks ->
+            val key = "reference-${reference.number}"
+            includeContent(key, blocks.mapIndexed { blockIndex, block -> block to "$key/block-$blockIndex" }, index)
+        }
     }
     val fragment = target.substring(1)
     fun matches(value: String) = headings.filter { (it.anchor.isNotEmpty() && it.anchor == value) || (it.fallback.isNotEmpty() && it.fallback == value) }

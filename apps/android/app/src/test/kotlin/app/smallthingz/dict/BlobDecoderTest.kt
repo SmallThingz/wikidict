@@ -52,8 +52,32 @@ class BlobDecoderTest {
         "underline" to span.underline, "role" to span.role).also { fields ->
             span.fontScale?.let { fields["font_scale"] = it }
             if (span.fontScaleBasis == FontScaleBasis.NormalBody) fields["font_scale_basis"] = "normal_body"
+            span.image?.let { image -> fields["image"] = linkedMapOf<String, Any?>("file" to image.file).also { values ->
+                image.widthPx?.let { values["width_px"] = it }; image.heightPx?.let { values["height_px"] = it }
+                image.alt?.let { values["alt"] = it }; image.tooltip?.let { values["tooltip"] = it }
+            } }
         }
-    private fun producerTable(table: Table): Map<String, Any?> = linkedMapOf(
+    private fun producerStyleLength(value: StyleLength): Map<String, Any?> = linkedMapOf(
+        "unit" to if (value.unit == StyleLengthUnit.Px) "px" else "em", "value" to value.value)
+    private fun producerStyleEdges(value: StyleEdges): Map<String, Any?> = linkedMapOf(
+        "top" to producerStyleLength(value.top), "right" to producerStyleLength(value.right),
+        "bottom" to producerStyleLength(value.bottom), "left" to producerStyleLength(value.left))
+    private fun producerStyleBorder(value: StyleBorder): Map<String, Any?> = when (value) {
+        StyleBorder.None -> linkedMapOf("none" to emptyMap<String, Any?>())
+        is StyleBorder.Solid -> linkedMapOf("solid" to linkedMapOf("width" to producerStyleLength(value.width), "color" to value.color))
+    }
+    private fun producerCellStyle(value: CellStyle): Map<String, Any?> = linkedMapOf<String, Any?>().also { fields ->
+        value.border?.let { fields["border"] = producerStyleBorder(it) }
+        value.padding?.let { fields["padding"] = producerStyleEdges(it) }
+        value.textAlign?.let { fields["text_align"] = when (it) { CellTextAlign.Left -> "left"; CellTextAlign.Center -> "center"; CellTextAlign.Right -> "right" } }
+    }
+    private fun producerTableStyle(value: TableStyle): Map<String, Any?> = linkedMapOf<String, Any?>().also { fields ->
+        value.background?.let { fields["background"] = it }
+        value.border?.let { fields["border"] = producerStyleBorder(it) }
+        value.collapse?.let { fields["collapse"] = if (it == TableCollapse.Separate) "separate" else "collapse" }
+        value.margins?.let { fields["margins"] = producerStyleEdges(it) }
+    }
+    private fun producerTable(table: Table): Map<String, Any?> = linkedMapOf<String, Any?>(
         "caption" to table.caption.map(::producerSpan),
         "geometry" to table.geometry?.let { geometry -> linkedMapOf(
             "border" to geometry.border, "cell_spacing" to geometry.cellSpacing, "cell_padding" to geometry.cellPadding,
@@ -61,7 +85,10 @@ class BlobDecoderTest {
         "rows" to table.rows.map { row -> linkedMapOf("cells" to row.map { cell -> linkedMapOf<String, Any?>(
             "spans" to cell.spans.map(::producerSpan), "header" to cell.header, "colspan" to cell.colspan,
             "rowspan" to cell.rowspan, "background" to cell.background, "nested_table" to cell.nestedTable?.let(::producerTable))
-                .also { fields -> cell.blocks?.let { blocks -> fields["blocks"] = blocks.map(::producerBlock) } } }) })
+                .also { fields ->
+                    cell.blocks?.let { blocks -> fields["blocks"] = blocks.map(::producerBlock) }
+                    cell.style?.let { fields["style"] = producerCellStyle(it) }
+                } }) }).also { fields -> table.style?.let { fields["style"] = producerTableStyle(it) } }
     private fun producerBlock(block: Block): Map<String, Any?> = linkedMapOf(
         "kind" to block.kind, "depth" to block.depth, "spans" to block.spans.map(::producerSpan),
         "feature" to block.feature?.let { linkedMapOf("kind" to it.kind, "language" to it.language,
@@ -75,20 +102,22 @@ class BlobDecoderTest {
             "anchor" to it.anchor, "anchor_fallback" to it.anchorFallback, "blocks" to it.blocks.map(::producerBlock)) },
         "references" to entry.references.map { linkedMapOf<String, Any?>("number" to it.number, "group_number" to it.groupNumber,
             "group" to it.group, "spans" to it.spans.map(::producerSpan)).also { fields ->
+                it.blocks?.let { blocks -> fields["blocks"] = blocks.map(::producerBlock) }
                 if (it.kind == ReferenceKind.Fragment) fields["kind"] = "fragment"
             } },
         "media" to entry.media.map { linkedMapOf("file" to it.file, "kind" to it.kind, "caption" to it.caption) })
 
     /** Configured producer case is a separate required run of the existing conformance target. */
     private fun requiredProducerConformance(version: Char) {
-        require(version in "789B")
+        require(version in "789BC")
         val prefix = "WIKBLB_DPR$version"
         fun name(suffix: String) = "${prefix}_$suffix"
         val fixtureTitle = when (version) {
             '7' -> "geacen"
             '8' -> "cell-heading-regression"
             '9' -> "DPR9 reference fragments"
-            else -> "DPRB font scale basis"
+            'B' -> "DPRB font scale basis"
+            else -> "נספח:שיבושי הגייה/תבנית"
         }
         require(producerEnvironment(name("REQUIRED")) == "1")
         val blob = producerInput(name("BLOB"))
@@ -99,7 +128,7 @@ class BlobDecoderTest {
         producerInput(name("SOURCE_FACTS"))
         producerInput(name("CASE"))
         val wantedTitle = titleFile.readBytes().decodeToString(throwOnInvalidSequence = true)
-        require(wantedTitle == fixtureTitle)
+        require(wantedTitle == fixtureTitle || version == 'C' && wantedTitle == "skakavica")
         var selected: Entry? = null
         var selectedOffset = -1L
         var selectedLength = -1
@@ -160,7 +189,7 @@ class BlobDecoderTest {
                     addAll(block.spans)
                     block.table?.visitSpanRuns { values, _ -> addAll(values) }
                 } }
-                entry.references.forEach { addAll(it.spans) }
+                entry.references.forEach { reference -> reference.visitSpanRuns { spans, _ -> addAll(spans) } }
             }
             val headingSpans = entry.sections.flatMap { section ->
                 section.blocks.filter { it.kind == "heading" }.flatMap { it.spans }
@@ -169,6 +198,21 @@ class BlobDecoderTest {
             require(headingSpans.any { it.fontScale == 1f && it.fontScaleBasis == FontScaleBasis.NormalBody })
             require(headingSpans.any { it.fontScale == 1.25f && it.fontScaleBasis == FontScaleBasis.Context })
             require(spans.any { it.fontScale == 0f })
+        }
+        if (version == 'C') {
+            val entry = checkNotNull(selected)
+            if (wantedTitle == "skakavica") {
+                require(entry.languageCode == "hr")
+                val reference = entry.references.single()
+                require(reference.spans.isEmpty() && reference.blocks != null)
+                val table = checkNotNull(reference.blocks).mapNotNull { it.table }.single()
+                require(table.rows.size == 2 && table.rows.all { it.size == 5 } && table.style != null)
+            } else {
+                val images = entry.inlineImages
+                require(images.size == 3)
+                require(images.map { it.file }.toSet() == setOf("Vraagteken-2.svg", "X mark.svg", "Yes check.svg"))
+                require(images.all { it.widthPx == 15L && it.heightPx == null })
+            }
         }
         val output = File(producerEnvironment(name("ACTUAL"))).canonicalFile
         require(output.parentFile.isDirectory && output.createNewFile()) { "Use a fresh owned output path" }
@@ -212,7 +256,7 @@ class BlobDecoderTest {
     }
 
     @Test fun everyRealCorpusRecordDecodesDirectly() {
-        val requiredVersions = "789B".filter { System.getenv("WIKBLB_DPR${it}_REQUIRED") != null }
+        val requiredVersions = "789BC".filter { System.getenv("WIKBLB_DPR${it}_REQUIRED") != null }
         if (requiredVersions.isNotEmpty()) {
             require(requiredVersions.length == 1) { "Select exactly one required producer case" }
             requiredProducerConformance(requiredVersions.single())

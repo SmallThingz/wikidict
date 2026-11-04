@@ -203,6 +203,102 @@ internal fun assertCompletePlainTextLayout(layout: androidx.compose.ui.text.Text
 }
 
 class RendererDeviceTest {
+    @Test fun typedInlineImagesUseOneCanonicalAssetAndKeepZeroFontInkAndCompiledActionsWithControlledPng(): Unit = runBlocking {
+        // Controlled PNG/UI/resource test only, not actual HE SVG availability.
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            java.io.File(context.cacheDir, "typed-inline-" + java.util.UUID.randomUUID()).apply { mkdirs() }
+        }
+        val png = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val bitmap = android.graphics.Bitmap.createBitmap(100, 300, android.graphics.Bitmap.Config.ARGB_8888)
+            try {
+                bitmap.eraseColor(android.graphics.Color.RED)
+                java.io.ByteArrayOutputStream().also { assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }.toByteArray()
+            } finally { bitmap.recycle() }
+        }
+        val metadataCalls = java.util.concurrent.atomic.AtomicInteger()
+        val downloads = java.util.concurrent.atomic.AtomicInteger()
+        val queries = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val opened = mutableListOf<String>()
+        val links = mutableListOf<String>()
+        val metadata = """{"query":{"pages":[{"imageinfo":[{"url":"https://fixture.invalid/controlled.png","descriptionurl":"https://commons.wikimedia.org/wiki/File:Different_asset_description","width":100,"height":300,"mime":"image/png"}]}]}}""".toByteArray()
+        val cache = MediaCache(context, metadata = { query -> metadataCalls.incrementAndGet(); queries += query; metadata },
+            openMedia = { downloads.incrementAndGet(); java.io.ByteArrayInputStream(png) }, directory = directory)
+        val file = "File:Controlled.png"
+        val first = Span("link", "", "File:File:Controlled.png", fontScale = 0f, small = true, image = InlineImage(file, 15))
+        val second = Span("link", "", "Target", fontScale = 0f, image = InlineImage(file, 30, alt = "Body alternative", tooltip = "Body tooltip"))
+        val heading = Block("heading", 0, listOf(Span("text", "Heading "), first), level = 3, anchor = "Heading")
+        val legacyCatalogue = Span("link", "Legacy caption", first.target, classes = "wikidict-media")
+        val entry = Entry("Inline image control", emptyList(), "language", "English", "en", listOf(Section(3, "Heading",
+            listOf(heading, Block("paragraph", 0, listOf(Span("text", "Before "), second, Span("text", " After"))),
+                Block("paragraph", 0, listOf(legacyCatalogue))))), emptyList(),
+            media = listOf(Media(file, "image", "Distinct catalogue caption")), edition = "hewiktionary-20261001")
+        val settings = mutableStateOf(AppSettings(allowImages = false, mediaCacheMb = 0,
+            collapseOtherSections = false, collapseDetails = false))
+        var displayDensity = 1f
+        val images = SemanticsMatcher("Typed inline image state") { node ->
+            node.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Role) == androidx.compose.ui.semantics.Role.Image &&
+                node.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.StateDescription) != null
+        }
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                DictTheme("light") {
+                    val density = LocalDensity.current
+                    SideEffect { displayDensity = density.density }
+                    CompositionLocalProvider(LocalInlineImageCache provides cache,
+                        androidx.compose.ui.platform.LocalUriHandler provides object : androidx.compose.ui.platform.UriHandler {
+                            override fun openUri(uri: String) { opened += uri }
+                        }) { EntryView(entry, false, {}, onLink = { links += it }, settings = settings.value) }
+                }
+            } }
+            compose.waitUntil(15000) { compose.onAllNodes(images, useUnmergedTree = true).fetchSemanticsNodes(atLeastOneRootRequired = false).size == 2 }
+            assertEquals(0, metadataCalls.get()); assertEquals(0, downloads.get())
+            compose.onNodeWithText("Body alternative").assertIsDisplayed()
+            assertTrue(compose.onNodeWithText("Body alternative").fetchSemanticsNode().boundsInRoot.width > 30f * displayDensity)
+            compose.onAllNodes(images, useUnmergedTree = true)[0].performClick()
+            compose.runOnIdle { assertEquals("https://he.wiktionary.org/wiki/File%3AFile%3AControlled.png", opened.single()); settings.value = settings.value.copy(allowImages = true) }
+            compose.waitUntil(15000) {
+                val nodes = compose.onAllNodes(images, useUnmergedTree = true).fetchSemanticsNodes(atLeastOneRootRequired = false)
+                nodes.size == 2 && nodes.all { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.StateDescription) == "" }
+            }
+            compose.waitUntil(15000) { kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) { directory.listFiles().orEmpty().isEmpty() } }
+            assertEquals(1, metadataCalls.get()); assertEquals(1, downloads.get())
+            assertTrue(queries.single().contains("titles=File%3AFile%3AControlled.png"))
+            compose.onAllNodesWithText("Body alternative").assertCountEquals(0)
+            val firstNode = compose.onAllNodes(images, useUnmergedTree = true)[0]
+            assertNull(firstNode.fetchSemanticsNode().config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription))
+            assertEquals(15f * displayDensity, firstNode.fetchSemanticsNode().boundsInRoot.width, 1f)
+            val captured = firstNode.captureToImage().asAndroidBitmap()
+            try {
+                var left = captured.width; var top = captured.height; var right = -1; var bottom = -1
+                for (y in 0 until captured.height) for (x in 0 until captured.width) {
+                    val pixel = captured.getPixel(x, y)
+                    if (android.graphics.Color.red(pixel) > 240 && android.graphics.Color.green(pixel) < 15 && android.graphics.Color.blue(pixel) < 15) {
+                        left = minOf(left, x); top = minOf(top, y); right = maxOf(right, x); bottom = maxOf(bottom, y)
+                    }
+                }
+                assertTrue("Zero-font image must contain actual visible bitmap ink", right >= left && bottom >= top)
+                assertEquals(15f * displayDensity, (right - left + 1).toFloat(), 2f)
+                assertEquals(45f * displayDensity, (bottom - top + 1).toFloat(), 2f)
+            } finally { captured.recycle() }
+            firstNode.performClick()
+            compose.runOnIdle { assertEquals(opened[0], opened[1]); assertTrue(links.isEmpty()) }
+            compose.onAllNodes(images, useUnmergedTree = true)[1].performClick()
+            compose.runOnIdle { assertEquals(listOf("Target"), links) }
+            compose.onAllNodes(images, useUnmergedTree = true)[1].performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus) { assertTrue(it()) }
+            compose.onAllNodes(images, useUnmergedTree = true)[1].performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Enter) }
+            compose.runOnIdle { assertEquals(listOf("Target", "Target"), links); assertEquals(1, downloads.get()) }
+            compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText("Distinct catalogue caption"))
+            compose.onNodeWithText("Distinct catalogue caption").assertIsDisplayed()
+            compose.onNodeWithTag("entry-scroll").performScrollToIndex(0)
+            compose.waitForIdle()
+            assertEquals(1, metadataCalls.get()); assertEquals(1, downloads.get())
+        } finally {
+            compose.activityRule.scenario.onActivity { it.setContent {} }
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { directory.deleteRecursively() }
+        }
+    }
+
     @Test fun mediaStopReplayPermissionAndDisposalPreserveCurrentRequestAndOwnedFiles(): Unit = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val directory = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {

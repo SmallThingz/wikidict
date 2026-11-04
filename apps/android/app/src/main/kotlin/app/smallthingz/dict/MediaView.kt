@@ -27,7 +27,19 @@ import java.io.File
 import java.net.URLEncoder
 import java.util.Properties
 
-data class MediaFile(val file: File,val source:String,val credit:String,val ephemeral:Boolean=false)
+data class MediaFile(val file: File,val source:String,val credit:String,val ephemeral:Boolean=false,
+    val originalWidth: Long? = null, val originalHeight: Long? = null, val originalMime: String? = null)
+internal fun mediaRequestTitle(media: Media, canonicalFile: Boolean): String =
+    "File:" + if (canonicalFile) media.file else media.file.removePrefix("File:")
+internal data class DecodedMediaBitmap(val bitmap: android.graphics.Bitmap, val width: Int, val height: Int)
+internal suspend fun decodeMediaBitmap(file: File, maximumSide: Int = 1600): DecodedMediaBitmap = withContext(Dispatchers.IO) {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(file.absolutePath, bounds)
+    require(bounds.outWidth > 0 && bounds.outHeight > 0) { "Unsupported image" }
+    val side = maximumSide.coerceIn(1, 1600)
+    val options = BitmapFactory.Options().apply { inSampleSize = maxOf(1, maxOf(bounds.outWidth, bounds.outHeight) / side) }
+    DecodedMediaBitmap(requireNotNull(BitmapFactory.decodeFile(file.absolutePath, options)) { "Unsupported image" }, bounds.outWidth, bounds.outHeight)
+}
 class MediaCache internal constructor(context:Context,
     private val metadata:(String)->ByteArray={Network.read(it,2*1024*1024)},
     private val openMedia:(String)->java.io.InputStream=Network::open,
@@ -41,12 +53,12 @@ class MediaCache internal constructor(context:Context,
     suspend fun clear()=withContext(Dispatchers.IO){lock.withLock{cacheDirectory.listFiles()?.forEach{it.delete()};Unit}}
     suspend fun trim(mb:Int)=withContext(Dispatchers.IO){lock.withLock{trimLocked(mb.toLong()*1024*1024)}}
     private fun trimLocked(max:Long,keep:File?=null){val files=cacheDirectory.listFiles().orEmpty().filter{it.extension=="bin"};var total=files.sumOf{it.length()};for(f in files.sortedBy{it.lastModified()}){if(total<=max)break;if(f==keep)continue;total-=f.length();f.delete();File(cacheDirectory,f.nameWithoutExtension+".meta").delete()}}
-    suspend fun get(media:Media,mb:Int,edition:String=""):MediaFile=acquire(media,mb,edition,false) {}
-    internal suspend fun <T> withFile(media:Media,mb:Int,edition:String="",forceRefresh:Boolean=false,action:suspend (MediaFile)->T):T {
+    suspend fun get(media:Media,mb:Int,edition:String=""):MediaFile=acquire(media,mb,edition,false,false) {}
+    internal suspend fun <T> withFile(media:Media,mb:Int,edition:String="",forceRefresh:Boolean=false,canonicalFile:Boolean=false,action:suspend (MediaFile)->T):T {
         var owned:MediaFile?=null
         var failure:Throwable?=null
         try {
-            val loaded=acquire(media,mb,edition,forceRefresh) { owned=it }
+            val loaded=acquire(media,mb,edition,forceRefresh,canonicalFile) { owned=it }
             return action(loaded)
         } catch(e:Throwable) { failure=e;throw e }
         finally {
@@ -57,33 +69,42 @@ class MediaCache internal constructor(context:Context,
             } } catch(cleanup:Throwable) { if(failure!=null) failure.addSuppressed(cleanup) else throw cleanup }
         }
     }
-    private suspend fun acquire(media:Media,mb:Int,edition:String,forceRefresh:Boolean,acquired:(MediaFile)->Unit):MediaFile=withContext(Dispatchers.IO){lock.withLock{
-        val key=mediaKey(media,edition)
+    private suspend fun acquire(media:Media,mb:Int,edition:String,forceRefresh:Boolean,canonicalFile:Boolean,acquired:(MediaFile)->Unit):MediaFile=withContext(Dispatchers.IO){lock.withLock{
+        val key=mediaKey(media,edition) + if (canonicalFile) "-canonical" else ""
         val file=File(cacheDirectory,"$key.bin");val meta=File(cacheDirectory,"$key.meta")
-        if(!forceRefresh&&file.isFile&&meta.isFile){file.setLastModified(System.currentTimeMillis());val props=Properties().apply{meta.inputStream().use(::load)};return@withLock MediaFile(file,props.getProperty("source"),props.getProperty("credit","")).also(acquired)}
+        if(!forceRefresh&&file.isFile&&meta.isFile){file.setLastModified(System.currentTimeMillis());val props=Properties().apply{meta.inputStream().use(::load)}
+            val width=props.getProperty("width")?.toLongOrNull()?.takeIf{it>0}
+            val height=props.getProperty("height")?.toLongOrNull()?.takeIf{it>0}
+            if(!canonicalFile||(width!=null&&height!=null))return@withLock MediaFile(file,props.getProperty("source"),props.getProperty("credit",""),originalWidth=width,originalHeight=height,originalMime=props.getProperty("mime")).also(acquired)}
         var info:JSONObject?=null
         var resolvedHost = "commons.wikimedia.org"
         for(host in mediaHosts(edition)) {
-            val title=URLEncoder.encode("File:"+media.file.removePrefix("File:"),"UTF-8")
-            val response=JSONObject(metadata("https://$host/w/api.php?action=query&format=json&formatversion=2&prop=imageinfo&iiprop=url%7Cextmetadata&iiurlwidth=960&titles=$title").decodeToString())
+            val title=URLEncoder.encode(mediaRequestTitle(media,canonicalFile),"UTF-8")
+            val response=JSONObject(metadata("https://$host/w/api.php?action=query&format=json&formatversion=2&prop=imageinfo&iiprop=url%7Csize%7Cmime%7Cextmetadata&iiurlwidth=960&titles=$title").decodeToString())
             info=response.getJSONObject("query").getJSONArray("pages").getJSONObject(0).optJSONArray("imageinfo")?.optJSONObject(0)
             if(info!=null){resolvedHost=host;break}
         }
         val data=info?:error("Media is unavailable")
         val url=if(media.kind=="image")data.optString("thumburl").ifBlank{data.getString("url")}else data.getString("url")
         val ext=data.optJSONObject("extmetadata")
+        val originalWidth=data.optLong("width").takeIf{it>0}
+        val originalHeight=data.optLong("height").takeIf{it>0}
+        val originalMime=data.optString("mime").takeIf{it.isNotBlank()}
         val artist=ext?.optJSONObject("Artist")?.optString("value").orEmpty().replace(Regex("<[^>]*>"),"").take(200)
         val licence=ext?.optJSONObject("LicenseShortName")?.optString("value").orEmpty()
-        val source=data.optString("descriptionurl").ifBlank{"https://$resolvedHost/wiki/"+URLEncoder.encode("File:"+media.file.removePrefix("File:"),"UTF-8").replace("+","%20")}
+        val source=data.optString("descriptionurl").ifBlank{"https://$resolvedHost/wiki/"+URLEncoder.encode(mediaRequestTitle(media,canonicalFile),"UTF-8").replace("+","%20")}
         val temp=File.createTempFile("$key-",".part",cacheDirectory)
         try {
             openMedia(url).use{input->temp.outputStream().use{out->val b=ByteArray(64*1024);var total=0L;while(true){currentCoroutineContext().ensureActive();val n=input.read(b);if(n<0)break;total+=n;require(total<=50L*1024*1024){"Media file is too large"};out.write(b,0,n)}}}
             val credit=listOf(artist,licence).filter{it.isNotBlank()}.joinToString(" · ")
-            if(mb==0||temp.length()>mb.toLong()*1024*1024) return@withLock MediaFile(temp,source,credit,true).also(acquired)
+            if(mb==0||temp.length()>mb.toLong()*1024*1024) return@withLock MediaFile(temp,source,credit,true,originalWidth,originalHeight,originalMime).also(acquired)
             trimLocked(mb.toLong()*1024*1024-temp.length())
             require(temp.renameTo(file))
-            Properties().apply{setProperty("source",source);setProperty("credit",credit)}.let{p->meta.outputStream().use{p.store(it,null)}}
-            MediaFile(file,source,credit).also(acquired)
+            Properties().apply{setProperty("source",source);setProperty("credit",credit)
+                originalWidth?.let{setProperty("width",it.toString())};originalHeight?.let{setProperty("height",it.toString())}
+                originalMime?.let{setProperty("mime",it)}
+            }.let{p->meta.outputStream().use{p.store(it,null)}}
+            MediaFile(file,source,credit,originalWidth=originalWidth,originalHeight=originalHeight,originalMime=originalMime).also(acquired)
         } catch(e:Exception){temp.delete();throw e}
     }}
 }
@@ -119,7 +140,7 @@ object MediaPlayback {
     }
 }
 @Composable
-fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition:String="",showCaption:Boolean=true,cache:MediaCache=MediaCache.get(LocalContext.current)) {
+fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition:String="",showCaption:Boolean=true,cache:MediaCache=LocalInlineImageCache.current ?: MediaCache.get(LocalContext.current),showImage:Boolean=true) {
     val scope=rememberCoroutineScope();val uri=LocalUriHandler.current
     val key=remember(media.kind,media.file,edition){mediaKey(media,edition)}
     var resource by remember(key){mutableStateOf<MediaFile?>(null)}
@@ -131,24 +152,35 @@ fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition
     var audioJob by remember(key){mutableStateOf<Job?>(null)}
     var imageRequest by remember(key){mutableIntStateOf(0)}
     val allowed=if(media.kind=="image")settings.allowImages else settings.allowAudio
-    LaunchedEffect(key,allowed,settings.mediaCacheMb,retry){
+    val sharedOwner=LocalInlineImageOwner.current?.takeIf{media.kind=="image"&&it.owns(media.file)}
+    val sharedState=sharedOwner?.states?.get(media.file)
+    val sharedReady=sharedState as? InlineImageAssetState.Ready
+    LaunchedEffect(sharedOwner,media.file,showImage){if(showImage)sharedOwner?.ensure(media.file)}
+    LaunchedEffect(key,allowed,settings.mediaCacheMb,retry,sharedOwner,showImage){
+        if(media.kind=="image"&&!showImage){busy=false;return@LaunchedEffect}
+        if(sharedOwner!=null){audioJob?.cancel();busy=false;return@LaunchedEffect}
         val request=++imageRequest
         // A retry must bypass bytes that already failed image decoding.
         val forceRefresh=retry!=attemptedRetry
         attemptedRetry=retry
         if(!allowed){audioJob?.cancel();busy=false;return@LaunchedEffect}
         if(media.kind=="image"&&allowed){busy=true;error=null;try{cache.withFile(media,settings.mediaCacheMb,edition,forceRefresh=forceRefresh){loaded->resource=loaded
-            bitmap=withContext(Dispatchers.IO){val bounds=BitmapFactory.Options().apply{inJustDecodeBounds=true};BitmapFactory.decodeFile(loaded.file.absolutePath,bounds);require(bounds.outWidth>0&&bounds.outHeight>0){"Unsupported image"};val options=BitmapFactory.Options().apply{inSampleSize= maxOf(1,maxOf(bounds.outWidth,bounds.outHeight)/1600)};requireNotNull(BitmapFactory.decodeFile(loaded.file.absolutePath,options)){"Unsupported image"}}
+            bitmap=decodeMediaBitmap(loaded.file).bitmap
         }}catch(e:CancellationException){throw e}catch(e:Exception){if(imageRequest==request)error=e.message}finally{if(imageRequest==request)busy=false}}
     }
     DisposableEffect(key){onDispose{audioJob?.cancel()}}
+    val shownBitmap=if(sharedOwner==null)bitmap else sharedReady?.decoded?.bitmap
+    val shownError=if(sharedOwner==null)error else if(sharedState==InlineImageAssetState.Failed)"Image unavailable" else null
+    val shownBusy=if(sharedOwner==null)busy else allowed&&(sharedState==null||sharedState==InlineImageAssetState.Loading)
+    val shownSource=if(sharedOwner==null)resource?.source else sharedReady?.source
+    val shownCredit=if(sharedOwner==null)resource?.credit else sharedReady?.credit
     Column(Modifier.fillMaxWidth().animateContentSize()) {
-        if(media.kind=="image"&&allowed&&(error==null||bitmap!=null)) Box(Modifier.fillMaxWidth().padding(top=12.dp).height(220.dp),contentAlignment=Alignment.Center) {
-            bitmap?.let { Image(it.asImageBitmap(),media.caption.ifBlank{media.file},Modifier.fillMaxSize()) }
-            if(bitmap==null && busy) CircularProgressIndicator(Modifier.size(24.dp),strokeWidth=2.dp)
+        if(media.kind=="image"&&showImage&&allowed&&(shownError==null||shownBitmap!=null)) Box(Modifier.fillMaxWidth().padding(top=12.dp).height(220.dp),contentAlignment=Alignment.Center) {
+            shownBitmap?.let { Image(it.asImageBitmap(),media.caption.ifBlank{media.file},Modifier.fillMaxSize()) }
+            if(shownBitmap==null && shownBusy) CircularProgressIndicator(Modifier.size(24.dp),strokeWidth=2.dp)
         }
         Row(verticalAlignment=Alignment.CenterVertically) {
-            if(media.kind!="image" || !allowed || error!=null) IconButton(modifier=if(busy)Modifier.semantics{contentDescription=if(media.kind=="image")"Loading image" else "Loading pronunciation"}else Modifier,enabled=allowed&&!busy,onClick={
+            if(media.kind!="image" || (showImage&&(!allowed || shownError!=null))) IconButton(modifier=if(shownBusy)Modifier.semantics{contentDescription=if(media.kind=="image")"Loading image" else "Loading pronunciation"}else Modifier,enabled=allowed&&!shownBusy,onClick={
                 if(media.kind=="audio") { if(MediaPlayback.playing==key)MediaPlayback.stop() else {
                     val request=MediaPlayback.begin()
                     audioJob?.cancel()
@@ -164,15 +196,16 @@ fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition
                     }}catch(e:CancellationException){throw e}catch(e:Exception){if(audioJob===ownedJob)error="Pronunciation could not be played."}finally{MediaPlayback.cancel(request);if(audioJob===ownedJob){audioJob=null;busy=false}}}
                     audioJob=nextJob;nextJob.start()
                 } }
+                else if(sharedOwner!=null){if(shownError!=null||shownSource==null)sharedOwner.retry(media.file)else uri.openUri(shownSource)}
                 else if(error!=null || resource==null) retry++ else resource?.source?.let{uri.openUri(it)}
-            }) { if(busy) CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp) else Icon(if(media.kind=="image")Icons.Outlined.Image else if(MediaPlayback.playing==key)Icons.Outlined.Stop else Icons.Outlined.PlayArrow,if(media.kind=="image"){if(error!=null) "Retry image" else "Image source"} else if(MediaPlayback.playing==key) "Stop pronunciation" else "Play pronunciation") }
+            }) { if(shownBusy) CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp) else Icon(if(media.kind=="image")Icons.Outlined.Image else if(MediaPlayback.playing==key)Icons.Outlined.Stop else Icons.Outlined.PlayArrow,if(media.kind=="image"){if(shownError!=null) "Retry image" else "Image source"} else if(MediaPlayback.playing==key) "Stop pronunciation" else "Play pronunciation") }
             Column(Modifier.weight(1f)) {
                 val caption=media.caption.takeUnless{it==media.file}.orEmpty()
                 if(showCaption && (caption.isNotBlank() || showFileName)) Text(caption.ifBlank{media.file.substringBeforeLast('.').replace('_',' ')},style=MaterialTheme.typography.bodyMedium)
-                error?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)}
-                resource?.credit?.takeIf{it.isNotBlank()}?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                shownError?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)}
+                shownCredit?.takeIf{it.isNotBlank()}?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
             }
-            resource?.let{r->IconButton(onClick={uri.openUri(r.source)}){Icon(Icons.Outlined.OpenInNew,"Source and licence",Modifier.size(17.dp))}}
+            shownSource?.let{source->IconButton(onClick={uri.openUri(source)}){Icon(Icons.Outlined.OpenInNew,"Source and licence",Modifier.size(17.dp))}}
         }
     }
 }
