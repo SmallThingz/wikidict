@@ -34,19 +34,25 @@ class BlobDecoderTest {
             append('"')
         }
         is Boolean, is Int, is Long -> value.toString()
+        // Preserve the exact decoded f32 numeric value in the JSON graph. The
+        // shortest Float spelling would round when another decoder reads Double.
+        is Float -> { require(value.isFinite()); value.toDouble().toString() }
         is Map<*, *> -> value.entries.joinToString(",", "{", "}") { (key, item) ->
             require(key is String); producerJson(key) + ":" + producerJson(item)
         }
         is Iterable<*> -> value.joinToString(",", "[", "]") { producerJson(it) }
         else -> error("Unsupported conformance projection value")
     }
-    private fun producerSpan(span: Span): Map<String, Any?> = linkedMapOf(
+    private fun producerSpan(span: Span): Map<String, Any?> = linkedMapOf<String, Any?>(
         "kind" to span.kind, "text" to span.text, "target" to span.target, "trail" to span.trail,
         "language" to span.language, "classes" to span.classes, "direction" to span.direction,
         "explanation" to span.explanation, "foreground" to span.foreground, "background" to span.background,
         "bold" to span.bold, "italic" to span.italic, "code" to span.code, "small" to span.small,
         "superscript" to span.superscript, "subscript" to span.subscript, "strike" to span.strike,
-        "underline" to span.underline, "role" to span.role)
+        "underline" to span.underline, "role" to span.role).also { fields ->
+            span.fontScale?.let { fields["font_scale"] = it }
+            if (span.fontScaleBasis == FontScaleBasis.NormalBody) fields["font_scale_basis"] = "normal_body"
+        }
     private fun producerTable(table: Table): Map<String, Any?> = linkedMapOf(
         "caption" to table.caption.map(::producerSpan),
         "geometry" to table.geometry?.let { geometry -> linkedMapOf(
@@ -74,14 +80,15 @@ class BlobDecoderTest {
         "media" to entry.media.map { linkedMapOf("file" to it.file, "kind" to it.kind, "caption" to it.caption) })
 
     /** Configured producer case is a separate required run of the existing conformance target. */
-    private fun requiredProducerConformance(version: Int) {
-        require(version in 7..9)
+    private fun requiredProducerConformance(version: Char) {
+        require(version in "789B")
         val prefix = "WIKBLB_DPR$version"
         fun name(suffix: String) = "${prefix}_$suffix"
         val fixtureTitle = when (version) {
-            7 -> "geacen"
-            8 -> "cell-heading-regression"
-            else -> "DPR9 reference fragments"
+            '7' -> "geacen"
+            '8' -> "cell-heading-regression"
+            '9' -> "DPR9 reference fragments"
+            else -> "DPRB font scale basis"
         }
         require(producerEnvironment(name("REQUIRED")) == "1")
         val blob = producerInput(name("BLOB"))
@@ -137,7 +144,7 @@ class BlobDecoderTest {
             }
             require(recordCount == 1 && selected != null) { "Genuine Writer fixture must contain its one selected record" }
         }
-        if (version == 9) {
+        if (version == '9') {
             // This required Writer case exercises fragment-first footer order; the
             // general decoder separately accepts otherwise valid all-note DPR9.
             val items = checkNotNull(selected).references
@@ -145,10 +152,28 @@ class BlobDecoderTest {
             require(items.map { it.number } == listOf(2L, 1L, 3L))
             require(items.map { it.groupNumber } == listOf(null, 1L, 2L))
         }
+        if (version == 'B') {
+            val entry = checkNotNull(selected)
+            val spans = buildList {
+                addAll(entry.displayTitle); addAll(entry.preamble)
+                entry.sections.forEach { section -> section.blocks.forEach { block ->
+                    addAll(block.spans)
+                    block.table?.visitSpanRuns { values, _ -> addAll(values) }
+                } }
+                entry.references.forEach { addAll(it.spans) }
+            }
+            val headingSpans = entry.sections.flatMap { section ->
+                section.blocks.filter { it.kind == "heading" }.flatMap { it.spans }
+            }
+            require(entry.displayTitle.any { it.fontScale == 1.25f && it.fontScaleBasis == FontScaleBasis.Context })
+            require(headingSpans.any { it.fontScale == 1f && it.fontScaleBasis == FontScaleBasis.NormalBody })
+            require(headingSpans.any { it.fontScale == 1.25f && it.fontScaleBasis == FontScaleBasis.Context })
+            require(spans.any { it.fontScale == 0f })
+        }
         val output = File(producerEnvironment(name("ACTUAL"))).canonicalFile
         require(output.parentFile.isDirectory && output.createNewFile()) { "Use a fresh owned output path" }
         output.writeText(producerJson(linkedMapOf(
-            "schema" to "wikidict.android.dpr$version-producer-actual.v1",
+            "schema" to "wikidict.android.dpr${version.lowercaseChar()}-producer-actual.v1",
             "case_sha256" to producerEnvironment(name("CASE_SHA256")),
             "blob_sha256" to producerEnvironment(name("BLOB_SHA256")),
             "header_sha256" to producerDigest(headerFile.readBytes()),
@@ -187,9 +212,9 @@ class BlobDecoderTest {
     }
 
     @Test fun everyRealCorpusRecordDecodesDirectly() {
-        val requiredVersions = listOf(7, 8, 9).filter { System.getenv("WIKBLB_DPR${it}_REQUIRED") != null }
+        val requiredVersions = "789B".filter { System.getenv("WIKBLB_DPR${it}_REQUIRED") != null }
         if (requiredVersions.isNotEmpty()) {
-            require(requiredVersions.size == 1) { "Select exactly one required producer case" }
+            require(requiredVersions.length == 1) { "Select exactly one required producer case" }
             requiredProducerConformance(requiredVersions.single())
             return
         }

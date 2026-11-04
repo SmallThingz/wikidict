@@ -52,7 +52,9 @@ internal fun egyptianTextRuns(spans: List<Span>): List<EgyptianTextRun> {
         val isolated = span.direction in listOf("rtl", "ltr", "auto")
         if (isolated) offset++
         val text = if (span.kind == "line_break") "\n" else span.text
-        if (!span.code && span.classes.split(Regex("\\s+")).any { it == "Egyp" }) {
+        // Zero remains original annotated text, never a positive-size shaping
+        // request or an error placeholder. Its Compose layout needs qualification.
+        if (!span.code && span.fontScale != 0f && span.classes.split(Regex("\\s+")).any { it == "Egyp" }) {
             var at = 0
             while (at < text.length) {
                 val point = text.codePointAt(at)

@@ -58,14 +58,17 @@ import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 
 private val EgyptianFontFamily = FontFamily(Font(R.font.egyptian_hieroglyphs))
 private val spanClassWhitespace = Regex("\\s+")
 
+private data class TextCacheKey(val weight: FontWeight?, val direction: LayoutDirection,
+    val background: String?, val normalBodySize: TextUnit, val contextSize: TextUnit, val density: Density)
 private class TextCache(val link: State<(String) -> Unit>) {
-    val values = java.util.IdentityHashMap<List<Span>, MutableMap<Triple<FontWeight?, LayoutDirection, String?>, AnnotatedString>>()
+    val values = java.util.IdentityHashMap<List<Span>, MutableMap<TextCacheKey, AnnotatedString>>()
 }
 private val LocalEntryMedia = staticCompositionLocalOf<List<Media>> { emptyList() }
 private val LocalEntryEdition = staticCompositionLocalOf { "" }
@@ -511,6 +514,20 @@ private fun TableGridView(table: Table, onLink: (String) -> Unit, path: String, 
     }
 }
 
+/** Keep ordinary context em sizing; convert a capped result back through the
+ * same density/font converter rather than treating 10000 pixels as 10000 sp.
+ * All current StyledText callers supply Material typography with an sp size.
+ */
+internal fun renderedSpanFontSize(span: Span, contextSize: TextUnit, normalBodySize: TextUnit, density: Density): TextUnit {
+    require(contextSize.isSp && normalBodySize.isSp)
+    val contextPixels = with(density) { contextSize.toPx() }
+    val bodyPixels = with(density) { normalBodySize.toPx() }
+    val pixels = spanFontPixels(span, contextPixels, bodyPixels)
+    if (span.fontScaleBasis == FontScaleBasis.NormalBody || pixels == MaxComputedFontPixels)
+        return with(density) { pixels.toSp() }
+    return spanFontScale(span).em
+}
+
 /** Use the same explicit ownership for inline controls and the media footer. */
 private fun inlineMediaFiles(entry: Entry): Set<String> = buildSet {
     val owners = MediaOwners(entry.media)
@@ -538,6 +555,9 @@ private fun inlineMediaFiles(entry: Entry): Set<String> = buildSet {
 @Composable
 internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null, style: TextStyle = MaterialTheme.typography.bodyLarge, onLink: (String) -> Unit = {}, preserveWhitespace: Boolean = false) {
     val effectiveWeight = weight ?: LocalCellWeight.current
+    val normalBodySize = MaterialTheme.typography.bodyLarge.fontSize
+    val contextSize = LocalTextStyle.current.merge(style).fontSize
+    val textDensity = LocalDensity.current
     val spans = remember(source, preserveWhitespace) { if (preserveWhitespace) source else compactSpans(source) }
     val availableMedia = LocalEntryMedia.current
     val owners = remember(availableMedia) { MediaOwners(availableMedia) }
@@ -557,8 +577,8 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
     val currentLink = rememberUpdatedState(onLink)
     val layoutDirection = LocalLayoutDirection.current
     val inheritedBackground = LocalAuthoredBackground.current
-    val cacheKey = Triple(effectiveWeight, layoutDirection, inheritedBackground)
-    val annotated = remember(spans, effectiveWeight, linkColor, codeColor, cache, layoutDirection, inheritedBackground) {
+    val cacheKey = TextCacheKey(effectiveWeight, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity)
+    val annotated = remember(spans, effectiveWeight, linkColor, codeColor, cache, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity) {
         cache?.values?.get(spans)?.get(cacheKey) ?: buildAnnotatedString {
             val appendedSpans = ArrayList<Pair<Span, IntRange>>(spans.size)
             spans.forEach { span ->
@@ -589,14 +609,14 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
                         span.classes.split(spanClassWhitespace).any { it == "Egyp" } -> EgyptianFontFamily
                         else -> null
                     }
-                    if (foreground != null || languageTag != null || fontFamily != null || effectiveWeight != null || span.bold || span.italic || span.code || span.small || span.superscript || span.subscript || span.strike || span.underline) addStyle(SpanStyle(
+                    if (foreground != null || languageTag != null || fontFamily != null || effectiveWeight != null || span.bold || span.italic || span.code || span.small || span.superscript || span.subscript || span.strike || span.underline || span.fontScale != null) addStyle(SpanStyle(
                         color = foreground ?: Color.Unspecified,
                         localeList = languageTag?.let { LocaleList(Locale(it)) },
                         fontWeight = if (span.bold) FontWeight.Bold else effectiveWeight,
                         fontStyle = if (span.italic) FontStyle.Italic else null,
                         fontFamily = fontFamily,
                         letterSpacing = if (fontFamily == EgyptianFontFamily) 0.sp else TextUnit.Unspecified,
-                        fontSize = if (span.small || span.superscript || span.subscript) 0.8.em else 1.em,
+                        fontSize = renderedSpanFontSize(span, contextSize, normalBodySize, textDensity),
                         baselineShift = when { span.superscript -> BaselineShift.Superscript; span.subscript -> BaselineShift.Subscript; else -> null },
                         background = if (background == null && span.code) codeColor else Color.Unspecified,
                         textDecoration = when {

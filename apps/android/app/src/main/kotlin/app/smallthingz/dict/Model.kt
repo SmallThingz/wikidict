@@ -21,7 +21,34 @@ data class Span(
     val explanation: String = "",
     val foreground: String? = null,
     val background: String? = null,
-)
+    val fontScale: Float? = null,
+    val fontScaleBasis: FontScaleBasis = FontScaleBasis.Context,
+) {
+    init {
+        require(fontScaleBasis != FontScaleBasis.NormalBody || fontScale != null) {
+            "Normal-body font scale requires a value"
+        }
+    }
+}
+
+enum class FontScaleBasis { Context, NormalBody }
+
+/** Relative to the caller's typography; legacy reduction is applied only once. */
+internal fun spanFontScale(span: Span): Float =
+    (span.fontScale ?: 1f) * if (span.small || span.superscript || span.subscript) 0.8f else 1f
+
+// Blink kMaximumAllowedFontSize / GetComputedSizeFromSpecifiedSize cap computed
+// pixels, after the typography/zoom context. This never changes stored scale.
+internal const val MaxComputedFontPixels = 10000f
+internal fun spanFontPixels(span: Span, contextPixels: Float, normalBodyPixels: Float): Float {
+    require(contextPixels.isFinite() && contextPixels >= 0f)
+    require(normalBodyPixels.isFinite() && normalBodyPixels >= 0f)
+    val scale = span.fontScale ?: 1f
+    require(scale.isFinite() && scale >= 0f)
+    val base = if (span.fontScaleBasis == FontScaleBasis.NormalBody) normalBodyPixels else contextPixels
+    val legacy = if (span.small || span.superscript || span.subscript) 0.8 else 1.0
+    return (base.toDouble() * scale.toDouble() * legacy).coerceAtMost(MaxComputedFontPixels.toDouble()).toFloat()
+}
 
 internal const val MaxTableDepth = 16
 
