@@ -99,8 +99,30 @@ const FirstFailureCaptureContext = struct {
     requested_now_unix: ?i64,
     invocation_args: []const []const u8,
     invocation_id: ?[]const u8,
+    failure_evidence_root: ?[]const u8 = null,
     attempted: bool = false,
     continuous_output_active: bool = false,
+
+    fn fromCli(io: std.Io, a: std.mem.Allocator, args: []const []const u8, options: Options) FirstFailureCaptureContext {
+        const evidence_root: ?[]const u8 = if (options.failure_receipt) |path| blk: {
+            const parent = std.fs.path.dirname(path) orelse break :blk null;
+            const invocation_id = options.invocation_id orelse break :blk null;
+            // Match the existing sharded driver's private invocation directory.
+            // Other receipt destinations retain the ordinary marker contract.
+            break :blk if (std.mem.eql(u8, std.fs.path.basename(parent), invocation_id)) parent else null;
+        } else null;
+        return .{
+            .io = io, .allocator = a, .output_root = args[2],
+            .input = .{ .dump_path = args[1], .expander_root = options.expander_root,
+                .workers = options.workers, .timeout_ms = options.expansion_timeout_ms orelse expansion_deadline.default_ms,
+                .now_unix = 0,
+                .start_page = options.start_page, .requested_limit = options.limit_pages,
+                .index_byte_offset = options.index_byte_offset },
+            .requested_now_unix = options.now_unix,
+            .invocation_args = args[1..], .invocation_id = options.invocation_id,
+            .failure_evidence_root = evidence_root,
+        };
+    }
 };
 var first_failure_capture_context: ?FirstFailureCaptureContext = null;
 
@@ -151,14 +173,15 @@ fn writeFirstPresentationFailure(err: anyerror, context: FirstFailureCaptureCont
     var arena = std.heap.ArenaAllocator.init(context.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    // Ordinary builds require their incomplete marker. Continuous builds arm
-    // only their exact CLI output root for the lifetime of runContinuous.
-    if (!context.continuous_output_active) {
+    // The ordinary sharded driver creates a private per-invocation receipt
+    // directory outside its disposable workspace and raw shard. Use that same
+    // explicit destination for capture; otherwise retain the marker/scope guard.
+    if (context.failure_evidence_root == null and !context.continuous_output_active) {
         const marker = try std.fs.path.join(a, &.{ context.output_root, ".incomplete" });
         const marker_file = try std.Io.Dir.cwd().openFile(context.io, marker, .{});
         marker_file.close(context.io);
     }
-    const root = try std.fs.path.join(a, &.{ context.output_root, ".presentation-first-failure" });
+    const root = try std.fs.path.join(a, &.{ context.failure_evidence_root orelse context.output_root, ".presentation-first-failure" });
     try std.Io.Dir.cwd().createDir(context.io, root, .default_dir);
     try writeDiagnosticJson(context.io, a, root, "capture.json", .{
         .schema = "wikidict.presentation-first-failure.v1", .record_complete = false,
@@ -2097,16 +2120,7 @@ pub fn main(init: std.process.Init) !void {
         .invocation_id = options.invocation_id.?, .invocation_args = args[1..],
     } else null;
     defer failure_receipt_context = null;
-    first_failure_capture_context = if (options.audit_presentation_errors) null else .{
-        .io = init.io, .allocator = a, .output_root = args[2],
-        .input = .{ .dump_path = args[1], .expander_root = options.expander_root,
-            .workers = options.workers, .timeout_ms = options.expansion_timeout_ms orelse expansion_deadline.default_ms,
-            .now_unix = 0,
-            .start_page = options.start_page, .requested_limit = options.limit_pages,
-            .index_byte_offset = options.index_byte_offset },
-        .requested_now_unix = options.now_unix,
-        .invocation_args = args[1..], .invocation_id = options.invocation_id,
-    };
+    first_failure_capture_context = if (options.audit_presentation_errors) null else FirstFailureCaptureContext.fromCli(init.io, a, args, options);
     defer first_failure_capture_context = null;
     var audit_storage: ?PresentationAudit = if (options.audit_presentation_errors)
         try PresentationAudit.init(init.io, a, args[2], .{ .dump_path = args[1], .expander_root = options.expander_root, .workers = options.workers, .timeout_ms = options.expansion_timeout_ms orelse expansion_deadline.default_ms, .now_unix = options.now_unix orelse std.Io.Clock.real.now(init.io).toSeconds(), .start_page = options.start_page, .requested_limit = options.limit_pages, .index_byte_offset = options.index_byte_offset, .expanded_byte_cap = options.audit_expanded_bytes orelse 0 })
@@ -5714,6 +5728,120 @@ test "first failure snapshot survives normal failed shard cleanup" {
     try F.noPublication(a, root);
 }
 
+test "ordinary sharded CLI capture survives raw shard and workspace retirement" {
+    const F = FirstFailureControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const root = try auditControlFreshRoot(a, "ordinary-sharded-capture");
+    defer std.Io.Dir.cwd().deleteTree(F.io, root) catch {};
+    const workspace = try std.fs.path.join(a, &.{ root, "edition.shards" });
+    const raw = try std.fs.path.join(a, &.{ root, "edition.raw-shards" });
+    const shard = try std.fs.path.join(a, &.{ raw, "00000000" });
+    const evidence = try std.fs.path.join(a, &.{ root, "edition.shards.failures", "0123456789abcdef0123456789abcdef" });
+    const receipt = try std.fs.path.join(a, &.{ evidence, "failure.json" });
+    try std.Io.Dir.cwd().createDirPath(F.io, workspace);
+    try std.Io.Dir.cwd().createDirPath(F.io, evidence);
+    // This is the ordinary Python driver's argv shape, not --shard-pages.
+    // Neither the writer nor that driver creates a marker in the raw shard.
+    const args = [_][]const u8{ "dict-blob-build", "not-opened.xml", shard,
+        "--expander-root", "not-opened-inputs", "--start-page", "0",
+        "--limit-pages", "100000", "--index-byte-offset", "0", "--workers", "1",
+        "--now-unix", "1791731560", "--failure-receipt", receipt,
+        "--invocation-id", "0123456789abcdef0123456789abcdef" };
+    const options = try parseOptions(&args);
+    try std.testing.expect(options.shard_pages == null);
+    try std.testing.expect(first_failure_capture_context == null and failure_receipt_context == null);
+    first_failure_capture_context = FirstFailureCaptureContext.fromCli(F.io, a, &args, options);
+    defer first_failure_capture_context = null;
+    failure_receipt_context = .{ .io = F.io, .a = a, .path = receipt,
+        .invocation_id = options.invocation_id.?, .invocation_args = args[1..] };
+    defer failure_receipt_context = null;
+    try std.testing.expectEqualStrings(shard, first_failure_capture_context.?.output_root);
+    try std.testing.expectEqualStrings(evidence, first_failure_capture_context.?.failure_evidence_root.?);
+    try std.testing.expect(!first_failure_capture_context.?.continuous_output_active);
+    const job: ExpansionJob = .{ .ordinal = 17, .index_offset = 9,
+        .ns = .{ .id = 0, .kind = .language }, .title = "Synthetic shard failure",
+        .source = "exact raw fixture", .page_id = 71, .revision_id = 91,
+        .index_line = "exact synthetic index row" };
+    const expanded: bundle_expander.Expansion = .{ .source = "before |} after" };
+    {
+        var writer = try encoder.blob_builder.Writer.init(F.io, a, shard); defer writer.deinit();
+        try F.absent(try std.fs.path.join(a, &.{ shard, ".incomplete" }));
+        try F.absent(try std.fs.path.join(a, &.{ workspace, ".incomplete" }));
+        try std.testing.expectError(error.UncompiledPresentation, consumeExpandedPage(&writer, job, expanded, a, null));
+    }
+    const capture = try std.fs.path.join(a, &.{ evidence, ".presentation-first-failure", "capture.json" });
+    const before = try std.Io.Dir.cwd().readFileAlloc(F.io, capture, a, .limited(64 * 1024));
+    const outer_before = try std.Io.Dir.cwd().readFileAlloc(F.io, receipt, a, .limited(64 * 1024));
+    try F.absent(try std.fs.path.join(a, &.{ shard, ".presentation-first-failure" }));
+    // Model normal retry/workspace retirement after the process exits. No
+    // generated shard, input or workspace directory owns these diagnostics.
+    try std.Io.Dir.cwd().deleteTree(F.io, raw);
+    try std.Io.Dir.cwd().deleteTree(F.io, workspace);
+    try F.absent(raw); try F.absent(workspace);
+    const row = try F.manifest(a, evidence);
+    try std.testing.expect(row.object.get("record_complete").?.bool);
+    try std.testing.expect(row.object.get("diagnostic_only").?.bool);
+    try std.testing.expect(!row.object.get("publication_created").?.bool);
+    try std.testing.expect(!row.object.get("semantic_acceptance").?.bool);
+    try std.testing.expectEqualStrings("UncompiledPresentation", row.object.get("error_name").?.string);
+    try std.testing.expectEqualStrings(job.title, row.object.get("title").?.string);
+    try std.testing.expectEqual(@as(i64, 17), row.object.get("ordinal").?.integer);
+    try std.testing.expectEqual(@as(i64, 9), row.object.get("index_offset").?.integer);
+    try std.testing.expectEqual(@as(i64, 0), row.object.get("namespace").?.integer);
+    try std.testing.expectEqual(@as(i64, 71), row.object.get("page_id").?.integer);
+    try std.testing.expectEqual(@as(i64, 91), row.object.get("revision_id").?.integer);
+    try F.payload(a, row, "raw_source", job.source, 256 * 1024);
+    try F.payload(a, row, "expanded", expanded.source, 2 * 1024 * 1024);
+    try F.payload(a, row, "index_row", job.index_line, 256 * 1024);
+    const outer = try std.json.parseFromSliceLeaky(std.json.Value, a, outer_before, .{});
+    try std.testing.expectEqualStrings("wikidict.blob-build.failure.v1", outer.object.get("schema").?.string);
+    try std.testing.expectEqualStrings("deterministic-presentation", outer.object.get("failure_class").?.string);
+    const outer_args = outer.object.get("invocation_args").?.array.items;
+    try std.testing.expectEqual(args.len - 1, outer_args.len);
+    for (outer_args, args[1..]) |actual, expected| try std.testing.expectEqualStrings(expected, actual.string);
+    try std.testing.expectEqualStrings(outer.object.get("invocation_id").?.string, row.object.get("invocation_id").?.string);
+    try std.testing.expectEqualStrings(try invocationArgumentsHash(a, args[1..]), row.object.get("invocation_args_sha256").?.string);
+    try std.testing.expectEqualStrings("UncompiledPresentation", outer.object.get("error_name").?.string);
+    try std.testing.expectEqual(@as(i64, 71), outer.object.get("page").?.object.get("page_id").?.integer);
+    captureFirstPresentationFailure(error.UncompiledPresentation, job, .{ .source = "replacement" });
+    const after = try std.Io.Dir.cwd().readFileAlloc(F.io, capture, a, .limited(64 * 1024));
+    const outer_after = try std.Io.Dir.cwd().readFileAlloc(F.io, receipt, a, .limited(64 * 1024));
+    try std.testing.expectEqualSlices(u8, before, after);
+    try std.testing.expectEqualSlices(u8, outer_before, outer_after);
+    try F.noPublication(a, evidence);
+}
+
+test "sharded capture destination requires matching invocation directory" {
+    const F = FirstFailureControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const root = try auditControlFreshRoot(a, "ordinary-sharded-capture-scope");
+    defer std.Io.Dir.cwd().deleteTree(F.io, root) catch {};
+    const shard = try std.fs.path.join(a, &.{ root, "00000000" });
+    const unrelated = try std.fs.path.join(a, &.{ root, "other-invocation" });
+    try std.Io.Dir.cwd().createDirPath(F.io, shard);
+    try std.Io.Dir.cwd().createDirPath(F.io, unrelated);
+    const receipt = try std.fs.path.join(a, &.{ unrelated, "failure.json" });
+    const args = [_][]const u8{ "dict-blob-build", "not-opened.xml", shard,
+        "--expander-root", "not-opened-inputs", "--failure-receipt", receipt,
+        "--invocation-id", "0123456789abcdef0123456789abcdef" };
+    const options = try parseOptions(&args);
+    const context = FirstFailureCaptureContext.fromCli(F.io, a, &args, options);
+    try std.testing.expect(context.failure_evidence_root == null);
+    const job: ExpansionJob = .{ .ordinal = 0, .index_offset = 0,
+        .ns = .{ .id = 0, .kind = .language }, .title = "Scope fixture", .source = "raw" };
+    try std.testing.expectError(error.FileNotFound, writeFirstPresentationFailure(error.UncompiledPresentation, context, job, .{ .source = "expanded" }));
+    try F.absent(try std.fs.path.join(a, &.{ shard, ".presentation-first-failure" }));
+    try F.absent(try std.fs.path.join(a, &.{ unrelated, ".presentation-first-failure" }));
+    // The pre-existing ordinary destination still works with its own marker.
+    try F.marker(a, shard);
+    try writeFirstPresentationFailure(error.UncompiledPresentation, context, job, .{ .source = "expanded" });
+    try std.testing.expect((try F.manifest(a, shard)).object.get("record_complete").?.bool);
+    try F.absent(try std.fs.path.join(a, &.{ unrelated, ".presentation-first-failure" }));
+    try F.noPublication(a, shard);
+}
+
 test "first failure snapshot caps payloads with full hashes and bounded serialization" {
     const F = FirstFailureControl;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
@@ -7388,34 +7516,52 @@ test "source flagged language banner requires literal neutral icon and known exa
 }
 
 test "Writer source flagged banner owns exact root and preserves complete typed body" {
-    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
-    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
-    try KyFlagBannerTest.install(io, a, root, KyFlagBannerTest.template_raw);
-    var namespaces = try namespace_registry.Registry.init(a, KyFlagBannerTest.namespaces); defer namespaces.deinit();
-    var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
-    try std.testing.expect(registry.matchesSourceLanguageBanner("ky", KyFlagBannerTest.heading, 2));
-    try std.testing.expect(registry.resolveTrusted(KyFlagBannerTest.heading) == null);
-    const codes = languageCodes(&registry, &namespaces); const output = try std.fs.path.join(a, &.{ root, "blobs" });
-    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
-    const roots = [_][]const u8{ "{{-ky-}}\n# body", "", "{{-en-}}\n", "{{-ky-|parameter}}\n", "prefix\n{{-ky-}}\n", "<!--{{-ky-}}-->\n", "<nowiki>{{-ky-}}</nowiki>\n" };
-    for (roots, 0..) |raw, i| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, try std.fmt.allocPrint(a, "flag-control-{d}", .{i}), KyFlagBannerTest.expanded, raw, null);
-    const stats = try writer.finish(codes); try std.testing.expectEqual(@as(usize, roots.len), stats.language_records);
-    for (roots, 0..) |_, i| {
-        const owner = if (i == 0) "кыргызча" else "Unclassified";
-        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
-        var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename(owner, &filename) })); defer mapped.deinit();
-        const blob = try encoder.blob_format.inspect(mapped.bytes); const metadata = try blob.languageMetadata(); var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
-        const title = try std.fmt.allocPrint(a, "flag-control-{d}", .{i}); const record = (try index.find(title)).?;
-        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
-        try std.testing.expectEqualStrings(if (i == 0) "ky" else "", decoded.entry.language_code);
-        var report: encoder.presentation_document.Fallbacks = .{};
-        const whole_payload = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, title, .language, owner, metadata.code, KyFlagBannerTest.expanded, null, .{}, &namespaces, &report);
-        const whole = try encoder.presentation_codec.decodeAlloc(a, whole_payload, title, .language, metadata);
-        try std.testing.expectEqualDeep(whole.entry.sections, decoded.entry.sections);
-        try std.testing.expectEqualDeep(whole.entry.references, decoded.entry.references);
-        try std.testing.expectEqualDeep(whole.entry.media, decoded.entry.media);
-        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    // Trusted plain labels independently own a neutral image heading. Ordinary
+    // aliases still require the exact source-banner root; every rejected raw
+    // root below must remain Unclassified in that isolated authority case.
+    for ([_]bool{ true, false }) |independent_heading| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        try KyFlagBannerTest.install(io, a, root, KyFlagBannerTest.template_raw);
+        // Keep the retained source and complete expanded body unchanged. This
+        // synthetic registry variant makes the visible name only an ordinary alias,
+        // so the exact authenticated raw template root is its sole owner proof.
+        if (!independent_heading) try std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }),
+            .data = "# content-language\tky\n# mediawiki\nky\tKirghiz\tКыргызча\tky\tkir\nen\tEnglish\n",
+        });
+        var namespaces = try namespace_registry.Registry.init(a, KyFlagBannerTest.namespaces); defer namespaces.deinit();
+        var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+        try std.testing.expect(registry.matchesSourceLanguageBanner("ky", KyFlagBannerTest.heading, 2));
+        try std.testing.expect(registry.resolveTrusted(KyFlagBannerTest.heading) == null);
+        try std.testing.expectEqualStrings("ky", registry.resolve("Кыргызча").?.code);
+        try std.testing.expect(registry.resolveStrong("Кыргызча") == null);
+        try std.testing.expectEqual(independent_heading, registry.resolveTrusted("Кыргызча") != null);
+        const preferred = if (independent_heading) "кыргызча" else "Kirghiz";
+        try std.testing.expectEqualStrings(preferred, registry.resolve("ky").?.heading);
+        const codes = languageCodes(&registry, &namespaces); const output = try std.fs.path.join(a, &.{ root, "blobs" });
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+        const roots = [_][]const u8{ "{{-ky-}}\n# body", "", "{{-en-}}\n", "{{-ky-|parameter}}\n", "prefix\n{{-ky-}}\n", "<!--{{-ky-}}-->\n", "<nowiki>{{-ky-}}</nowiki>\n" };
+        for (roots, 0..) |raw, i| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, try std.fmt.allocPrint(a, "flag-control-{d}", .{i}), KyFlagBannerTest.expanded, raw, null);
+        const stats = try writer.finish(codes); try std.testing.expectEqual(@as(usize, roots.len), stats.language_records);
+        try std.testing.expectEqual(@as(usize, if (independent_heading) 1 else 2), stats.language_blobs);
+        for (roots, 0..) |_, i| {
+            const owner = if (independent_heading or i == 0) preferred else "Unclassified";
+            var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+            var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename(owner, &filename) })); defer mapped.deinit();
+            const blob = try encoder.blob_format.inspect(mapped.bytes); const metadata = try blob.languageMetadata(); var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+            const title = try std.fmt.allocPrint(a, "flag-control-{d}", .{i}); const record = (try index.find(title)).?;
+            const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+            try std.testing.expectEqualStrings(if (independent_heading or i == 0) "ky" else "", decoded.entry.language_code);
+            var report: encoder.presentation_document.Fallbacks = .{};
+            const whole_payload = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, title, .language, owner, metadata.code, KyFlagBannerTest.expanded, null, .{}, &namespaces, &report);
+            const whole = try encoder.presentation_codec.decodeAlloc(a, whole_payload, title, .language, metadata);
+            try std.testing.expectEqualDeep(whole.entry.sections, decoded.entry.sections);
+            try std.testing.expectEqualDeep(whole.entry.references, decoded.entry.references);
+            try std.testing.expectEqualDeep(whole.entry.media, decoded.entry.media);
+            try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+        }
     }
 }
 
@@ -8258,5 +8404,304 @@ test "normal literal switch Writer preserves complete actual Lao page and unowne
             try std.testing.expectEqual(@as(usize, 1), bold);
             try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, doc));
         }
+    }
+}
+
+const SdLeadingLanguageTest = struct {
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\tfr\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tFile\tFile\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\tImage\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tinput\n" ++
+        "14\tزمرو\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\n";
+    const raw =
+        \\=== سنڌي ===
+        \\# ڏيکاءُ
+        \\# مَڪر
+        \\
+        \\== انگريزي ==
+        \\# Something that is showy or pretentious, often used to describe empty talk
+        \\# Deceit or trickery, suitable for situations where "claptrap" implies something misleading or insincere
+        \\
+        \\===لاڳاپيل لفظ ۽ اصطلاح===
+        \\{{-ترجما-}}
+        \\== رومن سنڌي / (لپي مَٽَ) =={{)}}
+        \\''Ddekhhau''
+        \\''Makar''
+        \\
+        \\
+        \\{{سنڌو رومن سنڌي}}
+        \\
+        \\
+        \\[[زمرو:اصطلاح]]
+        \\[[زمرو: رومن سنڌي]]
+        \\[[Category: Transliteration]]
+    ;
+    const expanded =
+        \\=== سنڌي ===
+        \\# ڏيکاءُ
+        \\# مَڪر
+        \\
+        \\== انگريزي ==
+        \\# Something that is showy or pretentious, often used to describe empty talk
+        \\# Deceit or trickery, suitable for situations where "claptrap" implies something misleading or insincere
+        \\
+        \\===لاڳاپيل لفظ ۽ اصطلاح===
+        \\=== [[Image:trans.png|30px]] ترجما ===
+        \\== رومن سنڌي / (لپي مَٽَ) ==|}
+        \\''Ddekhhau''
+        \\''Makar''
+        \\
+        \\
+        \\[[زمرو:انڊس رومن سنڌي]]
+        \\[[زمرو:سنڌو رومن سنڌي]]
+        \\[[category:Indus Roman Sindhi]]
+        \\
+        \\
+        \\
+        \\[[زمرو:اصطلاح]]
+        \\[[زمرو: رومن سنڌي]]
+        \\[[Category: Transliteration]]
+    ;
+    fn read(a: std.mem.Allocator, root: []const u8, owner: []const u8) !encoder.presentation_types.Stored {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{root, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(owner, &filename)});
+        // All decoded backing bytes have the enclosing test arena lifetime.
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, a, .limited(16 * 1024 * 1024));
+        const blob = try encoder.blob_format.inspect(bytes);
+        const metadata = try blob.languageMetadata();
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find("claptrap")) orelse return error.TestUnexpectedResult;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+        return decoded;
+    }
+};
+
+test "normal Writer leading registered Sindhi H3 separates complete claptrap body from English" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var namespaces = try namespace_registry.Registry.init(a, SdLeadingLanguageTest.namespaces); defer namespaces.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv("# mediawiki\nsd\tسنڌي\tsd\tSindhi\tsnd\nen\tانگريزي\tEnglish\ten\teng\nfr\tFrench\n");
+    const codes = languageCodes(&registry, &namespaces);
+    const base = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const output = try std.fs.path.join(a, &.{base, "actual"});
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{.id = 0, .kind = .language}, "claptrap", SdLeadingLanguageTest.expanded, SdLeadingLanguageTest.raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    const sindhi = try SdLeadingLanguageTest.read(a, output, "سنڌي");
+    const english = try SdLeadingLanguageTest.read(a, output, "انگريزي");
+    try std.testing.expectEqualStrings("sd", sindhi.entry.language_code);
+    try std.testing.expectEqualStrings("en", english.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 1), sindhi.entry.sections.len);
+    try std.testing.expectEqual(@as(u8, 3), sindhi.entry.sections[0].level);
+    try std.testing.expectEqualStrings("سنڌي", sindhi.entry.sections[0].title);
+    try std.testing.expectEqual(@as(u8, 2), english.entry.sections[0].level);
+    try std.testing.expectEqualStrings("انگريزي", english.entry.sections[0].title);
+    const meanings = [_][]const u8{"ڏيکاءُ", "مَڪر"};
+    try std.testing.expectEqual(@as(usize, 2), sindhi.entry.sections[0].blocks.len);
+    for (sindhi.entry.sections[0].blocks, meanings) |block, meaning| {
+        try std.testing.expect(block.kind == .definition);
+        try std.testing.expectEqual(@as(usize, 1), block.spans.len);
+        try std.testing.expectEqualStrings(meaning, block.spans[0].text);
+    }
+    try std.testing.expectEqual(@as(usize, 2), english.entry.sections[0].blocks.len);
+    for (english.entry.sections[0].blocks) |block| try std.testing.expect(block.kind == .definition);
+    try std.testing.expectEqual(@as(usize, 0), sindhi.entry.organization.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 0), english.entry.organization.lexemes.len);
+
+    // Control: a real preceding L2 keeps the exact same H3 subordinate. Compare
+    // every resulting section/block/span/action/style against this normal Writer
+    // path; ownership splitting must not silently change the retained body.
+    const control = try std.fs.path.join(a, &.{base, "control"});
+    var nested = try encoder.blob_builder.Writer.init(io, a, control); defer nested.deinit(); nested.language_codes = codes;
+    try nested.addExpandedPage(a, .{.id = 0, .kind = .language}, "claptrap", "== French ==\n" ++ SdLeadingLanguageTest.expanded, "== French ==\n" ++ SdLeadingLanguageTest.raw, null);
+    const nested_stats = try nested.finish(codes);
+    try std.testing.expectEqual(@as(usize, 2), nested_stats.language_records);
+    const subordinate = try SdLeadingLanguageTest.read(a, control, "French");
+    const reference = try SdLeadingLanguageTest.read(a, control, "انگريزي");
+    try std.testing.expectEqualStrings("fr", subordinate.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 2), subordinate.entry.sections.len);
+    try std.testing.expectEqual(@as(usize, 0), subordinate.entry.sections[0].blocks.len);
+    try std.testing.expectEqualDeep(sindhi.entry.sections[0], subordinate.entry.sections[1]);
+    try std.testing.expectEqualDeep(english.entry.sections, reference.entry.sections);
+    try std.testing.expectEqualDeep(reference.entry.media, english.entry.media);
+    try std.testing.expectEqualDeep(reference.entry.references, english.entry.references);
+    try std.testing.expectEqual(@as(usize, 0), sindhi.entry.media.len);
+    try std.testing.expectEqual(@as(usize, 0), sindhi.entry.references.len);
+}
+
+test "normal Writer deeper heading requires trusted registry authority not code edition or ordinary alias" {
+    for ([_][]const u8{
+        "# mediawiki\nen\tانگريزي\nfr\tFrench\n",
+        "# mediawiki\nsd\tSindhi\tسنڌي\nen\tانگريزي\nfr\tFrench\n",
+    }) |rows| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+        const a = arena.allocator(); const io = std.testing.io;
+        var namespaces = try namespace_registry.Registry.init(a, SdLeadingLanguageTest.namespaces); defer namespaces.deinit();
+        var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(rows);
+        try std.testing.expect(registry.resolveTrusted("سنڌي") == null and registry.resolveStrong("سنڌي") == null);
+        const codes = languageCodes(&registry, &namespaces);
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+        var writer = try encoder.blob_builder.Writer.init(io, a, root); defer writer.deinit(); writer.language_codes = codes;
+        const source = "=== سنڌي ===\n# untouched prefix\n== انگريزي ==\n# English\n";
+        try writer.addExpandedPage(a, .{.id = 0, .kind = .language}, "claptrap", source, source, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        const entry = try SdLeadingLanguageTest.read(a, root, "انگريزي");
+        try std.testing.expectEqualStrings("en", entry.entry.language_code);
+        try std.testing.expectEqual(@as(usize, 2), entry.entry.sections.len);
+        try std.testing.expectEqualStrings("سنڌي", entry.entry.sections[0].title);
+    }
+}
+
+test "normal Writer two trusted H3 peers keep separate owners and nested H4 body through codec" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var namespaces = try namespace_registry.Registry.init(a, SdLeadingLanguageTest.namespaces); defer namespaces.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv("# mediawiki\nsd\tسنڌي\nen\tانگريزي\nfr\tFrench\n");
+    const codes = languageCodes(&registry, &namespaces);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(io, a, root); defer writer.deinit(); writer.language_codes = codes;
+    const source = "=== سنڌي ===\n# [[sd-target|Sindhi]] '''bold'''\n==== انگريزي ====\n[[nested-target|nested]]\n=== انگريزي ===\n# [[en-target|English]] ''italic''\n";
+    try writer.addExpandedPage(a, .{.id = 0, .kind = .language}, "claptrap", source, source, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    const sindhi = try SdLeadingLanguageTest.read(a, root, "سنڌي");
+    const english = try SdLeadingLanguageTest.read(a, root, "انگريزي");
+    try std.testing.expectEqualStrings("sd", sindhi.entry.language_code);
+    try std.testing.expectEqualStrings("en", english.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 2), sindhi.entry.sections.len);
+    try std.testing.expectEqual(@as(usize, 1), english.entry.sections.len);
+    try std.testing.expectEqual(@as(u8, 3), sindhi.entry.sections[0].level);
+    try std.testing.expectEqual(@as(u8, 4), sindhi.entry.sections[1].level);
+    try std.testing.expectEqualStrings("انگريزي", sindhi.entry.sections[1].title);
+    try std.testing.expectEqual(@as(u8, 3), english.entry.sections[0].level);
+    var sd_links: usize = 0; var child_links: usize = 0; var en_links: usize = 0;
+    var bold = false; var italic = false; var definitions: [2]usize = .{0, 0};
+    for ([_]encoder.presentation_types.Entry{sindhi.entry, english.entry}, 0..) |entry, owner_index| {
+        for (entry.sections) |section| for (section.blocks) |block| {
+            if (block.kind == .definition) definitions[owner_index] += 1;
+            for (block.spans) |span| {
+                if (std.mem.eql(u8, span.target, "sd-target")) {
+                    try std.testing.expect(owner_index == 0 and span.kind == .link);
+                    try std.testing.expectEqualStrings("Sindhi", span.text); sd_links += 1;
+                }
+                if (std.mem.eql(u8, span.target, "nested-target")) {
+                    try std.testing.expect(owner_index == 0 and section.level == 4 and span.kind == .link);
+                    try std.testing.expectEqualStrings("nested", span.text); child_links += 1;
+                }
+                if (std.mem.eql(u8, span.target, "en-target")) {
+                    try std.testing.expect(owner_index == 1 and span.kind == .link);
+                    try std.testing.expectEqualStrings("English", span.text); en_links += 1;
+                }
+                bold = bold or (owner_index == 0 and span.bold and std.mem.eql(u8, span.text, "bold"));
+                italic = italic or (owner_index == 1 and span.italic and std.mem.eql(u8, span.text, "italic"));
+            }
+        };
+    }
+    try std.testing.expectEqualSlices(usize, &.{1, 1}, &definitions);
+    try std.testing.expectEqual(@as(usize, 1), sd_links);
+    try std.testing.expectEqual(@as(usize, 1), child_links);
+    try std.testing.expectEqual(@as(usize, 1), en_links);
+    try std.testing.expect(bold and italic);
+}
+
+const HsbExactHeadingTest = struct {
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\tfr\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tinput\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\n";
+    const rows = "# mediawiki\nhsb\thornjoserbsce\ndsb\tdelnjoserbšćina\npl\tpólšćina\nfr\tFrench\n";
+    // Synthetic body; exact real heading syntax and authenticated rěč projection.
+    // This is not a captured full stary expansion.
+    const raw = "'''stary'''\n== stary ({{rěč|hornjoserbšćina}}) ==\n# [[hsb-target|Upper]] '''bold'''\n# second\n# third\n# fourth\n== stary ({{rěč|delnjoserbšćina}}) ==\n# [[dsb-target|Lower]] ''italic''\n== stary ({{rěč|pólšćina}}) ==\n# [[pl-target|Polish]]\n";
+    const expanded = "'''stary'''\n== stary ([[hornjoserbšćina|hornjoserbšćina]][[Category:hornjoserbšćina]]) ==\n# [[hsb-target|Upper]] '''bold'''\n# second\n# third\n# fourth\n== stary ([[delnjoserbšćina|delnjoserbšćina]][[Category:delnjoserbšćina]]) ==\n# [[dsb-target|Lower]] ''italic''\n== stary ([[pólšćina|pólšćina]][[Category:pólšćina]]) ==\n# [[pl-target|Polish]]\n";
+    fn read(a: std.mem.Allocator, root: []const u8, owner: []const u8) !encoder.presentation_types.Stored {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{root, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(owner, &filename)});
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, a, .limited(16 * 1024 * 1024));
+        const blob = try encoder.blob_format.inspect(bytes); const metadata = try blob.languageMetadata();
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find("stary")) orelse return error.TestUnexpectedResult;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+        return decoded;
+    }
+};
+
+test "normal Writer exact reviewed Upper Sorbian template argument separates physical regions and prefix through codec" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var namespaces = try namespace_registry.Registry.init(a, HsbExactHeadingTest.namespaces); defer namespaces.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(HsbExactHeadingTest.rows);
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(@embedFile("reviewed_language_aliases.json"), &digest, .{});
+    const marker = try std.fmt.allocPrint(a, "# reviewed-alias\thsb\thornjoserbšćina\thsb-hornjoserbscina-exact-enwik92963766-v1\t{s}\n", .{std.fmt.bytesToHex(digest, .lower)});
+    try registry.addTsv(marker);
+    const codes = languageCodes(&registry, &namespaces);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/hsb", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(io, a, root); defer writer.deinit(); writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{.id=0, .kind=.language}, "stary", HsbExactHeadingTest.expanded, HsbExactHeadingTest.raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    const owners = [_][]const u8{"hornjoserbsce", "delnjoserbšćina", "pólšćina", "Unclassified"};
+    const expected_codes = [_][]const u8{"hsb", "dsb", "pl", ""};
+    const expected_definitions = [_]usize{4,1,1,0};
+    const targets = [_][]const u8{"hsb-target", "dsb-target", "pl-target"};
+    var bold = false; var italic = false; var prefix = false;
+    for (owners, 0..) |owner, owner_index| {
+        const stored = try HsbExactHeadingTest.read(a, root, owner);
+        try std.testing.expectEqualStrings(expected_codes[owner_index], stored.entry.language_code);
+        var definitions: usize = 0; var own_links: usize = 0;
+        for (stored.entry.sections) |section| {
+            if (owner_index < 3) try std.testing.expectEqual(@as(u8, 2), section.level);
+            for (section.blocks) |block| {
+                if (block.kind == .definition) definitions += 1;
+                for (block.spans) |span| {
+                    for (targets, 0..) |target, target_owner| if (std.mem.eql(u8, span.target, target)) {
+                        try std.testing.expectEqual(target_owner, owner_index);
+                        try std.testing.expect(span.kind == .link); own_links += 1;
+                    };
+                    bold = bold or (owner_index == 0 and span.bold and std.mem.eql(u8, span.text, "bold"));
+                    italic = italic or (owner_index == 1 and span.italic and std.mem.eql(u8, span.text, "italic"));
+                    prefix = prefix or (owner_index == 3 and span.bold and std.mem.eql(u8, span.text, "stary"));
+                }
+            }
+        }
+        try std.testing.expectEqual(expected_definitions[owner_index], definitions);
+        try std.testing.expectEqual(@as(usize, if (owner_index < 3) 1 else 0), own_links);
+    }
+    try std.testing.expect(bold and italic and prefix);
+    // The same complete fixture without the reviewed row reproduces the owner
+    // leak. Its section bodies must survive redistribution byte-for-byte in
+    // typed form, rather than being replaced by a shorter successful fixture.
+    var unreviewed = language_registry.Registry.empty(a); defer unreviewed.deinit();
+    try unreviewed.addTsv(HsbExactHeadingTest.rows);
+    const old_codes = languageCodes(&unreviewed, &namespaces);
+    const old_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/without-alias", .{tmp.sub_path});
+    var old_writer = try encoder.blob_builder.Writer.init(io, a, old_root); defer old_writer.deinit(); old_writer.language_codes = old_codes;
+    try old_writer.addExpandedPage(a, .{.id=0, .kind=.language}, "stary", HsbExactHeadingTest.expanded, HsbExactHeadingTest.raw, null);
+    try std.testing.expectEqual(@as(usize, 3), (try old_writer.finish(old_codes)).language_records);
+    const old_lower = try HsbExactHeadingTest.read(a, old_root, "delnjoserbšćina");
+    const new_upper = try HsbExactHeadingTest.read(a, root, "hornjoserbsce");
+    const new_lower = try HsbExactHeadingTest.read(a, root, "delnjoserbšćina");
+    try std.testing.expectEqual(@as(usize, 2), old_lower.entry.sections.len);
+    try std.testing.expectEqual(@as(usize, 1), new_upper.entry.sections.len);
+    try std.testing.expectEqual(@as(usize, 1), new_lower.entry.sections.len);
+    try std.testing.expectEqualDeep(old_lower.entry.sections[0], new_upper.entry.sections[0]);
+    try std.testing.expectEqualDeep(old_lower.entry.sections[1], new_lower.entry.sections[0]);
+    for ([_][]const u8{"pólšćina", "Unclassified"}) |unchanged_owner| {
+        const old_record = try HsbExactHeadingTest.read(a, old_root, unchanged_owner);
+        const new_record = try HsbExactHeadingTest.read(a, root, unchanged_owner);
+        try std.testing.expectEqualDeep(old_record, new_record);
     }
 }

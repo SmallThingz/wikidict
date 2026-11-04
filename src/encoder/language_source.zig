@@ -333,13 +333,23 @@ pub const Iterator = struct {
                     const body = std.mem.trim(u8, trimmed[2 .. trimmed.len - 2], " \t");
                     break :blk body[0] == '-';
                 } else false;
+                const title = if (heading) |value| value.title else marker orelse "";
+                // A declared language can start a page at a deeper authored
+                // level. Never promote a nested heading or meaningful prefix.
+                const leading_position = heading != null and self.active_level == null and
+                    std.mem.trim(u8, self.source[0..line_start], " \t\r\n").len == 0;
+                // Once a declared deep language established the active depth,
+                // its declared peers must split too; deeper children still do not.
+                const same_deep_level = if (heading) |value| value.level > 2 and
+                    self.active_level != null and value.level == self.active_level.? else false;
+                const eligible = if (heading) |value| self.all_heading_levels or
+                    value.level == 1 or value.level == 2 or leading_position or same_deep_level else marker != null;
+                const declared = eligible and if (self.heading_filter) |filter| filter.accepts(filter.ctx, title) else false;
                 const candidate_level: ?u8 = if (heading) |value|
-                    if (self.all_heading_levels or value.level == 1 or value.level == 2) value.level else null
+                    if (self.all_heading_levels or value.level == 1 or value.level == 2 or ((leading_position or same_deep_level) and declared)) value.level else null
                 else if (marker != null) 2 else null;
                 if (candidate_level) |level| {
                     if (self.active_level == null) self.active_level = level;
-                    const title = if (heading) |value| value.title else marker.?;
-                    const declared = if (self.heading_filter) |filter| filter.accepts(filter.ctx, title) else false;
                     if (level == self.active_level.? or declared) {
                         if (level != self.active_level.?) self.mixed_levels = true;
                         self.active_level = level;
@@ -1451,4 +1461,86 @@ test "linked HTML H1 language syntax requires ordinary links and nonvisible name
     try std.testing.expect(scopes.heading(source, 1, line) == null);
     try std.testing.expectEqualStrings("English", plainLineHtmlH2("<h2>English</h2>").?);
     try std.testing.expect(plainLineHtmlH2("<h2>[[English]]</h2>") == null);
+}
+
+const LeadingDeclaredLanguageTest = struct {
+    fn accepts(_: ?*const anyopaque, label: []const u8) bool {
+        return std.mem.eql(u8, label, "سنڌي") or std.mem.eql(u8, label, "انگريزي");
+    }
+    fn iterator(source: []const u8) Iterator {
+        var result = Iterator.init(source);
+        result.heading_filter = .{ .ctx = null, .accepts = accepts };
+        return result;
+    }
+};
+
+test "leading declared deeper language retains exact source before shallower peer" {
+    const first = "=== سنڌي ===\n# ڏيکاءُ\n# مَڪر\n\n";
+    const second = "== انگريزي ==\n# English sense\n";
+    var it = LeadingDeclaredLanguageTest.iterator(" \n\t\n" ++ first ++ second);
+    try std.testing.expectEqualStrings("سنڌي", it.next().?.heading);
+    // The original fixture indented the delimiter itself. Keep that exact
+    // spelling as a negative: blank prefix lines are not indented headings.
+    var indented = LeadingDeclaredLanguageTest.iterator(" \n\t" ++ first ++ second);
+    try std.testing.expectEqualStrings(second, indented.next().?.source);
+    try std.testing.expect(indented.next() == null);
+    // Leading whitespace is intentionally outside the first section, as for L2.
+    var exact = LeadingDeclaredLanguageTest.iterator(first ++ second);
+    try std.testing.expectEqualStrings(first, exact.next().?.source);
+    try std.testing.expectEqualStrings(second, exact.next().?.source);
+    try std.testing.expect(exact.next() == null and exact.mixed_levels);
+    var unproved = Iterator.init(first ++ second);
+    try std.testing.expectEqualStrings(second, unproved.next().?.source);
+    try std.testing.expect(unproved.next() == null);
+    var deeper = LeadingDeclaredLanguageTest.iterator("==== سنڌي ====\n# sense\n" ++ second);
+    try std.testing.expectEqualStrings("سنڌي", deeper.next().?.heading);
+    try std.testing.expectEqualStrings("انگريزي", deeper.next().?.heading);
+    try std.testing.expect(deeper.next() == null);
+}
+
+test "leading deeper language refuses unknown prefix nested and protected declarations" {
+    const ending = "== انگريزي ==\n# retained peer\n";
+    for ([_][]const u8{
+        "=== Unknown ===\n# unknown\n",
+        "Meaningful prefix\n=== سنڌي ===\n# prefix sense\n",
+        "=== Noun ===\n=== سنڌي ===\n# nested sense\n",
+        "<nowiki>\n=== سنڌي ===\n</nowiki>\n",
+        "<pre>\n=== سنڌي ===\n</pre>\n",
+        "<!--\n=== سنڌي ===\n-->\n",
+        "{|\n|\n=== سنڌي ===\n|}\n",
+        "[[target|\n=== سنڌي ===\n]]\n",
+        "{{wrapper|\n=== سنڌي ===\n}}\n",
+    }) |prefix| {
+        const source = try std.mem.concat(std.testing.allocator, u8, &.{prefix, ending});
+        defer std.testing.allocator.free(source);
+        var it = LeadingDeclaredLanguageTest.iterator(source);
+        try std.testing.expectEqualStrings(ending, it.next().?.source);
+        try std.testing.expect(it.next() == null);
+    }
+    const nested = "== انگريزي ==\n=== سنڌي ===\n# subordinate body\n";
+    var it = LeadingDeclaredLanguageTest.iterator(nested);
+    try std.testing.expectEqualStrings(nested, it.next().?.source);
+    try std.testing.expect(it.next() == null);
+}
+
+test "declared deep language peers split at active depth without promoting children or unknown labels" {
+    const first = "=== سنڌي ===\n# Sindhi\n==== انگريزي ====\n# nested child\n=== Unknown ===\n# support\n";
+    const second = "=== انگريزي ===\n# English\n";
+    var it = LeadingDeclaredLanguageTest.iterator(first ++ second);
+    try std.testing.expectEqualStrings(first, it.next().?.source);
+    try std.testing.expectEqualStrings(second, it.next().?.source);
+    try std.testing.expect(it.next() == null);
+    try std.testing.expect(!it.mixed_levels);
+    const deeper_first = "==== سنڌي ====\n# Sindhi\n===== انگريزي =====\n# child\n";
+    const deeper_second = "==== انگريزي ====\n# English\n";
+    var deeper = LeadingDeclaredLanguageTest.iterator(deeper_first ++ deeper_second);
+    try std.testing.expectEqualStrings(deeper_first, deeper.next().?.source);
+    try std.testing.expectEqualStrings(deeper_second, deeper.next().?.source);
+    try std.testing.expect(deeper.next() == null);
+    var unproved = Iterator.init(first ++ second);
+    try std.testing.expect(unproved.next() == null);
+    const nested = "== سنڌي ==\n" ++ second;
+    var under_l2 = LeadingDeclaredLanguageTest.iterator(nested);
+    try std.testing.expectEqualStrings(nested, under_l2.next().?.source);
+    try std.testing.expect(under_l2.next() == null);
 }

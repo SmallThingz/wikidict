@@ -3465,3 +3465,30 @@ test "reviewed TG Dutch label preserves preferred name exact trust and conflict 
     try ambiguous.addTsv(marker);
     try std.testing.expect(ambiguous.resolveTrusted("Нидерландӣ") == null);
 }
+
+test "reviewed exact Upper Sorbian heading preserves preferred owner and rejects missing or conflicting authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(@embedFile("reviewed_language_aliases.json"), &hash, .{});
+    const marker = try std.fmt.allocPrint(a, "# reviewed-alias\thsb\thornjoserbšćina\thsb-hornjoserbscina-exact-enwik92963766-v1\t{s}\n", .{std.fmt.bytesToHex(hash, .lower)});
+    var registry = Registry.empty(a); defer registry.deinit();
+    try registry.addTsv("# mediawiki\nhsb\thornjoserbsce\ndsb\tdelnjoserbšćina\n");
+    try std.testing.expect(registry.resolve("hornjoserbšćina") == null);
+    try registry.addTsv(marker);
+    const actual = registry.resolveTrusted("hornjoserbšćina") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("hsb", actual.code);
+    try std.testing.expectEqualStrings("hornjoserbsce", actual.heading);
+    try std.testing.expect(registry.resolveSourceTrusted("hornjoserbšćina") == null);
+    try std.testing.expect(registry.resolve("hornjoserbšćina extra") == null);
+    try std.testing.expect(registry.resolve("HORNJOSERBŠĆINA") == null);
+    var absent = Registry.empty(a); defer absent.deinit();
+    try absent.addTsv("dsb\tdelnjoserbšćina\n");
+    try std.testing.expectError(error.InvalidLanguageRegistry, absent.addTsv(marker));
+    var conflict = Registry.empty(a); defer conflict.deinit();
+    try conflict.addTsv("# mediawiki\nhsb\thornjoserbsce\ndsb\thornjoserbšćina\n");
+    try conflict.addTsv(marker);
+    try std.testing.expectEqualStrings("dsb", conflict.resolveTrusted("hornjoserbšćina").?.code);
+    try registry.addLocalAlias("hornjoserbšćina", "dsb");
+    try std.testing.expect(registry.resolveTrusted("hornjoserbšćina") == null);
+}

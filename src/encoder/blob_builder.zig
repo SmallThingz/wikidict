@@ -1313,7 +1313,48 @@ fn rawTemplateCodeConflicts(codes: LanguageCodes, original: language_source.Iter
 }
 
 
+// Classification borrows the complete label after one decorative image. It
+// never edits the source rendered by the Writer, or reads a caption as a label.
+// Require an actual physical L2 section: heading_filter's source-empty probe
+// must not promote icon-bearing POS/support subsections across depth levels.
+fn imageLanguageLabel(codes: LanguageCodes, section: language_source.Section) ?[]const u8 {
+    if (section.hyphen_marker or section.source.len == 0) return null;
+    const syntax = blobs.wikitext_syntax;
+    const line_end = std.mem.indexOfScalar(u8, section.source, '\n') orelse section.source.len;
+    const line = std.mem.trimEnd(u8, section.source[0..line_end], "\r");
+    if (!std.mem.startsWith(u8, line, "==") or std.mem.startsWith(u8, line, "===")) return null;
+    const parsed = syntax.controlHeading(line, null) orelse return null;
+    if (parsed.level != 2 or !std.mem.eql(u8, parsed.title, section.heading)) return null;
+    const heading = section.heading;
+    if (!std.mem.startsWith(u8, heading, "[[")) return null;
+    const pair = syntax.balanced(heading, 0) orelse return null;
+    const body = heading[2..pair.inner_end];
+    if (std.mem.indexOfAny(u8, body, "[]{}<>\r\n") != null) return null;
+    const pipe = syntax.delimiter(body, "|", 0) orelse body.len;
+    const target = std.mem.trim(u8, body[0..pipe], " \t");
+    if (target.len == 0 or target[0] == ':' or std.mem.indexOfScalar(u8, target, '#') != null) return null;
+    const namespaces = codes.namespace_catalog orelse return null;
+    const file = namespaces.ofTitle(target);
+    if (file.id != 6 or @import("presentation_media.zig").referencedKind(file.text) != .image) return null;
+    // Only the normal width option is needed for this proof. A caption, link,
+    // alt text, frame or arbitrary parameter cannot supply ownership evidence.
+    if (pipe < body.len) {
+        const option = std.mem.trim(u8, body[pipe + 1 ..], " \t");
+        if (std.mem.indexOfScalar(u8, option, '|') != null) return null;
+        const options = @import("namespace_registry").image_options;
+        const matched = if (codes.image_options) |registry| registry.match(option, .image) else options.matchEnglish(option, .image);
+        const width = matched orelse return null;
+        if (!std.mem.eql(u8, width.id, "img_width")) return null;
+    }
+    if (pair.end >= heading.len or (heading[pair.end] != ' ' and heading[pair.end] != '\t')) return null;
+    const label = std.mem.trim(u8, heading[pair.end..], " \t");
+    if (label.len == 0 or std.mem.indexOfAny(u8, label, "[]{}<>|=\r\n\"'") != null or knownOuterSupportOrPos(label)) return null;
+    return label;
+}
+
 fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
+    if (imageLanguageLabel(codes, section)) |label|
+        return codes.resolveStrong(label) orelse codes.resolveTrusted(label);
     if (arabicLinkedOwner(codes, section.heading)) |declaration| return resolveArabicLinkedOwner(codes, declaration);
     if (codes.namespace_catalog) |namespaces| if (std.mem.eql(u8, namespaces.content_language, "ar")) {
         // Plain "لغة NAME" already has the Strong/Trusted resolver below.
@@ -1425,6 +1466,8 @@ fn hasExplicitLanguageDeclaration(codes: LanguageCodes, section: language_source
 }
 
 fn boundaryLanguage(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
+    if (imageLanguageLabel(codes, section)) |label|
+        return codes.resolveStrong(label) orelse codes.resolveTrusted(label);
     if (arabicLinkedOwner(codes, section.heading)) |declaration| return resolveArabicLinkedOwner(codes, declaration);
     if (arabicNorwegianDeclaration(codes, section.heading) != null)
         return resolveArabicNorwegianDeclaration(codes, section.heading);
@@ -11340,4 +11383,828 @@ test "retained SCN static icon language headings require independently trusted s
     var no_catalog = codes;
     no_catalog.namespace_catalog = null;
     try std.testing.expect(resolveLinkedHeading(no_catalog, "[[Image:Flag.svg|40px]] [[sicilianu|Sicilianu]]") == null);
+}
+
+test "complete retained OC recapte conserves malformed translation cells whole body styles actions and codec through Writer" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const expanded = "<h1 style=\"clear: both; font-family: sans-serif; font-weight: bold; font-size: 1.3em; line-height: 1.3em; padding: 0.5em; background-color: #F7EED6; color:#000; border-top: 1px solid #AAA; border-bottom: 1px solid #AAA;\">[[occitan|Occitan]]</h1>[[Categoria:occitan]]\n\n<h3 style=\"border-bottom: 1px #AAA dotted;\" title=\"Origina e istòria de la paraula\"> [[etimologia#Occitan|Etimologia]]  </h3>\n:De [[recaptar]]\n\n<h3 style=\"border-bottom: 1px #AAA dotted;\" title=\"Entre-senhas fonologicas sul mot : recapte\"> [[prononciacion|Prononciacion]]  </h3>\n:lengadocian <nowiki>/</nowiki><span class=\"pron-AFI-SAMPA\"><span lang=\"en\" class=\"AFI\" style=\"font-family: 'DejaVu Sans', 'Segoe UI', 'Segoe UI Symbol', 'Lucida Grande', 'Arial Unicode MS', 'Lucida Sans Unicode', 'Charis SIL', 'Doulos SIL', Gentium, GentiumAlt, 'Adobe Pi Std', Code2000, 'Chrysanthi Unicode', 'TITUS Cyberbit Basic', 'Bitstream Cyberbit', 'Hiragino Kaku Gothic Pro', 'Matrix Unicode', sans-serif;\"><span title=\"AFI\">reˈkatte</span></span></span><nowiki>/</nowiki><span class=\"AFI-e-SAMPA\" style=\"display:none;\">, </span><span class=\"SAMPA\" style=\"display:none;\">[[Annèxa:Prononciacion|<span title=\"X-SAMPA\">/<span class=\"X-SAMPA\">reˈkatte</span>/</span>]]</span>\n:gascon <nowiki>/</nowiki><span class=\"pron-AFI-SAMPA\"><span lang=\"en\" class=\"AFI\" style=\"font-family: 'DejaVu Sans', 'Segoe UI', 'Segoe UI Symbol', 'Lucida Grande', 'Arial Unicode MS', 'Lucida Sans Unicode', 'Charis SIL', 'Doulos SIL', Gentium, GentiumAlt, 'Adobe Pi Std', Code2000, 'Chrysanthi Unicode', 'TITUS Cyberbit Basic', 'Bitstream Cyberbit', 'Hiragino Kaku Gothic Pro', 'Matrix Unicode', sans-serif;\"><span title=\"AFI\">reˈkapte</span></span></span><nowiki>/</nowiki><span class=\"AFI-e-SAMPA\" style=\"display:none;\">, </span><span class=\"SAMPA\" style=\"display:none;\">[[Annèxa:Prononciacion|<span title=\"X-SAMPA\">/<span class=\"X-SAMPA\">reˈkapte</span>/</span>]]</span>\n:provençau <nowiki>/</nowiki><span class=\"pron-AFI-SAMPA\"><span lang=\"en\" class=\"AFI\" style=\"font-family: 'DejaVu Sans', 'Segoe UI', 'Segoe UI Symbol', 'Lucida Grande', 'Arial Unicode MS', 'Lucida Sans Unicode', 'Charis SIL', 'Doulos SIL', Gentium, GentiumAlt, 'Adobe Pi Std', Code2000, 'Chrysanthi Unicode', 'TITUS Cyberbit Basic', 'Bitstream Cyberbit', 'Hiragino Kaku Gothic Pro', 'Matrix Unicode', sans-serif;\"><span title=\"AFI\">ʀeˈkapte</span></span></span><nowiki>/</nowiki><span class=\"AFI-e-SAMPA\" style=\"display:none;\">, </span><span class=\"SAMPA\" style=\"display:none;\">[[Annèxa:Prononciacion|<span title=\"X-SAMPA\">/<span class=\"X-SAMPA\">ʀeˈkapte</span>/</span>]]</span>\n:França (Bearn) : escotar « recapte » [[Fichièr:LL-Q14185 (oci)-Davidgrosclaude-recapte.wav]]\n\n<h2 style=\"font-family: sans-serif; font-weight: bold; font-size: 1.2em; line-height: 1.2em; padding: 0.5em; border-top: 1px dotted #AAA; border-bottom: 1px dotted #AAA;\"><span style=\"padding-right: 0.5em;\">[[Fichièr:Open book 01.svg|25px|middle|link=]]</span>Nom comun  [[Categoria:occitan]][[Categoria:Noms comuns en occitan]] </h2>\n{| cellpadding=\"3\" style=\"border: 1px solid #AAA; margin-left: 1em; margin-top: 0.5em; float: right; width: 300px;\"\n! colspan=\"2\" style=\"text-align: center; \" | Declinason\n|- align=\"center\" style=\"text-align: center;\"\n| colspan=\"2\" | Dialècte : ''lengadocian''\n|- align=\"center\" style=\"text-align: center;\"\n! width=\"50%\" style=\"text-align: center; \" | Singular\n! width=\"50%\" style=\"text-align: center; \" | Plural\n|- align=\"center\" style=\"text-align: center;\"\n| width=\"50%\" | [[recapte]]\n| width=\"50%\" | [[recaptes]]\n|- align=\"center\" style=\"text-align: center; font-family: 'DejaVu Sans', 'Segoe UI', 'Segoe UI Symbol', 'Lucida Grande', 'Arial Unicode MS', 'Lucida Sans Unicode', 'Charis SIL', 'Doulos SIL', Gentium, GentiumAlt, 'Adobe Pi Std', Code2000, 'Chrysanthi Unicode', 'TITUS Cyberbit Basic', 'Bitstream Cyberbit', 'Hiragino Kaku Gothic Pro', 'Matrix Unicode', sans-serif;\"\n| width=\"50%\" style=\"border-top: 1px #AAA dotted;\" | <nowiki>[</nowiki>reˈkatte<nowiki>]</nowiki>\n| width=\"50%\" style=\"border-top: 1px #AAA dotted; \" | <nowiki>[</nowiki>reˈkattes<nowiki>]</nowiki>\n|}\n'''recapte''' <span style=\"color:#002000;\">''masculin''</span>  \n# Abric, refugi: [[recaptador]], [[recès]], [[cambron]].\n##*''Lo comte d'Augeron s'acaminèt alara cap a Lunac, ont lo senhor aviá dubèrt lo castèl a de fugitius, siá en cèrca d'un '''recapte''', siá, coma l'Artemon de Mejanet, encara desiroses de batalhejar.'' Los crocants de Roergue, ''(Ferran Delèris), 2000\n# Trabalh que consistís a metre en [[òrdre]] e [[netejar]] un ostal: [[recaptason]].\n#*''La femna tornava dau trabalh e repotegava que la taula èra pas mesa, ni lo '''recapte''' prest, ni mai las crompas fachas.'' Als baugs'', (Jaume Landièr), 2008\n#Çò recaptat.\n##[[provision|Provision]] per manjar.\n### ''(per extension)'' [[sèrva|Sèrva]] de manjar: [[celièr]], [[tinal]].\n## Manjar pres dins la natura: [[picnic]], [[rechauchon]].\n### ''(per extension)'' Sortida per majar pel camp.\n## Çò recaptat per l’utilizar mai tard: [[estalvi]].\n##''(drech)'' Acte de la persona que [[recaptar|recapta]] e [[amagar|amaga]] l’objècte d’un delicte o d’un crime: [[recelament]], [[recaptason]].\n\n<h3 style=\"border-bottom: 1px #AAA dotted;\" title=\"\"> [[traduccion|Traduccions]]  </h3>\n{| class=\"mw-collapsible mw-collapsed\" data-expandtext=\"+\" data-collapsetext=\"−\" width=\"100%\" style=\"background-color: #FAFAFA; color:#000; border: 1px solid #AAA; margin: 1em 0;\"\n|-\n! colspan=\"2\" style=\"text-align: left; background-color: #F7EED6; color:#000; border: 1px dotted #AAA; padding: 3px 7px 5px;\" | recès\n|-\n| class=\"mw-collapsible-content\" valign=\"top\" width=\"50%\" style=\"padding: 4px 8px 12px; background-color: #FFF; color:#000; border: 1px dotted #AAA;\" | \n<div style=\"-moz-column-count:2;-webkit-column-count:2;column-count:2;-moz-column-gap:1em;-webkit-column-gap:1em;column-gap:1em;text-align:left;\" class=\"colonnes\">\n\n* \n* [[alemand]]: [[Zufluchtsort#de|Zufluchtsort]] [[:de:Zufluchtsort|<small><sup>(de)</sup></small>]], [[Unterschlupf#de|Unterschlupf]] [[:de:Unterschlupf|<small><sup>(de)</sup></small>]]\n* \n* [[anglés]]: [[shelter#en|shelter]] [[:en:shelter|<small><sup>(en)</sup></small>]], [[refuge#en|refuge]] [[:en:refuge|<small><sup>(en)</sup></small>]], [[haven#en|haven]] [[:en:haven|<small><sup>(en)</sup></small>]]\n* \n* [[basc]]:  \n* \n* [[catalan]]: [[refugi#ca|refugi]] [[:ca:refugi|<small><sup>(ca)</sup></small>]]                     \n* \n* [[espanhòl]]: [[refugio#es|refugio]] [[:es:refugio|<small><sup>(es)</sup></small>]], [[abrigo#es|abrigo]] [[:es:abrigo|<small><sup>(es)</sup></small>]], \n* \n* [[francés]]: [[abri#fr|abri]] [[:fr:abri|<small><sup>(fr)</sup></small>]], [[refuge#fr|refuge]] [[:fr:refuge|<small><sup>(fr)</sup></small>]]\n* \n* [[italian]]: [[rifugio#it|rifugio]] [[:it:rifugio|<small><sup>(it)</sup></small>]]\n* \n* [[portugués]]: [[abrigo#pt|abrigo]] [[:pt:abrigo|<small><sup>(pt)</sup></small>]], [[refúgio#pt|refúgio]] [[:pt:refúgio|<small><sup>(pt)</sup></small>]]\n\n</div>\n\n|}\n{| class=\"mw-collapsible mw-collapsed\" data-expandtext=\"+\" data-collapsetext=\"−\" width=\"100%\" style=\"background-color: #FAFAFA; color:#000; border: 1px solid #AAA; margin: 1em 0;\"\n|-\n! colspan=\"2\" style=\"text-align: left; background-color: #F7EED6; color:#000; border: 1px dotted #AAA; padding: 3px 7px 5px;\" | trabalh de lar\n|-\n| class=\"mw-collapsible-content\" valign=\"top\" width=\"50%\" style=\"padding: 4px 8px 12px; background-color: #FFF; color:#000; border: 1px dotted #AAA;\" | \n<div style=\"-moz-column-count:2;-webkit-column-count:2;column-count:2;-moz-column-gap:1em;-webkit-column-gap:1em;column-gap:1em;text-align:left;\" class=\"colonnes\">\n\n* \n* [[alemand]]: [[Hausarbeit#de|Hausarbeit]] [[:de:Hausarbeit|<small><sup>(de)</sup></small>]], [[Wohnungsreinigung#de|Wohnungsreinigung]] [[:de:Wohnungsreinigung|<small><sup>(de)</sup></small>]]\n* \n* [[anglés]]: [[housework#en|housework]] [[:en:housework|<small><sup>(en)</sup></small>]], [[cleaning#en|cleaning]] [[:en:cleaning|<small><sup>(en)</sup></small>]]\n* \n* [[basc]]:  \n* \n* [[catalan]]: [[neteja#ca|neteja]] [[:ca:neteja|<small><sup>(ca)</sup></small>]], [[tasques de la llar#ca|tasques de la llar]] [[:ca:tasques de la llar|<small><sup>(ca)</sup></small>]]            \n* \n* [[espanhòl]]: [[limpieza#es|limpieza]] [[:es:limpieza|<small><sup>(es)</sup></small>]], [[quehaceres domésticos#es|quehaceres domésticos]] [[:es:quehaceres domésticos|<small><sup>(es)</sup></small>]], [[tareas domésticas#es|tareas domésticas]] [[:es:tareas domésticas|<small><sup>(es)</sup></small>]]\n* \n* [[francés]]: [[ménage#fr|ménage]] [[:fr:ménage|<small><sup>(fr)</sup></small>]], [[rangement#fr|rangement]] [[:fr:rangement|<small><sup>(fr)</sup></small>]]\n* \n* [[italian]]: [[pulizie#it|pulizie]] [[:it:pulizie|<small><sup>(it)</sup></small>]]\n* \n* [[portugués]]: [[limpeza#pt|limpeza]] [[:pt:limpeza|<small><sup>(pt)</sup></small>]]\n\n</div>\n\n|}\n{| class=\"mw-collapsible mw-collapsed\" data-expandtext=\"+\" data-collapsetext=\"−\" width=\"100%\" style=\"background-color: #FAFAFA; color:#000; border: 1px solid #AAA; margin: 1em 0;\"\n|-\n! colspan=\"2\" style=\"text-align: left; background-color: #F7EED6; color:#000; border: 1px dotted #AAA; padding: 3px 7px 5px;\" | provision\n|-\n| class=\"mw-collapsible-content\" valign=\"top\" width=\"50%\" style=\"padding: 4px 8px 12px; background-color: #FFF; color:#000; border: 1px dotted #AAA;\" | \n<div style=\"-moz-column-count:2\n* \n* [[alemand]]: [[Vorrat#de|Vorrat]] [[:de:Vorrat|<small><sup>(de)</sup></small>]], [[Proviant#de|Proviant]] [[:de:Proviant|<small><sup>(de)</sup></small>]]\n* \n* [[anglés]]: [[provision#en|provision]] [[:en:provision|<small><sup>(en)</sup></small>]]\n* \n* [[basc]]: \n* \n* [[catalan]]: [[provisió#ca|provisió]] [[:ca:provisió|<small><sup>(ca)</sup></small>]]\n* \n* [[espanhòl]]: [[provisión#es|provisión]] [[:es:provisión|<small><sup>(es)</sup></small>]]\n* \n* [[francés]]: [[provision#fr|provision]] [[:fr:provision|<small><sup>(fr)</sup></small>]]\n* \n* [[portugués]]: [[provvista#it|provvista]] [[:it:provvista|<small><sup>(it)</sup></small>]]\n* \n* [[portugués]]: [[provisão#pt|provisão]] [[:pt:provisão|<small><sup>(pt)</sup></small>]]\n* \n* [[romanés]]: [[provizie#ro|provizie]] [[:ro:provizie|<small><sup>(ro)</sup></small>]];-webkit-column-count:2\n* \n* [[alemand]]: [[Vorrat#de|Vorrat]] [[:de:Vorrat|<small><sup>(de)</sup></small>]], [[Proviant#de|Proviant]] [[:de:Proviant|<small><sup>(de)</sup></small>]]\n* \n* [[anglés]]: [[provision#en|provision]] [[:en:provision|<small><sup>(en)</sup></small>]]\n* \n* [[basc]]: \n* \n* [[catalan]]: [[provisió#ca|provisió]] [[:ca:provisió|<small><sup>(ca)</sup></small>]]\n* \n* [[espanhòl]]: [[provisión#es|provisión]] [[:es:provisión|<small><sup>(es)</sup></small>]]\n* \n* [[francés]]: [[provision#fr|provision]] [[:fr:provision|<small><sup>(fr)</sup></small>]]\n* \n* [[portugués]]: [[provvista#it|provvista]] [[:it:provvista|<small><sup>(it)</sup></small>]]\n* \n* [[portugués]]: [[provisão#pt|provisão]] [[:pt:provisão|<small><sup>(pt)</sup></small>]]\n* \n* [[romanés]]: [[provizie#ro|provizie]] [[:ro:provizie|<small><sup>(ro)</sup></small>]];column-count:2\n* \n* [[alemand]]: [[Vorrat#de|Vorrat]] [[:de:Vorrat|<small><sup>(de)</sup></small>]], [[Proviant#de|Proviant]] [[:de:Proviant|<small><sup>(de)</sup></small>]]\n* \n* [[anglés]]: [[provision#en|provision]] [[:en:provision|<small><sup>(en)</sup></small>]]\n* \n* [[basc]]: \n* \n* [[catalan]]: [[provisió#ca|provisió]] [[:ca:provisió|<small><sup>(ca)</sup></small>]]\n* \n* [[espanhòl]]: [[provisión#es|provisión]] [[:es:provisión|<small><sup>(es)</sup></small>]]\n* \n* [[francés]]: [[provision#fr|provision]] [[:fr:provision|<small><sup>(fr)</sup></small>]]\n* \n* [[portugués]]: [[provvista#it|provvista]] [[:it:provvista|<small><sup>(it)</sup></small>]]\n* \n* [[portugués]]: [[provisão#pt|provisão]] [[:pt:provisão|<small><sup>(pt)</sup></small>]]\n* \n* [[romanés]]: [[provizie#ro|provizie]] [[:ro:provizie|<small><sup>(ro)</sup></small>]];-moz-column-gap:1em;-webkit-column-gap:1em;column-gap:1em;text-align:left;\" class=\"colonnes\">\n\n</div>\n\n|}\n{| class=\"mw-collapsible mw-collapsed\" data-expandtext=\"+\" data-collapsetext=\"−\" width=\"100%\" style=\"background-color: #FAFAFA; color:#000; border: 1px solid #AAA; margin: 1em 0;\"\n|-\n! colspan=\"2\" style=\"text-align: left; background-color: #F7EED6; color:#000; border: 1px dotted #AAA; padding: 3px 7px 5px;\" | picnic\n|-\n| class=\"mw-collapsible-content\" valign=\"top\" width=\"50%\" style=\"padding: 4px 8px 12px; background-color: #FFF; color:#000; border: 1px dotted #AAA;\" | \n<div style=\"-moz-column-count:2\n* \n* [[alemand]]: [[Picknick#de|Picknick]] [[:de:Picknick|<small><sup>(de)</sup></small>]]\n* \n* [[anglés]]: [[picnic#en|picnic]] [[:en:picnic|<small><sup>(en)</sup></small>]]\n* \n* [[basc]]: \n* \n* [[catalan]]: [[pícnic#ca|pícnic]] [[:ca:pícnic|<small><sup>(ca)</sup></small>]]\n* \n* [[espanhòl]]: [[pícnic#es|pícnic]] [[:es:pícnic|<small><sup>(es)</sup></small>]], [[picnic#es|picnic]] [[:es:picnic|<small><sup>(es)</sup></small>]]\n* \n* [[francés]]: [[picnic#fr|picnic]] [[:fr:picnic|<small><sup>(fr)</sup></small>]], [[pique-nique#fr|pique-nique]] [[:fr:pique-nique|<small><sup>(fr)</sup></small>]]\n* \n* [[portugués]]: [[picnic#it|picnic]] [[:it:picnic|<small><sup>(it)</sup></small>]]\n* \n* [[portugués]]: [[piquenique#pt|piquenique]] [[:pt:piquenique|<small><sup>(pt)</sup></small>]];-webkit-column-count:2\n* \n* [[alemand]]: [[Picknick#de|Picknick]] [[:de:Picknick|<small><sup>(de)</sup></small>]]\n* \n* [[anglés]]: [[picnic#en|picnic]] [[:en:picnic|<small><sup>(en)</sup></small>]]\n* \n* [[basc]]: \n* \n* [[catalan]]: [[pícnic#ca|pícnic]] [[:ca:pícnic|<small><sup>(ca)</sup></small>]]\n* \n* [[espanhòl]]: [[pícnic#es|pícnic]] [[:es:pícnic|<small><sup>(es)</sup></small>]], [[picnic#es|picnic]] [[:es:picnic|<small><sup>(es)</sup></small>]]\n* \n* [[francés]]: [[picnic#fr|picnic]] [[:fr:picnic|<small><sup>(fr)</sup></small>]], [[pique-nique#fr|pique-nique]] [[:fr:pique-nique|<small><sup>(fr)</sup></small>]]\n* \n* [[portugués]]: [[picnic#it|picnic]] [[:it:picnic|<small><sup>(it)</sup></small>]]\n* \n* [[portugués]]: [[piquenique#pt|piquenique]] [[:pt:piquenique|<small><sup>(pt)</sup></small>]];column-count:2\n* \n* [[alemand]]: [[Picknick#de|Picknick]] [[:de:Picknick|<small><sup>(de)</sup></small>]]\n* \n* [[anglés]]: [[picnic#en|picnic]] [[:en:picnic|<small><sup>(en)</sup></small>]]\n* \n* [[basc]]: \n* \n* [[catalan]]: [[pícnic#ca|pícnic]] [[:ca:pícnic|<small><sup>(ca)</sup></small>]]\n* \n* [[espanhòl]]: [[pícnic#es|pícnic]] [[:es:pícnic|<small><sup>(es)</sup></small>]], [[picnic#es|picnic]] [[:es:picnic|<small><sup>(es)</sup></small>]]\n* \n* [[francés]]: [[picnic#fr|picnic]] [[:fr:picnic|<small><sup>(fr)</sup></small>]], [[pique-nique#fr|pique-nique]] [[:fr:pique-nique|<small><sup>(fr)</sup></small>]]\n* \n* [[portugués]]: [[picnic#it|picnic]] [[:it:picnic|<small><sup>(it)</sup></small>]]\n* \n* [[portugués]]: [[piquenique#pt|piquenique]] [[:pt:piquenique|<small><sup>(pt)</sup></small>]];-moz-column-gap:1em;-webkit-column-gap:1em;column-gap:1em;text-align:left;\" class=\"colonnes\">\n\n</div>\n\n|}\n{| class=\"mw-collapsible mw-collapsed\" data-expandtext=\"+\" data-collapsetext=\"−\" width=\"100%\" style=\"background-color: #FAFAFA; color:#000; border: 1px solid #AAA; margin: 1em 0;\"\n|-\n! colspan=\"2\" style=\"text-align: left; background-color: #F7EED6; color:#000; border: 1px dotted #AAA; padding: 3px 7px 5px;\" | estalvi\n|-\n| class=\"mw-collapsible-content\" valign=\"top\" width=\"50%\" style=\"padding: 4px 8px 12px; background-color: #FFF; color:#000; border: 1px dotted #AAA;\" | \n<div style=\"-moz-column-count:2;-webkit-column-count:2;column-count:2;-moz-column-gap:1em;-webkit-column-gap:1em;column-gap:1em;text-align:left;\" class=\"colonnes\">\n\n* \n* [[alemand]]: [[Ersparnis#de|Ersparnis]] [[:de:Ersparnis|<small><sup>(de)</sup></small>]]\n* \n* [[anglés]]: [[saving#en|saving]] [[:en:saving|<small><sup>(en)</sup></small>]]\n* \n* [[basc]]: \n* \n* [[catalan]]: [[estalvi#ca|estalvi]] [[:ca:estalvi|<small><sup>(ca)</sup></small>]]\n* \n* [[espanhòl]]: [[ahorro#es|ahorro]] [[:es:ahorro|<small><sup>(es)</sup></small>]]\n* \n* [[francés]]: [[économie#fr|économie]] [[:fr:économie|<small><sup>(fr)</sup></small>]] <span style=\"color:#002000;\">''femenin''</span>, [[épargne#fr|épargne]] [[:fr:épargne|<small><sup>(fr)</sup></small>]]\n* \n* [[italian]]: [[risparmio#it|risparmio]] [[:it:risparmio|<small><sup>(it)</sup></small>]]\n* \n* [[naut sorab]]: [[lutowanka#hsb|lutowanka]] [[:hsb:lutowanka|<small><sup>(hsb)</sup></small>]] <span style=\"color:#002000;\">''femenin''</span>, [[nalutowanka#hsb|nalutowanka]] [[:hsb:nalutowanka|<small><sup>(hsb)</sup></small>]]\n* \n* [[portugués]]: [[poupança#pt|poupança]] [[:pt:poupança|<small><sup>(pt)</sup></small>]], [[economia#pt|economia]] [[:pt:economia|<small><sup>(pt)</sup></small>]]\n\n</div>\n\n|}\n{| class=\"mw-collapsible mw-collapsed\" data-expandtext=\"+\" data-collapsetext=\"−\" width=\"100%\" style=\"background-color: #FAFAFA; color:#000; border: 1px solid #AAA; margin: 1em 0;\"\n|-\n! colspan=\"2\" style=\"text-align: left; background-color: #F7EED6; color:#000; border: 1px dotted #AAA; padding: 3px 7px 5px;\" | amagar l’objècte d’un delicte\n|-\n| class=\"mw-collapsible-content\" valign=\"top\" width=\"50%\" style=\"padding: 4px 8px 12px; background-color: #FFF; color:#000; border: 1px dotted #AAA;\" | \n<div style=\"-moz-column-count:2;-webkit-column-count:2;column-count:2;-moz-column-gap:1em;-webkit-column-gap:1em;column-gap:1em;text-align:left;\" class=\"colonnes\">\n\n* \n* [[alemand]]: [[Hehlerei#de|Hehlerei]] [[:de:Hehlerei|<small><sup>(de)</sup></small>]]\n* \n* [[anglés]]: [[receiving stolen property#en|receiving stolen property]] [[:en:receiving stolen property|<small><sup>(en)</sup></small>]]\n* \n* [[basc]]: \n* \n* [[catalan]]: [[receptació#ca|receptació]] [[:ca:receptació|<small><sup>(ca)</sup></small>]]\n* \n* [[espanhòl]]: [[receptación#es|receptación]] [[:es:receptación|<small><sup>(es)</sup></small>]]\n* \n* [[francés]]: [[recel#fr|recel]] [[:fr:recel|<small><sup>(fr)</sup></small>]]\n* \n* [[italian]]: [[ricettazione#it|ricettazione]] [[:it:ricettazione|<small><sup>(it)</sup></small>]]\n* \n* [[portugués]]: [[receptação#pt|receptação]] [[:pt:receptação|<small><sup>(pt)</sup></small>]]\n\n</div>\n\n|}\n\n<h2 style=\"font-family: sans-serif; font-weight: bold; font-size: 1.2em; line-height: 1.2em; padding: 0.5em; border-top: 1px dotted #AAA; border-bottom: 1px dotted #AAA;\"><span style=\"padding-right: 0.5em;\">[[Fichièr:Open book 01.svg|25px|middle|link=]]</span>Forma de vèrb   </h2>\n[[Categoria:occitan|recapte]]\n[[Categoria:Vèrbes conjugats en occitan|recapte]]\n'''recapte'''\n# ''primièra persona del singular del present del subjonctiu de'' [[recaptar]].\n# ''tresena persona del singular del present del subjonctiu de'' [[recaptar]].\n\n[[ca:recapte]]\n[[fr:recapte]]";
+    const raw = "{{=oc=}}\n\n{{-etim-}}\n:De [[recaptar]]\n\n{{-pron-}}\n:lengadocian {{pron|reˈkatte|oc}}\n:gascon {{pron|reˈkapte|oc}}\n:provençau {{pron|ʀeˈkapte|oc}}\n:França (Bearn) : escotar « recapte » [[Fichièr:LL-Q14185 (oci)-Davidgrosclaude-recapte.wav]]\n\n{{-nom-|oc}}\n{{Declinason|n|dialècte=lengadocian|{{pn}}|{{pn}}s|reˈkatte|reˈkattes}}\n'''recapte''' {{m}}  \n# Abric, refugi: [[recaptador]], [[recès]], [[cambron]].\n##*''Lo comte d'Augeron s'acaminèt alara cap a Lunac, ont lo senhor aviá dubèrt lo castèl a de fugitius, siá en cèrca d'un '''recapte''', siá, coma l'Artemon de Mejanet, encara desiroses de batalhejar.'' Los crocants de Roergue, ''(Ferran Delèris), 2000\n# Trabalh que consistís a metre en [[òrdre]] e [[netejar]] un ostal: [[recaptason]].\n#*''La femna tornava dau trabalh e repotegava que la taula èra pas mesa, ni lo '''recapte''' prest, ni mai las crompas fachas.'' Als baugs'', (Jaume Landièr), 2008\n#Çò recaptat.\n##[[provision|Provision]] per manjar.\n### ''(per extension)'' [[sèrva|Sèrva]] de manjar: [[celièr]], [[tinal]].\n## Manjar pres dins la natura: [[picnic]], [[rechauchon]].\n### ''(per extension)'' Sortida per majar pel camp.\n## Çò recaptat per l’utilizar mai tard: [[estalvi]].\n##''(drech)'' Acte de la persona que [[recaptar|recapta]] e [[amagar|amaga]] l’objècte d’un delicte o d’un crime: [[recelament]], [[recaptason]].\n\n{{-revi-}}\n{{Reviradas|recès|\n{{colomnas|nombre=2|\n* {{dev1}}: {{trad|de|Zufluchtsort}}, {{trad|de|Unterschlupf}}\n* {{env1}}: {{trad|en|shelter}}, {{trad|en|refuge}}, {{trad|en|haven}}\n* {{euv1}}: {{trad|eu|}} \n* {{cav1}}: {{trad|ca|refugi}}                     \n* {{esv1}}: {{trad|es|refugio}}, {{trad|es|abrigo}}, {{trad|es|}}\n* {{frv1}}: {{trad|fr|abri}}, {{trad|fr|refuge}}\n* {{itv1}}: {{trad|it|rifugio}}\n* {{ptv1}}: {{trad|pt|abrigo}}, {{trad|pt|refúgio}}\n}}}}\n{{Reviradas|trabalh de lar|\n{{colomnas|nombre=2|\n* {{dev1}}: {{trad|de|Hausarbeit}}, {{trad|de|Wohnungsreinigung}}\n* {{env1}}: {{trad|en|housework}}, {{trad|en|cleaning}}\n* {{euv1}}: {{trad|eu|}} \n* {{cav1}}: {{trad|ca|neteja}}, {{trad|ca|tasques de la llar}}            \n* {{esv1}}: {{trad|es|limpieza}}, {{trad|es|quehaceres domésticos}}, {{trad|es|tareas domésticas}}\n* {{frv1}}: {{trad|fr|ménage}}, {{trad|fr|rangement}}\n* {{itv1}}: {{trad|it|pulizie}}\n* {{ptv1}}: {{trad|pt|limpeza}}\n}}}}\n{{Reviradas|provision|\n{{colomnas|nombre=2\n* {{dev1}}: {{trad|de|Vorrat}}, {{trad|de|Proviant}}\n* {{env1}}: {{trad|en|provision}}\n* {{euv1}}: {{trad|eu|}}\n* {{cav1}}: {{trad|ca|provisió}}\n* {{esv1}}: {{trad|es|provisión}}\n* {{frv1}}: {{trad|fr|provision}}\n* {{ptv1}}: {{trad|it|provvista}}\n* {{ptv1}}: {{trad|pt|provisão}}\n* {{rov1}}: {{trad|ro|provizie}}\n}}}}\n{{Reviradas|picnic|\n{{colomnas|nombre=2\n* {{dev1}}: {{trad|de|Picknick}}\n* {{env1}}: {{trad|en|picnic}}\n* {{euv1}}: {{trad|eu|}}\n* {{cav1}}: {{trad|ca|pícnic}}\n* {{esv1}}: {{trad|es|pícnic}}, {{trad|es|picnic}}\n* {{frv1}}: {{trad|fr|picnic}}, {{trad|fr|pique-nique}}\n* {{ptv1}}: {{trad|it|picnic}}\n* {{ptv1}}: {{trad|pt|piquenique}}\n}}}}\n{{Reviradas|estalvi|\n{{colomnas|nombre=2|\n* {{dev1}}: {{trad|de|Ersparnis}}\n* {{env1}}: {{trad|en|saving}}\n* {{euv1}}: {{trad|eu|}}\n* {{cav1}}: {{trad|ca|estalvi}}\n* {{esv1}}: {{trad|es|ahorro}}\n* {{frv1}}: {{trad|fr|économie}} {{f}}, {{trad|fr|épargne}}\n* {{itv1}}: {{trad|it|risparmio}}\n* {{hsbv1}}: {{trad|hsb|lutowanka}} {{f}}, {{trad|hsb|nalutowanka}}\n* {{ptv1}}: {{trad|pt|poupança}}, {{trad|pt|economia}}\n}}}}\n{{Reviradas|amagar l’objècte d’un delicte|\n{{colomnas|nombre=2|\n* {{dev1}}: {{trad|de|Hehlerei}}\n* {{env1}}: {{trad|en|receiving stolen property}}\n* {{euv1}}: {{trad|eu|}}\n* {{cav1}}: {{trad|ca|receptació}}\n* {{esv1}}: {{trad|es|receptación}}\n* {{frv1}}: {{trad|fr|recel}}\n* {{itv1}}: {{trad|it|ricettazione}}\n* {{ptv1}}: {{trad|pt|receptação}}\n}}}}\n\n{{-flex-verb-|oc}}\n'''recapte'''\n# ''primièra persona del singular del present del subjonctiu de'' [[recaptar]].\n# ''tresena persona del singular del present del subjonctiu de'' [[recaptar]].\n\n[[ca:recapte]]\n[[fr:recapte]]";
+    try std.testing.expectEqual(@as(usize, 18901), expanded.len);
+    try std.testing.expectEqual(@as(usize, 4058), raw.len);
+    const fragment = "<div style=\"-moz-column-count:2\n";
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, expanded, fragment));
+    // Only the two rejected cell-opening angles are entity-authored. Preserve
+    // every repeated translation, CSS tail, physical line and other page byte.
+    const control = try std.mem.replaceOwned(u8, a, expanded, fragment, "&lt;div style=\"-moz-column-count:2\n");
+    var namespaces = try @import("namespace_registry").Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tocwiktionary\n# dump-date\t20261001\n# content-language\toc\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "6\tFichièr\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\tImatge\n" ++
+        "10\tModèl\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tCategoria\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n");
+    defer namespaces.deinit();
+    // Explicit retained language-registry row383 binds occitan/Occitan to oc;
+    // raw {{=oc=}} corroborates it. Inline lang=en is pronunciation metadata.
+    const Local = struct {
+        fn get(_: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(null, value)) |language| language.code else null;
+        }
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Occitan") or std.mem.eql(u8, value, "occitan") or std.mem.eql(u8, value, "oc"))
+                return .{ .code = "oc", .heading = "occitan" };
+            return null;
+        }
+    };
+    const codes: LanguageCodes = .{ .get_fn = Local.get, .resolve_fn = Local.resolve, .strong_fn = Local.resolve, .trusted_fn = Local.resolve, .namespace_catalog = &namespaces };
+    var payloads: [2][]const u8 = undefined;
+    for ([_][]const u8{ expanded, control }, 0..) |source, i| {
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/oc-recapte-{d}", .{ tmp.sub_path, i });
+        var writer = try Writer.init(std.testing.io, a, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "recapte", source, raw, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "occitan"));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("recapte")) orelse return error.TestUnexpectedResult;
+        payloads[i] = try a.dupe(u8, record.payload);
+    }
+    try std.testing.expectEqualSlices(u8, payloads[1], payloads[0]);
+    const stored = try blobs.presentation_codec.decodeAlloc(a, payloads[0], "recapte", .language, .{ .code = "oc", .heading = "occitan" });
+    try std.testing.expectEqualSlices(u8, payloads[0], try blobs.presentation_codec.encodeAlloc(a, stored));
+    try std.testing.expectEqualStrings("oc", stored.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+    var audio: usize = 0;
+    for (stored.entry.media) |item| if (std.mem.eql(u8, item.file, "LL-Q14185 (oci)-Davidgrosclaude-recapte.wav")) { audio += 1; };
+    try std.testing.expectEqual(@as(usize, 1), audio);
+    const Scan = struct {
+        visible: std.ArrayList(u8) = .empty,
+        targets: std.ArrayList([]const u8) = .empty,
+        tables: usize = 0,
+        cells: usize = 0,
+        declensions: usize = 0,
+        translations: usize = 0,
+        literal_prefixes: usize = 0,
+        scaled_superscript_actions: usize = 0,
+        recaptar_contexts: u4 = 0,
+        feminine: bool = false,
+        bold_headword: bool = false,
+        italic_example: bool = false,
+        fn spans(self: *@This(), allocator: std.mem.Allocator, values: []const blobs.presentation_types.Span) !void {
+            for (values) |span| {
+                try self.visible.appendSlice(allocator, span.text);
+                try self.visible.appendSlice(allocator, span.trail);
+                if (span.kind == .link) {
+                    try self.targets.append(allocator, span.target);
+                    if (!span.small and span.superscript and span.font_scale != null and span.font_scale.? == @as(f32, 1.0 / 1.2) and span.font_scale_basis == .context) self.scaled_superscript_actions += 1;
+                }
+                if (std.mem.eql(u8, span.text, "femenin") and span.italic and span.foreground != null and std.mem.eql(u8, span.foreground.?, "#002000")) self.feminine = true;
+                if (std.mem.eql(u8, span.text, "recapte") and span.bold) self.bold_headword = true;
+                if (std.mem.indexOf(u8, span.text, "Lo comte d'Augeron") != null and span.italic) self.italic_example = true;
+                try std.testing.expect(std.mem.indexOf(u8, span.text, "{|") == null and std.mem.indexOf(u8, span.text, "|}") == null);
+            }
+        }
+        fn blocks(self: *@This(), allocator: std.mem.Allocator, values: []const blobs.presentation_types.Block) anyerror!void {
+            for (values) |block| {
+                var text: std.ArrayList(u8) = .empty;
+                for (block.spans) |span| {
+                    try text.appendSlice(allocator, span.text);
+                    try text.appendSlice(allocator, span.trail);
+                }
+                const contexts = [_][]const u8{
+                    "De recaptar", "Acte de la persona que recapta",
+                    "primièra persona del singular del present del subjonctiu de",
+                    "tresena persona del singular del present del subjonctiu de",
+                };
+                for (contexts, 0..) |context, i| if (std.mem.indexOf(u8, text.items, context) != null) {
+                    var actions: usize = 0;
+                    for (block.spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "recaptar")) {
+                        try std.testing.expectEqualStrings(if (i == 1) "recapta" else "recaptar", span.text);
+                        actions += 1;
+                    };
+                    try std.testing.expectEqual(@as(usize, 1), actions);
+                    self.recaptar_contexts |= @as(u4, 1) << @intCast(i);
+                };
+                try self.spans(allocator, block.spans);
+                if (block.table) |value| try self.table(allocator, value);
+            }
+        }
+        fn table(self: *@This(), allocator: std.mem.Allocator, value: blobs.presentation_types.Table) anyerror!void {
+            self.tables += 1;
+            if (value.rows.len == 5) {
+                self.declensions += 1;
+                try std.testing.expectEqual(@as(u16, 2), value.rows[0].cells[0].colspan);
+                try std.testing.expectEqual(@as(u16, 3), value.geometry.?.cell_padding.?);
+            }
+            if (value.rows.len == 2) {
+                self.translations += 1;
+                const first = value.rows[0].cells[0];
+                try std.testing.expect(first.header and first.colspan == 2);
+                try std.testing.expectEqualStrings("#f7eed6", first.background.?);
+                try std.testing.expectEqualStrings("#ffffff", value.rows[1].cells[0].background.?);
+            }
+            try self.spans(allocator, value.caption);
+            for (value.rows) |row| for (row.cells) |cell| {
+                self.cells += 1;
+                if (cell.blocks) |children| try self.blocks(allocator, children) else {
+                    try self.spans(allocator, cell.spans);
+                    if (cell.nested_table) |nested| try self.table(allocator, nested);
+                }
+            };
+        }
+        fn countTarget(self: *@This(), target: []const u8) usize {
+            var count: usize = 0;
+            for (self.targets.items) |actual| if (std.mem.eql(u8, target, actual)) { count += 1; };
+            return count;
+        }
+    };
+    var scan: Scan = .{};
+    var noun = false;
+    var verb = false;
+    for (stored.entry.sections) |section| {
+        noun = noun or std.mem.indexOf(u8, section.title, "Nom comun") != null;
+        verb = verb or std.mem.indexOf(u8, section.title, "Forma de vèrb") != null;
+        try scan.blocks(a, section.blocks);
+    }
+    try std.testing.expect(noun and verb);
+    try std.testing.expectEqual(@as(usize, 7), scan.tables);
+    try std.testing.expectEqual(@as(usize, 20), scan.cells);
+    try std.testing.expectEqual(@as(usize, 1), scan.declensions);
+    try std.testing.expectEqual(@as(usize, 6), scan.translations);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, scan.visible.items, "<div style=\"-moz-column-count:2"));
+    try std.testing.expect(scan.feminine and scan.bold_headword and scan.italic_example and scan.scaled_superscript_actions > 0);
+    // Preserve the malformed upstream expansion's repeated data. Deduplicating
+    // it or reinterpreting it as CSS would lose captured lexical presentation.
+    for ([_][]const u8{ "Vorrat#de", "Proviant#de", "provision#en", "provizie#ro", "Picknick#de", "pícnic#ca", "piquenique#pt" }) |target|
+        try std.testing.expectEqual(@as(usize, 3), scan.countTarget(target));
+    // Etymology, the legal noun sense, and both conjugated verb senses.
+    try std.testing.expectEqual(@as(usize, 4), scan.countTarget("recaptar"));
+    try std.testing.expectEqual(@as(u4, 0b1111), scan.recaptar_contexts);
+    for ([_][]const u8{ "recaptes", "recaptador", "recès", "cambron", "òrdre", "netejar", "recaptason", "sèrva", "celièr", "tinal", "picnic", "rechauchon", "estalvi", "amagar", "recelament", "Zufluchtsort#de", "Hausarbeit#de", "saving#en", "Hehlerei#de", "receiving stolen property#en", "receptació#ca", "receptação#pt" }) |target|
+        try std.testing.expect(scan.countTarget(target) != 0);
+    for ([_][]const u8{ "Abric, refugi:", "Trabalh que consistís a metre en", "Çò recaptat.", "Provision per manjar.", "Sortida per majar pel camp.", "l’objècte d’un delicte o d’un crime:", "Lo comte d'Augeron", "Los crocants de Roergue", "Ferran Delèris", "La femna tornava dau trabalh", "Jaume Landièr", "primièra persona del singular del present del subjonctiu de", "tresena persona del singular del present del subjonctiu de", ";-webkit-column-count:2", ";column-count:2", "text-align:left;\" class=\"colonnes\">" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, text) != null);
+}
+
+test "complete retained IA dictionary appendix e keeps supplemental body table navigation styles actions and codec" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const title = "Appendice:Dictionarios/Interlingua-catalano/e";
+    const expanded = "\n{| id=\"toc\" class=\"toc\" summary=\"Contents\" align=\"center\"\n! <div style=\"text-align:right;\">[[../|Dictionario<br />interlingua-catalano]]&#58;\n|\n|<div style=\"text-align:center;\"> <big>'''[[../a|&nbsp;A&nbsp;]]·[[../b|&nbsp;B&nbsp;]]·[[../c|&nbsp;C&nbsp;]]·[[../d|&nbsp;D&nbsp;]]·[[../e|&nbsp;E&nbsp;]]·[[../f|&nbsp;F&nbsp;]]·[[../g|&nbsp;G&nbsp;]]·[[../h|&nbsp;H&nbsp;]]·[[../i|&nbsp;I&nbsp;]]·[[../j|&nbsp;J&nbsp;]]·[[../k|&nbsp;K&nbsp;]]·[[../l|&nbsp;L&nbsp;]]·[[../m|&nbsp;M&nbsp;]]·[[../n|&nbsp;N&nbsp;]]·[[../o|&nbsp;O&nbsp;]]·[[../p|&nbsp;P&nbsp;]]·[[../q|&nbsp;Q&nbsp;]]·[[../r|&nbsp;R&nbsp;]]·[[../s|&nbsp;S&nbsp;]]·[[../t|&nbsp;T&nbsp;]]·[[../u|&nbsp;U&nbsp;]]·[[../v|&nbsp;V&nbsp;]]·[[../w|&nbsp;W&nbsp;]]·[[../x|&nbsp;X&nbsp;]]·[[../y|&nbsp;Y&nbsp;]]·[[../z|&nbsp;Z&nbsp;]]'''</big><br />[[#top|Capite]]&nbsp;&nbsp;[[#DICTa|ea]]&nbsp;&nbsp;[[#DICTb|eb]]&nbsp;&nbsp;[[#DICTc|ec]]&nbsp;&nbsp;[[#DICTd|ed]]&nbsp;&nbsp;[[#DICTe|ee]]&nbsp;&nbsp;[[#DICTf|ef]]&nbsp;&nbsp;[[#DICTg|eg]]&nbsp;&nbsp;[[#DICTh|eh]]&nbsp;&nbsp;[[#DICTi|ei]]&nbsp;&nbsp;[[#DICTj|ej]]&nbsp;&nbsp;[[#DICTk|ek]]&nbsp;&nbsp;[[#DICTl|el]]&nbsp;&nbsp;[[#DICTm|em]]&nbsp;&nbsp;[[#DICTn|en]]&nbsp;&nbsp;[[#DICTo|eo]]&nbsp;&nbsp;[[#DICTp|ep]]&nbsp;&nbsp;[[#DICTq|eq]]&nbsp;&nbsp;[[#DICTr|er]]&nbsp;&nbsp;[[#DICTs|es]]&nbsp;&nbsp;[[#DICTt|et]]&nbsp;&nbsp;[[#DICTu|eu]]&nbsp;&nbsp;[[#DICTv|ev]]&nbsp;&nbsp;[[#DICTw|ew]]&nbsp;&nbsp;[[#DICTx|ex]]&nbsp;&nbsp;[[#DICTy|ey]]&nbsp;&nbsp;[[#DICTz|ez]]&nbsp;</div>\n|}__NOTOC__\n[[Categoria:Dictionario de interlingua|Interlingua-catalano/e]]\n<b>e</b> i<br>\n<br>\n<b>ecce</b> vet aci<br>\n<br>\n<b>effortiar se</b> esforçar-se<br>\n<br>\n<b>era</b> = <b>esseva</b> <verb <b>esser</b>><br>\n<br>\n<B>Espania</b> Espanya<br>\n<br>\n<b>espaniol</b> <adj., n.> espanyol, -a<br>\n<br>\n<b>esque</b> ¿<br>\n<br>\n<b>esser</b> ésser, estar<br>\n<br>\n<b>estate</b> estiu<br>\n<br>\n<b>estranie</b> estrany, -a<br>\n<br>\n<b>etate</b> edad<br>\n<br>\n<b>etiam</b> també<br>\n<br>\n<B>Europa</b> Europa<br>\n<br>\n<b>europee</b> europeu, -ea<br>\n<br>\n<b>evenir</b> esdevenir<br>\n<br>\n<b>ex</b> de, des de<br>\n<br>\n<b>exprimer</b> expressar<br>\n<br>\n<b>extra</b> fora de<br>\n<br>";
+    const raw = "{{dictionario sub}}\n<b>e</b> i<br>\n<br>\n<b>ecce</b> vet aci<br>\n<br>\n<b>effortiar se</b> esforçar-se<br>\n<br>\n<b>era</b> = <b>esseva</b> <verb <b>esser</b>><br>\n<br>\n<B>Espania</b> Espanya<br>\n<br>\n<b>espaniol</b> <adj., n.> espanyol, -a<br>\n<br>\n<b>esque</b> ¿<br>\n<br>\n<b>esser</b> ésser, estar<br>\n<br>\n<b>estate</b> estiu<br>\n<br>\n<b>estranie</b> estrany, -a<br>\n<br>\n<b>etate</b> edad<br>\n<br>\n<b>etiam</b> també<br>\n<br>\n<B>Europa</b> Europa<br>\n<br>\n<b>europee</b> europeu, -ea<br>\n<br>\n<b>evenir</b> esdevenir<br>\n<br>\n<b>ex</b> de, des de<br>\n<br>\n<b>exprimer</b> expressar<br>\n<br>\n<b>extra</b> fora de<br>\n<br>";
+    try std.testing.expectEqual(@as(usize, 2183), expanded.len);
+    try std.testing.expectEqual(@as(usize, 625), raw.len);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, expanded, "<verb <b>esser</b>>"));
+    // Only the rejected outer '<' is entity-authored in the control. Every
+    // child/body byte, navigation action, table marker and newline stays exact.
+    const control = try std.mem.replaceOwned(u8, a, expanded, "<verb <b>esser</b>>", "&lt;verb <b>esser</b>>");
+    var namespaces = try @import("namespace_registry").Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tiawiktionary\n# dump-date\t20261001\n# content-language\tia\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "10\tPatrono\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tCategoria\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "102\tAppendice\tAppendice\tcase-sensitive\t1\t0\t0\t\tsupplemental\tunclassified_subject_retained\n");
+    defer namespaces.deinit();
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces };
+    var payloads: [2][]const u8 = undefined;
+    for ([_][]const u8{ expanded, control }, 0..) |source, i| {
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ia-e-{d}", .{ tmp.sub_path, i });
+        var writer = try Writer.init(std.testing.io, a, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 102, .kind = .supplemental }, title, source, raw, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.supplemental_records);
+        try std.testing.expectEqual(@as(usize, 0), stats.language_records);
+        var mapped = try mmapPath(std.testing.io, try std.fs.path.join(a, &.{ root, "supplemental.wikblb" }));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        try std.testing.expect(blob.kind == .supplemental);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(title)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(title, record.title);
+        payloads[i] = try a.dupe(u8, record.payload);
+    }
+    try std.testing.expectEqualSlices(u8, payloads[1], payloads[0]);
+    const stored = try blobs.presentation_codec.decodeAlloc(a, payloads[0], title, .supplemental, null);
+    try std.testing.expectEqualSlices(u8, payloads[0], try blobs.presentation_codec.encodeAlloc(a, stored));
+    try std.testing.expectEqualStrings(title, stored.entry.title);
+    try std.testing.expect(stored.entry.language == null and stored.entry.language_code.len == 0);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.media.len);
+    const Scan = struct {
+        visible: std.ArrayList(u8) = .empty,
+        actions: std.ArrayList([]const u8) = .empty,
+        bold_words: std.ArrayList([]const u8) = .empty,
+        tables: usize = 0,
+        large_bold_actions: usize = 0,
+        fn spans(self: *@This(), allocator: std.mem.Allocator, values: []const blobs.presentation_types.Span) !void {
+            for (values) |span| {
+                try self.visible.appendSlice(allocator, span.text);
+                if (span.kind == .link) {
+                    // One source link can have multiple styled/entity runs.
+                    if (self.actions.items.len == 0 or !std.mem.eql(u8, self.actions.items[self.actions.items.len - 1], span.target)) {
+                        try self.actions.append(allocator, span.target);
+                        if (span.bold and span.font_scale != null and span.font_scale.? > 1) self.large_bold_actions += 1;
+                    }
+                }
+                if (span.bold) try self.bold_words.append(allocator, span.text);
+                try std.testing.expect(std.mem.indexOf(u8, span.text, "{|") == null and std.mem.indexOf(u8, span.text, "|}") == null);
+                try std.testing.expect(std.mem.indexOf(u8, span.text, "__NOTOC__") == null);
+            }
+        }
+        fn blocks(self: *@This(), allocator: std.mem.Allocator, values: []const blobs.presentation_types.Block) anyerror!void {
+            for (values) |block| {
+                try self.spans(allocator, block.spans);
+                if (block.table) |value| {
+                    self.tables += 1;
+                    try std.testing.expectEqual(@as(usize, 1), value.rows.len);
+                    try std.testing.expectEqual(@as(usize, 3), value.rows[0].cells.len);
+                    try std.testing.expect(value.rows[0].cells[0].header and !value.rows[0].cells[1].header and !value.rows[0].cells[2].header);
+                    for (value.rows[0].cells) |cell| {
+                        if (cell.blocks) |children| try self.blocks(allocator, children) else try self.spans(allocator, cell.spans);
+                    }
+                }
+            }
+        }
+    };
+    var scan: Scan = .{};
+    for (stored.entry.sections) |section| try scan.blocks(a, section.blocks);
+    try std.testing.expectEqual(@as(usize, 1), scan.tables);
+    try std.testing.expectEqual(@as(usize, 54), scan.actions.items.len);
+    try std.testing.expectEqual(@as(usize, 26), scan.large_bold_actions);
+    // Every dictionary entry remains present, in order, with its authored bold
+    // headword. The malformed word 'verb' has no formatting authority of its own.
+    const body_words = [_][]const u8{ "e", "ecce", "effortiar se", "era", "esseva", "esser", "Espania", "espaniol", "esque", "esser", "estate", "estranie", "etate", "etiam", "Europa", "europee", "evenir", "ex", "exprimer", "extra" };
+    var next: usize = 0;
+    for (scan.bold_words.items) |word| if (next < body_words.len and std.mem.eql(u8, word, body_words[next])) { next += 1; };
+    try std.testing.expectEqual(body_words.len, next);
+    for ([_][]const u8{ "Dictionario", "interlingua-catalano", "era = esseva <verb esser>", "espaniol <adj., n.> espanyol, -a", "vet aci", "esforçar-se", "Espania Espanya", "esque ¿", "esser ésser, estar", "estate estiu", "estranie estrany, -a", "etate edad", "etiam també", "Europa Europa", "europee europeu, -ea", "evenir esdevenir", "ex de, des de", "exprimer expressar", "extra fora de" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, text) != null);
+    for ("abcdefghijklmnopqrstuvwxyz", 0..) |letter, i| {
+        const sibling = try std.fmt.allocPrint(a, "../{c}", .{letter});
+        const fragment = try std.fmt.allocPrint(a, "#DICT{c}", .{letter});
+        // Parent and alphabet entries precede Capite and the 26 fragments.
+        try std.testing.expectEqualStrings(sibling, scan.actions.items[i + 1]);
+        try std.testing.expectEqualStrings(fragment, scan.actions.items[i + 28]);
+    }
+    try std.testing.expectEqualStrings("../", scan.actions.items[0]);
+    try std.testing.expectEqualStrings("#top", scan.actions.items[27]);
+}
+
+test "complete retained EU trzy preserves whole body table grids paint actions and codec through Writer" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Retained EU language-registry.tsv row401 explicitly binds pl/Poloniera;
+    // raw {{-pl-}} corroborates the captured expanded heading. The namespace
+    // registry below uses exact retained relevant rows, not guessed names.
+    const Local = struct {
+        fn get(_: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(null, value)) |language| language.code else null;
+        }
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Poloniera") or std.mem.eql(u8, value, "pl"))
+                return .{ .code = "pl", .heading = "Poloniera" };
+            return null;
+        }
+    };
+    var namespaces = try @import("namespace_registry").Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\teuwiktionary\n# dump-date\t20261001\n# content-language\teu\n" ++
+        "-2\tMedia\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "6\tFitxategi\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\tIrudi\n" ++
+        "10\tTxantiloi\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tKategoria\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n");
+    defer namespaces.deinit();
+    const codes: LanguageCodes = .{ .get_fn = Local.get, .resolve_fn = Local.resolve, .strong_fn = Local.resolve, .trusted_fn = Local.resolve, .namespace_catalog = &namespaces };
+    // Exact complete retained p6566/r374022 capture; fixture hashes and lengths
+    // are pinned by the source-only preparation receipt. No new expansion.
+    const expanded = "\n== Poloniera ==\n[[Kategoria:Poloniera-Euskara]]\n\n{| border=\"2\" cellpadding=\"4\" cellspacing=\"0\" style=\"margin: 0.5em 0 0.5em 1em; background: #f9f9f9; border: 1px #aaa solid; border-collapse: collapse; font-size: 95%; float:right;\" width=\"250\" style=\"float: right; margin-left:20px;\"\n|-\n| style=\"background:#B4CDCD;\" align=\"right\" width=\"100%\" colspan=\"2\" |[[dwa|2]] <div class=\"center\"><big><big><big><big>'''3'''</big></big></big></big></div>[[cztery|4]]\n|-\n| '''Zenbaki kardinala'''\n| [[trzy]]\n|-\n| '''Zenbaki ordinala'''\n| [[trzeci]]\n|}\n\n===Ahoskera===\n:* <span class=\"IPA\" style=\"white-space: nowrap; font-family:DejaVu Sans, Arial Unicode MS, Doulos SIL, Code2000, Chrysanthi Unicode, Gentium, GentiumAlt, TITUS Cyberbit Basic, Bitstream Cyberbit, Lucida Sans Unicode; /**/:inherit;\">'''[[IPA]]''': /'''t.ʂɨ'''/</span> \n:* <span class=\"IPA unicode audiolink\">&nbsp;[[:Media:pl-trzy.ogg|audio]]</span>&nbsp;&nbsp;&nbsp;&nbsp;<small>([[Wikipedia:Wikipedia:Media help (Ogg)|laguntza]], [[:Image:pl-trzy.ogg |fitxategia]])</small>\n\n===Jatorria===\n:* Proto-eslaviarretik: ''*tri'', Proto-indoeuroparretik: ''tréyes''.\n\n===Adjektiboa===\n:Zenbakizko adjektibo kardinala: '''trzy''' <span class=\"gender m\" title=\"genero maskulinoa\">''m<span class=\"gender-period\">.</span>''</span>\n\n:# [[hiru]]\n\n====Deklinabidea====\n</noinclude>{| border=\"2\" cellpadding=\"2\" cellspacing=\"0\" style=\"margin-bottom:0.5em; margin-left:1em; margin-right:1em; margin-top:0.5em; background: #ffffff; border: 1px #aaa solid; border-collapse: collapse;\"\n|- align=center\n! rowspan=\"2\" bgcolor=\"#CCCCFF\" |Kasua\n! colspan=\"3\" bgcolor=\"#CCCCFF\" |Pluralean bakarrik\n|-\n! bgcolor=\"#E5E5FF\" |Maskulino pertsonala\n! bgcolor=\"#E5E5FF\" |Besteak\n|- align=center\n! bgcolor=\"#CCCCFF\"  |Nominatiboa eta Bokatiboa\n| [[trzej]] / [[trzech]]\n| [[trzy]]\n|- align=center\n! bgcolor=\"#CCCCFF\" |Genitiboa\n| colspan=2 |[[trzech]]\n|- align=center\n! bgcolor=\"#CCCCFF\" |Datiboa\n| colspan=2 |[[trzem]]\n|- align=center\n! bgcolor=\"#CCCCFF\" |Akusatiboa\n| [[trzech]]\n| [[trzy]]\n|- align=center\n! bgcolor=\"#CCCCFF\" |Instrumentala\n| colspan=2 | [[trzema]]\n|- align=center\n! bgcolor=\"#CCCCFF\" |Lokatiboa\n| colspan=2 |[[trzech]]\n|}\n\n{| width=\"100%\" class=\"inflection-table;\" \n|-\n|<div class=\"NavFrame\">\n<div class=\"NavHead\" style=\"background:#ccccff\"><div class=\"center\">'''Polonierazko zenbaki aurkibidea'''</div></div>\n<div class=\"NavContent\">\n{| width=\"100%\" border=\"2\" cellpadding=\"4\" cellspacing=\"0\" style=\" background: #f9f9f9; border: 1px #aaa solid; border-collapse: collapse; font-size: 100%; text-align:left; \"\n| \n<ol start=\"0\">\n<li >[[zero]]\n<li >[[jeden]] \n<li >[[dwa]]\n<li >[[trzy]]\n<li >[[cztery]]\n<li >[[pięć]]\n<li >[[sześć]]\n<li >[[siedem]]\n<li >[[osiem]]\n<li >[[dziewięć]]\n</ol>\n|\n<ol start=\"10\">\n<li >[[dziesięć]]\n<li >[[jedenaście]]\n<li >[[dwanaście]]\n<li >[[trzynaście]]\n<li >[[czternaście]]\n<li >[[piętnaście]]\n<li >[[szesnaście]]\n<li >[[siedemnaście]]\n<li >[[osiemnaście]]\n<li >[[dziewiętnaście]]\n</ol>\n|\n<ol start=\"20\">\n<li >[[dwadzieścia]]\n<li >[[dwadzieścia jeden]]\n<li >[[dwadzieścia dwa]]\n<li >[[dwadzieścia trzy]]\n<li >[[dwadzieścia cztery]]\n<li >[[dwadzieścia pięć]]\n<li >[[dwadzieścia sześć]]\n<li >[[dwadzieścia siedem]]\n<li >[[dwadzieścia osiem]]\n<li >[[dwadzieścia dziewięć]]\n</ol>\n|\n<ol start=\"30\">\n<li >[[trzydzieści]]\n<li >[[trzydzieści jeden]]\n<li >[[trzydzieści dwa]]\n<li >[[trzydzieści trzy]]\n<li >[[trzydzieści cztery]]\n<li >[[trzydzieści pięć]]\n<li >[[trzydzieści sześć]]\n<li >[[trzydzieści siedem]]\n<li >[[trzydzieści osiem]]\n<li >[[trzydzieści dziewięć]]\n</ol>\n|\n<ol start=\"40\">\n<li >[[czterdzieści]]\n<li >[[czterdzieści jeden]]\n<li >[[czterdzieści dwa]]\n<li >[[czterdzieści trzy]]\n<li >[[czterdzieści cztery]]\n<li >[[czterdzieści pięć]]\n<li >[[czterdzieści sześć]]\n<li >[[czterdzieści siedem]]\n<li >[[czterdzieści osiem]]\n<li >[[czterdzieści dziewięć]]\n</ol>\n|-\n|\n<ol start=\"50\">\n<li >[[pięćdziesiąt]]\n<li >[[pięćdziesiąt jeden]]\n<li >[[pięćdziesiąt dwa]]\n<li >[[pięćdziesiąt trzy]]\n<li >[[pięćdziesiąt cztery]]\n<li >[[pięćdziesiąt pięć]]\n<li >[[pięćdziesiąt sześć]]\n<li >[[pięćdziesiąt siedem]]\n<li >[[pięćdziesiąt osiem]]\n<li >[[pięćdziesiąt dziewięć]]\n</ol>\n|\n<ol start=\"60\">\n<li >[[sześćdziesiąt]]\n<li >[[sześćdziesiąt jeden]]\n<li >[[sześćdziesiąt dwa]]\n<li >[[sześćdziesiąt trzy]]\n<li >[[sześćdziesiąt cztery]]\n<li >[[sześćdziesiąt pięć]]\n<li >[[sześćdziesiąt sześć]]\n<li >[[sześćdziesiąt siedem]]\n<li >[[sześćdziesiąt osiem]]\n<li >[[sześćdziesiąt dziewięć]]\n</ol>\n|\n<ol start=\"70\">\n<li >[[siedemdziesiąt]]\n<li >[[siedemdziesiąt jeden]]\n<li >[[siedemdziesiąt dwa]]\n<li >[[siedemdziesiąt trzy]]\n<li >[[siedemdziesiąt cztery]]\n<li >[[siedemdziesiąt pięć]]\n<li >[[siedemdziesiąt sześć]]\n<li >[[siedemdziesiąt siedem]]\n<li >[[siedemdziesiąt osiem]]\n<li >[[siedemdziesiąt dziewięć]]\n</ol>\n|\n<ol start=\"80\">\n<li >[[osiemdziesiąt]]\n<li >[[osiemdziesiąt jeden]]\n<li >[[osiemdziesiąt dwa]]\n<li >[[osiemdziesiąt trzy]]\n<li >[[osiemdziesiąt cztery]]\n<li >[[osiemdziesiąt pięć]]\n<li >[[osiemdziesiąt sześć]]\n<li >[[osiemdziesiąt siedem]]\n<li >[[osiemdziesiąt osiem]]\n<li >[[osiemdziesiąt dziewięć]]\n</ol>\n|\n<ol start=\"90\">\n<li >[[dziewięćdziesiąt]]\n<li >[[dziewięćdziesiąt jeden]]\n<li >[[dziewięćdziesiąt dwa]]\n<li >[[dziewięćdziesiąt trzy]]\n<li >[[dziewięćdziesiąt cztery]]\n<li >[[dziewięćdziesiąt pięć]]\n<li >[[dziewięćdziesiąt sześć]]\n<li >[[dziewięćdziesiąt siedem]]\n<li >[[dziewięćdziesiąt osiem]]\n<li >[[dziewięćdziesiąt dziewięć]]\n</ol>\n|}\n</div>\n</div>\n|}\n\n\n[[Kategoria:Zenbatzaile kardinalak polonieraz]]";
+    const raw = "{{-pl-}}\n\n{{Zenbaki infotaula\n| zenbaki = 3\n| aurreko zenbakia= [[dwa|2]]\n| ondorengo zenbakia= [[cztery|4]]\n| kardinal = [[trzy]]\n| ordinal = [[trzeci]]\n}}\n\n==={{Ahoskera}}===\n:* {{IPA|t.ʂɨ}} \n:* {{audio|pl-trzy.ogg|audio}}\n\n==={{Jatorria}}===\n:* Proto-eslaviarretik: ''*tri'', Proto-indoeuroparretik: ''tréyes''.\n\n==={{Adjektiboa}}===\n:Zenbakizko adjektibo kardinala: '''trzy''' {{m}}\n\n:# [[hiru]]\n\n====Deklinabidea====\n</noinclude>{| border=\"2\" cellpadding=\"2\" cellspacing=\"0\" style=\"margin-bottom:0.5em; margin-left:1em; margin-right:1em; margin-top:0.5em; background: #ffffff; border: 1px #aaa solid; border-collapse: collapse;\"\n|- align=center\n! rowspan=\"2\" bgcolor=\"#CCCCFF\" |Kasua\n! colspan=\"3\" bgcolor=\"#CCCCFF\" |Pluralean bakarrik\n|-\n! bgcolor=\"#E5E5FF\" |Maskulino pertsonala\n! bgcolor=\"#E5E5FF\" |Besteak\n|- align=center\n! bgcolor=\"#CCCCFF\"  |Nominatiboa eta Bokatiboa\n| [[trzej]] / [[trzech]]\n| [[trzy]]\n|- align=center\n! bgcolor=\"#CCCCFF\" |Genitiboa\n| colspan=2 |[[trzech]]\n|- align=center\n! bgcolor=\"#CCCCFF\" |Datiboa\n| colspan=2 |[[trzem]]\n|- align=center\n! bgcolor=\"#CCCCFF\" |Akusatiboa\n| [[trzech]]\n| [[trzy]]\n|- align=center\n! bgcolor=\"#CCCCFF\" |Instrumentala\n| colspan=2 | [[trzema]]\n|- align=center\n! bgcolor=\"#CCCCFF\" |Lokatiboa\n| colspan=2 |[[trzech]]\n|}\n\n{{Polonierazko zenbaki aurkibidea}}\n\n[[Kategoria:Zenbatzaile kardinalak polonieraz]]";
+    try std.testing.expectEqual(@as(usize, 5695), expanded.len);
+    try std.testing.expectEqual(@as(usize, 1364), raw.len);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, expanded, "</noinclude>"));
+    // Page-context noinclude closing tags are ignored. The control removes
+    // only that delimiter: every body byte, newline, style and link stays exact.
+    const control = try std.mem.replaceOwned(u8, a, expanded, "</noinclude>", "");
+    var payloads: [2][]const u8 = undefined;
+    for ([_][]const u8{ expanded, control }, 0..) |source, i| {
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/trzy-{d}", .{ tmp.sub_path, i });
+        var writer = try Writer.init(std.testing.io, a, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "trzy", source, raw, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "Poloniera"));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings("pl", metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("trzy")) orelse return error.TestUnexpectedResult;
+        payloads[i] = try a.dupe(u8, record.payload);
+    }
+    try std.testing.expectEqualSlices(u8, payloads[1], payloads[0]);
+    const stored = try blobs.presentation_codec.decodeAlloc(a, payloads[0], "trzy", .language, .{ .code = "pl", .heading = "Poloniera" });
+    try std.testing.expectEqualSlices(u8, payloads[0], try blobs.presentation_codec.encodeAlloc(a, stored));
+    try std.testing.expectEqualStrings("pl", stored.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+    const Scan = struct {
+        visible: std.ArrayList(u8) = .empty,
+        actions: std.ArrayList([]const u8) = .empty,
+        tables: usize = 0,
+        declensions: usize = 0,
+        indexes: usize = 0,
+        page_self_items: usize = 0,
+        navigation_items: usize = 0,
+        hiru_items: usize = 0,
+        big_three: bool = false,
+        italic_origin: bool = false,
+        fn spans(self: *@This(), allocator: std.mem.Allocator, values: []const blobs.presentation_types.Span) !void {
+            for (values) |span| {
+                try self.visible.appendSlice(allocator, span.text);
+                if (span.kind == .link) try self.actions.append(allocator, span.target);
+                if (span.kind == .text and std.mem.eql(u8, span.text, "trzy") and span.bold and span.target.len == 0 and
+                    std.mem.indexOf(u8, span.classes, "mw-selflink") != null) self.page_self_items += 1;
+                errdefer std.debug.print("EU span witness: text={s} target={s}\n", .{ span.text, span.target });
+                try std.testing.expect(std.mem.indexOf(u8, span.text, "{|") == null);
+                try std.testing.expect(std.mem.indexOf(u8, span.text, "|}") == null);
+                try std.testing.expect(std.mem.indexOf(u8, span.text, "</noinclude>") == null);
+                if (std.mem.eql(u8, span.text, "3") and std.mem.eql(u8, span.classes, "center")) {
+                    errdefer std.debug.print("EU infobox 3: bold={} scale={any} basis={s}\n", .{ span.bold, span.font_scale, @tagName(span.font_scale_basis) });
+                    try std.testing.expectEqual(true, span.bold);
+                    try std.testing.expectEqual(true, span.font_scale != null);
+                    // Authored table95% followed by four nested BIG defaults.
+                    var expected_scale: f32 = 0.95;
+                    for (0..4) |_| expected_scale *= 1.2;
+                    try std.testing.expectApproxEqAbs(expected_scale, span.font_scale.?, @as(f32, 0.000001));
+                    try std.testing.expectEqual(blobs.presentation_types.FontScaleBasis.context, span.font_scale_basis);
+                    self.big_three = true;
+                }
+                if (std.mem.eql(u8, span.text, "*tri") and span.italic) self.italic_origin = true;
+            }
+        }
+        fn blocks(self: *@This(), allocator: std.mem.Allocator, values: []const blobs.presentation_types.Block) anyerror!void {
+            for (values) |block| {
+                if (block.kind == .list_item and std.mem.eql(u8, block.list_path, ":#")) {
+                    errdefer std.debug.print("EU authored hiru block: path={s} number={s} depth={d}\n", .{ block.list_path, block.number, block.depth });
+                    try std.testing.expectEqualStrings("1", block.number);
+                    try std.testing.expectEqual(@as(u8, 2), block.depth);
+                    var body: std.ArrayList(u8) = .empty;
+                    var actions: usize = 0;
+                    for (block.spans) |span| {
+                        try body.appendSlice(allocator, span.text);
+                        try body.appendSlice(allocator, span.trail);
+                        if (span.kind == .link) {
+                            try std.testing.expectEqualStrings("hiru", span.target);
+                            try std.testing.expectEqualStrings("hiru", span.text);
+                            actions += 1;
+                        }
+                    }
+                    try std.testing.expectEqualStrings("hiru", std.mem.trim(u8, body.items, " \t\r\n"));
+                    try std.testing.expectEqual(@as(usize, 1), actions);
+                    self.hiru_items += 1;
+                }
+                try self.spans(allocator, block.spans);
+                if (block.table) |value| try self.table(allocator, value);
+            }
+        }
+        fn cell(self: *@This(), allocator: std.mem.Allocator, value: blobs.presentation_types.Cell) anyerror!void {
+            if (value.blocks) |children| {
+                try self.blocks(allocator, children);
+            } else {
+                try self.spans(allocator, value.spans);
+                if (value.nested_table) |nested| try self.table(allocator, nested);
+            }
+        }
+        fn table(self: *@This(), allocator: std.mem.Allocator, value: blobs.presentation_types.Table) anyerror!void {
+            self.tables += 1;
+            if (value.rows.len == 8 and value.rows[0].cells.len == 2 and value.rows[0].cells[0].rowspan == 2) {
+                self.declensions += 1;
+                const first = value.rows[0].cells;
+                try std.testing.expect(first[0].header and first[1].header);
+                try std.testing.expectEqual(@as(u16, 3), first[1].colspan);
+                try std.testing.expectEqualStrings("#ccccff", first[0].background.?);
+                try std.testing.expectEqualStrings("#e5e5ff", value.rows[1].cells[0].background.?);
+                try std.testing.expectEqual(@as(u16, 2), value.rows[3].cells[1].colspan);
+                try std.testing.expectEqualStrings("#ffffff", value.rows[2].cells[1].background.?);
+                const geometry = value.geometry.?;
+                try std.testing.expectEqual(@as(u16, 2), geometry.border.?);
+                try std.testing.expectEqual(@as(u16, 2), geometry.cell_padding.?);
+                try std.testing.expectEqual(@as(u16, 0), geometry.cell_spacing.?);
+            }
+            if (value.rows.len == 2 and value.rows[0].cells.len == 5 and value.rows[1].cells.len == 5) {
+                self.indexes += 1;
+                // Exact ordered labels from the retained ten authored HTML lists.
+                const navigation_labels = [_][]const u8{
+                    "zero", "jeden", "dwa", "trzy", "cztery", "pięć", "sześć", "siedem", "osiem", "dziewięć",
+                    "dziesięć", "jedenaście", "dwanaście", "trzynaście", "czternaście", "piętnaście", "szesnaście", "siedemnaście", "osiemnaście", "dziewiętnaście",
+                    "dwadzieścia", "dwadzieścia jeden", "dwadzieścia dwa", "dwadzieścia trzy", "dwadzieścia cztery", "dwadzieścia pięć", "dwadzieścia sześć", "dwadzieścia siedem", "dwadzieścia osiem", "dwadzieścia dziewięć",
+                    "trzydzieści", "trzydzieści jeden", "trzydzieści dwa", "trzydzieści trzy", "trzydzieści cztery", "trzydzieści pięć", "trzydzieści sześć", "trzydzieści siedem", "trzydzieści osiem", "trzydzieści dziewięć",
+                    "czterdzieści", "czterdzieści jeden", "czterdzieści dwa", "czterdzieści trzy", "czterdzieści cztery", "czterdzieści pięć", "czterdzieści sześć", "czterdzieści siedem", "czterdzieści osiem", "czterdzieści dziewięć",
+                    "pięćdziesiąt", "pięćdziesiąt jeden", "pięćdziesiąt dwa", "pięćdziesiąt trzy", "pięćdziesiąt cztery", "pięćdziesiąt pięć", "pięćdziesiąt sześć", "pięćdziesiąt siedem", "pięćdziesiąt osiem", "pięćdziesiąt dziewięć",
+                    "sześćdziesiąt", "sześćdziesiąt jeden", "sześćdziesiąt dwa", "sześćdziesiąt trzy", "sześćdziesiąt cztery", "sześćdziesiąt pięć", "sześćdziesiąt sześć", "sześćdziesiąt siedem", "sześćdziesiąt osiem", "sześćdziesiąt dziewięć",
+                    "siedemdziesiąt", "siedemdziesiąt jeden", "siedemdziesiąt dwa", "siedemdziesiąt trzy", "siedemdziesiąt cztery", "siedemdziesiąt pięć", "siedemdziesiąt sześć", "siedemdziesiąt siedem", "siedemdziesiąt osiem", "siedemdziesiąt dziewięć",
+                    "osiemdziesiąt", "osiemdziesiąt jeden", "osiemdziesiąt dwa", "osiemdziesiąt trzy", "osiemdziesiąt cztery", "osiemdziesiąt pięć", "osiemdziesiąt sześć", "osiemdziesiąt siedem", "osiemdziesiąt osiem", "osiemdziesiąt dziewięć",
+                    "dziewięćdziesiąt", "dziewięćdziesiąt jeden", "dziewięćdziesiąt dwa", "dziewięćdziesiąt trzy", "dziewięćdziesiąt cztery", "dziewięćdziesiąt pięć", "dziewięćdziesiąt sześć", "dziewięćdziesiąt siedem", "dziewięćdziesiąt osiem", "dziewięćdziesiąt dziewięć",
+                };
+                var count: usize = 0;
+                var self_count: usize = 0;
+                var cell_index: usize = 0;
+                for (value.rows) |row| for (row.cells) |item| {
+                    var sub: @This() = .{};
+                    try sub.cell(allocator, item);
+                    const is_first = cell_index == 0;
+                    try std.testing.expectEqual(@as(usize, if (is_first) 9 else 10), sub.actions.items.len);
+                    try std.testing.expectEqual(@as(usize, if (is_first) 1 else 0), sub.page_self_items);
+                    try std.testing.expectEqual(@as(usize, 10), sub.actions.items.len + sub.page_self_items);
+                    // Ordinary cells flatten semantic HTML list blocks into
+                    // spans, including the number and punctuation. Check the
+                    // final stored projection for every ordinal/body pair.
+                    errdefer std.debug.print("EU navigation cell={d} body={s}\n", .{ cell_index, sub.visible.items });
+                    try std.testing.expectEqual(false, item.blocks != null);
+                    try std.testing.expectEqual(false, item.nested_table != null);
+                    var lines = std.mem.splitScalar(u8, sub.visible.items, '\n');
+                    var item_index: usize = 0;
+                    while (lines.next()) |line| {
+                        const actual = std.mem.trim(u8, line, " \t\r");
+                        if (actual.len == 0) continue;
+                        try std.testing.expectEqual(true, item_index < 10);
+                        const ordinal = cell_index * 10 + item_index;
+                        const expected = try std.fmt.allocPrint(allocator, "{d}. {s}", .{ ordinal, navigation_labels[ordinal] });
+                        errdefer std.debug.print("EU navigation ordinal={d} expected={s} actual={s}\n", .{ ordinal, expected, actual });
+                        try std.testing.expectEqualStrings(expected, actual);
+                        item_index += 1;
+                    }
+                    try std.testing.expectEqual(@as(usize, 10), item_index);
+                    self.navigation_items += item_index;
+                    if (is_first) {
+                        const targets = [_][]const u8{ "zero", "jeden", "dwa", "cztery", "pięć", "sześć", "siedem", "osiem", "dziewięć" };
+                        for (targets, sub.actions.items) |expected, actual| try std.testing.expectEqualStrings(expected, actual);
+                    }
+                    count += sub.actions.items.len;
+                    self_count += sub.page_self_items;
+                    cell_index += 1;
+                };
+                try std.testing.expectEqual(@as(usize, 99), count);
+                try std.testing.expectEqual(@as(usize, 1), self_count);
+                try std.testing.expectEqual(@as(usize, 100), count + self_count);
+            }
+            try self.spans(allocator, value.caption);
+            for (value.rows) |row| for (row.cells) |item| try self.cell(allocator, item);
+        }
+    };
+    var scan: Scan = .{};
+    for (stored.entry.sections) |section| try scan.blocks(a, section.blocks);
+    try std.testing.expectEqual(@as(usize, 4), scan.tables);
+    try std.testing.expectEqual(@as(usize, 1), scan.declensions);
+    try std.testing.expectEqual(@as(usize, 1), scan.indexes);
+    {
+        errdefer std.debug.print("EU infobox/origin: big_three={} italic_origin={}\n", .{ scan.big_three, scan.italic_origin });
+        try std.testing.expectEqual(true, scan.big_three);
+        try std.testing.expectEqual(true, scan.italic_origin);
+    }
+    // Infobox cardinal, nominative, accusative, and navigation entry 3.
+    try std.testing.expectEqual(@as(usize, 4), scan.page_self_items);
+    try std.testing.expectEqual(@as(usize, 100), scan.navigation_items);
+    try std.testing.expectEqual(@as(usize, 1), scan.hiru_items);
+    for ([_][]const u8{ "Zenbaki kardinala", "Zenbaki ordinala", "Proto-eslaviarretik:", "tréyes", "Zenbakizko adjektibo kardinala:", "Nominatiboa eta Bokatiboa", "Instrumentala", "Lokatiboa", "Polonierazko zenbaki aurkibidea" }) |text| {
+        errdefer std.debug.print("EU required body text: {s}\n", .{text});
+        try std.testing.expectEqual(true, std.mem.indexOf(u8, scan.visible.items, text) != null);
+    }
+    for ([_][]const u8{ "dwa", "cztery", "trzeci", "hiru", "trzej", "trzech", "trzem", "trzema", "zero", "dziewięćdziesiąt dziewięć" }) |target| {
+        errdefer std.debug.print("EU required action target: {s}\n", .{target});
+        var found = false;
+        for (scan.actions.items) |actual| if (std.mem.eql(u8, actual, target)) { found = true; };
+        try std.testing.expectEqual(true, found);
+    }
+}
+
+
+test "captured Slovak biola keeps full body and error children through Writer codec" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Fixture = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Slovenčina") or std.mem.eql(u8, value, "sk"))
+                return .{ .code = "sk", .heading = "Slovenčina" };
+            return null;
+        }
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return (resolve(ctx, value) orelse return null).code;
+        }
+    };
+    // Captured p1243/r164571, ordinal9: raw287/8c52d87e, expanded795/50782a49.
+    const raw = "== Slovenčina ==\n\n=== Výslovnosť ===\n* {{IPA|bɪjɔla}}\n\n=== Podstatné meno ===\n* rod ženský\n\n==== Význam ====\n# [[slangový]] [[výraz]] [[pre]] [[biológia|biológiu]].{{Doplňte zdroj|20150910192507}}\n\n[[Kategória:Slovenské podstatné mená]]\n[[Kategória:Slangové výrazy]]";
+    const expanded = "== Slovenčina ==\n\n=== Výslovnosť ===\n* [[:w:sk:Medzinárodná fonetická abeceda|IPA]]: <span title=\"Toto je prepis výslovnosti pomocou medzinárodnej fonetickej abecedy IPA.\" class=\"IPA\">[bɪjɔla]</span>\n\n=== Podstatné meno ===\n* rod ženský\n\n==== Význam ====\n# [[slangový]] [[výraz]] [[pre]] [[biológia|biológiu]].&lrm;<sup dir=\"ltr\" class=\"Šablóna__Doplňte_zdroj\" style=\"border: 2px solid #<strong class=\"error\">Expression error: UnexpectedOperator</strong>;\"><span title=\"Je potrebné doložiť zdroj predchádzajúceho tvrdenia alebo citácie. Označené <strong class=\"error\">Time error: InvalidDate</strong> SE(L)Č.\">zdroj?</span></sup>[[Kategória:Údržba:Doplniť zdroj| 20150910192507biola]]\n\n[[Kategória:Slovenské podstatné mená]]\n[[Kategória:Slangové výrazy]]";
+    var namespaces = try @import("namespace_registry").Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tskwiktionary\n# dump-date\t20261001\n# content-language\tsk\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "10\tŠablóna\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tKategória\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n");
+    defer namespaces.deinit();
+    try namespaces.attachInterwikiMap("# interwiki-magic\t1\nw\t1\t0\t0\t0\thttps://sk.wikipedia.org/wiki/$1\t0\n");
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = Fixture.get, .resolve_fn = Fixture.resolve, .trusted_fn = Fixture.resolve, .strong_fn = Fixture.resolve };
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "biola", expanded, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
+    const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(4096));
+    try std.testing.expect(std.mem.indexOf(u8, report, "literal_markup") != null);
+    try std.testing.expect(std.mem.indexOf(u8, report, "missing_language_heading") == null);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "Slovenčina"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("sk", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("biola")).?;
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    try std.testing.expectEqualStrings("sk", decoded.entry.language_code);
+    try std.testing.expectEqualStrings("Slovenčina", decoded.entry.language.?);
+    var headings: usize = 0;
+    var list_items: usize = 0;
+    var definitions: usize = 0;
+    var actions: usize = 0;
+    var action_counts: [5]usize = @splat(0);
+    var errors: usize = 0;
+    for (decoded.entry.sections) |section| {
+        for ([_][]const u8{ "Výslovnosť", "Podstatné meno", "Význam" }, [_]u8{ 3, 3, 4 }) |title, level| {
+            if (std.mem.eql(u8, section.title, title)) {
+                headings += 1;
+                try std.testing.expectEqual(level, section.level);
+            }
+        }
+        for (section.blocks) |block| {
+            if (block.kind == .list_item) list_items += 1;
+            if (block.kind == .definition) {
+                definitions += 1;
+                var text: std.ArrayList(u8) = .empty;
+                for (block.spans) |span| try text.appendSlice(a, span.text);
+                try std.testing.expectEqualStrings("slangový výraz pre biológiu.‎<sup dir=\"ltr\" class=\"Šablóna__Doplňte_zdroj\" style=\"border: 2px solid #Expression error: UnexpectedOperator;\"><span title=\"Je potrebné doložiť zdroj predchádzajúceho tvrdenia alebo citácie. Označené Time error: InvalidDate SE(L)Č.\">zdroj?", text.items);
+            }
+            for (block.spans) |span| {
+                if (span.kind == .link or span.kind == .external_link) {
+                    actions += 1;
+                    var matched = false;
+                    for ([_][]const u8{ "slangový", "výraz", "pre", "biológia", "https://sk.wikipedia.org/wiki/sk:Medzin%C3%A1rodn%C3%A1_fonetick%C3%A1_abeceda" }, [_][]const u8{ "slangový", "výraz", "pre", "biológiu", "IPA" }, 0..) |target, label, action_index| {
+                        if (std.mem.eql(u8, span.target, target)) {
+                            matched = true;
+                            action_counts[action_index] += 1;
+                            try std.testing.expectEqualStrings(label, span.text);
+                            try std.testing.expectEqual(target[0] == 'h', span.kind == .external_link);
+                        }
+                    }
+                    try std.testing.expect(matched);
+                }
+                if (std.mem.indexOf(u8, span.text, "Expression error:") != null or std.mem.indexOf(u8, span.text, "Time error:") != null) {
+                    errors += 1;
+                    try std.testing.expect(span.bold and !span.superscript and span.direction.len == 0);
+                }
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 3), headings);
+    try std.testing.expectEqual(@as(usize, 2), list_items);
+    try std.testing.expectEqual(@as(usize, 1), definitions);
+    try std.testing.expectEqual(@as(usize, 5), actions);
+    for (action_counts) |count| try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expectEqual(@as(usize, 2), errors);
+    for ([_][]const u8{ "[bɪjɔla]", "rod ženský", "border: 2px solid #", "zdroj?", "Šablóna__Doplňte_zdroj" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, record.payload, text) != null);
+    try std.testing.expectEqual(@as(usize, 0), decoded.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 0), decoded.entry.media.len);
+}
+
+const ImageHeadingTestLanguages = struct {
+    fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+        if (std.mem.eql(u8, value, "Estonyano") or std.mem.eql(u8, value, "Estonyo")) return .{ .heading = "Estonyo", .code = "et" };
+        if (std.mem.eql(u8, value, "Polones") or std.mem.eql(u8, value, "Polako")) return .{ .heading = "Polako", .code = "pl" };
+        // Five captured names plus two separately reviewed exact aliases; no flag authority.
+        inline for (.{ .{ "Tagalog", "tl" }, .{ "Kapampangan", "pam" }, .{ "Leton", "lv" }, .{ "Litwano", "lt" }, .{ "Tseko", "cs" }, .{ "Estonyano", "et" }, .{ "Polones", "pl" } }) |row| {
+            if (std.mem.eql(u8, value, row[0])) return .{ .heading = row[0], .code = row[1] };
+        }
+        return null;
+    }
+    fn strong(ctx: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+        if (std.mem.eql(u8, value, "Estonyano") or std.mem.eql(u8, value, "Polones")) return null;
+        return resolve(ctx, value);
+    }
+    fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+        return (resolve(ctx, value) orelse return null).code;
+    }
+    fn weak(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+        if (std.mem.eql(u8, value, "Weak alias")) return .{ .heading = "Tagalog", .code = "tl" };
+        return resolve(null, value);
+    }
+    fn none(_: ?*const anyopaque, _: []const u8) ?ResolvedLanguage { return null; }
+    fn section(source: []const u8) language_source.Section {
+        const end = std.mem.indexOfScalar(u8, source, '\n') orelse source.len;
+        return .{ .heading = blobs.wikitext_syntax.controlHeading(source[0..end], null).?.title, .source = source };
+    }
+    fn actions(stored: blobs.presentation_types.Stored, target: []const u8) usize {
+        var count: usize = 0;
+        for (stored.entry.sections) |part| for (part.blocks) |block| for (block.spans) |span| {
+            if (span.kind == .link and std.mem.eql(u8, span.target, target)) count += 1;
+        };
+        return count;
+    }
+};
+
+test "physical image language declarations require complete strong or trusted labels" {
+    const ns = @import("namespace_registry");
+    var namespaces = try ns.Registry.init(std.testing.allocator, ns.english_test_fixture);
+    defer namespaces.deinit();
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = ImageHeadingTestLanguages.get, .resolve_fn = ImageHeadingTestLanguages.weak, .trusted_fn = ImageHeadingTestLanguages.resolve, .strong_fn = ImageHeadingTestLanguages.strong };
+    inline for (.{ .{ "Tagalog", "tl" }, .{ "Kapampangan", "pam" }, .{ "Leton", "lv" }, .{ "Litwano", "lt" }, .{ "Tseko", "cs" }, .{ "Estonyano", "et" }, .{ "Polones", "pl" } }) |row| {
+        inline for (.{ "File", "Image" }) |prefix| {
+            const source = "==[[" ++ prefix ++ ":Flag.svg|31x27px]] " ++ row[0] ++ "==\n# body\n";
+            const section = ImageHeadingTestLanguages.section(source);
+            try std.testing.expectEqualStrings(row[0], imageLanguageLabel(codes, section).?);
+            try std.testing.expectEqualStrings(row[1], resolveSection(codes, section).?.code);
+            try std.testing.expectEqualStrings(row[1], boundaryLanguage(codes, section).?.code);
+            try std.testing.expectEqualStrings(source, section.source);
+        }
+    }
+    inline for (.{ "Regional vocabulary", "Unknown", "Weak alias", "Tagalog trailing prose" }) |label| {
+        const source = "==[[File:Flag.svg|20px]] " ++ label ++ "==\n===Noun===\n# body\n";
+        const section = ImageHeadingTestLanguages.section(source);
+        try std.testing.expectEqualStrings(label, imageLanguageLabel(codes, section).?);
+        try std.testing.expect(!hasExplicitLanguageDeclaration(codes, section));
+        try std.testing.expect(resolveSection(codes, section) == null);
+        try std.testing.expect(boundaryLanguage(codes, section) == null);
+    }
+    const untrusted: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = ImageHeadingTestLanguages.get, .resolve_fn = ImageHeadingTestLanguages.weak, .trusted_fn = ImageHeadingTestLanguages.none, .strong_fn = ImageHeadingTestLanguages.none };
+    try std.testing.expect(resolveSection(untrusted, ImageHeadingTestLanguages.section("==[[File:Flag.svg]] Tagalog==\n# body\n")) == null);
+    // Use the actual captured-option matching API; a width-looking caption is
+    // not accepted when that spelling is absent from the selected snapshot.
+    const snapshot = "# wikidict-image-options-v1\n# wiki\ttestwiktionary\n# dump-date\t20261001\n# content-language\ttest\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n# behavior-switches-sha256\t0000000000000000000000000000000000000000000000000000000000000000\nimg_width\t1\t\"$1lapad\"\n";
+    var options = try ns.image_options.Registry.init(std.testing.allocator, snapshot, "testwiktionary", "20261001", "test", @splat(0), @splat(0));
+    defer options.deinit();
+    var localized = codes; localized.image_options = &options;
+    try std.testing.expect(resolveSection(localized, ImageHeadingTestLanguages.section("==[[Image:Flag.svg|25lapad]] Tagalog==\n# body\n")) != null);
+    try std.testing.expect(imageLanguageLabel(localized, ImageHeadingTestLanguages.section("==[[Image:Flag.svg|25px]] Tagalog==\n# body\n")) == null);
+}
+
+test "image language proof rejects visible links captions and nested scope" {
+    const ns = @import("namespace_registry");
+    var namespaces = try ns.Registry.init(std.testing.allocator, ns.english_test_fixture);
+    defer namespaces.deinit();
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = ImageHeadingTestLanguages.get, .trusted_fn = ImageHeadingTestLanguages.resolve, .strong_fn = ImageHeadingTestLanguages.strong };
+    inline for (.{
+        "==[[:File:Flag.svg|30px]] Tagalog==\n# body\n",
+        "==[[File:Flag.svg|Tagalog]] Tagalog==\n# body\n",
+        "==[[File:Flag.svg|30px|caption]] Tagalog==\n# body\n",
+        "==[[File:Flag.svg|alt=Tagalog]] Tagalog==\n# body\n",
+        "==[[File:Flag.svg|link=Tagalog]] Tagalog==\n# body\n",
+        "==[[File:Sound.ogg|30px]] Tagalog==\n# body\n",
+        "==[[Other:Flag.svg|30px]] Tagalog==\n# body\n",
+        "==[[File:Flag.svg#Tagalog|30px]] Tagalog==\n# body\n",
+        "==[[File:Flag.svg|{{width}}]] Tagalog==\n# body\n",
+        "==[[File:Flag.svg|[[Tagalog]]]] Tagalog==\n# body\n",
+        "==[[File:Flag.svg|30px] Tagalog==\n# body\n",
+        "==<nowiki>[[File:Flag.svg|30px]]</nowiki> Tagalog==\n# body\n",
+        "==<span title='[[File:Flag.svg|30px]] Tagalog'>other</span>==\n# body\n",
+        "==[[File:Flag.svg|30px]] <nowiki>Tagalog</nowiki>==\n# body\n",
+        "==[[File:Flag.svg|30px]] [[Tagalog]]==\n# body\n",
+        "==[[File:Flag.svg|30px]] {{Tagalog}}==\n# body\n",
+        "==[[File:Flag.svg|30px]] 'Tagalog'==\n# body\n",
+        "==[[File:Flag.svg|30px]] Noun==\n# body\n",
+        "==[[File:Flag.svg|30px]] Pronunciation==\n# body\n",
+        "===[[File:Flag.svg|30px]] Tagalog===\n# body\n",
+    }) |source| try std.testing.expect(imageLanguageLabel(codes, ImageHeadingTestLanguages.section(source)) == null);
+    try std.testing.expect(imageLanguageLabel(codes, .{ .heading = "[[File:Flag.svg|30px]] Tagalog", .source = "" }) == null);
+    const context: LanguageMarkers = .{ .codes = &codes };
+    const source = "==Tagalog==\n# first\n===[[File:Flag.svg|30px]] Noun===\n# nested noun\n===[[File:Flag.svg|30px]] Pronunciation===\n# nested pronunciation\n===[[File:Flag.svg|30px]] Unknown===\n# nested unknown\n<nowiki>\n==[[File:Flag.svg|30px]] Leton==\n</nowiki>\n{{hidden|\n==[[File:Flag.svg|30px]] Litwano==\n}}\n==[[Image:Flag.svg|30px]] Kapampangan==\n# last\n";
+    var iterator = languageSections(source, &context);
+    const first = iterator.next().?;
+    const second = iterator.next().?;
+    try std.testing.expectEqualStrings("tl", resolveSection(codes, first).?.code);
+    try std.testing.expect(std.mem.indexOf(u8, first.source, "nested unknown") != null);
+    try std.testing.expectEqualStrings("pam", resolveSection(codes, second).?.code);
+    try std.testing.expect(iterator.next() == null);
+}
+
+
+test "unknown image support remains with its owner without borrowing neighboring languages" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer namespaces.deinit();
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = ImageHeadingTestLanguages.get,
+        .resolve_fn = ImageHeadingTestLanguages.weak, .trusted_fn = ImageHeadingTestLanguages.resolve, .strong_fn = ImageHeadingTestLanguages.strong };
+    const source = "==[[File:Flag.svg|30px]] Tagalog==\n# [[first|first sense]]\n==[[File:Flag.svg|30px]] Regional vocabulary==\n===Noun===\n# [[regional_term|regional sense]]\n==[[File:Flag.svg|30px]] Kapampangan==\n# [[last|last sense]]\n";
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root); defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "unknown-support", source, source, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    inline for (.{ .{ "Tagalog", "tl" }, .{ "Kapampangan", "pam" } }) |row| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, row[0])); defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(row[1], metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find("unknown-support")) orelse return error.TestUnexpectedResult;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        const tl = std.mem.eql(u8, row[1], "tl");
+        try std.testing.expectEqual(@as(usize, @intFromBool(tl)), ImageHeadingTestLanguages.actions(decoded, "first"));
+        // Ordinary internal titles normalize authored underscores to spaces.
+        try std.testing.expectEqual(@as(usize, @intFromBool(tl)), ImageHeadingTestLanguages.actions(decoded, "regional term"));
+        try std.testing.expectEqual(@as(usize, 0), ImageHeadingTestLanguages.actions(decoded, "regional_term"));
+        try std.testing.expectEqual(@as(usize, @intFromBool(!tl)), ImageHeadingTestLanguages.actions(decoded, "last"));
+        const boundary = std.mem.indexOf(u8, source, "==[[File:Flag.svg|30px]] Kapampangan==").?;
+        const expected_source = if (tl) source[0..boundary] else source[boundary..];
+        var report: presentation_document.Fallbacks = .{};
+        const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAlloc(
+            a, record.title, .language, row[0], row[1], MissingText.untracked(expected_source), null, .{}, &namespaces,
+            null, null, .{}, &report, null, &.{}, null, &.{}, .{ .heading = row[0], .code = row[1] });
+        const expected = try blobs.presentation_codec.decodeAlloc(a, payload, record.title, .language, metadata);
+        try std.testing.expectEqualDeep(expected, decoded);
+        try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, decoded));
+    }
+}
+
+const ImageHeadingAbakaRaw = "==[[Image:Flag of Philippines.svg|30px]] Tagalog==\n====Ibang paraan ng pagbaybay====\n*[[abaca]]\n\n===Pagbigkas===\n*{{API|tl|/ˈa.bɐ.kɐ/}}\n\n===Etimolohiya===\nSalitang '''''abaka''''' ng Tagalog\n\n===Pangngalan===\n{{tl-noun}} (''Baybayin'' '''[[ᜀᜊᜃ]]''') \n#Halaman na ang [[dahon]] ay hawig sa [[saging]]. Napagkukunan ito ng himaymay, [[hibla]] o sinulid na maaring gamitin sa paghabi ng damit, kurtina, at iba pa.  ''Musa textilis'' ang siyentipikong pangalan nito\n#:''Sinimulang tamnan ng '''abaka''' ang lupain ni Teodoro.''\n#Ang hibla mula sa abaka.\n#:''Ang salaping papel ng [[Pilipinas]] ay gawa sa '''abaka'''.''\n\n====Mga salin====\n{{Salinan|Halamang ''Musa textilis''}}\n<div class=\"references-small\" style=\"-moz-column-count:2; column-count:2;\">\n*[[Aleman]]: [[Abaka]]\n*[[Bulgaro]]: [[абака]]\n*[[Danes]]: [[abaca]]\n*[[Estonyano]]: [[kanepbanaan]], [[manillakanep]], [[kiubanaan]], [[kiudbanaan]]\n*[[Galyego]]: [[abacá]]\n*[[Griyego]]: [[αβάκα]] (''abaka'', pambabae)\n*[[Hapones]]: [[マニラアサ]] (''manira asa''), [[マニライトバショウ]] (''manira itobashō'')\n*[[Ingles]]: [[abaca]], [[Manila hemp]], [[Manilla hemp]], [[musa textilis]], [[Musa textilis]]\n*[[Italyano]]: [[abaca]]\n*[[Kastila]]: [[abacá]] (panlalake)\n*[[Latin]]: [[Musa textilis]]\n*[[Olandes]]: [[manillahennep]] (panlalake)\n*[[Polones]]: [[banan manilski]]\n*[[Portuges]]: [[abaca]]\n*[[Pranses]]: [[abaca]] (panlalake)\n*[[Ruso]]: [[текстильный банан]] (''tekstíl’nyj banán'', panlalake), [[абака]] (''abaká'', pambabae)\n*[[Tsino]]: [[蕉麻]] (''jiāomá'')， [[马尼拉麻]] (''Mǎnílā má'')\n|}</div></div>\n\n{{Salinan|Hibla mula sa abaka}}\n<div class=\"references-small\" style=\"-moz-column-count:2; column-count:2;\">\n*Aleman: [[Abaca]], [[Manila]], [[Manilafaser]] (pambabae), [[Manilahanf]] (panlalake), [[Abaka]] (panlalake)\n*Danes: [[manilahamp]], [[Manilahamp]], [[Manila]]\n*Estonyano: [[manilla]], [[manillakanep]], [[maniila]], [[maniila kanep]], [[manilla kanep]]\n*Galyego: [[cánabo de Manila]] (panlalake)\n*[[Interlingua]]: [[abaca]]\n*[[Ingles]]: [[abaca]], [[abaca fiber]], [[Manila hemp]], [[Manilla hemp]]\n*Italyano: [[canapa di Manila]] (pambabae), [[abaca]] (pambabae)\n*Kastila: [[cáñamo de Manila]] (panlalake), [[abacá]]\n*[[Leton]]: [[Manilas kaņepāji]] (panlalake, pantangi)\n*[[Litwano]]: [[Manilos kanapė]] (pambabae)\n*[[Pinlandes]]: [[manilla]]\n*Polones: [[manila]] (pambabae)\n*Pranses: [[chanvre de Manille]] (panlalake), [[abaca]] (panlalake)\n*Ruso: [[манильская пенька]] (pambabae), [[абака]] (pambabae)\n*[[Suweko]]: [[abaca]], [[manillahampa]], [[Manillahampa]], [[manilla]]\n*[[Tseko]]: [[manilské konopí]]\n|}</div></div>\n\n[[Category:Mga katutubong salitang Tagalog]]\n[[Kategorya:Mga pangngalang Tagalog]]\n\n==[[Image:Flag of Estonia.svg|30px]] Estonyano==\n===Pangngalan===\n'''abaka'''\n\n#[[abaka#Tagalog|abaka]]\n\n[[Category:Mga pangngalang Estonyano]]\n\n==[[Image:Flag of Philippines.svg|30px]] Kapampangan==\n===Pangngalan===\n'''abaka'''\n\n#[[abaka#Tagalog|abaka]]\n\n[[Category:Mga pangngalang Kapampangan]]\n\n==[[Image:Flag of Latvia.svg|30px]] Leton==\n===Pangngalan===\n(''pambabae'')<br>\n'''abaka'''\n\n#[[abaka#Tagalog|abaka]]\n\n[[Category:Mga pangngalang Leton]]\n\n==[[Image:Flag of Lithuania.svg|30px]] Litwano==\n===Pangngalan===\n(''pambabae'')<br>\n'''abaka'''\n\n#[[abaka#Tagalog|abaka]]\n\n[[Category:Mga pangngalang Litwano]]\n\n==[[Image:Flag of Poland.svg|30px]] Polones==\n===Pangngalan===\n(''pambabae'')<br>\n'''abaka'''\n\n#[[abaka#Tagalog|abaka]]\n\n[[Category:Mga pangngalang Polones]]\n\n==[[Image:Flag of the Czech Republic.svg|30px]] Tseko==\n===Pangngalan===\n(''pambabae'')<br>\n'''abaka'''\n\n#[[abaka#Tagalog|abaka]]\n\n[[Category:Mga pangngalang Tseko]]\n\n[[cs:abaka]]\n[[de:abaka]]\n[[en:abaka]]\n[[et:abaka]]\n[[fi:abaka]]\n[[fr:abaka]]\n[[hu:abaka]]\n[[id:abaka]]\n[[ko:abaka]]\n[[ky:abaka]]\n[[lt:abaka]]\n[[mg:abaka]]\n[[ms:abaka]]\n[[nl:abaka]]\n[[pl:abaka]]\n[[pt:abaka]]\n[[ru:abaka]]\n[[tr:abaka]]\n[[zh:abaka]]";
+const ImageHeadingAbakaExpanded = "==[[Image:Flag of Philippines.svg|30px]] Tagalog==\n====Ibang paraan ng pagbaybay====\n*[[abaca]]\n\n===Pagbigkas===\n*[[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[Apendise:Tagalog na pagbigkas|gabay]])</sup>:&#32;<span class=\"IPA nowrap\">/ˈa.bɐ.kɐ/</span>[[Category:Tagalog na salitang may 3 pantig|ABAKA]][[Category:Tagalog na salitang may pagbigkas na IPA|ABAKA]]\n\n===Etimolohiya===\nSalitang '''''abaka''''' ng Tagalog\n\n===Pangngalan===\n<span class=\"headword-line\"><strong class=\"Latn headword\" lang=\"tl\">abaka</strong></span>[[Category:Tagalog na lema|ABAKA]][[Category:Tagalog na pangngalan|ABAKA]][[Category:Tagalog na salitang walang pagbaybay na Baybayin|ABAKA]][[Category:Tagalog na salitang walang padrong pambigkas|ABAKA]][[Category:Pahinang may entrada|ABAKA]][[Category:Pahinang may 7 entrada|ABAKA]][[Category:Pahinang may paulong pangwika na hindi magkasunod-sunod|ABAKA]][[Category:Pahinang may paulong pangwika na hindi naaayon|ABAKA]][[Category:Pahinang may paulong pangwika na hindi gumagamit ng padron|ABAKA]][[Category:Pahinang may paulong pangwika na hindi gumagamit ng padron|ABAKA]][[Category:Pahinang may paulong pangwika na hindi gumagamit ng padron|ABAKA]][[Category:Pahinang may paulong pangwika na hindi gumagamit ng padron|ABAKA]][[Category:Pahinang may paulong pangwika na hindi gumagamit ng padron|ABAKA]][[Category:Pahinang may paulong pangwika na hindi gumagamit ng padron|ABAKA]][[Category:Pahinang may paulong pangwika na hindi gumagamit ng padron|ABAKA]] (''Baybayin'' '''[[ᜀᜊᜃ]]''') \n#Halaman na ang [[dahon]] ay hawig sa [[saging]]. Napagkukunan ito ng himaymay, [[hibla]] o sinulid na maaring gamitin sa paghabi ng damit, kurtina, at iba pa.  ''Musa textilis'' ang siyentipikong pangalan nito\n#:''Sinimulang tamnan ng '''abaka''' ang lupain ni Teodoro.''\n#Ang hibla mula sa abaka.\n#:''Ang salaping papel ng [[Pilipinas]] ay gawa sa '''abaka'''.''\n\n====Mga salin====\n<div class=\"NavFrame\" id=\"Translations-Halamang_&amp;#039;&amp;#039;Musa_textilis&amp;#039;&amp;#039;\"><div class=\"NavHead\" style=\"text-align:left\">Halamang ''Musa textilis''</div><div class=\"NavContent\"><table class=\"translations\" role=\"presentation\" data-gloss=\"Halamang ''Musa textilis''\"><tr><td class=\"translations-cell multicolumn-list\" colspan=\"3\">[[Category:Entradang may talasalinan|ABAKA]]<templatestyles src=\"Module:translations/styles.css\"/>\n<div class=\"references-small\" style=\"-moz-column-count:2; column-count:2;\">\n*[[Aleman]]: [[Abaka]]\n*[[Bulgaro]]: [[абака]]\n*[[Danes]]: [[abaca]]\n*[[Estonyano]]: [[kanepbanaan]], [[manillakanep]], [[kiubanaan]], [[kiudbanaan]]\n*[[Galyego]]: [[abacá]]\n*[[Griyego]]: [[αβάκα]] (''abaka'', pambabae)\n*[[Hapones]]: [[マニラアサ]] (''manira asa''), [[マニライトバショウ]] (''manira itobashō'')\n*[[Ingles]]: [[abaca]], [[Manila hemp]], [[Manilla hemp]], [[musa textilis]], [[Musa textilis]]\n*[[Italyano]]: [[abaca]]\n*[[Kastila]]: [[abacá]] (panlalake)\n*[[Latin]]: [[Musa textilis]]\n*[[Olandes]]: [[manillahennep]] (panlalake)\n*[[Polones]]: [[banan manilski]]\n*[[Portuges]]: [[abaca]]\n*[[Pranses]]: [[abaca]] (panlalake)\n*[[Ruso]]: [[текстильный банан]] (''tekstíl’nyj banán'', panlalake), [[абака]] (''abaká'', pambabae)\n*[[Tsino]]: [[蕉麻]] (''jiāomá'')， [[马尼拉麻]] (''Mǎnílā má'')\n|}</div></div>\n\n<div class=\"NavFrame\" id=\"Translations-Hibla_mula_sa_abaka\"><div class=\"NavHead\" style=\"text-align:left\">Hibla mula sa abaka</div><div class=\"NavContent\"><table class=\"translations\" role=\"presentation\" data-gloss=\"Hibla mula sa abaka\"><tr><td class=\"translations-cell multicolumn-list\" colspan=\"3\">[[Category:Entradang may talasalinan|ABAKA]]<templatestyles src=\"Module:translations/styles.css\"/>\n<div class=\"references-small\" style=\"-moz-column-count:2; column-count:2;\">\n*Aleman: [[Abaca]], [[Manila]], [[Manilafaser]] (pambabae), [[Manilahanf]] (panlalake), [[Abaka]] (panlalake)\n*Danes: [[manilahamp]], [[Manilahamp]], [[Manila]]\n*Estonyano: [[manilla]], [[manillakanep]], [[maniila]], [[maniila kanep]], [[manilla kanep]]\n*Galyego: [[cánabo de Manila]] (panlalake)\n*[[Interlingua]]: [[abaca]]\n*[[Ingles]]: [[abaca]], [[abaca fiber]], [[Manila hemp]], [[Manilla hemp]]\n*Italyano: [[canapa di Manila]] (pambabae), [[abaca]] (pambabae)\n*Kastila: [[cáñamo de Manila]] (panlalake), [[abacá]]\n*[[Leton]]: [[Manilas kaņepāji]] (panlalake, pantangi)\n*[[Litwano]]: [[Manilos kanapė]] (pambabae)\n*[[Pinlandes]]: [[manilla]]\n*Polones: [[manila]] (pambabae)\n*Pranses: [[chanvre de Manille]] (panlalake), [[abaca]] (panlalake)\n*Ruso: [[манильская пенька]] (pambabae), [[абака]] (pambabae)\n*[[Suweko]]: [[abaca]], [[manillahampa]], [[Manillahampa]], [[manilla]]\n*[[Tseko]]: [[manilské konopí]]\n|}</div></div>\n\n[[Category:Mga katutubong salitang Tagalog]]\n[[Kategorya:Mga pangngalang Tagalog]]\n\n==[[Image:Flag of Estonia.svg|30px]] Estonyano==\n===Pangngalan===\n'''abaka'''\n\n#[[abaka#Tagalog|abaka]]\n\n[[Category:Mga pangngalang Estonyano]]\n\n==[[Image:Flag of Philippines.svg|30px]] Kapampangan==\n===Pangngalan===\n'''abaka'''\n\n#[[abaka#Tagalog|abaka]]\n\n[[Category:Mga pangngalang Kapampangan]]\n\n==[[Image:Flag of Latvia.svg|30px]] Leton==\n===Pangngalan===\n(''pambabae'')<br>\n'''abaka'''\n\n#[[abaka#Tagalog|abaka]]\n\n[[Category:Mga pangngalang Leton]]\n\n==[[Image:Flag of Lithuania.svg|30px]] Litwano==\n===Pangngalan===\n(''pambabae'')<br>\n'''abaka'''\n\n#[[abaka#Tagalog|abaka]]\n\n[[Category:Mga pangngalang Litwano]]\n\n==[[Image:Flag of Poland.svg|30px]] Polones==\n===Pangngalan===\n(''pambabae'')<br>\n'''abaka'''\n\n#[[abaka#Tagalog|abaka]]\n\n[[Category:Mga pangngalang Polones]]\n\n==[[Image:Flag of the Czech Republic.svg|30px]] Tseko==\n===Pangngalan===\n(''pambabae'')<br>\n'''abaka'''\n\n#[[abaka#Tagalog|abaka]]\n\n[[Category:Mga pangngalang Tseko]]\n\n[[cs:abaka]]\n[[de:abaka]]\n[[en:abaka]]\n[[et:abaka]]\n[[fi:abaka]]\n[[fr:abaka]]\n[[hu:abaka]]\n[[id:abaka]]\n[[ko:abaka]]\n[[ky:abaka]]\n[[lt:abaka]]\n[[mg:abaka]]\n[[ms:abaka]]\n[[nl:abaka]]\n[[pl:abaka]]\n[[pt:abaka]]\n[[ru:abaka]]\n[[tr:abaka]]\n[[zh:abaka]]";
+
+test "retained TL abaka image headings preserve seven independently proved bodies and codec" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer namespaces.deinit();
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = ImageHeadingTestLanguages.get,
+        .resolve_fn = ImageHeadingTestLanguages.weak, .trusted_fn = ImageHeadingTestLanguages.resolve, .strong_fn = ImageHeadingTestLanguages.strong };
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root); defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "abaka", ImageHeadingAbakaExpanded, ImageHeadingAbakaRaw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 7), stats.language_records);
+    const rows = .{ .{ "Tagalog", "tl" }, .{ "Estonyo", "et" }, .{ "Kapampangan", "pam" }, .{ "Leton", "lv" }, .{ "Litwano", "lt" }, .{ "Polako", "pl" }, .{ "Tseko", "cs" } };
+    const boundaries = [_]usize{ 0, 4853, 4998, 5151, 5306, 5468, 5627, 6040 };
+    const observation = try presentation_document.observeHeadingAnchorsAlloc(a, "abaka", MissingText.untracked(ImageHeadingAbakaExpanded), .{}, &namespaces, null, null, .{}, null);
+    var consumed: usize = 0;
+    inline for (rows, 0..) |row, i| {
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, row[0])); defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(row[0], metadata.heading);
+        try std.testing.expectEqualStrings(row[1], metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find("abaka")) orelse return error.TestUnexpectedResult;
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        const part = ImageHeadingAbakaExpanded[boundaries[i]..boundaries[i + 1]];
+        consumed += part.len;
+        var report: presentation_document.Fallbacks = .{};
+        const projection = [_]presentation_document.HeadingSourceRange{.{ .owner_start = 0, .page_start = boundaries[i], .len = part.len }};
+        const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAlloc(
+            a, record.title, .language, row[0], row[1], MissingText.untracked(part), null, .{}, &namespaces,
+            null, null, .{}, &report, null, &.{}, &observation, &projection, .{ .heading = row[0], .code = row[1] });
+        const expected = try blobs.presentation_codec.decodeAlloc(a, payload, record.title, .language, metadata);
+        // Includes every block/grid cell/span, heading, action, paint, media and
+        // reference, plus organization. Only owner selection is supplied here.
+        try std.testing.expectEqualDeep(expected, decoded);
+        try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, decoded));
+        try std.testing.expectEqualStrings(row[1], decoded.entry.language_code);
+        try std.testing.expect(decoded.entry.sections.len >= 2);
+        if (i == 0) {
+            // One alternate spelling plus ten authored translation links.
+            try std.testing.expectEqual(@as(usize, 11), std.mem.count(u8, part, "[[abaca]]"));
+            try std.testing.expectEqual(@as(usize, 11), ImageHeadingTestLanguages.actions(decoded, "abaca"));
+        } else {
+            try std.testing.expectEqual(@as(usize, 1), ImageHeadingTestLanguages.actions(decoded, "abaka#Tagalog"));
+        }
+    }
+    try std.testing.expectEqual(ImageHeadingAbakaExpanded.len, consumed);
 }

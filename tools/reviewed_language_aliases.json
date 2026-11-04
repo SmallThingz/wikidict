@@ -225,6 +225,68 @@
       "observed_date": "2026-11-04",
       "evidence": "Official Wikidata Q1571 revision2555413675 has exact mrwiki sitelink title मराठी भाषा and ISO639-1 code mr. The permanent revision was inspected through the web retrieval tool on 2026-11-04. Independently, authenticated MR02 raw page अनिर्वचनिय page5191 revision27567 directly authors ==मराठी भाषा==; the full raw3605B SHA256 60e0554930c2cc224ac0f7e2335c6e4d81d516d904604b69dd85e5274f3964b1 and expanded4024B a04398bd62a0d8efbbe7d3868dc21ae0c2fadf18ae1ccb869a6e2075a6148c71 are retained. The selected registry0d1d98c7 already registers mr with preferred मराठी but lacks this exact longer heading.",
       "rationale": "One exact editorial alias backed by an independent language-item title and ISO code, not a captured preferred-name replacement, generic भाषा suffix stripping, template-name guess, category translation or edition default. Preserve preferred मराठी, all existing records and original MR02 inputs. The separate table repair retains its Unclassified oracle until ordinary source/input integration and validation. This alias alone does not prove repaired full-page semantics or publication acceptance."
+    },
+    {
+      "id": "tl-estonyano-reviewed-language-v1",
+      "code": "et",
+      "alias": "Estonyano",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://tl.wiktionary.org/w/index.php?oldid=168143&title=wika",
+      "observed_date": "2026-11-04",
+      "evidence": "The permanent TL Wiktionary wika revision168143 explicitly lists Estonyano with translation keel (et); its preserved HTML includes the exact source pair Estonyano: {{S+|et|keel}}. The independent official Wikidata Q9072 revision2558975862 carries P218 et. Retained HTML SHA256 f562e88a4592bbbced3fe4f028f5906f37ef6105ec189781aa1d7c97338ae42d. Actual abaka page1085 revision164102 directly authors this exact image-decorated L2 label.",
+      "rationale": "One reviewed exact alias for an already registered code. Preserve preferred name, all upstream rows and conflict vetoes. Do not infer code from flag filename, template title, edition, capitalization or neighboring headings. A separate strict physical decorated-heading resolver and ordinary Writer qualification are required; this curation alone proves neither output ownership nor body acceptance.",
+      "references": [
+        "https://www.wikidata.org/w/index.php?title=Q9072&oldid=2558975862"
+      ]
+    },
+    {
+      "id": "tl-polones-reviewed-language-v1",
+      "code": "pl",
+      "alias": "Polones",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://tl.wikipedia.org/w/index.php?oldid=2199842&title=Wikang_Polako",
+      "observed_date": "2026-11-04",
+      "evidence": "Permanent TL Wikipedia Wikang Polako revision2199842 explicitly says Polako o Polones and gives ISO639-1 pl. Official Wikidata Q809 revision2558978163 joins this exact tlwiki article to P218 pl. Retained HTML SHA256 4e55f77da8728b1d42084eea89f518a87bdb8f4fc292bbfa5e5b1980d51db591. Actual abaka page1085 revision164102 directly authors this exact image-decorated L2 label.",
+      "rationale": "One reviewed exact alias for an already registered code. Preserve preferred name, all upstream rows and conflict vetoes. Do not infer code from flag filename, template title, edition, capitalization or neighboring headings. A separate strict physical decorated-heading resolver and ordinary Writer qualification are required; this curation alone proves neither output ownership nor body acceptance.",
+      "references": [
+        "https://www.wikidata.org/w/index.php?title=Q809&oldid=2558978163"
+      ]
+    },
+    {
+      "id": "nan-ban-lam-gi-native-label-exact-v1",
+      "code": "nan",
+      "alias": "Bân-lâm-gí",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://www.wikidata.org/w/index.php?title=Q36495&oldid=2561375913",
+      "observed_date": "2026-11-04",
+      "evidence": "Wikidata Southern Min Q36495 revision 2561375913 explicitly records native label Bân-lâm-gí and ISO 639-3 nan. The local Wiktionary entry Bân-lâm-gí revision 142149 separately defines this exact spelling as Min Nan. The selected registry already has code nan; the retained chheh page 7753 revision 161162 explicitly authors this H2 label.",
+      "rationale": "An explicitly curated exact label-to-code mapping, supported independently of the existing combined preferred label. Preserve preferred name 閩南語 / Bân-lâm-gí. Do not split arbitrary preferred names, infer language from the edition, translate unmatched labels, or change POS/body handling. Public sources were reviewed through the web tool; no local raw response archive is claimed.",
+      "references": [
+        "https://zh-min-nan.wiktionary.org/w/index.php?title=B%C3%A2n-l%C3%A2m-g%C3%AD&oldid=142149"
+      ]
+    },
+    {
+      "id": "nan-tai-oan-oe-iso-language-exact-v1",
+      "code": "nan",
+      "alias": "Tâi-oân-ōe",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://zh-min-nan.wikipedia.org/w/index.php?title=T%C3%A2i-o%C3%A2n-%C5%8De&oldid=3291630",
+      "observed_date": "2026-11-04",
+      "evidence": "The exact-title local Wikipedia entry Tâi-oân-ōe revision 3291630 explicitly lists ISO 639-3 nan and IETF nan-TW. Wikidata Q36778 revision 2509603875 independently identifies Taiwanese Hokkien with that exact local sitelink and IETF nan-TW. The retained chheh page 7753 revision 161162 explicitly authors this H2 label.",
+      "rationale": "Curate this exact Taiwanese-variety label at the selected registry's existing ISO-language code nan. The regional nan-TW identity remains part of the authority record; this does not assert that the variety equals all Southern Min or create a regional registry code. Preserve preferred name 閩南語 / Bân-lâm-gí and the original visible authored heading. No generic region stripping, edition default, preferred-name splitting, or body/POS inference. Public sources were reviewed through the web tool, not represented as a captured raw archive.",
+      "references": [
+        "https://www.wikidata.org/w/index.php?title=Q36778&oldid=2509603875"
+      ]
+    },
+    {
+      "id": "hsb-hornjoserbscina-exact-enwik92963766-v1",
+      "code": "hsb",
+      "alias": "hornjoserbšćina",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://en.wiktionary.org/w/index.php?title=hornjoserb%C5%A1%C4%87ina&oldid=92963766",
+      "observed_date": "2026-11-04",
+      "evidence": "The directly read English Wiktionary entry hornjoserbšćina identifies the exact lowercase word as the Upper Sorbian language and links the language code hsb; its footer supplies revision 92963766. The separate permanent-revision fetch failed, so this is a live-page observation with a displayed revision, not a dump-authenticated document. Independently, the selected HSB normal canonical module maps Upper Sorbian to hsb, and its data/3/h module has m[\"hsb\"][1] = \"Hornjoserbšćina\". Authenticated stary raw source uses the exact lowercase value in its first H2 rěč invocation; authenticated rěč simply emits its unchanged argument as a link and category.",
+      "rationale": "Install only this independently attested exact label for an already installed hsb code through existing reviewed-alias conflict checks. Preserve the preferred display, all other labels and authored headings. No generic lowercasing, script/edition inference, parenthesis stripping, template-name authority, or collision override. This is editorial build data, not a captured upstream registry row. The existing heading template-argument resolver can consume the exact alias; no new source-banner equivalence is granted. Actual full-page repaired ownership remains unearned until the ordinary current route is run."
     }
   ]
 }
