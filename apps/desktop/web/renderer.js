@@ -71,17 +71,41 @@ function poemSpans(values,onLink,explanations,withinSummary,cellBackground) {
   else if(endedWithBreak){include(lastBreak);appendLine();}
   return fragment;
 }
+// Normal-body basis shares the same configured size as .block in style.css.
+// Keep context-relative em sizing for legacy and inline heading spans.
+function semanticFontSize(span) {
+  const basis=span.font_scale_basis===undefined?'context':span.font_scale_basis,scale=span.font_scale;
+  if(basis!=='context'&&basis!=='normal_body')throw new Error('invalid semantic font scale basis');
+  if(scale===undefined||scale===null){if(basis!=='context')throw new Error('normal body scale is absent');return null;}
+  if(typeof scale!=='number'||!Number.isFinite(scale)||scale<0)throw new Error('invalid semantic font scale');
+  const size=basis==='normal_body'?`calc(var(--wikidict-normal-body-size) * ${scale})`:(scale===1?null:`${scale}em`);
+  // Match the browser's computed-font ceiling in CSS pixels, retaining semantic
+  // scale and the zero/identity paths rather than rewriting compiled data.
+  return scale>0&&size!==null?`min(10000px, ${size})`:size;
+}
+function inlineImageElement(image,load){
+  if(!image||typeof image.file!=='string'||!image.file||new TextEncoder().encode(image.file).length>32*1024*1024||image.file.startsWith(' ')||image.file.endsWith(' ')||/[_\[\]{}<>|#\x00-\x1f\x7f-\x9f]/u.test(image.file))throw Error('Invalid inline image');
+  const el=node('img');el.className='compiled-inline-image';el.style.display='inline';el.style.verticalAlign='middle';el.style.border='0';el.style.maxWidth='10000px';el.style.maxHeight='10000px';el.style.margin='0';el.style.borderRadius='0';el.style.objectFit='fill';
+  for(const [key,axis] of [['width_px','width'],['height_px','height']])if(image[key]!=null){if(!Number.isInteger(image[key])||image[key]<=0||image[key]>4294967295)throw Error('Invalid image dimension');el.style[axis]=image[key]+'px';}
+  const pendingScale=Math.min(1,image.width_px==null?1:10000/image.width_px,image.height_px==null?1:10000/image.height_px);
+  if(image.width_px!=null)el.style.width=image.width_px*pendingScale+'px';if(image.height_px!=null)el.style.height=image.height_px*pendingScale+'px';
+  if(image.width_px!=null&&image.height_px==null)el.style.height='auto';if(image.height_px!=null&&image.width_px==null)el.style.width='auto';
+  for(const [key,attr] of [['alt','alt'],['tooltip','title']])if(image[key]!=null){if(typeof image[key]!=='string')throw Error('Invalid image description');el.setAttribute(attr,image[key]);}
+  el.dataset.mediaState='pending';load?.(el,image);return el;
+}
 export function spans(values = [], onLink = () => {}, preserve = false, explanations = null, withinSummary = false, cellBackground = null) {
   if (!preserve && values.some(isPoem)) return poemSpans(values,onLink,explanations,withinSummary,cellBackground);
   const fragment = document.createDocumentFragment();
   const compact=[];
+  const scaled=span=>semanticFontSize(span)!==null;
+  values.forEach(value=>{semanticFontSize(value);if(value.image&&(value.text!==''||(value.trail??'')!==''||!['text','link','external_link'].includes(value.kind)||(value.kind==='text'?!!value.target:!value.target)))throw Error('Invalid inline image action');});
   const blank=value=>!(value||'').includes('\u00a0')&&!(value||'').trim();
   for(const span of values){
     if(span.kind==='line_break' && !span.trail && (!compact.length||compact.at(-1).kind==='line_break'))continue;
-    if(!canonicalRGB(span.background)&&span.kind==='text'&&blank(span.text)&&blank(span.trail)&&(!compact.length||compact.at(-1).kind==='line_break'))continue;
+    if(!span.image&&!scaled(span)&&!canonicalRGB(span.background)&&span.kind==='text'&&blank(span.text)&&blank(span.trail)&&(!compact.length||compact.at(-1).kind==='line_break'))continue;
     compact.push(span);
   }
-  while(compact.length&&!canonicalRGB(compact.at(-1).background)&&((compact.at(-1).kind==='line_break'&&blank(compact.at(-1).trail))||(blank(compact.at(-1).text)&&blank(compact.at(-1).trail))))compact.pop();
+  while(compact.length&&!compact.at(-1).image&&!scaled(compact.at(-1))&&!canonicalRGB(compact.at(-1).background)&&((compact.at(-1).kind==='line_break'&&blank(compact.at(-1).trail))||(blank(compact.at(-1).text)&&blank(compact.at(-1).trail))))compact.pop();
   const visible = preserve?values:compact, described = new Map();
   for (let i=0;i<visible.length;) {
     const explanation=visible[i].explanation;
@@ -109,8 +133,15 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
     return trail;
   };
   for (const [i,span] of visible.entries()) {
-    if (span.kind === 'line_break') { fragment.append(node('br'),trailNode(span,i)); continue; }
+    if (span.kind === 'line_break') {
+      const trail=trailNode(span,i);
+      if(scaled(span)){
+        const wrapper=node('span');wrapper.style.fontSize=semanticFontSize(span);wrapper.append(trail);fragment.append(node('br'),wrapper);
+      }else fragment.append(node('br'),trail);
+      continue;
+    }
     let el = node('span', span.text || '');
+    if(span.image){if(span.kind==='line_break')throw Error('Invalid inline image action');el.append(inlineImageElement(span.image,explanations?.inlineImage));}
     if(inkFor(span))el.style.color=inkFor(span);
     if(!canonicalRGB(span.foreground)&&inkFor(span)&&((span.kind==='link'&&span.target)||(span.kind==='external_link'&&safeURL(span.target))))el.style.textDecoration='underline';
     if(canonicalRGB(span.background)){el.style.backgroundColor=span.background;el.style.whiteSpace='pre-wrap';}
@@ -125,14 +156,25 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
       if(described.has(i))abbreviation.setAttribute('aria-describedby',described.get(i));
       abbreviation.append(el);el=abbreviation;
     }
-    if (span.kind === 'link' && span.target) {
+    const imageURL=span.image&&span.kind==='link'?safeURL(explanations?.imageActionURL?.(span.target)):null;
+    if(imageURL){
+      const link=node('a');link.href=imageURL;link.rel='noopener noreferrer';link.target='_blank';if(withinSummary)link.addEventListener('click',event=>event.stopPropagation());link.append(el);el=link;
+    } else if(span.image&&span.kind==='link'&&span.target?.startsWith('File:')){
+      const unresolved=node('span');unresolved.setAttribute('role','link');unresolved.setAttribute('aria-disabled','true');unresolved.dataset.actionTarget=span.target;unresolved.append(el);el=unresolved;
+    } else if (span.kind === 'link' && span.target) {
       const link = node('a'); link.href = '#' + encodeURIComponent(span.target);
       link.addEventListener('click', event => { event.preventDefault(); if(withinSummary)event.stopPropagation(); onLink(span.target); }); link.append(el); el = link;
     } else if (span.kind === 'external_link' && safeURL(span.target)) {
       const link = node('a'); link.href = safeURL(span.target); link.rel = 'noopener noreferrer'; link.target = '_blank'; if(withinSummary)link.addEventListener('click',event=>event.stopPropagation()); link.append(el); el = link;
     }
     if(described.has(i) && el.tagName==='A')el.setAttribute('aria-describedby',described.get(i));
-    fragment.append(el,trailNode(span,i));
+    const trail=trailNode(span,i);
+    const fontSize=semanticFontSize(span);
+    if(fontSize!==null){
+      const scaled=node('span');scaled.style.fontSize=fontSize;
+      scaled.append(el,trail);fragment.append(scaled);continue;
+    }
+    fragment.append(el,trail);
   }
   return fragment;
 }
@@ -162,7 +204,7 @@ function destination(el, value, legacy = '') {
 }
 function legacyDestinations(entry) {
   const candidates = [], counts = new Map();
-  if (['DPR5','DPR6','DPR7','DPR8','DPR9'].includes(entry.presentation_version)) return new Map();
+  if (['DPR5','DPR6','DPR7','DPR8','DPR9','DPRA','DPRB','DPRC'].includes(entry.presentation_version)) return new Map();
   const add = (value, label) => {
     if (value.anchor || value.anchor_fallback) return;
     const id = label.replaceAll(' ','_');
@@ -178,6 +220,12 @@ function legacyDestinations(entry) {
   }
   return new Map(candidates.filter(([,id]) => counts.get(id) === 1));
 }
+function styleObject(value){if(value==null)return null;if(typeof value!=='object'||Array.isArray(value)||!Object.values(value).some(field=>field!=null))throw Error('Invalid typed table style');return value;}
+function styleLength(value){if(!value||!['px','em'].includes(value.unit)||typeof value.value!=='number'||!Number.isFinite(value.value)||value.value<0)throw Error('Invalid style length');return value.value+value.unit;}
+function styleBorder(value){if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==1)throw Error('Invalid style border');if(Object.hasOwn(value,'none')){if(!value.none||typeof value.none!=='object'||Array.isArray(value.none)||Object.keys(value.none).length)throw Error('Invalid none border');return 'none';}const solid=value.solid;if(!solid||!canonicalRGB(solid.color))throw Error('Invalid style border color');return styleLength(solid.width)+' solid '+solid.color;}
+function styleEdges(el,name,value){if(!value||typeof value!=='object'||Array.isArray(value))throw Error('Invalid style edges');for(const side of ['top','right','bottom','left'])el.style[name+side[0].toUpperCase()+side.slice(1)]=styleLength(value[side]);}
+function applyTableStyle(el,value){const s=styleObject(value);if(!s)return;for(const key of Object.keys(s))if(!['background','border','collapse','margins'].includes(key))throw Error('Invalid table style field');if(s.background!=null){if(!canonicalRGB(s.background))throw Error('Invalid table background');el.style.backgroundColor=s.background;}if(s.border!=null)el.style.border=styleBorder(s.border);if(s.collapse!=null){if(!['separate','collapse'].includes(s.collapse))throw Error('Invalid border collapse');el.style.borderCollapse=s.collapse;}if(s.margins!=null)styleEdges(el,'margin',s.margins);}
+function applyCellStyle(el,value){const s=styleObject(value);if(!s)return;for(const key of Object.keys(s))if(!['border','padding','text_align'].includes(key))throw Error('Invalid cell style field');if(s.border!=null)el.style.border=styleBorder(s.border);if(s.padding!=null)styleEdges(el,'padding',s.padding);if(s.text_align!=null){if(!['left','center','right'].includes(s.text_align))throw Error('Invalid cell text alignment');el.style.textAlign=s.text_align;}}
 function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
   if(depth>16)throw Error('Nested table depth exceeds limit');
   if(value.geometry!=null&&(typeof value.geometry!=='object'||Array.isArray(value.geometry)))throw Error('Invalid table geometry object');
@@ -186,11 +234,14 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
   const border=dimension('border'),spacing=dimension('cell_spacing'),padding=dimension('cell_padding');
   if(spacing!==null){table.style.borderCollapse='separate';table.style.borderSpacing=spacing+'px';}
   if(g.width!=null){const {unit,value:n}=g.width;if(!['px','percent'].includes(unit)||!Number.isInteger(n)||n<0||n>4294967295||(unit==='percent'&&n>100))throw Error('Invalid table width');table.style.width=n+(unit==='percent'?'%':'px');}
-  if(value.caption?.length){const caption=node('caption');caption.append(spans(value.caption,onLink,false,explanations,false,inheritedBackground));table.append(caption);}
+  applyTableStyle(table,value.style);
+  const tableBackground=canonicalRGB(value.style?.background)?value.style.background:inheritedBackground;
+  if(value.caption?.length){const caption=node('caption');caption.append(spans(value.caption,onLink,false,explanations,false,tableBackground));table.append(caption);}
   for(const row of value.rows){const tr=node('tr');for(const cell of row.cells){
     const td=node(cell.header?'th':'td');td.colSpan=cell.colspan||1;td.rowSpan=cell.rowspan||1;
     if(border!==null)td.style.border=border+'px solid currentColor';if(padding!==null)td.style.padding=padding+'px';
-    const effectiveBackground=canonicalRGB(cell.background)?cell.background:inheritedBackground;
+    applyCellStyle(td,cell.style);
+    const effectiveBackground=canonicalRGB(cell.background)?cell.background:tableBackground;
     if(canonicalRGB(effectiveBackground))td.style.backgroundColor=effectiveBackground;
     if(cell.blocks!=null){
       if(!Array.isArray(cell.blocks)||cell.spans?.length||cell.nested_table!=null)throw Error('Invalid ordered table cell');
@@ -201,7 +252,7 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
   }table.append(tr);}return table;
 }
 function visibleBlock(block){
-  return block.kind!=='blank'&&(block.table||block.kind==='rule'||block.spans?.some(s=>s.text?.trim()||s.trail?.trim())||block.spans?.some(isPoem)||(block.kind==='heading'&&(block.anchor||block.anchor_fallback)));
+  return block.kind!=='blank'&&(block.table||block.kind==='rule'||block.spans?.some(s=>s.image||s.text?.trim()||s.trail?.trim())||block.spans?.some(isPoem)||(block.kind==='heading'&&(block.anchor||block.anchor_fallback)));
 }
 function appendBlocks(parent,values,render){
   let lists=[];
@@ -281,26 +332,33 @@ function blockView(block, onLink, explanations, legacy = '', context = {}) {
 function sectionHeadingCompanion(section){
   const first=section.blocks?.[0];
   if(!section.title||!first||first.kind!=='heading'||first.level!==section.level)return null;
-  let navigable=false,explained=false,styledText=false,label='';
+  let navigable=false,explained=false,styledText=false,visual=false,label='';
   for(const span of first.spans||[]){
     if(span.kind==='line_break'&&span.trail)return null;
+    visual=visual||span.image!=null;
     explained=explained||!!span.explanation;
     navigable=navigable||(['link','external_link'].includes(span.kind)&&!!span.target&&!!(span.text||span.trail));
     const styled=['bold','italic','code','small','superscript','subscript','strike','underline'].some(flag=>span[flag])||
-      span.foreground!=null||span.background!=null||!!span.classes||!!span.language||!!span.direction||(span.role??'normal')!=='normal';
+      (span.font_scale_basis==='normal_body'||(span.font_scale!=null&&span.font_scale!==1))||span.foreground!=null||span.background!=null||!!span.classes||!!span.language||!!span.direction||(span.role??'normal')!=='normal';
     styledText=styledText||(span.kind==='text'&&!!span.text&&!span.target&&styled);
     label+=span.kind==='line_break'?'\n':(span.text||'')+(span.trail||'');
   }
   const trimmed=label.replace(/^[ \t\r\n\u00a0]+|[ \t\r\n\u00a0]+$/g,'');
-  return (navigable||explained||styledText||first.depth>0)&&trimmed===section.title?first:null;
+  return (navigable||explained||styledText||visual||first.depth>0)&&trimmed===section.title?first:null;
 }
-export function renderEntry(entry, onLink, settings = {}, mediaView = () => null) {
+export function renderEntry(entry, onLink, settings = {}, mediaView = () => null, inlineImage = () => {}, imageActionURL = () => null) {
   const root = document.createDocumentFragment(), references = new Map(), legacy = legacyDestinations(entry);
   const headingDestinations = new Set();
   const observeHeading=value=>{for(const id of [value.anchor,value.anchor_fallback,legacy.get(value)])if(id)headingDestinations.add(id);};
   for(const section of entry.sections){observeHeading(section);visitBlocks(section.blocks,block=>{if(block.kind==='heading')observeHeading(block);});}
+  for(const ref of entry.references||[]){
+    if(ref.blocks!=null){
+      if(!Array.isArray(ref.blocks)||!Array.isArray(ref.spans)||ref.spans.length)throw Error('Invalid structured reference');
+      visitBlocks(ref.blocks,block=>{if(block.kind==='heading')observeHeading(block);});
+    }
+  }
   const explanationRows=[], explanationKeys=new Map();
-  const explanations={add(label,explanation){
+  const explanations={inlineImage,imageActionURL,add(label,explanation){
     const key=JSON.stringify([label,explanation]);
     if(explanationKeys.has(key))return explanationKeys.get(key);
     let id;do{id='abbreviation-explanation-'+(++explanationSequence);}while(headingDestinations.has(id));
@@ -353,18 +411,25 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     const section=fold('References',!settings.collapseOtherSections);
     const referenceIDs=new Set(headingDestinations);
     for (const ref of entry.references) {
-      const p=node('p',null,'reference'),kind=ref.kind??'note';
+      const p=node(ref.blocks!=null?'div':'p',null,'reference'),kind=ref.kind??'note';
       if(kind==='note'){
         const target=`reference-${ref.number}`;let id=target;
         while(referenceIDs.has(id))id='citation-'+id;
         referenceIDs.add(id);p.id=id;p.tabIndex=-1;references.set(`#${target}`,p);
         p.append(node('span',`[${ref.group?ref.group+' ':''}${ref.group_number}]`));
       }else if(kind!=='fragment')throw Error('Invalid compiled reference kind');
-      const body=node('span');body.append(spans(ref.spans,followLink,false,explanations));p.append(body);section.append(p);
+      if(ref.blocks!=null)appendBlocks(p,ref.blocks,block=>blockView(block,followLink,explanations));
+      else {const body=node('span');body.append(spans(ref.spans,followLink,false,explanations));p.append(body);}
+      section.append(p);
     }
     root.append(section);
   }
-  if (entry.media?.length) { const section=fold('Images & sound',!settings.collapseOtherSections);for(const media of entry.media){const view=mediaView(media);if(view)section.append(view);}root.append(section); }
+  const canonicalImageFiles=new Set();
+  const imageSpans=values=>{for(const span of values||[])if(span.image)canonicalImageFiles.add(span.image.file);};
+  const imageTable=value=>{imageSpans(value.caption);for(const row of value.rows||[])for(const cell of row.cells||[]){imageSpans(cell.spans);if(cell.blocks)imageBlocks(cell.blocks);if(cell.nested_table)imageTable(cell.nested_table);}};
+  const imageBlocks=values=>{for(const block of values||[]){imageSpans(block.spans);if(block.table)imageTable(block.table);}};
+  imageSpans(entry.display_title);imageSpans(entry.preamble_spans);for(const section of entry.sections||[])imageBlocks(section.blocks);for(const ref of entry.references||[]){imageSpans(ref.spans);imageBlocks(ref.blocks);}
+  if (entry.media?.length) { const section=fold('Images & sound',!settings.collapseOtherSections);for(const media of entry.media){const view=mediaView(media,canonicalImageFiles.has(media.file));if(view)section.append(view);}root.append(section); }
   if(explanationRows.length){
     const details=fold('Abbreviations',false),list=node('dl');details.className='abbreviation-explanations';
     for(const row of explanationRows){

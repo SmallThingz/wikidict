@@ -29,6 +29,78 @@ try{
   await page.route(styleOrigin+'/style.css',route=>route.fulfill({contentType:'text/css',body:productionStyle}));
   await page.route(styleOrigin+'/reader.ttf',route=>route.fulfill({contentType:'font/ttf',headers:{'access-control-allow-origin':'*'},body:readerFont}));
   await page.addStyleTag({url:styleOrigin+'/style.css'});
+  await page.evaluate(()=>{
+   const host=document.getElementById('reference-items'),assert=(ok,message)=>{if(!ok)throw Error(message);};
+   for(const base of [12,18]){
+    host.style.fontSize=base+'px';
+    for(const flags of [{},{small:true},{superscript:true},{subscript:true},{small:true,superscript:true}]){
+     const sample=scale=>({kind:'link',text:'سبتمبر',target:'سبتمبر',trail:'!',...flags,font_scale:scale});
+     const boxes=[1,1.25].map(scale=>{const wrapper=document.createElement('div');wrapper.append(WikidictRendererQA.spans([sample(scale)]));host.append(wrapper);return wrapper;});
+     const leaf=el=>{while(el.firstElementChild)el=el.firstElementChild;return el;};
+     const sizes=boxes.map(el=>parseFloat(getComputedStyle(leaf(el)).fontSize));
+     assert(Math.abs(sizes[1]/sizes[0]-1.25)<0.001,'font scale must multiply existing small/sub/sup context once');
+     assert(boxes[1].textContent==='سبتمبر!','scaled linked text/trail preserved');
+     assert(boxes[1].querySelector('a').getAttribute('href')==='#'+encodeURIComponent('سبتمبر'),'scaled link retained');
+     boxes.forEach(el=>el.remove());
+    }
+   }
+   // Authored block-relative CSS and inline-relative CSS have different bases.
+   // Compare both to the browser's actual production-styled source controls.
+   const leaf=el=>{while(el.firstElementChild)el=el.firstElementChild;return el;};
+   for(const base of [12,18]){
+    host.style.fontSize=base+'px';host.style.setProperty('--wikidict-normal-body-size',base+'px');
+    for(const {level,source,scale,basis} of [
+     {level:1,source:'<h1 style="font-size:1.3em">Niçard</h1>',scale:1.3,basis:'normal_body'},
+     {level:2,source:'<h2 style="font-size:1.2em">Niçard</h2>',scale:1.2,basis:'normal_body'},
+     {level:2,source:'<h2><span style="font-size:1.2em">Niçard</span></h2>',scale:1.2,basis:'context'},
+     {level:2,source:'<h2 style="font-size:100%">Niçard</h2>',scale:1,basis:'normal_body'},
+     {level:2,source:'<h2 style="font-size:125%"><span style="font-size:80%">Niçard</span></h2>',scale:1,basis:'normal_body'}
+    ]){
+     const control=document.createElement('div');control.innerHTML=source;
+     const actual=document.createElement('h'+level);actual.append(WikidictRendererQA.spans([{kind:'text',text:'Niçard',font_scale:scale,font_scale_basis:basis}]));
+     host.append(control,actual);
+     assert(Math.abs(parseFloat(getComputedStyle(leaf(control)).fontSize)-parseFloat(getComputedStyle(leaf(actual)).fontSize))<0.001,'typed basis must match actual authored heading CSS');
+     assert(actual.textContent==='Niçard','typed basis text retained');control.remove();actual.remove();
+    }
+    for(const flags of [{},{small:true},{superscript:true},{subscript:true},{small:true,superscript:true}]){
+     const control=document.createElement('div'),actual=document.createElement('h2');
+     control.style.fontSize=base+'px';
+     const plain={kind:'link',text:'Niçard',target:'Niçard',trail:'!',...flags};
+     control.append(WikidictRendererQA.spans([{...plain,font_scale:1.2}]));
+     actual.append(WikidictRendererQA.spans([{...plain,font_scale:1.2,font_scale_basis:'normal_body'}]));host.append(control,actual);
+     assert(Math.abs(parseFloat(getComputedStyle(leaf(control)).fontSize)-parseFloat(getComputedStyle(leaf(actual)).fontSize))<0.001,'body basis retains measured legacy reduction once');
+     assert(actual.querySelector('a').getAttribute('href')==='#'+encodeURIComponent('Niçard'),'body basis link retained');
+     control.remove();actual.remove();
+    }
+    for(const invalid of [{font_scale_basis:'unknown',font_scale:1},{font_scale_basis:null,font_scale:1},{font_scale_basis:'normal_body'}]){
+     let rejected=false;try{WikidictRendererQA.spans([{kind:'text',text:'invalid',...invalid}]);}catch{rejected=true;}assert(rejected,'invalid basis rejected');
+    }
+   }
+   // Render-only saturation preserves original data, actions and exact zero.
+   for(const base of [12,18])for(const basis of ['context','normal_body']){
+    host.style.fontSize=base+'px';host.style.setProperty('--wikidict-normal-body-size',base+'px');
+    for(const scale of [0,1,1.25,Math.fround(3.4028234663852886e38)]){
+     const sample={kind:'link',text:'حد',target:'target',trail:'!',font_scale:scale,font_scale_basis:basis},stored=JSON.stringify(sample);
+     const actual=document.createElement('div');actual.append(WikidictRendererQA.spans([sample]));host.append(actual);
+     const computed=parseFloat(getComputedStyle(leaf(actual)).fontSize),expected=Math.min(10000,base*scale);
+     assert(Number.isFinite(computed)&&Math.abs(computed-expected)<0.01,'resolved semantic font size is bounded in CSS pixels');
+     assert(JSON.stringify(sample)===stored&&actual.textContent==='حد!'&&actual.querySelector('a').getAttribute('href')==='#target','saturation retains semantic source, text and target');
+     actual.remove();
+    }
+   }
+   // The outer semantic wrapper caps the parent; legacy descendants can be
+   // smaller than the ceiling. Assert the bound, not cross-renderer saturation.
+   for(const basis of ['context','normal_body'])for(const flags of [{small:true},{superscript:true},{subscript:true},{small:true,superscript:true}]){
+    const sample={kind:'link',text:'حد',target:'target',font_scale:Math.fround(3.4028234663852886e38),font_scale_basis:basis,...flags},stored=JSON.stringify(sample);
+    const actual=document.createElement('div');actual.append(WikidictRendererQA.spans([sample]));host.append(actual);
+    const size=parseFloat(getComputedStyle(leaf(actual)).fontSize);
+    assert(Number.isFinite(size)&&size>0&&size<=10000,'legacy descendants obey computed-font upper bound');
+    assert(JSON.stringify(sample)===stored&&actual.querySelector('a').getAttribute('href')==='#target','bounded legacy span retains model and action');
+    actual.remove();
+   }
+   host.style.removeProperty('--wikidict-normal-body-size');
+   host.style.fontSize='';
+  });
   const initial=await page.evaluate(()=>{
    const text=value=>({kind:'text',text:value}),host=document.getElementById('reference-items');window.fragmentLinks=[];window.fragmentMedia=[];
    const entry={title:'Reference items',presentation_version:'DPR9',sections:[{title:'Links',anchor:'Links',blocks:[{kind:'paragraph',spans:[

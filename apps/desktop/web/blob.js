@@ -3,10 +3,11 @@
 const utf8 = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true});
 const kinds = ['language','thesaurus','citations','reconstruction','rhymes','sign_gloss','supplemental','alias'];
 const blocks = ['paragraph','blank','definition','example','quotation','list_item','list_detail','indent','term','heading','preformatted','rule','table'];
+const validInlineImageFile=value=>typeof value==='string'&&value.length>0&&new TextEncoder().encode(value).length<=32*1024*1024&&!value.startsWith(' ')&&!value.endsWith(' ')&&!/[_\[\]{}<>|#\x00-\x1f\x7f-\x9f]/u.test(value);
 const roles = ['normal','label','pronunciation','headword','example','quotation','citation','reference'];
 const require = (ok, message='Invalid compiled dictionary') => { if (!ok) throw Error(message); };
 export function decode(bytes, metadata) {
-  let p=0, budget=1000000, explained=false, colored=false, anchored=false, painted=false, nested=false, ordered=false, scaled=false, based=false, referenceItems=false;
+  let p=0, budget=1000000, explained=false, colored=false, anchored=false, painted=false, nested=false, ordered=false, scaled=false, based=false, referenceItems=false, referenceBlocks=false;
   const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
   const take=n=>{require(n>=0 && n<=bytes.length-p);const start=p;p+=n;return bytes.subarray(start,p);};
   const byte=()=>take(1)[0], u16=()=>{const at=p;take(2);return view.getUint16(at,true);}, u32=()=>{const at=p;take(4);return view.getUint32(at,true);};
@@ -19,12 +20,36 @@ export function decode(bytes, metadata) {
   const optional=limit=>{const n=u32();require(n===0xffffffff||n<limit);};
   const indices=limit=>list(4,()=>index(limit));
   const rgb=()=>{if(!presence())return null;const value=string();require(value.length===7&&/^#[0-9a-f]{6}$/.test(value));return value;};
-  const spans=()=>list(scaled?34:painted?33:colored?32:explained?31:27,()=>{
+  const spans=()=>list(referenceBlocks?35:scaled?34:painted?33:colored?32:explained?31:27,()=>{
     const kind=tag(['text','link','external_link','line_break']),role=tag(roles),flags=byte();
     const s={kind,role,text:string(),target:string(),trail:string(),language:string(),classes:string(),direction:string(),explanation:explained?string():'',foreground:colored?rgb():null,background:painted?rgb():null};
     if(scaled&&presence()){const at=p;take(4);const value=view.getFloat32(at,true);require(Number.isFinite(value)&&value>=0,'Invalid semantic font scale');s.font_scale=value;if(based){const basis=tag(['context','normal_body']);if(basis!=='context')s.font_scale_basis=basis;}}
+    if(referenceBlocks&&presence()){
+      require(kind!=='line_break'&&s.text===''&&s.trail===''&&(kind==='text'?s.target==='':s.target.length>0));const image={file:string()},flags=byte();require((flags&~15)===0&&validInlineImageFile(image.file));
+      for(const [bit,key] of [[1,'width_px'],[2,'height_px']])if(flags&bit){image[key]=u32();require(image[key]>0);}
+      if(flags&4)image.alt=string();if(flags&8)image.tooltip=string();s.image=image;
+    }
     ['bold','italic','code','small','superscript','subscript','strike','underline'].forEach((f,i)=>s[f]=!!(flags&(1<<i)));return s;
   });
+  const styleLength=()=>{const unit=tag(['px','em']),at=p;take(4);const value=view.getFloat32(at,true);require(Number.isFinite(value)&&value>=0,'Invalid style length');return {unit,value};};
+  const edges=()=>({top:styleLength(),right:styleLength(),bottom:styleLength(),left:styleLength()});
+  const borderStyle=()=>{const kind=tag(['none','solid']);if(kind==='none')return {none:{}};const width=styleLength(),color=string();require(/^#[0-9a-f]{6}$/.test(color));return {solid:{width,color}};};
+  const typedStyle=table=>{
+    if(!presence())return null;
+    const flags=byte();require(flags!==0&&(flags&~(table?15:7))===0);
+    const style={};
+    if(table){
+      if(flags&1){style.background=string();require(/^#[0-9a-f]{6}$/.test(style.background));}
+      if(flags&2)style.border=borderStyle();
+      if(flags&4)style.collapse=tag(['separate','collapse']);
+      if(flags&8)style.margins=edges();
+    }else{
+      if(flags&1)style.border=borderStyle();
+      if(flags&2)style.padding=edges();
+      if(flags&4)style.text_align=tag(['left','center','right']);
+    }
+    return style;
+  };
   const tableValue=depth=>{
     if(!presence())return null;
     require(!nested||depth<=16,'Nested table depth exceeds limit');
@@ -34,13 +59,15 @@ export function decode(bytes, metadata) {
       if(flags){geometry={};for(const [bit,key] of [[1,'border'],[2,'cell_spacing'],[4,'cell_padding']])if(flags&bit)geometry[key]=u16();
         if(flags&8){const unit=tag(['px','percent']),value=u32();require(unit!=='percent'||value<=100);geometry.width={unit,value};}}
     }
-    const result={caption:spans(),rows:list(4,()=>({cells:list(ordered?12:nested?11:colored?10:9,()=>{
+    const result={caption:spans(),rows:list(4,()=>({cells:list(referenceBlocks?13:ordered?12:nested?11:colored?10:9,()=>{
       const header=presence(),colspan=u16(),rowspan=u16();require(colspan>=1&&colspan<=100&&rowspan>=1&&rowspan<=100);
       const background=colored?rgb():null,values=spans(),cell={header,colspan,rowspan,background,spans:values};
       if(nested){const child=tableValue(depth+1);if(child){require(values.length===0);cell.nested_table=child;}}
       if(ordered&&presence()){require(values.length===0&&!cell.nested_table);cell.blocks=list(25,()=>block(depth));}
+      if(referenceBlocks){const style=typedStyle(false);if(style)cell.style=style;}
       return cell;
     })}))};
+    if(referenceBlocks){const style=typedStyle(true);if(style)result.style=style;}
     if(geometry)result.geometry=geometry;return result;
   };
   const block=(tableDepth=0)=>{
@@ -52,22 +79,36 @@ export function decode(bytes, metadata) {
     return value;
   };
   const magic=utf8.decode(take(4));
-  require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB','Dictionary contains uncompiled records');
-  based=magic==='DPRB';scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
+  require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC','Dictionary contains uncompiled records');
+  referenceBlocks=magic==='DPRC';based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
   const entry={...metadata,presentation_version:magic,display_title:spans(),sections:list(anchored?17:9,()=>({level:byte(),title:string(),anchor:anchored?string():'',anchor_fallback:anchored?string():'',blocks:list(anchored?25:17,()=>block())})),preamble_spans:spans()};
   list(29,()=>{string();string();const s=index(entry.sections.length);optional(entry.sections.length);const n=entry.sections[s].blocks.length;
     list(18,(_,sense)=>{index(n);optional(sense);indices(n);indices(n);indices(n);if(presence()){string();string();string();}});
     indices(n);indices(n);indices(entry.sections.length);
   });
   indices(entry.sections.length);
-  entry.references=list(referenceItems?13:20,()=>{
+  entry.references=list(referenceBlocks?14:referenceItems?13:20,()=>{
     const kind=referenceItems?tag(['note','fragment']):'note',number=u32();
     require(number>0&&number<0xffffffff);
-    if(kind==='fragment')return {kind,number,group_number:null,name:'',group:string(),spans:spans()};
-    const group_number=u32();require(group_number>0&&group_number<0xffffffff);
-    const name=string(),group=string();return {number,group_number,name,group,spans:spans()};
+    let reference;
+    if(kind==='fragment')reference={kind,number,group_number:null,name:'',group:string(),spans:spans()};
+    else {
+      const group_number=u32();require(group_number>0&&group_number<0xffffffff);
+      const name=string(),group=string();reference={number,group_number,name,group,spans:spans()};
+    }
+    if(referenceBlocks){
+      if(presence()){require(reference.spans.length===0);reference.blocks=list(25,()=>block());}
+    }
+    return reference;
   });
   entry.media=list(9,()=>({file:string(),kind:tag(['image','audio']),caption:string()}));
+  const images=[];
+  const inspect=values=>{for(const span of values||[])if(span.image)images.push(span.image);};
+  const inspectTable=value=>{inspect(value.caption);for(const row of value.rows)for(const cell of row.cells){inspect(cell.spans);if(cell.blocks)inspectBlocks(cell.blocks);if(cell.nested_table)inspectTable(cell.nested_table);}};
+  const inspectBlocks=values=>{for(const value of values){inspect(value.spans);if(value.table)inspectTable(value.table);}};
+  inspect(entry.display_title);inspect(entry.preamble_spans);for(const section of entry.sections)inspectBlocks(section.blocks);for(const ref of entry.references){inspect(ref.spans);if(ref.blocks)inspectBlocks(ref.blocks);}
+  if(images.length)require(entry.media.length<=128);
+  for(const image of images){const matches=entry.media.filter(media=>media.file===image.file);require(matches.length===1&&matches[0].kind==='image','Invalid inline image catalog identity');}
   require(p===bytes.length,'Trailing presentation data');return entry;
 }
 
@@ -123,7 +164,7 @@ export async function buildIndex(source) {
       rows.push({title:alias.source_key,raw_key:title,source_kind:alias.source_kind,source_title:alias.source_title,offset:p,length});
     }else{
       const magic=utf8.decode(await source.read(p,4));
-      require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB');
+      require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC');
       rows.push({title,offset:p,length});
     }
     require(rows.length<=10000000);p+=length;
