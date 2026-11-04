@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import build_resource_limits as limits
 import build_wiktionaries as builder
+import corpus_controller as controller
 
 
 class DiskWatchdogTest(unittest.TestCase):
@@ -103,6 +104,7 @@ class DiskWatchdogTest(unittest.TestCase):
             self.assertEqual(report['termination_reason'], 'disk_free_floor')
             self.assertEqual(report['disk_space'][0]['minimum_available_bytes'], 0)
             self.assertIsNone(report['child_exit_status'])
+            self.assertFalse(report['cleanup_complete'])
 
     def test_cli_covers_project_scratch_and_explicit_output_filesystem(self):
         with self.temp() as tmp:
@@ -123,8 +125,17 @@ class DiskWatchdogTest(unittest.TestCase):
     def test_floor_crossing_reaps_owned_python_child_and_leaves_existing_child_alive(self):
         # Only Python fixtures are launched; no compiler, native build, or corpus input.
         with self.temp() as tmp:
-            tmp = Path(tmp)
+            tmp = Path(tmp).resolve()
             report_path, ready = tmp / 'watchdog.json', tmp / 'ready'
+            cfg=dict(output=str(tmp/'output'),raw_shard_root=str(tmp/'raw'),date='20261001')
+            edition='testwiktionary'
+            workspace=Path(cfg['output'])/edition/'20261001.shards'; workspace.mkdir(parents=True)
+            raw=builder.external_raw_shards(workspace,Path(cfg['raw_shard_root'])/edition/'20261001.raw-shards',create=True)
+            (workspace/'state.json').write_text(json.dumps(dict(raw_shards_path=str(raw))))
+            shard=raw/'00000000'; (shard/'.spool').mkdir(parents=True); (shard/'languages').mkdir()
+            spool=shard/'.spool/lang-00.tmp'; blob=shard/'languages'/('a'*64+'.wikblb')
+            fallback=shard/'fallback-pages.jsonl'
+            folder=tmp/'attempt'; folder.mkdir()
             unrelated = subprocess.Popen([sys.executable, '-B', '-c', 'import time; time.sleep(10)'],
                                          start_new_session=True)
             unrelated_identity = limits._process_table()[unrelated.pid]
@@ -132,6 +143,9 @@ class DiskWatchdogTest(unittest.TestCase):
             self.assertEqual(unrelated_identity['session'], unrelated.pid)
             child_code = (
                 'import time; from pathlib import Path; '
+                f'Path({str(spool)!r}).write_bytes(b"generated spool"); '
+                f'Path({str(blob)!r}).write_bytes(b"generated unfinished language"); '
+                f'Path({str(fallback)!r}).write_bytes(b"retained fallback"); '
                 f'Path({str(ready)!r}).write_text("ready"); time.sleep(10)'
             )
             def free(_path):
@@ -146,6 +160,20 @@ class DiskWatchdogTest(unittest.TestCase):
                 self.assertEqual(report['termination_reason'], 'disk_free_floor')
                 self.assertLess(report['child_exit_status'], 0)
                 self.assertEqual(report['guardian_exit_status'], 0)
+                self.assertTrue(report['cleanup_complete'])
+                self.assertTrue(controller.watchdog_closed(report))
+                self.assertIn('error',report)
+                # The disk stop still halts normal continuation; cleanup is separate.
+                self.assertIsNone(controller.next_resources(4,controller.MEMORY_INITIAL,report))
+                original=dict(report)
+                closed=dict(outcome='failed',accepted=None,controller_interrupted=False,exit_code=1,
+                            cleanup_proven=controller.watchdog_closed(report),source_guard=True,control_proven=True)
+                retired=builder.cleanup_failed_attempt_shards(cfg,edition,folder,closed)
+                self.assertEqual(len(retired['shards'][0]['removed']),2)
+                self.assertFalse(spool.exists()); self.assertFalse(blob.exists())
+                self.assertEqual((folder/'generated-shard-diagnostics/00000000/fallback-pages.jsonl').read_bytes(),b'retained fallback')
+                self.assertEqual(fallback.read_bytes(),b'retained fallback')
+                self.assertEqual(report,original)
                 self.assertFalse(Path('/proc', str(report['child_pid'])).exists())
                 self.assertFalse(Path('/proc', str(report['guardian_pid'])).exists())
                 self.assertIsNone(unrelated.poll())

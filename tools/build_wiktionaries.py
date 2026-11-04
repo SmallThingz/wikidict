@@ -1599,6 +1599,116 @@ def matching_presentation_failure(path, invocation_id, invocation_args, start, l
         return False
 
 
+def shard_completion_present(shard):
+    if any((shard/name).exists() or (shard/name).is_symlink() for name in
+           ('.verified','page-coverage.json','namespace-coverage.json','complete.json')):
+        return True
+    catalog=shard/'languages.tsv'
+    return catalog.is_symlink() or (catalog.is_file() and catalog.stat().st_size>0)
+
+
+def cleanup_incomplete_shard_payload(shard, diagnostics, *, retire_payload=True):
+    """Closed builder only: preserve diagnostics before retiring disposable output."""
+    shard=artifact_path(shard)
+    result=dict(shard=str(shard),status='absent',removed=[],diagnostics=[],
+                allocated_file_bytes_removed=0,exclusive_filesystem_gain_claimed=False)
+    if not shard.exists(): return result
+    if shard.is_symlink() or not shard.is_dir(): raise ValueError('Unsafe incomplete shard')
+    if retire_payload and shard_completion_present(shard):
+        return dict(result,status='retained-completed')
+    def identity(path):
+        s=path.lstat()
+        return (s.st_dev,s.st_ino,s.st_mode,s.st_nlink,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
+    root_identity=identity(shard)[:2]
+    payload=[]
+    spool_names={f'lang-{i:02d}.tmp' for i in range(32)}|{
+        name+'.tmp' for name in ('thesaurus','citations','reconstruction','rhymes','sign-gloss','supplemental','aliases')}
+    for name in ('.spool','languages'):
+        if not retire_payload: break
+        directory=shard/name
+        if not directory.exists() and not directory.is_symlink(): continue
+        artifact_path(directory)
+        if directory.is_symlink() or not directory.is_dir(): raise ValueError('Unsafe generated shard directory')
+        for path in directory.iterdir():
+            selected=path.name in spool_names if name=='.spool' else re.fullmatch(r'[0-9a-f]{64}\.wikblb(?:\.xz(?:\.part)?)?',path.name)
+            if not selected: continue
+            before=identity(path)
+            # A shared inode can belong to another publication/cache. Leave it.
+            if stat.S_ISREG(before[2]) and before[3]==1: payload.append((path,before,path.lstat().st_blocks*512))
+    diagnostic_files=[]
+    fallback=shard/'fallback-pages.jsonl'
+    if fallback.exists() or fallback.is_symlink(): diagnostic_files.append(fallback)
+    capture=shard/'.presentation-first-failure'
+    if capture.exists() or capture.is_symlink():
+        if capture.is_symlink() or not capture.is_dir(): raise ValueError('Unsafe first-failure capture')
+        diagnostic_files.extend(capture.iterdir())
+    if diagnostic_files:
+        diagnostics=Path(diagnostics)
+        diagnostics.mkdir(mode=0o700,parents=True,exist_ok=False)
+        for source in diagnostic_files:
+            artifact_path(source)
+            before=identity(source)
+            if not stat.S_ISREG(before[2]): raise ValueError('Unexpected failure diagnostic entry')
+            target=diagnostics/source.relative_to(shard)
+            target.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+            with source.open('rb') as src,target.open('xb') as dst:
+                if identity(source)!=before: raise ValueError('Failure diagnostic changed')
+                shutil.copyfileobj(src,dst,1024*1024)
+                dst.flush(); os.fsync(dst.fileno())
+            original_sha=sha256_file(source); retained_sha=sha256_file(target)
+            if identity(source)!=before or original_sha!=retained_sha:
+                raise ValueError('Failure diagnostic copy differs')
+            if identity(target)[:2]==before[:2]: raise ValueError('Failure diagnostic archive shares inode')
+            result['diagnostics'].append(dict(original=str(source),retained=str(target),bytes=before[4],sha256=retained_sha))
+    for path,before,allocated in payload:
+        if identity(shard)[:2]!=root_identity or shard_completion_present(shard):
+            raise ValueError('Incomplete shard ownership/completion changed')
+        if identity(path)!=before: raise ValueError('Generated shard payload changed')
+        unlink_artifact(path)
+        result['removed'].append(dict(path=str(path),device=before[0],inode=before[1],bytes=before[4],allocated_bytes=allocated))
+        result['allocated_file_bytes_removed']+=allocated
+    return dict(result,status='generated-payload-retired' if payload else 'diagnostics-retained' if diagnostic_files else 'no-generated-payload')
+
+
+def cleanup_failed_attempt_shards(cfg, edition, folder, attempt):
+    """Controller post-join hook; never infer closure from a failed exit alone."""
+    if (attempt.get('accepted') is not None or attempt.get('outcome')!='failed'
+            or attempt.get('controller_interrupted') is not False
+            or not all(attempt.get(key) is True for key in ('cleanup_proven','source_guard','control_proven'))
+            or type(attempt.get('exit_code')) is not int or attempt['exit_code']==0):
+        return dict(status='retained-unproven-or-complete-attempt',shards=[])
+    if not cfg.get('raw_shard_root'): return dict(status='retained-no-external-raw-owner',shards=[])
+    workspace=Path(cfg['output'])/edition/(cfg['date']+'.shards')
+    artifact_path(workspace)
+    if workspace.is_symlink() or not workspace.is_dir(): return dict(status='retained-no-workspace-owner',shards=[])
+    state_path=workspace/'state.json'
+    if state_path.is_symlink() or not state_path.is_file():
+        return dict(status='retained-no-workspace-owner',shards=[])
+    state=read_small_json(state_path)
+    if not isinstance(state,dict): raise ValueError('Invalid failed-attempt workspace owner')
+    expected=Path(cfg['raw_shard_root']).absolute()/edition/(cfg['date']+'.raw-shards')
+    if state.get('raw_shards_path')!=str(expected): raise ValueError('Failed-attempt raw shard owner differs')
+    raw=external_raw_shards(workspace,expected)
+    if not raw.exists(): return dict(status='absent',shards=[])
+    results=[]
+    for shard in sorted(raw.iterdir()):
+        if re.fullmatch(r'[0-9]{8}',shard.name):
+            results.append(cleanup_incomplete_shard_payload(shard,Path(folder)/'generated-shard-diagnostics'/shard.name))
+    return dict(status='closed-attempt-processed',shards=results)
+
+
+def retain_failed_shard_diagnostics(shard, evidence, *, retire_payload=True):
+    try:
+        # Existing coverage retry policy owns marker-bearing rejected output.
+        # Archive its diagnostics, without changing the normal retry decision.
+        result=cleanup_incomplete_shard_payload(shard,evidence/'shard-diagnostics',
+            retire_payload=retire_payload and not shard_completion_present(shard))
+    except (OSError,ValueError) as error:
+        result=dict(status='cleanup-error',error=f'{type(error).__name__}: {error}',partial_cleanup_possible=True)
+    write_failure_evidence(evidence/'payload-cleanup.json',result)
+    return result['status'] not in ('cleanup-error','retained-completed')
+
+
 def build_shard_with_retries(command, shard, evidence_root, edition, date, start, limit, check_identity, validate):
     evidence_root.mkdir(mode=0o700, exist_ok=True)
     if evidence_root.is_symlink() or not evidence_root.is_dir():
@@ -1607,8 +1717,8 @@ def build_shard_with_retries(command, shard, evidence_root, edition, date, start
     for attempt in range(1, SHARD_RETRIES + 1):
         if shard.exists(): remove_artifact_tree(shard)
         invocation_id = uuid.uuid4().hex
-        # Receipts survive ordinary workspace retirement. Matching failures leave
-        # the failed shard in place; unclassified retries retain old cleanup.
+        # Receipts and diagnostic copies survive workspace retirement. Only
+        # recognized generated payload is retired after a joined failed builder.
         evidence = evidence_root / invocation_id
         evidence.mkdir(mode=0o700)
         receipt = evidence / 'failure.json'
@@ -1628,11 +1738,16 @@ def build_shard_with_retries(command, shard, evidence_root, edition, date, start
             deterministic = matching_presentation_failure(receipt, invocation_id, invocation_args, start, limit)
             write_failure_evidence(evidence / 'classification.json', dict(
                 deterministic_presentation=deterministic))
+            # A signaled command can leave descendants alive. Archive evidence,
+            # but leave new payload retirement to the controller's proven join.
+            may_retry=retain_failed_shard_diagnostics(shard,evidence,
+                retire_payload=type(error.returncode) is int and error.returncode>0)
             if deterministic:
                 phase_event(edition, date, 'shard_build', 'retry_suppressed', start_page=start,
                             pages=limit, attempt=attempt, failure_receipt=str(receipt),
                             error_name='UncompiledPresentation')
                 raise DeterministicPresentationFailure(error, receipt) from error
+            if not may_retry: raise error
             last_error = error
             print(f'Retrying failed shard builder {edition} start={start} attempt={attempt}/{SHARD_RETRIES}', flush=True)
             continue
@@ -1641,6 +1756,7 @@ def build_shard_with_retries(command, shard, evidence_root, edition, date, start
             validate()
         except ValueError as error:
             write_failure_evidence(evidence / 'coverage-error.json', dict(error=str(error)))
+            if not retain_failed_shard_diagnostics(shard,evidence): raise
             last_error = error
             print(f'Retrying shard with invalid coverage {edition} start={start} attempt={attempt}/{SHARD_RETRIES}', flush=True)
             continue
@@ -2229,11 +2345,11 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     recorded_now=read_small_json(staging/NOW_UNIX_NAME) if (staging/NOW_UNIX_NAME).is_file() else None
     validate_now_unix(recorded_now)
     coverage=validate_page_coverage(staging,require_total=True)
-    nonlexical.check_coverage(staging,build_identity)
     fallback_counts = {}
     fallback_reasons = {}
     fallback_pages = validate_fallback_report(staging / 'fallback-pages.jsonl', fallback_counts, fallback_reasons)
     namespace_totals=validate_namespace_coverage(staging,coverage['pages_seen'],namespace_snapshot,fallback_counts,site_info_snapshot)
+    nonlexical.check_coverage(staging,build_identity)
     if namespace_snapshot is not None and namespace_totals['fallback_pages']!=fallback_pages:raise ValueError('Namespace fallback totals differ from fallback report')
     for part in staging.rglob('*.xz.part'):
         unlink_artifact(part)
@@ -2345,7 +2461,6 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         if metadata.get('auxiliary_snapshot_sha256',{})!=auxiliary_hashes:
             raise ValueError('Existing output uses different auxiliary snapshots; choose a new output directory')
         nonlexical.bind_identity(target,build_identity,reviewed)
-        nonlexical.check_coverage(target,build_identity)
         require_build_identity(metadata.get('build_inputs'),build_identity)
         coverage=validate_page_coverage(target,require_total=True)
         if type(metadata.get('input_pages')) is not int or metadata['input_pages']!=coverage['pages_seen']:
@@ -2354,6 +2469,7 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
         fallback_reasons = {}
         fallback_pages=validate_fallback_report(target/'fallback-pages.jsonl', fallback_counts, fallback_reasons)
         namespace_totals=validate_namespace_coverage(target,metadata['input_pages'],namespace,fallback_counts,auxiliary_snapshots.get('site-info'))
+        nonlexical.check_coverage(target,build_identity)
         if (type(metadata.get('fallback_pages')) is not int or metadata['fallback_pages']!=fallback_pages or
                 namespace_totals['fallback_pages']!=fallback_pages or
                 metadata.get('namespace_coverage_totals')!=namespace_totals):
@@ -2392,7 +2508,6 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
             raise ValueError(f'Unsafe incomplete build path: {staging}')
         if (staging / VERIFIED_MARKER).is_file():
             nonlexical.bind_identity(staging,build_identity,reviewed)
-            nonlexical.check_coverage(staging,build_identity)
             recorded_now=read_small_json(staging/NOW_UNIX_NAME) if (staging/NOW_UNIX_NAME).is_file() else None
             if now_unix is not None and recorded_now!=now_unix:
                 raise ValueError('Verified staging uses a different or unrecorded build time')

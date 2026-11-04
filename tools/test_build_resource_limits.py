@@ -397,6 +397,7 @@ class ResourceLimitsTest(unittest.TestCase):
             report = json.loads((Path(tmp) / 'watchdog.json').read_text())
             self.assertEqual(report['error'], 'Host pressure safety stop: host_ram_admission_reserve')
             self.assertNotIn('child_pid', report)
+            self.assertFalse(report['cleanup_complete'])
             self.assertTrue(report['host_pressure_guard']['stopped'])
 
     def test_runtime_pressure_policy_preserves_other_failures(self):
@@ -444,6 +445,7 @@ class ResourceLimitsTest(unittest.TestCase):
             self.assertEqual(report['termination_reason'], 'child_exit')
             self.assertFalse(report['host_pressure_guard']['stopped'])
             self.assertEqual(report['guardian_exit_status'], 0)
+            self.assertTrue(report['cleanup_complete'])
             self.assertEqual(report['host_pressure_guard']['last_sample']['mem_available_bytes'], 1)
             self.assertEqual(report['memory_limit_bytes'], 64 * 1024**2)
             remaining = limits._process_table().get(report['child_pid'])
@@ -647,6 +649,7 @@ class ResourceLimitsTest(unittest.TestCase):
             report = json.loads(report_path.read_text())
             self.assertEqual(report['termination_reason'], 'cleanup_error')
             self.assertEqual(report['error'], 'Independent guardian did not finish cleanup')
+            self.assertFalse(report['cleanup_complete'])
             self.assertNotIn('guardian_exit_status', report)
             self.assertEqual(report['child_exit_status'], 0)
             self.assertFalse(Path('/proc', str(report['child_pid'])).exists())
@@ -684,6 +687,7 @@ class ResourceLimitsTest(unittest.TestCase):
                     memory_limit_bytes=64 * 1024**2, max_tasks=4)
             report = json.loads(report_path.read_text())
             self.assertEqual(report['termination_reason'], 'controller_exited_with_descendants')
+            self.assertTrue(report['cleanup_complete'])
             self.assertEqual(report['child_exit_status'], 0)
             # This marker is mandatory: the child wrote it before its normal exit.
             native_pid = int(native_pid_path.read_text())

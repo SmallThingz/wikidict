@@ -165,6 +165,190 @@ class PresentationRetryPolicyTests(unittest.TestCase):
             self.assertEqual(json.loads((evidence[0]/'exit.json').read_text())['returncode'],1)
             self.assertFalse((evidence[0]/'classification.json').exists())
             self.assertEqual((shard/'partial').read_text(),'failed bytes')
+class FailedShardPayloadCleanupTests(unittest.TestCase):
+    def fixture(self, root):
+        edition='testwiktionary'; date='20261001'
+        cfg=dict(output=str(root/'output'),raw_shard_root=str(root/'raw'),date=date)
+        workspace=Path(cfg['output'])/edition/(date+'.shards'); workspace.mkdir(parents=True)
+        raw=Path(cfg['raw_shard_root'])/edition/(date+'.raw-shards')
+        b.external_raw_shards(workspace,raw,create=True)
+        (workspace/'state.json').write_text(json.dumps(dict(raw_shards_path=str(raw))))
+        inputs=workspace/'input'; inputs.mkdir(); (inputs/'pages.xml.zst').write_bytes(b'original input')
+        cache=inputs/'extraction-cache'; cache.mkdir(); (cache/'source').write_bytes(b'required extraction')
+        shard=raw/'00000000'; shard.mkdir(); (shard/'.spool').mkdir(); (shard/'languages').mkdir()
+        payload=[]
+        names=[f'lang-{i:02d}.tmp' for i in range(32)]+[name+'.tmp' for name in
+            ('thesaurus','citations','reconstruction','rhymes','sign-gloss','supplemental','aliases')]
+        for name in names:
+            path=shard/'.spool'/name; path.write_bytes(b'generated spool'); payload.append(path)
+        for i in range(195):
+            path=shard/'languages'/(hashlib.sha256(str(i).encode()).hexdigest()+'.wikblb')
+            path.write_bytes(b'generated language output'); payload.append(path)
+        (shard/'languages.tsv').write_bytes(b'')
+        (shard/'fallback-pages.jsonl').write_bytes(b'exact fallback diagnostic\n')
+        capture=shard/'.presentation-first-failure'; capture.mkdir()
+        (capture/'capture.json').write_bytes(b'{"record_complete":false}\n')
+        (capture/'raw.wikitext').write_bytes(b'exact first failure source')
+        (shard/'unique-source-note').write_bytes(b'keep unknown evidence')
+        verified=raw/'00100000'; verified.mkdir(); (verified/'.verified').write_text('verified\n')
+        (verified/'retained.wikblb').write_bytes(b'complete verified work')
+        folder=root/'attempt'; folder.mkdir(); (folder/'build.log').write_bytes(b'original failed attempt log')
+        external=workspace.with_name(workspace.name+'.failures')/'invocation'; external.mkdir(parents=True)
+        (external/'failure.json').write_bytes(b'exact original typed receipt')
+        closed=dict(outcome='failed',accepted=None,controller_interrupted=False,exit_code=-9,
+                    cleanup_proven=True,source_guard=True,control_proven=True)
+        return cfg,edition,workspace,raw,shard,payload,folder,external,closed
+
+    def test_eligible_closed_attempt_retires_234_generated_files_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);cfg,edition,workspace,raw,shard,payload,folder,external,closed=self.fixture(root)
+            original=dict(closed); allocated=sum(path.stat().st_blocks*512 for path in payload)
+            result=b.cleanup_failed_attempt_shards(cfg,edition,folder,closed)
+            retired=next(row for row in result['shards'] if row['shard']==str(shard))
+            self.assertEqual(closed,original); self.assertEqual(retired['status'],'generated-payload-retired')
+            self.assertEqual(len(retired['removed']),234); self.assertEqual(retired['allocated_file_bytes_removed'],allocated)
+            self.assertFalse(retired['exclusive_filesystem_gain_claimed'])
+            self.assertTrue(all(not path.exists() for path in payload))
+            self.assertEqual((shard/'fallback-pages.jsonl').read_bytes(),b'exact fallback diagnostic\n')
+            self.assertEqual((shard/'.presentation-first-failure/raw.wikitext').read_bytes(),b'exact first failure source')
+            self.assertEqual((shard/'unique-source-note').read_bytes(),b'keep unknown evidence')
+            self.assertEqual((workspace/'input/pages.xml.zst').read_bytes(),b'original input')
+            self.assertEqual((workspace/'input/extraction-cache/source').read_bytes(),b'required extraction')
+            self.assertEqual((raw/'00100000/retained.wikblb').read_bytes(),b'complete verified work')
+            self.assertEqual((external/'failure.json').read_bytes(),b'exact original typed receipt')
+            self.assertEqual((folder/'build.log').read_bytes(),b'original failed attempt log')
+            for row in retired['diagnostics']:
+                source=Path(row['original']); archived=Path(row['retained'])
+                self.assertEqual(source.read_bytes(),archived.read_bytes())
+                self.assertNotEqual(source.stat().st_ino,archived.stat().st_ino)
+                self.assertEqual(hashlib.sha256(archived.read_bytes()).hexdigest(),row['sha256'])
+
+    def test_unproven_interrupted_and_accepted_attempts_do_not_touch_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg,edition,workspace,raw,shard,payload,folder,external,closed=self.fixture(Path(tmp))
+            for key,value in [('cleanup_proven',False),('source_guard',False),('control_proven',False),
+                              ('controller_interrupted',True),('accepted',{'root':'published'}),('exit_code',0)]:
+                with self.subTest(key=key):
+                    result=b.cleanup_failed_attempt_shards(cfg,edition,folder,dict(closed,**{key:value}))
+                    self.assertEqual(result['status'],'retained-unproven-or-complete-attempt')
+                    self.assertTrue(all(path.is_file() for path in payload))
+                    self.assertFalse((folder/'generated-shard-diagnostics').exists())
+
+    def test_completion_markers_and_nonempty_catalog_preserve_all_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg,edition,workspace,raw,shard,payload,folder,external,closed=self.fixture(Path(tmp))
+            for name in ('.verified','page-coverage.json','namespace-coverage.json','complete.json','languages.tsv'):
+                with self.subTest(name=name):
+                    marker=shard/name; marker.write_bytes(b'completed work')
+                    result=b.cleanup_incomplete_shard_payload(shard,folder/'never-created')
+                    self.assertEqual(result['status'],'retained-completed'); self.assertTrue(all(path.exists() for path in payload))
+                    if name=='languages.tsv': marker.write_bytes(b'')
+                    else: marker.unlink()
+            self.assertFalse((folder/'never-created').exists())
+
+    def test_shared_payload_inode_and_unknown_files_are_not_unlinked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg,edition,workspace,raw,shard,payload,folder,external,closed=self.fixture(Path(tmp))
+            shared=payload[-1]; alias=workspace/'input/retained-shared-blob'; os.link(shared,alias)
+            before=shared.stat(); unknown=shard/'.spool/unrecognized.trace'; unknown.write_bytes(b'unique trace')
+            result=b.cleanup_incomplete_shard_payload(shard,folder/'diagnostics')
+            self.assertEqual(len(result['removed']),233); self.assertTrue(shared.is_file())
+            self.assertEqual(shared.stat().st_ctime_ns,before.st_ctime_ns); self.assertEqual(alias.read_bytes(),b'generated language output')
+            self.assertEqual(unknown.read_bytes(),b'unique trace')
+
+    def test_diagnostic_copy_failure_prevents_any_payload_retirement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg,edition,workspace,raw,shard,payload,folder,external,closed=self.fixture(Path(tmp))
+            with patch.object(b.shutil,'copyfileobj',side_effect=OSError('archive unavailable')):
+                with self.assertRaisesRegex(OSError,'archive unavailable'):
+                    b.cleanup_incomplete_shard_payload(shard,folder/'diagnostics')
+            self.assertTrue(all(path.is_file() for path in payload))
+            self.assertEqual((shard/'fallback-pages.jsonl').read_bytes(),b'exact fallback diagnostic\n')
+
+    def test_wrong_raw_owner_and_symlink_directory_are_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg,edition,workspace,raw,shard,payload,folder,external,closed=self.fixture(Path(tmp))
+            state=workspace/'state.json'; state.write_text(json.dumps(dict(raw_shards_path=str(raw)+'-other')))
+            with self.assertRaisesRegex(ValueError,'owner differs'):
+                b.cleanup_failed_attempt_shards(cfg,edition,folder,closed)
+            self.assertTrue(all(path.exists() for path in payload))
+            old=shard/'.spool'; saved=shard/'retained-spool'; old.rename(saved); old.symlink_to(saved,target_is_directory=True)
+            with self.assertRaisesRegex(ValueError,'Unsafe generated'):
+                b.cleanup_incomplete_shard_payload(shard,folder/'diagnostics')
+            self.assertTrue(all((saved/path.name).is_file() for path in payload[:39]))
+
+    def test_invalid_coverage_keeps_existing_retry_policy_and_archives_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); shard=root/'00000000'; calls=[]
+            error=ValueError('original invalid coverage')
+            def run(argv,*args,**kwargs):
+                calls.append(argv); shard.mkdir()
+                (shard/'languages.tsv').write_bytes(b'nonempty rejected catalog')
+                (shard/'page-coverage.json').write_bytes(b'invalid rejected coverage')
+                (shard/'fallback-pages.jsonl').write_bytes(b'exact fallback')
+            with patch.object(b,'timed_run',side_effect=run):
+                with self.assertRaises(ValueError) as failed:
+                    b.build_shard_with_retries(['zig','build','build-blobs','--','dump',str(shard)],shard,
+                        root/'failures','testwiktionary','20261001',0,2,lambda:None,
+                        lambda:(_ for _ in ()).throw(error))
+            self.assertIs(failed.exception,error)
+            self.assertEqual(len(calls),b.SHARD_RETRIES)
+            self.assertEqual((shard/'page-coverage.json').read_bytes(),b'invalid rejected coverage')
+            evidence=list((root/'failures').iterdir())
+            self.assertEqual(len(evidence),b.SHARD_RETRIES)
+            for item in evidence:
+                self.assertEqual((item/'shard-diagnostics/fallback-pages.jsonl').read_bytes(),b'exact fallback')
+                self.assertEqual(json.loads((item/'payload-cleanup.json').read_text())['removed'],[])
+
+    def test_nonpositive_final_failure_archives_only_and_preserves_error_and_retries(self):
+        for returncode in (-15,0):
+            with self.subTest(returncode=returncode),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp); shard=root/'00000000'; calls=[]; errors=[]
+                def run(argv,*args,**kwargs):
+                    calls.append(argv); (shard/'.spool').mkdir(parents=True); (shard/'languages').mkdir()
+                    (shard/'.spool/lang-00.tmp').write_bytes(b'generated spool')
+                    (shard/'languages'/('a'*64+'.wikblb')).write_bytes(b'generated language')
+                    (shard/'fallback-pages.jsonl').write_bytes(b'exact fallback')
+                    error=subprocess.CalledProcessError(returncode,argv,output=b'original stdout',stderr=b'original stderr')
+                    errors.append(error); raise error
+                with patch.object(b,'timed_run',side_effect=run):
+                    with self.assertRaises(subprocess.CalledProcessError) as failed:
+                        b.build_shard_with_retries(['zig','build','build-blobs','--','dump',str(shard)],shard,
+                            root/'failures','testwiktionary','20261001',0,2,lambda:None,
+                            lambda:self.fail('no validation after command failure'))
+                self.assertIs(failed.exception,errors[-1]); self.assertEqual(len(calls),b.SHARD_RETRIES)
+                self.assertEqual(failed.exception.output,b'original stdout'); self.assertEqual(failed.exception.stderr,b'original stderr')
+                self.assertEqual((shard/'.spool/lang-00.tmp').read_bytes(),b'generated spool')
+                self.assertEqual((shard/'languages'/('a'*64+'.wikblb')).read_bytes(),b'generated language')
+                evidence=list((root/'failures').iterdir()); self.assertEqual(len(evidence),b.SHARD_RETRIES)
+                for item in evidence:
+                    self.assertEqual((item/'shard-diagnostics/fallback-pages.jsonl').read_bytes(),b'exact fallback')
+                    receipt=json.loads((item/'payload-cleanup.json').read_text())
+                    self.assertEqual(receipt['removed'],[]); self.assertEqual(receipt['status'],'diagnostics-retained')
+
+    def test_matching_failure_keeps_primary_error_and_archives_before_payload_removal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);shard=root/'00000000';original=[];calls=[]
+            command=['zig','build','build-blobs','--','dump',str(shard),'--start-page','0','--limit-pages','2']
+            def run(argv,*args,**kwargs):
+                calls.append(argv); (shard/'.spool').mkdir(parents=True); (shard/'languages').mkdir()
+                (shard/'.spool/lang-00.tmp').write_bytes(b'disposable'); (shard/'languages'/('a'*64+'.wikblb')).write_bytes(b'disposable blob')
+                (shard/'fallback-pages.jsonl').write_bytes(b'exact fallback')
+                receipt=Path(argv[argv.index('--failure-receipt')+1]); receipt.write_text(json.dumps(dict(
+                    schema='wikidict.blob-build.failure.v1',error_name='UncompiledPresentation',failure_class='deterministic-presentation',
+                    invocation_id=argv[argv.index('--invocation-id')+1],invocation_args=argv[argv.index('--')+1:],
+                    page=dict(ordinal=1,namespace=0,title='fixture',page_id=7,revision_id=9))))
+                error=subprocess.CalledProcessError(1,argv,output=b'original stdout',stderr=b'original stderr'); original.append(error); raise error
+            with patch.object(b,'timed_run',side_effect=run):
+                with self.assertRaises(b.DeterministicPresentationFailure) as failed:
+                    b.build_shard_with_retries(command,shard,root/'failures','testwiktionary','20261001',0,2,lambda:None,lambda:self.fail('no validation on failed builder'))
+            self.assertEqual(len(calls),1); self.assertIs(failed.exception.__cause__,original[0]); self.assertEqual(failed.exception.stderr,b'original stderr')
+            evidence=Path(failed.exception.failure_receipt).parent
+            self.assertFalse((shard/'.spool/lang-00.tmp').exists()); self.assertFalse((shard/'languages'/('a'*64+'.wikblb')).exists())
+            self.assertEqual((evidence/'shard-diagnostics/fallback-pages.jsonl').read_bytes(),b'exact fallback')
+            self.assertEqual(json.loads((evidence/'payload-cleanup.json').read_text())['status'],'generated-payload-retired')
+
+
 from compress_blobs import compress, compress_many, default_workers
 
 def write_namespace_fixture(folder, edition=None, date=None):
@@ -2826,6 +3010,25 @@ class VerifiedPublicationInventoryTests(unittest.TestCase):
         self.assertEqual(inventory,(staging/b.VERIFIED_INVENTORY_NAME).read_bytes() if inventory is not None else None)
         self.assertEqual(complete,(staging/'complete.json').read_bytes() if complete is not None else None)
 
+    def test_missing_namespace_report_refuses_before_cleanup_then_exact_restore_recovers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root):
+                item,target,workspace,staging=self.interrupted(root)
+                report=staging/'namespace-coverage.json';raw=report.read_bytes();report.unlink()
+                with patch.object(b,'cleanup_shard_workspace',side_effect=AssertionError('Cleanup before coverage refusal')) as cleanup:
+                    self.assert_refused_preserved(item,target,workspace,staging,'Missing or invalid namespace coverage')
+                    cleanup.assert_not_called()
+                self.assertFalse(report.exists())
+                report.write_bytes(raw)
+                with patch.object(b,'run_checked') as native:
+                    self.assertEqual(b.build_locked([item],root,root/'output','zig',1),'resumed_publication')
+                    native.assert_not_called()
+                self.assertEqual((target/'namespace-coverage.json').read_bytes(),raw)
+                self.assertFalse(staging.exists())
+                self.assertFalse((target/b.VERIFIED_MARKER).exists())
+                self.assertEqual(b.publication_inventory(target),json.loads((target/'complete.json').read_text())['publication_files'])
+
     def test_sealed_compressed_only_interrupted_resume_keeps_exact_logical_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
@@ -3680,11 +3883,17 @@ class FileMetadataV2ReplayReuseTest(unittest.TestCase):
         with self.assertRaises(ValueError):self.validate()
 
     def test_producer_change_does_not_reuse_proof(self):
-        self.validate()
+        expected=self.validate()
         changed=self.helper.producer();changed['generator_sha256']='0'*64
-        with patch.object(self.helper,'producer',return_value=changed),patch.object(self.helper,'validate_snapshot',wraps=self.helper.validate_snapshot) as replay:
-            with self.assertRaisesRegex(ValueError,'collector or dependency'):self.validate()
-            self.assertEqual(replay.call_count,1)
+        with patch.object(self.helper,'producer',return_value=changed):
+            with patch.object(self.helper,'validate_snapshot',side_effect=ValueError('fresh replay rejected')) as replay:
+                with self.assertRaisesRegex(ValueError,'fresh replay rejected'):self.validate()
+                self.assertEqual(replay.call_count,1)
+            with patch.object(self.helper,'validate_snapshot',wraps=self.helper.validate_snapshot) as replay:
+                self.assertEqual(self.validate(),expected)
+                self.assertEqual(replay.call_count,1)
+                self.assertEqual(self.validate(),expected)
+                self.assertEqual(replay.call_count,1)
 
 
 
@@ -3870,14 +4079,32 @@ class LoopMessageSelectionTests(unittest.TestCase):
         with self.assertRaises((ValueError,FileNotFoundError)):
             self.resolve()
 
-    def test_prior_and_unknown_producer_cannot_claim_preferred_profile(self):
+    def test_preferred_loop_profile_requires_warning_and_full_current_replay(self):
         for mode in ('prior-sixty-six','unknown'):
             with self.subTest(mode=mode):
                 if (self.root/'language-messages-loop-v1').exists():
                     (self.root/'language-messages-loop-v1').rename(self.root/'previous-loop-case')
                 new=self.collect('language-messages-loop-v1',prior=mode=='prior-sixty-six')
-                if mode=='unknown':self.rebind(new,'0'*64)
-                with self.assertRaisesRegex(ValueError,'producer|original collector'):
+                if mode=='prior-sixty-six':
+                    with self.assertRaisesRegex(ValueError,'loop-warning key'):self.resolve()
+                    continue
+                self.rebind(new,'0'*64)
+                before={path.name:path.read_bytes() for path in new.iterdir()}
+                record=json.loads((new/'interface-messages.manifest.json').read_text())
+                expected_batches=sum(json.loads((new/batch['request']).read_text())['kind']=='messages'
+                                     for batch in record['requests'])
+                self.assertGreater(expected_batches,0)
+                self.messages._VALIDATED_REPLAY_KEYS.clear()
+                with patch.object(self.messages,'parse_messages',wraps=self.messages.parse_messages) as replay:
+                    selected=self.resolve()
+                    self.assertEqual(replay.call_count,expected_batches)
+                for kind in self.messages.KINDS:self.assertEqual(selected[kind],new/(kind+'.tsv'))
+                self.assertEqual(before,{path.name:path.read_bytes() for path in new.iterdir()})
+                self.assertEqual(self.messages.validate_snapshot(selected['interface-messages'])['generator_sha256'],'0'*64)
+                target=new/'interface-messages.tsv';raw=target.read_bytes()
+                tampered=raw.replace('বাংলা parser-template-loop-warning'.encode(),b'forged warning')
+                self.assertNotEqual(raw,tampered);target.write_bytes(tampered);self.rebind(new,'0'*64)
+                with self.assertRaisesRegex(ValueError,'Rendered TSV differs from complete API evidence'):
                     self.resolve()
 
     def test_missing_warning_under_new_producer_is_not_a_loop_profile(self):

@@ -805,6 +805,7 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
     subreaper_set = False
     known = {}
     preexisting = frozenset()
+    child_reaped = descendants_empty = guardian_disarmed = guardian_joined = False
     started = time.monotonic()
     report = {'mode': 'watchdog', 'aggregate_limit': 'sampled best effort, not kernel hard cap',
               'memory_limit_bytes': memory_limit_bytes, 'address_space_limit_bytes': address_space_limit_bytes, 'max_tasks': max_tasks,
@@ -816,7 +817,8 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
               'disk_sample_interval_seconds': WATCHDOG_POLL_SECONDS,
               'disk_limit': 'sampled free-space reserve; expansion and concurrent writes are not bounded',
               'wall_seconds': wall_seconds, 'deadline_monotonic': started + wall_seconds, 'peak_pss_bytes': 0,
-              'peak_rss_bytes': 0, 'peak_tasks': 0, 'termination_reason': 'starting'}
+              'peak_rss_bytes': 0, 'peak_tasks': 0, 'termination_reason': 'starting',
+              'cleanup_complete': False}
     reason = None
     try:
         # Refuse before creating a child when the reserve is already spent.
@@ -1032,6 +1034,7 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
                         report['child_identity_source'] = 'guardian_handshake'
                         _signal_owned(known, signal.SIGKILL)
                 child.wait(timeout=2)
+                child_reaped = type(child.returncode) is int
                 # Drain adopted children before dropping subreaper ownership.
                 if child.pid in known:
                     deadline = time.monotonic() + 2.0
@@ -1043,6 +1046,7 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
                                 try: os.waitpid(pid, os.WNOHANG)
                                 except ChildProcessError: pass
                         if not remaining:
+                            descendants_empty = True
                             break
                         if time.monotonic() >= deadline:
                             raise ContainmentUnavailable('Owned watchdog descendants did not exit')
@@ -1064,6 +1068,7 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
                             reason != 'cleanup_error' and child is not None and \
                             child.poll() is not None:
                         os.write(guardian_liveness_write, b'DONE\n')
+                        guardian_disarmed = True
                 except OSError as error:
                     reason = 'cleanup_error'
                     report['error'] = f'Could not disarm independent guardian: {error}'
@@ -1079,6 +1084,7 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
                         started + wall_seconds + WATCHDOG_GUARDIAN_CLEANUP_SECONDS)
                     guardian.wait(timeout=max(0.0, cleanup_deadline - time.monotonic()))
                     report['guardian_exit_status'] = guardian.returncode
+                    guardian_joined = guardian.returncode == 0
                     if guardian.returncode != 0:
                         if reason != 'guardian_lost':
                             reason = 'cleanup_error'
@@ -1099,6 +1105,9 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
                 signal.signal(signal.SIGTERM, old_term)
             report['elapsed_seconds'] = time.monotonic() - started
             report['termination_reason'] = reason or 'monitor_error'
+            # Operational failure is independent of the exact owned-tree join.
+            report['cleanup_complete'] = (child_reaped and descendants_empty
+                                          and guardian_disarmed and guardian_joined)
             _write_watchdog_report(report_path, report)
     if reason != 'child_exit':
         raise ContainmentUnavailable(f'Watchdog stopped build: {reason}; see {report_path}')

@@ -261,6 +261,11 @@ class ControllerHistoryTests(unittest.TestCase):
             controller.history(self.state, dict(self.context, source='different-current-source'))
         self.assertFalse((self.folder / 'result.json').exists())
 
+    def test_retired_source78_migration_is_rejected_as_unsupported(self):
+        cfg = dict(production_manifest_transition=dict(scope='source78-pilot-retry-time-only'))
+        with self.assertRaisesRegex(ValueError, 'Explicit English-only history transition required'):
+            controller.load_history_transition(cfg)
+
 
 class ControllerLockTests(unittest.TestCase):
     def test_lock_persists_after_release_and_replaced_inode_is_rejected(self):
@@ -302,6 +307,25 @@ class ControllerAdmissionTests(unittest.TestCase):
                            dict(child_pid='910001'), dict(guardian_start_time_ticks=None)]:
                 with self.subTest(change=change):
                     self.assertFalse(controller.watchdog_closed(dict(self.terminal(), **change)))
+
+    def test_explicit_cleanup_proof_preserves_operational_failure_and_all_identity_guards(self):
+        terminal=dict(self.terminal(),cleanup_complete=True,termination_reason='disk_free_floor',
+                      child_exit_status=-15,error='Disk free-space safety stop: fixture')
+        with mock.patch.object(controller,'process_identity',return_value=None):
+            self.assertTrue(controller.watchdog_closed(terminal))
+            self.assertEqual(terminal['termination_reason'],'disk_free_floor')
+            self.assertEqual(terminal['error'],'Disk free-space safety stop: fixture')
+            self.assertIsNone(controller.next_resources(4,controller.MEMORY_INITIAL,terminal))
+            for change in (dict(cleanup_complete=False),dict(cleanup_complete=1),
+                           dict(child_exit_status=None),dict(guardian_exit_status=1),
+                           dict(termination_reason='cleanup_error'),dict(termination_reason='guardian_lost')):
+                with self.subTest(change=change):
+                    self.assertFalse(controller.watchdog_closed(dict(terminal,**change)))
+        for role in ('child','guardian'):
+            live=dict(pid=terminal[role+'_pid'],start_time_ticks=terminal[role+'_start_time_ticks'])
+            with self.subTest(role=role),mock.patch.object(controller,'process_identity',
+                    side_effect=lambda pid,live=live:live if pid==live['pid'] else None):
+                self.assertFalse(controller.watchdog_closed(terminal))
 
     def test_watchdog_closure_uses_pid_and_start_identity_without_pid_reuse_false_positive(self):
         terminal = self.terminal()
@@ -1146,6 +1170,16 @@ class ControllerPreparationTests(unittest.TestCase):
             self.assertAlmostEqual(39944.368390301985, sum(row['elapsed_seconds'] for row in rows))
             self.assertTrue(all(row['manifest_transition']['runtime_reuse_credit'] is False for row in rows))
             self.assertEqual(originals, {path: Path(path).read_bytes() for path in originals})
+
+    def test_case_distinct_aliases_refuse_exact_duplicates_and_cross_owner_folds(self):
+        for extra in (['it', 'Italián'], ['fr', 'ITALIÁN']):
+            with self.subTest(extra=extra), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                old, current, snapshot, changes = self.four_registry_appends_context(root, AN14_REVIEWED_ALIASES + [extra])
+                receipt = self.preparation(root / 'prep', old, 'bad-case-distinct')
+                current['production_preparations'] = [self.manifest_receipt(root / 'prep', receipt,
+                    old, current, snapshot, dict(unrelated_registry_appends=changes))]
+                with self.assertRaises(ValueError): controller.load_preparations(current)
 
 class ControllerMemoryPolicyTests(unittest.TestCase):
     def cfg(self, root):
@@ -2102,315 +2136,6 @@ class SourceLuaDefectTests(unittest.TestCase):
         with self.assertRaises(ValueError):f.check()
 
 
-class Source78PilotTimeHistoryTests(unittest.TestCase):
-    """Closed source78 pilot costs survive; every target publication is rebuilt."""
-    def fixture(self, root, an_aliases=None):
-        source = dict(controller.SOURCE78_PILOT)
-        target = dict(head='9' * 40, fingerprint='a' * 64)
-        manifest_path = root / 'dumps/manifest.json'
-        registry = root / 'an.original.tsv'
-        aliases = [['it', 'Italián']] if an_aliases is None else copy.deepcopy(an_aliases)
-        codes = sorted({code for code, _ in aliases})
-        registry.write_text('# wikidict-language-registry-v2\n# content-language\tan\n' +
-            ('it\tItalian\n' if an_aliases is None else ''.join(code + '\tExisting ' + code + '\n' for code in codes)))
-        derived = root / 'an.derived.tsv'
-        derived.write_bytes(registry.read_bytes() + ''.join('# local-alias\t' + code + '\t' + label + '\n'
-            for code, label in aliases).encode())
-        change = dict(edition='anwiktionary', original_registry=controller.descriptor(registry),
-                      derived_registry=controller.descriptor(derived), aliases=aliases)
-        before = dict(requested_editions=all_editions(),
-            files=[dict(wiki='arwiktionary', date='20261001', name='synthetic.xml.bz2', size=1, sha1='0' * 40)],
-            auxiliary_capture_roots={e: str(root / 'capture' / e) for e in all_editions()},
-            language_registries=[dict(wiki='anwiktionary', date='20261001',
-                name='language-registry.tsv', content_language='an',
-                size=registry.stat().st_size, sha256=change['original_registry']['sha256'])])
-        write_json(manifest_path, before)
-        original_manifest = controller.descriptor(manifest_path)
-        write_json(root / 'manifest.original.json', before)
-        old = dict(armed=True, source=source, compiler=dict(path='/fixture/zig', bytes=1, sha256='b' * 64),
-            manifest=original_manifest, downloads=str(root / 'dumps'), output=str(root / 'output'),
-            raw_shard_root=str(root / 'raw'), date='20261001', now_unix=1791731560,
-            expansion_timeout_ms=60000, state_directory=str(root / 'state'),
-            build_timeout_seconds=604800, production_manifest_transition=None, diagnostic_disposition=None)
-        write_json(root / 'oldcfg.json', old)
-        after = copy.deepcopy(before)
-        after['language_registries'][0].update(size=derived.stat().st_size, sha256=change['derived_registry']['sha256'])
-        write_json(manifest_path, after)
-        snapshot = dict(target, files={})
-        write_json(root / 'source-snapshot79.json', snapshot)
-        snapshot_ref = controller.descriptor(root / 'source-snapshot79.json')
-        q = dict(schema='wikidict.durable-fresh-qualification-result.v1', passed=True, source_guard=True,
-            error=None, source_head=target['head'], source_fingerprint=target['fingerprint'],
-            source_snapshot=snapshot_ref, phases=dict(native=dict(exit_code=0), python=dict(exit_code=0)))
-        write_json(root / 'qualified.json', q)
-        qref = controller.descriptor(root / 'qualified.json')
-        closed = dict(schema='wikidict.durable-fresh-qualification-independent-closure.v1',
-            outcome='passed-closed', result=qref, qualification_passed=True, cleanup_proven=True,
-            source_guard=True, source_head=target['head'], source_fingerprint=target['fingerprint'],
-            source_snapshot=snapshot_ref)
-        write_json(root / 'qualified-close.json', closed)
-        entries, originals = [], {}
-        for sequence, (edition, passed, cap) in enumerate([
-                ('arwiktionary', True, False), ('arwiktionary', False, True),
-                ('aawiktionary', True, False), ('anwiktionary', False, False)], 1):
-            folder = root / 'state/attempts' / ('%06d-%s' % (sequence, edition))
-            start = dict(attempt_id=folder.name, sequence=sequence, edition=edition, date='20261001',
-                         context=controller.production_context(old), controller=dict(pid=900001, start_time_ticks=1))
-            wd = dict(termination_reason='sampled_pss_limit' if cap else 'child_exit',
-                child_exit_status=-15 if cap else (0 if passed else 1), guardian_exit_status=0,
-                memory_limit_bytes=controller.MEMORY_INITIAL, error=None)
-            write_json(folder / 'start.json', start)
-            write_json(folder / 'watchdog.json', wd)
-            accepted = None
-            if passed:
-                inputs = dict(source=source['fingerprint'])
-                complete = dict(edition=edition, date='20261001', now_unix=old['now_unix'],
-                                build_inputs=inputs, input_pages=111)
-                write_json(folder / 'complete.json', complete)
-                complete_ref = controller.descriptor(folder / 'complete.json')
-                accepted = dict(source=source, complete=complete_ref, complete_snapshot=complete_ref,
-                                build_inputs=inputs, input_pages=111)
-            row = dict(attempt_id=folder.name, sequence=sequence, edition=edition,
-                outcome='passed' if passed else 'failed', accepted=accepted,
-                elapsed_seconds=float(sequence * 10), execution_mode=FRESH,
-                memory_limit_bytes=controller.MEMORY_INITIAL, watchdog=controller.descriptor(folder / 'watchdog.json'),
-                cleanup_proven=True, controller_interrupted=False, exit_code=0 if passed else 1)
-            write_json(folder / 'result.json', row)
-            result_ref = controller.descriptor(folder / 'result.json')
-            entries.append(dict(result=result_ref, start=controller.descriptor(folder / 'start.json'),
-                watchdog=row['watchdog'], original_result=row, original_watchdog=wd))
-            for name in ('start.json', 'result.json', 'complete.json'):
-                if (folder / name).exists(): originals[str(folder / name)] = (folder / name).read_bytes()
-        launch = dict(configuration=controller.descriptor(root / 'oldcfg.json'))
-        write_json(root / 'launch.json', launch)
-        terminal = dict(schema='wikidict.production-controller-terminal.v1', controller_joined=True,
-            controller_exit_status=1, source=source, launch=controller.descriptor(root / 'launch.json'),
-            cleanup=dict(cleanup_proven=True, attempts=[dict(result=e['result']) for e in entries]))
-        write_json(root / 'terminal.json', terminal)
-        pilot = dict(schema='wikidict.production-controller-independent-owned-cleanup.v1',
-            configuration=controller.descriptor(root / 'oldcfg.json'), source=source,
-            source_guard=True, cleanup_proven=True, all_recorded_identities_absent=True,
-            all_owned_groups_and_sessions_empty=True, remaining_owned_processes=[],
-            semantic_acceptance=False, all198_complete=False, terminal=controller.descriptor(root / 'terminal.json'),
-            launch=terminal['launch'], original_terminal=terminal, attempts=entries)
-        write_json(root / 'pilot-close.json', pilot)
-        transition = dict(scope='source78-pilot-retry-time-only', reason='Measured old work only',
-            runtime_reuse_credit=False, from_configuration=controller.descriptor(root / 'oldcfg.json'),
-            from_manifest_snapshot=controller.descriptor(root / 'manifest.original.json'),
-            to_manifest=controller.descriptor(manifest_path), to_source_snapshot=snapshot_ref,
-            qualification_result=qref, qualification_closure=controller.descriptor(root / 'qualified-close.json'),
-            pilot_closure=controller.descriptor(root / 'pilot-close.json'), an_registry_append=change)
-        cfg = dict(old, source=target, manifest=transition['to_manifest'],
-                   qualification=transition['qualification_closure'], production_manifest_transition=transition)
-        return cfg, originals
-
-    def rows(self, cfg):
-        with mock.patch.object(controller, 'process_identity', side_effect=AssertionError('Closed history never queries live processes')):
-            return controller.history(Path(cfg['state_directory']), controller.production_context(cfg), cfg)
-
-    def interrupted_fixture(self, root, an_aliases=None, interrupted_seconds=None):
-        cfg, _ = self.fixture(root, an_aliases)
-        tr = cfg['production_manifest_transition']; pilot = controller.read_ref(tr['pilot_closure'])
-        entry = pilot['attempts'][1]; folder = Path(entry['result']['path']).parent
-        row = controller.read_ref(entry['result']); wd = controller.read_ref(entry['watchdog'])
-        row.update(cleanup_proven=False, error=None)
-        if interrupted_seconds is not None: row['elapsed_seconds'] = interrupted_seconds
-        wd.update(termination_reason='interrupted', error='Build supervisor interrupted by signal 15',
-                  child_pid=900003, child_start_time_ticks=3, guardian_pid=900004)
-        write_json(folder/'watchdog.json', wd); row['watchdog']=controller.descriptor(folder/'watchdog.json')
-        write_json(folder/'result.json', row)
-        launched=dict(identity=dict(pid=900002,start_time_ticks=2),private_session=900002)
-        write_json(folder/'launch.json',launched)
-        entry.update(result=controller.descriptor(folder/'result.json'),watchdog=row['watchdog'],
-                     original_result=row,original_watchdog=wd,launch=controller.descriptor(folder/'launch.json'))
-        guardian=dict(status='disarmed',reason='normal_done',supervisor_pid=900002,supervisor_start=2,
-                      root_pid=900003,root_start=3,guardian_pid=900004)
-        write_json(folder/'guardian.json',guardian);entry['guardian']=controller.descriptor(folder/'guardian.json')
-        intent=dict(schema='wikidict.owned-diagnosed-build-interruption-intent.v1',configuration=tr['from_configuration'],
-                    signal=15,boot_id='synthetic-boot',attempt_start=entry['start'],attempt_launch=entry['launch'],
-                    target=dict(pid=900002,start_time_ticks=2,process_group=900002,session=900002))
-        write_json(root/'intent.json',intent);pilot['authorized_interruption_intent']=controller.descriptor(root/'intent.json')
-        signal=dict(schema='wikidict.owned-diagnosed-build-interruption-signal.v1',intent=pilot['authorized_interruption_intent'],
-                    helper_invocations=1,helper_returned=True,error=None,cleanup_proven=False,
-                    controller_and_observer_signalled=False,other_owner_signalled=False)
-        write_json(root/'signal.json',signal);pilot['authorized_interruption_signal']=controller.descriptor(root/'signal.json')
-        terminal=controller.read_ref(pilot['terminal']);terminal['cleanup']['cleanup_proven']=False
-        terminal['cleanup']['attempts']=[dict(result=e['result']) for e in pilot['attempts']]
-        write_json(root/'terminal.json',terminal)
-        pilot.update(terminal=controller.descriptor(root/'terminal.json'),original_terminal=terminal,
-                     outcome='failed-closed',passed_mechanical=False,ordinary_watchdog_closed=False,
-                     both_locks_free_same_inode=True,original_observer_cleanup_proven=False,host_boot_id='synthetic-boot')
-        write_json(root/'pilot-close.json',pilot);tr['pilot_closure']=controller.descriptor(root/'pilot-close.json')
-        return cfg, dict(closure=tr['pilot_closure'],attempt_id=row['attempt_id'])
-
-    def test_exact_independent_interruption_counts_failed_time_without_restamping_or_pages(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);cfg,pin=self.interrupted_fixture(root)
-            originals={str(p):p.read_bytes() for p in root.rglob('*.json')}
-            # Synthetic pin is explicit: this test cannot authorize the real maintenance closure.
-            with mock.patch.object(controller,'SOURCE78_INTERRUPTED_PILOT',pin):
-                rows=self.rows(cfg)
-                self.assertEqual(len(rows),4)
-                self.assertEqual(sum(r['elapsed_seconds'] for r in rows if r['edition']=='arwiktionary'),30)
-                self.assertTrue(all(r['accepted'] is None for r in rows))
-                failed=next(r for r in rows if r['attempt_id']==pin['attempt_id'])
-                self.assertIs(failed['cleanup_proven'],False)
-            self.assertEqual(originals,{str(p):p.read_bytes() for p in root.rglob('*.json')})
-            with self.assertRaises(ValueError):self.rows(cfg) # Same data without exact trusted pin refuses.
-
-    def test_interruption_exception_refuses_other_error_owner_identity_or_false_independent_cleanup(self):
-        for mode in ('error','owner','identity','guardian','independent','other-row'):
-            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
-                root=Path(directory);cfg,pin=self.interrupted_fixture(root)
-                tr=cfg['production_manifest_transition'];pilot=controller.read_ref(tr['pilot_closure']);entry=pilot['attempts'][1]
-                if mode=='independent':pilot['cleanup_proven']=False
-                elif mode=='identity':
-                    value=controller.read_ref(pilot['authorized_interruption_intent']);value['target']['start_time_ticks']=99
-                    write_json(root/'intent.json',value);pilot['authorized_interruption_intent']=controller.descriptor(root/'intent.json')
-                elif mode=='guardian':
-                    value=controller.read_ref(entry['guardian']);value['status']='armed'
-                    write_json(Path(entry['guardian']['path']),value);entry['guardian']=controller.descriptor(entry['guardian']['path'])
-                elif mode=='other-row':
-                    other=pilot['attempts'][3];value=controller.read_ref(other['result']);value['cleanup_proven']=False
-                    write_json(Path(other['result']['path']),value);other.update(result=controller.descriptor(other['result']['path']),original_result=value)
-                else:
-                    value=controller.read_ref(entry['result']);wd=controller.read_ref(entry['watchdog'])
-                    if mode=='owner':value['edition']='anwiktionary'
-                    else:wd['error']='different watchdog failure'
-                    write_json(Path(entry['watchdog']['path']),wd);value['watchdog']=controller.descriptor(entry['watchdog']['path'])
-                    write_json(Path(entry['result']['path']),value)
-                    entry.update(result=controller.descriptor(entry['result']['path']),watchdog=value['watchdog'],original_result=value,original_watchdog=wd)
-                terminal=controller.read_ref(pilot['terminal']);terminal['cleanup']['attempts']=[dict(result=e['result']) for e in pilot['attempts']]
-                write_json(root/'terminal.json',terminal);pilot.update(terminal=controller.descriptor(root/'terminal.json'),original_terminal=terminal)
-                write_json(root/'pilot-close.json',pilot);tr['pilot_closure']=controller.descriptor(root/'pilot-close.json');pin['closure']=tr['pilot_closure']
-                with mock.patch.object(controller,'SOURCE78_INTERRUPTED_PILOT',pin), self.assertRaises(ValueError):self.rows(cfg)
-
-    def test_closed_mixed_old_intervals_count_once_without_old_acceptance_or_pages(self):
-        with tempfile.TemporaryDirectory() as directory:
-            cfg, original = self.fixture(Path(directory))
-            rows = self.rows(cfg)
-            self.assertEqual(4, len(rows))
-            self.assertTrue(all(r['accepted'] is None and r['history_time_only'] for r in rows))
-            self.assertEqual(2, sum(r['historical_accepted'] is not None for r in rows))
-            summary = controller.summarize(rows + copy.deepcopy(rows), all_editions())
-            ar = next(r for r in summary['editions'] if r['edition'] == 'arwiktionary')
-            self.assertEqual(30, ar['observed_build_seconds'])
-            self.assertIsNone(ar['accepted'])
-            self.assertEqual(0, summary['accepted_cohort_input_pages'])
-            self.assertEqual(set(controller.PILOT[:7]), {r['edition'] for r in summary['editions'] if r['timing_excluded']})
-            current = attempt('new-ar', 5, edition='arwiktionary', seconds=5, pages=222)
-            joined = controller.summarize(rows + [current], all_editions())
-            self.assertEqual(222, joined['accepted_cohort_input_pages'])
-            self.assertEqual(35, next(r for r in joined['editions'] if r['edition'] == 'arwiktionary')['observed_build_seconds'])
-            self.assertFalse(joined['final_cohort_complete'])
-            self.assertEqual(rows, self.rows(cfg))
-            for path, raw in original.items(): self.assertEqual(raw, Path(path).read_bytes())
-
-    def test_real_main_does_not_skip_old_passed_or_failed_without_retry_flag(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory);cfg, _ = self.fixture(root);rows = self.rows(cfg);seen = []
-            real_descriptor = controller.descriptor
-            def selected_descriptor(path):
-                return cfg['compiler'] if Path(path) == Path(cfg['compiler']['path']) else real_descriptor(path)
-            write_json(root / 'cfg.json', cfg)
-            def execute(current, edition, workers, folder, sequence, context, locks, memory):
-                seen.append((edition, sequence))
-                row = attempt('current-' + edition, sequence, edition=edition, seconds=2, pages=20)
-                row.update(controller_interrupted=False, cleanup_proven=True, source_guard=True, control_proven=True)
-                return row, {}
-            with mock.patch.object(controller, 'history', return_value=rows), \
-                 mock.patch.object(controller, 'source_guard'), \
-                 mock.patch.object(controller, 'gate', return_value={}), \
-                 mock.patch.object(controller, 'load_preparations', return_value=[]), \
-                 mock.patch.object(controller, 'descriptor', side_effect=selected_descriptor), \
-                 mock.patch.object(controller, 'validate_pipeline_paths'), \
-                 mock.patch.object(controller, 'selected_phase_editions', return_value=['arwiktionary', 'aawiktionary']), \
-                 mock.patch.object(controller, 'Lock'), \
-                 mock.patch.object(controller, 'execute', side_effect=execute), \
-                 mock.patch.object(controller.resource, 'getrlimit', return_value=(-1, -1)), \
-                 mock.patch.object(controller.os, 'sched_getaffinity', return_value={1,3,5,7}), \
-                 mock.patch('builtins.print'):
-                self.assertEqual(0, controller.main(['--config', str(root / 'cfg.json')]))
-            self.assertEqual([('arwiktionary', 5), ('aawiktionary', 6)], seen)
-            summary = json.loads((root / 'state/summary.json').read_text())
-            self.assertEqual(20, summary['accepted_cohort_input_pages'])
-
-    def test_stale_unclean_malformed_source_or_manifest_proofs_refuse(self):
-        for mode in ('source', 'target-source', 'unclosed', 'terminal', 'inventory',
-                     'other-edition', 'roots', 'registry-rewrite', 'runtime-credit', 'extra-field'):
-            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
-                root=Path(directory);cfg,_=self.fixture(root);tr=cfg['production_manifest_transition']
-                if mode=='runtime-credit':tr['runtime_reuse_credit']=True
-                elif mode=='extra-field':tr['surprise']=True
-                elif mode=='source':
-                    old=controller.read_ref(tr['from_configuration']);old['source']['head']='0'*40
-                    write_json(root/'oldcfg.json',old);tr['from_configuration']=controller.descriptor(root/'oldcfg.json')
-                elif mode=='target-source':cfg['source']=dict(head='0'*40,fingerprint='0'*64)
-                elif mode in ('unclosed','terminal','inventory','other-edition'):
-                    close=controller.read_ref(tr['pilot_closure'])
-                    if mode=='unclosed':close['cleanup_proven']=False
-                    if mode=='terminal':close['original_terminal']['controller_joined']=False
-                    if mode=='inventory':close['attempts'].pop()
-                    if mode=='other-edition':close['attempts'][0]['original_result']['edition']='enwiktionary'
-                    write_json(root/'pilot-close.json',close);tr['pilot_closure']=controller.descriptor(root/'pilot-close.json')
-                elif mode=='roots':
-                    value=controller.read_ref(cfg['manifest']);value['auxiliary_capture_roots']['arwiktionary']+='-changed'
-                    write_json(root/'dumps/manifest.json',value);cfg['manifest']=tr['to_manifest']=controller.descriptor(root/'dumps/manifest.json')
-                elif mode=='registry-rewrite':
-                    p=Path(tr['an_registry_append']['derived_registry']['path']);p.write_bytes(p.read_bytes()+b'bad')
-                with self.assertRaises(ValueError):self.rows(cfg)
-
-    def test_old_missing_stale_or_uncatalogued_attempt_cannot_be_recovered(self):
-        for mode in ('missing-result','stale-result','missing-folder','extra-old-row'):
-            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
-                root=Path(directory);cfg,_=self.fixture(root)
-                folders=sorted((root/'state/attempts').iterdir());first=folders[0]
-                if mode=='missing-result':(first/'result.json').unlink()
-                if mode=='stale-result':
-                    row=json.loads((first/'result.json').read_text());row['elapsed_seconds']+=1
-                    write_json(first/'result.json',row)
-                if mode=='missing-folder':first.rename(root/'retired-attempt')
-                if mode=='extra-old-row':
-                    extra=root/'state/attempts/999999-unproven'
-                    start=json.loads((first/'start.json').read_text());start.update(attempt_id=extra.name,sequence=999999)
-                    write_json(extra/'start.json',start);write_json(extra/'result.json',dict(attempt_id=extra.name,sequence=999999,edition='arwiktionary',accepted=None))
-                with self.assertRaises((ValueError,FileNotFoundError)):self.rows(cfg)
-                if mode=='missing-result':self.assertFalse((first/'result.json').exists())
-
-
-    def test_an14_case_distinct_same_owner_keeps_exact_interrupted_time_without_output_credit(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cfg, pin = self.interrupted_fixture(root, AN14_REVIEWED_ALIASES, 4090.5811582690003)
-            originals = {str(p): p.read_bytes() for p in root.rglob('*.json')}
-            with mock.patch.object(controller, 'SOURCE78_INTERRUPTED_PILOT', pin):
-                rows = self.rows(cfg)
-                failed = next(row for row in rows if row['attempt_id'] == pin['attempt_id'])
-                self.assertEqual(4090.5811582690003, failed['elapsed_seconds'])
-                self.assertIs(failed['cleanup_proven'], False)
-                self.assertTrue(all(row['history_time_only'] and row['accepted'] is None for row in rows))
-                summary = controller.summarize(rows + copy.deepcopy(rows), all_editions())
-                ar = next(row for row in summary['editions'] if row['edition'] == 'arwiktionary')
-                self.assertAlmostEqual(4100.581158269, ar['observed_build_seconds'])
-                self.assertEqual(0, summary['accepted_cohort_input_pages'])
-                self.assertEqual(set(controller.PILOT[:7]), {row['edition'] for row in summary['editions'] if row['timing_excluded']})
-            self.assertEqual(originals, {str(p): p.read_bytes() for p in root.rglob('*.json')})
-
-    def test_case_distinct_aliases_still_refuse_exact_duplicates_and_cross_owner_folds(self):
-        for extra in (['it', 'Italián'], ['fr', 'ITALIÁN']):
-            for route in ('preparations', 'pilot-history'):
-                with self.subTest(extra=extra, route=route), tempfile.TemporaryDirectory() as directory:
-                    root = Path(directory); aliases = AN14_REVIEWED_ALIASES + [extra]
-                    if route == 'pilot-history':
-                        cfg, _ = self.fixture(root, aliases)
-                        with self.assertRaises(ValueError): self.rows(cfg)
-                    else:
-                        helper = ControllerPreparationTests()
-                        old, current, snapshot, changes = helper.four_registry_appends_context(root, aliases)
-                        receipt = helper.preparation(root / 'prep', old, 'bad-case-distinct')
-                        current['production_preparations'] = [helper.manifest_receipt(root / 'prep', receipt,
-                            old, current, snapshot, dict(unrelated_registry_appends=changes))]
-                        with self.assertRaises(ValueError): controller.load_preparations(current)
 
 
 class ControllerAllReadyTests(unittest.TestCase):
@@ -2435,7 +2160,7 @@ class ControllerAllReadyTests(unittest.TestCase):
         self.assertNotIn('enwiktionary',controller.selected_phase_editions(editions,'all',True,manifest))
         with self.assertRaises(ValueError):controller.selected_phase_editions(editions,'all')
 
-    def run_main(self,root,cleanup=True,unsafe=None,plan=None,history_rows=None):
+    def run_main(self,root,cleanup=True,unsafe=None,plan=None,history_rows=None,max_editions=None,execute_override=None):
         manifest=self.manifest();cfg=dict(armed=True,source={'head':'a'*40,'fingerprint':'b'*64},
             compiler={'path':str(root/'zig'),'bytes':1,'sha256':'c'*64},
             manifest={'path':str(root/'downloads/manifest.json'),'bytes':1,'sha256':'d'*64},
@@ -2444,6 +2169,8 @@ class ControllerAllReadyTests(unittest.TestCase):
         seen=[];written=[];gates=[]
         def execute(cfg,edition,workers,folder,sequence,context,locks,memory_limit_bytes):
             seen.append(edition)
+            if execute_override is not None:
+                return execute_override(edition, workers, memory_limit_bytes, sequence)
             return (dict(attempt_id='attempt-'+str(sequence),edition=edition,sequence=sequence,
                 controller_interrupted=False,cleanup_proven=cleanup,source_guard=unsafe!='source',control_proven=unsafe!='control',elapsed_seconds=0.125,
                 execution_mode='pipeline_run_may_reuse_verified_inputs_or_shards',outcome='failed'if edition=='arwiktionary'else'passed',
@@ -2467,9 +2194,9 @@ class ControllerAllReadyTests(unittest.TestCase):
              mock.patch.object(controller,'write_json',side_effect=lambda path,value,**kw:written.append(value)), \
              mock.patch('builtins.print'):
             if not cleanup or unsafe:
-                with self.assertRaisesRegex(ValueError,'unproven|control validation|Non-ordinary'):controller.main(['--config',str(root/'cfg.json'),'--phase','all'])
+                with self.assertRaisesRegex(ValueError,'unproven|control validation|Non-ordinary'):controller.main(['--config',str(root/'cfg.json'),'--phase','all'] + ([] if max_editions is None else ['--max-editions',str(max_editions)]))
                 return seen
-            code=controller.main(['--config',str(root/'cfg.json'),'--phase','all'])
+            code=controller.main(['--config',str(root/'cfg.json'),'--phase','all'] + ([] if max_editions is None else ['--max-editions',str(max_editions)]))
         self.assertEqual(len(gates),2) # qualification+diagnostic, never bypassed; no pilot prerequisite
         self.assertGreaterEqual(source_guard.call_count,199 if plan is None else 1);preparations.assert_called_once()
         return code,seen,written[-1]
@@ -2887,6 +2614,65 @@ class ControllerCampaignSelectionTests(unittest.TestCase):
             self.assertEqual(plan['unstarted_count'], 44)
             self.assertEqual(plan['dispositions'], [])
             self.assertFalse(plan['semantic_acceptance'])
+
+
+
+
+class ControllerBatchBoundaryTests(unittest.TestCase):
+    def test_positive_limit_yields_after_closed_failed_edition_and_preserves_pending(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code,seen,summary=ControllerAllReadyTests().run_main(Path(tmp),
+                plan=dict(ready=['arwiktionary','enwiktionary'],dispositions=[]),max_editions=1)
+        self.assertEqual(code,1);self.assertEqual(seen,['arwiktionary'])
+        self.assertEqual(summary['execution'],dict(outcome='batch-complete',max_editions=1,
+            completed_editions=['arwiktionary'],pending_editions=['enwiktionary'],all_selected_editions_processed=False))
+        self.assertFalse(summary['final_cohort_complete'])
+
+    def test_default_unbounded_and_limit_larger_than_selection_finish_selection(self):
+        for limit in (None,9):
+            with self.subTest(limit=limit),tempfile.TemporaryDirectory() as tmp:
+                code,seen,summary=ControllerAllReadyTests().run_main(Path(tmp),
+                    plan=dict(ready=['arwiktionary','enwiktionary'],dispositions=[]),max_editions=limit)
+                self.assertEqual(seen,['arwiktionary','enwiktionary'])
+                self.assertEqual(summary['execution']['outcome'],'selection-complete')
+                self.assertEqual(summary['execution']['pending_editions'],[])
+
+    def test_memory_escalation_finishes_inside_one_edition_before_yield(self):
+        calls=[]
+        def execute(edition,workers,memory,sequence):
+            calls.append((edition,workers,memory));passed=memory==controller.MEMORY
+            row=attempt('attempt-'+str(sequence),sequence,edition,accepted=passed)
+            row.update(controller_interrupted=False,cleanup_proven=True,source_guard=True,control_proven=True)
+            return row,dict(termination_reason='child_exit' if passed else 'sampled_pss_limit',
+                            child_exit_status=0 if passed else -15,memory_limit_bytes=memory)
+        with tempfile.TemporaryDirectory() as tmp:
+            code,seen,summary=ControllerAllReadyTests().run_main(Path(tmp),
+                plan=dict(ready=['arwiktionary','enwiktionary'],dispositions=[]),max_editions=1,execute_override=execute)
+        self.assertEqual(calls,[('arwiktionary',4,controller.MEMORY_INITIAL),('arwiktionary',4,controller.MEMORY)])
+        self.assertEqual(code,0);self.assertEqual(summary['execution']['completed_editions'],['arwiktionary'])
+        self.assertEqual(summary['execution']['pending_editions'],['enwiktionary'])
+        self.assertEqual(next(x for x in summary['editions'] if x['edition']=='arwiktionary')['attempt_count'],2)
+        self.assertFalse(summary['final_cohort_complete'])
+
+    def test_skipped_old_failure_does_not_consume_limit_and_no_pending_phantom(self):
+        old=attempt('old',1,'arwiktionary',accepted=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            code,seen,summary=ControllerAllReadyTests().run_main(Path(tmp),
+                plan=dict(ready=['arwiktionary','enwiktionary'],dispositions=[]),max_editions=1,history_rows=[old])
+        self.assertEqual(seen,['enwiktionary']);self.assertEqual(summary['execution']['completed_editions'],['enwiktionary'])
+        self.assertEqual(summary['execution']['outcome'],'selection-complete')
+
+    def test_unsafe_cleanup_cannot_become_clean_batch_yield(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            seen=ControllerAllReadyTests().run_main(Path(tmp),cleanup=False,
+                plan=dict(ready=['arwiktionary','enwiktionary'],dispositions=[]),max_editions=1)
+        self.assertEqual(seen,['arwiktionary'])
+
+    def test_nonpositive_limit_rejected_before_configuration_or_launch(self):
+        for limit in (0,-1):
+            with self.subTest(limit=limit),mock.patch.object(controller,'read_json',side_effect=AssertionError('must not read config')):
+                with self.assertRaisesRegex(ValueError,'must be positive'):
+                    controller.main(['--config','unused','--max-editions',str(limit)])
 
 
 if __name__ == '__main__':
