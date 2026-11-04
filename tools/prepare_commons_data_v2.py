@@ -39,6 +39,17 @@ def producer():
                              'tools/download_wiktionaries.py', 'tools/category_tree_snapshot.py')}}
 
 
+def validate_producer_provenance(manifest):
+    # Captured code identities are provenance; current raw/TSV replay is authority.
+    roles = {'tools/prepare_commons_data.py', 'tools/prepare_file_metadata.py',
+             'tools/download_wiktionaries.py', 'tools/category_tree_snapshot.py'}
+    dependencies = manifest.get('dependency_sha256')
+    if (not isinstance(dependencies, dict) or set(dependencies) != roles
+            or any(not isinstance(value, str) or not re.fullmatch('[0-9a-f]{64}', value)
+                   for value in [manifest.get('generator_sha256'), *dependencies.values()])):
+        raise ValueError('Invalid Commons producer provenance')
+
+
 def namespace_identity(raw, wiki, date):
     lines = raw.decode('utf-8').splitlines()
     if (len(lines) < 4 or lines[:3] != ['# wikidict-namespace-registry-v1',
@@ -308,8 +319,7 @@ def verify(root, require_complete=True):
     if require_complete and evidence.decode(evidence.small(root / COMPLETE)) != {
             'schema': SCHEMA, 'manifest_sha256': evidence.digest(raw_manifest)}:
         raise ValueError('Commons completion mismatch')
-    if any(manifest.get(k) != v for k, v in producer().items()):
-        raise ValueError('Commons collector dependencies changed')
+    validate_producer_provenance(manifest)
     if (manifest.get('source_url') != API or manifest.get('dump_date') is not None
             or manifest.get('temporal_scope') != 'current-api-observation'
             or manifest.get('candidate_queries_complete') is not True

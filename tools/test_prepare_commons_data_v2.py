@@ -233,18 +233,72 @@ class CommonsCaptureV2Tests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Commons TSV replay mismatch'):
             helper.verify(self.args.output)
 
-    def test_v2_cannot_claim_another_generator_or_legacy_dependency(self):
-        original = self.capture()
-        for field in ('generator_sha256', 'legacy_dependency'):
-            manifest = copy.deepcopy(original)
-            if field == 'generator_sha256':
-                manifest[field] = '0' * 64
-            else:
-                manifest['dependency_sha256']['tools/prepare_commons_data.py'] = '0' * 64
+    def test_historical_provenance_replays_through_current_builder(self):
+        manifest = self.capture(1)
+        manifest['generator_sha256'] = 'a' * 64
+        manifest['dependency_sha256']['tools/download_wiktionaries.py'] = 'b' * 64
+        self.rewrite_manifest(manifest)
+        before = (self.args.output / 'commons-data.manifest.json').read_bytes()
+        with mock.patch.object(helper, 'producer', side_effect=AssertionError('No current producer gate')):
+            self.assertEqual(manifest, helper.verify(self.args.output))
+            self.assertEqual(manifest['output_sha256'], build.verified_auxiliary_hashes(
+                {'commons-data': self.args.output / 'commons-data.tsv',
+                 'namespace-registry': self.args.namespace_registry},
+                'arwiktionary', '20261001')['commons-data'])
+        self.assertEqual(before, (self.args.output / 'commons-data.manifest.json').read_bytes())
+
+    def test_malformed_provenance_rejected(self):
+        original = self.capture(1)
+        changes = [
+            {'generator_sha256': None}, {'generator_sha256': 'A' * 64},
+            {'generator_sha256': 'f' * 63}, {'dependency_sha256': []},
+            {'dependency_sha256': {}},
+            {'dependency_sha256': {**original['dependency_sha256'], 'unknown.py': 'f' * 64}},
+            {'dependency_sha256': {**original['dependency_sha256'], 'tools/download_wiktionaries.py': 123}},
+        ]
+        for change in changes:
+            manifest = {**original, **change}
             self.rewrite_manifest(manifest)
-            with self.subTest(field=field), self.assertRaisesRegex(
-                    ValueError, 'Commons collector dependencies changed'):
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, 'Commons producer provenance'):
                 helper.verify(self.args.output)
+
+    def test_historical_provenance_does_not_bypass_resealed_evidence(self):
+        for kind, expected in (
+                ('query', 'Commons query mismatch'),
+                ('receipt', 'Commons response receipt mismatch'),
+                ('raw', 'Commons repository identity mismatch'),
+                ('tsv', 'Commons TSV replay mismatch')):
+            with self.subTest(kind=kind):
+                self.args.output = self.root / kind
+                manifest = self.capture(1)
+                manifest['generator_sha256'] = 'a' * 64
+                manifest['dependency_sha256']['tools/download_wiktionaries.py'] = 'b' * 64
+                index = helper.read_index(self.args.output, manifest)
+                request = self.args.output / index['requests'][0]['request']
+                receipt = self.args.output / index['requests'][0]['accepted_receipt']
+                receipt_value = json.loads(receipt.read_bytes())
+                raw = self.args.output / receipt_value['response']
+                if kind == 'query':
+                    value = json.loads(request.read_bytes()); value['query']['titles'] = 'Data:Other.tab'
+                    request.write_bytes(helper.evidence.encoded(value))
+                elif kind == 'receipt':
+                    receipt_value['accepted'] = False
+                    receipt.write_bytes(helper.evidence.encoded(receipt_value))
+                elif kind == 'raw':
+                    value = json.loads(raw.read_bytes()); value['query']['general']['wikiid'] = 'enwiki'
+                    raw.write_bytes(helper.evidence.encoded(value))
+                    receipt_value.update(response_sha256=helper.evidence.digest(raw.read_bytes()),
+                                         response_bytes=raw.stat().st_size)
+                    receipt.write_bytes(helper.evidence.encoded(receipt_value))
+                else:
+                    path = self.args.output / 'commons-data.tsv'
+                    path.write_bytes(path.read_bytes().replace(b'40400000', b'40400001'))
+                    manifest.update(output_sha256=helper.evidence.digest(path.read_bytes()),
+                                    output_bytes=path.stat().st_size)
+                index['artifacts'] = helper.payload_inventory(self.args.output)
+                self.rewrite_index(manifest, index)
+                with self.assertRaisesRegex(ValueError, expected):
+                    helper.verify(self.args.output)
 
     def test_unknown_or_null_explicit_schema_still_fails_builder_validation(self):
         original = self.capture()

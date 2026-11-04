@@ -165,6 +165,115 @@ class PresentationRetryPolicyTests(unittest.TestCase):
             self.assertEqual(json.loads((evidence[0]/'exit.json').read_text())['returncode'],1)
             self.assertFalse((evidence[0]/'classification.json').exists())
             self.assertEqual((shard/'partial').read_text(),'failed bytes')
+    def template_capture(self, receipt, argv):
+        capture=receipt.parent/'.presentation-first-failure';capture.mkdir()
+        args=argv[argv.index('--')+1:];identity=argv[argv.index('--invocation-id')+1]
+        digest=hashlib.sha256()
+        for arg in args:
+            data=arg.encode();digest.update(len(data).to_bytes(8,'little'));digest.update(data)
+        title='Белград'
+        row=dict(schema='wikidict.presentation-first-failure.v1',record_complete=True,diagnostic_only=True,
+                 publication_created=False,semantic_acceptance=False,error_name='UncompiledTemplate',
+                 invocation_id=identity,invocation_args_sha256=digest.hexdigest(),
+                 invocation_args_hash_framing='each argv item: u64 little-endian byte length then exact bytes',
+                 ordinal=1,namespace=0,page_id=662,revision_id=1135263,title=title,
+                 title_bytes=len(title.encode()),title_sha256=hashlib.sha256(title.encode()).hexdigest(),title_truncated=False,
+                 input=dict(dump_path='dump',expander_root='bundle',start_page=0,requested_limit=2),payload_limit_bytes=4*1024*1024)
+        parts={'raw_source':('raw.wikitext',b'{{one}}'),'expanded':('expanded.wikitext',b'{{one|two}}'),
+               'index_row':('index-row.tsv',b'exact original row'),'display_title':('display-title.wikitext',None),
+               'poem_metadata':('poem.json',None),'missing_dependency_metadata':('missing-dependency.json',None),'alias_record':('alias.json',None)}
+        for key,(suffix,data) in parts.items():
+            path=capture/('failure-00000001-'+suffix)
+            if data is not None:path.write_bytes(data)
+            row[key]=dict(present=data is not None,bytes=len(data) if data is not None else 0,
+                          sha256=hashlib.sha256(data).hexdigest() if data is not None else None,
+                          path=str(path) if data is not None else None,retained_bytes=len(data) if data is not None else 0,
+                          truncated=False,unretained=False)
+        return capture/'capture.json',row
+
+    def exercise_template_capture(self, change=None, identity_failure=False, no_capture=False):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);shard=root/'00000000';calls=[];captures=[];validated=[]
+            command=['zig','build','build-blobs','--','dump',str(shard),'--expander-root','bundle','--start-page','0','--limit-pages','2']
+            def run(argv,*args,**kwargs):
+                calls.append(argv);shard.mkdir();(shard/'partial').write_text('retained failure bytes')
+                if len(calls)>1:return
+                receipt=Path(argv[argv.index('--failure-receipt')+1])
+                if not no_capture:
+                    path,row=self.template_capture(receipt,argv)
+                    if change:change(row,path,receipt)
+                    path.write_text(json.dumps(row));captures.append(path)
+                raise subprocess.CalledProcessError(1,argv,stderr='UncompiledTemplate')
+            def check():
+                if identity_failure:raise ValueError('input identity changed')
+            with patch.object(b,'timed_run',side_effect=run),patch.object(b,'phase_event') as event:
+                if identity_failure:
+                    with patch.object(b,'matching_presentation_failure') as classify:
+                        with self.assertRaisesRegex(ValueError,'input identity changed'):
+                            b.build_shard_with_retries(command,shard,root/'failures','bgwiktionary','20261001',0,2,check,lambda:None)
+                        classify.assert_not_called()
+                    self.assertEqual(len(calls),1)
+                elif change is None and not no_capture:
+                    with self.assertRaises(b.DeterministicPresentationFailure) as failed:
+                        b.build_shard_with_retries(command,shard,root/'failures','bgwiktionary','20261001',0,2,check,lambda:validated.append(True))
+                    self.assertEqual(len(calls),1);self.assertEqual(validated,[])
+                    self.assertEqual(failed.exception.failure_receipt,str(captures[0]))
+                    self.assertEqual(failed.exception.returncode,1)
+                    self.assertEqual(event.call_args.kwargs['error_name'],'UncompiledTemplate')
+                    self.assertEqual(json.loads((captures[0].parents[1]/'classification.json').read_text())['deterministic_presentation'],True)
+                    self.assertEqual((shard/'partial').read_text(),'retained failure bytes')
+                else:
+                    self.assertEqual(b.build_shard_with_retries(command,shard,root/'failures','bgwiktionary','20261001',0,2,check,lambda:validated.append(True)),2)
+                    self.assertEqual(len(calls),2);self.assertEqual(validated,[True])
+
+    def test_complete_typed_template_capture_stops_first_identical_retry(self):
+        self.exercise_template_capture()
+
+    def test_template_capture_generic_exit_and_stderr_do_not_classify(self):
+        self.exercise_template_capture(no_capture=True)
+
+    def test_template_capture_requires_current_invocation_and_exact_framed_arguments(self):
+        changes=[lambda r,p,f:r.update(invocation_id='stale'),lambda r,p,f:r.update(invocation_args_sha256='0'*64),
+                 lambda r,p,f:r.update(invocation_args_hash_framing='joined strings')]
+        for change in changes:
+            with self.subTest(change=change):self.exercise_template_capture(change)
+
+    def test_template_capture_rejects_other_errors_incomplete_and_foreign_page_context(self):
+        for fields in [dict(error_name='InvalidPreContext'),dict(record_complete=False),dict(publication_created=True),
+                       dict(title_truncated=True),dict(title_sha256='0'*64),dict(ordinal=2),dict(namespace=True),dict(page_id=-1)]:
+            with self.subTest(fields=fields):self.exercise_template_capture(lambda r,p,f:r.update(fields))
+        self.exercise_template_capture(lambda r,p,f:r['input'].update(dump_path='other'))
+        self.exercise_template_capture(lambda r,p,f:r['input'].update(expander_root='other'))
+
+    def test_template_capture_requires_complete_unchanged_bounded_payloads(self):
+        for fields in [dict(truncated=True),dict(unretained=True),dict(bytes=3*1024*1024),dict(sha256='0'*64),dict(retained_bytes=0)]:
+            with self.subTest(fields=fields):self.exercise_template_capture(lambda r,p,f:r['expanded'].update(fields))
+        self.exercise_template_capture(lambda r,p,f:r['display_title'].update(truncated=True))
+        self.exercise_template_capture(lambda r,p,f:Path(r['raw_source']['path']).write_bytes(b'changed'))
+        self.exercise_template_capture(lambda r,p,f:Path(r['index_row']['path']).unlink())
+
+    def test_template_capture_rejects_foreign_or_symlinked_payloads(self):
+        self.exercise_template_capture(lambda r,p,f:r['raw_source'].update(path=str(p.parent/'other')))
+        def symlink(row,path,receipt):
+            target=Path(row['raw_source']['path']);data=target.read_bytes();target.unlink();other=receipt.parent/'outside';other.write_bytes(data);target.symlink_to(other)
+        self.exercise_template_capture(symlink)
+
+    def test_template_capture_cannot_override_existing_unknown_receipt(self):
+        self.exercise_template_capture(lambda r,p,f:f.write_text(json.dumps(dict(error_name='OtherFailure'))))
+
+    def test_template_capture_refuses_nonregular_files_before_open(self):
+        def payload_fifo(row,path,receipt):
+            target=Path(row['raw_source']['path']);target.unlink();os.mkfifo(target)
+        self.exercise_template_capture(payload_fifo)
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)/'invocation';root.mkdir();capture=root/'.presentation-first-failure';capture.mkdir()
+            os.mkfifo(capture/'capture.json')
+            with patch.object(Path,'open',side_effect=AssertionError('nonregular capture opened')):
+                self.assertFalse(b.matching_template_capture(root/'failure.json','invocation',['dump','output'],0,2))
+
+    def test_template_capture_changed_input_precedes_any_classification(self):
+        self.exercise_template_capture(identity_failure=True)
+
 class FailedShardPayloadCleanupTests(unittest.TestCase):
     def fixture(self, root):
         edition='testwiktionary'; date='20261001'
@@ -2359,7 +2468,7 @@ class BuildTest(unittest.TestCase):
                 with self.assertRaises(limits.ContainmentUnavailable):
                     b.acquire_build_resource_lock(root/'.tmp/build-resources.lock')
                 raise limits.ContainmentUnavailable('delegation required')
-            with patch.object(b,'PROJECT',root),patch.object(sys,'argv',['build_wiktionaries.py']),patch.object(limits,'inside_envelope',return_value=False),patch.object(limits,'supervise',side_effect=supervised) as supervise,patch.object(b,'safe_worker_budget',return_value=0),patch.object(b,'main') as main:
+            with patch.object(b,'PROJECT',root),patch.object(sys,'argv',['build_wiktionaries.py']),patch.object(limits,'inside_envelope',return_value=False),patch.object(limits,'inside_watchdog',return_value=False),patch.object(limits,'supervise',side_effect=supervised) as supervise,patch.object(b,'safe_worker_budget',return_value=0),patch.object(b,'main') as main:
                 with self.assertRaisesRegex(SystemExit,'delegation required'): b.cli()
             supervise.assert_called_once_with()
             main.assert_not_called()

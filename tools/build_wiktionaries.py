@@ -1573,30 +1573,102 @@ def write_failure_evidence(path, row):
             pass
 
 
+def matching_template_capture(receipt, invocation_id, invocation_args, start, limit):
+    """Verify the complete typed capture used when no outer failure receipt exists."""
+    root=receipt.parent/'.presentation-first-failure'
+    capture=root/'capture.json'
+    try:
+        if receipt.is_symlink() or receipt.parent.name!=invocation_id or root.is_symlink() or capture.is_symlink():return False
+        if not stat.S_ISREG(capture.lstat().st_mode):return False
+        with capture.open('rb') as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):return False
+            raw=stream.read(64*1024+1)
+        if len(raw)>64*1024:return False
+        row=json.loads(raw)
+        if (not isinstance(row,dict) or row.get('schema')!='wikidict.presentation-first-failure.v1'
+                or row.get('record_complete') is not True or row.get('diagnostic_only') is not True
+                or row.get('publication_created') is not False or row.get('semantic_acceptance') is not False
+                or row.get('error_name')!='UncompiledTemplate' or row.get('invocation_id')!=invocation_id):return False
+        digest=hashlib.sha256()
+        for arg in invocation_args:
+            encoded=arg.encode('utf-8');digest.update(len(encoded).to_bytes(8,'little'));digest.update(encoded)
+        if (row.get('invocation_args_hash_framing')!='each argv item: u64 little-endian byte length then exact bytes'
+                or row.get('invocation_args_sha256')!=digest.hexdigest()):return False
+        title=row.get('title')
+        if (type(row.get('ordinal')) is not int or not start<=row['ordinal']<start+limit
+                or type(row.get('namespace')) is not int or row['namespace']<0
+                or type(row.get('page_id')) is not int or row['page_id']<0
+                or type(row.get('revision_id')) is not int or row['revision_id']<0
+                or not isinstance(title,str) or not title or row.get('title_truncated') is not False):return False
+        title_bytes=title.encode('utf-8')
+        if type(row.get('title_bytes')) is not int or row['title_bytes']!=len(title_bytes) or row.get('title_sha256')!=hashlib.sha256(title_bytes).hexdigest():return False
+        context=row.get('input')
+        if (not isinstance(context,dict) or len(invocation_args)<2
+                or context.get('dump_path')!=invocation_args[0]
+                or type(context.get('start_page')) is not int or context['start_page']!=start
+                or type(context.get('requested_limit')) is not int or context['requested_limit']!=limit
+                or row.get('payload_limit_bytes')!=4*1024*1024):return False
+        # Hash framing binds every argument; also check the captured source role.
+        flag='--expander-root'
+        if invocation_args.count(flag)!=1:return False
+        index=invocation_args.index(flag)+1
+        if index>=len(invocation_args) or context.get('expander_root')!=invocation_args[index]:return False
+        payloads=(('raw_source','raw.wikitext',256*1024,True),('expanded','expanded.wikitext',2*1024*1024,True),
+                  ('display_title','display-title.wikitext',256*1024,False),('poem_metadata','poem.json',256*1024,False),
+                  ('missing_dependency_metadata','missing-dependency.json',256*1024,False),
+                  ('index_row','index-row.tsv',256*1024,True),('alias_record','alias.json',256*1024,False))
+        retained=0
+        for key,suffix,maximum,required in payloads:
+            part=row.get(key)
+            if (not isinstance(part,dict) or part.get('truncated') is not False or part.get('unretained') is not False
+                    or type(part.get('bytes')) is not int or type(part.get('retained_bytes')) is not int):return False
+            if part.get('present') is False:
+                if required or part['bytes']!=0 or part['retained_bytes']!=0 or part.get('path') is not None or part.get('sha256') is not None:return False
+                continue
+            size=part['bytes'];path=root/('failure-00000001-'+suffix)
+            if (part.get('present') is not True or not 0<=size<=maximum or part['retained_bytes']!=size
+                    or part.get('path')!=str(path) or path.is_symlink()):return False
+            if not stat.S_ISREG(path.lstat().st_mode):return False
+            with path.open('rb') as stream:
+                info=os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_size!=size:return False
+                data=stream.read(size+1)
+            if len(data)!=size or hashlib.sha256(data).hexdigest()!=part.get('sha256'):return False
+            retained+=size
+        return retained<=4*1024*1024
+    except (OSError,ValueError,TypeError,KeyError,UnicodeError,AttributeError):
+        return False
+
+
 def matching_presentation_failure(path, invocation_id, invocation_args, start, limit):
-    # The private, newly created attempt directory is the authority. Never infer
-    # classification from exit 1, page text, or inherited stderr.
+    # Return the exact typed error and evidence path, never a classification from
+    # exit 1, page text, or inherited stderr. Input identity is checked by caller.
     try:
         with path.open('rb') as stream:
-            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode): return False
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode): return None
             raw = stream.read(64 * 1024 + 1)
-        if len(raw) > 64 * 1024: return False
+        if len(raw) > 64 * 1024: return None
         row = json.loads(raw)
-        if not isinstance(row, dict): return False
+        if not isinstance(row, dict): return None
         if (row.get('schema') != 'wikidict.blob-build.failure.v1'
                 or row.get('error_name') != 'UncompiledPresentation'
                 or row.get('failure_class') != 'deterministic-presentation'
                 or row.get('invocation_id') != invocation_id
-                or row.get('invocation_args') != invocation_args): return False
+                or row.get('invocation_args') != invocation_args): return None
         page = row.get('page')
-        return (isinstance(page, dict) and type(page.get('ordinal')) is int
+        if (isinstance(page, dict) and type(page.get('ordinal')) is int
                 and start <= page['ordinal'] < start + limit
                 and type(page.get('namespace')) is int and page['namespace'] >= 0
                 and isinstance(page.get('title'), str) and bool(page['title'])
                 and type(page.get('page_id')) is int and page['page_id'] >= 0
-                and type(page.get('revision_id')) is int and page['revision_id'] >= 0)
+                and type(page.get('revision_id')) is int and page['revision_id'] >= 0):
+            return 'UncompiledPresentation',path
+    except FileNotFoundError:
+        if matching_template_capture(path,invocation_id,invocation_args,start,limit):
+            return 'UncompiledTemplate',path.parent/'.presentation-first-failure'/'capture.json'
     except (OSError, ValueError, TypeError):
-        return False
+        pass
+    return None
 
 
 def shard_completion_present(shard):
@@ -1735,7 +1807,8 @@ def build_shard_with_retries(command, shard, evidence_root, edition, date, start
             # Preserve the command evidence first. Changed input identity is an
             # independent fatal condition, never a typed-data failure or retry.
             check_identity()
-            deterministic = matching_presentation_failure(receipt, invocation_id, invocation_args, start, limit)
+            matched_failure = matching_presentation_failure(receipt, invocation_id, invocation_args, start, limit)
+            deterministic = matched_failure is not None
             write_failure_evidence(evidence / 'classification.json', dict(
                 deterministic_presentation=deterministic))
             # A signaled command can leave descendants alive. Archive evidence,
@@ -1744,9 +1817,9 @@ def build_shard_with_retries(command, shard, evidence_root, edition, date, start
                 retire_payload=type(error.returncode) is int and error.returncode>0)
             if deterministic:
                 phase_event(edition, date, 'shard_build', 'retry_suppressed', start_page=start,
-                            pages=limit, attempt=attempt, failure_receipt=str(receipt),
-                            error_name='UncompiledPresentation')
-                raise DeterministicPresentationFailure(error, receipt) from error
+                            pages=limit, attempt=attempt, failure_receipt=str(matched_failure[1]),
+                            error_name=matched_failure[0])
+                raise DeterministicPresentationFailure(error, matched_failure[1]) from error
             if not may_retry: raise error
             last_error = error
             print(f'Retrying failed shard builder {edition} start={start} attempt={attempt}/{SHARD_RETRIES}', flush=True)
