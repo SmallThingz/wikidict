@@ -259,12 +259,35 @@ class CaptureTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'source bytes'):
             capture.verify(self.args.output)
 
-    def test_missing_marker_dependency_drift_and_symlink_fail(self):
+    def test_replay_preserves_provenance_without_current_collector_identity(self):
         manifest = self.collect()
-        with mock.patch.object(capture, 'producer', return_value={
-                'generator_sha256': '0' * 64, 'dependency_sha256': manifest['dependency_sha256']}):
-            with self.assertRaisesRegex(ValueError, 'original collector'):
-                capture.verify(self.args.output)
+        path = self.args.output / capture.MANIFEST
+        recorded = copy.deepcopy(manifest)
+        recorded['generator_sha256'] = '0' * 64
+        recorded['dependency_sha256'] = {name: '1' * 64 for name in manifest['dependency_sha256']}
+        path.write_bytes(capture.evidence.encoded(recorded))
+        self.rebind()
+        with mock.patch.object(capture, 'producer', side_effect=AssertionError('replay must not call collector')):
+            self.assertEqual(capture.verify(self.args.output)['dependency_sha256'], recorded['dependency_sha256'])
+
+    def test_malformed_collector_provenance_fails_even_when_hash_rebound(self):
+        manifest = self.collect()
+        path = self.args.output / capture.MANIFEST
+        for change in (
+            {'generator_sha256': None}, {'generator_sha256': 'A' * 64},
+            {'generator_sha256': '0' * 63}, {'dependency_sha256': []},
+            {'dependency_sha256': {}},
+            {'dependency_sha256': dict(manifest['dependency_sha256'], unexpected='0' * 64)},
+            {'dependency_sha256': {key: None for key in manifest['dependency_sha256']}},
+        ):
+            with self.subTest(change=change):
+                path.write_bytes(capture.evidence.encoded(dict(manifest, **change)))
+                self.rebind()
+                with self.assertRaisesRegex(ValueError, 'collector provenance'):
+                    capture.verify(self.args.output)
+
+    def test_missing_marker_and_symlink_fail(self):
+        self.collect()
         (self.args.output / capture.COMPLETE).unlink()
         with self.assertRaises(OSError):
             capture.verify(self.args.output)

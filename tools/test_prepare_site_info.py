@@ -61,6 +61,54 @@ class SiteInfoCaptureTests(unittest.TestCase):
         (root/s.COMPLETE).write_bytes(s.evidence.encoded({'schema': s.SCHEMA,
             'manifest_sha256': s.evidence.digest((root/s.MANIFEST).read_bytes())}))
 
+    def historical(self, root):
+        manifest = s.evidence.decode((root/s.MANIFEST).read_bytes())
+        manifest['generator_sha256'] = 'a' * 64
+        manifest['dependency_sha256'] = {name: 'b' * 64 for name in s.PRODUCER_DEPENDENCIES}
+        (root/s.MANIFEST).write_bytes(s.evidence.encoded(manifest))
+        self.rebind(root)
+        return s.evidence.decode((root/s.MANIFEST).read_bytes())
+
+    def test_historical_producer_is_preserved_and_replayed_without_old_code(self):
+        root, _ = self.collect()
+        expected = self.historical(root)
+        before = {path.name: path.read_bytes() for path in root.iterdir()}
+        with patch.object(s, 'producer', side_effect=AssertionError('must not execute historical producer')):
+            self.assertEqual(expected, s.validate_snapshot(root/s.SNAPSHOT, 'testwiktionary', '20261001'))
+            self.assertEqual(set(before), set(s.capture_artifacts(root/s.SNAPSHOT)))
+        self.assertEqual(before, {path.name: path.read_bytes() for path in root.iterdir()})
+
+    def test_malformed_recorded_producer_cannot_bypass_current_replay(self):
+        root, _ = self.collect()
+        good = self.historical(root)
+        bad = []
+        for value in (None, True, '', 'a' * 63, 'A' * 64, '../producer.py'):
+            bad.append({**good, 'generator_sha256': value})
+        for value in (None, [], {}, {'other.py': 'b' * 64},
+                      {**good['dependency_sha256'], 'extra.py': 'b' * 64},
+                      {**good['dependency_sha256'], 'download_wiktionaries.py': True}):
+            bad.append({**good, 'dependency_sha256': value})
+        for manifest in bad:
+            with self.subTest(provenance=manifest.get('dependency_sha256')):
+                (root/s.MANIFEST).write_bytes(s.evidence.encoded(manifest))
+                self.rebind(root)
+                with self.assertRaisesRegex(ValueError, 'producer provenance'):
+                    s.verify(root)
+
+    def test_historical_provenance_still_requires_http_query_and_exact_projection(self):
+        root, _ = self.collect()
+        self.historical(root)
+        saved = {path.name: path.read_bytes() for path in root.iterdir()}
+        mutations = [('site-info.request.json', lambda value: value['query'].update(siprop='general')),
+                     ('site-info.01.receipt.json', lambda value: value.update(status=503)),
+                     (s.SNAPSHOT, lambda value: value['query']['statistics'].update(admins=999))]
+        for name, mutate in mutations:
+            with self.subTest(artifact=name):
+                for key, value in saved.items(): (root/key).write_bytes(value)
+                value = s.evidence.decode((root/name).read_bytes()); mutate(value)
+                (root/name).write_bytes(s.evidence.encoded(value)); self.rebind(root)
+                with self.assertRaises(ValueError): s.verify(root)
+
     def test_complete_one_response_and_legacy_evidence_immutable(self):
         before = {p.name: p.read_bytes() for p in self.original.iterdir()}
         root, manifest = self.collect()

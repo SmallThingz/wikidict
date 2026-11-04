@@ -39,21 +39,19 @@ SOURCE_PINS = {
     'LanguageCode.php': '17962f89468aa25369f126cc7a4edd8c074cb73497c8d4de77e8cbb04858d60d',
     'Names.php': '0b0c62791924c139d7d476530c2ad9a58d053c0f34e1195595b0c2e43776b11f',
 }
-DEPENDENCIES = {
-    'prepare_language_names.py': 'e65eeb33bd1986bd4ffd09a35748206207471134fd6ea8c0ebb878810fdb0fed',
-    'prepare_language_names_generic.py': 'e76d9a80f6c5ab32df2ddd596f3b383f2dc604f75eb469fc65ca5006f3a19f03',
-    'prepare_language_names_translate.py': '45935d70e31651e8c3c51c0fa6eddb7cd2cf86e21193cc0f1f55ad1f16510281',
-    'prepare_file_metadata.py': 'd2a09c741c3fb12ee1a59ea5ce6eeb9611105ffa782d90ca25d3a7b37acf23ab',
-    'download_wiktionaries.py': '061472228c81890c4eecc670ea643c8793cb5928cde7854fa4896f5c3c3b29d2',
-}
+DEPENDENCIES = (
+    'prepare_language_names.py',
+    'prepare_language_names_generic.py',
+    'prepare_language_names_translate.py',
+    'prepare_file_metadata.py',
+    'download_wiktionaries.py',
+)
 
 
 def producer():
-    for name, expected in DEPENDENCIES.items():
-        if evidence.digest(evidence.small(Path(evidence.__file__).with_name(name))) != expected:
-            raise ValueError('Autonym dependency changed: ' + name)
     return dict(generator_sha256=evidence.digest(evidence.small(Path(__file__))),
-                dependency_sha256=DEPENDENCIES)
+                dependency_sha256={name: evidence.digest(evidence.small(
+                    Path(evidence.__file__).with_name(name))) for name in DEPENDENCIES})
 
 
 def regular(path, maximum=4 * 1024 * 1024):
@@ -175,10 +173,17 @@ def render_profile(single):
 
 
 def accepted_producer(record):
-    current = producer()
-    return (record.get('dependency_sha256') == current['dependency_sha256'] and
-            (record.get('generator_sha256') == current['generator_sha256'] or
-             record.get('generator_sha256') == LEGACY_GENERATOR_SHA256 and record.get('core', record.get('config', {}).get('core')) == CORE))
+    # Producer identities record history; current source and response replay
+    # below establishes the captured data's meaning independently.
+    if not isinstance(record, dict):
+        return False
+    dependencies = record.get('dependency_sha256')
+    hashes = [record.get('generator_sha256')]
+    if not isinstance(dependencies, dict) or set(dependencies) != set(DEPENDENCIES):
+        return False
+    hashes.extend(dependencies.values())
+    return all(isinstance(value, str) and re.fullmatch('[0-9a-f]{64}', value)
+               for value in hashes)
 
 
 def validate_source_contract(root, core):

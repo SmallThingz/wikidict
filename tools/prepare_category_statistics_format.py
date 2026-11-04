@@ -163,8 +163,7 @@ def verify(root, complete=True):
     root=Path(root);manifest=e.decode(read(root/MANIFEST))
     if manifest.get('schema')!=CAPTURE_SCHEMA or artifacts(root)!=manifest.get('artifacts'):
         raise ValueError('Category capture artifact inventory differs')
-    for name,path in producer_paths().items():
-        if read(root/name,128*1024)!=read(path,128*1024): raise ValueError('Category capture producer differs')
+    prior.validate_provenance(manifest['artifacts'], producer_paths())
     cfg=configuration(read(root/'original-site-info.json'),read(root/'original-category-stats.tsv',MAX_STATS_BYTES))
     if cfg!=manifest.get('configuration') or cfg!=e.decode(read(root/'requested.json')):
         raise ValueError('Category capture configuration differs')

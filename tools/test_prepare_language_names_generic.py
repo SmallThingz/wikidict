@@ -204,6 +204,60 @@ class GenericTest(unittest.TestCase):
                 self.assertEqual(names.verify(args.output), manifest)
                 self.assertEqual(names.capture_artifacts(args.output/'language-names.tsv', manifest),
                                  names.capture_artifacts(args.output/'language-names.tsv'))
+                original = {p.name: p.read_bytes() for p in args.output.iterdir()}
+                def restore():
+                    for name, raw in original.items():
+                        (args.output/name).write_bytes(raw)
+                def reseal(value):
+                    value['artifacts'] = names.payload(args.output)
+                    path = args.output/'language-names.manifest.json'
+                    path.write_bytes(names.evidence.encoded(value))
+                    (args.output/names.COMPLETE).write_bytes(names.evidence.encoded({
+                        'schema': names.SCHEMA, 'manifest_sha256': names.evidence.digest(path.read_bytes())}))
+                historical = copy.deepcopy(manifest)
+                historical['generator_sha256'] = 'a'*64
+                historical['dependency_sha256'] = {name: 'b'*64 for name in manifest['dependency_sha256']}
+                reseal(historical)
+                self.assertEqual(names.verify(args.output), historical)
+                self.assertEqual((args.output/'language-names.tsv').read_bytes(), original['language-names.tsv'])
+                self.assertEqual(historical.get('retrieved_utc'), manifest.get('retrieved_utc'))
+                for mutation in ('generator', 'roles', 'dependency', 'raw', 'receipt', 'query', 'reconstructed', 'tsv'):
+                    restore(); changed = copy.deepcopy(historical)
+                    record = changed['requests'][0]
+                    receipt_path = args.output/record['accepted_receipt']
+                    receipt = json.loads(receipt_path.read_bytes())
+                    with self.subTest(mutation=mutation):
+                        if mutation == 'generator':
+                            changed['generator_sha256'] = 'A'*64
+                        elif mutation == 'roles':
+                            changed['dependency_sha256']['extra.py'] = 'c'*64
+                        elif mutation == 'dependency':
+                            changed['dependency_sha256']['download_wiktionaries.py'] = None
+                        elif mutation == 'receipt':
+                            receipt['accepted'] = False
+                            receipt_path.write_bytes(names.evidence.encoded(receipt))
+                        elif mutation == 'query':
+                            path = args.output/record['request']; request = json.loads(path.read_bytes())
+                            request['query']['uselang'] = 'de'
+                            request['url'] = names.evidence.wiktionary_api(args.wiki) + '?' + urllib.parse.urlencode(sorted(request['query'].items()))
+                            path.write_bytes(names.evidence.encoded(request))
+                        elif mutation in ('raw', 'reconstructed'):
+                            path = args.output/receipt['response']; raw = path.read_bytes()
+                            if mutation == 'raw':
+                                path.write_bytes(raw+b' ')
+                            else:
+                                value = json.loads(raw)
+                                value['query']['languageinfo']['en']['name'] = 'altered'
+                                raw = names.evidence.encoded(value); path.write_bytes(raw)
+                                receipt['response_bytes'] = len(raw); receipt['response_sha256'] = names.evidence.digest(raw)
+                                receipt_path.write_bytes(names.evidence.encoded(receipt))
+                        else:
+                            path = args.output/'language-names.tsv'; raw = path.read_bytes()+b'bad\n'; path.write_bytes(raw)
+                            changed['output_bytes'] = len(raw); changed['output_sha256'] = names.evidence.digest(raw)
+                        reseal(changed)
+                        with self.assertRaises(ValueError):
+                            names.verify(args.output)
+                restore()
                 (args.output/'language-names.source-fixture').write_bytes(b'tampered')
                 with self.assertRaisesRegex(ValueError, 'inventory'):
                     names.verify(args.output)

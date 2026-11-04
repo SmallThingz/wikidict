@@ -186,6 +186,20 @@ def producer():
                 'tools/prepare_language_messages.py')}}
 
 
+
+def validate_provenance(record):
+    # Historical producer identities describe the retained observation. Acceptance
+    # requires today's complete request/response replay, never an old collector.
+    roles = {'tools/prepare_file_metadata.py', 'tools/download_wiktionaries.py',
+             'tools/prepare_language_messages.py'}
+    dependencies = record.get('dependency_sha256') if isinstance(record, dict) else None
+    if (not isinstance(record, dict) or not isinstance(dependencies, dict)
+            or set(dependencies) != roles
+            or any(not isinstance(value, str) or not re.fullmatch('[0-9a-f]{64}', value)
+                   for value in [record.get('generator_sha256'), *dependencies.values()])):
+        raise ValueError('Invalid language/message producer provenance')
+
+
 def owned_payload(root):
     found = {}
     for path in root.iterdir():
@@ -365,9 +379,9 @@ def verify(root, require_complete=True):
                    PRE_LOOP_WARNING_GENERATOR_SHA256: 66}.get(manifest.get('generator_sha256'))
     prior_scope = (prior_limit is not None and isinstance(manifest.get('keys'), list)
                    and 1 <= len(manifest['keys']) <= prior_limit)
-    if (manifest.get('dependency_sha256') != identity['dependency_sha256']
-            or manifest.get('generator_sha256') != identity['generator_sha256'] and not prior_scope):
-        raise ValueError('Capture requires its original collector and dependencies')
+    validate_provenance(manifest)
+    if prior_limit is not None and not prior_scope:
+        raise ValueError('Invalid prior collector message scope')
     if (manifest.get('temporal_scope') != 'current-api-observation' or manifest.get('dump_date') is not None
             or manifest.get('fallback_mode') != 'strict' or manifest.get('message_mode') != 'plain-with-database'
             or manifest.get('candidate_queries_complete') is not True or manifest.get('corpus_query_closure_proven') is not False):

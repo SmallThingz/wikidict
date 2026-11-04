@@ -127,14 +127,27 @@ def capture(site_path, root, *, delay=1.0, wall_seconds=300, transport=None, sle
         document(root/'failure.json',dict(error=str(error),ended_utc=e.utc()))
         raise
 
+def validate_provenance(recorded, roles):
+    # Copied helpers are original observation provenance, never executable replay.
+    # Current parsers below must reconstruct every query/response and output.
+    roles = set(roles)
+    if not isinstance(recorded, dict) or {name for name in recorded if name.endswith('.py')} != roles:
+        raise ValueError('Recorded producer provenance roles differ')
+    for name in roles:
+        row = recorded.get(name)
+        if (not isinstance(row, dict) or set(row) != {'bytes', 'sha256'}
+                or type(row.get('bytes')) is not int or not 1 <= row['bytes'] <= 128*1024
+                or not isinstance(row.get('sha256'), str)
+                or __import__('re').fullmatch('[0-9a-f]{64}', row['sha256']) is None):
+            raise ValueError('Invalid recorded producer provenance')
+
+
 def verify(root,complete=True):
     root=Path(root);manifest=e.decode(read(root/MANIFEST))
     if manifest.get('schema')!='wikidict.site-statistics-format-capture.v1' or artifacts(root)!=manifest['artifacts']:
         raise ValueError('Capture artifact inventory differs')
-    selected_producers={'capture-producer.py':Path(__file__),'profile-producer.py':Path(profile.__file__),
-        'date-numbering-helper.py':Path(date.__file__),'capture-evidence-helper.py':Path(e.__file__)}
-    for name,path in selected_producers.items():
-        if read(root/name,128*1024)!=read(path,128*1024):raise ValueError('Capture producer identity differs')
+    validate_provenance(manifest['artifacts'], ('capture-producer.py', 'profile-producer.py',
+        'date-numbering-helper.py', 'capture-evidence-helper.py'))
     raw=read(root/'original-site-info.json');cfg=profile.configuration(e.decode(raw),digest(raw))
     if cfg!=manifest['configuration'] or cfg!=e.decode(read(root/'requested.json')):raise ValueError('Pinned configuration differs')
     if any(manifest.get(key)!=cfg[key] for key in ('wiki','date','content_language','namespace_registry_sha256')):

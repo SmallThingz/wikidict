@@ -437,9 +437,20 @@ def verify(root, require_complete=True):
     if require_complete and evidence.decode(evidence.small(root / COMPLETE, MAX_MANIFEST)) != {
             'schema': SCHEMA, 'manifest_sha256': evidence.digest(raw_manifest)}:
         raise ValueError('Date-numbering completion marker mismatch')
-    identity = producer()
-    if any(manifest.get(k) != v for k, v in identity.items()):
-        raise ValueError('Capture requires its original collector and dependencies')
+    # Collector identities are retained provenance, not the verifier version.
+    # Current code below reconstructs the request and exact output from the
+    # complete authenticated observation without executing the old collector.
+    generator = manifest.get('generator_sha256')
+    dependencies = manifest.get('dependency_sha256')
+    expected_dependencies = {
+        'tools/prepare_file_metadata.py', 'tools/prepare_language_messages.py',
+        'tools/download_wiktionaries.py', 'tools/category_tree_snapshot.py',
+    }
+    if (not isinstance(generator, str) or re.fullmatch(r'[0-9a-f]{64}', generator) is None
+            or not isinstance(dependencies, dict) or set(dependencies) != expected_dependencies
+            or any(not isinstance(value, str) or re.fullmatch(r'[0-9a-f]{64}', value) is None
+                   for value in dependencies.values())):
+        raise ValueError('Invalid date-numbering collector provenance')
     if (manifest.get('temporal_scope') != 'current-api-observation' or manifest.get('dump_date') is not None
             or manifest.get('reference_scope') != 'reviewed-reference-semantics-not-server-commit'
             or manifest.get('observation_scope') != 'per-request-configuration-no-cross-request-config-atomicity'

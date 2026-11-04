@@ -34,6 +34,8 @@ SCRIBUNTO = 'b109cb6e5866c13871e308859ef78249b1bd3ea2'
 MAX_RESPONSE = 2 * 1024 * 1024
 MAX_MANIFEST = 64 * 1024
 MAX_INTEGER = 2**53 - 1
+PRODUCER_DEPENDENCIES = ('prepare_file_metadata.py', 'download_wiktionaries.py',
+                         'site_info_snapshot.py', 'namespace_registry_snapshot.py')
 FIELDS = {'pages': 'pages', 'articles': 'articles', 'files': 'images',
           'edits': 'edits', 'users': 'users', 'activeUsers': 'activeusers', 'admins': 'admins'}
 SOURCE_PINS = {
@@ -70,8 +72,20 @@ def namespace_identity(raw, wiki, date):
 def producer():
     return {'generator_sha256': evidence.digest(evidence.small(Path(__file__))),
             'dependency_sha256': {name: evidence.digest(evidence.small(Path(evidence.__file__).with_name(name)))
-                for name in ('prepare_file_metadata.py', 'download_wiktionaries.py',
-                             'site_info_snapshot.py', 'namespace_registry_snapshot.py')}}
+                for name in PRODUCER_DEPENDENCIES}}
+
+
+
+def validate_producer_provenance(manifest):
+    # Retain the original producer identity as provenance, not executable trust.
+    # verify() always replays the complete capture using the current verifier.
+    generator = manifest.get('generator_sha256')
+    dependencies = manifest.get('dependency_sha256')
+    if (not isinstance(generator, str) or re.fullmatch('[0-9a-f]{64}', generator) is None
+            or not isinstance(dependencies, dict) or set(dependencies) != set(PRODUCER_DEPENDENCIES)
+            or any(not isinstance(value, str) or re.fullmatch('[0-9a-f]{64}', value) is None
+                   for value in dependencies.values())):
+        raise ValueError('Invalid recorded site-info producer provenance')
 
 
 def primary_sources(root, prefix=''):
@@ -211,9 +225,9 @@ def verify(root, require_complete=True):
     manifest = evidence.decode(raw_manifest)
     if (not isinstance(manifest, dict) or manifest.get('schema') != SCHEMA or manifest.get('profile') != PROFILE
             or manifest.get('core') not in CORE_PROFILES or manifest.get('scribunto') != SCRIBUNTO
-            or manifest.get('temporal_scope') != 'current-api-observation' or manifest.get('dump_date') is not None
-            or any(manifest.get(k) != v for k, v in producer().items())):
+            or manifest.get('temporal_scope') != 'current-api-observation' or manifest.get('dump_date') is not None):
         raise ValueError('Unreviewed site-info capture profile or producer')
+    validate_producer_provenance(manifest)
     if require_complete and evidence.decode(evidence.small(root / COMPLETE, MAX_MANIFEST)) != {
             'schema': SCHEMA, 'manifest_sha256': evidence.digest(raw_manifest)}:
         raise ValueError('Capture completion mismatch')

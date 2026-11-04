@@ -685,10 +685,11 @@ def discover_auxiliary_generation(root,directory,names,edition,date):
                 message_union.require_preferred_loop(record)
                 continue
             keys=record.get('keys')
-            if (record.get('generator_sha256')!=messages.producer()['generator_sha256']
-                    or not isinstance(keys,list) or not 1<=len(keys)<=67
+            # validate_snapshot already reconstructs the complete paired capture
+            # with today's verifier; recorded producer hashes remain provenance.
+            if (not isinstance(keys,list) or not 1<=len(keys)<=67
                     or 'parser-template-loop-warning' not in keys):
-                raise ValueError('Preferred loop messages require the new producer and loop-warning key')
+                raise ValueError('Preferred loop messages require the loop-warning key')
     return snapshots
 
 

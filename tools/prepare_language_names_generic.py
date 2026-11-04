@@ -368,6 +368,16 @@ def producer():
                                   for name in ('prepare_file_metadata.py', 'download_wiktionaries.py')}}
 
 
+def validate_provenance(record):
+    dependencies = record.get('dependency_sha256')
+    if not isinstance(dependencies, dict) or set(dependencies) != {
+            'prepare_file_metadata.py', 'download_wiktionaries.py'}:
+        raise ValueError('Invalid language-name producer dependency roles')
+    for value in [record.get('generator_sha256'), *dependencies.values()]:
+        if not isinstance(value, str) or not re.fullmatch('[0-9a-f]{64}', value):
+            raise ValueError('Invalid language-name producer provenance')
+
+
 def payload(root):
     result = {}
     for path in root.iterdir():
@@ -558,11 +568,11 @@ def verify(root, require_complete=True):
         raise ValueError('Unsafe capture directory')
     manifest_raw = evidence.small(root / (KIND + '.manifest.json'), MAX_MANIFEST)
     manifest = evidence.decode(manifest_raw)
+    validate_provenance(manifest)
     if (manifest.get('schema') != SCHEMA or manifest.get('kind') != KIND or manifest.get('header_version') != 1
             or manifest.get('temporal_scope') != 'current-api-observation' or manifest.get('dump_date') is not None
             or manifest.get('candidate_queries_complete') is not True or manifest.get('corpus_query_closure_proven') is not False
-            or manifest.get('source_url') != evidence.wiktionary_api(manifest.get('wiki', ''))
-            or any(manifest.get(k) != v for k, v in producer().items())):
+            or manifest.get('source_url') != evidence.wiktionary_api(manifest.get('wiki', ''))):
         raise ValueError('Unreviewed capture manifest/producer/scope')
     if require_complete and evidence.decode(evidence.small(root / COMPLETE, MAX_MANIFEST)) != {
             'schema': SCHEMA, 'manifest_sha256': evidence.digest(manifest_raw)}:

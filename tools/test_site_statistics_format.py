@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import urllib.parse
+from unittest import mock
 
 s=importlib.util.spec_from_file_location('capture',Path(__file__).with_name('prepare_site_statistics_format.py'))
 m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
@@ -73,11 +74,62 @@ class CaptureTests(unittest.TestCase):
     def test_existing_output_refused(self):
         (self.top/'out').mkdir()
         with self.assertRaises(FileExistsError):self.capture()
-    def test_rebound_archived_producer_refused(self):
+    def reseal(self,root,change=None):
+        manifest=json.loads((root/m.MANIFEST).read_bytes())
+        if change:change(manifest)
+        manifest['artifacts']=m.artifacts(root)
+        (root/m.MANIFEST).write_bytes(m.e.encoded(manifest))
+        (root/m.COMPLETE).write_bytes(m.e.encoded(dict(schema=manifest['schema'],manifest_sha256=m.digest((root/m.MANIFEST).read_bytes()))))
+        return manifest
+    def test_recorded_producer_provenance_replays_without_relabeling(self):
         self.capture();root=self.top/'out'
-        (root/'profile-producer.py').write_text('# changed producer\n')
-        manifest=json.loads((root/m.MANIFEST).read_text());manifest['artifacts']=m.artifacts(root)
-        (root/m.MANIFEST).write_text(json.dumps(manifest))
-        with self.assertRaisesRegex(ValueError,'producer identity'):m.verify(root,complete=False)
+        original=json.loads((root/m.MANIFEST).read_bytes())
+        (root/'profile-producer.py').write_text('# recorded historical producer\n')
+        manifest=self.reseal(root)
+        before={p.name:p.read_bytes()for p in root.iterdir()}
+        changed_current=self.top/'future-date-helper.py';changed_current.write_text('# current helper maintenance\n')
+        with mock.patch.object(m.date,'__file__',str(changed_current)):
+            self.assertEqual(m.verify(root),manifest)
+        self.assertEqual({p.name:p.read_bytes()for p in root.iterdir()},before)
+        for key in ('retrieved_utc','server_identity','requests','temporal_scope'):
+            self.assertEqual(manifest[key],original[key])
+    def test_recorded_producer_roles_and_descriptors_stay_bounded(self):
+        roles=('capture-producer.py','profile-producer.py','date-numbering-helper.py','capture-evidence-helper.py')
+        good={name:dict(bytes=1,sha256='a'*64)for name in roles}
+        m.validate_provenance(good,roles)
+        for mode in ('missing','extra','boolean','empty','oversize','hash'):
+            with self.subTest(mode=mode):
+                value=json.loads(json.dumps(good))
+                if mode=='missing':value.pop(roles[0])
+                elif mode=='extra':value['unknown-helper.py']=dict(bytes=1,sha256='a'*64)
+                elif mode=='boolean':value[roles[0]]['bytes']=True
+                elif mode=='empty':value[roles[0]]['bytes']=0
+                elif mode=='oversize':value[roles[0]]['bytes']=128*1024+1
+                else:value[roles[0]]['sha256']='A'*64
+                with self.assertRaisesRegex(ValueError,'producer provenance'):m.validate_provenance(value,roles)
+    def test_changed_provenance_does_not_hide_resealed_evidence_changes(self):
+        for mode in ('query','url','receipt','raw','control','bracket','output','reordered','missing-producer'):
+            with self.subTest(mode=mode):
+                self.capture();root=self.top/'out'
+                (root/'capture-producer.py').write_text('# recorded prior version\n')
+                if mode in ('query','url'):
+                    path=root/'02.request.json';v=json.loads(path.read_bytes())
+                    if mode=='query':v['query']['uselang']='wrong'
+                    else:v['url']='https://example.invalid/api.php'
+                    path.write_bytes(m.e.encoded(v))
+                elif mode=='receipt':
+                    path=root/'02-01.receipt.json';v=json.loads(path.read_bytes());v['status']=503;path.write_bytes(m.e.encoded(v))
+                elif mode in ('raw','control','bracket'):
+                    number='03'if mode=='bracket'else'02';path=root/(number+'-01.raw.json');v=json.loads(path.read_bytes())
+                    if mode=='bracket':v['query']['general']['generator']='changed server'
+                    elif mode=='control':v['expandtemplates']['wikitext']=v['expandtemplates']['wikitext'].replace('pages-RAW=1234567','pages-RAW=1234568')
+                    else:v['expandtemplates']['wikitext']=v['expandtemplates']['wikitext'].replace('pages=1,234,567','pages=9')
+                    path.write_bytes(m.e.encoded(v));receipt=root/(number+'-01.receipt.json');rv=json.loads(receipt.read_bytes());rv.update(response_bytes=path.stat().st_size,response_sha256=m.digest(path.read_bytes()));receipt.write_bytes(m.e.encoded(rv))
+                elif mode=='output':(root/m.OUTPUT).write_bytes(b'{}\n')
+                elif mode=='missing-producer':(root/'date-numbering-helper.py').unlink()
+                self.reseal(root,(lambda v:v['requests'].reverse())if mode=='reordered'else None)
+                with self.assertRaises(ValueError):m.verify(root)
+                # Existing capture() requires a fresh owned output directory.
+                __import__('shutil').rmtree(root)
 
 if __name__=='__main__':unittest.main()

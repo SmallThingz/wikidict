@@ -80,3 +80,46 @@ class CategoryFormattingTests(unittest.TestCase):
                 capture.capture(site,stats,output,delay=0,transport=transport,sleep=lambda _:None)
             self.assertEqual(len(calls),3);self.assertFalse((output/capture.COMPLETE).exists())
             self.assertTrue((output/'failure.json').is_file());self.assertTrue(any(output.glob('*.raw.json')))
+
+    def captured(self,root):
+        site=root/'site.json';stats=root/'stats.tsv';site.write_bytes(self.raw_site());stats.write_bytes(self.stats())
+        cfg=capture.configuration(site.read_bytes(),stats.read_bytes())
+        def transport(url,timeout):
+            query={k:v[0]for k,v in urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).items()}
+            value=dict(query=dict(general=self.site()['query']['general']))if query['action']=='query'else self.response(cfg,int(query['text'].split('\n')[0].rsplit('-',1)[1]))
+            return 200,{},json.dumps(value).encode()
+        out=root/'capture';capture.capture(site,stats,out,delay=0,transport=transport,sleep=lambda _:None);return out
+    def reseal(self,root,change=None):
+        manifest=json.loads((root/capture.MANIFEST).read_bytes())
+        if change:change(manifest)
+        manifest['artifacts']=capture.artifacts(root)
+        (root/capture.MANIFEST).write_bytes(capture.e.encoded(manifest))
+        (root/capture.COMPLETE).write_bytes(capture.e.encoded(dict(schema=manifest['schema'],manifest_sha256=capture.digest((root/capture.MANIFEST).read_bytes()))))
+        return manifest
+    def test_recorded_category_provenance_replays_without_relabeling(self):
+        with tempfile.TemporaryDirectory()as temp:
+            out=self.captured(Path(temp));original=json.loads((out/capture.MANIFEST).read_bytes())
+            (out/'statistics-capture-helper.py').write_text('# recorded original helper\n')
+            manifest=self.reseal(out);before={p.name:p.read_bytes()for p in out.iterdir()}
+            self.assertEqual(capture.verify(out),manifest)
+            self.assertEqual({p.name:p.read_bytes()for p in out.iterdir()},before)
+            for key in ('retrieved_utc','server_identity','requests','temporal_scope'):self.assertEqual(original[key],manifest[key])
+    def test_changed_category_provenance_cannot_hide_resealed_evidence(self):
+        for mode in ('query','receipt','raw','control','bracket','output','stats','reordered','missing-producer'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory()as temp:
+                out=self.captured(Path(temp));(out/'capture-producer.py').write_text('# historical observation producer\n')
+                if mode=='query':
+                    path=out/'02.request.json';v=json.loads(path.read_bytes());v['query']['title']='wrong';path.write_bytes(capture.e.encoded(v))
+                elif mode=='receipt':
+                    path=out/'02-01.receipt.json';v=json.loads(path.read_bytes());v['accepted']=False;path.write_bytes(capture.e.encoded(v))
+                elif mode in ('raw','control','bracket'):
+                    number='03'if mode=='bracket'else'02';path=out/(number+'-01.raw.json');v=json.loads(path.read_bytes())
+                    if mode=='bracket':v['query']['general']['generator']='changed server'
+                    elif mode=='control':v['expandtemplates']['wikitext']=v['expandtemplates']['wikitext'].replace('0-RAW=0','0-RAW=1')
+                    else:v['expandtemplates']['wikitext']=v['expandtemplates']['wikitext'].replace('0=0','0=9')
+                    path.write_bytes(capture.e.encoded(v));receipt=out/(number+'-01.receipt.json');rv=json.loads(receipt.read_bytes());rv.update(response_bytes=path.stat().st_size,response_sha256=capture.digest(path.read_bytes()));receipt.write_bytes(capture.e.encoded(rv))
+                elif mode=='output':(out/capture.OUTPUT).write_bytes(b'{}\n')
+                elif mode=='stats':(out/'original-category-stats.tsv').write_bytes(b'A\t9\t2\t3\n')
+                elif mode=='missing-producer':(out/'statistics-profile-helper.py').unlink()
+                self.reseal(out,(lambda v:v['requests'].reverse())if mode=='reordered'else None)
+                with self.assertRaises(ValueError):capture.verify(out)

@@ -43,9 +43,27 @@ class AutonymCaptureTests(unittest.TestCase):
         current = m.producer()
         legacy = dict(current, generator_sha256=m.LEGACY_GENERATOR_SHA256, core=m.CORE)
         self.assertTrue(m.accepted_producer(legacy))
-        self.assertFalse(m.accepted_producer(dict(legacy, core=second)))
+        # Core/source authority is checked by replay, not producer identity.
+        self.assertTrue(m.accepted_producer(dict(legacy, core=second)))
         self.assertFalse(m.accepted_producer(dict(legacy, dependency_sha256={})))
-        self.assertFalse(m.accepted_producer(dict(legacy, generator_sha256='0' * 64)))
+        self.assertTrue(m.accepted_producer(dict(legacy, generator_sha256='0' * 64)))
+
+    def test_recorded_provenance_is_strict_but_not_current_code_identity(self):
+        record = m.producer()
+        for name, value in record['dependency_sha256'].items():
+            self.assertEqual(value, m.evidence.digest(m.evidence.small(Path(m.evidence.__file__).with_name(name))))
+        historical = copy.deepcopy(record)
+        historical['generator_sha256'] = 'a' * 64
+        historical['dependency_sha256'] = {name: 'b' * 64 for name in m.DEPENDENCIES}
+        self.assertTrue(m.accepted_producer(historical))
+        for value in ('A' * 64, 'g' * 64, '0' * 63, None, 1, []):
+            with self.subTest(value=value):
+                self.assertFalse(m.accepted_producer(dict(historical, generator_sha256=value)))
+                bad = copy.deepcopy(historical)
+                bad['dependency_sha256']['download_wiktionaries.py'] = value
+                self.assertFalse(m.accepted_producer(bad))
+        for value in ({}, [], None, dict(historical['dependency_sha256'], unexpected='c' * 64)):
+            self.assertFalse(m.accepted_producer(dict(historical, dependency_sha256=value)))
 
     def test_warning_and_duplicate_mw_code_refused(self):
         data = response(); data['warnings'] = {}
@@ -125,6 +143,25 @@ class AutonymCaptureTests(unittest.TestCase):
                 self.assertEqual(observed['observed_codes'], 3)
                 self.assertEqual(observed['observed_empty'], 1)
                 self.assertEqual(m.replay_observation(root / 'out', observed)[1]['ar'], 'العربية')
+                historical = copy.deepcopy(observed)
+                historical['generator_sha256'] = 'a' * 64
+                historical['dependency_sha256'] = {name: 'b' * 64 for name in m.DEPENDENCIES}
+                self.assertTrue(m.accepted_producer(historical))
+                self.assertEqual(m.replay_observation(root/'out', historical), m.replay_observation(root/'out', observed))
+                request_path = root/'out'/observed['requests'][0]['request']
+                request_before = request_path.read_bytes()
+                bad_request = json.loads(request_before); bad_request['query']['liprop'] = 'code|name'
+                request_path.write_text(json.dumps(bad_request))
+                with self.assertRaises(ValueError):
+                    m.replay_observation(root/'out', historical)
+                request_path.write_bytes(request_before)
+                receipt_path = root/'out'/observed['requests'][0]['accepted_receipt']
+                receipt_before = receipt_path.read_bytes()
+                bad_receipt = json.loads(receipt_before); bad_receipt['accepted'] = False
+                receipt_path.write_text(json.dumps(bad_receipt))
+                with self.assertRaises(ValueError):
+                    m.replay_observation(root/'out', historical)
+                receipt_path.write_bytes(receipt_before)
                 second = '1' * 40
                 second_data = response(); second_data['query']['general']['git-hash'] = second
                 second_raw = json.dumps(second_data, ensure_ascii=False).encode()

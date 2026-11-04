@@ -133,8 +133,11 @@ class MessageV2Test(unittest.TestCase):
                 capture.verify(args.output)
                 self.rebind(args.output, lambda value: value['dependency_sha256'].update(
                     {'tools/prepare_file_metadata.py': '0' * 64}))
-            with self.assertRaisesRegex(ValueError, 'original collector'):
+                # Changed recorded dependencies are provenance, not a semantic waiver.
                 capture.verify(args.output)
+            else:
+                with self.assertRaisesRegex(ValueError, 'prior collector message scope'):
+                    capture.verify(args.output)
 
     def test_sixty_eight_rejected_before_capture_or_transport(self):
         args = self.options(68)
@@ -190,14 +193,13 @@ class MessageV2Test(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Rendered TSV'):
             capture.verify(args.output)
 
-    def test_paired_schema_and_own_producer_identity_required(self):
-        for mode in ('paired', 'legacy-producer', 'unknown-producer', 'unknown-schema'):
+    def test_paired_schema_and_well_formed_producer_provenance_required(self):
+        for mode in ('paired', 'malformed-producer', 'unknown-schema'):
             with self.subTest(mode=mode):
                 args, _, _ = self.collect(24, mode)
-                if mode in ('legacy-producer', 'unknown-producer'):
-                    self.rebind(args.output, lambda value: value.update(
-                        generator_sha256=LEGACY_SHA if mode == 'legacy-producer' else '0' * 64))
-                    with self.assertRaisesRegex(ValueError, 'original collector'):
+                if mode == 'malformed-producer':
+                    self.rebind(args.output, lambda value: value.update(generator_sha256='not-a-sha256'))
+                    with self.assertRaisesRegex(ValueError, 'producer provenance'):
                         capture.verify(args.output)
                 else:
                     path = args.output / 'interface-messages.manifest.json'
@@ -211,6 +213,98 @@ class MessageV2Test(unittest.TestCase):
                     self.assertIs(selected, legacy)
                     with self.assertRaises(ValueError):
                         selected.validate_snapshot(args.output / 'interface-messages.tsv', WIKI, DATE)
+
+    def test_changed_downloader_and_generator_replay_preserves_observation(self):
+        args, _, _ = self.collect(24, 'historical')
+        def provenance(value):
+            value['generator_sha256'] = '1' * 64
+            value['dependency_sha256']['tools/download_wiktionaries.py'] = '2' * 64
+        self.rebind(args.output, provenance)
+        before = {p.name: p.read_bytes() for p in args.output.iterdir()}
+        result = capture.verify(args.output)
+        self.assertEqual({p.name: p.read_bytes() for p in args.output.iterdir()}, before)
+        for kind in capture.KINDS:
+            original = json.loads(before[kind + '.manifest.json'])
+            self.assertEqual(result[kind], original)
+            self.assertEqual(result[kind]['generator_sha256'], '1' * 64)
+            self.assertEqual(result[kind]['started_utc'], original['started_utc'])
+            self.assertEqual(result[kind]['retrieved_utc'], original['retrieved_utc'])
+            self.assertIs(builder.auxiliary_capture_helper(kind, args.output / (kind + '.tsv')), capture)
+            self.assertEqual(capture.validate_snapshot(args.output / (kind + '.tsv'), WIKI, DATE), original)
+
+    def test_ordinary_preferred_pair_accepts_replay_but_requires_warning(self):
+        args, _, _ = self.collect(24, 'language-messages-loop-v1')
+        def historical(value):
+            value['generator_sha256'] = '1' * 64
+            value['dependency_sha256']['tools/download_wiktionaries.py'] = '2' * 64
+        self.rebind(args.output, historical)
+        selected = builder.discover_auxiliary_generation(
+            self.base, args.output.name, capture.KINDS, WIKI, DATE)
+        self.assertEqual(selected, {kind: args.output / (kind + '.tsv') for kind in capture.KINDS})
+        # Even a recognized historical scope cannot enter the preferred loop
+        # generation without an actually observed parser warning.
+        original_required = capture.REQUIRED_MESSAGE_KEYS
+        previous = self.base / 'old'
+        previous.mkdir()
+        options = self.options(24)
+        options.output = previous / 'language-messages-loop-v1'
+        options.messages = keys(24)
+        try:
+            capture.REQUIRED_MESSAGE_KEYS = frozenset()
+            capture.capture(options, transport=Transport(), sleep=lambda _: None)
+        finally:
+            capture.REQUIRED_MESSAGE_KEYS = original_required
+        self.rebind(options.output, lambda v: v.update(generator_sha256=capture.PRE_LOOP_WARNING_GENERATOR_SHA256))
+        capture.verify(options.output)
+        with self.assertRaisesRegex(ValueError, 'loop-warning key'):
+            builder.discover_auxiliary_generation(previous, options.output.name, capture.KINDS, WIKI, DATE)
+
+    def test_malformed_provenance_roles_and_hashes_rejected(self):
+        mutations = (
+            lambda v: v.update(generator_sha256=None),
+            lambda v: v.update(generator_sha256='A' * 64),
+            lambda v: v.update(dependency_sha256=[]),
+            lambda v: v['dependency_sha256'].pop('tools/download_wiktionaries.py'),
+            lambda v: v['dependency_sha256'].update({'unexpected.py': '0' * 64}),
+            lambda v: v['dependency_sha256'].update({'tools/download_wiktionaries.py': 'short'}),
+        )
+        for number, mutate in enumerate(mutations):
+            with self.subTest(number=number):
+                args, _, _ = self.collect(24, 'bad-provenance-' + str(number))
+                self.rebind(args.output, mutate)
+                with self.assertRaisesRegex(ValueError, 'producer provenance'):
+                    capture.verify(args.output)
+
+    def test_changed_provenance_does_not_hide_raw_receipt_or_query_tamper(self):
+        for mode in ('raw', 'receipt', 'query', 'resealed-raw'):
+            with self.subTest(mode=mode):
+                args, _, result = self.collect(24, 'tamper-' + mode)
+                batch = result['interface-messages']['requests'][1]
+                receipt_path = args.output / batch['accepted_receipt']
+                receipt = json.loads(receipt_path.read_text())
+                if mode in ('raw', 'resealed-raw'):
+                    response_path = args.output / receipt['response']
+                    response = json.loads(response_path.read_text())
+                    response['query']['allmessages'][0]['content'] = 'changed observation'
+                    response_path.write_bytes(capture.evidence.encoded(response))
+                    if mode == 'resealed-raw':
+                        raw = response_path.read_bytes()
+                        receipt.update(response_bytes=len(raw), response_sha256=capture.evidence.digest(raw))
+                        receipt_path.write_bytes(capture.evidence.encoded(receipt))
+                elif mode == 'receipt':
+                    receipt['accepted'] = False
+                    receipt_path.write_bytes(capture.evidence.encoded(receipt))
+                else:
+                    request_path = args.output / batch['request']
+                    request = json.loads(request_path.read_text())
+                    request['query']['amprop'] = 'parsed'
+                    request_path.write_bytes(capture.evidence.encoded(request))
+                def provenance(value):
+                    value['generator_sha256'] = '1' * 64
+                    value['dependency_sha256']['tools/download_wiktionaries.py'] = '2' * 64
+                self.rebind(args.output, provenance)
+                with self.assertRaisesRegex(ValueError, 'Raw API response|accepted API receipt|API semantics|Rendered TSV'):
+                    capture.verify(args.output)
 
     def test_namespace_binding_and_encoded_url_bounds_remain(self):
         args, _, _ = self.collect(24)
@@ -269,7 +363,7 @@ class MessageV2Test(unittest.TestCase):
         capture.capture(args, transport=Transport(), sleep=lambda _: None)
         self.rebind(args.output, lambda value: value.update(
             generator_sha256=capture.PRE_LOOP_WARNING_GENERATOR_SHA256))
-        with self.assertRaisesRegex(ValueError, 'original collector'):
+        with self.assertRaisesRegex(ValueError, 'prior collector message scope'):
             capture.verify(args.output)
 
     def test_retry_evidence_is_preserved_across_chunks(self):
