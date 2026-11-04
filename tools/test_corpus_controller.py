@@ -2160,8 +2160,8 @@ class ControllerAllReadyTests(unittest.TestCase):
         self.assertNotIn('enwiktionary',controller.selected_phase_editions(editions,'all',True,manifest))
         with self.assertRaises(ValueError):controller.selected_phase_editions(editions,'all')
 
-    def run_main(self,root,cleanup=True,unsafe=None,plan=None,history_rows=None,max_editions=None,execute_override=None):
-        manifest=self.manifest();cfg=dict(armed=True,source={'head':'a'*40,'fingerprint':'b'*64},
+    def run_main(self,root,cleanup=True,unsafe=None,plan=None,history_rows=None,max_editions=None,execute_override=None,manifest_override=None,phase="all"):
+        manifest=self.manifest() if manifest_override is None else manifest_override;cfg=dict(armed=True,source={'head':'a'*40,'fingerprint':'b'*64},
             compiler={'path':str(root/'zig'),'bytes':1,'sha256':'c'*64},
             manifest={'path':str(root/'downloads/manifest.json'),'bytes':1,'sha256':'d'*64},
             downloads=str(root/'downloads'),output=str(root/'output'),raw_shard_root=str(root/'raw'),state_directory=str(root/'state'),
@@ -2194,11 +2194,11 @@ class ControllerAllReadyTests(unittest.TestCase):
              mock.patch.object(controller,'write_json',side_effect=lambda path,value,**kw:written.append(value)), \
              mock.patch('builtins.print'):
             if not cleanup or unsafe:
-                with self.assertRaisesRegex(ValueError,'unproven|control validation|Non-ordinary'):controller.main(['--config',str(root/'cfg.json'),'--phase','all'] + ([] if max_editions is None else ['--max-editions',str(max_editions)]))
+                with self.assertRaisesRegex(ValueError,'unproven|control validation|Non-ordinary'):controller.main(['--config',str(root/'cfg.json'),'--phase',phase] + ([] if max_editions is None else ['--max-editions',str(max_editions)]))
                 return seen
-            code=controller.main(['--config',str(root/'cfg.json'),'--phase','all'] + ([] if max_editions is None else ['--max-editions',str(max_editions)]))
+            code=controller.main(['--config',str(root/'cfg.json'),'--phase',phase] + ([] if max_editions is None else ['--max-editions',str(max_editions)]))
         self.assertEqual(len(gates),2) # qualification+diagnostic, never bypassed; no pilot prerequisite
-        self.assertGreaterEqual(source_guard.call_count,199 if plan is None else 1);preparations.assert_called_once()
+        self.assertGreaterEqual(source_guard.call_count,len(seen)+1);preparations.assert_called_once()
         return code,seen,written[-1]
 
     def test_real_main_continues_after_closed_pilot_failure_once_without_semantic_credit(self):
@@ -2673,6 +2673,49 @@ class ControllerBatchBoundaryTests(unittest.TestCase):
             with self.subTest(limit=limit),mock.patch.object(controller,'read_json',side_effect=AssertionError('must not read config')):
                 with self.assertRaisesRegex(ValueError,'must be positive'):
                     controller.main(['--config','unused','--max-editions',str(limit)])
+
+
+
+
+class ControllerExplicitSubsetTests(unittest.TestCase):
+    def manifest(self):
+        editions=['kaawiktionary','mrwiktionary','slwiktionary']+[f'toy{i:03d}wiktionary' for i in range(45)]
+        return dict(requested_editions=list(reversed(editions)),files=[dict(wiki=wiki,date='20261001',
+            name=wiki+'-20261001-pages-meta-current.xml.bz2',size=i+1,sha1='a'*40,
+            url='https://dumps.wikimedia.org/'+wiki+'/20261001/'+wiki+'-20261001-pages-meta-current.xml.bz2')
+            for i,wiki in enumerate(editions)])
+
+    def test_explicit_48_runs_smallest_three_without_legacy_campaign_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code,seen,summary=ControllerAllReadyTests().run_main(Path(tmp),manifest_override=self.manifest(),max_editions=3)
+        self.assertEqual(code,0);self.assertEqual(seen,['kaawiktionary','mrwiktionary','slwiktionary'])
+        self.assertEqual(summary['execution']['outcome'],'batch-complete')
+        self.assertEqual(len(summary['execution']['pending_editions']),45)
+        self.assertNotIn('campaign_selection',summary)
+        self.assertFalse(summary['residual_review_complete'])
+
+    def test_empty_duplicate_or_mismatched_selection_refuses_before_execution(self):
+        variants=[]
+        value=self.manifest();value['requested_editions']=[];variants.append(value)
+        value=self.manifest();value['requested_editions'].append(value['requested_editions'][0]);variants.append(value)
+        value=self.manifest();value['requested_editions'].pop();variants.append(value)
+        value=self.manifest();value['files'].pop();variants.append(value)
+        for manifest in variants:
+            with self.subTest(manifest=manifest['requested_editions'][:3]),tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaisesRegex(ValueError,'Explicit all-phase selection'):
+                    ControllerAllReadyTests().run_main(Path(tmp),manifest_override=manifest,max_editions=3)
+
+    def test_partial_manifest_does_not_change_pilot_or_remaining_contract(self):
+        for phase in ('pilot','remaining'):
+            with self.subTest(phase=phase),tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaisesRegex(ValueError,'Exactly the selected 198'):
+                    ControllerAllReadyTests().run_main(Path(tmp),manifest_override=self.manifest(),phase=phase)
+
+    def test_subset_batch_still_stops_on_unproven_cleanup_or_source(self):
+        for options in ({'cleanup':False},{'unsafe':'source'}):
+            with self.subTest(options=options),tempfile.TemporaryDirectory() as tmp:
+                seen=ControllerAllReadyTests().run_main(Path(tmp),manifest_override=self.manifest(),max_editions=3,**options)
+                self.assertEqual(seen,['kaawiktionary'])
 
 
 if __name__ == '__main__':

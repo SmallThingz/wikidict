@@ -1614,7 +1614,14 @@ def main(argv=None):
     require(Path(cfg['manifest']['path']) == Path(cfg['downloads']) / 'manifest.json', 'Manifest selection differs')
     editions = manifest['requested_editions']
     if cfg.get('campaign') is None:
-        require(len(editions) == len(set(editions)) == 198 and set(PILOT) <= set(editions), 'Exactly the selected 198 editions required')
+        if args.phase == 'all':
+            require(isinstance(editions, list) and editions
+                    and all(isinstance(edition, str) and edition for edition in editions)
+                    and len(editions) == len(set(editions))
+                    and set(editions) == {item['wiki'] for item in manifest['files']},
+                    'Explicit all-phase selection requires nonempty unique editions matching manifest files')
+        else:
+            require(len(editions) == len(set(editions)) == 198 and set(PILOT) <= set(editions), 'Exactly the selected 198 editions required')
     else:
         require(args.phase == 'all' and not args.retry_failed and not args.revalidate,
                 'Campaign selection uses all phase and exact per-edition retry authority')
