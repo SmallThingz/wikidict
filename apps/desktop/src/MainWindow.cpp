@@ -1,4 +1,5 @@
 #include "MainWindow.hpp"
+#include "SemanticHtml.hpp"
 #include "LibraryDialog.hpp"
 #include "MediaPanel.hpp"
 
@@ -9,6 +10,7 @@
 #include <QTextCursor>
 #include <QTextLayout>
 #include <QAction>
+#include <QActionGroup>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
@@ -56,6 +58,8 @@
 #include <QStyleHints>
 #include <QSplitter>
 #include <QTabWidget>
+#include <QToolBar>
+#include <QResizeEvent>
 #include <QTextBrowser>
 #include <QTextBlock>
 #include <QTextBoundaryFinder>
@@ -428,6 +432,9 @@ QJsonArray sectionHeadingSpans(const QJsonObject &section) {
         const QJsonValue foreground = span.value(QStringLiteral("foreground"));
         const QString role = span.value(QStringLiteral("role")).toString(QStringLiteral("normal"));
         const QJsonValue background = span.value(QStringLiteral("background"));
+        const QJsonValue scale = span.value(QStringLiteral("font_scale"));
+        styled = styled || (!scale.isUndefined() && !scale.isNull() && (scale.toDouble(1) != 1
+            || span.value(QStringLiteral("font_scale_basis")).toString() == QStringLiteral("normal_body")));
         styled = styled || (!foreground.isUndefined() && !foreground.isNull()) ||
             (!background.isUndefined() && !background.isNull()) ||
             !span.value(QStringLiteral("classes")).toString().isEmpty() ||
@@ -524,6 +531,9 @@ bool ordinaryLayoutWhitespaceSpan(const QJsonObject &span, bool allowBreak) {
     for (const QString &key : {QStringLiteral("target"), QStringLiteral("trail"), QStringLiteral("language"),
          QStringLiteral("classes"), QStringLiteral("direction"), QStringLiteral("explanation")})
         if (!span.value(key).toString().isEmpty()) return false;
+    const QJsonValue scale = span.value(QStringLiteral("font_scale"));
+    if (!scale.isUndefined() && !scale.isNull() && (scale.toDouble(1) != 1
+        || span.value(QStringLiteral("font_scale_basis")).toString() == QStringLiteral("normal_body"))) return false;
     const QString role = span.value(QStringLiteral("role")).toString();
     if (!role.isEmpty() && role != QStringLiteral("normal")) return false;
     if (!span.value(QStringLiteral("foreground")).toString().isEmpty() ||
@@ -640,6 +650,37 @@ QString readerFamily() {
     return family;
 }
 
+// First-party zero-advance/zero-ink font, preserving original semantic text.
+// Exact 748-byte asset qualified by the public Qt zero-font probe (SHA256 708d920e...).
+QString zeroFontFamily() {
+    static const QString family = [] {
+        const QByteArray bytes = QByteArray::fromHex(
+            "00010000000a0080000300204f532f3245095782000000ac00000060636d6170001e00300000010c00000028676c7966"
+            "000000000000013400000018686561645f1640e50000014c0000003668686561000100030000018400000024686d7478"
+            "00000000000001a8000000086c6f6361000c0006000001b0000000066d61787000030002000001b8000000206e616d65"
+            "122c25ac000001d8000000f4706f737400030000000002cc000000200004000001900005000000000000000000000000"
+            "00000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffff5744435400400000ffff"
+            "00000000000000000000ffffffffffffffff0000000000000020000000000001000000060000000c000d00000000001c"
+            "0000000000000001000000000010ffff0000000100000000000000000000000000000000000000000000000000010000"
+            "00010000389f1ee35f0f3cf5000303e80000000000000000000000000000000000000000000000000000000800020000"
+            "000000000001000000000000000000000000000000000001000000000000000000000000000000020000000000000000"
+            "00000006000c000000010000000200000000000000000002000000000000000000000000000000000000000500420003"
+            "000104090001002600000003000104090002000e002600030001040900040036003400030001040900050016006a0003"
+            "0001040900060032008000570069006b006900640069006300740020005a00650072006f002000500072006f00620065"
+            "0052006500670075006c0061007200570069006b006900640069006300740020005a00650072006f002000500072006f"
+            "0062006500200052006500670075006c0061007200560065007200730069006f006e00200031002e003000570069006b"
+            "00690064006900630074005a00650072006f00500072006f00620065002d0052006500670075006c0061007200030000"
+            "00000000000000000000000000000000000000000000000000000000");
+        const int id = QFontDatabase::addApplicationFontFromData(bytes);
+        const QStringList families = QFontDatabase::applicationFontFamilies(id);
+        if (id < 0 || families.size() != 1 || families.first() != SemanticHtml::zeroFontFamilyName)
+            throw DictApiError("unable to register zero-size presentation font");
+        // Application font registration is intentionally retained for all documents.
+        return SemanticHtml::zeroFontFamilyName;
+    }();
+    return family;
+}
+
 QString egyptianFamily() {
     static const QString family = [] {
         const int id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/NewGardinerOmni2d4.ttf"));
@@ -654,8 +695,15 @@ MainWindow::MainWindow(const QString &root, const QString &initialWord)
     : QMainWindow() {
     setupUi();
     restoreGeometry(QSettings().value(QStringLiteral("reader/windowGeometry")).toByteArray());
-    if (auto *splitter = findChild<QSplitter *>(QStringLiteral("readerSplit")))
-        splitter->restoreState(QSettings().value(QStringLiteral("reader/splitter")).toByteArray());
+    const QByteArray storedSplitter = QSettings().value(QStringLiteral("reader/splitter")).toByteArray();
+    if (readerSplit_ && readerSplit_->restoreState(storedSplitter) && width() < 720) {
+        // Keep the opaque persisted wide state, not the temporarily hidden pane's
+        // allocation. Qt restores its own format on the first return to wide.
+        wideSplitterState_ = storedSplitter;
+        wideSidebarWidth_ = -1;
+        updateCompactNavigation();
+        showCompactPane(compactSearchPane_);
+    }
     readingPointSize_ = std::clamp(QSettings().value(QStringLiteral("reader/pointSize"), 12).toInt(), 9, 24);
     applyTheme();
     const QString folder = root.isEmpty() ? QSettings().value(QStringLiteral("reader/root")).toString() : root;
@@ -669,8 +717,9 @@ MainWindow::MainWindow(const QString &root, const QString &initialWord)
 MainWindow::~MainWindow() {
     if (cancelLoad_) cancelLoad_->store(true);
     QSettings().setValue(QStringLiteral("reader/windowGeometry"), saveGeometry());
-    if (auto *splitter = findChild<QSplitter *>(QStringLiteral("readerSplit")))
-        QSettings().setValue(QStringLiteral("reader/splitter"), splitter->saveState());
+    if (readerSplit_)
+        QSettings().setValue(QStringLiteral("reader/splitter"),
+            compactNavigation_ && !wideSplitterState_.isEmpty() ? wideSplitterState_ : readerSplit_->saveState());
 }
 
 void MainWindow::setLoading(bool loading) {
@@ -721,7 +770,7 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                 search_->setText(loaded->missingWord);
                 refreshSearch();
                 resultStatus_->setText(QStringLiteral("No exact entry for “%1”. Try a suggestion or another collection.").arg(loaded->missingWord));
-                search_->setFocus();
+                focusSearch();
                 return;
             }
             if (loaded->emptyLibrary || !loaded->error.isEmpty()) {
@@ -734,6 +783,7 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                     kind_->setCurrentIndex(kind_->findData(api_->kind()));
                     language_->setCurrentText(api_->language());
                     resultStatus_->setText(QStringLiteral("Could not open the selected dictionary. Your current dictionary is still open."));
+                    if (compactNavigation_) focusSearch();
                 } else {
                     if (loaded->emptyLibrary && !root.isEmpty())
                         QSettings().setValue(QStringLiteral("reader/root"), QDir(root).absolutePath());
@@ -799,8 +849,11 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
             } else if (!word.isEmpty()) openWord(word, fragment);
             const bool restoredReader = restoreVisit >= 0 && restoreVisit < visits_.size()
                 && visits_[restoreVisit].readerFocused && !currentEntry_.isEmpty();
-            if ((restoredReader || fragment || requireExactWord) && !currentEntry_.isEmpty()) reading_->setFocus();
-            else search_->setFocus();
+            const bool compactWordOpened = compactNavigation_ && restoreVisit < 0 && !word.isEmpty();
+            if ((restoredReader || fragment || requireExactWord || compactWordOpened) && !currentEntry_.isEmpty()) {
+                showCompactPane(false);
+                reading_->setFocus();
+            } else focusSearch();
             statusBar()->showMessage(QStringLiteral("Opened %1").arg(QDir::toNativeSeparators(root)), 4000);
         };
         // A modal Library worker can change files before its GUI notification.
@@ -945,8 +998,10 @@ void MainWindow::setupUi() {
     setMinimumSize(480, 480);
 
     auto *splitter = new QSplitter(this);
+    readerSplit_ = splitter;
     splitter->setObjectName(QStringLiteral("readerSplit"));
     auto *sideScroll = new QScrollArea(splitter);
+    searchPane_ = sideScroll;
     sideScroll->setObjectName(QStringLiteral("readerSidebarScroll"));
     sideScroll->setFrameShape(QFrame::NoFrame);
     sideScroll->setWidgetResizable(true);
@@ -1117,6 +1172,30 @@ void MainWindow::setupUi() {
     splitter->setStretchFactor(1, 1);
     splitter->setSizes({280, 900});
     splitter->setChildrenCollapsible(false);
+    compactToolbar_ = addToolBar(QStringLiteral("Search and reading"));
+    compactToolbar_->setObjectName(QStringLiteral("compactNavigation"));
+    compactToolbar_->setMovable(false);
+    compactToolbar_->toggleViewAction()->setEnabled(false);
+    compactToolbar_->setFloatable(false);
+    compactToolbar_->setContextMenuPolicy(Qt::PreventContextMenu);
+    compactToolbar_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    auto *paneActions = new QActionGroup(this);
+    searchPaneAction_ = compactToolbar_->addAction(QStringLiteral("Search"));
+    readingPaneAction_ = compactToolbar_->addAction(QStringLiteral("Reading"));
+    for (auto *action : {searchPaneAction_, readingPaneAction_}) {
+        action->setCheckable(true);
+        paneActions->addAction(action);
+    }
+    readingPaneAction_->setChecked(true);
+    for (const auto &item : {qMakePair(searchPaneAction_, QStringLiteral("Show search pane")),
+                            qMakePair(readingPaneAction_, QStringLiteral("Show reading pane"))}) {
+        QWidget *button = compactToolbar_->widgetForAction(item.first);
+        button->setFocusPolicy(Qt::StrongFocus);
+        button->setAccessibleName(item.second);
+    }
+    connect(searchPaneAction_, &QAction::triggered, this, [this] { focusSearch(); });
+    connect(readingPaneAction_, &QAction::triggered, this, [this] { showCompactPane(false); reading_->setFocus(); });
+    compactToolbar_->hide();
     setCentralWidget(splitter);
     content->installEventFilter(this);
     updateReaderLayout();
@@ -1138,7 +1217,7 @@ void MainWindow::setupUi() {
     });
     connect(results_, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
         const QString word = item->data(Qt::UserRole).toString();
-        if (currentEntry_.value(QStringLiteral("title")).toString() != word) openWord(word);
+        activateUserWord(word, true);
     });
     connect(kind_, &QComboBox::currentIndexChanged, this, [this] { selectDataset(); });
     connect(language_, &QComboBox::currentIndexChanged, this, [this] { selectDataset(); });
@@ -1247,6 +1326,20 @@ void MainWindow::setupUi() {
         readingPointSize_ = std::clamp(readingPointSize_ + delta, 9, 24);
         QSettings().setValue(QStringLiteral("reader/pointSize"), readingPointSize_);
         refreshReading();
+        const QJsonArray displayTitle = currentEntry_.value(QStringLiteral("display_title")).toArray();
+        if (std::any_of(displayTitle.cbegin(), displayTitle.cend(), [](const QJsonValue &value) {
+                const QJsonObject span = value.toObject();
+                return span.value(QStringLiteral("font_scale_basis")).toString() == QStringLiteral("normal_body")
+                    && span.value(QStringLiteral("font_scale")).toDouble() > 0;
+            })) {
+            const int position = title_->textCursor().position(), anchor = title_->textCursor().anchor();
+            SemanticHtml::setHtml(title_, spansHtml(displayTitle, 0, {}, {}, title_->font().pointSizeF()));
+            QTextCursor cursor(title_->document());
+            const int last = qMax(0, title_->document()->characterCount() - 1);
+            cursor.setPosition(qBound(0, anchor, last));
+            cursor.setPosition(qBound(0, position, last), QTextCursor::KeepAnchor);
+            title_->setTextCursor(cursor);
+        }
     };
     connect(smaller, &QPushButton::clicked, this, [resizeText] { resizeText(-1); });
     connect(larger, &QPushButton::clicked, this, [resizeText] { resizeText(1); });
@@ -1255,7 +1348,7 @@ void MainWindow::setupUi() {
         connect(key, &QShortcut::activated, this, action);
     };
     shortcut(QKeySequence::Open, [this] { chooseRoot(); });
-    shortcut(QKeySequence(QStringLiteral("Ctrl+L")), [this] { search_->setFocus(); search_->selectAll(); });
+    shortcut(QKeySequence(QStringLiteral("Ctrl+L")), [this] { focusSearch(true); });
     shortcut(QKeySequence(QStringLiteral("Alt+Left")), [this] { navigate(-1); });
     shortcut(QKeySequence(QStringLiteral("Alt+Right")), [this] { navigate(1); });
     shortcut(QKeySequence(QStringLiteral("Ctrl+D")), [this] { if (bookmark_->isEnabled()) bookmark_->click(); });
@@ -1317,12 +1410,83 @@ void MainWindow::submitSearch() {
     if (!searchSelectionExplicit_) {
         const auto equal = std::equal_range(searchTitles_.cbegin(), searchTitles_.cend(), resultsQuery_, titleLess);
         if (std::find(equal.first, equal.second, resultsQuery_) != equal.second) {
-            openWord(resultsQuery_);
+            activateUserWord(resultsQuery_);
             return;
         }
     }
-    if (auto *item = results_->currentItem()) openWord(item->data(Qt::UserRole).toString());
-    else openWord(search_->text().trimmed());
+    if (auto *item = results_->currentItem()) activateUserWord(item->data(Qt::UserRole).toString());
+    else activateUserWord(search_->text().trimmed());
+}
+
+void MainWindow::activateUserWord(const QString &word, bool skipCurrent) {
+    // Explicit search/saved-word activation transfers focus only in the compact layout.
+    // Programmatic opens and visit restoration retain their separate focus intent.
+    const bool alreadyOpen = skipCurrent && !currentEntry_.isEmpty()
+        && currentEntry_.value(QStringLiteral("title")).toString() == word;
+    if (!alreadyOpen && !openWord(word)) return;
+    if (compactNavigation_ && !loading_ && !currentEntry_.isEmpty()) {
+        showCompactPane(false);
+        reading_->setFocus();
+    }
+}
+
+void MainWindow::focusSearch(bool selectAll) {
+    showCompactPane(true);
+    search_->setFocus();
+    if (selectAll) search_->selectAll();
+}
+
+void MainWindow::showCompactPane(bool search) {
+    compactSearchPane_ = search;
+    if (!compactNavigation_) return;
+    searchPane_->setVisible(search);
+    readerContent_->setVisible(!search);
+    searchPaneAction_->setChecked(search);
+    readingPaneAction_->setChecked(!search);
+}
+
+void MainWindow::updateCompactNavigation() {
+    if (!readerSplit_ || !compactToolbar_) return;
+    const bool compact = width() < 720;
+    if (compact == compactNavigation_) return;
+    if (compact && wideSplitterState_.isEmpty()) {
+        wideSplitterState_ = readerSplit_->saveState();
+        wideSidebarWidth_ = readerSplit_->sizes().value(0, -1);
+    }
+    if (compact) {
+        // Carry the active wide pane into compact mode; explicit pane choices
+        // remain the fallback while focus belongs to another control or dialog.
+        QWidget *focused = focusWidget();
+        if (focused && (focused == readerContent_ || readerContent_->isAncestorOf(focused)))
+            compactSearchPane_ = false;
+        else if (focused && (focused == searchPane_ || searchPane_->isAncestorOf(focused)))
+            compactSearchPane_ = true;
+    }
+    compactNavigation_ = compact;
+    compactToolbar_->setVisible(compact);
+    if (compact) showCompactPane(compactSearchPane_);
+    else {
+        const QByteArray state = wideSplitterState_;
+        const int sidebarWidth = wideSidebarWidth_;
+        searchPane_->show();
+        readerContent_->show();
+        // Settle the central widget after hiding the compact toolbar before
+        // restoring pixel sizes, otherwise the later resize rescales them.
+        if (layout()) layout()->activate();
+        if (!state.isEmpty()) readerSplit_->restoreState(state);
+        if (sidebarWidth >= 0) {
+            const int available = readerSplit_->width() - readerSplit_->handleWidth();
+            readerSplit_->setSizes({sidebarWidth, std::max(0, available - sidebarWidth)});
+        }
+    }
+    updateReaderLayout();
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event) {
+    // The child resize filter retains the last actual wide geometry. The
+    // central splitter can already be narrow by this top-level resize event.
+    QMainWindow::resizeEvent(event);
+    updateCompactNavigation();
 }
 
 void MainWindow::updateReaderLayout() {
@@ -1333,6 +1497,24 @@ void MainWindow::updateReaderLayout() {
     QFont headingFont = title_->font();
     headingFont.setPointSize(compact ? 24 : 30);
     title_->setFont(headingFont);
+    const QJsonArray displayTitle = currentEntry_.value(QStringLiteral("display_title")).toArray();
+    const bool scaledTitle = std::any_of(displayTitle.cbegin(), displayTitle.cend(), [](const QJsonValue &value) {
+        const QJsonValue scale = value.toObject().value(QStringLiteral("font_scale"));
+        return scale.isDouble() && scale.toDouble() >= 0 && (scale.toDouble() != 1
+            || value.toObject().value(QStringLiteral("font_scale_basis")).toString() == QStringLiteral("normal_body"));
+    });
+    if (scaledTitle) {
+        // Numeric sizes include a measured zero-font block floor. Rebuild them
+        // against this surface's changed font without disturbing its selection.
+        const int position = title_->textCursor().position();
+        const int anchor = title_->textCursor().anchor();
+        SemanticHtml::setHtml(title_, spansHtml(displayTitle, 0, {}, {}, headingFont.pointSizeF()));
+        QTextCursor cursor(title_->document());
+        const int last = qMax(0, title_->document()->characterCount() - 1);
+        cursor.setPosition(qBound(0, anchor, last));
+        cursor.setPosition(qBound(0, position, last), QTextCursor::KeepAnchor);
+        title_->setTextCursor(cursor);
+    }
     for (auto *widget : std::array<QWidget *, 5>{back_, forward_, sections_, smaller_, larger_})
         navigationLayout_->removeWidget(widget);
     for (auto *widget : std::array<QWidget *, 3>{readerHeading_, listen_, bookmark_})
@@ -1368,8 +1550,13 @@ void MainWindow::updateReaderLayout() {
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
-    if (watched == readerContent_ && event->type() == QEvent::Resize)
+    if (watched == readerContent_ && event->type() == QEvent::Resize) {
+        if (readerSplit_ && !compactNavigation_ && width() >= 720) {
+            wideSplitterState_ = readerSplit_->saveState();
+            wideSidebarWidth_ = readerSplit_->sizes().value(0, -1);
+        }
         updateReaderLayout();
+    }
     if (event->type() == QEvent::KeyPress) {
         auto *key = static_cast<QKeyEvent *>(event);
         if (watched == reading_ && (key->key() == Qt::Key_Menu ||
@@ -1378,7 +1565,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
             return true;
         }
         if (watched == results_ && (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter)) {
-            if (auto *item = results_->currentItem()) openWord(item->data(Qt::UserRole).toString());
+            if (auto *item = results_->currentItem()) activateUserWord(item->data(Qt::UserRole).toString());
             return true;
         }
         if (watched == search_ && (key->key() == Qt::Key_Down || key->key() == Qt::Key_Up)) {
@@ -1396,7 +1583,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
              key->key() == Qt::Key_PageUp || key->key() == Qt::Key_PageDown))
             searchSelectionExplicit_ = true;
         if (watched == results_ && (key->key() == Qt::Key_Escape || (key->key() == Qt::Key_Up && results_->currentRow() == 0))) {
-            search_->setFocus();
+            focusSearch();
             return true;
         }
     }
@@ -1439,6 +1626,7 @@ bool MainWindow::openWord(const QString &word, const std::optional<QString> &fra
             search_->setText(word);
             refreshSearch();
             resultStatus_->setText(QStringLiteral("No exact entry for “%1”. Try a suggestion or another collection.").arg(word));
+            if (compactNavigation_) focusSearch();
             return false;
         }
         search_->setText(exact);
@@ -1460,12 +1648,13 @@ void MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const st
     if (addVisit) saveVisit();
     currentJson_ = document.toJson(QJsonDocument::Indented);
     currentEntry_ = entries.first().toObject();
+    showCompactPane(false);
 
     const QString title = currentEntry_.value(QStringLiteral("title")).toString();
     const QJsonArray displayTitle = currentEntry_.value(QStringLiteral("display_title")).toArray();
     const QString language = currentEntry_.value(QStringLiteral("language")).toString();
     const QString kind = currentEntry_.value(QStringLiteral("kind")).toString();
-    title_->setHtml(displayTitle.isEmpty() ? title.toHtmlEscaped() : spansHtml(displayTitle));
+    SemanticHtml::setHtml(title_, displayTitle.isEmpty() ? title.toHtmlEscaped() : spansHtml(displayTitle, 0, {}, {}, title_->font().pointSizeF()));
     meta_->setText(QStringLiteral("%1 · %2").arg(language.isEmpty() ? QStringLiteral("All languages") : language, kindLabel(kind)));
     const QJsonArray sections = currentEntry_.value(QStringLiteral("sections")).toArray();
     sections_->clear();
@@ -1576,7 +1765,7 @@ void MainWindow::showAbbreviations() {
 void MainWindow::refreshReading() {
     if (currentEntry_.isEmpty()) return;
     const int scroll = reading_->verticalScrollBar()->value();
-    reading_->setHtml(entryHtml(currentEntry_));
+    SemanticHtml::setHtml(reading_, entryHtml(currentEntry_));
     reading_->verticalScrollBar()->setValue(scroll);
 }
 
@@ -1689,7 +1878,7 @@ void MainWindow::restoreVisitReading(const Visit &visit) {
     cursor.setPosition(qBound(0, visit.cursorPosition, last), QTextCursor::KeepAnchor);
     reading_->setTextCursor(cursor);
     if (visit.readerFocused) reading_->setFocus(Qt::OtherFocusReason);
-    else search_->setFocus(Qt::OtherFocusReason);
+    else focusSearch();
     // Cursor/focus restoration can scroll; the saved reading position wins.
     reading_->verticalScrollBar()->setValue(visit.scroll);
 }
@@ -1772,29 +1961,49 @@ void MainWindow::openSavedWord(const SavedWord &word) {
         statusBar()->showMessage(QStringLiteral("This saved word needs %1. Open its dictionary folder.").arg(requested.language), 5000);
         return;
     }
-    if (api_->kind() == requested.kind && (requested.kind != QStringLiteral("language") || api_->language() == requested.language)) openWord(requested.title);
+    if (api_->kind() == requested.kind && (requested.kind != QStringLiteral("language") || api_->language() == requested.language)) activateUserWord(requested.title);
     else loadDataset(api_->root(), requested.language, requested.kind, false, requested.title, -1, originRoot_, originEdition_);
 }
-QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const QString &prefix, const QString &cellBackground) const {
+QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const QString &prefix, const QString &cellBackground, qreal contextPointSize) const {
+    const qreal basePoints = contextPointSize > 0 ? contextPointSize : readingPointSize_;
     const auto flatHtml = [&](const QJsonArray &parts) {
         QString out;
         for (const QJsonValue &value : parts) {
             const QJsonObject span = value.toObject();
+            const QJsonValue basisValue = span.value(QStringLiteral("font_scale_basis"));
+            const QString basis = basisValue.isUndefined() ? QStringLiteral("context") : basisValue.toString();
+            if ((!basisValue.isUndefined() && !basisValue.isString())
+                || (basis != QStringLiteral("context") && basis != QStringLiteral("normal_body")))
+                throw DictApiError("invalid semantic font-scale basis");
+            const bool normalBody = basis == QStringLiteral("normal_body");
+            const QJsonValue numericScale = span.value(QStringLiteral("font_scale"));
+            if (normalBody && (!numericScale.isDouble() || !std::isfinite(numericScale.toDouble()) || numericScale.toDouble() < 0))
+                throw DictApiError("normal-body font-scale basis requires a numeric scale");
             const QString kind = span.value(QStringLiteral("kind")).toString();
             if (kind == QStringLiteral("line_break")) {
                 out += QStringLiteral("<br>");
                 if (span.value(QStringLiteral("trail")).toString().isEmpty()) continue;
             }
+            const bool zeroScale = span.value(QStringLiteral("font_scale")).isDouble()
+                && span.value(QStringLiteral("font_scale")).toDouble() == 0;
             const QString classes = span.value(QStringLiteral("classes")).toString();
             QString text = ((kind == QStringLiteral("line_break") ? QString() : span.value(QStringLiteral("text")).toString())
                 + span.value(QStringLiteral("trail")).toString()).toHtmlEscaped();
             const QString explanation = span.value(QStringLiteral("explanation")).toString();
+            if (numericScale.isDouble() && numericScale.toDouble() >= 0 && (numericScale.toDouble() != 1 || normalBody))
+                text = SemanticHtml::scaledText(text, numericScale.toDouble(), explanation,
+                    normalBody ? SemanticHtml::Basis::NormalBody : SemanticHtml::Basis::Context, readingPointSize_,
+                    span.value(QStringLiteral("small")).toBool(), span.value(QStringLiteral("superscript")).toBool(),
+                    span.value(QStringLiteral("subscript")).toBool(), basePoints);
             if (!explanation.isEmpty())
                 text = QStringLiteral("<span title=\"%1\">%2</span>")
                     .arg(explanation.toHtmlEscaped(), text);
+            if (zeroScale)
+                text = QStringLiteral("<span style=\"font-family:'%1';color:transparent;text-decoration:none\">%2</span>")
+                    .arg(zeroFontFamily().toHtmlEscaped(), text);
             // Keep the script font on the characters themselves: Qt's full-page
             // body style can otherwise replace an outer span's font inside <b>.
-            if (!span.value(QStringLiteral("code")).toBool() &&
+            if (!zeroScale && !span.value(QStringLiteral("code")).toBool() &&
                 classes.simplified().split(QChar(' '), Qt::SkipEmptyParts).contains(QStringLiteral("Egyp")))
                 text = QStringLiteral("<span style=\"font-family:'%1'\">%2</span>")
                     .arg(egyptianFamily().toHtmlEscaped(), text);
@@ -1820,14 +2029,15 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             if (!canonicalForeground && !effectiveBackground.isEmpty()) {
                 const QString ink = backgroundInk(effectiveBackground);
                 text = QStringLiteral("<span style=\"color:%1\">%2</span>").arg(ink, text);
-                if (kind == QStringLiteral("link") || kind == QStringLiteral("external_link"))
+                if (!zeroScale && (kind == QStringLiteral("link") || kind == QStringLiteral("external_link")))
                     text = QStringLiteral("<u>%1</u>").arg(text);
             }
             if (kind == QStringLiteral("template"))
                 throw DictApiError("compiled dictionary contains an uncompiled template span");
             if (kind == QStringLiteral("link")) {
                 const QByteArray encoded = QUrl::toPercentEncoding(span.value(QStringLiteral("target")).toString());
-                text = QStringLiteral("<a href='dict:%1'>%2</a>").arg(QString::fromLatin1(encoded), text);
+                text = QStringLiteral("<a href='dict:%1'%2>%3</a>").arg(QString::fromLatin1(encoded),
+                    zeroScale ? QStringLiteral(" style='text-decoration:none'") : QString(), text);
             } else if (kind == QStringLiteral("external_link")) {
                 const QString target = span.value(QStringLiteral("target")).toString();
                 QUrl url(target);
@@ -1836,16 +2046,29 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                 if (url.isValid() && !url.host().isEmpty() &&
                     (url.scheme() == QStringLiteral("http") || url.scheme() == QStringLiteral("https")))
                     // QTextDocument decodes attribute entities only inside double quotes.
-                    text = QStringLiteral("<a href=\"%1\">%2</a>").arg(url.toString(QUrl::FullyEncoded).toHtmlEscaped(), text);
+                    text = QStringLiteral("<a href=\"%1\"%2>%3</a>").arg(url.toString(QUrl::FullyEncoded).toHtmlEscaped(),
+                        zeroScale ? QStringLiteral(" style='text-decoration:none'") : QString(), text);
             }
             if (span.value(QStringLiteral("code")).toBool()) text = QStringLiteral("<code>%1</code>").arg(text);
             if (span.value(QStringLiteral("small")).toBool()) text = QStringLiteral("<small>%1</small>").arg(text);
             if (span.value(QStringLiteral("bold")).toBool()) text = QStringLiteral("<b>%1</b>").arg(text);
             if (span.value(QStringLiteral("italic")).toBool()) text = QStringLiteral("<i>%1</i>").arg(text);
-            if (span.value(QStringLiteral("underline")).toBool()) text = QStringLiteral("<u>%1</u>").arg(text);
-            if (span.value(QStringLiteral("strike")).toBool()) text = QStringLiteral("<s>%1</s>").arg(text);
+            if (!zeroScale && span.value(QStringLiteral("underline")).toBool()) text = QStringLiteral("<u>%1</u>").arg(text);
+            if (!zeroScale && span.value(QStringLiteral("strike")).toBool()) text = QStringLiteral("<s>%1</s>").arg(text);
             if (span.value(QStringLiteral("superscript")).toBool()) text = QStringLiteral("<sup>%1</sup>").arg(text);
             if (span.value(QStringLiteral("subscript")).toBool()) text = QStringLiteral("<sub>%1</sub>").arg(text);
+            const QJsonValue scaleValue = span.value(QStringLiteral("font_scale"));
+            if (!scaleValue.isUndefined() && !scaleValue.isNull()) {
+                const double scale = scaleValue.toDouble(-1);
+                const qreal scaledBase = normalBody ? readingPointSize_ : basePoints;
+                if (!scaleValue.isDouble() || !std::isfinite(scale) || scale < 0)
+                    throw DictApiError("invalid semantic font scale");
+                // Qt ignores percentage/em sizes. Keep explicit points outside
+                // small/sup/sub so their inherited reductions are applied once.
+                if (scale > 0 && (scale != 1 || normalBody))
+                    text = QStringLiteral("<span style=\"font-size:%1pt\">%2</span>")
+                        .arg(SemanticHtml::boundedFontPoints(scaledBase, scale, SemanticHtml::maximumFontPoints()), 0, 'g', 17).arg(text);
+            }
             const QString language = span.value(QStringLiteral("language")).toString();
             const QString direction = span.value(QStringLiteral("direction")).toString();
             // QTextDocument does not isolate inline HTML direction attributes.
@@ -2123,7 +2346,24 @@ QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackg
             displaySpans.removeLast();
         }
     }
-    const QString body = spansHtml(displaySpans, poem ? outerIndent : 0, prefix, cellBackground);
+    qreal contextPoints = readingPointSize_;
+    if (kind == QStringLiteral("heading") && std::any_of(displaySpans.begin(), displaySpans.end(), [](const QJsonValue &value) {
+            const QJsonValue scale = value.toObject().value(QStringLiteral("font_scale"));
+            return scale.isDouble() && scale.toDouble() > 0 && scale.toDouble() != 1
+                && value.toObject().value(QStringLiteral("font_scale_basis")).toString() != QStringLiteral("normal_body");
+        })) {
+        // Ask the same public HTML engine for its existing "large" context;
+        // do not replace Qt's heading typography with a guessed scale factor.
+        QTextDocument context;
+        QFont baseFont = reading_->font();
+        baseFont.setPointSizeF(readingPointSize_);
+        context.setDefaultFont(baseFont);
+        context.setHtml(QStringLiteral("<h3 style='font-size:large'>x</h3>"));
+        contextPoints = context.find(QStringLiteral("x")).charFormat().font().pointSizeF();
+        if (!std::isfinite(contextPoints) || contextPoints <= 0)
+            throw DictApiError("unable to resolve heading font context");
+    }
+    const QString body = spansHtml(displaySpans, poem ? outerIndent : 0, prefix, cellBackground, contextPoints);
     const QString anchor = kind == QStringLiteral("heading") && !location.isEmpty()
         ? QStringLiteral("<a name='%1'></a>").arg(location.toHtmlEscaped()) : QString();
     if (poem) {
@@ -2437,6 +2677,7 @@ void MainWindow::showRandomWord() {
                 search_->setText(entries.first().toObject().value(QStringLiteral("title")).toString());
                 renderResponse(response);
                 refreshSearch();
+                if (compactNavigation_ && !currentEntry_.isEmpty()) reading_->setFocus();
             }
             return;
         }
@@ -2446,6 +2687,13 @@ void MainWindow::showRandomWord() {
     } catch (const std::exception &error) { reportError(QStringLiteral("Random word"), error); }
 }
 void MainWindow::showLearningDialog(int tab) {
+    // A resize while this modal is open must leave its eventual focus opener
+    // visible, rather than switching away from the sidebar on Close.
+    if (!compactNavigation_) {
+        QWidget *opener = QApplication::focusWidget();
+        if (opener && searchPane_->isAncestorOf(opener)) compactSearchPane_ = true;
+        else if (opener && readerContent_->isAncestorOf(opener)) compactSearchPane_ = false;
+    }
     QDialog dialog(this);
     dialog.setObjectName(QStringLiteral("learningDialog"));
     dialog.setWindowTitle(QStringLiteral("Saved words & learning"));

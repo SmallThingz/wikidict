@@ -1,12 +1,14 @@
 #include "MainWindow.hpp"
 #include "LibraryStore.hpp"
 #include "LibraryDialog.hpp"
+#include "SemanticHtml.hpp"
 
 #include <QAbstractTextDocumentLayout>
 #include <QAccessible>
 #include <QApplication>
 #include <QAction>
 #include <QComboBox>
+#include <QClipboard>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDesktopServices>
@@ -20,6 +22,7 @@
 #include <QGridLayout>
 #include <QGlyphRun>
 #include <QPainterPath>
+#include <QPainter>
 #include <QImage>
 #include <QItemSelectionModel>
 #include <QJsonArray>
@@ -52,6 +55,8 @@
 #include <QStringList>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QToolBar>
+#include <QSplitter>
 #include <QTemporaryDir>
 #include <QTextBlock>
 #include <QTextBrowser>
@@ -64,6 +69,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QtTest>
+#include <limits>
 #include <algorithm>
 #include <array>
 
@@ -223,6 +229,461 @@ private:
     }
 
 private slots:
+    void fontScaleRenderLimitUsesDevicePixelsWithoutChangingSemantics() {
+        for (const int dpi : {96, 144}) {
+            QImage device(8, 8, QImage::Format_ARGB32_Premultiplied);
+            device.setDotsPerMeterX(qRound(dpi / 0.0254)); device.setDotsPerMeterY(qRound(dpi / 0.0254));
+            QTextDocument document; document.setDefaultFont(QFont("DejaVu Sans", 12));
+            document.documentLayout()->setPaintDevice(&device);
+            const qreal maximum = SemanticHtml::maximumFontPoints(&document);
+            QVERIFY(qAbs(maximum - 10000.0 * 72 / dpi) < 1);
+            QCOMPARE(SemanticHtml::boundedFontPoints(12, maximum / 12, maximum), maximum);
+            QCOMPARE(SemanticHtml::boundedFontPoints(12, std::numeric_limits<double>::max(), maximum), maximum);
+            for (const auto basis : {SemanticHtml::Basis::Context, SemanticHtml::Basis::NormalBody}) {
+                const QString html = SemanticHtml::scaledText("<a href=\"dict:Target\">X</a>",
+                    std::numeric_limits<float>::max(), "Authored tooltip", basis, 12, false, false, false, 12);
+                SemanticHtml::setHtml(&document, html);
+                const auto format = document.begin().begin().fragment().charFormat();
+                QCOMPARE(format.fontPointSize(), maximum);
+                QCOMPARE(format.anchorHref(), QStringLiteral("dict:Target"));
+                QCOMPARE(format.toolTip(), QStringLiteral("Authored tooltip"));
+                QCOMPARE(document.toPlainText(), QStringLiteral("X"));
+            }
+            QCOMPARE(SemanticHtml::boundedFontPoints(12, 1.25, maximum), 15.0);
+            QVERIFY(qAbs(SemanticHtml::boundedFontPoints(12, 1.25, maximum, 0.8) - 12.0) < 0.0001);
+        }
+        // Existing helper callers need not provide emitter provenance.
+        QTextDocument direct; direct.setDefaultFont(QFont("DejaVu Sans", 12));
+        SemanticHtml::setHtml(&direct, SemanticHtml::scaledText("X", 1.25, ""));
+        QCOMPARE(direct.begin().begin().fragment().charFormat().fontPointSize(), 15.0);
+        MainWindow window(fixture_);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        for (const double scale : {double(std::numeric_limits<float>::max()), std::numeric_limits<double>::max()}) {
+            const QJsonArray spans{QJsonObject{{"kind", "text"}, {"text", "X"}, {"font_scale", scale}}};
+            const QByteArray original = QJsonDocument(spans).toJson(QJsonDocument::Compact);
+            const QString html = window.spansHtml(spans);
+            QVERIFY(!html.contains(QStringLiteral("inf")));
+            QTextDocument rendered; rendered.setDefaultFont(QFont("DejaVu Sans", 12));
+            SemanticHtml::setHtml(&rendered, html);
+            QVERIFY(rendered.begin().begin().fragment().charFormat().fontPointSize() <= SemanticHtml::maximumFontPoints(&rendered));
+            QCOMPARE(QJsonDocument(spans).toJson(QJsonDocument::Compact), original);
+        }
+        const QString zero = SemanticHtml::scaledText("X", 0, "");
+        QVERIFY(!zero.contains(QStringLiteral("context_points")));
+        QTextDocument identity; identity.setHtml("<p>X</p>");
+        const QString old = identity.toHtml(); SemanticHtml::setHtml(&identity, "<p>X</p>");
+        QCOMPARE(identity.toHtml(), old);
+    }
+
+    void zeroFontScaleActualHtmlRetainsLogicalTextAcrossReaderSurfaces() {
+        MainWindow window(fixture_);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const QString hidden = QString::fromUcs4(U"سبتمبر\U00013000\U0001f600\u064e");
+        const QJsonObject zero{{"kind", "link"}, {"text", hidden}, {"target", "Zero target"},
+            {"classes", "AR Egyp"}, {"font_scale", 0}, {"bold", true}, {"italic", true},
+            {"underline", true}, {"strike", true}, {"code", true}, {"foreground", "#123456"}};
+        const auto text = [](const QString &value) { return QJsonObject{{"kind", "text"}, {"text", value}}; };
+        const auto paint = [](QTextDocument *document) {
+            QImage image(800, 320, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
+            QAbstractTextDocumentLayout::PaintContext context;
+            QPainter painter(&image); document->documentLayout()->draw(&painter, context); return image;
+        };
+        QString diagnosticSurface;
+        int diagnosticBase = -1;
+        bool diagnosticMixed = false;
+        const auto verify = [&](QTextBrowser *browser, const QString &html, const QString &baselineHtml, qreal base, bool alreadyRendered = false) {
+            QFont font = browser->document()->defaultFont();
+            if (!alreadyRendered) {
+                font.setPointSizeF(base); font.setKerning(false);
+                browser->setFont(font); browser->document()->setDefaultFont(font);
+                SemanticHtml::setHtml(browser, html);
+            }
+            browser->document()->setTextWidth(700);
+            QTextDocument baseline; baseline.setDefaultFont(font);
+            baseline.setDocumentMargin(browser->document()->documentMargin());
+            baseline.setDefaultTextOption(browser->document()->defaultTextOption());
+            SemanticHtml::setHtml(&baseline, baselineHtml); baseline.setTextWidth(700);
+            if (diagnosticSurface == QStringLiteral("reference") && !diagnosticMixed) {
+                // The visible reference number already keeps this paragraph alive.
+                // Removing zero text must preserve its original bidi context, without
+                // introducing a U+200B fallback-font line box into the control.
+                const QTextCursor original = browser->document()->find(hidden);
+                QTextCursor prefix = baseline.find(QStringLiteral("[1]"));
+                QVERIFY(!original.isNull()); QVERIFY(!prefix.isNull());
+                QTextBlockFormat parent = prefix.blockFormat();
+                parent.setLayoutDirection(original.block().textDirection());
+                prefix.setBlockFormat(parent);
+                QCOMPARE(prefix.block().textDirection(), original.block().textDirection());
+            }
+            browser->document()->documentLayout()->documentSize(); // Resolve layout before inspecting glyph runs.
+            QVERIFY(browser->toPlainText().contains(hidden));
+            QTextCursor cursor = browser->document()->find(hidden); QVERIFY(!cursor.isNull());
+            QCOMPARE(cursor.selectedText(), hidden); QVERIFY(cursor.charFormat().isAnchor());
+            QCOMPARE(cursor.charFormat().anchorHref(), QStringLiteral("dict:Zero%20target"));
+            browser->setTextCursor(cursor); browser->copy(); QCOMPARE(QApplication::clipboard()->text(), hidden);
+            QAccessibleInterface *accessible = QAccessible::queryAccessibleInterface(browser);
+            QVERIFY(accessible && accessible->textInterface());
+            const auto accessibleText = accessible->textInterface();
+            QVERIFY(accessibleText->text(0, accessibleText->characterCount()).contains(hidden));
+            const QTextBlock block = cursor.block();
+            const int relative = cursor.selectionStart() - block.position();
+            const QTextLine line = block.layout()->lineForTextPosition(relative);
+            QVERIFY(line.isValid());
+            const qreal diagnosticStart = line.cursorToX(relative);
+            const qreal diagnosticEnd = line.cursorToX(relative + hidden.size());
+            if (!(qAbs(diagnosticStart - diagnosticEnd) < 0.001) || diagnosticSurface == QStringLiteral("reference")) {
+                const QString diagnosticDirectory = QDir::current().filePath(QStringLiteral(".tmp/font-zero-diagnostics/%1").arg(QCoreApplication::applicationPid()));
+                QVERIFY(QDir().mkpath(diagnosticDirectory));
+                const QString diagnosticStem = QStringLiteral("%1-%2-%3").arg(diagnosticSurface).arg(diagnosticBase).arg(diagnosticMixed ? "mixed" : "whole");
+                const QString actualPng = QDir(diagnosticDirectory).filePath(diagnosticStem + QStringLiteral("-actual.png"));
+                const QString baselinePng = QDir(diagnosticDirectory).filePath(diagnosticStem + QStringLiteral("-baseline.png"));
+                QVERIFY(paint(browser->document()).save(actualPng));
+                QVERIFY(paint(&baseline).save(baselinePng));
+                qInfo().noquote() << "ZERO_ADVANCE_FRAMES" << actualPng << baselinePng;
+                QJsonArray diagnosticRuns;
+                for (const QGlyphRun &run : block.layout()->glyphRuns(relative, hidden.size())) {
+                    QJsonArray glyphs;
+                    const auto ids = run.glyphIndexes(); const auto advances = run.rawFont().advancesForGlyphIndexes(ids);
+                    for (int i = 0; i < ids.size(); ++i)
+                        glyphs.append(QJsonObject{{"id", int(ids[i])}, {"advance_x", advances[i].x()}, {"advance_y", advances[i].y()}});
+                    diagnosticRuns.append(QJsonObject{{"family", run.rawFont().familyName()}, {"rtl", run.isRightToLeft()}, {"glyphs", glyphs}});
+                }
+                const auto format = cursor.charFormat();
+                qInfo().noquote() << "ZERO_ADVANCE_DIAGNOSTIC" << QJsonDocument(QJsonObject{
+                    {"surface", diagnosticSurface}, {"base", diagnosticBase}, {"mixed", diagnosticMixed},
+                    {"start", diagnosticStart}, {"end", diagnosticEnd}, {"relative", relative},
+                    {"line_start", line.textStart()}, {"line_length", line.textLength()},
+                    {"start_leading", line.cursorToX(relative, QTextLine::Leading)},
+                    {"start_trailing", line.cursorToX(relative, QTextLine::Trailing)},
+                    {"end_leading", line.cursorToX(relative + hidden.size(), QTextLine::Leading)},
+                    {"end_trailing", line.cursorToX(relative + hidden.size(), QTextLine::Trailing)},
+                    {"block_direction", int(block.textDirection())},
+                    {"baseline_block_direction", int(baseline.findBlockByNumber(block.blockNumber()).textDirection())},
+                    {"no_font_merging", bool(int(format.font().styleStrategy()) & int(QFont::NoFontMerging))},
+                    {"family", format.font().family()}, {"weight", int(format.font().weight())},
+                    {"background_style", int(format.background().style())}, {"background", format.background().color().name()},
+                    {"html_prefix", html.left(1600)}, {"selected_format_html", QTextDocumentFragment(cursor).toHtml().left(1600)}, {"glyph_runs", diagnosticRuns}}).toJson(QJsonDocument::Compact);
+            }
+            QVERIFY(qAbs(line.cursorToX(relative) - line.cursorToX(relative + hidden.size())) < 0.001);
+            bool sawGlyph = false;
+            for (const QGlyphRun &run : block.layout()->glyphRuns(relative, hidden.size())) {
+                QCOMPARE(run.rawFont().familyName(), QStringLiteral("Wikidict Zero Probe"));
+                for (const QPointF &advance : run.rawFont().advancesForGlyphIndexes(run.glyphIndexes()))
+                    QCOMPARE(advance, QPointF(0, 0));
+                sawGlyph = sawGlyph || !run.glyphIndexes().isEmpty();
+            }
+            QVERIFY(sawGlyph);
+            QCOMPARE(browser->document()->size().height(), baseline.size().height());
+            QCOMPARE(paint(browser->document()), paint(&baseline));
+        };
+        for (const int base : {12, 18}) {
+            window.readingPointSize_ = base;
+            diagnosticBase = base;
+            for (const bool mixed : {true, false}) {
+                diagnosticMixed = mixed;
+                const QJsonArray source = mixed ? QJsonArray{text("A"), zero, text("B")} : QJsonArray{zero};
+                const QJsonArray control = mixed ? QJsonArray{text("AB")} : QJsonArray{text(QString(QChar(0x200b)))};
+                const auto verifySurface = [&](const QString &actualHtml, const QString &mixedControlHtml) {
+                    QString baselineHtml = mixedControlHtml;
+                    if (!mixed) {
+                        // Keep the identical production container/furniture, including
+                        // <caption>. Truly empty surfaces get an inert parent-font strut;
+                        // reference furniture already supplies visible parent text.
+                        const QString zeroHtml = window.spansHtml(source);
+                        QCOMPARE(actualHtml.count(zeroHtml), 1);
+                        baselineHtml = actualHtml;
+                        baselineHtml.replace(zeroHtml, diagnosticSurface == QStringLiteral("reference")
+                            ? QString() : QString(QChar(0x200b)));
+                    }
+                    verify(window.reading_, actualHtml, baselineHtml, base);
+                };
+                const auto paragraph = [&](const QJsonArray &spans) { return window.blockHtml(QJsonObject{{"kind", "paragraph"}, {"spans", spans}}); };
+                const auto heading = [&](const QJsonArray &spans) { return window.blockHtml(QJsonObject{{"kind", "heading"}, {"level", 3}, {"spans", spans}}); };
+                const auto caption = [&](const QJsonArray &spans) { return window.tableHtml(QJsonObject{{"caption", spans}, {"rows", QJsonArray{}}}, 0); };
+                diagnosticSurface = QStringLiteral("paragraph");
+                verifySurface(paragraph(source), paragraph(control));
+                diagnosticSurface = QStringLiteral("heading");
+                verifySurface(heading(source), heading(control));
+                diagnosticSurface = QStringLiteral("caption");
+                verifySurface(caption(source), caption(control));
+                const auto cell = [&](const QJsonArray &spans) {
+                    return window.tableHtml(QJsonObject{{"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{QJsonObject{{"spans", spans}}}}}}}}, 0);
+                };
+                diagnosticSurface = QStringLiteral("cell");
+                verifySurface(cell(source), cell(control));
+                diagnosticSurface = QStringLiteral("inline");
+                verifySurface(window.spansHtml(source), window.spansHtml(control));
+                const auto reference = [&](const QJsonArray &spans) {
+                    return window.entryHtml(QJsonObject{{"sections", QJsonArray{}}, {"references", QJsonArray{
+                        QJsonObject{{"number", 1}, {"group_number", 1}, {"name", "zero"}, {"group", ""}, {"spans", spans}}}}});
+                };
+                diagnosticSurface = QStringLiteral("reference");
+                verifySurface(reference(source), reference(control));
+                diagnosticSurface = QStringLiteral("actual-title");
+                // Exercise the actual rich display-title HeadingBrowser path.
+                QJsonObject entry{{"title", hidden}, {"kind", "language"}, {"language", "Test"},
+                    {"display_title", source}, {"sections", QJsonArray{}}};
+                window.resize(1180, 780); window.show(); window.activateWindow();
+                QTRY_VERIFY(window.isActiveWindow());
+                QTRY_VERIFY(!window.compactNavigation_);
+                QFont titleFont = window.title_->font(); titleFont.setKerning(false);
+                window.title_->setFont(titleFont);
+                window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false);
+                QVERIFY(window.title_->accessibleName().contains(hidden));
+                QVERIFY(window.title_->height() >= 1);
+                verify(window.title_, {}, window.spansHtml(control, 0, {}, {}, window.title_->font().pointSizeF()), window.title_->font().pointSizeF(), true);
+                for (const QSize size : {QSize(480, 600), QSize(1180, 780)}) {
+                    window.reading_->setFocus(); QTRY_VERIFY(window.reading_->hasFocus());
+                    QTextCursor selection(window.title_->document()); selection.setPosition(0);
+                    selection.setPosition(1, QTextCursor::KeepAnchor); window.title_->setTextCursor(selection);
+                    window.resize(size);
+                    QTRY_COMPARE(window.compactNavigation_, size.width() < 720);
+                    QTRY_COMPARE(window.title_->font().pointSize(), size.width() < 720 ? 24 : 30);
+                    QCOMPARE(window.title_->textCursor().anchor(), 0);
+                    QCOMPARE(window.title_->textCursor().position(), 1);
+                    QVERIFY(window.reading_->hasFocus());
+                    // Inspect the actual resize-triggered result, never serialize
+                    // and reimport it (private font strategies do not round-trip).
+                    verify(window.title_, {}, window.spansHtml(control, 0, {}, {}, window.title_->font().pointSizeF()), window.title_->font().pointSizeF(), true);
+                }
+                // Rendering suppression never rewrites the semantic style/link data.
+                QCOMPARE(window.currentEntry_.value("display_title").toArray(), source);
+                QCOMPARE(source[mixed ? 1 : 0].toObject(), zero);
+            }
+        }
+    }
+    void relativeFontScalePreservesContextAndLegacyReductions() {
+        MainWindow window(fixture_);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const auto span = [](double scale) {
+            return QJsonObject{{"kind", "link"}, {"text", QString::fromUtf8("سبتمبر")},
+                {"target", QString::fromUtf8("سبتمبر")}, {"trail", "!"}, {"classes", "AR"}, {"font_scale", scale}};
+        };
+        // Semantic HTML uses the same import/normalization contract as the real
+        // widgets; bare Qt setHtml retains overriding legacy size adjustments.
+        const auto points = [](const QString &html, int base) {
+            QTextDocument document;
+            QFont font; font.setPointSize(base); document.setDefaultFont(font);
+            SemanticHtml::setHtml(&document, html);
+            const QTextCursor cursor = document.find(QString::fromUtf8("سبتمبر"));
+            return cursor.isNull() ? -1.0 : cursor.charFormat().font().pointSizeF();
+        };
+        for (const int base : {12, 18}) {
+            window.readingPointSize_ = base;
+            const QJsonArray original{span(1)}, enlarged{span(1.25)};
+            const qreal bodyPoints = points(window.spansHtml(original), base);
+            QVERIFY(bodyPoints > 0);
+            QVERIFY(qAbs(points(window.spansHtml(enlarged), base) - bodyPoints * 1.25) < 0.001);
+            for (const QString &flag : {QStringLiteral("small"), QStringLiteral("superscript"), QStringLiteral("subscript")}) {
+                QJsonObject plain = span(1), large = span(1.25);
+                plain.insert(flag, true); large.insert(flag, true);
+                QVERIFY(qAbs(points(window.spansHtml(QJsonArray{large}), base) -
+                    points(window.spansHtml(QJsonArray{plain}), base) * 1.25) < 0.001);
+            }
+            QJsonObject nested = span(1.25); nested.insert("small", true); nested.insert("superscript", true);
+            QJsonObject nestedIdentity = nested; nestedIdentity.insert("font_scale", 1);
+            QVERIFY(qAbs(points(window.spansHtml(QJsonArray{nested}), base) -
+                points(window.spansHtml(QJsonArray{nestedIdentity}), base) * 1.25) < 0.001);
+            const auto heading = [&](const QJsonArray &spans) {
+                return window.blockHtml(QJsonObject{{"kind", "heading"}, {"level", 4}, {"spans", spans}});
+            };
+            const qreal headingPoints = points(heading(original), base);
+            QVERIFY(headingPoints > 0);
+            QVERIFY(qAbs(points(heading(enlarged), base) - headingPoints * 1.25) < 0.001);
+            const auto caption = [&](const QJsonArray &spans) {
+                return window.tableHtml(QJsonObject{{"caption", spans}, {"rows", QJsonArray{}}}, 0);
+            };
+            const qreal captionPoints = points(caption(original), base);
+            QVERIFY(captionPoints > 0);
+            QVERIFY(qAbs(points(caption(enlarged), base) - captionPoints * 1.25) < 0.001);
+            QTextDocument linked; SemanticHtml::setHtml(&linked, window.spansHtml(enlarged));
+            QCOMPARE(linked.toPlainText(), QString::fromUtf8("سبتمبر!"));
+            QVERIFY(linked.find(QString::fromUtf8("سبتمبر")).charFormat().isAnchor());
+            const QString explanation = QStringLiteral("Original tooltip & \"quoted\"\nline");
+            QJsonObject explained = span(1.25);
+            explained.insert("explanation", explanation); explained.insert("small", true);
+            explained.insert("superscript", true); explained.insert("italic", true);
+            const QByteArray payload = QJsonDocument(QJsonObject{{"scale", 1.25}, {"tooltip", explanation}})
+                .toJson(QJsonDocument::Compact).toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+            const QString collision = SemanticHtml::scalePrefix + QString::fromLatin1(payload);
+            const QJsonObject authored{{"kind", "text"}, {"text", "Authored tooltip"}, {"explanation", collision}};
+            QTextDocument annotated;
+            QFont annotatedFont; annotatedFont.setPointSize(base); annotated.setDefaultFont(annotatedFont);
+            SemanticHtml::setHtml(&annotated, window.spansHtml(QJsonArray{explained, authored}));
+            const QTextCharFormat format = annotated.find(QString::fromUtf8("سبتمبر")).charFormat();
+            QCOMPARE(format.toolTip(), explanation);
+            QCOMPARE(format.anchorHref(), QStringLiteral("dict:%1").arg(QString::fromLatin1(QUrl::toPercentEncoding(QString::fromUtf8("سبتمبر")))));
+            QCOMPARE(format.verticalAlignment(), QTextCharFormat::AlignSuperScript);
+            QVERIFY(format.fontItalic());
+            QVERIFY(!format.hasProperty(QTextFormat::FontSizeAdjustment));
+            QCOMPARE(annotated.find(QStringLiteral("!")).charFormat().toolTip(), explanation);
+            QCOMPARE(annotated.find(QStringLiteral("Authored tooltip")).charFormat().toolTip(), collision);
+            QVERIFY(!annotated.toHtml().contains(QStringLiteral("data-wikidict-font-scale")));
+
+            QJsonObject absent = span(1); absent.remove("font_scale");
+            QCOMPARE(window.spansHtml(QJsonArray{absent}), window.spansHtml(original));
+            QCOMPARE(heading(QJsonArray{absent}), heading(original));
+            QCOMPARE(caption(QJsonArray{absent}), caption(original));
+            const auto renderTitle = [&](const QJsonArray &spans) {
+                const QJsonObject entry{{"title", QString::fromUtf8("سبتمبر")}, {"kind", "language"},
+                    {"language", "Test"}, {"display_title", spans}, {"sections", QJsonArray{}}};
+                window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false);
+            };
+            // Compare the actual HeadingBrowser against its own unscaled control;
+            // title typography follows its responsive widget font, not body points.
+            renderTitle(QJsonArray{absent});
+            const QString unscaledTitleHtml = window.title_->document()->toHtml();
+            const QTextCursor titleControl = window.title_->document()->find(QString::fromUtf8("سبتمبر"));
+            QVERIFY(!titleControl.isNull());
+            const qreal titlePoints = titleControl.charFormat().font().pointSizeF();
+            QVERIFY(titlePoints > 0);
+            renderTitle(original);
+            QCOMPARE(window.title_->document()->toHtml(), unscaledTitleHtml);
+            renderTitle(enlarged);
+            const QTextCursor titleScaled = window.title_->document()->find(QString::fromUtf8("سبتمبر"));
+            QVERIFY(!titleScaled.isNull());
+            QVERIFY(qAbs(titleScaled.charFormat().font().pointSizeF() - titlePoints * 1.25) < 0.001);
+            window.resize(1180, 780);
+            window.show(); window.activateWindow();
+            QTRY_VERIFY(window.isActiveWindow());
+            for (const QSize size : {QSize(480, 600), QSize(1180, 780)}) {
+                window.reading_->setFocus();
+                QTRY_VERIFY(window.reading_->hasFocus());
+                QTextCursor selection(window.title_->document());
+                selection.setPosition(0); selection.setPosition(1, QTextCursor::KeepAnchor);
+                window.title_->setTextCursor(selection);
+                window.resize(size);
+                QTRY_COMPARE(window.compactNavigation_, size.width() < 720);
+                QTRY_VERIFY(window.readerContent_->isVisible());
+                QTRY_COMPARE(window.compactReader_, window.readerContent_->width() < 580);
+                const QTextCursor resizedScaled = window.title_->document()->find(QString::fromUtf8("سبتمبر"));
+                QVERIFY(!resizedScaled.isNull());
+                const qreal resizedPoints = resizedScaled.charFormat().font().pointSizeF();
+                QCOMPARE(window.title_->textCursor().anchor(), 0);
+                QCOMPARE(window.title_->textCursor().position(), 1);
+                QVERIFY(window.reading_->hasFocus());
+                // Capture the automatically resized scaled output first, then
+                // measure an actual unscaled control on that same surface.
+                renderTitle(original);
+                const QTextCursor resizedControl = window.title_->document()->find(QString::fromUtf8("سبتمبر"));
+                QVERIFY(!resizedControl.isNull());
+                const qreal controlPoints = resizedControl.charFormat().font().pointSizeF();
+                QVERIFY(controlPoints > 0);
+                QVERIFY(qAbs(resizedPoints - controlPoints * 1.25) < 0.001);
+                const QString identityHtml = window.title_->document()->toHtml();
+                renderTitle(QJsonArray{absent});
+                QCOMPARE(window.title_->document()->toHtml(), identityHtml);
+                renderTitle(enlarged);
+            }
+        }
+    }
+    void fontScaleBasisKeepsHeadingOriginAndReadingBaseDistinct() {
+        QSettings settings;
+        const QString pointKey = QStringLiteral("reader/pointSize");
+        const bool hadPointSize = settings.contains(pointKey);
+        const QVariant previousPointSize = settings.value(pointKey);
+        auto restorePointSize = qScopeGuard([&] {
+            if (hadPointSize) settings.setValue(pointKey, previousPointSize); else settings.remove(pointKey);
+        });
+        MainWindow window(fixture_);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const QString label = QStringLiteral("Basis text");
+        const auto span = [&](double scale, const QString &basis, int flags = 0) {
+            return QJsonObject{{"kind", "link"}, {"text", label}, {"target", "Basis target"},
+                {"font_scale", scale}, {"font_scale_basis", basis}, {"small", bool(flags & 1)},
+                {"superscript", bool(flags & 2)}, {"subscript", bool(flags & 4)}};
+        };
+        QString matchedFormatDiagnostic;
+        const auto points = [&](const QString &html, qreal base) {
+            QTextDocument doc; QFont font; font.setPointSizeF(base); doc.setDefaultFont(font);
+            SemanticHtml::setHtml(&doc, html);
+            const QTextCursor found = doc.find(label);
+            const auto format = found.charFormat();
+            matchedFormatDiagnostic = QString::fromUtf8(QJsonDocument(QJsonObject{
+                {"found", !found.isNull()}, {"position", found.position()}, {"selected", found.selectedText()},
+                {"point_size", format.font().pointSizeF()}, {"raw_point_size", format.fontPointSize()},
+                {"has_adjustment", format.hasProperty(QTextFormat::FontSizeAdjustment)},
+                {"adjustment", format.intProperty(QTextFormat::FontSizeAdjustment)},
+                {"tooltip", format.toolTip()}, {"anchor", format.anchorHref()},
+                {"vertical_alignment", int(format.verticalAlignment())}}).toJson(QJsonDocument::Compact));
+            return found.isNull() ? -1.0 : found.charFormat().font().pointSizeF();
+        };
+        const auto block = [&](const QJsonObject &value, int level) {
+            return QJsonObject{{"kind", "heading"}, {"level", level}, {"spans", QJsonArray{value}}};
+        };
+        const auto section = [&](const QJsonObject &value, int level) {
+            return window.entryHtml(QJsonObject{{"sections", QJsonArray{QJsonObject{{"level", level}, {"title", label},
+                {"blocks", QJsonArray{block(value, level)}}}}}});
+        };
+        for (const int body : {12, 18}) {
+            window.readingPointSize_ = body;
+            for (int flags = 0; flags < 8; ++flags) {
+                const QJsonObject legacy = span(1, QStringLiteral("context"), flags);
+                const qreal bodyControl = points(window.spansHtml(QJsonArray{legacy}), body);
+                QVERIFY(bodyControl > 0);
+                for (const int level : {1, 2}) for (const double scale : {1.0, 1.2, 1.3}) {
+                    const QJsonObject own = span(scale, QStringLiteral("normal_body"), flags);
+                    const QJsonObject child = span(scale, QStringLiteral("context"), flags);
+                    const qreal headingControl = points(window.blockHtml(block(legacy, level)), body);
+                    QVERIFY(headingControl > 0);
+                    QVERIFY(qAbs(points(window.blockHtml(block(own, level)), body) - bodyControl * scale) < 0.001);
+                    QVERIFY(qAbs(points(window.blockHtml(block(child, level)), body) - headingControl * scale) < 0.001);
+                    const QString actualSectionHtml = section(own, level);
+                    const qreal actualSectionPoints = points(actualSectionHtml, body);
+                    if (!(qAbs(actualSectionPoints - bodyControl * scale) < 0.001))
+                        qInfo().noquote() << "SECTION_BASIS_DIAGNOSTIC" << "body" << body << "level" << level
+                            << "flags" << flags << "scale" << scale << "basis" << own.value("font_scale_basis").toString()
+                            << "actual" << actualSectionPoints << "body_control" << bodyControl
+                            << "matched_format" << matchedFormatDiagnostic << "html_prefix" << actualSectionHtml.left(2400);
+                    QVERIFY(qAbs(actualSectionPoints - bodyControl * scale) < 0.001);
+                    const qreal sectionControl = points(section(legacy, level), body);
+                    QVERIFY(sectionControl > 0);
+                    QVERIFY(qAbs(points(section(child, level), body) - sectionControl * scale) < 0.001);
+                    const QJsonObject table{{"caption", QJsonArray{own}}, {"rows", QJsonArray{}}};
+                    QVERIFY(qAbs(points(window.tableHtml(table, 0), body) - bodyControl * scale) < 0.001);
+                }
+            }
+            const auto renderTitle = [&](const QJsonObject &value) {
+                const QJsonObject entry{{"title", label}, {"kind", "language"}, {"language", "Test"},
+                    {"display_title", QJsonArray{value}}, {"sections", QJsonArray{}}};
+                window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false);
+            };
+            window.show(); window.activateWindow(); QTRY_VERIFY(window.isActiveWindow());
+            for (const QSize size : {QSize(1180, 780), QSize(480, 600)}) {
+                window.resize(size); QTRY_COMPARE(window.compactNavigation_, size.width() < 720);
+                for (const double scale : {1.0, 1.3}) {
+                    renderTitle(span(scale, QStringLiteral("normal_body")));
+                    const auto actual = window.title_->document()->find(label).charFormat();
+                    QVERIFY(qAbs(actual.font().pointSizeF() - body * scale) < 0.001);
+                    QVERIFY(actual.isAnchor());
+                    QCOMPARE(actual.anchorHref(), QStringLiteral("dict:Basis%20target"));
+                }
+                renderTitle(span(1.3, QStringLiteral("normal_body")));
+                window.reading_->setFocus(); QTRY_VERIFY(window.reading_->hasFocus());
+                QTextCursor selection(window.title_->document()); selection.setPosition(0);
+                selection.setPosition(1, QTextCursor::KeepAnchor); window.title_->setTextCursor(selection);
+                window.larger_->click();
+                QCOMPARE(window.readingPointSize_, body + 1);
+                QVERIFY(qAbs(window.title_->document()->find(label).charFormat().font().pointSizeF() - (body + 1) * 1.3) < 0.001);
+                QCOMPARE(window.title_->textCursor().anchor(), 0); QCOMPARE(window.title_->textCursor().position(), 1);
+                QVERIFY(window.reading_->hasFocus());
+                window.smaller_->click(); QCOMPARE(window.readingPointSize_, body);
+                QVERIFY(qAbs(window.title_->document()->find(label).charFormat().font().pointSizeF() - body * 1.3) < 0.001);
+            }
+            QJsonObject bodyIdentity = span(1, QStringLiteral("normal_body"));
+            QVERIFY(window.spansHtml(QJsonArray{bodyIdentity}).contains(SemanticHtml::markerOpen));
+            QJsonObject bodyZero = span(0, QStringLiteral("normal_body"));
+            QVERIFY(window.spansHtml(QJsonArray{bodyZero}).contains(SemanticHtml::markerOpen));
+            QVERIFY(window.spansHtml(QJsonArray{bodyZero}).contains(QStringLiteral("Wikidict Zero Probe")));
+            for (const QJsonValue invalid : {QJsonValue(QStringLiteral("unknown")), QJsonValue(QJsonValue::Null), QJsonValue(1)}) {
+                QJsonObject value = bodyIdentity; value.insert("font_scale_basis", invalid);
+                QVERIFY_EXCEPTION_THROWN(window.spansHtml(QJsonArray{value}), DictApiError);
+            }
+            bodyIdentity.remove("font_scale");
+            QVERIFY_EXCEPTION_THROWN(window.spansHtml(QJsonArray{bodyIdentity}), DictApiError);
+        }
+    }
+
     void sectionHeadingLayoutWhitespaceDoesNotCreateEmptyReadingBlocks() {
         MainWindow window(QString{});
         const auto text = [](const QString &value) { return QJsonObject{{QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("text"), value}}; };
@@ -419,6 +880,206 @@ private slots:
         QTRY_COMPARE(title(window), QStringLiteral("cat"));
         QVERIFY(window.search_->isEnabled());
         QVERIFY(window.results_->isEnabled());
+    }
+
+    void compactNavigationUsesFullWidthAndRetainsWideState() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.resize(1180, 780);
+        window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        QTRY_VERIFY(window.isActiveWindow());
+        auto *splitter = window.readerSplit_;
+        auto *search = window.search_;
+        auto *reader = window.reading_;
+        splitter->setSizes({330, 846});
+        QCoreApplication::processEvents();
+        const QList<int> wideSizes = splitter->sizes();
+        QCOMPARE(window.wideSidebarWidth_, wideSizes.value(0));
+        const bool bookmarked = window.learning_.isBookmarked(window.savedWord(window.currentEntry_).key);
+        const int savedCount = window.learning_.bookmarks().size();
+        const QJsonObject entry = window.currentEntry_;
+        reader->setFocus();
+        QTRY_VERIFY(reader->hasFocus());
+        window.resize(480, 600);
+        QTRY_VERIFY(window.compactNavigation_);
+        QCOMPARE(window.wideSidebarWidth_, wideSizes.value(0));
+        QTRY_VERIFY(window.readerContent_->isVisible());
+        QVERIFY(!window.searchPane_->isVisible());
+        QTRY_VERIFY(reader->viewport()->width() >= 400);
+        QCOMPARE(window.width(), 480);
+        QWidget *searchSwitch = window.compactToolbar_->widgetForAction(window.searchPaneAction_);
+        QWidget *readingSwitch = window.compactToolbar_->widgetForAction(window.readingPaneAction_);
+        QCOMPARE(searchSwitch->focusPolicy(), Qt::StrongFocus);
+        QCOMPARE(readingSwitch->focusPolicy(), Qt::StrongFocus);
+        searchSwitch->setFocus(); QTRY_VERIFY(searchSwitch->hasFocus());
+        QTest::keyClick(searchSwitch, Qt::Key_Space);
+        QTRY_VERIFY(window.searchPane_->isVisible());
+        QVERIFY(!window.readerContent_->isVisible());
+        QTRY_VERIFY(search->hasFocus());
+        const auto searchGeometry = [&] {
+            auto *area = qobject_cast<QScrollArea *>(window.searchPane_);
+            return QJsonObject{{"window", window.width()}, {"splitter", splitter->width()},
+                {"search_pane", window.searchPane_->width()}, {"viewport", area ? area->viewport()->width() : -1},
+                {"sidebar", area && area->widget() ? area->widget()->width() : -1}, {"search", search->width()}};
+        };
+        qInfo().noquote() << "COMPACT_SEARCH_INITIAL_GEOMETRY" << QJsonDocument(searchGeometry()).toJson(QJsonDocument::Compact);
+        QTRY_VERIFY(search->width() >= 400);
+        qInfo().noquote() << "COMPACT_SEARCH_SETTLED_GEOMETRY" << QJsonDocument(searchGeometry()).toJson(QJsonDocument::Compact);
+        for (const QString &label : {QStringLiteral("Library"), QStringLiteral("History"), QStringLiteral("Saved"), QStringLiteral("Learn"), QStringLiteral("Settings")}) {
+            QPushButton *button = nullptr;
+            for (auto *candidate : window.searchPane_->findChildren<QPushButton *>())
+                if (candidate->text() == label) button = candidate;
+            QVERIFY(button && button->isEnabled() && !button->isHidden());
+        }
+        readingSwitch->setFocus(); QTRY_VERIFY(readingSwitch->hasFocus());
+        QTest::keyClick(readingSwitch, Qt::Key_Space);
+        QTRY_VERIFY(window.readerContent_->isVisible());
+        QTRY_VERIFY(reader->viewport()->width() >= 400);
+        search->setText(QStringLiteral("cat"));
+        QTest::keyClick(reader, Qt::Key_L, Qt::ControlModifier);
+        QTRY_VERIFY(window.searchPane_->isVisible());
+        QTRY_VERIFY(search->hasFocus());
+        QCOMPARE(search->selectedText(), QStringLiteral("cat"));
+        QTest::keyClick(search, Qt::Key_Return);
+        QTRY_VERIFY(window.readerContent_->isVisible());
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        QTRY_VERIFY(reader->hasFocus());
+        // Exercise the real focused reader widget, not an action-string oracle.
+        reader->setHtml(QStringLiteral("<p>Keyboard page scrolling in the compact reading pane.</p>").repeated(80));
+        QTRY_VERIFY(reader->verticalScrollBar()->maximum() > 0);
+        reader->verticalScrollBar()->setValue(0);
+        QTest::keyClick(reader, Qt::Key_PageDown);
+        QTRY_VERIFY(reader->verticalScrollBar()->value() > 0);
+        window.refreshReading();
+        // Clicking the already-open suggestion must return to Reading without
+        // re-rendering the entry or adding another visit.
+        QTest::keyClick(reader, Qt::Key_L, Qt::ControlModifier);
+        QTRY_VERIFY(search->hasFocus());
+        window.refreshSearch();
+        QVERIFY(window.results_->count() > 0);
+        const int revisionBefore = reader->document()->revision();
+        const qsizetype visitsBefore = window.visits_.size();
+        QListWidgetItem *currentSuggestion = window.results_->item(0);
+        QCOMPARE(currentSuggestion->data(Qt::UserRole).toString(), QStringLiteral("cat"));
+        QTest::mouseClick(window.results_->viewport(), Qt::LeftButton, Qt::NoModifier,
+            window.results_->visualItemRect(currentSuggestion).center());
+        QTRY_VERIFY(window.readerContent_->isVisible());
+        QTRY_VERIFY(reader->hasFocus());
+        QCOMPARE(reader->document()->revision(), revisionBefore);
+        QCOMPARE(window.visits_.size(), visitsBefore);
+
+        QCOMPARE(window.currentEntry_, entry);
+        QCOMPARE(window.learning_.bookmarks().size(), savedCount);
+        QCOMPARE(window.learning_.isBookmarked(window.savedWord(entry).key), bookmarked);
+        // Restoring a search-focused visit must reveal the saved focus target.
+        MainWindow::Visit visit; visit.readerFocused = false;
+        window.restoreVisitReading(visit);
+        QTRY_VERIFY(window.searchPane_->isVisible());
+        QTRY_VERIFY(search->hasFocus());
+        window.showCompactPane(false);
+        QVERIFY(!window.openWord(QStringLiteral("__compact_missing_entry__")));
+        QVERIFY(window.searchPane_->isVisible());
+        QVERIFY(search->hasFocus());
+        QVERIFY(window.resultStatus_->isVisible());
+        QVERIFY(window.resultStatus_->text().contains(QStringLiteral("No exact entry")));
+        QCOMPARE(window.currentEntry_, entry);
+        QVERIFY(window.openWord(QStringLiteral("cat")));
+        QVERIFY(window.readerContent_->isVisible());
+        DictApi *previousApi = window.api_.get();
+        QTemporaryDir rejected; QVERIFY(rejected.isValid());
+        window.loadDataset(rejected.path() + QStringLiteral("/missing"), QStringLiteral("English"), QStringLiteral("language"), false);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        QCOMPARE(window.api_.get(), previousApi);
+        QVERIFY(window.searchPane_->isVisible());
+        QVERIFY(window.resultStatus_->isVisible());
+        QVERIFY(window.resultStatus_->text().contains(QStringLiteral("Your current dictionary is still open")));
+        QCOMPARE(window.currentEntry_, entry);
+        QVERIFY(window.openWord(QStringLiteral("cat")));
+        QVERIFY(window.readerContent_->isVisible());
+        // Tables retain their existing independent horizontal-scroll behavior.
+        reader->setHtml(QStringLiteral("<table><tr><td>WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW</td></tr></table>"));
+        QTRY_VERIFY(reader->horizontalScrollBar()->maximum() > 0);
+        reader->horizontalScrollBar()->setValue(reader->horizontalScrollBar()->maximum());
+        QCOMPARE(reader->horizontalScrollBar()->value(), reader->horizontalScrollBar()->maximum());
+        qInfo() << "WIDE_CACHE_BEFORE_RETURN" << window.wideSidebarWidth_ << "expected" << wideSizes.value(0);
+        QCOMPARE(window.wideSidebarWidth_, wideSizes.value(0));
+        window.resize(1000, 780);
+        QTRY_VERIFY(!window.compactNavigation_);
+        QTRY_VERIFY(window.searchPane_->isVisible() && window.readerContent_->isVisible());
+        const auto restoredGeometry = [&] {
+            return QJsonObject{{"window", window.width()}, {"splitter", splitter->width()},
+                {"sidebar", splitter->sizes().value(0)}, {"reader", splitter->sizes().value(1)},
+                {"cached_sidebar", window.wideSidebarWidth_},
+                {"expected_sidebar", wideSizes.value(0)}};
+        };
+        qInfo().noquote() << "WIDE_RESTORE_INITIAL_GEOMETRY" << QJsonDocument(restoredGeometry()).toJson(QJsonDocument::Compact);
+        QTRY_VERIFY(qAbs(splitter->sizes().value(0) - wideSizes.value(0)) <= 2);
+        qInfo().noquote() << "WIDE_RESTORE_SETTLED_GEOMETRY" << QJsonDocument(restoredGeometry()).toJson(QJsonDocument::Compact);
+        QCOMPARE(window.wideSidebarWidth_, wideSizes.value(0));
+        QVERIFY(splitter->sizes().value(1) > 600);
+        QCOMPARE(window.search_, search); QCOMPARE(window.reading_, reader);
+        QCOMPARE(window.currentEntry_, entry);
+        QVERIFY(!window.compactToolbar_->isVisible());
+        // A compact transition during Saved keeps the sidebar opener reachable.
+        QPushButton *saved = nullptr;
+        for (auto *button : window.searchPane_->findChildren<QPushButton *>())
+            if (button->text() == QStringLiteral("Saved")) saved = button;
+        QVERIFY(saved); saved->setFocus(); QTRY_VERIFY(saved->hasFocus());
+        bool modalPaneKept = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto *dialog = window.findChild<QDialog *>(QStringLiteral("learningDialog"));
+            if (!dialog) return;
+            window.resize(480, 600);
+            QCoreApplication::processEvents();
+            modalPaneKept = window.compactNavigation_ && window.searchPane_->isVisible() && saved->isVisible();
+            dialog->reject();
+        });
+        saved->click();
+        QVERIFY(modalPaneKept);
+        QVERIFY(window.searchPane_->isVisible());
+        QVERIFY(saved->isVisible());
+        QCOMPARE(window.currentEntry_, entry);
+        QCOMPARE(window.learning_.bookmarks().size(), savedCount);
+    }
+
+    void compactStartupRetainsOpaqueWideSplitterPreference() {
+        QSettings settings;
+        const QString geometryKey = QStringLiteral("reader/windowGeometry"), splitterKey = QStringLiteral("reader/splitter");
+        const bool hadGeometry = settings.contains(geometryKey), hadSplitter = settings.contains(splitterKey);
+        const QVariant originalGeometry = settings.value(geometryKey), originalSplitter = settings.value(splitterKey);
+        auto restorePreferences = qScopeGuard([&] {
+            if (hadGeometry) settings.setValue(geometryKey, originalGeometry); else settings.remove(geometryKey);
+            if (hadSplitter) settings.setValue(splitterKey, originalSplitter); else settings.remove(splitterKey);
+        });
+        QByteArray wideState, narrowGeometry;
+        {
+            MainWindow seed(fixture_, QStringLiteral("cat"));
+            seed.resize(900, 700); seed.show();
+            QTRY_VERIFY_WITH_TIMEOUT(!seed.loading_ && seed.api_, 30000);
+            seed.readerSplit_->setSizes({310, 586});
+            QCoreApplication::processEvents();
+            wideState = seed.readerSplit_->saveState();
+            seed.resize(480, 600);
+            QTRY_VERIFY(seed.compactNavigation_);
+            narrowGeometry = seed.saveGeometry();
+        }
+        settings.setValue(geometryKey, narrowGeometry);
+        settings.setValue(splitterKey, wideState);
+        {
+            MainWindow restored(fixture_, QStringLiteral("cat"));
+            restored.show();
+            QTRY_VERIFY_WITH_TIMEOUT(!restored.loading_ && restored.api_, 30000);
+            QTRY_VERIFY(restored.compactNavigation_);
+            QCOMPARE(restored.width(), 480);
+            QCOMPARE(restored.wideSplitterState_, wideState);
+            QCOMPARE(restored.wideSidebarWidth_, -1);
+            QVERIFY(restored.readerContent_->isVisible());
+            QTRY_VERIFY(restored.reading_->viewport()->width() >= 400);
+            QCOMPARE(title(restored), QStringLiteral("cat"));
+        }
+        // A cold compact close must write the identical opaque wide preference.
+        QCOMPARE(settings.value(splitterKey).toByteArray(), wideState);
     }
 
     void narrowReaderKeepsNavigationAndHeadingVisible() {
@@ -6420,6 +7081,25 @@ private slots:
         for (const int width : {580, 780, 1100, 780, 580}) {
             window.resize(width, 480);
             QTest::qWait(100); // Process the real child resize/layout events; never call updateReaderLayout directly.
+            qInfo().noquote() << "SETTLED_READER_PRESELECTION" << QJsonDocument(QJsonObject{
+                {"step", step}, {"window_width", window.width()}, {"compact_navigation", window.compactNavigation_},
+                {"reader_visible", window.readerContent_->isVisible()}, {"reader_hidden", window.readerContent_->isHidden()},
+                {"search_visible", window.searchPane_->isVisible()}, {"back_visible", window.back_->isVisible()},
+                {"back_hidden", window.back_->isHidden()}}).toJson(QJsonDocument::Compact);
+            if (window.compactNavigation_) {
+                QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+                const QString frame = QDir::current().filePath(QStringLiteral(".tmp/ui-screenshots/desktop-settled-layout-preselection-%1-%2-%3.png")
+                    .arg(QCoreApplication::applicationPid()).arg(step).arg(width));
+                QVERIFY(window.grab().save(frame));
+                qInfo().noquote() << "SETTLED_READER_PRESELECTION_FRAME" << frame;
+                // This test measures the reading surface; choose it through the
+                // production action when compact navigation shows one pane.
+                window.readingPaneAction_->trigger();
+                QTRY_VERIFY(window.readerContent_->isVisible());
+                QTRY_VERIFY(!window.searchPane_->isVisible());
+                QTest::qWait(100);
+            }
+            QTRY_VERIFY(window.readerContent_->isVisible());
             QTRY_COMPARE(window.compactReader_, window.readerContent_->width() < 580);
             const bool compact = window.readerContent_->width() < 580;
             int row = -1, column = -1, rowSpan = -1, columnSpan = -1;

@@ -12,6 +12,9 @@
 #include "DictApi.hpp"
 #include "LearningStore.hpp"
 
+class QAction;
+class QToolBar;
+class QSplitter;
 class QComboBox;
 class MediaPanel;
 class QEvent;
@@ -49,6 +52,10 @@ private:
 
     void setupUi();
     void updateReaderLayout();
+    void updateCompactNavigation();
+    void showCompactPane(bool search);
+    void focusSearch(bool selectAll = false);
+    void resizeEvent(QResizeEvent *event) override;
     void openRoot(const QString &root, const QString &word = {});
     void loadDataset(const QString &root, const QString &language, const QString &kind, bool resetVisits, const QString &word = {}, int restoreVisit = -1, const QString &expectedRoot = {}, const QString &expectedEdition = {}, const std::optional<QString> &fragment = std::nullopt, bool requireExactWord = false);
     void setLoading(bool loading);
@@ -56,6 +63,7 @@ private:
     void refreshSearch();
     void loadMoreResults();
     void submitSearch();
+    void activateUserWord(const QString &word, bool skipCurrent = false);
     bool eventFilter(QObject *watched, QEvent *event) override;
     void selectDataset();
     bool openWord(const QString &word, const std::optional<QString> &fragment = std::nullopt, bool allowUnclassifiedFallback = false);
@@ -77,7 +85,7 @@ private:
     void updateNavigation();
     QString entryHtml(const QJsonObject &entry) const;
     QString blockHtml(const QJsonObject &block, const QString &cellBackground = {}, int tableDepth = 1, const QString &location = {}) const;
-    QString spansHtml(const QJsonArray &spans, qreal leftMargin = 0, const QString &prefix = {}, const QString &cellBackground = {}) const;
+    QString spansHtml(const QJsonArray &spans, qreal leftMargin = 0, const QString &prefix = {}, const QString &cellBackground = {}, qreal contextPointSize = 0) const;
     QString tableHtml(const QJsonObject &table, int depth, int tableDepth = 1, const QString &inheritedBackground = {}, const QString &location = {}) const;
     SavedWord savedWord(const QJsonObject &entry) const;
     QString clueFor(const QJsonObject &entry) const;
@@ -110,6 +118,15 @@ private:
     QPushButton *smaller_ = nullptr;
     QPushButton *larger_ = nullptr;
     bool compactReader_ = false;
+    QSplitter *readerSplit_ = nullptr;
+    QWidget *searchPane_ = nullptr;
+    QToolBar *compactToolbar_ = nullptr;
+    QAction *searchPaneAction_ = nullptr;
+    QAction *readingPaneAction_ = nullptr;
+    QByteArray wideSplitterState_;
+    int wideSidebarWidth_ = -1;
+    bool compactNavigation_ = false;
+    bool compactSearchPane_ = false;
     QTextBrowser *title_ = nullptr;
     QLabel *meta_ = nullptr;
     QTabWidget *entryTabs_ = nullptr;
