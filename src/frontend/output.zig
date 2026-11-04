@@ -256,7 +256,8 @@ fn spanPieceText(w: *std.Io.Writer, piece: SpanPiece, color: bool, whitespace: ?
     if (color and span.italic) try w.writeAll("\x1b[3m");
     if (color and (span.underline or contrast_link)) try w.writeAll("\x1b[4m");
     if (color and span.strike) try w.writeAll("\x1b[9m");
-    if (color and (span.small or span.role == .label or span.role == .citation)) try w.writeAll("\x1b[2m");
+    const numeric_small = if (span.font_scale) |scale| scale > 0 and scale < 1 else false;
+    if (color and (span.small or numeric_small or span.role == .label or span.role == .citation)) try w.writeAll("\x1b[2m");
     if (color) {
         if (canonicalRgb(span.background)) |rgb|
             try w.print("\x1b[48;2;{d};{d};{d}m", .{ rgb[0], rgb[1], rgb[2] });
@@ -727,7 +728,7 @@ fn sectionHeadingCompanion(section: model.Section) ?[]const model.Span {
         styled_self = styled_self or selfLinkHeadingSpan(span);
         styled = styled or (span.kind == .text and span.text.len != 0 and span.target.len == 0 and
             (span.bold or span.italic or span.code or span.small or span.superscript or span.subscript or
-                span.strike or span.underline or span.foreground != null or span.background != null or span.classes.len != 0 or
+                span.strike or span.underline or span.foreground != null or span.background != null or span.font_scale != null or span.classes.len != 0 or
                 span.language.len != 0 or span.direction.len != 0 or span.role != .normal));
         if (span.kind == .line_break and span.trail.len != 0) return null;
         if ((span.kind == .link or span.kind == .external_link) and
@@ -2154,6 +2155,9 @@ test "unlinked styled heading companions render once and keep title and level gu
         .{ .text = "Noun", .italic = true },
         .{ .text = "Noun", .code = true },
         .{ .text = "Noun", .small = true },
+        .{ .text = "Noun", .font_scale = 1.0 / 1.2 },
+        .{ .text = "Noun", .font_scale = 1.2 },
+        .{ .text = "Noun", .font_scale = 0 },
         .{ .text = "Noun", .superscript = true },
         .{ .text = "Noun", .subscript = true },
         .{ .text = "Noun", .strike = true },
@@ -2188,6 +2192,7 @@ test "unlinked styled heading companions render once and keep title and level gu
             if (folded) _ = try entryTextFolded(&out, entry, color, .{ .details = true }, &.{}, 0) else try entryText(&out.writer, entry, color);
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "Noun"));
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "Definition."));
+            if (color and style.font_scale != null and style.font_scale.? > 0 and style.font_scale.? < 1) try std.testing.expect(std.mem.indexOf(u8, out.written(), "\x1b[2mNoun") != null);
             if (color and style.italic) try std.testing.expect(std.mem.indexOf(u8, out.written(), "\x1b[3mNoun") != null);
             if (color and style.foreground != null) try std.testing.expect(std.mem.indexOf(u8, out.written(), "\x1b[38;2;255;0;0mNoun") != null);
             if (color and style.background != null) {
@@ -3420,4 +3425,40 @@ test "reference fragments retain rich footer content without a synthesized label
     try std.testing.expect(std.mem.indexOf(u8, ansi.written(), "\x1b[1m\x1b[36mORPHAN\x1b[0m") != null);
     try std.testing.expectEqualStrings("Destination", entry.references[0].spans[0].target);
     try std.testing.expectEqual(@as(usize, 8), entry.references[0].number);
+}
+
+
+test "numeric reduced text preserves legacy dim cue plain bytes and terminal escaping" {
+    const cases = [_]struct { scale: ?f32, legacy: bool = false, dim: bool = false }{
+        .{ .scale = null },
+        .{ .scale = 1.0 / 1.2, .dim = true },
+        .{ .scale = 0.01, .dim = true },
+        .{ .scale = 1 },
+        .{ .scale = 1.2 },
+        .{ .scale = 0 },
+        .{ .scale = null, .legacy = true, .dim = true },
+        .{ .scale = 1.2, .legacy = true, .dim = true },
+    };
+    const text = "A\x1b[31mB C";
+    const baseline = [_]model.Span{.{ .text = text }};
+    var plain_reference: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer plain_reference.deinit();
+    try spansText(&plain_reference.writer, &baseline, false);
+    var plain: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer plain.deinit();
+    var colored: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer colored.deinit();
+    for (cases) |case| {
+        const spans = [_]model.Span{.{ .text = text, .font_scale = case.scale, .small = case.legacy }};
+        plain.clearRetainingCapacity();
+        colored.clearRetainingCapacity();
+        try spansText(&plain.writer, &spans, false);
+        try spansText(&colored.writer, &spans, true);
+        try std.testing.expectEqualStrings(plain_reference.written(), plain.written());
+        try std.testing.expectEqual(case.dim, std.mem.indexOf(u8, colored.written(), "\x1b[2m") != null);
+        try std.testing.expect(std.mem.indexOf(u8, colored.written(), "\x1b[31m") == null);
+        try std.testing.expect(std.mem.indexOf(u8, colored.written(), plain_reference.written()) != null);
+        try std.testing.expectEqualStrings(text, spans[0].text);
+        try std.testing.expectEqual(case.scale, spans[0].font_scale);
+    }
 }

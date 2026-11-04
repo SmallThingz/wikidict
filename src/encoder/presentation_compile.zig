@@ -4,6 +4,8 @@
 const missing_dependency = @import("missing_dependency");
 pub const MissingText = missing_dependency.Text;
 const std = @import("std");
+const relative_font = @import("font_scale.zig");
+pub const FontScaleBasis = @import("blob_encoder").presentation_types.FontScaleBasis;
 const ir = @import("blob_encoder").document_ir;
 const entities = @import("shared_xml_decode").html_entities;
 const syntax = @import("blob_encoder").wikitext_syntax;
@@ -288,7 +290,7 @@ fn htmlListItemCount(input: []const u8) i32 {
     return count;
 }
 pub const media_types = @import("presentation_media.zig");
-pub const Error = A.Error || error{ RenderLimit, InvalidPreContext, UncompiledTemplate, InvalidMissingDependencyCopy, InvalidLiteralProvenance, LiteralProvenanceLimit };
+pub const Error = A.Error || error{ InvalidFontScale, RenderLimit, InvalidPreContext, UncompiledTemplate, InvalidMissingDependencyCopy, InvalidLiteralProvenance, LiteralProvenanceLimit };
 
 // Build-only coordinates in an already page-TOC-prepared owner fragment.
 // The source owner map, rather than a new tag search here, proves these scopes.
@@ -302,6 +304,9 @@ pub const FormattingAttributes = struct {
     explanation_set: bool = false,
     foreground: ?[]const u8 = null,
     foreground_set: bool = false,
+    font_scale: ?f32 = null,
+    font_scale_basis: FontScaleBasis = .context,
+    font_scale_set: bool = false,
 };
 pub const FragmentPreContext = struct {
     pub const Kind = enum { pre, formatting, layout_div, link, refused_link, hidden };
@@ -575,6 +580,9 @@ pub const Style = struct {
     // Concrete paint retained when nested cell content is flattened.
     background: ?[]const u8 = null,
     foreground_set: bool = false,
+    font_scale: ?f32 = null,
+    font_scale_basis: FontScaleBasis = .context,
+    font_scale_set: bool = false,
     bold: bool = false,
     italic: bool = false,
     code: bool = false,
@@ -601,6 +609,11 @@ pub const Style = struct {
     missing_nonaction: bool = false,
 };
 fn inheritInlineMetadata(style: *Style, parent: Style) void {
+    if (!style.font_scale_set and style.font_scale == null) {
+        style.font_scale = parent.font_scale;
+        style.font_scale_basis = parent.font_scale_basis;
+        style.font_scale_set = parent.font_scale_set or parent.font_scale != null;
+    }
     if (!style.explanation_set and style.explanation.len == 0) {
         style.explanation = parent.explanation;
         style.explanation_set = parent.explanation_set or parent.explanation.len != 0;
@@ -647,6 +660,9 @@ pub const Span = struct {
     // Concrete paint retained when nested cell content is flattened.
     background: ?[]const u8 = null,
     foreground_set: bool = false,
+    font_scale: ?f32 = null,
+    font_scale_basis: FontScaleBasis = .context,
+    font_scale_set: bool = false,
     flags: SpanFlags = .{},
     role: Role = .normal,
 };
@@ -3685,6 +3701,12 @@ pub const Renderer = struct {
             }
         }
         var s = original;
+        if (!s.font_scale_set and s.font_scale == null) {
+            const inherited = self.bodyFormattingStyle(.{});
+            s.font_scale = inherited.font_scale;
+            s.font_scale_basis = inherited.font_scale_basis;
+            s.font_scale_set = inherited.font_scale_set;
+        }
         if (s.missing_nonaction and s.kind != .line_break) {
             s.kind = .text;
             s.target = "";
@@ -3714,7 +3736,7 @@ pub const Renderer = struct {
         }
         const flags: SpanFlags = .{ .bold = s.bold, .italic = s.italic, .code = s.code, .small = s.small, .superscript = s.superscript, .subscript = s.subscript, .strike = s.strike, .underline = s.underline };
         const inherited_flags: SpanFlags = @bitCast(@as(u8, @bitCast(flags)) | @as(u8, @bitCast(self.block_formatting)));
-        try self.spans.append(self.a, .{ .kind = s.kind, .provenance = s.provenance, .self_link = self_link, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .explanation = s.explanation, .explanation_set = s.explanation_set, .foreground = s.foreground, .foreground_set = s.foreground_set, .background = s.background, .flags = inherited_flags, .role = s.role });
+        try self.spans.append(self.a, .{ .kind = s.kind, .provenance = s.provenance, .self_link = self_link, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .explanation = s.explanation, .explanation_set = s.explanation_set, .foreground = s.foreground, .foreground_set = s.foreground_set, .font_scale = s.font_scale, .font_scale_basis = s.font_scale_basis, .font_scale_set = s.font_scale_set, .background = s.background, .flags = inherited_flags, .role = s.role });
     }
     pub fn lineBreak(self: *Renderer, s: Style) Error!void {
         var style = s;
@@ -5469,6 +5491,9 @@ pub const Renderer = struct {
                 label_style.explanation_set = span.explanation_set;
                 label_style.foreground = span.foreground;
                 label_style.foreground_set = span.foreground_set;
+                label_style.font_scale = span.font_scale;
+                label_style.font_scale_basis = span.font_scale_basis;
+                label_style.font_scale_set = span.font_scale_set;
                 label_style.classes = try self.mediaCaptionClasses(style.classes, span.classes);
                 label_style.role = span.role;
                 if (span.self_link) {
@@ -6542,6 +6567,39 @@ pub const Renderer = struct {
         return true;
     }
 
+    const RelativeFontSize = struct { value: ?f32 };
+    fn htmlRelativeFontSize(self: *Renderer, tag: syntax.Tag, parent: ?f32) Error!?RelativeFontSize {
+        // Select the winning UA default/author declaration before resolving
+        // against the parent. A losing default or declaration may overflow
+        // even when the winning value is zero or inherits the parent.
+        var selected_factor: ?f32 = if (tag.is("big")) 1.2 else if (tag.is("small")) 1.0 / 1.2 else null;
+        var selected_inherit = false;
+        const css = (try self.semanticAttribute(tag, "style")) orelse "";
+        var position: usize = 0;
+        var important_seen = false;
+        // Reuse the existing quoted/comment-aware CSS declaration scanner.
+        // Declarations on one element resolve against the parent, not each other.
+        while (try self.nextColorDeclaration(css, &position)) |raw| {
+            const colon = std.mem.indexOfScalar(u8, raw, ':') orelse continue;
+            if (!std.ascii.eqlIgnoreCase(trim(raw[0..colon]), "font-size")) continue;
+            var value = trim(raw[colon + 1 ..]);
+            var important = false;
+            if (std.mem.lastIndexOfScalar(u8, value, '!')) |bang| {
+                if (!std.ascii.eqlIgnoreCase(trim(value[bang + 1 ..]), "important")) continue;
+                important = true;
+                value = trim(value[0..bang]);
+            }
+            if (important_seen and !important) continue;
+            const inherited = std.ascii.eqlIgnoreCase(value, "inherit") or std.ascii.eqlIgnoreCase(value, "unset");
+            const factor: ?f32 = if (inherited) null else relative_font.parseRelative(value) orelse continue;
+            selected_factor = factor;
+            selected_inherit = inherited;
+            important_seen = important;
+        }
+        if (selected_inherit) return .{ .value = parent };
+        return if (selected_factor) |factor| .{ .value = try relative_font.resolve(parent, factor) } else null;
+    }
+
     fn htmlInlineStyle(self: *Renderer, tag: syntax.Tag, style: Style) Error!Style {
         var s = style;
         if (!tag.is("table")) s.background = (try self.authoredColor(tag, "background-color", null, style.background)).value;
@@ -6551,7 +6609,7 @@ pub const Renderer = struct {
         if (oneOf(tag.name, &.{ "s", "del", "strike" })) s.strike = true;
         if (tag.is("sup")) s.superscript = true;
         if (tag.is("sub")) s.subscript = true;
-        if (tag.is("small")) s.small = true;
+        // Authored big/small are numeric sizes; legacy Style.small remains independent.
         if (oneOf(tag.name, &.{ "code", "tt", "kbd", "samp" })) s.code = true;
         if (try self.htmlFontWeight(tag)) |bold| s.bold = bold;
         if (try self.htmlFontStyle(tag)) |italic| s.italic = italic;
@@ -7062,6 +7120,17 @@ pub const Renderer = struct {
                 scan = end;
                 continue;
             }
+            if (at >= template_end) if (pairedUnknownHtmlAnglesEnd(input, at)) |end| {
+                if (angles) |positions| try positions.appendSlice(self.a, &.{ at, at + 1, end - 2, end - 1 });
+                try out.appendSlice(self.a, tracked, emitted, at);
+                try out.append(self.a, missingEdit(tracked, at, at + 2, "&lt;&lt;"));
+                try out.appendSlice(self.a, tracked, at + 2, end - 2);
+                try out.append(self.a, missingEdit(tracked, end - 2, end, "&gt;&gt;"));
+                self.fallbacks.literal_markup = true;
+                emitted = end;
+                scan = end;
+                continue;
+            };
             var literal_end: ?usize = null;
             if (opaque_scan.tagAt(input, at, null)) |tag| {
                 if (tag.is("includeonly") and !tag.closing and !tag.self_closing) {
@@ -7116,6 +7185,23 @@ pub const Renderer = struct {
         if (emitted == 0) return tracked;
         try out.appendSlice(self.a, tracked, emitted, input.len);
         return try out.finish(self.a);
+    }
+    // A matched doubled quotation has two literal angle pairs. Prove its
+    // inner unknown atomic name separately; do not relax the single-token guard.
+    fn pairedUnknownHtmlAnglesEnd(input: []const u8, at: usize) ?usize {
+        if (at + 2 >= input.len or !starts(input[at..], "<<") or
+            !std.ascii.isAlphabetic(input[at + 2])) return null;
+        var preceding = at;
+        while (preceding != 0) {
+            preceding -= 1;
+            if (input[preceding] == '<') return null;
+            if (input[preceding] == '>') break;
+        }
+        const inner_end = completeUnknownHtmlTokenEnd(input[at + 1 ..], 0) orelse return null;
+        const outer_close = at + 1 + inner_end;
+        if (outer_close >= input.len or input[outer_close] != '>' or
+            (outer_close + 1 < input.len and input[outer_close + 1] == '>')) return null;
+        return outer_close + 1;
     }
     // Recover a complete unknown atomic name; the caller owns protected/template domains.
     // MediaWiki REL1_43 Sanitizer::ELEMENT_BITS_REGEX supplies the atomic boundary;
@@ -7173,6 +7259,31 @@ pub const Renderer = struct {
         }
         return cursor + 1;
     }
+    // A valid child link can begin a literal angle-delimited dictionary form.
+    // Prove its raw source boundary; never infer that boundary from rendered text.
+    fn preserveLinkedAngleOpening(self: *Renderer, input: []const u8, start: usize, end: usize, style: Style) void {
+        if (style.provenance != .parsed or style.kind != .text or style.target.len != 0 or
+            style.self_link_target != null or style.missing_nonaction or start == 0 or
+            end < start or end > input.len or end - start < 4 or input[start - 1] != '<' or
+            !std.mem.eql(u8, input[start .. start + 2], "[[") or
+            !std.mem.eql(u8, input[end - 2 .. end], "]]")) return;
+        var before = start - 1;
+        while (before != 0) {
+            before -= 1;
+            if (input[before] == '<') return;
+            if (input[before] == '>') break;
+        }
+        const length = std.mem.indexOfScalar(u8, input[end..], '>') orelse return;
+        const tail = input[end .. end + length];
+        if (std.mem.indexOfAny(u8, tail, "<[]{}\"'\r\n") != null or !std.unicode.utf8ValidateSlice(tail)) return;
+        for (tail) |byte| if (byte < 0x20 or byte == 0x7f) return;
+        if (self.spans.items.len == 0) return;
+        const opening = &self.spans.items[self.spans.items.len - 1];
+        if (opening.provenance == .parsed and opening.kind == .text and opening.target.len == 0 and
+            opening.text.len == 1 and opening.text.ptr == input[start - 1 ..].ptr)
+            opening.provenance = .protected_literal;
+    }
+
     // A complete unregistered alphabetic abbreviation ending in one dot is
     // authored text, not an HTML tag. Use only in ordinary parsed nonaction
     // text after tagAt declined; do not rewrite target or attribute domains.
@@ -7403,8 +7514,7 @@ pub const Renderer = struct {
                 self.markUnclosed(input, tag, "small");
                 break :blk syntax.Pair{ .inner_end = input.len, .end = input.len };
             };
-            var s = style;
-            s.small = true;
+            const s = try self.htmlInlineStyle(tag, style);
             try self.inlineTextWithMissing(try missingSlice(self.a, tracked, input[tag.end..pair.inner_end]), s, depth + 1);
             return pair.end;
         }
@@ -7578,7 +7688,7 @@ pub const Renderer = struct {
             const parent_attributes = self.body_formatting_attributes;
             const parent_language_direction = self.body_language_direction;
             const parent_flags = self.block_formatting;
-            self.restoreFormattingAttributes(.{ .classes = s.classes, .role = s.role, .relation_note = parent_attributes.relation_note, .language = s.language, .direction = s.direction, .explanation = s.explanation, .explanation_set = s.explanation_set, .foreground = s.foreground, .foreground_set = s.foreground_set });
+            self.restoreFormattingAttributes(.{ .classes = s.classes, .role = s.role, .relation_note = parent_attributes.relation_note, .language = s.language, .direction = s.direction, .explanation = s.explanation, .explanation_set = s.explanation_set, .foreground = s.foreground, .foreground_set = s.foreground_set, .font_scale = s.font_scale, .font_scale_basis = s.font_scale_basis, .font_scale_set = s.font_scale_set });
             const flags: SpanFlags = .{ .bold = s.bold, .italic = s.italic, .code = s.code, .small = s.small, .superscript = s.superscript, .subscript = s.subscript, .strike = s.strike, .underline = s.underline };
             self.block_formatting = @bitCast(@as(u8, @bitCast(parent_flags)) | @as(u8, @bitCast(flags)));
             defer {
@@ -7851,6 +7961,52 @@ pub const Renderer = struct {
         return false;
     }
 
+    // A line-final close after ordinary text is not a physical table control.
+    // Require an exact borrowed plain token; decoded or synthesized text cannot
+    // establish this origin, and structural prefix domains retain their guards.
+    fn ordinaryInlineTableTail(input: []const u8, plain_text: []const u8, at: usize) bool {
+        const base = @intFromPtr(input.ptr);
+        const ptr = @intFromPtr(plain_text.ptr);
+        if (ptr < base or ptr - base > input.len or plain_text.len > input.len - (ptr - base) or
+            at + 2 > plain_text.len or !starts(plain_text[at..], "|}")) return false;
+        const marker = ptr - base + at;
+        const after = marker + 2;
+        if (after < input.len and input[after] != '\n' and input[after] != '\r') return false;
+        var line_start = marker;
+        while (line_start != 0 and input[line_start - 1] != '\n' and input[line_start - 1] != '\r') line_start -= 1;
+        const prefix = input[line_start..marker];
+        return trim(prefix).len != 0 and std.mem.indexOfAny(u8, prefix, "<>{}[]") == null;
+    }
+    fn ordinaryInlineTableTailInDomain(self: *const Renderer, input: []const u8, plain_text: []const u8, at: usize) bool {
+        if (!ordinaryInlineTableTail(input, plain_text, at)) return false;
+        // A recursively parsed label/formatting slice does not establish a
+        // physical line end. Every containing authored domain must agree.
+        var domain = self.inline_source_domain;
+        var remaining: usize = max_depth + 1;
+        while (domain) |current| {
+            if (remaining == 0 or !ordinaryInlineTableTail(current.source, plain_text, at)) return false;
+            remaining -= 1;
+            domain = current.parent;
+        }
+        return true;
+    }
+    fn literalPlainTableTails(self: *Renderer, input: []const u8, plain_text: []const u8, style: Style, tail: []const u8) Error!?usize {
+        if (style.provenance != .parsed or style.code or style.preserve_whitespace or
+            style.kind != .text or style.target.len != 0 or style.self_link_target != null) return null;
+        var emitted: usize = 0;
+        var search: usize = 0;
+        var found = false;
+        while (std.mem.indexOfPos(u8, plain_text, search, "|}")) |at| {
+            search = at + 2;
+            if (!self.ordinaryInlineTableTailInDomain(input, plain_text, at)) continue;
+            _ = try self.plainWithMagicLinks(plain_text[emitted..at], style, "");
+            try self.protectedLiteral(plain_text[at .. at + 2], style);
+            emitted = at + 2;
+            found = true;
+        }
+        if (!found) return null;
+        return try self.plainWithMagicLinks(plain_text[emitted..], style, tail);
+    }
     pub fn inlineText(self: *Renderer, source: []const u8, inherited: Style, depth: usize) Error!void {
         return self.inlineTextWithMissing(MissingText.untracked(source), inherited, depth);
     }
@@ -8129,6 +8285,8 @@ pub const Renderer = struct {
                     diagnostic.self_link_target = null;
                     try self.generatedDiagnostic("[malformed link] ", diagnostic);
                     self.fallbacks.literal_markup = true;
+                } else if (try self.literalPlainTableTails(input, token.text, s, input[it.cursor..])) |consumed| {
+                    it.cursor += consumed;
                 } else if (try self.malformedPlain(prepared_missing, token.text, s, input[it.cursor..], depth)) |consumed| {
                     it.cursor += consumed;
                 } else {
@@ -8429,6 +8587,7 @@ pub const Renderer = struct {
                                     return;
                                 }
                             }
+                            self.preserveLinkedAngleOpening(input, token_start, it.cursor - token.trail.len, s);
                             const destination = try self.interwikiDestination(target, 0);
                             const action_style = try self.wikiLinkStyle(s, destination);
                             if (!token.link_has_pipe or generated_label) {
@@ -8514,7 +8673,36 @@ pub const Renderer = struct {
             }
         }
     }
+    // A complete computed name with an unresolved bare parameter is not a
+    // valid title. MediaWiki reconstructs its braces, not a Template: action.
+    // Keep this proof finite: no defaults, arguments, functions or child markup.
+    fn literalUnboundTemplateName(body: []const u8) bool {
+        var at: usize = 0;
+        var parameters: usize = 0;
+        while (at < body.len) {
+            if (starts(body[at..], "{{{")) {
+                if (at == 0) return false;
+                const end = std.mem.indexOfPos(u8, body, at + 3, "}}}") orelse return false;
+                const name = body[at + 3 .. end];
+                if (name.len == 0) return false;
+                for (name) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '_' and ch != '-') return false;
+                parameters += 1;
+                at = end + 3;
+            } else {
+                const ch = body[at];
+                if (!std.ascii.isAlphanumeric(ch) and ch != '_' and ch != '-' and ch != ' ') return false;
+                at += 1;
+            }
+        }
+        return parameters != 0;
+    }
     fn resolveTemplate(self: *Renderer, body: []const u8, style: Style, depth: usize) Error!void {
+        if (literalUnboundTemplateName(body)) {
+            var literal_style = style;
+            literal_style.provenance = .protected_literal;
+            try self.text(try std.fmt.allocPrint(self.a, "{{{{{s}}}}}", .{body}), literal_style);
+            return;
+        }
         const t = syntax.Template.parse(self.a, body) catch |err| switch (err) {
             error.RenderLimit => {
                 self.unresolved_templates += 1;
@@ -8728,7 +8916,7 @@ pub const Renderer = struct {
         if (oneOf(tag.name, &.{ "s", "del", "strike" })) return .{ .strike = true };
         if (tag.is("sup")) return .{ .superscript = true };
         if (tag.is("sub")) return .{ .subscript = true };
-        if (tag.is("small")) return .{ .small = true };
+        if (tag.is("small") or tag.is("big")) return .{};
         if (oneOf(tag.name, &.{ "code", "tt", "kbd", "samp" })) return .{ .code = true };
         return null;
     }
@@ -8749,6 +8937,11 @@ pub const Renderer = struct {
         if (self.body_language_direction) |style| {
             value.language = style.language;
             value.direction = style.direction;
+            if (style.font_scale_set or style.font_scale != null) {
+                value.font_scale = style.font_scale;
+                value.font_scale_basis = style.font_scale_basis;
+                value.font_scale_set = style.font_scale_set;
+            }
             if (style.foreground_set or style.foreground != null) {
                 value.foreground = style.foreground;
                 value.foreground_set = style.foreground_set;
@@ -8762,11 +8955,11 @@ pub const Renderer = struct {
     }
     fn restoreFormattingAttributes(self: *Renderer, value: FormattingAttributes) void {
         self.body_formatting_attributes = value;
-        self.body_language_direction = .{ .language = value.language, .direction = value.direction, .explanation = value.explanation, .explanation_set = value.explanation_set, .foreground = value.foreground, .foreground_set = value.foreground_set };
+        self.body_language_direction = .{ .language = value.language, .direction = value.direction, .explanation = value.explanation, .explanation_set = value.explanation_set, .foreground = value.foreground, .foreground_set = value.foreground_set, .font_scale = value.font_scale, .font_scale_basis = value.font_scale_basis, .font_scale_set = value.font_scale_set };
     }
     fn formattingSeparator(self: *Renderer) Span {
         const value = self.formattingAttributes();
-        return .{ .text = " ", .flags = self.block_formatting, .classes = value.classes, .role = value.role, .language = value.language, .direction = value.direction, .explanation = value.explanation, .explanation_set = value.explanation_set, .foreground = value.foreground, .foreground_set = value.foreground_set };
+        return .{ .text = " ", .flags = self.block_formatting, .classes = value.classes, .role = value.role, .language = value.language, .direction = value.direction, .explanation = value.explanation, .explanation_set = value.explanation_set, .foreground = value.foreground, .foreground_set = value.foreground_set, .font_scale = value.font_scale, .font_scale_basis = value.font_scale_basis, .font_scale_set = value.font_scale_set };
     }
     fn formattingVisibleEndsSpace(spans: []const Span) bool {
         var at = spans.len;
@@ -8918,7 +9111,7 @@ pub const Renderer = struct {
                     if (!tag.is("div")) return error.InvalidPreContext;
                 } else if (scope.kind == .hidden) {
                     if (!tag.is(scope.tag_name)) return error.InvalidPreContext;
-                } else if (blockFormattingFlags(tag) == null) return error.InvalidPreContext;
+                } else if (!tag.is("span") and !tag.is("noinclude") and blockFormattingFlags(tag) == null) return error.InvalidPreContext;
             }
             previous_end = scope.resume_at;
         }
@@ -8941,7 +9134,7 @@ pub const Renderer = struct {
                     if (!tag.is("div") or trim(tag.attrs).len != 0) return error.InvalidPreContext;
                 } else if (scope.kind == .hidden) {
                     if (scope.tag_name.len == 0 or !tag.is(scope.tag_name) or !knownInlineHtmlName(tag.name) or tag.is("noinclude") or tag.is("onlyinclude") or !try self.htmlDisplayNone(tag)) return error.InvalidPreContext;
-                } else if (blockFormattingFlags(tag) == null) return error.InvalidPreContext;
+                } else if (!tag.is("span") and !tag.is("noinclude") and blockFormattingFlags(tag) == null) return error.InvalidPreContext;
             }
             previous_end = scope.body_start;
             while (checked_initial < context.initial.len and context.initial[checked_initial].resume_at <= scope.opening_start) {
@@ -9809,7 +10002,7 @@ pub const Renderer = struct {
                                 defer self.semantic_capture = previous_capture;
                                 break :blk try self.htmlInlineStyle(tag, self.bodyFormattingStyle(self.body_language_direction orelse .{}));
                             };
-                            self.restoreFormattingAttributes(.{ .classes = scoped_style.classes, .role = scoped_style.role, .relation_note = scoped_hints.relation_note, .language = scoped_style.language, .direction = scoped_style.direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set, .foreground = scoped_style.foreground, .foreground_set = scoped_style.foreground_set });
+                            self.restoreFormattingAttributes(.{ .classes = scoped_style.classes, .role = scoped_style.role, .relation_note = scoped_hints.relation_note, .language = scoped_style.language, .direction = scoped_style.direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set, .foreground = scoped_style.foreground, .foreground_set = scoped_style.foreground_set, .font_scale = scoped_style.font_scale, .font_scale_basis = scoped_style.font_scale_basis, .font_scale_set = scoped_style.font_scale_set });
                             defer {
                                 self.body_formatting_attributes = parent_attribute_storage;
                                 self.body_language_direction = parent_language_direction;
@@ -9850,7 +10043,7 @@ pub const Renderer = struct {
                                     var leading: std.ArrayList(Span) = .empty;
                                     const previous = &blocks.items[index];
                                     if (join_separator and !formattingVisibleEndsSpace(previous.spans))
-                                        try leading.append(self.a, .{ .text = " ", .flags = parent_formatting, .classes = parent_attributes.classes, .role = parent_attributes.role, .language = parent_attributes.language, .direction = parent_attributes.direction, .explanation = parent_attributes.explanation, .explanation_set = parent_attributes.explanation_set, .foreground = parent_attributes.foreground, .foreground_set = parent_attributes.foreground_set });
+                                        try leading.append(self.a, .{ .text = " ", .flags = parent_formatting, .classes = parent_attributes.classes, .role = parent_attributes.role, .language = parent_attributes.language, .direction = parent_attributes.direction, .explanation = parent_attributes.explanation, .explanation_set = parent_attributes.explanation_set, .foreground = parent_attributes.foreground, .foreground_set = parent_attributes.foreground_set, .font_scale = parent_attributes.font_scale, .font_scale_basis = parent_attributes.font_scale_basis, .font_scale_set = parent_attributes.font_scale_set });
                                     try leading.appendSlice(self.a, scoped_blocks[0].spans);
                                     try self.appendParagraphSpans(&blocks, index, leading.items, false);
                                     blocks.items[index].relation_note = previous.relation_note or scoped_blocks[0].relation_note;
@@ -9866,7 +10059,7 @@ pub const Renderer = struct {
                                 var leading: std.ArrayList(Span) = .empty;
                                 const previous = &blocks.items[blocks.items.len - 1];
                                 if (join_separator and !formattingVisibleEndsSpace(previous.spans))
-                                    try leading.append(self.a, .{ .text = " ", .flags = parent_formatting, .classes = parent_attributes.classes, .role = parent_attributes.role, .language = parent_attributes.language, .direction = parent_attributes.direction, .explanation = parent_attributes.explanation, .explanation_set = parent_attributes.explanation_set, .foreground = parent_attributes.foreground, .foreground_set = parent_attributes.foreground_set });
+                                    try leading.append(self.a, .{ .text = " ", .flags = parent_formatting, .classes = parent_attributes.classes, .role = parent_attributes.role, .language = parent_attributes.language, .direction = parent_attributes.direction, .explanation = parent_attributes.explanation, .explanation_set = parent_attributes.explanation_set, .foreground = parent_attributes.foreground, .foreground_set = parent_attributes.foreground_set, .font_scale = parent_attributes.font_scale, .font_scale_basis = parent_attributes.font_scale_basis, .font_scale_set = parent_attributes.font_scale_set });
                                 try leading.appendSlice(self.a, scoped_blocks[0].spans);
                                 try self.appendParagraphSpans(&blocks, blocks.items.len - 1, leading.items, false);
                                 blocks.items[blocks.items.len - 1].relation_note = previous.relation_note or scoped_blocks[0].relation_note;
@@ -10183,8 +10376,8 @@ pub const Renderer = struct {
                     // text; their close does not invent a new wiki line start.
                     const parent_attributes = self.body_formatting_attributes;
                     const parent_language_direction = self.body_language_direction;
-                    const scoped_style = try self.htmlInlineStyle(tag, self.bodyFormattingStyle(.{}));
-                    self.restoreFormattingAttributes(.{ .classes = scoped_style.classes, .role = scoped_style.role, .relation_note = parent_attributes.relation_note, .language = scoped_style.language, .direction = scoped_style.direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set, .foreground = scoped_style.foreground, .foreground_set = scoped_style.foreground_set });
+                    const scoped_style = try self.htmlHeadingStyle(tag, self.bodyFormattingStyle(.{}));
+                    self.restoreFormattingAttributes(.{ .classes = scoped_style.classes, .role = scoped_style.role, .relation_note = parent_attributes.relation_note, .language = scoped_style.language, .direction = scoped_style.direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set, .foreground = scoped_style.foreground, .foreground_set = scoped_style.foreground_set, .font_scale = scoped_style.font_scale, .font_scale_basis = scoped_style.font_scale_basis, .font_scale_set = scoped_style.font_scale_set });
                     defer {
                         self.body_formatting_attributes = parent_attributes;
                         self.body_language_direction = parent_language_direction;
@@ -10225,7 +10418,7 @@ pub const Renderer = struct {
                     defer self.block_formatting = parent_formatting;
                     const parent_language_direction = self.body_language_direction;
                     const scoped_style = try self.htmlLanguageDirection(tag, parent_language_direction orelse .{});
-                    self.body_language_direction = .{ .language = scoped_style.language, .direction = scoped_style.direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set, .foreground = scoped_style.foreground, .foreground_set = scoped_style.foreground_set };
+                    self.body_language_direction = .{ .language = scoped_style.language, .direction = scoped_style.direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set, .foreground = scoped_style.foreground, .foreground_set = scoped_style.foreground_set, .font_scale = scoped_style.font_scale, .font_scale_basis = scoped_style.font_scale_basis, .font_scale_set = scoped_style.font_scale_set };
                     defer self.body_language_direction = parent_language_direction;
                     // Ordinary quoted lines do not open implicit preformatted blocks.
                     // Explicit pre/nowiki and actual list/heading rules stay independent.
@@ -10495,7 +10688,7 @@ pub const Renderer = struct {
     }
     fn renderBodyWithLanguageDirection(self: *Renderer, input: []const u8, style: Style) Error![]const Block {
         const previous = self.body_language_direction;
-        self.body_language_direction = .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set };
+        self.body_language_direction = .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set, .font_scale = style.font_scale, .font_scale_basis = style.font_scale_basis, .font_scale_set = style.font_scale_set };
         defer self.body_language_direction = previous;
         const tracked = if (self.body_missing) |parent| try self.missingSliceWithHeadingSource(parent, input) else MissingText.untracked(input);
         return self.renderBodyWithOrphanOrigin(tracked, true);
@@ -10506,18 +10699,33 @@ pub const Renderer = struct {
         self.body_link_target = "";
         defer self.body_link_target = previous_target;
         const previous = self.body_language_direction;
-        self.body_language_direction = .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set };
+        self.body_language_direction = .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set, .font_scale = style.font_scale, .font_scale_basis = style.font_scale_basis, .font_scale_set = style.font_scale_set };
         defer self.body_language_direction = previous;
-        return self.parseBodySpans(input, .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set });
+        return self.parseBodySpans(input, .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set, .font_scale = style.font_scale, .font_scale_basis = style.font_scale_basis, .font_scale_set = style.font_scale_set });
     }
     fn cellSpansWithLanguageDirection(self: *Renderer, input: []const u8, style: Style, blocks: *?[]const Block) Error![]const Span {
         const previous = self.body_language_direction;
-        self.body_language_direction = .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set };
+        self.body_language_direction = .{ .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set, .font_scale = style.font_scale, .font_scale_basis = style.font_scale_basis, .font_scale_set = style.font_scale_set };
         defer self.body_language_direction = previous;
         return self.cellContentSpans(input, blocks);
     }
+    fn htmlHeadingStyle(self: *Renderer, tag: syntax.Tag, inherited: Style) Error!Style {
+        var parent = inherited;
+        parent.font_scale_basis = .context;
+        var result = try self.htmlInlineStyle(tag, parent);
+        if (try self.htmlRelativeFontSize(tag, inherited.font_scale)) |resolved| {
+            result.font_scale = resolved.value orelse 1;
+            result.font_scale_basis = .normal_body;
+            result.font_scale_set = true;
+        }
+        return result;
+    }
     fn htmlLanguageDirection(self: *Renderer, tag: syntax.Tag, inherited: Style) Error!Style {
         var result = inherited;
+        if (try self.htmlRelativeFontSize(tag, inherited.font_scale)) |resolved| {
+            result.font_scale = if (inherited.font_scale_basis == .normal_body) resolved.value orelse 1 else resolved.value;
+            result.font_scale_set = true;
+        }
         const foreground = try self.authoredColor(tag, "color", if (tag.is("font")) "color" else null, inherited.foreground);
         result.foreground = foreground.value;
         if (foreground.specified) result.foreground_set = true;
@@ -10559,7 +10767,7 @@ pub const Renderer = struct {
             if (self.poem_depth != 0) self.poem_base_style.italic = italic;
         }
         const previous_language_direction = self.body_language_direction;
-        self.body_language_direction = .{ .language = list_style.language, .direction = list_style.direction, .explanation = list_style.explanation, .explanation_set = list_style.explanation_set, .foreground = list_style.foreground, .foreground_set = list_style.foreground_set };
+        self.body_language_direction = .{ .language = list_style.language, .direction = list_style.direction, .explanation = list_style.explanation, .explanation_set = list_style.explanation_set, .foreground = list_style.foreground, .foreground_set = list_style.foreground_set, .font_scale = list_style.font_scale, .font_scale_basis = list_style.font_scale_basis, .font_scale_set = list_style.font_scale_set };
         defer self.body_language_direction = previous_language_direction;
         const reversed = list_tag.is("ol") and htmlAttributePresent(list_tag, "reversed");
         const default_start: i32 = if (reversed) htmlListItemCount(input) else 1;
@@ -10869,7 +11077,7 @@ pub const Renderer = struct {
         const previous_poem_italic = self.poem_base_style.italic;
         defer self.poem_base_style.italic = previous_poem_italic;
         const previous_flow = self.html_list_item_flow;
-        self.restoreFormattingAttributes(.{ .classes = item_style.classes, .role = item_style.role, .relation_note = hints.relation_note, .language = item_style.language, .direction = item_style.direction, .explanation = item_style.explanation, .explanation_set = item_style.explanation_set, .foreground = item_style.foreground, .foreground_set = item_style.foreground_set });
+        self.restoreFormattingAttributes(.{ .classes = item_style.classes, .role = item_style.role, .relation_note = hints.relation_note, .language = item_style.language, .direction = item_style.direction, .explanation = item_style.explanation, .explanation_set = item_style.explanation_set, .foreground = item_style.foreground, .foreground_set = item_style.foreground_set, .font_scale = item_style.font_scale, .font_scale_basis = item_style.font_scale_basis, .font_scale_set = item_style.font_scale_set });
         const flags: SpanFlags = .{ .bold = item_style.bold, .italic = item_style.italic, .code = item_style.code, .small = item_style.small, .superscript = item_style.superscript, .subscript = item_style.subscript, .strike = item_style.strike, .underline = item_style.underline };
         self.block_formatting = @bitCast(@as(u8, @bitCast(previous_formatting)) | @as(u8, @bitCast(flags)));
         self.html_list_item_flow = true;
@@ -11354,7 +11562,7 @@ pub const Renderer = struct {
                             if (htmlNestedChild(input[cell_tag.end..cell_pair.inner_end])) |child| {
                                 var child_fostered: std.ArrayList(Block) = .empty;
                                 defer child_fostered.deinit(self.a);
-                                nested_table = (try self.htmlTable(child.body, &child_fostered, false, cell_style, try self.tableCellBackground(cell_tag, background_fallback), .{ .tag = child.tag, .depth = grid.depth + 1 })) orelse unreachable;
+                                nested_table = (try self.htmlTable(child.body, &child_fostered, false, try self.htmlLanguageDirection(child.tag, cell_style), try self.tableCellBackground(cell_tag, background_fallback), .{ .tag = child.tag, .depth = grid.depth + 1 })) orelse unreachable;
                                 std.debug.assert(child_fostered.items.len == 0);
                                 break :scoped &.{};
                             }
@@ -11805,6 +12013,10 @@ pub const Renderer = struct {
     // contract. Apply before rendering so nested normal overrides remain exact.
     fn wikiTableForeground(self: *Renderer, tag: syntax.Tag, inherited: Style) Error!Style {
         var effective = inherited;
+        if (try self.htmlRelativeFontSize(tag, inherited.font_scale)) |resolved| {
+            effective.font_scale = if (inherited.font_scale_basis == .normal_body) resolved.value orelse 1 else resolved.value;
+            effective.font_scale_set = true;
+        }
         const foreground = try self.authoredColor(tag, "color", null, inherited.foreground);
         effective.foreground = foreground.value;
         if (foreground.specified) effective.foreground_set = true;
@@ -14531,7 +14743,7 @@ test "unclosed formatting and rowless nested tables compile their contents" {
     var r: Renderer = .{ .a = a, .context = .{} };
     const spans = try r.parseSpans("<small>[[word]]<small> tail", .{});
     try std.testing.expectEqualStrings("word tail", try flattened(a, spans));
-    try std.testing.expect(spans[0].flags.small);
+    { try std.testing.expect(!spans[0].flags.small); try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), spans[0].font_scale orelse return error.TestUnexpectedResult, 0.000001); }
     const blocks = try r.renderBody("{|\n{|\n* [[one]]\n|}\n{|\n* [[two]]\n|}\n|}\n|}\nAfter");
     // Three table opens consume three closes; the fourth physical close is
     // malformed source and now has an explicit nonaction diagnostic.
@@ -14660,7 +14872,7 @@ test "balanced formatting wrapper preserves implicit block newline and list styl
         try std.testing.expectEqual(Kind.list_item, block_value.kind);
         try std.testing.expectEqualStrings("*", block_value.list_path);
         try std.testing.expectEqual(@as(u8, 1), block_value.depth);
-        for (block_value.spans) |span| try std.testing.expect(span.flags.small);
+        for (block_value.spans) |span| { try std.testing.expect(!span.flags.small); try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001); }
     }
     try std.testing.expectEqualStrings("هذه الصفحة معتمدة على كتاب", try flattened(a, blocks[0].spans));
     var linked = false;
@@ -14753,7 +14965,7 @@ test "nested block formatting restores parent flags and keeps unclosed reports" 
         try std.testing.expectEqualStrings(if (index == 0) "1" else "2", block_value.number);
         try std.testing.expectEqual(@as(u8, 1), block_value.depth);
         for (block_value.spans) |span| {
-            try std.testing.expect(span.flags.small);
+            { try std.testing.expect(!span.flags.small); try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001); }
             try std.testing.expect(span.flags.bold);
         }
     }
@@ -14763,7 +14975,7 @@ test "nested block formatting restores parent flags and keeps unclosed reports" 
     for (blocks[2].spans) |span| {
         try std.testing.expect(!span.flags.bold);
         for (span.text) |_| {
-            if (visible_offset < "End".len) try std.testing.expect(span.flags.small);
+            if (visible_offset < "End".len) { try std.testing.expect(!span.flags.small); try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001); }
             if (visible_offset >= "End ".len) try std.testing.expect(!span.flags.small);
             visible_offset += 1;
         }
@@ -15950,7 +16162,11 @@ test "HTML table cell lists retain nested counters surrounding text and inline s
     const styled = try r.renderBody("{|\n| <small lang='an'><ol><li>[[word]]</li></ol></small>\n|}\n");
     var inherited_style = false;
     for (styled[0].table.?.rows[0].cells[0].spans) |span| {
-        if (span.kind == .link) inherited_style = span.flags.small and std.mem.eql(u8, span.language, "an");
+        if (span.kind == .link) {
+            try std.testing.expect(!span.flags.small);
+            try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001);
+            inherited_style = std.mem.eql(u8, span.language, "an");
+        }
     }
     try std.testing.expect(inherited_style);
 }
@@ -22239,11 +22455,12 @@ test "official link labels preserve literal list prefixes and spaces with active
         bold: bool = false,
         italic: bool = false,
         small: bool = false,
+        font_scale: ?f32 = null,
         space_before: bool = true,
         level: u8 = 0,
     };
     const Check = struct {
-        const Character = struct { target: []const u8, bold: bool, italic: bool, small: bool, code: bool, level: u8 };
+        const Character = struct { target: []const u8, bold: bool, italic: bool, small: bool, font_scale: ?f32, code: bool, level: u8 };
         const Trace = struct {
             text: std.ArrayList(u8) = .empty,
             characters: std.ArrayList(Character) = .empty,
@@ -22278,6 +22495,7 @@ test "official link labels preserve literal list prefixes and spaces with active
                         .bold = if (native) span.flags.bold else span.bold,
                         .italic = if (native) span.flags.italic else span.italic,
                         .small = if (native) span.flags.small else span.small,
+                        .font_scale = span.font_scale,
                         .code = if (native) span.flags.code else span.code,
                         .level = level,
                     };
@@ -22306,6 +22524,7 @@ test "official link labels preserve literal list prefixes and spaces with active
                     try std.testing.expectEqual(word.bold, character.bold);
                     try std.testing.expectEqual(word.italic, character.italic);
                     try std.testing.expectEqual(word.small, character.small);
+                    if (word.font_scale) |scale| try std.testing.expectApproxEqAbs(scale, character.font_scale orelse return error.TestUnexpectedResult, 0.000001) else try std.testing.expect(character.font_scale == null);
                     try std.testing.expect(!character.code);
                     try std.testing.expectEqual(word.level, character.level);
                 }
@@ -22330,8 +22549,8 @@ test "official link labels preserve literal list prefixes and spaces with active
             .source = "[[Target|''lead\n<small>\n==French==\nbody\n</small>\nend'']] plain",
             .expected = &.{
                 .{ .text = "lead", .target = "Target", .italic = true },
-                .{ .text = "French", .target = "Target", .italic = true, .small = true, .level = 2 },
-                .{ .text = "body", .target = "Target", .italic = true, .small = true },
+                .{ .text = "French", .target = "Target", .italic = true, .font_scale = 1.0 / 1.2, .level = 2 },
+                .{ .text = "body", .target = "Target", .italic = true, .font_scale = 1.0 / 1.2 },
                 .{ .text = "end", .target = "Target", .italic = true },
                 .{ .text = "plain" },
             },
@@ -24610,6 +24829,9 @@ const FormattingScopeTest = struct {
                     try std.testing.expectEqualStrings(expected.direction, span.direction);
                     try std.testing.expectEqualStrings(@tagName(expected.role), @tagName(span.role));
                     try std.testing.expectEqual(expected.small, if (@hasField(@TypeOf(span), "flags")) span.flags.small else span.small);
+                    if (expected.font_scale_set) {
+                        if (expected.font_scale) |scale| try std.testing.expectApproxEqAbs(scale, span.font_scale orelse return error.TestUnexpectedResult, 0.000001) else try std.testing.expect(span.font_scale == null);
+                    }
                     try std.testing.expectEqual(expected.bold, if (@hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold);
                     try std.testing.expectEqual(expected.italic, if (@hasField(@TypeOf(span), "flags")) span.flags.italic else span.italic);
                     try std.testing.expectEqual(expected.code, if (@hasField(@TypeOf(span), "flags")) span.flags.code else span.code);
@@ -24668,12 +24890,12 @@ test "matched multiline formatting keeps scoped attributes and paragraph flow th
         try std.testing.expect(!r.fallbacks.any());
         if (index < 2) {
             for ([_]bool{ false, true }) |decoded| {
-                if (decoded) try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, "item", .{ .small = true, .classes = "note", .kind = .link, .target = "cat" }) else try FormattingScopeTest.word(a, blocks, "item", .{ .small = true, .classes = "note", .kind = .link, .target = "cat" });
+                if (decoded) try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, "item", .{ .font_scale = 1.0 / 1.2, .font_scale_set = true, .classes = "note", .kind = .link, .target = "cat" }) else try FormattingScopeTest.word(a, blocks, "item", .{ .font_scale = 1.0 / 1.2, .font_scale_set = true, .classes = "note", .kind = .link, .target = "cat" });
             }
         }
         if (index == 2 or index == 3 or index == 4) {
-            try FormattingScopeTest.word(a, blocks, "trailer", .{ .small = true });
-            try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, "trailer", .{ .small = true });
+            try FormattingScopeTest.word(a, blocks, "trailer", .{ .font_scale = 1.0 / 1.2, .font_scale_set = true });
+            try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, "trailer", .{ .font_scale = 1.0 / 1.2, .font_scale_set = true });
             const suffix = if (index == 3) "next" else "tail";
             try FormattingScopeTest.word(a, blocks, suffix, .{});
             try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, suffix, .{});
@@ -24686,8 +24908,8 @@ test "matched multiline formatting keeps scoped attributes and paragraph flow th
     const trail_saved = try FormattingScopeTest.encode(a, &trailed, trail_blocks);
     try FormattingScopeTest.shapes(a, trail_blocks, &.{"paragraph"}, &.{"one label s tail"});
     try FormattingScopeTest.shapes(a, trail_saved.entry.sections[0].blocks, &.{"paragraph"}, &.{"one label s tail"});
-    try FormattingScopeTest.word(a, trail_blocks, "s", .{ .kind = .link, .target = "A", .small = true });
-    try FormattingScopeTest.word(a, trail_saved.entry.sections[0].blocks, "s", .{ .kind = .link, .target = "A", .small = true });
+    try FormattingScopeTest.word(a, trail_blocks, "s", .{ .kind = .link, .target = "A", .font_scale = 1.0 / 1.2, .font_scale_set = true });
+    try FormattingScopeTest.word(a, trail_saved.entry.sections[0].blocks, "s", .{ .kind = .link, .target = "A", .font_scale = 1.0 / 1.2, .font_scale_set = true });
     try FormattingScopeTest.word(a, trail_saved.entry.sections[0].blocks, "tail", .{});
     var styled: Renderer = .{ .a = a, .context = .{} };
     const blocks = try styled.renderBody("before\n<small class=\"note IPA nyms\" lang=fr dir=rtl>prefix\n# [[cat|item]]<ref>one</ref> [[File:One.jpg|thumb|photo<ref>two</ref>]]\ntrailer</small> tail\nnext\n\noutside");
@@ -24708,7 +24930,7 @@ test "matched multiline formatting keeps scoped attributes and paragraph flow th
         try FormattingScopeTest.word(a, blocks, word, .{});
         try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, word, .{});
     }
-    const inherited: Style = .{ .small = true, .classes = "note IPA nyms", .language = "fr", .direction = "rtl", .role = .pronunciation };
+    const inherited: Style = .{ .font_scale = 1.0 / 1.2, .font_scale_set = true, .classes = "note IPA nyms", .language = "fr", .direction = "rtl", .role = .pronunciation };
     try FormattingScopeTest.word(a, blocks, "prefix", inherited);
     try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, "prefix", inherited);
     var item_style = inherited;
@@ -24731,16 +24953,16 @@ test "matched multiline formatting keeps scoped attributes and paragraph flow th
     try FormattingScopeTest.shapes(a, nested_blocks, &nested_kinds, &nested_texts);
     try FormattingScopeTest.shapes(a, nested_saved.entry.sections[0].blocks, &nested_kinds, &nested_texts);
     for ([_][]const u8{ "bold", "trailer" }) |word| {
-        try FormattingScopeTest.word(a, nested_blocks, word, .{ .small = true, .bold = true, .classes = "note", .direction = "ltr" });
-        try FormattingScopeTest.word(a, nested_saved.entry.sections[0].blocks, word, .{ .small = true, .bold = true, .classes = "note", .direction = "ltr" });
+        try FormattingScopeTest.word(a, nested_blocks, word, .{ .font_scale = 1.0 / 1.2, .font_scale_set = true, .bold = true, .classes = "note", .direction = "ltr" });
+        try FormattingScopeTest.word(a, nested_saved.entry.sections[0].blocks, word, .{ .font_scale = 1.0 / 1.2, .font_scale_set = true, .bold = true, .classes = "note", .direction = "ltr" });
     }
-    try FormattingScopeTest.word(a, nested_blocks, "after", .{ .small = true, .classes = "note", .language = "fr", .direction = "rtl" });
+    try FormattingScopeTest.word(a, nested_blocks, "after", .{ .font_scale = 1.0 / 1.2, .font_scale_set = true, .classes = "note", .language = "fr", .direction = "rtl" });
     try FormattingScopeTest.word(a, nested_saved.entry.sections[0].blocks, "outside", .{});
     var holder: Renderer = .{ .a = a, .context = .{} };
     const holder_blocks = try holder.renderBody("<small class=note>\n# [[A|[https://example.test label] tail]]\n</small> after");
     const holder_saved = try FormattingScopeTest.encode(a, &holder, holder_blocks);
-    try FormattingScopeTest.word(a, holder_blocks, "https://example.test", .{ .kind = .link, .target = "A", .small = true, .classes = "note" });
-    try FormattingScopeTest.word(a, holder_saved.entry.sections[0].blocks, "https://example.test", .{ .kind = .link, .target = "A", .small = true, .classes = "note" });
+    try FormattingScopeTest.word(a, holder_blocks, "https://example.test", .{ .kind = .link, .target = "A", .font_scale = 1.0 / 1.2, .font_scale_set = true, .classes = "note" });
+    try FormattingScopeTest.word(a, holder_saved.entry.sections[0].blocks, "https://example.test", .{ .kind = .link, .target = "A", .font_scale = 1.0 / 1.2, .font_scale_set = true, .classes = "note" });
     try FormattingScopeTest.word(a, holder_blocks, "after", .{});
     try std.testing.expect(!holder.fallbacks.any());
 }
@@ -24874,7 +25096,7 @@ test "HTML list items preserve authored wiki sublists through DPR2" {
                 try std.testing.expectEqualStrings(expected_text, trim(try FormattingScopeTest.text(alloc, block_value.spans)));
             }
             if (rich) {
-                try FormattingScopeTest.word(alloc, blocks, "parent", .{ .small = true, .language = "fr", .direction = "rtl" });
+                try FormattingScopeTest.word(alloc, blocks, "parent", .{ .font_scale = 1.0 / 1.2, .font_scale_set = true, .language = "fr", .direction = "rtl" });
                 try FormattingScopeTest.word(alloc, blocks, "child", .{ .kind = .link, .target = "cat", .language = "fr", .direction = "rtl" });
                 try FormattingScopeTest.word(alloc, blocks, "after", .{});
             }
@@ -24963,15 +25185,15 @@ test "HTML wiki sublist repair preserves indentation and formatting boundaries t
             }
         }
         fn words(alloc: A, blocks: anytype, small: bool, child_small: bool, literal_star: bool, inline_scope: bool, list_scope: bool) !void {
-            try FormattingScopeTest.word(alloc, blocks, "parent", .{ .small = small, .language = "fr", .direction = "rtl", .classes = "note" });
-            try FormattingScopeTest.word(alloc, blocks, "child", .{ .small = child_small, .kind = .link, .target = "cat", .language = if (inline_scope) "de" else "fr", .direction = if (inline_scope) "ltr" else "rtl", .classes = if (inline_scope) "note inner" else "note" });
+            try FormattingScopeTest.word(alloc, blocks, "parent", .{ .font_scale = if (small) 1.0 / 1.2 else null, .font_scale_set = true, .language = "fr", .direction = "rtl", .classes = "note" });
+            try FormattingScopeTest.word(alloc, blocks, "child", .{ .font_scale = if (child_small) 1.0 / 1.2 else null, .font_scale_set = true, .kind = .link, .target = "cat", .language = if (inline_scope) "de" else "fr", .direction = if (inline_scope) "ltr" else "rtl", .classes = if (inline_scope) "note inner" else "note" });
             if (inline_scope) {
-                try FormattingScopeTest.word(alloc, blocks, "before", .{ .small = true, .language = "de", .direction = "ltr", .classes = "note inner" });
-                try FormattingScopeTest.word(alloc, blocks, "brief", .{ .small = true, .language = "fr", .direction = "rtl", .classes = "note" });
+                try FormattingScopeTest.word(alloc, blocks, "before", .{ .font_scale = 1.0 / 1.2, .font_scale_set = true, .language = "de", .direction = "ltr", .classes = "note inner" });
+                try FormattingScopeTest.word(alloc, blocks, "brief", .{ .font_scale = 1.0 / 1.2, .font_scale_set = true, .language = "fr", .direction = "rtl", .classes = "note" });
             }
             if (list_scope) {
                 try FormattingScopeTest.word(alloc, blocks, "before", .{ .language = "fr", .direction = "rtl", .classes = "note" });
-                try FormattingScopeTest.word(alloc, blocks, "continuation", .{ .small = true, .language = "fr", .direction = "rtl", .classes = "note" });
+                try FormattingScopeTest.word(alloc, blocks, "continuation", .{ .font_scale = 1.0 / 1.2, .font_scale_set = true, .language = "fr", .direction = "rtl", .classes = "note" });
             }
             try FormattingScopeTest.word(alloc, blocks, "tail", .{ .language = "fr", .direction = "rtl", .classes = "note" });
             try FormattingScopeTest.word(alloc, blocks, "after", .{});
@@ -24993,10 +25215,10 @@ test "HTML wiki sublist repair preserves indentation and formatting boundaries t
                 }
             }
             if (case.numbered_scope) {
-                try FormattingScopeTest.word(alloc, blocks, "child", .{ .small = true, .kind = .link, .target = "cat" });
-                try FormattingScopeTest.word(alloc, stored.entry.sections[0].blocks, "child", .{ .small = true, .kind = .link, .target = "cat" });
-                try FormattingScopeTest.word(alloc, blocks, "fourth", .{ .small = true });
-                try FormattingScopeTest.word(alloc, stored.entry.sections[0].blocks, "fourth", .{ .small = true });
+                try FormattingScopeTest.word(alloc, blocks, "child", .{ .font_scale = 1.0 / 1.2, .font_scale_set = true, .kind = .link, .target = "cat" });
+                try FormattingScopeTest.word(alloc, stored.entry.sections[0].blocks, "child", .{ .font_scale = 1.0 / 1.2, .font_scale_set = true, .kind = .link, .target = "cat" });
+                try FormattingScopeTest.word(alloc, blocks, "fourth", .{ .font_scale = 1.0 / 1.2, .font_scale_set = true });
+                try FormattingScopeTest.word(alloc, stored.entry.sections[0].blocks, "fourth", .{ .font_scale = 1.0 / 1.2, .font_scale_set = true });
                 try FormattingScopeTest.word(alloc, blocks, "fifth", .{});
                 try FormattingScopeTest.word(alloc, stored.entry.sections[0].blocks, "fifth", .{});
                 try FormattingScopeTest.word(alloc, blocks, "tail", .{});
@@ -25200,7 +25422,7 @@ test "blockquote indentation remains ordinary flow with protected and outside bo
                     try std.testing.expect(!code);
                 };
             }
-            try FormattingScopeTest.word(alloc, blocks, "quoted", if (case.rich) .{ .small = true, .language = "fr", .direction = "rtl" } else .{});
+            try FormattingScopeTest.word(alloc, blocks, "quoted", if (case.rich) .{ .font_scale = 1.0 / 1.2, .font_scale_set = true, .language = "fr", .direction = "rtl" } else .{});
             try FormattingScopeTest.word(alloc, blocks, "outside", .{ .code = true });
         }
         fn one(alloc: A, case: Case) !void {
@@ -25263,7 +25485,7 @@ test "inline block containers retain physical list ownership and protected bound
             try std.testing.expectEqual(@as(usize, @intFromBool(case.has_word)), links);
             if (case.has_word) try FormattingScopeTest.word(alloc, values, "word", if (case.rich) .{ .kind = .link, .target = "cat", .language = "fr", .direction = "rtl" } else .{ .kind = .link, .target = "cat" });
             if (case.rich) {
-                try FormattingScopeTest.word(alloc, values, "brief", .{ .small = true });
+                try FormattingScopeTest.word(alloc, values, "brief", .{ .font_scale = 1.0 / 1.2, .font_scale_set = true });
                 try FormattingScopeTest.word(alloc, values, "after", .{});
             }
         }
@@ -25433,7 +25655,7 @@ test "HTML item ordinary containers retain nested wiki lists and protected owner
             try std.testing.expectEqual(@as(usize, @intFromBool(case.rich or case.external)), links);
             if (case.rich) {
                 try FormattingScopeTest.word(alloc, values, "parent", .{ .language = "fr", .direction = "rtl", .classes = "note" });
-                try FormattingScopeTest.word(alloc, values, "child", .{ .kind = .link, .target = "cat", .small = true, .language = "de", .direction = "ltr", .classes = "note" });
+                try FormattingScopeTest.word(alloc, values, "child", .{ .kind = .link, .target = "cat", .font_scale = 1.0 / 1.2, .font_scale_set = true, .language = "de", .direction = "ltr", .classes = "note" });
                 try FormattingScopeTest.word(alloc, values, "tail", .{ .language = "fr", .direction = "rtl", .classes = "note" });
                 try FormattingScopeTest.word(alloc, values, "after", .{});
             }
@@ -26927,7 +27149,7 @@ test "DIV scope retains complete wiki tables across inner closing tags" {
                     for (cell.spans) |span| {
                         if (span.kind == .link and std.mem.eql(u8, span.target, "ويكاموس:بوابة المجتمع")) {
                             listed_community += 1;
-                            try std.testing.expect(span.flags.small);
+                            { try std.testing.expect(!span.flags.small); try std.testing.expectApproxEqAbs(@as(f32, 0.8 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001); }
                         }
                         if (span.kind == .external_link and std.mem.indexOf(u8, span.target, "commons.wikimedia.org") != null) listed_commons += 1;
                     }
@@ -29551,9 +29773,9 @@ test "captured Bleoh swatches and BEN dialect colors preserve typed RGB through 
                     for (cell.spans) |span| for (words, expected, 0..) |word, color, i| if (std.mem.eql(u8, span.text, word)) {
                         try std.testing.expectEqualStrings(color, span.foreground.?);
                         if (comptime @hasField(@TypeOf(span), "flags")) {
-                            if (i == 3) try std.testing.expect(span.flags.bold) else try std.testing.expect(span.flags.small);
+                            if (i == 3) try std.testing.expect(span.flags.bold) else { try std.testing.expect(!span.flags.small); try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001); }
                         } else {
-                            if (i == 3) try std.testing.expect(span.bold) else try std.testing.expect(span.small);
+                            if (i == 3) try std.testing.expect(span.bold) else { try std.testing.expect(!span.small); try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001); }
                         }
                         seen[i] = true;
                     };
@@ -29784,7 +30006,7 @@ test "active missing internal targets produce nonaction diagnostics while intent
     var styled: Renderer = .{ .a = a, .context = .{} };
     const spans = try styled.parseSpans("[[{{{7}}}|<b><i><small>label</small></i></b>]]", .{});
     try std.testing.expectEqualStrings("label [missing parameter]", try flattened(a, spans));
-    try std.testing.expect(spans[0].flags.bold and spans[0].flags.italic and spans[0].flags.small);
+    { try std.testing.expect(spans[0].flags.bold and spans[0].flags.italic and !spans[0].flags.small); try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), spans[0].font_scale orelse return error.TestUnexpectedResult, 0.000001); }
     var defaults: Renderer = .{ .a = a, .context = .{} };
     try std.testing.expect((try defaults.internalTargetHasUnboundParameter("{{{safe|resolved default}}}", 0)) == .none);
     try std.testing.expect(!defaults.fallbacks.render_limit);
@@ -30327,18 +30549,19 @@ test "synthetic list formatting prefixes preserve seeded quote coordinates" {
             try std.testing.expectEqual(expected.kind, span.kind);
             try std.testing.expectEqualStrings(expected.target, span.target);
             try std.testing.expectEqual(expected.flags, span.flags);
+            try std.testing.expectEqual(expected.font_scale, span.font_scale);
             try std.testing.expectEqual(expected.provenance, span.provenance);
             if (std.mem.eql(u8, span.target, "mimer")) {
                 mimes = true;
-                try std.testing.expect(span.flags.small and !span.flags.italic);
+                { try std.testing.expect(!span.flags.small and !span.flags.italic); try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001); }
             }
             if (std.mem.eql(u8, span.text, "next")) {
                 next = true;
-                try std.testing.expect(span.flags.small and span.flags.italic);
+                { try std.testing.expect(!span.flags.small and span.flags.italic); try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001); }
             }
             if (std.mem.eql(u8, span.text, "''literal''")) {
                 literal = true;
-                try std.testing.expect(span.flags.small and !span.flags.italic and span.provenance == .protected_literal);
+                { try std.testing.expect(!span.flags.small and !span.flags.italic and span.provenance == .protected_literal); try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001); }
             }
             if (std.mem.eql(u8, span.target, "Tail")) {
                 tail = true;
@@ -33061,7 +33284,7 @@ test "angle bracketed external links protect only their exact raw opening bounda
     }
     for ([_][]const u8{
         "<[https://example.test label>", "<[https://example.test label]\n>",
-        "<[https:// broken]>", "<[https://example.test/{{missing}} label]>", "<[[Target|label]]>",
+        "<[https:// broken]>", "<[https://example.test/{{missing}} label]>",
     }) |source| {
         var renderer: Renderer = .{ .a = a, .context = .{} };
         const spans = try renderer.parseSpans(source, .{});
@@ -34095,4 +34318,464 @@ test "missing parameter diagnostics retain bracket boundaries styles and authore
         for (spans) |span| try std.testing.expect(!span.generated_diagnostic);
     }
     try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("[[missing parameter]]"));
+}
+
+
+test "relative font scale actual ARchar inheritance cascade legacy flags and zero" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var r: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    try r.inlineText("<span class=AR style=\"font-size:125%\">[[سبتمبر|سبتمبر]]<small><sup><span style=\"font-size:80%\">cancel</span></sup></small><span style=\"font-size:100%\">inherit</span><span style=\"font-size:0\">zero</span></span>outside", .{}, 0);
+    var seen: usize = 0;
+    for (r.spans.items) |span| {
+        if (std.mem.eql(u8, span.text, "سبتمبر")) {
+            try std.testing.expectEqual(@as(?f32, 1.25), span.font_scale);
+            try std.testing.expectEqualStrings("سبتمبر", span.target);
+            seen += 1;
+        } else if (std.mem.eql(u8, span.text, "cancel")) {
+            try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001);
+            try std.testing.expect(!span.flags.small and span.flags.superscript);
+            seen += 1;
+        } else if (std.mem.eql(u8, span.text, "inherit")) {
+            try std.testing.expectEqual(@as(?f32, 1.25), span.font_scale);
+            seen += 1;
+        } else if (std.mem.eql(u8, span.text, "zero")) {
+            try std.testing.expectEqual(@as(?f32, 0), span.font_scale);
+            seen += 1;
+        } else if (std.mem.eql(u8, span.text, "outside")) {
+            try std.testing.expect(span.font_scale == null);
+            seen += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 5), seen);
+    const tag = (try r.semanticTagAt("<span style=\"font-size:200%; font-size:125%!important; font-size:300%; font-size:1.em\">", 0)).?;
+    const resolved = (try r.htmlRelativeFontSize(tag, 2)).?;
+    try std.testing.expectEqual(@as(?f32, 2.5), resolved.value);
+    for ([_][]const u8{ "inherit", "unset" }) |keyword| {
+        const source = try std.fmt.allocPrint(arena.allocator(), "<span style=\"font-size:125%;font-size:{s}\">", .{keyword});
+        const inherited_tag = (try r.semanticTagAt(source, 0)).?;
+        const inherited = (try r.htmlRelativeFontSize(inherited_tag, 2)).?;
+        try std.testing.expectEqual(@as(?f32, 2), inherited.value);
+    }
+}
+
+
+test "relative font scale structural HTML and wiki cell scopes resolve exactly once" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var r: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    for ([_][]const u8{ "<span style=\"font-size:125%\">", "<td style=\"font-size:125%\">", "<tr style=\"font-size:125%\">", "<caption style=\"font-size:125%\">", "<ul style=\"font-size:125%\">", "<li style=\"font-size:125%\">" }) |source| {
+        const tag = (try r.semanticTagAt(source, 0)).?;
+        const style = try r.htmlInlineStyle(tag, .{ .font_scale = 2, .font_scale_set = true });
+        try std.testing.expectEqual(@as(?f32, 2.5), style.font_scale);
+        try std.testing.expect(style.font_scale_set);
+        const structural = try r.htmlLanguageDirection(tag, .{ .font_scale = 2, .font_scale_set = true });
+        try std.testing.expectEqual(@as(?f32, 2.5), structural.font_scale);
+        const wiki = try r.wikiTableForeground(tag, .{ .font_scale = 2, .font_scale_set = true });
+        try std.testing.expectEqual(@as(?f32, 2.5), wiki.font_scale);
+    }
+}
+
+// Append this first test to presentation_compile.zig.
+test "relative font scale resolves nested table attributes once and resets sibling scope" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const source = "<table border=0 cellspacing=15><tr>" ++
+        "<td style=\"font-size:125%\"><table border=1 style=\"font-size:125%\"><tr><td>nested</td></tr></table></td>" ++
+        "<td><table border=1><tr><td>sibling</td></tr></table></td>" ++
+        "</tr></table>";
+    const blocks = try renderer.renderBody(source);
+    const Check = struct {
+        fn spans(values: []const Span, seen: *u8) !void {
+            for (values) |span| {
+                if (std.mem.indexOf(u8, span.text, "nested") != null) {
+                    try std.testing.expectEqual(@as(?f32, 1.5625), span.font_scale);
+                    seen.* |= 1;
+                }
+                if (std.mem.indexOf(u8, span.text, "sibling") != null) {
+                    try std.testing.expect(span.font_scale == null);
+                    seen.* |= 2;
+                }
+            }
+        }
+        fn table(value: Table, seen: *u8) anyerror!void {
+            try spans(value.caption, seen);
+            for (value.rows) |row| for (row.cells) |cell| {
+                try spans(cell.spans, seen);
+                if (cell.nested_table) |child| try table(child, seen);
+                if (cell.blocks) |children| try visit(children, seen);
+            };
+        }
+        fn visit(values: []const Block, seen: *u8) anyerror!void {
+            for (values) |block| {
+                try spans(block.spans, seen);
+                if (block.table) |child| try table(child, seen);
+            }
+        }
+    };
+    var seen: u8 = 0;
+    try Check.visit(blocks, &seen);
+    try std.testing.expectEqual(@as(u8, 3), seen);
+    try std.testing.expect(!renderer.fallbacks.malformed_table and !renderer.fallbacks.render_limit);
+}
+
+
+// The old external-only negative for <[[Target|label]]> is now covered
+// positively below: a valid child link cannot make its authored angle HTML.
+test "authored linked angle forms preserve only opening provenance and child actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, visible: []const u8, target: []const u8, label: []const u8, links: usize = 1, italic: bool = false, bold: bool = false }{
+        .{ .source = "<[[nissart]] nissarda>", .visible = "<nissart nissarda>", .target = "nissart", .label = "nissart" },
+        .{ .source = "''<[[nissart]] nissarda>''", .visible = "<nissart nissarda>", .target = "nissart", .label = "nissart", .italic = true },
+        .{ .source = "<[[Target|label]]>", .visible = "<label>", .target = "Target", .label = "label" },
+        .{ .source = "<b><[[Target|''label'']] suffix></b>", .visible = "<label suffix>", .target = "Target", .label = "label", .italic = true, .bold = true },
+        .{ .source = "<[[Target]]s suffix>", .visible = "<Targets suffix>", .target = "Target", .label = "Targets", .links = 2 },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("linked angle source: {s}\n", .{case.source});
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try plainText(a, spans));
+        var openings: usize = 0;
+        var links: usize = 0;
+        var linked_text: std.ArrayList(u8) = .empty;
+        for (spans) |span| {
+            if (std.mem.eql(u8, span.text, "<")) {
+                openings += 1;
+                try std.testing.expect(span.provenance == .protected_literal and span.kind == .text and span.target.len == 0);
+            }
+            if (span.kind == .link) {
+                links += 1;
+                try std.testing.expect(span.provenance == .parsed);
+                try std.testing.expectEqualStrings(case.target, span.target);
+                try linked_text.appendSlice(a, span.text);
+                try std.testing.expectEqual(case.italic, span.flags.italic);
+                try std.testing.expectEqual(case.bold, span.flags.bold);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), openings);
+        try std.testing.expectEqual(case.links, links);
+        try std.testing.expectEqualStrings(case.label, linked_text.items);
+        _ = try @import("presentation_document.zig").compileAlloc(a, "linked angles", .language, "English", "en", case.source, null);
+    }
+    for ([_][]const u8{
+        "<[[Target]]", "<<[[Target]]>", "<[[Target]]\n>",
+        "<[[Target]] <b>tail</b>>", "<[[Target]] {{missing}}>",
+        "<[[{{missing}}|label]]>", "<[[Bad<target>|label]]>",
+    }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(source, .{});
+        try std.testing.expect(spans.len != 0);
+        try std.testing.expectEqualStrings("<", spans[0].text);
+        try std.testing.expect(spans[0].provenance == .parsed);
+    }
+    var protected: Renderer = .{ .a = a, .context = .{} };
+    const literal = try protected.parseSpans("<nowiki><[[Target]] suffix></nowiki>", .{});
+    try std.testing.expectEqualStrings("<[[Target]] suffix>", try plainText(a, literal));
+    for (literal) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
+    var entity: Renderer = .{ .a = a, .context = .{} };
+    const entity_spans = try entity.parseSpans("&lt;[[Target]] suffix>", .{});
+    try std.testing.expect(entity_spans[0].provenance == .entity_literal);
+    var attribute: Renderer = .{ .a = a, .context = .{} };
+    // Current tagAt declines this outer token at its raw nested angle. Test
+    // only this helper's boundary veto; HTML attribute semantics are separate.
+    const attribute_source = "<span title='<[[Target]] suffix>'>body</span>";
+    const attribute_start = (std.mem.indexOf(u8, attribute_source, "<[[") orelse unreachable) + 1;
+    const attribute_end = (std.mem.indexOfPos(u8, attribute_source, attribute_start, "]]") orelse unreachable) + 2;
+    try attribute.spans.append(a, .{ .text = attribute_source[attribute_start - 1 .. attribute_start] });
+    attribute.preserveLinkedAngleOpening(attribute_source, attribute_start, attribute_end, .{});
+    try std.testing.expect(attribute.spans.items[0].provenance == .parsed);
+    try std.testing.expectEqualStrings("<", attribute.spans.items[0].text);
+    var inherited: Renderer = .{ .a = a, .context = .{} };
+    const inherited_spans = try inherited.parseSpans("<[[Target]] suffix>", .{ .kind = .link, .target = "Outer" });
+    for (inherited_spans) |span| if (std.mem.eql(u8, span.text, "<"))
+        try std.testing.expect(span.provenance != .protected_literal);
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("<nissart nissarda>"));
+}
+
+test "plain physical line tail table close keeps source text without a table action" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "== Roman ==|}\n''next''";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans(source, .{});
+    var literal_closes: usize = 0;
+    var italic_next = false;
+    for (spans) |span| {
+        if (std.mem.eql(u8, span.text, "|}")) {
+            literal_closes += 1;
+            try std.testing.expect(span.provenance == .protected_literal and span.kind == .text and span.target.len == 0);
+        }
+        if (std.mem.eql(u8, span.text, "next")) italic_next = span.flags.italic;
+    }
+    try std.testing.expectEqual(@as(usize, 1), literal_closes);
+    try std.testing.expect(italic_next);
+    try std.testing.expect(Renderer.ordinaryInlineTableTail(source, source, std.mem.indexOf(u8, source, "|}").?));
+    for ([_][]const u8{
+        "|}", " \t|}", "prefix\n|}", "prefix |} tail", "<span title='prefix |}",
+        "[[Target|prefix |}", "{{template|prefix |}", "{|prefix |}",
+    }) |raw| {
+        const marker = std.mem.indexOf(u8, raw, "|}").?;
+        try std.testing.expect(!Renderer.ordinaryInlineTableTail(raw, raw, marker));
+    }
+    const foreign = [_]u8{ '|', '}' };
+    try std.testing.expect(!Renderer.ordinaryInlineTableTail(source, &foreign, 0));
+    const parent_source = "[[Target|label |}]]";
+    const label = parent_source[9 .. parent_source.len - 2];
+    const parent_domain: InlineSourceDomain = .{ .source = parent_source, .parent = null };
+    const nested: Renderer = .{ .a = a, .context = .{}, .inline_source_domain = &parent_domain };
+    try std.testing.expect(Renderer.ordinaryInlineTableTail(label, label, label.len - 2));
+    try std.testing.expect(!nested.ordinaryInlineTableTailInDomain(label, label, label.len - 2));
+    for ([_]Style{
+        .{ .kind = .link, .target = "Target" },
+        .{ .kind = .external_link, .target = "https://example.test/" },
+        .{ .self_link_target = "entry" },
+    }) |action_style| {
+        var action: Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expect((try action.literalPlainTableTails(label, label, action_style, "")) == null);
+    }
+    var physical: Renderer = .{ .a = a, .context = .{} };
+    _ = try physical.renderBody("|}tail");
+    try std.testing.expect(physical.fallbacks.malformed_table);
+    var table: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try table.renderBody("{|\n| cell\n|}");
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expect(blocks[0].table != null and !table.fallbacks.malformed_table);
+}
+
+test "paired unknown name angles preserve quotation text styles and child actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "''<<Qırq [[Target|qız]]>>''";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans(source, .{});
+    try std.testing.expectEqualStrings("<<Qırq qız>>", try plainText(a, spans));
+    var actions: usize = 0;
+    for (spans) |span| {
+        try std.testing.expect(span.flags.italic);
+        if (span.kind == .link) {
+            actions += 1;
+            try std.testing.expectEqualStrings("Target", span.target);
+            try std.testing.expectEqualStrings("qız", span.text);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), actions);
+    try std.testing.expect(renderer.fallbacks.literal_markup);
+    const literal = "<<Qırq qız>>";
+    try std.testing.expectEqual(@as(?usize, literal.len), Renderer.pairedUnknownHtmlAnglesEnd(literal, 0));
+    try std.testing.expect(Renderer.completeUnknownHtmlTokenEnd(literal, 1) == null);
+    for ([_][]const u8{
+        "<<Qırq qız>", "<Qırq qız>>", "<<<Qırq qız>>>", "<<Qırq qız>>>",
+        "<<Qırq\nqız>>", "<<Qırq <b>qız>>", "<<b>>", "<<ref>>", "<<script>>",
+        "<<https://example.test>>", "<<''sample''>>", "<<[[Target]]>>",
+    }) |value| try std.testing.expect(Renderer.pairedUnknownHtmlAnglesEnd(value, 0) == null);
+    const attribute = "<span title=\"<<Qırq qız>>\">";
+    const at = std.mem.indexOf(u8, attribute, "<<").?;
+    try std.testing.expect(Renderer.pairedUnknownHtmlAnglesEnd(attribute, at) == null);
+    for ([_][]const u8{
+        "{{unresolved|<<Qırq qız>>}}", "{{{parameter|<<Qırq qız>>}}}",
+        "<nowiki><<Qırq qız>></nowiki>", "<!-- <<Qırq qız>> -->",
+        "<includeonly><<Qırq qız>></includeonly>",
+    }) |value| {
+        var protected: Renderer = .{ .a = a, .context = .{} };
+        const mapped = try protected.literalHtmlAnglesSourceWithMissing(MissingText.untracked(value));
+        try std.testing.expectEqualStrings(value, mapped.bytes);
+        try std.testing.expect(!protected.fallbacks.literal_markup);
+    }
+}
+
+test "invalid computed template names preserve exact literal text without an action" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "{{about_templates_{{{TEMPLATES}}}}}";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans(source, .{ .italic = true });
+    try std.testing.expectEqualStrings(source, try plainText(a, spans));
+    try std.testing.expectEqual(@as(usize, 0), renderer.unresolved_templates);
+    for (spans) |span| {
+        try std.testing.expect(span.kind == .text and span.target.len == 0);
+        try std.testing.expect(span.flags.italic and span.provenance == .protected_literal);
+    }
+    var linked: Renderer = .{ .a = a, .context = .{} };
+    const label = try linked.parseSpans(source, .{ .kind = .link, .target = "Target", .bold = true });
+    try std.testing.expectEqualStrings(source, try plainText(a, label));
+    for (label) |span| {
+        try std.testing.expect(span.kind == .link and span.flags.bold);
+        try std.testing.expectEqualStrings("Target", span.target);
+    }
+    for ([_][]const u8{
+        "known", "about_{{{x|default}}}", "about_{{{x|}}}", "about_{{bound}}",
+        "about_{{{x}}}|argument", "about_{{{x}}}|1=argument", "{{{x}}}",
+        "about_{{{}}}", "about_{{{x}}", "about_{{{x}}}}", "about_{{{x{{y}}}}}",
+        "#if:{{{x}}}", "subst:about_{{{x}}}", "about_[[Target]]{{{x}}}",
+        "about_<nowiki>x</nowiki>{{{x}}}", "about_&#123;{{{x}}}",
+    }) |body| try std.testing.expect(!Renderer.literalUnboundTemplateName(body));
+    try std.testing.expect(Renderer.literalUnboundTemplateName("prefix_{{{x}}}_{{{y}}}"));
+    var missing: Renderer = .{ .a = a, .context = .{} };
+    const unresolved = try missing.parseSpans("{{ordinary_missing|argument}}", .{});
+    try std.testing.expectEqual(@as(usize, 1), missing.unresolved_templates);
+    try std.testing.expect(unresolved[0].kind == .template);
+    try std.testing.expectEqualStrings("ordinary_missing", unresolved[0].target);
+}
+
+test "heading element size and inline child size retain distinct typography bases" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, scale: ?f32, basis: FontScaleBasis, flags: bool = false }{
+        .{ .source = "<h2 style=\"font-size:125%\">[[Target|marked]]</h2>", .scale = 1.25, .basis = .normal_body },
+        .{ .source = "<h2><span style=\"font-size:125%\">[[Target|marked]]</span></h2>", .scale = 1.25, .basis = .context },
+        .{ .source = "<h1 style=\"font-size:100%\">[[Target|marked]]</h1>", .scale = 1, .basis = .normal_body },
+        .{ .source = "<h2 style=\"font-size:125%\"><small><sup><sub><span style=\"font-size:80%\">[[Target|marked]]</span></sub></sup></small></h2>", .scale = 1.0 / 1.2, .basis = .normal_body, .flags = true },
+        .{ .source = "<h2 style=\"font-size:125%\"><span style=\"font-size:125%\">[[Target|marked]]</span></h2>", .scale = 1.5625, .basis = .normal_body },
+        .{ .source = "<div style=\"font-size:125%\">\n<h2>[[Target|marked]]</h2>\n</div>", .scale = 1.25, .basis = .context },
+        .{ .source = "<div style=\"font-size:125%\">\n<h2 style=\"font-size:100%\">[[Target|marked]]</h2>\n</div>", .scale = 1.25, .basis = .normal_body },
+        .{ .source = "<h2 style=\"font-size:0\">[[Target|marked]]</h2>", .scale = 0, .basis = .normal_body },
+        .{ .source = "<h2 style=\"font-size:nonsense\">[[Target|marked]]</h2>", .scale = null, .basis = .context },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("heading basis source: {s}\n", .{case.source});
+        var renderer: Renderer = .{ .a = a, .context = .{ .title = "control" } };
+        const blocks = try renderer.renderBody(case.source);
+        var marked: usize = 0;
+        for (blocks) |block| for (block.spans) |span| {
+            if (!std.mem.eql(u8, span.text, "marked")) continue;
+            try std.testing.expectEqual(Kind.heading, block.kind);
+            try std.testing.expectEqualStrings("Target", span.target);
+            try std.testing.expect(span.kind == .link);
+            try std.testing.expectEqual(case.scale, span.font_scale);
+            try std.testing.expectEqual(case.basis, span.font_scale_basis);
+            try std.testing.expect(!span.flags.small);
+            try std.testing.expectEqual(case.flags, span.flags.superscript);
+            try std.testing.expectEqual(case.flags, span.flags.subscript);
+            marked += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 1), marked);
+    }
+}
+
+test "heading basis restores siblings and preserves explicit body identity in style snapshots" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{ .title = "control" } };
+    const blocks = try renderer.renderBody("<h2 style=\"font-size:125%\"><span style=\"font-size:80%\">cancel</span>parent</h2>\n<h2>plain</h2>\noutside");
+    var seen: u8 = 0;
+    for (blocks) |block| for (block.spans) |span| {
+        if (std.mem.eql(u8, span.text, "cancel")) {
+            try std.testing.expectEqual(@as(?f32, 1), span.font_scale);
+            try std.testing.expectEqual(FontScaleBasis.normal_body, span.font_scale_basis);
+            seen |= 1;
+        } else if (std.mem.eql(u8, span.text, "parent")) {
+            try std.testing.expectEqual(@as(?f32, 1.25), span.font_scale);
+            try std.testing.expectEqual(FontScaleBasis.normal_body, span.font_scale_basis);
+            seen |= 2;
+        } else if (std.mem.eql(u8, span.text, "plain") or std.mem.eql(u8, span.text, "outside")) {
+            try std.testing.expect(span.font_scale == null);
+            try std.testing.expectEqual(FontScaleBasis.context, span.font_scale_basis);
+            seen |= if (std.mem.eql(u8, span.text, "plain")) @as(u8, 4) else 8;
+        }
+    };
+    try std.testing.expectEqual(@as(u8, 15), seen);
+    const body_identity: FormattingAttributes = .{ .font_scale = 1, .font_scale_basis = .normal_body, .font_scale_set = true };
+    renderer.restoreFormattingAttributes(body_identity);
+    try std.testing.expectEqualDeep(body_identity, renderer.formattingAttributes());
+    const inherited = renderer.bodyFormattingStyle(.{});
+    try std.testing.expectEqual(@as(?f32, 1), inherited.font_scale);
+    try std.testing.expectEqual(FontScaleBasis.normal_body, inherited.font_scale_basis);
+    const tag = (try renderer.semanticTagAt("<span style=\"font-size:100%\">", 0)).?;
+    const child = try renderer.htmlInlineStyle(tag, inherited);
+    try std.testing.expectEqual(@as(?f32, 1), child.font_scale);
+    try std.testing.expectEqual(FontScaleBasis.normal_body, child.font_scale_basis);
+}
+
+test "authored big and small compute parent relative numeric sizes with author CSS precedence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, scale: f32 }{
+        .{ .source = "<big>word</big>", .scale = 1.2 },
+        .{ .source = "<big><big>word</big></big>", .scale = 1.2 * 1.2 },
+        .{ .source = "<small>word</small>", .scale = 1.0 / 1.2 },
+        .{ .source = "<small><small>word</small></small>", .scale = (1.0 / 1.2) * (1.0 / 1.2) },
+        .{ .source = "<big><small>word</small></big>", .scale = 1 },
+        .{ .source = "<small><big>word</big></small>", .scale = 1 },
+        .{ .source = "<big style='font-size:125%'>word</big>", .scale = 1.25 },
+        .{ .source = "<small style='font-size:125%'>word</small>", .scale = 1.25 },
+        .{ .source = "<big><span style='font-size:125%'>word</span></big>", .scale = 1.5 },
+        .{ .source = "<span style='font-size:125%'><big>word</big></span>", .scale = 1.5 },
+        .{ .source = "<big style='font-size:inherit'>word</big>", .scale = 1 },
+        .{ .source = "<small style='font-size:100%'>word</small>", .scale = 1 },
+    };
+    for (cases) |case| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        try renderer.inlineText(case.source, .{}, 0);
+        try std.testing.expectEqual(@as(usize, 1), renderer.spans.items.len);
+        const span = renderer.spans.items[0];
+        try std.testing.expectEqualStrings("word", span.text);
+        try std.testing.expectEqualStrings("", span.target);
+        try std.testing.expect(!span.flags.small);
+        try std.testing.expectEqual(FontScaleBasis.context, span.font_scale_basis);
+        try std.testing.expectApproxEqAbs(case.scale, span.font_scale orelse 1, 0.000001);
+        if (case.scale == 1) try std.testing.expect(span.font_scale == null);
+    }
+    for ([_]struct { source: []const u8, scale: f32, basis: FontScaleBasis }{
+        .{ .source = "<h2><big>word</big></h2>", .scale = 1.2, .basis = .context },
+        .{ .source = "<h2 style='font-size:125%'><big>word</big></h2>", .scale = 1.5, .basis = .normal_body },
+        .{ .source = "<h2><big style='font-size:125%'>word</big></h2>", .scale = 1.25, .basis = .context },
+    }) |case| {
+        var heading: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try heading.renderBody(case.source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        try std.testing.expect(blocks[0].kind == .heading and blocks[0].level == 2);
+        try std.testing.expectEqual(@as(usize, 1), blocks[0].spans.len);
+        const span = blocks[0].spans[0];
+        try std.testing.expectEqualStrings("word", span.text);
+        try std.testing.expectEqual(case.basis, span.font_scale_basis);
+        try std.testing.expectApproxEqAbs(case.scale, span.font_scale.?, 0.000001);
+        try std.testing.expect(!span.flags.small);
+    }
+    // Losing UA defaults/declarations must not overflow before a winning
+    // zero/inherit declaration is selected. Winning overflow remains fatal.
+    var cascade: Renderer = .{ .a = a, .context = .{} };
+    const max = std.math.floatMax(f32);
+    const overrides = [_]struct { source: []const u8, expected: f32 }{
+        .{ .source = "<big style='font-size:0'>", .expected = 0 },
+        .{ .source = "<big style='font-size:inherit'>", .expected = max },
+        .{ .source = "<big style='font-size:unset!important;font-size:200%'>", .expected = max },
+        .{ .source = "<big style='font-size:200%;font-size:0'>", .expected = 0 },
+        .{ .source = "<big style='font-size:200%;font-size:0!important;font-size:300%'>", .expected = 0 },
+        .{ .source = "<big style='font-size:0!important;font-size:200%!important;font-size:inherit!important'>", .expected = max },
+    };
+    for (overrides) |case| {
+        const tag = (try cascade.semanticTagAt(case.source, 0)).?;
+        const selected = (try cascade.htmlRelativeFontSize(tag, max)).?;
+        try std.testing.expectEqual(@as(?f32, case.expected), selected.value);
+    }
+    const overflow = (try cascade.semanticTagAt("<big>", 0)).?;
+    try std.testing.expectError(error.InvalidFontScale, cascade.htmlRelativeFontSize(overflow, max));
+    const winning = (try cascade.semanticTagAt("<big style='font-size:0;font-size:200%!important'>", 0)).?;
+    try std.testing.expectError(error.InvalidFontScale, cascade.htmlRelativeFontSize(winning, max));
+    // Numeric CSS cancellation remains independently covered without a small
+    // default: 125% * 80% is identity, with an explicit inheritance marker.
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const cancel = (try renderer.semanticTagAt("<span style='font-size:80%'>", 0)).?;
+    const cancelled = try renderer.htmlInlineStyle(cancel, .{ .font_scale = 1.25, .font_scale_set = true });
+    try std.testing.expect(cancelled.font_scale == null and cancelled.font_scale_set);
+    // Caller-supplied legacy style is independent of authored HTML sizing.
+    const small = (try renderer.semanticTagAt("<small>", 0)).?;
+    const legacy = try renderer.htmlInlineStyle(small, .{ .small = true });
+    try std.testing.expect(legacy.small);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), legacy.font_scale.?, 0.000001);
+    const body = try renderer.htmlInlineStyle(small, .{ .font_scale = 1.2, .font_scale_basis = .normal_body, .font_scale_set = true });
+    try std.testing.expectEqual(FontScaleBasis.normal_body, body.font_scale_basis);
+    try std.testing.expectEqual(@as(?f32, 1), body.font_scale);
+    try std.testing.expect(body.font_scale_set);
 }

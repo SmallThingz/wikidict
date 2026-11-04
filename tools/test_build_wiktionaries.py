@@ -3795,6 +3795,53 @@ class LoopMessageSelectionTests(unittest.TestCase):
         with patch.object(b,'PROJECT',self.project):
             return b.resolve_edition_snapshot_options(self.manifest,self.groups,self.downloads)[(self.wiki,self.date)]['auxiliary_snapshots']
 
+    def test_explicit_valid_pair_ignores_invalid_unused_default(self):
+        old=self.collect('language-messages-loop-v1')
+        (old/'interface-messages.tsv').write_bytes(b'invalid unused default')
+        new=self.collect('explicit-messages')
+        overrides={kind:new/(kind+'.tsv') for kind in self.messages.KINDS}
+        with patch.object(b,'PROJECT',self.project):
+            selected=b.resolve_edition_snapshot_options(self.manifest,self.groups,self.downloads,overrides)[(self.wiki,self.date)]['auxiliary_snapshots']
+        for kind in self.messages.KINDS:
+            self.assertEqual(selected[kind],overrides[kind])
+            self.messages.validate_snapshot(selected[kind],self.wiki,self.date)
+
+    def test_invalid_explicit_pair_still_fails_selected_validation(self):
+        self.collect('language-messages-loop-v1')
+        new=self.collect('explicit-messages')
+        (new/'interface-messages.tsv').write_bytes(b'invalid selected override')
+        overrides={kind:new/(kind+'.tsv') for kind in self.messages.KINDS}
+        with patch.object(b,'PROJECT',self.project),self.assertRaises(ValueError):
+            b.resolve_edition_snapshot_options(self.manifest,self.groups,self.downloads,overrides)
+
+    def test_explicit_magic_ignores_corrupt_unused_default(self):
+        import shutil
+        import prepare_magic_words_lst as lst_magic
+        default=self.root/lst_magic.DERIVED_DIRECTORY
+        selected=self.project/'explicit-magic'
+        shutil.copytree(default,selected)
+        (default/'magic-words.tsv').write_bytes(b'corrupt unused magic')
+        overrides={'magic-words':selected/'magic-words.tsv'}
+        with patch.object(b,'PROJECT',self.project):
+            options=b.resolve_edition_snapshot_options(self.manifest,self.groups,self.downloads,overrides)
+        self.assertEqual(options[(self.wiki,self.date)]['auxiliary_snapshots']['magic-words'],overrides['magic-words'])
+
+    def test_corrupt_selected_magic_still_rejected(self):
+        import shutil
+        import prepare_magic_words_lst as lst_magic
+        selected=self.project/'explicit-magic'
+        shutil.copytree(self.root/lst_magic.DERIVED_DIRECTORY,selected)
+        (selected/'magic-words.tsv').write_bytes(b'corrupt selected magic')
+        with patch.object(b,'PROJECT',self.project),self.assertRaises(ValueError):
+            b.resolve_edition_snapshot_options(self.manifest,self.groups,self.downloads,{'magic-words':selected/'magic-words.tsv'})
+
+    def test_partial_message_override_still_validates_required_default_pair(self):
+        default=self.collect('language-messages-loop-v1')
+        selected=self.collect('explicit-messages')
+        (default/'language-fallbacks.tsv').write_bytes(b'corrupt required fallback')
+        with patch.object(b,'PROJECT',self.project),self.assertRaises(ValueError):
+            b.resolve_edition_snapshot_options(self.manifest,self.groups,self.downloads,{'interface-messages':selected/'interface-messages.tsv'})
+
     def test_loop_pair_preferred_and_prior_pair_bytes_unchanged(self):
         old=self.collect('language-messages',prior=True)
         before={p.name:p.read_bytes() for p in old.iterdir()}

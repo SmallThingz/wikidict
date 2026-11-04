@@ -2238,32 +2238,36 @@ pub const Expander = struct {
 
     fn expandSwitch(self: *Expander, key_raw: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
         const key = std.mem.trim(u8, try self.expandWikitext(key_raw, params, host_title, depth + 1), " \t\r\n");
-        var pending = false;
+        var pending_match = false;
+        var pending_default = false;
         var fallback: ?[]const u8 = null;
         var trailing: ?[]const u8 = null;
         for (args, 0..) |raw_case, index| {
             if (preprocess.findTopDelimiter(raw_case, '=')) |eq| {
-                const label_raw = std.mem.trim(u8, raw_case[0..eq], " \t\r\n");
                 const value_raw = raw_case[eq + 1 ..];
-                if (std.ascii.eqlIgnoreCase(label_raw, "#default")) {
+                // A matched bare case selects this result without evaluating its label.
+                if (pending_match) return self.expandTrimmedParserArgument(value_raw, params, host_title, depth + 1);
+                const label = std.mem.trim(u8, try self.expandWikitext(raw_case[0..eq], params, host_title, depth + 1), " \t\r\n");
+                if (ifEqEqual(key, label)) return self.expandTrimmedParserArgument(value_raw, params, host_title, depth + 1);
+                if (pending_default or std.ascii.eqlIgnoreCase(label, "#default")) {
                     fallback = value_raw;
-                    if (pending) return self.expandTrimmedParserArgument(value_raw, params, host_title, depth + 1);
-                    continue;
+                    pending_default = false;
                 }
-                const label = std.mem.trim(u8, try self.expandWikitext(label_raw, params, host_title, depth + 1), " \t\r\n");
-                if (pending or ifEqEqual(key, label)) return self.expandTrimmedParserArgument(value_raw, params, host_title, depth + 1);
-                pending = false;
             } else {
                 if (index + 1 == args.len) {
                     trailing = raw_case;
                     continue;
                 }
                 const label = std.mem.trim(u8, try self.expandWikitext(raw_case, params, host_title, depth + 1), " \t\r\n");
-                if (ifEqEqual(key, label)) pending = true;
+                if (ifEqEqual(key, label)) {
+                    pending_match = true;
+                } else if (std.ascii.eqlIgnoreCase(label, "#default")) {
+                    pending_default = true;
+                }
             }
         }
-        if (fallback) |value| return self.expandTrimmedParserArgument(value, params, host_title, depth + 1);
         if (trailing) |value| return self.expandTrimmedParserArgument(value, params, host_title, depth + 1);
+        if (fallback) |value| return self.expandTrimmedParserArgument(value, params, host_title, depth + 1);
         return "";
     }
 
@@ -2670,7 +2674,7 @@ pub const Expander = struct {
                 clearInvokeFailure(self.runtime);
                 return .{ .export_error = .{ .failure = err, .markup = markup } };
             }
-            if (err != error.AotCallFailed) return err;
+            if (err != error.AotCallFailed and err != error.LuaRaised) return err;
             // Operational failures retain their typed name across the native
             // AOT call envelope. Let the worker retire and retry the page.
             // Lua error("OutOfMemory") instead carries the name LuaRaised.
@@ -2697,7 +2701,7 @@ pub const Expander = struct {
                             clearInvokeFailure(self.runtime);
                             return .{ .export_error = .{ .failure = retry_err, .markup = markup } };
                         }
-                        if (retry_err != error.AotCallFailed) return retry_err;
+                        if (retry_err != error.AotCallFailed and retry_err != error.LuaRaised) return retry_err;
                         if (self.runtime.aotErrorName()) |name| {
                             if (std.mem.eql(u8, name, "OutOfMemory")) return error.OutOfMemory;
                             if (std.mem.eql(u8, name, "LuaCpuClockUnavailable")) return error.LuaCpuClockUnavailable;
@@ -2825,7 +2829,9 @@ pub const Expander = struct {
             try rt.bindGlobalTable(&stack_child, global_shape, self.env_slot);
             if (!try stack_child.bootstrapProgram()) try stdlib.install(&stack_child);
             try install(&self.scribunto_state, self.scribunto_shared, page_a, &stack_child, self.env_slot, self.string_slot, self.mw_slot);
-            stack_child.module_template_context = outer_runtime;
+            // A nested #invoke is a fresh Scribunto invocation, not another
+            // require in the caller's mutable module graph.
+            stack_child.module_template_context = self.page_runtime orelse outer_runtime;
             stack_child.module_template_eligible = self.page_template_eligible;
             stack_child.module_template_rejected = self.page_template_rejected;
             stack_child.module_template_page_scope = true;
@@ -6866,6 +6872,29 @@ test "switch numeric matches keep unselected branches lazy and defaults exact" {
     try NumericSwitchFixture.check("{{#switch:01x|1={{MissingBranch}}| trailing }}", "trailing");
 }
 
+test "switch bare default falls through to the next named result" {
+    // Formula:la-declinatio selects this shape when its optional modus is absent.
+    try NumericSwitchFixture.check("{{#switch:{{{modus|}}}|en={{MissingEnglishTable}}|#default|eu=tabula}}", "tabula");
+    try NumericSwitchFixture.check("{{#switch:other|#default|unused|eu=tabula|later={{MissingBranch}}}}", "tabula");
+    try NumericSwitchFixture.check("{{#switch:match|#default|eu={{MissingDefault}}|match=selected}}", "selected");
+    try NumericSwitchFixture.check("{{#switch:#default|#default=first|#default={{MissingLaterDefault}}}}", "first");
+    try NumericSwitchFixture.check("{{#switch:other|{{#if:1|#default}}=expanded-default}}", "expanded-default");
+    try NumericSwitchFixture.check("{{#switch:other|#default|eu=first|#default|us=last}}", "last");
+}
+
+test "switch matched fallthrough does not expand the result label" {
+    try NumericSwitchFixture.check("{{#switch:match|match|{{MissingLabel}}=selected|#default={{MissingDefault}}}}", "selected");
+    try NumericSwitchFixture.check("{{#switch:01|1|{{MissingLabel}}=numeric-selected}}", "numeric-selected");
+    try NumericSwitchFixture.check("{{#switch:match|#default|match|{{MissingLabel}}=selected}}", "selected");
+}
+
+test "switch final bare argument takes precedence over an earlier default" {
+    try NumericSwitchFixture.check("{{#switch:other|#default={{MissingDefault}}| final }}", "final");
+    try NumericSwitchFixture.check("{{#switch:other|#default|eu={{MissingDefault}}| final }}", "final");
+    try NumericSwitchFixture.check("{{#switch:other|#default={{MissingDefault}}|}}", "");
+    try NumericSwitchFixture.check("{{#switch:match|match=selected|{{MissingTrailing}}}}", "selected");
+}
+
 // Official Arabic oracle response02 SHA256 ee526543ecfce7e41a3142c56a68ee7aad9a00a083abe7b4dd3a40c80cd4b0bb.
 test "parser numeric equality rejects nondecimal Zig literals" {
     try NumericSwitchFixture.check("{{#ifeq:1_0|10|bad|literal}}", "literal");
@@ -8293,4 +8322,150 @@ test "normal file metadata host bridge preserves positive negative and provider 
     try std.testing.expect(negative.media_type == null and negative.canonical_title == null);
     try std.testing.expectError(error.FileMetadataSnapshotMissing, get(expander.host.ctx, "File:Unknown.ogg"));
     try std.testing.expectEqual(@as(usize, 3), probe.calls);
+}
+
+
+test "direct module load LuaRaised uses invoke markup and iferror while require remains typed" {
+    const Probe = struct {
+        const diagnostic = "error loading module 'Module:Test': UnexpectedToken";
+        fn loadError(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return if (id == 0) diagnostic else null;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+    defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{rt.stabilize(TestModule.root)};
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, TestModule.lookup, TestModule.name);
+    runtime.configureModuleLoadErrors(Probe.loadError);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try std.testing.expectError(error.LuaRaised, runtime.requireByName("Module:Test"));
+    runtime.clearLuaError();
+    var expander = Expander{
+        .runtime = &runtime,
+        .env_slot = 0,
+        .string_slot = 18,
+        .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists },
+        .install_scribunto = installTestInvoke,
+    };
+    const visible = try expander.expandFragment("Page", "A{{#invoke:Test|run}}B", 1_670_803_200);
+    try std.testing.expect(std.mem.startsWith(u8, visible, "A") and std.mem.endsWith(u8, visible, "B"));
+    try std.testing.expect(std.mem.indexOf(u8, visible, "scribunto-error") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible, "UnexpectedToken") != null);
+    for (0..2) |_| {
+        const caught = try expander.expandFragment("Page", "{{#iferror:{{#invoke:Test|run}}|CAUGHT|BAD}}", 1_670_803_200);
+        try std.testing.expectEqualStrings("CAUGHT", caught);
+        try std.testing.expect(runtime.current_frame == null and runtime.aotErrorName() == null and !runtime.last_error_present);
+    }
+}
+
+const NestedInvokeIsolationProbe = struct {
+    var dependency_roots: usize = 0;
+
+    fn lookup(_: ?*const anyopaque, name: []const u8) ?u32 {
+        if (std.mem.eql(u8, name, "Module:IsolationOuter")) return 0;
+        if (std.mem.eql(u8, name, "Module:IsolationDependency")) return 1;
+        return null;
+    }
+    fn moduleName(_: ?*const anyopaque, id: u32) ?[]const u8 {
+        return switch (id) {
+            0 => "Module:IsolationOuter",
+            1 => "Module:IsolationDependency",
+            else => null,
+        };
+    }
+    fn dependency(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        dependency_roots += 1;
+        const exports = try ctx.newTable();
+        try exports.rawSet(ctx.allocator, .{ .string = "state" }, .{ .string = "pristine" });
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .table = exports };
+        return out;
+    }
+    fn outer(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        const dep = try ctx.requireByName("Module:IsolationDependency");
+        const state = try ctx.getIndex(dep, .{ .string = "state" });
+        if (state != .string or !std.mem.eql(u8, state.string, "pristine"))
+            return error.NestedInvokeInheritedCallerMutation;
+        try dep.table.rawSet(ctx.allocator, .{ .string = "state" }, .{ .string = "mutated" });
+        const exports = try ctx.newTable();
+        try exports.rawSet(ctx.allocator, .{ .string = "run" }, try ctx.makeFunctionKnown(2, run, &.{}));
+        try exports.rawSet(ctx.allocator, .{ .string = "inner" }, try ctx.makeFunctionKnown(3, inner, &.{}));
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .table = exports };
+        return out;
+    }
+    fn inner(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .string = "nested pristine" };
+        return out;
+    }
+    fn run(ctx: *rt.Context, _: rt.Captures, args: []const Value) ![]const Value {
+        if (args.len != 1 or args[0] != .table) return error.FrameExpected;
+        const before = try ctx.requireByName("Module:IsolationDependency");
+        const parser = try ctx.getIndex(args[0], .{ .string = "callParserFunction" });
+        const spec = try ctx.newTable();
+        const parser_args = try ctx.newTable();
+        try parser_args.rawSet(ctx.allocator, .{ .number = 1 }, .{ .string = "IsolationOuter" });
+        try parser_args.rawSet(ctx.allocator, .{ .number = 2 }, .{ .string = "inner" });
+        try spec.rawSet(ctx.allocator, .{ .string = "name" }, .{ .string = "#invoke" });
+        try spec.rawSet(ctx.allocator, .{ .string = "args" }, .{ .table = parser_args });
+        const nested = try ctx.callValue(parser, &.{ args[0], .{ .table = spec } });
+        defer rt.freeResults(nested);
+        if (nested.len != 1 or nested[0] != .string or !std.mem.eql(u8, nested[0].string, "nested pristine"))
+            return error.NestedInvokeNotPristine;
+        const after = try ctx.requireByName("Module:IsolationDependency");
+        if (before != .table or after != .table or before.table != after.table)
+            return error.CallerRequireIdentityChanged;
+        const state = try ctx.getIndex(after, .{ .string = "state" });
+        if (state != .string or !std.mem.eql(u8, state.string, "mutated"))
+            return error.CallerMutationLost;
+        // The page-local flags are live only inside the active invocation.
+        if (ctx.module_template_rejected.len != 2 or ctx.module_template_rejected[1])
+            return error.DependencyTemplateRejected;
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = .{ .string = "isolated nested; caller retained" };
+        return out;
+    }
+};
+
+test "nested frame parser invoke uses pristine page templates and retains caller require identity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 2);
+    defer runtime.deinit();
+    const roots = [_]rt.FunctionFn{ rt.stabilize(NestedInvokeIsolationProbe.outer), rt.stabilize(NestedInvokeIsolationProbe.dependency) };
+    const function_modules = [_]u32{ 0, 1, 0, 0 };
+    var eligible = [_]bool{ false, true };
+    var rejected = [_]bool{ false, false };
+    runtime.module_root_entries = &roots;
+    runtime.function_module_ids = &function_modules;
+    runtime.module_template_eligible = &eligible;
+    runtime.module_template_rejected = &rejected;
+    runtime.configureModules(null, NestedInvokeIsolationProbe.lookup, NestedInvokeIsolationProbe.moduleName);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{
+        .runtime = &runtime,
+        .env_slot = 0,
+        .string_slot = 18,
+        .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists },
+        .install_scribunto = installTestInvoke,
+    };
+    NestedInvokeIsolationProbe.dependency_roots = 0;
+    const text = try expander.expandFragment("Page", "{{#invoke:IsolationOuter|run}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("isolated nested; caller retained", text);
+    // One root execution proves the nested call used an eligible promoted
+    // dependency template rather than vacuously rerunning a fresh callback.
+    try std.testing.expectEqual(@as(usize, 1), NestedInvokeIsolationProbe.dependency_roots);
+    // expandFragment releases page-owned flags before returning and restores
+    // the caller's template flags; inspect that live baseline after cleanup.
+    try std.testing.expectEqual(@as(usize, 0), expander.page_template_rejected.len);
+    try std.testing.expect(!runtime.module_template_rejected[1]);
 }

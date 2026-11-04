@@ -80,6 +80,7 @@ pub const Program = struct {
     module_count: u32,
     module_lookup_count: u32,
     module_names: [][]const u8,
+    module_load_errors: []const []const u8,
     module_lookup_names: [][]const u8,
     module_lookup_ids: []u32,
     module_export_shape_ids: []u32,
@@ -176,6 +177,11 @@ pub const Program = struct {
         const module_names = try allocator.alloc([]const u8, module_count);
         errdefer allocator.free(module_names);
         for (module_names) |*name| name.* = try reader.readString();
+
+        const module_load_errors = try allocator.alloc([]const u8, module_count);
+        errdefer allocator.free(module_load_errors);
+        // Only the slice array is owned; strings borrow the immutable mapping.
+        for (module_load_errors) |*diagnostic| diagnostic.* = try reader.readString();
 
         const module_lookup_names = try allocator.alloc([]const u8, module_lookup_count);
         errdefer allocator.free(module_lookup_names);
@@ -286,6 +292,17 @@ pub const Program = struct {
         }
         if (synth_at != synth_exports.len) return error.InvalidProgramMetadata;
         module_synth_offsets[module_count] = @intCast(synth_at);
+        for (module_load_errors, 0..) |diagnostic, module_index| {
+            if (diagnostic.len == 0) continue;
+            if (module_static_root_blobs[module_index].len != 0 or
+                module_static_root_load_data[module_index] or
+                module_template_eligible[module_index] or module_synth_roots[module_index] or
+                module_export_shape_ids[module_index] != std.math.maxInt(u32) or
+                function_ranges[module_index].count != 1 or
+                module_requirement_offsets[module_index] != module_requirement_offsets[module_index + 1] or
+                module_synth_offsets[module_index] != module_synth_offsets[module_index + 1])
+                return error.InvalidProgramMetadata;
+        }
         const synth_export_entries: []const rt.FunctionFn = if (synth_exports.len == 0)
             &.{}
         else blk: {
@@ -345,6 +362,7 @@ pub const Program = struct {
             .module_count = module_count,
             .module_lookup_count = module_lookup_count,
             .module_names = module_names,
+            .module_load_errors = module_load_errors,
             .module_lookup_names = module_lookup_names,
             .module_lookup_ids = module_lookup_ids,
             .module_export_shape_ids = module_export_shape_ids,
@@ -420,6 +438,7 @@ pub const Program = struct {
         self.allocator.free(self.module_export_shape_ids);
         self.allocator.free(self.module_lookup_ids);
         self.allocator.free(self.module_lookup_names);
+        self.allocator.free(self.module_load_errors);
         self.allocator.free(self.module_names);
         self.mapped.deinit();
         self.namespace_catalog.deinit();
@@ -453,6 +472,13 @@ pub const Program = struct {
     fn moduleName(raw: ?*const anyopaque, id: u32) ?[]const u8 {
         const self: *const Program = @ptrCast(@alignCast(raw orelse return null));
         return if (id < self.module_count) self.module_names[id] else null;
+    }
+
+    fn moduleLoadError(raw: ?*const anyopaque, id: u32) ?[]const u8 {
+        const self: *const Program = @ptrCast(@alignCast(raw orelse return null));
+        if (id >= self.module_count) return null;
+        const diagnostic = self.module_load_errors[id];
+        return if (diagnostic.len == 0) null else diagnostic;
     }
 
     fn moduleRequirements(raw: ?*const anyopaque, id: u32) []const rt.ModuleRequirement {
@@ -549,6 +575,7 @@ pub const Program = struct {
         ctx.json_object_shape_id = self.json_object_shape_id;
         ctx.uri_query_shape_id = self.uri_query_shape_id;
         ctx.configureModules(self, lookup, moduleName);
+        ctx.configureModuleLoadErrors(moduleLoadError);
         ctx.configureFunctionModules(self.function_module_ids);
         ctx.configureModuleRequirements(self, moduleRequirements);
         ctx.configureStaticModules(self, staticModule);

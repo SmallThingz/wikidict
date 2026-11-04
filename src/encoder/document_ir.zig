@@ -956,7 +956,8 @@ fn parseExternalLinkAtBoundary(input: []const u8, start: usize, rejected_opener:
         // MediaWiki ends the URL before a raw double quote or HTML label,
         // even without whitespace; the boundary remains part of the label.
         // Reuse the existing tag parser; malformed angle text is not a new URL rule.
-        if (byte == '"' or externalLabelWhitespaceLen(body, index) != 0 or
+        // Raw '[' is excluded from the URL but can begin the label immediately.
+        if (byte == '[' or byte == '"' or externalLabelWhitespaceLen(body, index) != 0 or
             (byte == '<' and syntax.tagAt(body, index) != null))
         {
             separator = index;
@@ -1509,4 +1510,26 @@ test "alternate label restored closing byte evidence owns only its exact source 
         var nah_it: InlineIterator = .{ .input = nah_source, .renderer_boundaries = true };
         while (nah_it.next()) |nah_token| try std.testing.expect(!nah_token.link_label_restored_close);
     }
+}
+
+test "external raw opening bracket begins a label without whitespace" {
+    const cases = [_]struct { source: []const u8, target: []const u8, label: []const u8 }{
+        .{ .source = "[https://en.wiktionary.org/wiki/[bad word bad word]", .target = "https://en.wiktionary.org/wiki/", .label = "[bad word bad word" },
+        .{ .source = "[https://example.test/[word]", .target = "https://example.test/", .label = "[word" },
+        .{ .source = "[https://example.test/ [word]", .target = "https://example.test/", .label = "[word" },
+        .{ .source = "[https://example.test/[[Target|label]] tail]", .target = "https://example.test/", .label = "[[Target|label]] tail" },
+        .{ .source = "[https://example.test/%5Bbad label]", .target = "https://example.test/%5Bbad", .label = "label" },
+    };
+    for (cases) |case| {
+        var it: InlineIterator = .{ .input = case.source, .renderer_boundaries = true };
+        const token = it.next().?;
+        try std.testing.expect(token.kind == .external_link and !token.rejected_external_opener);
+        try std.testing.expectEqualStrings(case.target, token.target);
+        try std.testing.expectEqualStrings(case.label, token.text);
+        try std.testing.expect(it.next() == null);
+    }
+    try std.testing.expect(!validExternalUrl("https://example.test/[bad"));
+    try std.testing.expect(parseExternalLinkAt("[https://[label]", 0) == null);
+    try std.testing.expect(parseExternalLinkAt("[https://example.test/[label\nnext]", 0) == null);
+    try std.testing.expect(parseExternalLinkAt("[not-a-protocol/[label]", 0) == null);
 }

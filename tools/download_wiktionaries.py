@@ -498,7 +498,29 @@ def language_registry_snapshot(wiki, iso_path=None):
     rows.extend("\t".join([code, *aliases]) for code, aliases in sorted(site_entries))
     rows.append("# iso-639-3")
     rows.extend("\t".join([code, *aliases]) for code, aliases in iso_entries)
-    return content_language, "\n".join(rows) + "\n"
+    return content_language, append_reviewed_language_aliases("\n".join(rows) + "\n")
+
+def append_reviewed_language_aliases(text):
+    """Bind editorial evidence separately from upstream language-name captures."""
+    raw = Path(__file__).with_name("reviewed_language_aliases.json").read_bytes()
+    document = json.loads(raw)
+    if document.get("schema") != "wikidict.reviewed-language-aliases.v1":
+        raise ValueError("Invalid reviewed language aliases")
+    codes = {line.split("\t", 1)[0] for line in text.splitlines() if line and not line.startswith("#")}
+    digest = hashlib.sha256(raw).hexdigest()
+    seen = set()
+    rows = []
+    for record in document["records"]:
+        values = [record[key] for key in ("code", "alias", "id")]
+        if (record.get("authority_kind") != "reviewed_public_reference" or
+                not record.get("url", "").startswith("https://") or
+                any(not value or any(ch in value for ch in "\t\r\n\x00") for value in values) or
+                record["id"] in seen):
+            raise ValueError("Invalid reviewed language alias record")
+        seen.add(record["id"])
+        if record["code"] in codes:
+            rows.append("# reviewed-alias\t" + "\t".join(values + [digest]))
+    return text + "".join(row + "\n" for row in rows)
 
 def sha256_digest(path):
     with path.open("rb") as source:
@@ -535,6 +557,11 @@ def validate_registry_file(root, item):
     path = root / item["wiki"] / item["date"] / item["name"]
     if not path.is_file() or path.stat().st_size != item["size"] or sha256_digest(path) != item["sha256"]:
         raise ValueError(f"Missing or unverified language registry: {path}")
+    text = path.read_text(encoding="utf-8")
+    upstream = "".join(line for line in text.splitlines(keepends=True)
+                       if not line.startswith("# reviewed-alias"))
+    if text != append_reviewed_language_aliases(upstream):
+        raise ValueError(f"Stale reviewed language registry; derive a new registry and manifest without replacing original inputs: {path}")
     return path
 
 def digest(path):

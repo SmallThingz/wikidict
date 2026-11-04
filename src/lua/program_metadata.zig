@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const magic = "DLPMETA9";
+pub const magic = "DLPMETAA";
 
 pub const ShapeKeyTag = enum(u32) {
     string = 1,
@@ -84,4 +84,26 @@ test "program metadata primitive framing round trips" {
     try std.testing.expectEqual(@as(u32, 0x89abcdef), try reader.readU32());
     try std.testing.expectEqualStrings("Module:hello", try reader.readString());
     try reader.finish();
+}
+
+test "module load diagnostics retain explicit empty and error entries" {
+    // Golden bytes for a two-entry diagnostic section, independent of Writer.
+    const bytes: []const u8 = "DLPMETAA" ++ "\x02\x00\x00\x00" ++
+        "\x00\x00\x00\x00" ++ "\x03\x00\x00\x00bad";
+    var reader = Reader{ .bytes = bytes };
+    try reader.expectMagic();
+    try std.testing.expectEqual(@as(u32, 2), try reader.readU32());
+    try std.testing.expectEqualStrings("", try reader.readString());
+    const diagnostic = try reader.readString();
+    try std.testing.expectEqualStrings("bad", diagnostic);
+    try std.testing.expect(diagnostic.ptr == bytes.ptr + 20);
+    try reader.finish();
+}
+
+test "module diagnostic metadata rejects old version and truncated strings" {
+    var old = Reader{ .bytes = "DLPMETA9" };
+    try std.testing.expectError(error.InvalidProgramMetadata, old.expectMagic());
+    var truncated = Reader{ .bytes = "DLPMETAA" ++ "\x03\x00\x00\x00ba" };
+    try truncated.expectMagic();
+    try std.testing.expectError(error.InvalidProgramMetadata, truncated.readString());
 }

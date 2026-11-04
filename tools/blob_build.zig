@@ -12,6 +12,58 @@ const expansion_deadline = @import("expansion_deadline.zig");
 const reviewed_nonlexical = @import("reviewed_nonlexical.zig");
 const max_worker_count: usize = 8;
 
+extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
+
+// Process CPU would charge concurrent protocol threads to the consumer too.
+fn parentThreadCpuNow() ?u64 {
+    var ts: std.posix.timespec = undefined;
+    if (std.posix.errno(std.posix.system.clock_gettime(.THREAD_CPUTIME_ID, &ts)) != .SUCCESS) return null;
+    const seconds = std.math.cast(u64, ts.sec) orelse return null;
+    const nanos = std.math.cast(u64, ts.nsec) orelse return null;
+    return std.math.add(u64, std.math.mul(u64, seconds, std.time.ns_per_s) catch return null, nanos) catch null;
+}
+
+const ParentProfileStamp = struct {
+    cpu_ns: ?u64,
+    wall_ns: i128,
+
+    fn now(io: std.Io) ParentProfileStamp {
+        return .{ .cpu_ns = parentThreadCpuNow(), .wall_ns = std.Io.Clock.awake.now(io).toNanoseconds() };
+    }
+};
+
+const ParentPhaseTotals = struct {
+    calls: u64 = 0,
+    cpu_ns: u64 = 0,
+    wall_ns: u64 = 0,
+    cpu_clock_misses: u64 = 0,
+
+    fn record(self: *ParentPhaseTotals, started: ParentProfileStamp, stopped: ParentProfileStamp) void {
+        self.calls +|= 1;
+        self.wall_ns +|= std.math.cast(u64, @max(0, stopped.wall_ns - started.wall_ns)) orelse std.math.maxInt(u64);
+        if (started.cpu_ns) |before| {
+            if (stopped.cpu_ns) |after| {
+                self.cpu_ns +|= after -| before;
+                return;
+            }
+        }
+        self.cpu_clock_misses +|= 1;
+    }
+
+    fn merge(self: *ParentPhaseTotals, other: ParentPhaseTotals) void {
+        self.calls +|= other.calls;
+        self.cpu_ns +|= other.cpu_ns;
+        self.wall_ns +|= other.wall_ns;
+        self.cpu_clock_misses +|= other.cpu_clock_misses;
+    }
+
+    fn log(self: ParentPhaseTotals, phase: []const u8) void {
+        diagnostics.printLine("parent phase profile: phase={s} calls={d} thread_cpu_ns={d} wall_ns={d} cpu_clock_misses={d} wall_semantics=sum-of-calls\n", .{
+            phase, self.calls, self.cpu_ns, self.wall_ns, self.cpu_clock_misses,
+        });
+    }
+};
+
 const Options = struct {
     start_page: usize = 0,
     index_byte_offset: ?usize = null,
@@ -317,9 +369,11 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
     defer a.free(manifest_path);
     var manifest = try mmapPath(io, manifest_path);
     defer manifest.deinit();
-    const modules = [_]struct { name: []const u8, local_names: bool }{
+    const modules = [_]struct { name: []const u8, local_names: bool, nom_names: bool = false }{
         .{ .name = "languages/canonical names", .local_names = false },
         .{ .name = "sprǣcnaman", .local_names = true },
+        // Retained SHY langues p4217/r6746 reads l[code].nom from this data module.
+        .{ .name = "langues/data", .local_names = false, .nom_names = true },
     };
     for (modules) |module| {
         var rows = std.mem.splitScalar(u8, manifest.bytes, '\n');
@@ -339,12 +393,12 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
             var digest: [32]u8 = undefined;
             std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
             if (!std.mem.eql(u8, parsed.value.sha256, &std.fmt.bytesToHex(digest, .lower))) return error.LanguageSourceIdentityMismatch;
-            if (module.local_names) try out.addLocalNamesLua(source) else try out.addLua(source);
+            if (module.nom_names) try out.addNomLanguageDataLua(source) else if (module.local_names) try out.addLocalNamesLua(source) else try out.addLua(source);
         }
     }
     try loadPositionalLanguageModules(io, a, expander_root, namespaces, manifest.bytes, &out);
+    try loadNamedLanguageModules(io, a, expander_root, namespaces, manifest.bytes, &out);
     if (std.mem.eql(u8, out.content_code orelse "", "ar")) {
-        try loadArabicLanguageModules(io, a, expander_root, namespaces, manifest.bytes, &out);
         try loadLiteralLanguageTemplates(io, a, expander_root, namespaces, &out, .arabic);
     } else if (std.mem.eql(u8, out.content_code orelse "", "za")) {
         try loadLiteralLanguageTemplates(io, a, expander_root, namespaces, &out, .zhuang);
@@ -430,14 +484,14 @@ fn loadPositionalLanguageModules(io: std.Io, a: std.mem.Allocator, root: []const
     }
 }
 
-fn isArabicCanonicalLanguageModule(title: []const u8) bool {
+fn isCanonicalLanguageDataModule(title: []const u8) bool {
     if (std.mem.eql(u8, title, "languages/data2")) return true;
     const prefix = "languages/data3/";
     return title.len == prefix.len + 1 and std.mem.startsWith(u8, title, prefix) and
         title[prefix.len] >= 'a' and title[prefix.len] <= 'z';
 }
 
-fn loadArabicLanguageModules(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, manifest: []const u8, registry: *language_registry.Registry) !void {
+fn loadNamedLanguageModules(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, manifest: []const u8, registry: *language_registry.Registry) !void {
     var rows = std.mem.splitScalar(u8, manifest, '\n');
     while (rows.next()) |line| {
         if (line.len == 0) continue;
@@ -445,9 +499,9 @@ fn loadArabicLanguageModules(io: std.Io, a: std.mem.Allocator, root: []const u8,
         defer parsed.deinit();
         const title = namespaces.ofTitle(parsed.value.title);
         if (title.id != 828) continue;
-        const kind: language_registry.LanguageDataKind = if (isArabicCanonicalLanguageModule(title.text))
+        const kind: language_registry.LanguageDataKind = if (isCanonicalLanguageDataModule(title.text))
             .canonical_assignments
-        else if (std.mem.eql(u8, title.text, "لغات/بيانات"))
+        else if (std.mem.eql(u8, registry.content_code orelse "", "ar") and std.mem.eql(u8, title.text, "لغات/بيانات"))
             .named_table
         else
             continue;
@@ -560,8 +614,43 @@ fn loadLiteralLanguageTemplates(io: std.Io, a: std.mem.Allocator, root: []const 
     }
 }
 
+// A complete codetolang table declares parameter-1 codes as literal names.
+// Validate every row before importing any; this is source data, not #switch execution.
+fn importLiteralLanguageNameSwitch(a: std.mem.Allocator, registry: *language_registry.Registry, source: []const u8) !bool {
+    const prefix = "{{#switch:{{{1|}}}|";
+    const raw = std.mem.trim(u8, source, " \t\r\n");
+    if (!std.mem.startsWith(u8, raw, prefix) or !std.mem.endsWith(u8, raw, "}}") or raw.len > 4096) return false;
+    const Row = struct { code: []const u8, label: []const u8 };
+    var rows: std.ArrayList(Row) = .empty;
+    defer rows.deinit(a);
+    var fields = std.mem.splitScalar(u8, raw[prefix.len .. raw.len - 2], '|');
+    var default_seen = false;
+    while (fields.next()) |field| {
+        const equals = std.mem.indexOfScalar(u8, field, '=') orelse return false;
+        const code = field[0..equals];
+        const label = field[equals + 1 ..];
+        if (label.len == 0 or !std.unicode.utf8ValidateSlice(label) or
+            !std.mem.eql(u8, label, std.mem.trim(u8, label, " \t\r\n")) or
+            std.mem.indexOfAny(u8, label, "[]{}<>&#='~\x00\r\n\t") != null or
+            std.mem.indexOf(u8, label, "__") != null) return false;
+        if (std.mem.eql(u8, code, "#default")) {
+            if (default_seen) return false;
+            default_seen = true;
+            continue;
+        }
+        if (code.len < 2 or code.len > 16) return false;
+        for (code) |byte| if (!(byte >= 'a' and byte <= 'z') and byte != '-') return false;
+        for (rows.items) |row| if (std.mem.eql(u8, row.code, code)) return false;
+        if (rows.items.len == 64) return false;
+        try rows.append(a, .{ .code = code, .label = label });
+    }
+    if (!default_seen or rows.items.len == 0) return false;
+    for (rows.items) |row| if (registry.codes.contains(row.code)) try registry.addLocalAlias(row.label, row.code);
+    return true;
+}
+
 // Discover authenticated source banners without changing ordinary registry trust.
-// Open/checksum template data only when the index has a registered hyphen-code.
+// Open/checksum template data only for a registered code or hyphen-code title.
 fn loadSourceLanguageBanners(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, registry: *language_registry.Registry) !void {
     const path = try std.fs.path.join(a, &.{ root, "page-index.tsv" }); defer a.free(path);
     var index = mmapPath(io, path) catch |err| switch (err) { error.FileNotFound => return, else => return err };
@@ -579,9 +668,14 @@ fn loadSourceLanguageBanners(io: std.Io, a: std.mem.Allocator, root: []const u8,
         const this_ordinal = ordinal; ordinal += 1;
         if (row.ns != 10 or row.redirect != null or !row.has_source) continue;
         const title = namespaces.ofTitle(row.title);
-        if (title.id != 10 or title.text.len < 3 or title.text[0] != '-' or title.text[title.text.len - 1] != '-') continue;
-        const code = title.text[1 .. title.text.len - 1];
-        if (!registry.codes.contains(code)) continue;
+        if (title.id != 10) continue;
+        const name_table = std.mem.eql(u8, title.text, "codetolang");
+        const message_link = !name_table and registry.codes.contains(title.text);
+        const code = if (name_table) "" else if (message_link) title.text else blk: {
+            if (title.text.len < 3 or title.text[0] != '-' or title.text[title.text.len - 1] != '-') continue;
+            break :blk title.text[1 .. title.text.len - 1];
+        };
+        if (!name_table and !registry.codes.contains(code)) continue;
         if (templates == null) {
             templates = (try dump_source.TemplateSource.open(io, a, root, index.bytes)) orelse return;
             const behavior_path = try std.fs.path.join(a, &.{ root, "behavior-switches.tsv" }); defer a.free(behavior_path);
@@ -593,8 +687,17 @@ fn loadSourceLanguageBanners(io: std.Io, a: std.mem.Allocator, root: []const u8,
         if (raw.len > 4096) continue;
         const decoded = if (row.source_needs_decode) try xml_decode.decodeSinglePassAlloc(a, raw) else null;
         defer if (decoded) |value| a.free(value);
-        if (source_language_banner.parse(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code)) |proof|
-            try registry.addSourceLanguageBanner(code, proof);
+        if (name_table) {
+            _ = try importLiteralLanguageNameSwitch(a, registry, decoded orelse raw);
+        } else if (message_link) {
+            if (source_language_banner.messageLinkTarget(decoded orelse raw, namespaces, code)) |target|
+                try registry.addLocalAlias(target, code);
+        } else {
+            if (source_language_banner.parse(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code)) |proof|
+                try registry.addSourceLanguageBanner(code, proof);
+            if (source_language_banner.parseParagraph(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code)) |proof|
+                try registry.addSourceLanguageParagraph(code, proof);
+        }
     }
 }
 
@@ -680,7 +783,7 @@ fn loadSourceEquivalentLanguageTemplates(io: std.Io, a: std.mem.Allocator, root:
     // another proof, and competing original owners make the wrapper ambiguous.
     for (rows.items, 0..) |entry, i| {
         const title = namespaces.ofTitle(entry.row.title);
-        const trusted = registry.resolveStrong(title.text) orelse registry.resolveTrusted(title.text) orelse continue;
+        const trusted = registry.resolveStrong(title.text) orelse registry.resolveSourceTrusted(title.text) orelse continue;
         const terminal = sourceEquivalentTerminal(rows.items, &names, namespaces, i) orelse continue;
         const owner = try owners.getOrPut(a, terminal);
         if (!owner.found_existing) owner.value_ptr.* = trusted.code else if (owner.value_ptr.*) |before| {
@@ -715,6 +818,12 @@ fn languageCodes(registry: *const language_registry.Registry, namespaces: ?*cons
     return .{
         .namespace_catalog = namespaces,
         .ctx = registry,
+        .source_paragraph_fn = struct {
+            fn matches(raw: ?*const anyopaque, code_value: []const u8, line: []const u8) bool {
+                const value: *const language_registry.Registry = @ptrCast(@alignCast(raw orelse return false));
+                return value.matchesSourceLanguageParagraph(code_value, line);
+            }
+        }.matches,
         .source_banner_fn = struct {
             fn matches(raw: ?*const anyopaque, code_value: []const u8, heading: []const u8, level: u8) bool {
                 const value: *const language_registry.Registry = @ptrCast(@alignCast(raw orelse return false));
@@ -1148,6 +1257,9 @@ const ExpansionSlot = struct {
     job: ExpansionJob = undefined,
     expansion: ?bundle_expander.Expansion = null,
     failure: ?anyerror = null,
+    profile_enabled: bool = false,
+    protocol_profile: ParentPhaseTotals = .{},
+    consumer_profile: ParentPhaseTotals = .{},
 
     fn threadMain(self: *ExpansionSlot) void {
         defer self.worker.deinit();
@@ -1156,6 +1268,7 @@ const ExpansionSlot = struct {
             self.job_event.reset();
             if (self.stop.load(.acquire)) return;
             self.failure = null;
+            const profile_start = if (self.profile_enabled) ParentProfileStamp.now(self.io) else null;
             self.expansion = self.worker.expand(
                 self.arena.allocator(),
                 self.job.ordinal,
@@ -1166,6 +1279,7 @@ const ExpansionSlot = struct {
                 self.failure = err;
                 break :blk null;
             };
+            if (profile_start) |started| self.protocol_profile.record(started, ParentProfileStamp.now(self.io));
             self.done.store(true, .release);
             self.completion.set(self.io);
         }
@@ -1217,7 +1331,11 @@ const ExpansionSlot = struct {
         }
         if (self.expansion) |expanded| {
             const fallback_before = writer.stats.fallback_pages;
-            const compiled = try consumeExpandedPage(writer, self.job, expanded, self.arena.allocator(), audit);
+            const compiled = blk: {
+                const profile_start = if (self.profile_enabled) ParentProfileStamp.now(self.io) else null;
+                defer if (profile_start) |started| self.consumer_profile.record(started, ParentProfileStamp.now(self.io));
+                break :blk try consumeExpandedPage(writer, self.job, expanded, self.arena.allocator(), audit);
+            };
             if (compiled and audit == null and self.job.alias_record == null)
                 try writer.namespace_coverage.outcome(self.job.ns.id, if (writer.stats.fallback_pages != fallback_before) .fallback else .expanded);
         } else try writer.namespace_coverage.outcome(self.job.ns.id, .duplicate);
@@ -1286,6 +1404,8 @@ const ExpansionPool = struct {
     reviewed_nonlexical: ?*reviewed_nonlexical.Review = null,
     reviewed_dump_identity: ?PageIndexIdentity = null,
     audit: ?*PresentationAudit = null,
+    profile_enabled: bool = false,
+    finish_profile: ParentPhaseTotals = .{},
 
     fn init(
         io: std.Io,
@@ -1336,10 +1456,28 @@ const ExpansionPool = struct {
             slot.job_event.set(self.io);
         }
         for (self.slots) |*slot| if (slot.thread) |thread| thread.join();
+        if (self.profile_enabled) {
+            var consumer: ParentPhaseTotals = .{};
+            var protocol: ParentPhaseTotals = .{};
+            for (self.slots) |slot| {
+                consumer.merge(slot.consumer_profile);
+                protocol.merge(slot.protocol_profile);
+            }
+            // Protocol wall includes child wait and overlaps consumer/peer calls.
+            consumer.log("expanded-consume-compile-encode-spool");
+            protocol.log("worker-protocol-including-child-wait");
+            self.finish_profile.log("writer-finish");
+        }
         for (self.slots) |*slot| slot.arena.deinit();
         self.allocator.free(self.slots);
         self.allocator.destroy(self.completion);
         self.* = undefined;
+    }
+
+    fn finishWriter(self: *ExpansionPool, writer: *encoder.blob_builder.Writer, codes: encoder.blob_builder.LanguageCodes) !encoder.blob_builder.BuildStats {
+        const profile_start = if (self.profile_enabled) ParentProfileStamp.now(self.io) else null;
+        defer if (profile_start) |started| self.finish_profile.record(started, ParentProfileStamp.now(self.io));
+        return writer.finish(codes);
     }
 
     fn consumeReady(self: *ExpansionPool, writer: *encoder.blob_builder.Writer) !usize {
@@ -1843,7 +1981,7 @@ const PendingShard = struct {
         const writer = if (self.writer) |*value| value else return error.WriterFinished;
         try pool.drain(writer);
         try checkReviewedDump(pool, dump);
-        const stats = try writer.finish(codes);
+        const stats = try pool.finishWriter(writer, codes);
         if (stats.pages_seen != self.selected) return error.PageCoverageMismatch;
         try writePageCoverage(self.io, self.allocator, self.temporary, .{
             .start_page = self.start,
@@ -1982,6 +2120,8 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, options: Options, audit: ?*PresentationAudit) !void {
+    const profile_env = getenv("WIKIDICT_EXPANSION_PROFILE");
+    const profile_enabled = try diagnostics.profileEnabledFromEnv(if (profile_env) |value| std.mem.span(value) else null);
     var namespaces = try namespace_registry.Registry.load(io, a, options.expander_root);
     defer namespaces.deinit();
     const interwiki_path = try std.fs.path.join(a, &.{ options.expander_root, "interwiki-map.tsv" });
@@ -2067,6 +2207,8 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     defer a.free(worker_path);
     var pool = try ExpansionPool.init(io, a, options.expander_root, worker_path, args[1], options.workers, if (audit) |value| value.context.now_unix else options.now_unix, options.expansion_timeout_ms orelse expansion_deadline.default_ms);
     defer pool.deinit();
+    pool.profile_enabled = profile_enabled;
+    for (pool.slots) |*slot| slot.profile_enabled = profile_enabled;
     pool.audit = audit;
     pool.page_index_bytes = page_index.bytes;
     pool.page_title_index = title_index;
@@ -2132,7 +2274,7 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
         return;
     }
     const coverage = try pageCoverage(options, pages_selected, page_index.identity);
-    const stats = try writer.finish(codes);
+    const stats = try pool.finishWriter(&writer, codes);
     if (stats.pages_seen != coverage.pages_seen) return error.PageCoverageMismatch;
     if (!std.meta.eql(page_index.identity, try pathIdentity(io, page_index_path))) {
         return error.PageIndexChanged;
@@ -2270,14 +2412,14 @@ test "Arabic dump local literal language evidence reaches decoded records" {
 }
 
 test "Arabic canonical source admission accepts only bounded data shards" {
-    try std.testing.expect(isArabicCanonicalLanguageModule("languages/data2"));
+    try std.testing.expect(isCanonicalLanguageDataModule("languages/data2"));
     for ("abcdefghijklmnopqrstuvwxyz") |letter| {
         var title = "languages/data3/a".*;
         title[title.len - 1] = letter;
-        try std.testing.expect(isArabicCanonicalLanguageModule(&title));
+        try std.testing.expect(isCanonicalLanguageDataModule(&title));
     }
     for ([_][]const u8{ "languages/data3", "languages/data3/", "languages/data3/M", "languages/data3/mm", "languages/data3/m/doc", "languages/data3/1", "languages/data3/م", "languages/data3/m ", "Languages/data3/m", "other/languages/data3/m", "languages/data2/doc" }) |title|
-        try std.testing.expect(!isArabicCanonicalLanguageModule(title));
+        try std.testing.expect(!isCanonicalLanguageDataModule(title));
 }
 
 test "Arabic data3 loader rejects later mutation before trusting a canonical label" {
@@ -2308,7 +2450,7 @@ test "Arabic data3 loader rejects later mutation before trusting a canonical lab
         std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
         const manifest = try std.fmt.allocPrint(a, "{{\"page_id\":161772,\"title\":\"وحدة:languages/data3/m\",\"sha256\":\"{s}\"}}\n", .{std.fmt.bytesToHex(digest, .lower)});
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "modules", "161772.lua" }), .data = source });
-        try loadArabicLanguageModules(io, a, root, &namespaces, manifest, &registry);
+        try loadNamedLanguageModules(io, a, root, &namespaces, manifest, &registry);
         try std.testing.expect(registry.resolveTrusted("مون") == null);
         try std.testing.expectEqualStrings("mnw", registry.resolveTrusted("Mon").?.code);
     }
@@ -4231,7 +4373,8 @@ test "ZA captured aliases retain two Australia owners and unresolved source cont
                         }
                         if (std.mem.eql(u8, span.text, iso)) {
                             small_codes += 1;
-                            try std.testing.expect(span.small);
+                            try std.testing.expect(!span.small);
+                            try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001);
                             try std.testing.expectEqualStrings("toccolours", span.classes);
                         }
                         if (std.mem.eql(u8, span.text, entry[2]) and span.bold) bold_titles += 1;
@@ -7481,5 +7624,639 @@ test "UncompiledTemplate capture preserves exact payload and propagation without
             try std.testing.expectEqualStrings("retained first capture", bytes);
         } else try F.absent(capture_root);
         try F.noPublication(a, root);
+    }
+}
+
+test "normal Writer reviewed exact heading preserves complete body actions and codec" {
+    for ([_]bool{ false, true }) |attested| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+        const a = arena.allocator(); const io = std.testing.io;
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        var namespaces = try namespace_registry.Registry.init(a, AutonymLoaderTest.namespaces); defer namespaces.deinit();
+        try AutonymLoaderTest.install(io, a, root, null);
+        if (attested) {
+            var hash: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(@embedFile("reviewed_language_aliases.json"), &hash, .{});
+            const rows = try std.fmt.allocPrint(a, "{s}# reviewed-alias\tur\tاُردو\tnwe-urdu-exact-v1\t{s}\n", .{AutonymLoaderTest.registry, std.fmt.bytesToHex(hash, .lower)});
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{root, "language-registry.tsv"}), .data = rows });
+        }
+        var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+        const codes = languageCodes(&registry, &namespaces);
+        const output = try std.fs.path.join(a, &.{ root, "blobs" });
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+        writer.language_codes = codes;
+        const source = "== اُردو ==\n# Definition '''bold''' [[target|label]].\n";
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "synthetic-autonym", source, source, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const owner = if (attested) "Urdu" else "Unclassified";
+        const expected_code = if (attested) "ur" else "";
+        const path = try std.fs.path.join(a, &.{ output, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(owner, &filename) });
+        var mapped = try mmapPath(io, path); defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(expected_code, metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find("synthetic-autonym")) orelse return error.TestUnexpectedResult;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(expected_code, decoded.entry.language_code);
+        try std.testing.expectEqualStrings("synthetic-autonym", decoded.entry.title);
+        var headings: usize = 0; var definitions: usize = 0; var links: usize = 0; var bold: usize = 0;
+        for (decoded.entry.sections) |section| {
+            if (section.level == 2 and std.mem.eql(u8, section.title, "اُردو")) headings += 1;
+            for (section.blocks) |block| {
+                if (block.kind == .definition) definitions += 1;
+                for (block.spans) |span| {
+                    if (std.mem.eql(u8, span.target, "target")) {
+                        try std.testing.expect(span.kind == .link);
+                        try std.testing.expectEqualStrings("label", span.text);
+                        links += 1;
+                    }
+                    if (std.mem.eql(u8, span.text, "bold") and span.bold) bold += 1;
+                }
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), headings);
+        try std.testing.expectEqual(@as(usize, 1), definitions);
+        try std.testing.expectEqual(@as(usize, 1), links);
+        try std.testing.expectEqual(@as(usize, 1), bold);
+        const encoded = try encoder.presentation_codec.encodeAlloc(a, decoded);
+        try std.testing.expectEqualSlices(u8, record.payload, encoded);
+    }
+}
+
+test "reviewed exact alias retains complete p10 r229761 section payloads" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    // Exact partition: Saraiki stays owned; Urdu leaves the old unclassified
+    // record; the meaningful pre-language prefix remains unclassified.
+    var baseline_sections: [3]?[]const u8 = .{null, null, null};
+    for ([_]bool{false, true}) |reviewed| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        var namespaces = try namespace_registry.Registry.init(a, AutonymLoaderTest.namespaces); defer namespaces.deinit();
+        try AutonymLoaderTest.install(io, a, root, null);
+        if (reviewed) {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(@embedFile("reviewed_language_aliases.json"), &digest, .{});
+            const rows = try std.fmt.allocPrint(a, "{s}# reviewed-alias\tur\tاُردو\tnwe-urdu-exact-v1\t{s}\n", .{AutonymLoaderTest.registry, std.fmt.bytesToHex(digest, .lower)});
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{root, "language-registry.tsv"}), .data = rows });
+        }
+        var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+        const codes = languageCodes(&registry, &namespaces);
+        const output = try std.fs.path.join(a, &.{root, "blobs"});
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+        writer.language_codes = codes;
+        const source = @embedFile("reviewed_alias_p10_r229761.wikitext");
+        try std.testing.expectEqual(@as(usize, 1660), source.len);
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ہَݙا", source, source, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, if (reviewed) 3 else 2), stats.language_records);
+        const owners: []const []const u8 = if (reviewed)
+            &.{"سرائیکی", "Urdu", "Unclassified"}
+        else
+            &.{"سرائیکی", "Unclassified"};
+        for (owners, 0..) |owner, ordinal| {
+            var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+            const path = try std.fs.path.join(a, &.{output, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(owner, &filename)});
+            var mapped = try mmapPath(io, path); defer mapped.deinit();
+            const blob = try encoder.blob_format.inspect(mapped.bytes);
+            const metadata = try blob.languageMetadata();
+            try std.testing.expectEqualStrings(if (ordinal == 0) "skr" else if (reviewed and ordinal == 1) "ur" else "", metadata.code);
+            var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+            const record = (try index.find("ہَݙا")) orelse return error.TestUnexpectedResult;
+            const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+            const sections = decoded.entry.sections;
+            if (!reviewed and ordinal == 1) {
+                // The prefix and final unresolved reference heading remain
+                // unclassified. All middle Urdu sections stay complete, including
+                // the second H1 inside the first Urdu range.
+                try std.testing.expect(sections.len > 2);
+                try std.testing.expectEqual(@as(u8, 1), sections[0].level);
+                try std.testing.expectEqualStrings("ہَݙا", sections[0].title);
+                try std.testing.expectEqual(@as(usize, 2), sections[0].blocks.len);
+                try std.testing.expectEqual(@as(u8, 2), sections[1].level);
+                try std.testing.expectEqualStrings("اُردو", sections[1].title);
+                const last = sections.len - 1;
+                try std.testing.expectEqual(@as(u8, 2), sections[last].level);
+                try std.testing.expectEqualStrings("حوالہ", sections[last].title);
+                const unclassified = try a.alloc(@TypeOf(sections[0]), 2);
+                unclassified[0] = sections[0];
+                unclassified[1] = sections[last];
+                baseline_sections[2] = try std.json.Stringify.valueAlloc(a, unclassified, .{});
+                baseline_sections[1] = try std.json.Stringify.valueAlloc(a, sections[1..last], .{});
+            } else {
+                const complete = try std.json.Stringify.valueAlloc(a, sections, .{});
+                if (!reviewed) baseline_sections[ordinal] = complete else
+                    try std.testing.expectEqualStrings(baseline_sections[ordinal].?, complete);
+            }
+            const encoded = try encoder.presentation_codec.encodeAlloc(a, decoded);
+            try std.testing.expectEqualSlices(u8, record.payload, encoded);
+        }
+    }
+}
+
+const IsParagraphTest = struct {
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tiswiktionary\n# dump-date\t20261001\n# content-language\tis\n0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n10\tSnið\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n14\tFlokkur\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tcategories\n";
+    const registry = "# content-language\tis\n# mediawiki\nis\tíslenska\nde\tþýska\tÞýska\nen\tEnglish\n";
+    // Exact XML text of Snið:-de-, p2831/r393255, verified selected dump.
+    const template_raw = "Þýska&lt;noinclude&gt;[[Flokkur:Tungumálasnið]]&lt;/noinclude&gt;&lt;includeonly&gt;[[Flokkur:Þýska]]&lt;/includeonly&gt;";
+    const emission = "Þýska[[Flokkur:Þýska]]";
+    // Marked synthetic expanded body; no actual native expansion is claimed.
+    const expanded = emission ++ "\n{| class=\"wikitable\"\n| '''bold''' [[target|label]] || ''italic''\n|}\n:[[Auto]] [[Versicherung|versicherung]] <sup>2</sup>.\n";
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8) !void {
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = registry });
+        const index = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index, .data = "0\t0\tSnið:-de-\t\t2831\t393255\t2025-01-01T00:00:00Z\tA\twikitext\t10\t1\t1\n" });
+        var writer = try dump_source.TemplateSourceWriter.init(io, a, root); defer writer.deinit();
+        try writer.append(0, 2831, 393255, template_raw); try writer.finish(index);
+    }
+};
+
+test "literal paragraph declaration requires exact known name and same owner hidden category" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var namespaces = try namespace_registry.Registry.init(a, IsParagraphTest.namespaces); defer namespaces.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(IsParagraphTest.registry);
+    const source = try xml_decode.decodeSinglePassAlloc(a, IsParagraphTest.template_raw);
+    const proof = source_language_banner.parseParagraph(source, &namespaces, null, &registry, "de").?;
+    try std.testing.expectEqualStrings("Þýska", proof.label);
+    try std.testing.expectEqualStrings("[[Flokkur:Þýska]]", proof.category);
+    try std.testing.expect(source_language_banner.parse(source, &namespaces, null, &registry, "de") == null);
+    try registry.addSourceLanguageParagraph("de", proof);
+    try std.testing.expect(registry.matchesSourceLanguageParagraph("de", IsParagraphTest.emission));
+    try std.testing.expect(!registry.matchesSourceLanguageParagraph("de", "Þýska"));
+    try std.testing.expect(!registry.matchesSourceLanguageParagraph("en", IsParagraphTest.emission));
+    for ([_][]const u8{
+        " Þýska<noinclude>[[Flokkur:Doc]]</noinclude><includeonly>[[Flokkur:Þýska]]</includeonly>",
+        "prefix Þýska<noinclude>[[Flokkur:Doc]]</noinclude><includeonly>[[Flokkur:Þýska]]</includeonly>",
+        "<nowiki>Þýska</nowiki><noinclude>[[Flokkur:Doc]]</noinclude><includeonly>[[Flokkur:Þýska]]</includeonly>",
+        "Þýska<noinclude>[[Flokkur:Doc]]</noinclude><includeonly>[[Flokkur:English]]</includeonly>",
+        "Þýska<noinclude>[[Flokkur:Doc]]</noinclude><includeonly>[[:Flokkur:Þýska]]</includeonly>",
+        "Þýska<noinclude>[[Flokkur:Doc]]</noinclude><includeonly>[[Flokkur:Þýska|sort]]</includeonly>",
+        "Þýska<noinclude>[[Flokkur:Doc]]</noinclude><includeonly>[[Flokkur:Þýska]]</includeonly>extra",
+        "{{{name|Þýska}}}<noinclude>[[Flokkur:Doc]]</noinclude><includeonly>[[Flokkur:Þýska]]</includeonly>",
+    }) |bad| try std.testing.expect(source_language_banner.parseParagraph(bad, &namespaces, null, &registry, "de") == null);
+    try registry.addTsv("# mediawiki\nen\tEnglish\tÞýska\n");
+    try std.testing.expect(source_language_banner.parseParagraph(source, &namespaces, null, &registry, "de") == null);
+    try std.testing.expect(!registry.matchesSourceLanguageParagraph("de", IsParagraphTest.emission));
+}
+
+test "Writer literal paragraph owner preserves complete original body styles links and codec" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try IsParagraphTest.install(io, a, root);
+    var namespaces = try namespace_registry.Registry.init(a, IsParagraphTest.namespaces); defer namespaces.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+    try std.testing.expectEqualStrings("en", (registry.resolve("English") orelse return error.TestUnexpectedResult).code);
+    try std.testing.expectEqualStrings("de", (registry.resolve("Þýska") orelse return error.TestUnexpectedResult).code);
+    try std.testing.expect(registry.matchesSourceLanguageParagraph("de", IsParagraphTest.emission));
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("de", "Þýska", 2));
+    const codes = languageCodes(&registry, &namespaces); const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    const cases = [_]struct { raw: []const u8, expanded: []const u8, owned: bool = false }{
+        .{ .raw = "{{-de-}}\n{{body}}\n", .expanded = IsParagraphTest.expanded, .owned = true },
+        .{ .raw = "\n{{-de-}}\n{{body}}\n", .expanded = "\n" ++ IsParagraphTest.expanded, .owned = true },
+        .{ .raw = " {{-de-}}\n", .expanded = IsParagraphTest.expanded },
+        .{ .raw = "\t{{-de-}}\n", .expanded = IsParagraphTest.expanded },
+        .{ .raw = "prefix {{-de-}}\n", .expanded = IsParagraphTest.expanded },
+        .{ .raw = "<nowiki>{{-de-}}</nowiki>\n", .expanded = IsParagraphTest.expanded },
+        .{ .raw = "<!--{{-de-}}-->\n", .expanded = IsParagraphTest.expanded },
+        .{ .raw = "{{-de-|parameter}}\n", .expanded = IsParagraphTest.expanded },
+        .{ .raw = "{{-en-}}\n", .expanded = IsParagraphTest.expanded },
+        .{ .raw = "{{-de-}}\n{{-en-}}\n", .expanded = IsParagraphTest.expanded },
+        .{ .raw = "{{-de-}}\n", .expanded = "prefix\n" ++ IsParagraphTest.expanded },
+        .{ .raw = "{{-de-}}\n", .expanded = " " ++ IsParagraphTest.expanded },
+        .{ .raw = "{{-de-}}\n", .expanded = "Þýska\nbody\n" },
+        .{ .raw = "{{-de-}}\n", .expanded = "Þýska[[Flokkur:English]]\nbody\n" },
+        .{ .raw = "{{-de-}}\n", .expanded = IsParagraphTest.expanded ++ "[[Flokkur:English]]\n" },
+        .{ .raw = "{{-de-}}\n== Unknown boundary ==\n", .expanded = IsParagraphTest.expanded ++ "== Unknown boundary ==\nbody\n" },
+    };
+    for (cases, 0..) |case, i| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, try std.fmt.allocPrint(a, "paragraph-control-{d}", .{i}), case.expanded, case.raw, null);
+    const stats = try writer.finish(codes); try std.testing.expectEqual(@as(usize, cases.len), stats.language_records);
+    for (cases, 0..) |case, i| {
+        const owner = if (case.owned) "þýska" else "Unclassified";
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename(owner, &filename) })); defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes); const metadata = try blob.languageMetadata(); var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const title = try std.fmt.allocPrint(a, "paragraph-control-{d}", .{i});
+        const record = (try index.find(title)) orelse {
+            std.debug.print("missing required paragraph record: title={s}, expected owner={s}\n", .{ title, owner });
+            return error.TestUnexpectedResult;
+        };
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(if (case.owned) "de" else "", decoded.entry.language_code);
+        var report: encoder.presentation_document.Fallbacks = .{};
+        const whole_payload = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, title, .language, owner, metadata.code, case.expanded, null, .{}, &namespaces, &report);
+        const whole = try encoder.presentation_codec.decodeAlloc(a, whole_payload, title, .language, metadata);
+        try std.testing.expectEqualDeep(whole.entry.sections, decoded.entry.sections);
+        try std.testing.expectEqualDeep(whole.entry.references, decoded.entry.references);
+        try std.testing.expectEqualDeep(whole.entry.media, decoded.entry.media);
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+        if (case.owned) {
+            try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections.len);
+            const first = decoded.entry.sections[0].blocks[0];
+            try std.testing.expect(first.kind == .paragraph);
+            try std.testing.expectEqualStrings("Þýska", first.spans[0].text);
+        }
+    }
+}
+
+const DvShyOwnerTest = struct {
+    const ns_shy = "# wikidict-namespace-registry-v1\n# wiki\tshywiktionary\n# dump-date\t20261001\n# content-language\tshy\n0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n6\tBhengkek\tFile\tcase-sensitive\t1\t0\t0\t\tcompile_only\tfiles\n10\tTamudemt\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n14\tTaggayt\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n828\tAmṣada\tModule\tcase-sensitive\t1\t0\t0\tScribunto\tcompile_only\tmodules\n";
+    const ns_dv = "# wikidict-namespace-registry-v1\n# wiki\tdvwiktionary\n# dump-date\t20261001\n# content-language\tdv\n0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n6\tފައިލް\tFile\tcase-sensitive\t1\t0\t0\t\tcompile_only\tfiles\n10\tފަންވަތް\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n14\tޤިސްމު\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n";
+    const dv_registry = "# content-language\tdv\n# mediawiki\ndv\tދިވެހިބަސް\tdv\nen\tEnglish\n";
+    const shy_registry = "# content-language\tshy\n# mediawiki\nshy\tShawiya\tTacawit\ttacawit\nen\tEnglish\n";
+    fn file(io: std.Io, a: std.mem.Allocator, root: []const u8, name: []const u8, bytes: []const u8) !void {
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{root, name}), .data = bytes });
+    }
+    fn nom(io: std.Io, a: std.mem.Allocator, root: []const u8, title: []const u8, source: []const u8, tamper: bool) !void {
+        try file(io, a, root, "language-registry.tsv", shy_registry);
+        try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{root, "modules"}));
+        try file(io, a, root, "modules/4218.lua", if (tamper) "return {}" else source);
+        var hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(source, &hash, .{});
+        const digest = std.fmt.bytesToHex(hash, .lower);
+        try file(io, a, root, "manifest.jsonl", try std.json.Stringify.valueAlloc(a, .{ .title = title, .page_id = @as(u64, 4218), .sha256 = digest[0..] }, .{}));
+    }
+};
+
+test "DV bare source banner retains explicit code proof without a new alias or fake root" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    var ns = try namespace_registry.Registry.init(a, DvShyOwnerTest.ns_dv); defer ns.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(DvShyOwnerTest.dv_registry);
+    const source = @embedFile("testdata/dv-bare-banner.wikitext");
+    const proof = source_language_banner.parse(source, &ns, null, &registry, "dv") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(proof.authority == .literal_code and proof.level == 1);
+    try std.testing.expectEqualStrings("ދިވެހި", proof.label);
+    try std.testing.expect(registry.resolveTrusted("ދިވެހި") == null);
+    const fake = try std.mem.replaceOwned(u8, a, source, "(dv)", "(en)");
+    try std.testing.expect(source_language_banner.parse(fake, &ns, null, &registry, "dv") == null);
+    for ([_][]const u8{ "English", "{{{label}}}", "<nowiki>ދިވެހި</nowiki>", "<big>ދިވެހި</big>" }) |label| {
+        const bad = try std.mem.replaceOwned(u8, a, source, "<big>ދިވެހި<small>", try std.fmt.allocPrint(a, "<big>{s}<small>", .{label}));
+        try std.testing.expect(source_language_banner.parse(bad, &ns, null, &registry, "dv") == null);
+    }
+    const indented = try std.mem.replaceOwned(u8, a, source, "=<div", " =<div");
+    try std.testing.expect(source_language_banner.parse(indented, &ns, null, &registry, "dv") == null);
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try DvShyOwnerTest.file(io, a, root, "language-registry.tsv", DvShyOwnerTest.dv_registry);
+    try DvShyOwnerTest.file(io, a, root, "manifest.jsonl", "");
+    const index_path = try std.fs.path.join(a, &.{root, "page-index.tsv"});
+    try DvShyOwnerTest.file(io, a, root, "page-index.tsv", "0\t0\tފަންވަތް:-dv-\t\t2048\t3925\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t0\n");
+    var templates = try dump_source.TemplateSourceWriter.init(io, a, root); defer templates.deinit();
+    try templates.append(0, 2048, 3925, source); try templates.finish(index_path);
+    var loaded = try loadLanguageRegistry(io, a, root, &ns); defer loaded.deinit();
+    try std.testing.expect(loaded.matchesSourceLanguageBanner("dv", proof.heading, 1));
+    try std.testing.expect(loaded.resolveTrusted(proof.label) == null);
+    const codes = languageCodes(&loaded, &ns); const output = try std.fs.path.join(a, &.{root, "blobs"});
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    const body = "\n'''lemma'''\n:[1] ...\n{|\n| [[chair]] || '''bold''' [https://example.test label]\n|}\n";
+    const expanded = try std.mem.concat(a, u8, &.{source, body});
+    const roots = [_][]const u8{ "{{-dv-}}\nbody", "{{-dv-|parameter}}", "<nowiki>{{-dv-}}</nowiki>", "prefix\n{{-dv-}}" };
+    for (roots, 0..) |raw, i| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, try std.fmt.allocPrint(a, "dv-{d}", .{i}), expanded, raw, null);
+    _ = try writer.finish(codes);
+    for (roots, 0..) |_, i| {
+        const owner = if (i == 0) "ދިވެހިބަސް" else "Unclassified";
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var mapped = try mmapPath(io, try std.fs.path.join(a, &.{output, "languages", encoder.blob_catalog.languageBlobFilename(owner, &filename)})); defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes); const metadata = try blob.languageMetadata(); var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find(try std.fmt.allocPrint(a, "dv-{d}", .{i}))).?;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(if (i == 0) "dv" else "", decoded.entry.language_code);
+        try std.testing.expectEqual(@as(usize, 0), decoded.entry.organization.lexemes.len);
+        var report: encoder.presentation_document.Fallbacks = .{};
+        const expected_bytes = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, record.title, .language, owner, metadata.code, expanded, null, .{}, &ns, &report);
+        const expected = try encoder.presentation_codec.decodeAlloc(a, expected_bytes, record.title, .language, metadata);
+        try std.testing.expectEqualDeep(expected.entry.sections, decoded.entry.sections);
+        try std.testing.expectEqualDeep(expected.entry.media, decoded.entry.media);
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    }
+}
+
+test "normal nom provider loader authenticates complete source and retains typed body without POS inference" {
+    const source = @embedFile("testdata/shy-nom-data.lua");
+    for ([_][]const u8{ "Amṣada:langues/data", "Module:langues/data", "Amṣada:langues/data/doc", "Tamudemt:langues/data" }) |title| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup(); var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        try DvShyOwnerTest.nom(io, a, root, title, source, false);
+        var ns = try namespace_registry.Registry.init(a, DvShyOwnerTest.ns_shy); defer ns.deinit();
+        var registry = try loadLanguageRegistry(io, a, root, &ns); defer registry.deinit();
+        const accepted = std.mem.eql(u8, title, "Amṣada:langues/data") or std.mem.eql(u8, title, "Module:langues/data");
+        if (!accepted) { try std.testing.expect(registry.resolveTrusted("Tacawit") == null); continue; }
+        try std.testing.expectEqualStrings("shy", registry.resolveTrusted("Tacawit").?.code);
+        const codes = languageCodes(&registry, &ns); const output = try std.fs.path.join(a, &.{root, "blobs"});
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+        const expanded = "==<span class=\"sectionlangue\" id=\"shy\">[[tacawit|Tacawit]]</span>==\n===Awal===\n'''axeddam'''\n# ''Iwafen ig khussan.''\n#* ''Ulac amedya.''\n{|\n! Asuf !! Asget\n|-\n| '''axeddam''' || [[travailleur]]\n|}\n[[File:LL-Q33274 (shy)-Reda Kerbouche-axeddam.wav]]\n";
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "axeddam", expanded, "=={{langue|shy}}==", null);
+        _ = try writer.finish(codes);
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var mapped = try mmapPath(io, try std.fs.path.join(a, &.{output, "languages", encoder.blob_catalog.languageBlobFilename("Shawiya", &filename)})); defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes); const metadata = try blob.languageMetadata(); var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find("axeddam")).?;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings("shy", decoded.entry.language_code);
+        try std.testing.expectEqual(@as(usize, 0), decoded.entry.organization.lexemes.len);
+        var report: encoder.presentation_document.Fallbacks = .{};
+        const expected_bytes = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, record.title, .language, metadata.heading, metadata.code, expanded, null, .{}, &ns, &report);
+        const expected = try encoder.presentation_codec.decodeAlloc(a, expected_bytes, record.title, .language, metadata);
+        try std.testing.expectEqualDeep(expected.entry.sections, decoded.entry.sections);
+        try std.testing.expectEqualDeep(expected.entry.media, decoded.entry.media);
+        try std.testing.expectEqualDeep(expected.entry.references, decoded.entry.references);
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    }
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup(); var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try DvShyOwnerTest.nom(io, a, root, "Amṣada:langues/data", source, true);
+    var ns = try namespace_registry.Registry.init(a, DvShyOwnerTest.ns_shy); defer ns.deinit();
+    try std.testing.expectError(error.LanguageSourceIdentityMismatch, loadLanguageRegistry(io, a, root, &ns));
+}
+
+const LaSourceLanguageTest = struct {
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tlawiktionary\n# dump-date\t20261001\n# content-language\tla\n" ++
+        "0\t\t\tfirst-letter\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tFasciculus\tFile\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tmedia\n" ++
+        "10\tFormula\tTemplate\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "12\tAuxilium\tHelp\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tother\n" ++
+        "14\tCategoria\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n" ++
+        "828\tModulus\tModule\tfirst-letter\t1\t0\t0\tScribunto\tcompile_only\tmodules\n";
+    const language_template = "[[Auxilium:Lingua Latina|{{int:wikt-la}}]]<noinclude>\n[[Categoria:Formulae linguarum|la]]\n</noinclude>";
+    const banner = "<span class=\"caput-linguae\">[[Auxilium:Lingua Latina|Latine]][[Categoria:Index inversus|sunihpled]][[Categoria:Lingua Latina|delphinus]][[Categoria:Linguae Latinae index inversus|sunihpled]]</span>";
+    // Source-instantiated banner and lexical body, not a captured expansion.
+    // Extra expanded support boundaries deliberately prevent raw count alignment.
+    const raw = "{{caput|la|delphinus}}\n=={{-lingua-|la|delphinus}}==\n{{substantivum|la}}\n# Animal mammiferum aquaticum.\n";
+    const body = "==" ++ banner ++ "==\n===Nomen substantivum===\n'''delphinus'''\n# Animal mammiferum [[aquaticum]].<ref>Bibliographia ''Latina''.</ref>\n# Sidus forma delphinis.\n==Loci==\n''delphinus'' [[Gaius Plinius Secundus|Plinii]]\n==Fontes==\n<references/>\n";
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8, module_source: []const u8, template_source: []const u8) !void {
+        try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{ root, "modules" }));
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = "# content-language\tla\n# mediawiki\nla\tLatina\nen\tEnglish\n" });
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(module_source, &digest, .{});
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = try std.fmt.allocPrint(a, "{{\"page_id\":24123,\"revision_id\":221631,\"title\":\"Modulus:languages/data2\",\"sha256\":\"{s}\"}}\n", .{std.fmt.bytesToHex(digest, .lower)}) });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "modules", "24123.lua" }), .data = module_source });
+        const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = "0\t0\tFormula:la\t\t959\t141120\t2016-06-03T21:47:32Z\tYaganZ\twikitext\t10\t1\t0\n" });
+        var templates = try dump_source.TemplateSourceWriter.init(io, a, root);
+        defer templates.deinit();
+        try templates.append(0, 959, 141120, template_source);
+        try templates.finish(index_path);
+    }
+};
+
+test "named canonical language modules and exact message targets preserve independent source authority" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var namespaces = try namespace_registry.Registry.init(a, LaSourceLanguageTest.namespaces); defer namespaces.deinit();
+    try LaSourceLanguageTest.install(io, a, root, laNamedCanonicalCapturedSource, LaSourceLanguageTest.language_template);
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+    for ([_][]const u8{ "Latine", "Auxilium:Lingua Latina" }) |label| {
+        const resolved = registry.resolveTrusted(label).?;
+        try std.testing.expectEqualStrings("la", resolved.code);
+        try std.testing.expectEqualStrings("Latina", resolved.heading);
+    }
+    for ([_][]const u8{ "Latinus", "Latinarum", "Auxilium:Latina", "Lingua Latina" }) |label|
+        try std.testing.expect(registry.resolveTrusted(label) == null);
+    try std.testing.expectEqualStrings("Auxilium:Lingua Latina", source_language_banner.messageLinkTarget(LaSourceLanguageTest.language_template, &namespaces, "la").?);
+    for ([_][]const u8{
+        "[[Auxilium:Lingua Latina|{{int:wikt-en}}]]<noinclude>[[Categoria:Formulae linguarum]]</noinclude>",
+        "[[Auxilium:Lingua Latina|{{int:wikt-la|x}}]]<noinclude>[[Categoria:Formulae linguarum]]</noinclude>",
+        "[[Auxilium:Lingua Latina|Latine]]<noinclude>[[Categoria:Formulae linguarum]]</noinclude>",
+        "[[Latina|{{int:wikt-la}}]]<noinclude>[[Categoria:Formulae linguarum]]</noinclude>",
+        "[[Auxilium:Lingua Latina#part|{{int:wikt-la}}]]<noinclude>[[Categoria:Formulae linguarum]]</noinclude>",
+        "[[Auxilium:Lingua Latina|{{int:wikt-la}}]]extra<noinclude>[[Categoria:Formulae linguarum]]</noinclude>",
+        "[[Auxilium:Lingua Latina|{{int:wikt-la}}]]<noinclude><onlyinclude>[[Categoria:Formulae linguarum]]</onlyinclude></noinclude>",
+    }) |source| try std.testing.expect(source_language_banner.messageLinkTarget(source, &namespaces, "la") == null);
+    // Same original target assigned to a second source code remains ambiguous.
+    try registry.addLocalAlias("Auxilium:Lingua Latina", "en");
+    try std.testing.expect(registry.resolveTrusted("Auxilium:Lingua Latina") == null);
+    try std.testing.expectEqualStrings("la", registry.resolveTrusted("Latine").?.code);
+    // A code-named message template cannot attest a different hyphen template.
+    const paragraph_root = try std.fs.path.join(a, &.{ root, "code-named-paragraph" });
+    const paragraph_source = "Latina<noinclude>[[Categoria:Doc]]</noinclude><includeonly>[[Categoria:Latina]]</includeonly>";
+    try LaSourceLanguageTest.install(io, a, paragraph_root, laNamedCanonicalCapturedSource, paragraph_source);
+    var paragraph_registry = try loadLanguageRegistry(io, a, paragraph_root, &namespaces);
+    defer paragraph_registry.deinit();
+    // Prove this would be a valid paragraph shape if its template identity matched.
+    try std.testing.expect(source_language_banner.parseParagraph(paragraph_source, &namespaces, null, &paragraph_registry, "la") != null);
+    try std.testing.expect(!paragraph_registry.matchesSourceLanguageParagraph("la", "Latina[[Categoria:Latina]]"));
+
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "modules", "24123.lua" }), .data = "return {}" });
+    try std.testing.expectError(error.LanguageSourceIdentityMismatch, loadLanguageRegistry(io, a, root, &namespaces));
+}
+
+test "Latin source declared Help banner reaches Writer without changing body actions or codec" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var namespaces = try namespace_registry.Registry.init(a, LaSourceLanguageTest.namespaces); defer namespaces.deinit();
+    try LaSourceLanguageTest.install(io, a, root, laNamedCanonicalCapturedSource, LaSourceLanguageTest.language_template);
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces); defer registry.deinit();
+    const codes = languageCodes(&registry, &namespaces);
+    const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "delphinus", LaSourceLanguageTest.body, LaSourceLanguageTest.raw, null);
+    _ = try writer.finish(codes);
+    var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+    var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename("Latina", &filename) })); defer mapped.deinit();
+    const blob = try encoder.blob_format.inspect(mapped.bytes); const metadata = try blob.languageMetadata();
+    var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+    const record = (try index.find("delphinus")).?;
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    try std.testing.expectEqualStrings("la", decoded.entry.language_code);
+    try std.testing.expectEqualStrings("Latina", metadata.heading);
+    const reference_payload = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, "delphinus", .language, "Latina", "la", LaSourceLanguageTest.body, null, .{}, &namespaces, null);
+    const reference = try encoder.presentation_codec.decodeAlloc(a, reference_payload, "delphinus", .language, metadata);
+    try std.testing.expectEqualDeep(reference.entry.sections, decoded.entry.sections);
+    try std.testing.expectEqualDeep(reference.entry.references, decoded.entry.references);
+    try std.testing.expectEqualDeep(reference.entry.media, decoded.entry.media);
+    try std.testing.expectEqualDeep(reference.entry.organization, decoded.entry.organization);
+    try std.testing.expectEqualStrings("Latine", decoded.entry.sections[0].title);
+    var help_actions: usize = 0;
+    var definitions: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| {
+        if (block.kind == .definition) definitions += 1;
+        for (block.spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "Auxilium:Lingua Latina")) {
+            try std.testing.expectEqualStrings("Latine", span.text);
+            try std.testing.expectEqualStrings("caput-linguae", span.classes);
+            help_actions += 1;
+        };
+    };
+    try std.testing.expectEqual(@as(usize, 1), help_actions);
+    try std.testing.expectEqual(@as(usize, 2), definitions);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.references.len);
+    try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+}
+
+test "source declared Help banners decline missing conflicting and decorated authority" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var namespaces = try namespace_registry.Registry.init(a, LaSourceLanguageTest.namespaces); defer namespaces.deinit();
+    const cases = [_]struct { module: []const u8 = "local m={};m['la']={canonicalName='Latine'};return m", template: []const u8 = LaSourceLanguageTest.language_template, heading: []const u8 = LaSourceLanguageTest.banner, conflict: bool = false }{
+        .{ .module = "local m={};m['la']={otherNames={'Latine'}};return m" },
+        .{ .module = "local m={};m['la']={canonicalName='Latine'};m['la'].canonicalName=change();return m" },
+        .{ .template = "[[Auxilium:Lingua Latina|Latine]]<noinclude>[[Categoria:Formulae linguarum]]</noinclude>" },
+        .{ .conflict = true },
+        .{ .heading = "<span class=\"caput-linguae\">[[Auxilium:Lingua Latina|English]]</span>" },
+        .{ .heading = "<span class=\"caput-linguae\">[[Auxilium:Other|Latine]]</span>" },
+        .{ .heading = "<span class=\"caput-linguae\">[[Auxilium:Lingua Latina|Latine]] visible</span>" },
+        .{ .heading = "<span class=\"caput-linguae\">[[Auxilium:Lingua Latina|Latine]][[:Categoria:visible]]</span>" },
+        .{ .heading = "<span class=\"caput-linguae\" style=\"display:none\">[[Auxilium:Lingua Latina|Latine]]</span>" },
+        .{ .heading = "<nowiki>" ++ LaSourceLanguageTest.banner ++ "</nowiki>" },
+    };
+    for (cases, 0..) |case, number| {
+        const input = try std.fmt.allocPrint(a, "{s}/input-{d}", .{ root, number });
+        try LaSourceLanguageTest.install(io, a, input, case.module, case.template);
+        var registry = try loadLanguageRegistry(io, a, input, &namespaces); defer registry.deinit();
+        if (case.conflict) try registry.addLocalAlias("Auxilium:Lingua Latina", "en");
+        const codes = languageCodes(&registry, &namespaces);
+        const output = try std.fs.path.join(a, &.{ input, "blobs" });
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+        const source = try std.fmt.allocPrint(a, "=={s}==\n# Preserved [[Target|body]]\n", .{case.heading});
+        // No raw declaration is supplied: these are checks of the new source
+        // authority route, not of the pre-existing raw-template alignment path.
+        try writer.addPage(a, .{ .id = 0, .kind = .language }, "negative", source, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename("Unclassified", &filename) })); defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes); const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings("", metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find("negative")).?;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        const reference_payload = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, "negative", .language, "Unclassified", "", source, null, .{}, &namespaces, null);
+        const reference = try encoder.presentation_codec.decodeAlloc(a, reference_payload, "negative", .language, metadata);
+        try std.testing.expectEqualDeep(reference.entry.sections, decoded.entry.sections);
+        try std.testing.expectEqualDeep(reference.entry.organization, decoded.entry.organization);
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    }
+}
+
+// Complete authenticated Modulus:languages/data2 p24123/r221631.
+const laNamedCanonicalCapturedSource = "-- Module:languages/data2\n-- imported from en.wiktionary\n-- 2023-04-09 -- V28 -- +ia, last modified by Usor:YaganZ\n-- 2022-12-12 -- V27 -- +mh, ml, last modified by Usor:YaganZ\n-- 2022-08-20 -- V26 -- fa-translit module experimental, last modified by Usor:YaganZ\n-- 2022-08-14 -- V25 -- sh-translit module, last modified by Usor:YaganZ\n-- 2021-12-27 -- V24 -- bn, ma, sc experimental, last modified by Usor:YaganZ\n-- 2021-03-14 -- V23 -- +kv = kpv = Komiense, last modified by Usor:YaganZ\n-- 2020-12-06 -- V22 -- +cu, last modified by Usor:YaganZ\n-- 2020-10-14 -- V21 -- +oj, last modified by Usor:YaganZ\n-- 2020-07-16 -- V20 -- +genplf, last modified by Usor:YaganZ\n-- canonicalNames are translated into Latin adverbial, ablative or neuter forms (if available in Categoria:Formulae linguarum),\n-- missing entries added.\n-- otherNames 1-6 are used for mostly used inflected forms, 7=own name, 8=non-inflected form, 9-n are rarely used inflected forms:\n-- 1=nomsgf, 2=nomplf, 3=nomplm, 4=nomsgn, 5=nompln, 6=gensgf, 7=ipsa, 8=nomsgm, 9=ablsgf, 10=genplf\n\nlocal u = mw.ustring.char\n\n-- UTF-8 encoded strings for some commonly-used diacritics\nlocal GRAVE     = u(0x0300)\nlocal ACUTE     = u(0x0301)\nlocal CIRC      = u(0x0302)\nlocal TILDE     = u(0x0303)\nlocal MACRON    = u(0x0304)\nlocal BREVE     = u(0x0306)\nlocal DOTABOVE  = u(0x0307)\nlocal DIAER     = u(0x0308)\nlocal CARON     = u(0x030C)\nlocal DGRAVE    = u(0x030F)\nlocal INVBREVE  = u(0x0311)\nlocal DOTBELOW  = u(0x0323)\nlocal RINGBELOW = u(0x0325)\nlocal CEDILLA   = u(0x0327)\n\n-- Puncuation to be used for standardChars field\n-- local PUNCTUATION = ' \\!\\#\\$\\%\\&\\*\\+\\,\\-\\.\\/\\:\\;\\<\\=\\>\\?\\@\\^\\_\\`\\|\\~\\'\\(\\)'\n\n-- UTF-8 encoded strings for some commonly-used diacritics.\nlocal c = {\n\tgrave\t\t\t= u(0x0300),\n\tacute\t\t\t= u(0x0301),\n\tcirc\t\t\t= u(0x0302),\n\ttilde\t\t\t= u(0x0303),\n\tmacron\t\t\t= u(0x0304),\n\toverline\t\t= u(0x0305),\n\tbreve\t\t\t= u(0x0306),\n\tdotabove\t\t= u(0x0307),\n\tdiaer\t\t\t= u(0x0308),\n\tringabove\t\t= u(0x030A),\n\tdacute\t\t\t= u(0x030B),\n\tcaron\t\t\t= u(0x030C),\n\tlineabove\t\t= u(0x030D),\n\tdgrave\t\t\t= u(0x030F),\n\tinvbreve\t\t= u(0x0311),\n\tcommaabove\t\t= u(0x0313),\n\trevcommaabove\t= u(0x0314),\n\tdotbelow\t\t= u(0x0323),\n\tdiaerbelow\t\t= u(0x0324),\n\tringbelow\t\t= u(0x0325),\n\tcedilla\t\t\t= u(0x0327),\n\togonek\t\t\t= u(0x0328),\n\tbrevebelow\t\t= u(0x032E),\n\tmacronbelow\t\t= u(0x0331),\n\tperispomeni\t\t= u(0x0342),\n\typogegrammeni\t= u(0x0345),\n\tCGJ\t\t\t\t= u(0x034F), -- combining grapheme joiner\n\tdbrevebelow\t\t= u(0x035C),\n\tdinvbreve\t\t= u(0x0361),\n\tkamora          = u(0x0484),\n\tdasiapneumata   = u(0x0485),\n\tpsilipneumata   = u(0x0486),\n\tkashida\t\t\t= u(0x0640),\n\tfathatan\t\t= u(0x064B),\n\tdammatan\t\t= u(0x064C),\n\tkasratan\t\t= u(0x064D),\n\tfatha\t\t\t= u(0x064E),\n\tdamma\t\t\t= u(0x064F),\n\tkasra\t\t\t= u(0x0650),\n\tshadda\t\t\t= u(0x0651),\n\tsukun\t\t\t= u(0x0652),\n\thamzaabove\t\t= u(0x0654),\n\tnunghunna\t\t= u(0x0658),\n\tsmallv\t\t\t= u(0x065A),\n\tsuperalef\t\t= u(0x0670),\n\tpsili\t\t\t= u(0x1FBD),\n\tcoronis\t\t\t= u(0x1FBF),\n\tZWNJ\t\t\t= u(0x200C), -- zero width non-joiner\n\tZWJ\t\t\t\t= u(0x200D), -- zero width joiner\n\tRSQuo\t\t\t= u(0x2019), -- right single quote\n\tVS01\t\t\t= u(0xFE00), -- variation selector 1\n\t-- Punctuation to be used for standardChars field.\n\tpunc\t\t\t= \" !#%%&'%(%)%*%+,%-%./:;<=>%?@%[\\\\%]^_`{|}~∅\"\n}\n\nlocal m = {}\n\nm[\"aa\"] = {\n\tcanonicalName = \"Afarice\",\n\totherNames = {\"Afarica\", \"Afaricae\", \"Afarici\", \"Afaricum\", \"Afarica\", \"Afaricae\", \"Qafaraf\",  \n\t\t\"Afaricus\", \"Afarica\", \"Afaricarum\", \"Qafar\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"cus\",\n}\n\nm[\"ab\"] = {\n\tcanonicalName = \"Abasce\",\n\totherNames = {\"Abasca\", \"Abascae\", \"Abasci\", \"Abascum\", \"Abasca\", \"Abascae\", \"аҧсшәа\", \n\t\t\"Abascus\", \"Abasca\", \"Abascarum\", \"Abkhazian\", \"Abxazo\"},\n\tscripts = {\"Cyrl\", \"Geor\", \"Latn\"},\n\tfamily = \"cau-abz\",\n\ttranslit_module = \"ab-translit\",\n\tentry_name = {\n\t\tfrom = {GRAVE, ACUTE},\n\t\tto   = {}} ,\n}\n\nm[\"ae\"] = {\n\tcanonicalName = \"Avestane\",\n\totherNames = {\"Avestana\", \"Avestanae\", \"Avestani\", \"Avestanum\", \"Avestana\", \"Avestanae\", \"zend\", \n\t\t\"Avestanus\", \"Avestana\", \"Avestanarum\", \"Old Bactrian\"},\n\tscripts = {\"Avst\", \"Gujr\"},\n\tfamily = \"ira-eas\",\n\ttranslit_module = \"Avst-translit\",\n}\n\nm[\"af\"] = {\n\tcanonicalName = \"Africanice\",\n\totherNames = {\"Africanica\", \"Africanicae\", \"Africanici\", \"Africanicum\", \"Africanica\", \"Africanicae\", \"Afrikaans\", \n\t\t\"Africanicus\", \"Africanica\", \"Africanicarum\"},\n\tscripts = {\"Latn\", \"Arab\"},\n\tfamily = \"gmw\",\n\tancestors = {\"nl\"},\n\tsort_key = {\n\t\tfrom = {\"[äáâà]\", \"[ëéêè]\", \"[ïíîì]\", \"[öóôò]\", \"[üúûù]\", \"[ÿýŷỳ]\", \"^-\", \"'\"},\n\t\tto   = {\"a\"\t , \"e\"\t, \"i\"\t, \"o\"\t, \"u\"  , \"y\" }} ,\n}\n\nm[\"ak\"] = {\n\tcanonicalName = \"Akan\",\n\totherNames = {\"Twi-Fante\", \"Twi\", \"Fante\", \"Fanti\", \"Asante\", \"Akuapem\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"alv-kwa\",\n}\n\nm[\"am\"] = {\n\tcanonicalName = \"Aethiopice\",\n\totherNames = {\"Aethiopica\", \"Aethiopicae\", \"Aethiopici\", \"Aethiopicum\", \"Aethiopica\", \"Aethiopicae\", \"አማርኛ\", \n\t\t\"Aethiopicus\", \"Aethiopica\", \"Aethiopicarum\", \"Amharica\"},\n\tscripts = {\"Ethi\"},\n\tfamily = \"sem-eth\",\n\ttranslit_module = \"Ethi-translit\",\n}\n\nm[\"an\"] = {\n\tcanonicalName = \"Aragonice\",\n\totherNames = {\"Aragonica\", \"Aragonicae\", \"Aragonici\", \"Aragonicum\", \"Aragonica\", \"Aragonicae\", \"aragonés\", \n\t\t\"Aragonicus\", \"Aragonica\", \"Aragonicarum\", \"Aragonensis\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"roa\",\n\tancestors = {\"roa-oan\"},\n}\n\nm[\"ar\"] = {\n\tcanonicalName = \"Arabice\",\n\totherNames = {\"Arabica\", \"Arabicae\", \"Arabici\", \"Arabicum\", \"Arabica\", \"Arabicae\", \"العربية\", \n\t\t\"Arabicus\", \"Arabica\", \"Arabicarum\", \"Modern Standard Arabic\", \"Standard Arabic\", \"Literary Arabic\", \"Classical Arabic\"},\n\tscripts = {\"Arab\"},\n\tfamily = \"sem-arb\",\n\tentry_name = {\n\t\tfrom = {u(0x0671), u(0x064B), u(0x064C), u(0x064D), u(0x064E), u(0x064F), u(0x0650), u(0x0651), u(0x0652), u(0x0670), u(0x0640)},\n\t\tto   = {u(0x0627)}},\n\ttranslit_module = \"ar-translit\",\n}\n\nm[\"as\"] = {\n\tcanonicalName = \"Assamice\",\n\totherNames = {\"Assamica\", \"Assamicae\", \"Assamici\", \"Assamicum\", \"Assamica\", \"Assamicae\", \"অসমীয়া\", \n\t\t\"Assamicus\", \"Assamica\", \"Assamicarum\", \"Asamiya\"},\n\tscripts = {\"Beng\"},\n\tfamily = \"inc\",\n\tancestors = {\"pka\"},\n}\n\nm[\"av\"] = {\n\tcanonicalName = \"Avar\",\n\totherNames = {\"Avaric\"},\n\tscripts = {\"Cyrl\"},\n\tfamily = \"cau-nec\",\n\tancestors = {\"oav\"},\n\ttranslit_module = \"av-translit\",\n}\n\nm[\"ay\"] = {\n\tcanonicalName = \"Aymare\",\n\totherNames = {\"Southern Aymara\", \"Central Aymara\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"sai-aym\",\n}\n\nm[\"az\"] = {\n\tcanonicalName = \"Atropatenice\",\n\totherNames = {\"Atropatenica\", \"Atropatenicae\", \"Atropatenici\", \"Atropatenicum\", \"Atropatenica\", \"Atropatenicae\", \"Azərbaycan dili\",\n\t\t\"Atropatenicus\", \"Atropatenica\", \"Atropatenicarum\",  \"Azerbaijani\", \"Azari\", \"Azeri Turkic\", \"Azerbaijani Turkic\", \"North Azerbaijani\", \"South Azerbaijani\"},\n\tscripts = {\"Latn\", \"Cyrl\", \"fa-Arab\"},\n\tfamily = \"trk-ogz\",\n}\n\nm[\"ba\"] = {\n\tcanonicalName = \"Baschkirice\",\n\totherNames = {\"Baschkirica\", \"Baschkiricae\", \"Baschkirici\", \"Baschkiricum\", \"Baschkirica\", \"Baschkiricae\", \"башҡортса\", \n\t\t\"Baschkiricus\", \"Baschkirica\", \"Baschkiricarum\", \"Bashkir\"},\n\tscripts = {\"Cyrl\"},\n\tfamily = \"trk-kip\",\n\ttranslit_module = \"ba-translit\",\n}\n\nm[\"be\"] = {\n\tcanonicalName = \"Albaruthenice\",\n\totherNames = {\"Albaruthenica\", \"Albaruthenicae\", \"Albaruthenici\", \"Albaruthenicum\", \"Albaruthenica\", \"Albaruthenicae\", \"беларуская мова\", \n\t\t\"Albaruthenicus\", \"Albaruthenica\", \"Albaruthenicarum\", \"Belorussian\", \"Belarusan\", \"Bielorussian\", \"Byelorussian\", \"Belarussian\", \"White Russian\"},\n\tscripts = {\"Cyrl\"},\n\tfamily = \"zle\",\n\ttranslit_module = \"be-translit\",\n\tsort_key = {\n\t\tfrom = {\"Ё\", \"ё\"},\n\t\tto   = {\"Е\" , \"е\"}},\n\tentry_name = {\n\t\tfrom = {\"Ѐ\", \"ѐ\", GRAVE, ACUTE},\n\t\tto   = {\"Е\", \"е\"}},\n}\n\nm[\"bg\"] = {\n\tcanonicalName = \"Bulgarice\",\n\totherNames = {\"Bulgarica\", \"Bulgaricae\", \"Bulgarici\", \"Bulgaricum\", \"Bulgarica\", \"Bulgaricae\", \"български език\", \n\t\t\"Bulgaricus\", \"Bulgarica\", \"Bulgaricarum\" },\n\tscripts = {\"Cyrl\"},\n\tfamily = \"zls\",\n\ttranslit_module = \"bg-translit\",\n\tentry_name = {\n\t\tfrom = {\"Ѐ\", \"ѐ\", \"Ѝ\", \"ѝ\", GRAVE, ACUTE},\n\t\tto   = {\"Е\", \"е\", \"И\", \"и\"}},\n}\n\nm[\"bh\"] = {\n\tcanonicalName = \"Bihari\",\n\tscripts = {\"Deva\"},\n\tfamily = \"inc\",\n\tancestors = {\"pka\"},\n}\n\nm[\"bi\"] = {\n\tcanonicalName = \"Bislama\",\n\tscripts = {\"Latn\"},\n\tfamily = \"crp\",\n\tancestors = {\"en\"},\n}\n\nm[\"bm\"] = {\n\tcanonicalName = \"Bambara\",\n\totherNames = {\"Bamanankan\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"dmn\",\n}\n\nm[\"bn\"] = {\n\t\"Bengale\", \"Q9610\", \"inc-eas\",\n\tcanonicalName = \"Bengale\",\n\totherNames = {\"Bengala\", \"Bengalae\", \"Bengali\", \"Bengalum\", \"Bengala\", \"Bengalae\", \"বাংলা\", \n\t\t\"Bengalus\", \"Bengala\", \"Bengalarum\", \"Bangla\", \"Bengali\"},\n\tscripts = {\"Beng\", \"Newa\"},\n\tancestors = {\"inc-mbn\"},\n\ttranslit_module = \"bn-translit\",\n}\n\nm[\"bo\"] = {\n\tcanonicalName = \"Tibetane\",\n\totherNames = {\"Tibetana\", \"Tibetanae\", \"Tibetani\", \"Tibetanum\", \"Tibetana\", \"Tibetanae\", \"བོད་སྐད།\",\n\t\t\"Tibetanus\", \"Tibetana\", \"Tibetanarum\"}, \n\tscripts = {\"Tibt\"},\n\tfamily = \"tbq\",\n\tancestors = {\"xct\"},\n\ttranslit_module = \"bo-translit\",\n}\n\nm[\"br\"] = {\n\tcanonicalName = \"Britonice\",\n\totherNames = {\"Britonica\", \"Britonicae\", \"Britonici\", \"Britonicum\", \"Britonica\", \"Britonicae\", \"brezhoneg\", \n\t\t\"Britonicus\", \"Britonica\", \"Britonicarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"cel-bry\",\n\tancestors = {\"xbm\"},\n}\n\nm[\"bs\"] = {\n\tcanonicalName = \"Bosnice\",\n\totherNames = {\"Bosnica\", \"Bosnicae\", \"Bosnici\", \"Bosnicum\", \"Bosnica\", \"Bosnicae\", \"Bosnian\", \"bosanski jezik\",\n\t\t\"Bosnicus\", \"Bosnica\", \"Bosnicarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"zlw\",\n}\n\nm[\"ca\"] = {\n\tcanonicalName = \"Catalane\",\n\totherNames = {\"Catalana\", \"Catalanae\", \"Catalani\", \"Catalanum\", \"Catalana\", \"Catalanae\", \"català\", \n\t\t\t\"Catalanus\", \"Catalana\", \"Catalanarum\", \"Valencian\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"roa\",\n\tancestors = {\"roa-oca\"},\n\tsort_key = {\n\t\tfrom = {\"à\", \"[èé]\", \"[íï]\", \"[òó]\", \"[úü]\", \"ç\", \"l·l\"},\n\t\tto   = {\"a\", \"e\"   , \"i\"   , \"o\"   , \"u\"   , \"c\", \"ll\" }} ,\n}\n\nm[\"ce\"] = {\n\tcanonicalName = \"Chechen\",\n\tscripts = {\"Cyrl\"},\n\tfamily = \"cau-nkh\",\n\ttranslit_module = \"ce-translit\",\n\tentry_name = {\n\t\tfrom = {MACRON},\n\t\tto   = {}},\n}\n\nm[\"ch\"] = {\n\tcanonicalName = \"Chamorre\",\n\totherNames = {\"Chamoru\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"poz-sus\",\n}\n\nm[\"co\"] = {\n\tcanonicalName = \"Corse\",\n\totherNames = {\"Corsa\", \"Corsae\", \"Corsi\", \"Corsum\", \"Corsa\", \"Corsae\", \"corsu\", \n\t\t\"Corsus\", \"Corsa\", \"Corsarum\", \"Corsican\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"roa\",\n}\n\nm[\"cr\"] = {\n\tcanonicalName = \"Cree\",\n\tscripts = {\"Cans\", \"Latn\"},\n\tfamily = \"alg\",\n\ttranslit_module = \"cr-translit\",\n}\n\nm[\"cs\"] = {\n\tcanonicalName = \"Bohemice\",\n\totherNames = {\"Bohemica\", \"Bohemicae\", \"Bohemici\", \"Bohemicum\", \"Bohemica\", \"Bohemicae\", \"čeština\", \n\t\t\"Bohemicus\", \"Bohemica\", \"Bohemicarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"zlw\",\n\tancestors = {\"zlw-ocs\"},\n\tsort_key = {\n\t\tfrom = {\"á\", \"é\", \"í\", \"ó\", \"[úů]\", \"ý\"},\n\t\tto   = {\"a\", \"e\", \"i\", \"o\", \"u\"   , \"y\"}} ,\n}\n\nm[\"cu\"] = {\n\t\"Slavica Antiqua\", \"Q35499\", \"zls\",\n\totherNames = {\"Slavica Antiqua\", \"Slavicae Antiquae\", \"Slavici Antiqui\", \"Slavicum Antiquum\", \"Slavica Antiqua\", \"Slavicae Antiquae\", \"словѣньскъ ѩзыкъ\",\n\t\t\"Slavicus Antiquus\", \"Slavica Antiqua\", \"Slavicarum Antiquarum\", \"Old Church Slavic\", \"Old Church Slavonic\"},\n\tscripts = {\"Cyrs\", \"Glag\"},\n\ttranslit_module = \"Cyrs-Glag-translit\",\n\tentry_name = {\n\t\tfrom = {u(0x0484)}, -- kamora\n\t\tto   = {}},\n\tsort_key = {\n\t\tfrom = {\"оу\", \"є\"},\n\t\tto   = {\"у\" , \"е\"}} ,\n}\n\nm[\"cv\"] = {\n\tcanonicalName = \"Chuvash\",\n\tscripts = {\"Cyrl\"},\n\tfamily = \"trk-ogr\",\n\ttranslit_module = \"cv-translit\",\n}\n\nm[\"cy\"] = {\n\tcanonicalName = \"Cambrice\",\n\totherNames = {\"Cambrica\", \"Cambricae\", \"Cambrici\", \"Cambricum\", \"Cambrica\", \"Cambricae\", \"Cymraeg\", \n\t\t\"Cambricus\", \"Cambrica\", \"Cambricarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"cel-bry\",\n\tancestors = {\"wlm\"},\n\tsort_key = {\n\t\tfrom = {\"[âáàä]\", \"[êéèë]\", \"[îíìï]\", \"[ôóòö]\", \"[ûúùü]\", \"[ŵẃẁẅ]\", \"[ŷýỳÿ]\", \"'\"},\n\t\tto   = {\"a\"\t , \"e\"\t , \"i\"\t , \"o\"\t , \"u\"\t , \"w\"\t , \"y\"\t }} ,\n}\n\nm[\"da\"] = {\n\tcanonicalName = \"Danice\",\n\totherNames = {\"Danica\", \"Danicae\", \"Danici\", \"Danicum\", \"Danica\", \"Danicae\", \"dansk\", \n\t\t\"Danicus\", \"Danica\", \"Danicarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"gmq\",\n\tancestors = {\"gmq-oda\"},\n}\n\nm[\"de\"] = {\n\t\"Germanice\", \"Q188\", \"gmw\",\n\totherNames = {\"Germanica\", \"Germanicae\", \"Germanici\", \"Germanicum\", \"Germanica\", \"Germanicae\", \"Deutsch\", \n\t\t\"Germanicus\", \"Germanica\", \"Germanicarum\", \"High German\", \"New High German\", \"Deutsch\"}, -- the last name is indeed also used in English\n\tscripts = {\"Latn\", \"Latf\"},\n\tancestors = {\"gmh\"},\n\tsort_key = {\n\t\tfrom = {\"[äàáâå]\", \"[ëèéê]\", \"[ïìíî]\", \"[öòóô]\", \"[üùúû]\", \"ß\" },\n\t\tto   = {\"a\"\t  , \"e\"\t , \"i\"\t , \"o\"\t , \"u\"\t , \"ss\"}} ,\n}\n\nm[\"dv\"] = {\n\tcanonicalName = \"Dhivehi\",\n\totherNames = {\"Divehi\", \"Mahal\", \"Mahl\", \"Maldivian\"},\n\tscripts = {\"Thaa\"},\n\tfamily = \"inc\",\n\tancestors = {\"pmh\"},\n\ttranslit_module = \"dv-translit\",\n}\n\nm[\"dz\"] = {\n\tcanonicalName = \"Dzongkha\",\n\tscripts = {\"Tibt\"},\n\tfamily = \"tbq\",\n\tancestors = {\"xct\"},\n\ttranslit_module = \"bo-translit\",\n}\n\nm[\"ee\"] = {\n\tcanonicalName = \"Ewe\",\n\tscripts = {\"Latn\"},\n\tfamily = \"alv\",\n}\n\nm[\"el\"] = {\n\tcanonicalName = \"Neograece\",\n\totherNames = {\"Neograeca\", \"Neograecae\", \"Neograeci\", \"Neograecum\", \"Neograeca\", \"Neograecae\", \"Νέα Ελληνικά\", \n\t\t\"Neograecus\", \"Neograeca\", \"Neograecarum\", \"Modern Greek\", \"Neo-Hellenic\"},\n\tscripts = {\"Grek\"},\n\tfamily = \"grk\",\n\tancestors = {\"grc\"},\n\ttranslit_module = \"el-translit\",\n\tsort_key = {  -- Keep this synchronized with grc, cpg, pnt\n\t\tfrom = {\"[ᾳάᾴὰᾲᾶᾷἀᾀἄᾄἂᾂἆᾆἁᾁἅᾅἃᾃἇᾇ]\", \"[έὲἐἔἒἑἕἓ]\", \"[ῃήῄὴῂῆῇἠᾐἤᾔἢᾒἦᾖἡᾑἥᾕἣᾓἧᾗ]\", \"[ίὶῖἰἴἲἶἱἵἳἷϊΐῒῗ]\", \"[όὸὀὄὂὁὅὃ]\", \"[ύὺῦὐὔὒὖὑὕὓὗϋΰῢῧ]\", \"[ῳώῴὼῲῶῷὠᾠὤᾤὢᾢὦᾦὡᾡὥᾥὣᾣὧᾧ]\", \"ῥ\", \"ς\"},\n\t\tto   = {\"α\"\t\t\t\t\t\t, \"ε\"\t\t , \"η\"\t\t\t\t\t\t, \"ι\"\t\t\t\t, \"ο\"\t\t , \"υ\"\t\t\t\t, \"ω\"\t\t\t\t\t\t, \"ρ\", \"σ\"}} ,\n}\n\nm[\"en\"] = {\n\tcanonicalName = \"Anglice\",\n\totherNames = {\"Anglica\", \"Anglicae\", \"Anglici\", \"Anglicum\", \"Anglica\", \"Anglicae\", \"English\", \n\t\t\"Anglicus\", \"Anglica\", \"Anglicarum\", \"Modern English\", \"New English\", \"Hawaiian Creole English\", \"Hawai'ian Creole English\", \"Hawaiian Creole\", \"Hawai'ian Creole\", \"Polari\", \"Yinglish\"}, -- all but the first three are names and alt names of subsumed dialects which once had ISO codes\n\tscripts = {\"Latn\", \"Shaw\", \"Dsrt\"}, -- last two are rare but probably attested; entries in them might require community approval, but it's good for the script codes not to be orphans\n\tfamily = \"gmw\",\n\tancestors = {\"enm\"},\n\tsort_key = {\n\t\tfrom = {\"[äàáâåā]\", \"[ëèéêē]\", \"[ïìíîī]\", \"[öòóôō]\", \"[üùúûū]\", \"æ\" , \"œ\" , \"[çč]\", \"ñ\", \"'\"},\n\t\tto   = {\"a\"       , \"e\"      , \"i\"      , \"o\"      , \"u\"      , \"ae\", \"oe\", \"c\"   , \"n\"}},\n\twikimedia_codes = {\"en\", \"simple\"},\n\tstandardChars = \"A-Za-z0-9\" .. c.punc .. u(0x2800) .. \"-\" .. u(0x28FF)\n}\n\nm[\"eo\"] = {\n\tcanonicalName = \"Esperantice\",\n\totherNames = {\"Esperantica\", \"Esperanticae\", \"Esperantici\", \"Esperanticum\", \"Esperantica\", \"Esperanticae\", \"Esperanto\", \n\t\t\"Esperanticus\", \"Esperantica\", \"Esperanticarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"art\",\n\tsort_key = {\n\t\tfrom = {\"[áà]\", \"[éè]\", \"[íì]\", \"[óò]\", \"[úù]\", \"[ĉ]\", \"[ĝ]\", \"[ĥ]\", \"[ĵ]\", \"[ŝ]\", \"[ŭ]\"},\n\t\tto   = {\"a\"\t   , \"e\"  , \"i\"  , \"o\"  , \"u\", \"cĉ\", \"gĉ\", \"hĉ\", \"jĉ\", \"sĉ\", \"uĉ\"}} ,\n}\n\nm[\"es\"] = {\n\tcanonicalName = \"Hispanice\",\n\totherNames = {\"Hispanica\", \"Hispanicae\", \"Hispanici\", \"Hispanicum\", \"Hispanica\", \"Hispanicae\", \"español\", \n\t\t\"Hispanicus\", \"Hispanica\", \"Hispanicarum\", \"Castilian\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"roa\",\n\tancestors = {\"osp\"},\n\tsort_key = {\n\t\tfrom = {\"á\", \"é\", \"í\", \"ó\", \"[úü]\", \"ç\", \"ñ\"},\n\t\tto   = {\"a\", \"e\", \"i\", \"o\", \"u\"   , \"c\", \"n\"}},\n\tstandardChars = \"A-VXYZa-vxyz0-9ÁáÉéÍíÓóÚúÑñ¿¡\" .. c.punc,\n}\n\nm[\"et\"] = {\n\tcanonicalName = \"Estonice\",\n\totherNames = {\"Estonica\", \"Estonicae\", \"Estonici\", \"Estonicum\", \"Estonica\", \"Estonicae\", \"eesti keel\", \n\t\t\"Estonicus\", \"Estonica\", \"Estonicarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"fiu-fin\",\n}\n\nm[\"eu\"] = {\n\tcanonicalName = \"Vasconice\",\n\totherNames = {\"Vasconica\", \"Vasconicae\", \"Vasconici\", \"Vasconicum\", \"Vasconica\", \"Vasconicae\", \"Euskara\", \n\t\t\"Vasconicus\", \"Vasconica\", \"Vasconicarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"euq\",\n}\n\nm[\"fa\"] = {\n\tcanonicalName = \"Persice\",\n\totherNames = {\"Persica\", \"Persicae\", \"Persici\", \"Persicum\", \"Persica\", \"Persicae\", \"فارسی\", \n\t\t\"Persicus\", \"Persica\", \"Persicarum\", \"Farsi\", \"New Persian\", \"Modern Persian\", \"Western Persian\", \"Iranian Persian\", \"Eastern Persian\", \"Dari\", \"Aimaq\", \"Aimak\", \"Aymaq\", \"Eimak\"},\n\tscripts = {\"fa-Arab\"},\n\tfamily = \"ira-wes\",\n\tancestors = {\"pal\"},\n\ttranslit_module = \"fa-translit\",\n\tentry_name = {\n\t\tfrom = {u(0x064E), u(0x064F), u(0x0650), u(0x0651), u(0x0652)},\n\t\tto   = {}} ,\n}\n\nm[\"ff\"] = {\n\tcanonicalName = \"Fula\",\n\totherNames = {\"Adamawa Fulfulde\", \"Bagirmi Fulfulde\", \"Borgu Fulfulde\", \"Central-Eastern Niger Fulfulde\", \"Fulani\", \"Fulfulde\", \"Maasina Fulfulde\", \"Nigerian Fulfulde\", \"Pular\", \"Pulaar\", \"Western Niger Fulfulde\"}, -- Maasina, etc are dialects, subsumed into this code\n\tscripts = {\"Latn\"},\n\tfamily = \"alv-sng\",\n}\n\nm[\"fi\"] = {\n\tcanonicalName = \"Finnice\",\n\totherNames = {\"Finnica\", \"Finnicae\", \"Finnici\", \"Finnicum\", \"Finnica\", \"Finnicae\", \"suomi\", \n\t\t\"Finnicus\", \"Finnica\", \"Finnicarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"fiu-fin\",\n\tentry_name = {\n\t\tfrom = {\"ˣ\"},  -- Used to indicate gemination of the next consonant\n\t\tto   = {}},\n\tsort_key = {\n\t\tfrom = {\"[áàâã]\", \"[éèêẽ]\", \"[íìîĩ]\", \"[óòôõ]\", \"[úùûũ]\", \"[ýỳŷüű]\", \"[øõő]\", \"æ\" , \"œ\" , \"[čç]\", \"š\", \"ž\", \"ß\" , \"[':]\"},\n\t\tto   = {\"a\"\t , \"e\"\t , \"i\"\t , \"o\"\t , \"u\"\t ,  \"y\"\t , \"ö\"\t, \"ae\", \"oe\", \"c\"   , \"s\", \"z\", \"ss\"}} ,\n}\n\nm[\"fj\"] = {\n\tcanonicalName = \"Fidziane\",\n\totherNames = {\"Fidziana\", \"Fidzianae\", \"Fidziani\", \"Fidzianum\", \"Fidziana\", \"Fidzianae\", \"?\", \n\t\t\"Fidzianus\", \"Fidziana\", \"Fidzianarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"poz-occ\",\n}\n\nm[\"fo\"] = {\n\tcanonicalName = \"Faeroice\",\n\totherNames = {\"Faeroica\", \"Faeroicae\", \"Faeroici\", \"Faeroicum\", \"Faeroica\", \"Faeroicae\", \"føroyskt\", \n\t\t\"Faeroicus\", \"Faeroica\", \"Faeroicarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"gmq\",\n\tancestors = {\"non\"},\n}\n\nm[\"fr\"] = {\n\tcanonicalName = \"Francogallice\",\n\totherNames = {\"Francogallica\", \"Francogallicae\", \"Francogallici\", \"Francogallicum\", \"Francogallica\", \"Francogallicae\", \"français\", \n\t\t\"Francogallicus\", \"Francogallica\", \"Francogallicarum\", \"Modern French\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"roa\",\n\tancestors = {\"frm\"},\n\tsort_key = {\n\t\tfrom = {\"[áàâä]\", \"[éèêë]\", \"[íìîï]\", \"[óòôö]\", \"[úùûü]\", \"[ýỳŷÿ]\", \"ç\", \"æ\" , \"œ\" , \"'\"},\n\t\tto   = {\"a\"\t , \"e\"\t , \"i\"\t , \"o\"\t , \"u\"\t , \"y\"\t , \"c\", \"ae\", \"oe\"}},\n\tstandardChars = \"A-Za-z0-9ÀÂÇÉÈÊËÎÏÔŒÛÙÜàâçéèêëîïôœûùü\" .. c.punc,\n}\n\nm[\"fy\"] = {\n\tcanonicalName = \"Frisice\",\n\totherNames = {\"Frisica\", \"Frisicae\", \"Frisici\", \"Frisicum\", \"Frisica\", \"Frisicae\", \"?\", \n\t\t\"Frisicus\", \"Frisica\", \"Frisicarum\", \"Western Frisian\", \"Frisian\", \"Frysk\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"gmw-fri\",\n\tancestors = {\"ofs\"},\n}\n\nm[\"ga\"] = {\n\tcanonicalName = \"Hibernice\",\n\totherNames = {\"Hibernica\", \"Hibernicae\", \"Hibernici\", \"Hibernicum\", \"Hibernica\", \"Hibernicae\", \"Gaeilge\", \n\t\t\"Hibernicus\", \"Hibernica\", \"Hibernicarum\", \"Irish Gaelic\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"cel-gae\",\n\tancestors = {\"mga\"},\n\tsort_key = {\n\t\tfrom = {\"á\", \"é\", \"í\", \"ó\", \"ú\", \"ý\", \"ḃ\" , \"ċ\" , \"ḋ\" , \"ḟ\" , \"ġ\" , \"ṁ\" , \"ṗ\" , \"ṡ\" , \"ṫ\" },\n\t\tto   = {\"a\", \"e\", \"i\", \"o\", \"u\", \"y\", \"bh\", \"ch\", \"dh\", \"fh\", \"gh\", \"mh\", \"ph\", \"sh\", \"th\"}} ,\n}\n\nm[\"gd\"] = {\n\tcanonicalName = \"Gaelice\",\n\totherNames = {\"Gaelica\", \"Gaelicae\", \"Gaelici\", \"Gaelicum\", \"Gaelica\", \"Gaelicae\", \"Gàidhlig\", \n\t\t\"Gaelicus\", \"Gaelica\", \"Gaelicarum\", \"Highland Gaelic\", \"Scots Gaelic\", \"Scottish\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"cel-gae\",\n\tancestors = {\"mga\"},\n\tsort_key = {\n\t\tfrom = {\"[áà]\", \"[éè]\", \"[íì]\", \"[óò]\", \"[úù]\", \"[ýỳ]\"},\n\t\tto   = {\"a\"   , \"e\"   , \"i\"   , \"o\"   , \"u\"   , \"y\"   }} ,\n}\n\nm[\"gl\"] = {\n\tcanonicalName = \"Gallaice\",\n\totherNames = {\"Gallaica\", \"Gallaicae\", \"Gallaici\", \"Gallaicum\", \"Gallaica\", \"Gallaicae\", \"galego\", \n\t\t\"Gallaicus\", \"Gallaica\", \"Gallaicarum\", \"Galician\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"roa\",\n\tancestors = {\"roa-opt\"},\n\tsort_key = {\n\t\tfrom = {\"á\", \"é\", \"í\", \"ó\", \"ú\"},\n\t\tto   = {\"a\", \"e\", \"i\", \"o\", \"u\"}} ,\n}\n\nm[\"gn\"] = {\n\tcanonicalName = \"Guaraní\",\n\tscripts = {\"Latn\"},\n\tfamily = \"tup\",\n}\n\nm[\"gu\"] = {\n\tcanonicalName = \"Gujarati\",\n\tscripts = {\"Gujr\"},\n\tfamily = \"inc\",\n\tancestors = {\"inc-ogu\"},\n\ttranslit_module = \"gu-translit\",\n}\n\nm[\"gv\"] = {\n\tcanonicalName = \"Manx\",\n\totherNames = {\"Manx Gaelic\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"cel-gae\",\n\tancestors = {\"mga\"},\n\tsort_key = {\n\t\tfrom = {\"ç\", \"-\"},\n\t\tto   = {\"c\"}} ,\n}\n\nm[\"ha\"] = {\n\tcanonicalName = \"Hausa\",\n\tscripts = {\"Latn\", \"Arab\"},\n\tfamily = \"cdc-wst\",\n}\n\nm[\"he\"] = {\n\tcanonicalName = \"Hebraice\",\n\totherNames = {\"Hebraica\", \"Hebraicae\", \"Hebraici\", \"Hebraicum\", \"Hebraica\", \"Hebraicae\", \"עִבְרִית\", \n\t\t\"Hebraicus\", \"Hebraica\", \"Hebraicarum\", \"Ivrit\"},\n\tscripts = {\"Hebr\", \"Phnx\"},\n\tfamily = \"sem-can\",\n\tentry_name = {\n\t\tfrom = {\"[\" .. u(0x0591) .. \"-\" .. u(0x05BD) .. u(0x05BF) .. \"-\" .. u(0x05C5) .. u(0x05C7) .. \"]\"},\n\t\tto   = {}} ,\n}\n\nm[\"hi\"] = {\n\tcanonicalName = \"Hindice\",\n\totherNames = {\"Hindica\", \"Hindicae\", \"Hindici\", \"Hindicum\", \"Hindica\", \"Hindicae\", \"हिन्दी\", \n\t\t\"Hindicus\", \"Hindica\", \"Hindicarum\", \"hindī\"},\n\tscripts = {\"Deva\"},\n\tfamily = \"inc\",\n\tancestors = {\"inc-ohi\"},\n\ttranslit_module = \"hi-translit\",\n}\n\nm[\"ho\"] = {\n\tcanonicalName = \"Hiri Motu\",\n\totherNames = {\"Pidgin Motu\", \"Police Motu\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"crp\",\n\tancestors = {\"meu\"},\n}\n\nm[\"hr\"] = {\n\tcanonicalName = \"Croate\",\n\totherNames = {\"Croata\", \"Croatae\", \"Croati\", \"Croatum\", \"Croata\", \"Croatae\", \"hrvatski\", \n\t\t\"Croatus\", \"Croata\", \"Croatarum\", \"Croatian\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"zlw\",\n}\n\nm[\"ht\"] = {\n\tcanonicalName = \"Haitiane\",\n\totherNames = {\"Haitiana\", \"Haitianae\", \"Haitiani\", \"Haitianum\", \"Haitiana\", \"Haitianae\", \"kreyòl\", \n\t\t\"Haitianus\", \"Haitiana\", \"Haitianarum\", \"Creole\", \"Haitian\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"crp\",\n}\n\nm[\"hu\"] = {\n\tcanonicalName = \"Hungarice\",\n\totherNames = {\"Hungarica\", \"Hungaricae\", \"Hungarici\", \"Hungaricum\", \"Hungarica\", \"Hungaricae\", \"magyar\", \n\t\t\"Hungaricus\", \"Hungarica\", \"Hungaricarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"fiu-ugr\",\n\tancestors = {\"ohu\"},\n\tsort_key = {\n\t\tfrom = {\"á\", \"é\", \"í\", \"ó\", \"ú\", \"ő\", \"ű\"},\n\t\tto   = {\"a\", \"e\", \"i\", \"o\", \"u\", \"ö\", \"ü\"}} ,\n}\n\nm[\"hy\"] = {\n\tcanonicalName = \"Armenie\",\n\totherNames = {\"Armenia\", \"Armeniae\", \"Armenii\", \"Armenium\", \"Armenia\", \"Armeniae\", \"Հայերէն\", \n\t\t\"Armenius\", \"Armenia\", \"Armeniarum\", \"Modern Armenian\", \"Eastern Armenian\", \"Western Armenian\"},\n\tscripts = {\"Armn\"},\n\tfamily = \"hyx\",\n\tancestors = {\"axm\"},\n\ttranslit_module = \"Armn-translit\",\n\tsort_key = {\n\t\tfrom = {\"ու\", \"և\", \"եւ\"},\n\t\tto   = {\"ւ\", \"եվ\", \"եվ\"}},\n\tentry_name = {\n\t\tfrom = {\"՞\", \"՜\", \"՛\", \"՟\", \"և\", \"<sup>յ</sup>\", \"<sup>ի</sup>\"},\n\t\tto   = {\"\", \"\", \"\", \"\", \"եւ\", \"յ\", \"ի\"}} ,\n}\n\nm[\"hz\"] = {\n\tcanonicalName = \"Herero\",\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt\",\n}\n\n-- 1=nomsgf, 2=nomplf, 3=nomplm, 4=nomsgn, 5=nompln, 6=gensgf, 7=ipsa, 8=nomsgm, 9=ablsgf, 10=genplf\nm[\"ia\"] = {\n\t\"Interlingua\", 35934, \"art\",\n\totherNames = {\"Interlingua\", \"Interlinguae\", \"Interlinguae\", \"Interlinguae\", \"Interlinguae\", \"Interlinguae\", \"Interlingua\",\n\t\t\"Interlinguae\", \"Interlingua\", \"Interlinguae\"},\n\tscripts = {\"Latn\"},\n}\n\nm[\"id\"] = {\n\tcanonicalName = \"Indonesie\",\n\totherNames = {\"Indonesia\", \"Indonesiae\", \"Indonesii\", \"Indonesium\", \"Indonesia\", \"Indonesiae\", \"Bahasa Indonesia\", \n\t\t\"Indonesius\", \"Indonesia\", \"Indonesiarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"poz-mly\",\n\tancestors = {\"ms\"},\n}\n\nm[\"ie\"] = {\n\tcanonicalName = \"Interlingue\",\n\totherNames = {\"Occidental\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"art\",\n}\n\nm[\"ig\"] = {\n\tcanonicalName = \"Igbo\",\n\tscripts = {\"Latn\"},\n\tfamily = \"nic-bco\",\n}\n\nm[\"ii\"] = {\n\tcanonicalName = \"Sichuan Yi\",\n\totherNames = {\"Nuosu\", \"Nosu\", \"Northern Yi\", \"Liangshan Yi\"},\n\tscripts = {\"Yiii\"},\n\tfamily = \"tbq-lol\",\n}\n\nm[\"ik\"] = {\n\tcanonicalName = \"Inupiak\",\n\totherNames = {\"Inupiaq\", \"Iñupiaq\", \"Inupiatun\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"esx-inu\",\n}\n\nm[\"io\"] = {\n\tcanonicalName = \"Ido\",\n\tscripts = {\"Latn\"},\n\tfamily = \"art\",\n}\n\nm[\"is\"] = {\n\tcanonicalName = \"Islandice\",\n\totherNames = {\"Islandica\", \"Islandicae\", \"Islandici\", \"Islandicum\", \"Islandica\", \"Islandicae\", \"íslenska\", \n\t\t\"Islandica\", \"Islandica\", \"Islandicarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"gmq\",\n\tancestors = {\"non\"},\n}\n\nm[\"it\"] = {\n\tcanonicalName = \"Italice\",\n\totherNames = {\"Italica\", \"Italicae\", \"Italici\", \"Italicum\", \"Italica\", \"Italicae\", \"italiano\", \n\t\t\"Italicus\", \"Italica\", \"Italicarum\", \"Italiana\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"roa\",\n\tancestors = {\"roa-oit\"},\n\tsort_key = {\n\t\tfrom = {\"[àáâäå]\", \"[èéêë]\", \"[ìíîï]\", \"[òóôö]\", \"[ùúûü]\"},\n\t\tto   = {\"a\"\t  , \"e\"\t , \"i\"\t , \"o\"\t , \"u\"\t }} ,\n}\n\nm[\"iu\"] = {\n\tcanonicalName = \"Inuktitut\",\n\totherNames = {\"Eastern Canadian Inuktitut\", \"Eastern Canadian Inuit\", \"Western Canadian Inuktitut\", \"Western Canadian Inuit\", \"Western Canadian Inuktun\", \"Inuinnaq\", \"Inuinnaqtun\", \"Inuvialuk\", \"Inuvialuktun\", \"Nunavimmiutit\", \"Nunatsiavummiut\", \"Aivilimmiut\", \"Natsilingmiut\", \"Kivallirmiut\", \"Siglit\", \"Siglitun\"},\n\tscripts = {\"Cans\", \"Latn\"},\n\tfamily = \"esx-inu\",\n\ttranslit_module = \"iu-translit\",\n}\n\nm[\"ja\"] = {\n\tcanonicalName = \"Iaponice\",\n\totherNames = {\"Iaponica\", \"Iaponicae\", \"Iaponici\", \"Iaponicum\", \"Iaponica\", \"Iaponicae\", \"日本語\", \n\t\"Iaponicus\", \"Iaponica\", \"Iaponicarum\", \"Nihongo\", \"Modern Japanese\", \"Nipponese\"},\n\tscripts = {\"Jpan\", \"Latn\", \"Hira\"},\n\tfamily = \"jpx\",\n\tancestors = {\"ojp\"},\n}\n\nm[\"jv\"] = {\n\tcanonicalName = \"Iavense\",\n\totherNames = {\"Iavensis\", \"Iavenses\", \"Iavenses\", \"Iavense\", \"Iavensia\", \"Iavensis\", \"basa Jawa\", \n\t\t\"Iavensis\", \"Iavensi\", \"Iavensium\"},\n\tscripts = {\"Latn\", \"Java\"},\n\tfamily = \"poz-sus\",\n\ttranslit_module = \"jv-translit\",\n\tancestors = {\"kaw\"},\n\tlink_tr = true,\n}\n\nm[\"ka\"] = {\n\tcanonicalName = \"Georgiane\",\n\totherNames = {\"Georgiana\", \"Georgianae\", \"Georgiani\", \"Georgianum\", \"Georgiana\", \"Georgianae\", \"ქართული\", \n\t\t\"Georgianus\", \"Georgiana\", \"Georgianarum\", \"Kartvelian\"},\n\tscripts = {\"Geor\", \"Geok\"},\n\tfamily = \"ccs-gzn\",\n\tancestors = {\"oge\"},\n\ttranslit_module = \"Geor-translit\",\n\tentry_name = {\n\t\tfrom = {\"̂\"},\n\t\tto   = {\"\"}},\n}\n\nm[\"kg\"] = {\n\tcanonicalName = \"Kongo\",\n\totherNames = {\"Kikongo\", \"Koongo\", \"Laari\", \"San Salvador Kongo\", \"Yombe\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt\",\n}\n\nm[\"ki\"] = {\n\tcanonicalName = \"Kikuyu\",\n\totherNames = {\"Gikuyu\", \"Gĩkũyũ\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt\",\n}\n\nm[\"kj\"] = {\n\tcanonicalName = \"Kwanyama\",\n\totherNames = {\"Kuanyama\", \"Oshikwanyama\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt\",\n}\n\nm[\"kk\"] =\n\t{\n\t\"Kazachice\", \"Q9252\", \"trk-kno\",\n\totherNames = {\"Kazachica\", \"Kazachicae\", \"Kazachici\", \"Kazachicum\", \"Kazachica\", \"Kazachicae\", \"Қазақ тілі\", \n\t\t\"Kazachicus\", \"Kazachica\", \"Kazachicarum\"},\n\tscripts = {\"Cyrl\", \"Latn\", \"kk-Arab\"},\n\ttranslit_module = \"kk-translit\",\n\toverride_translit = true,\n\t}\n\nm[\"kl\"] = {\n\tcanonicalName = \"Groenlandice\",\n\totherNames = {\"Groenlandica\", \"Groenlandicae\", \"Groenlandici\", \"Groenlandicum\", \"Groenlandica\", \"Groenlandicae\", \"Kalaallisut\", \n\t\t\"Groenlandicus\", \"Groenlandica\", \"Groenlandicarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"esx-inu\",\n}\n\nm[\"km\"] = {\n\tcanonicalName = \"Khmer\",\n\totherNames = {\"Cambodian\"},\n\tscripts = {\"Khmr\"},\n\tfamily = \"mkh\",\n\tancestors = {\"mkh-mkm\"},\n\ttranslit_module = \"km-translit\",\n}\n\nm[\"kn\"] = {\n\tcanonicalName = \"Kannada\",\n\tscripts = {\"Knda\"},\n\tfamily = \"dra\",\n\ttranslit_module = \"kn-translit\",\n}\n\nm[\"ko\"] = {\n\tcanonicalName = \"Coreane\",\n\totherNames = {\"Coreana\", \"Coreanae\", \"Coreani\", \"Coreanum\", \"Coreana\", \"Coreanae\", \"한국어\", \n\t\t\"Coreanus\", \"Coreana\", \"Coreanarum\", \"Modern Korean\"},\n\tscripts = {\"Kore\"},\n\tfamily = \"qfa-kor\",\n\tancestors = {\"okm\"},\n\ttranslit_module = \"ko-translit\",\n}\n\nm[\"kr\"] = {\n\tcanonicalName = \"Kanuri\",\n\totherNames = {\"Kanembu\", \"Bilma Kanuri\", \"Central Kanuri\", \"Manga Kanuri\", \"Tumari Kanuri\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"ssa\",\n}\n\nm[\"ks\"] = {\n\tcanonicalName = \"Caspirice\",\n\totherNames = {\"Caspirica\", \"Caspiricae\", \"Caspirici\", \"Caspiricum\", \"Caspirica\", \"Caspiricae\", \"कॉशुर / کٲشُر\", \n\t\t\"Caspiricus\", \"Caspirica\", \"Caspiricarum\", \"Kashmiri\"},\n\tscripts = {\"ks-Arab\", \"Deva\"},\n\tfamily = \"inc-dar\",\n}\n\nm[\"ku\"] = {\n\tcanonicalName = \"Corduene\",\n\totherNames = {\"Corduena\", \"Corduenae\", \"Cordueni\", \"Corduenum\", \"Corduena\", \"Corduenae\", \"kurdî\", \n\t\t\"Corduenus\", \"Corduena\", \"Corduenarum\"},\n\tscripts = {\"Latn\", \"ku-Arab\", \"Armn\", \"Cyrl\"},\n\tfamily = \"ira-wes\",\n}\n\nm[\"kv\"] = {\n\t\"Komiense\",\n\t\"Q34114\",\n\t\"urj-prm\",\n\totherNames = {\"Komiensis\", \"Komienses\", \"Komienses\", \"Komiense\", \"Komiensia\", \"Komiensis\", \"Коми кыв\", \n\t\"Komiensis\", \"Komiensi\", \"Komiensium\", \"Komi\", \"Komi-Zyryan\"},\n\tscripts = Cyrl,\n\ttranslit_module = \"kv-translit\",\n\toverride_translit = true,\n}\n\nm[\"kw\"] = {\n\tcanonicalName = \"Cornubice\",\n\totherNames = {\"Cornubica\", \"Cornubicae\", \"Cornubici\", \"Cornubicum\", \"Cornubica\", \"Cornubicae\", \"Kernowek\", \n\t\t\"Cornubicus\", \"Cornubica\", \"Cornubicarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"cel-bry\",\n\tancestors = {\"cnx\"},\n}\n\nm[\"ky\"] = {\n\tcanonicalName = \"Kyrgesse\",\n\totherNames = {\"Kyrgessa\", \"Kyrgessae\", \"Kyrgessi\", \"Kyrgessum\", \"Kyrgessa\", \"Kyrgessae\", \"кыргызча\", \n\t\t\"Kyrgessus\", \"Kyrgessa\", \"Kyrgessarum\", \"Chirgisica\", \"Kirghiz\", \"Kirgiz\"},\n\tscripts = {\"Cyrl\", \"Latn\", \"Arab\"},\n\tfamily = \"trk-kip\",\n\ttranslit_module = \"ky-translit\",\n}\n\nm[\"la\"] = {\n\tcanonicalName = \"Latine\",\n\totherNames = {\"Latina\", \"Latinae\", \"Latini\", \"Latinum\", \"Latina\", \"Latinae\", \"Latine\", \n\t\t\"Latinus\", \"Latina\", \"Latinarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"itc\",\n\tancestors = {\"itc-ola\"},\n\tentry_name = {\n\t\tfrom = {\"[ĀĂ]\", \"[āă]\", \"[ĒĔ]\", \"[ēĕë]\", \"[ĪĬÏ]\", \"[īĭï]\", \"[ŌŎ]\", \"[ōŏ]\", \"[ŪŬÜ]\", \"[ūŭü]\", \"Ȳ\", \"ȳ\", MACRON, BREVE, DIAER},\n\t\tto   = {\"A\", \"a\", \"E\", \"e\", \"I\", \"i\", \"O\", \"o\", \"U\", \"u\", \"Y\", \"y\"}},\n}\n\nm[\"lb\"] = {\n\tcanonicalName = \"Luxemburgice\",\n\totherNames = {\"Luxemburgica\", \"Luxemburgicae\", \"Luxemburgici\", \"Luxemburgicum\", \"Luxemburgica\", \"Luxemburgicae\", \"Lëtzebuergesch\", \n\t\t\"Luxemburgicus\", \"Luxemburgica\", \"Luxemburgicarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"gmw\",\n\tancestors = {\"gmh\"},\n}\n\nm[\"lg\"] = {\n\tcanonicalName = \"Luganda\",\n\totherNames = {\"Ganda\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt\",\n}\n\nm[\"li\"] = {\n\tcanonicalName = \"Limburgice\",\n\totherNames = {\"Limburgica\", \"Limburgicae\", \"Limburgici\", \"Limburgicum\", \"Limburgica\", \"Limburgicae\", \"Limburgs\", \n\t\t\"Limburgicus\", \"Limburgica\", \"Limburgicarum\", \"Limburgan\", \"Limburgian\", \"Limburgic\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"gmw\",\n\tancestors = {\"dum\"},\n}\n\nm[\"ln\"] = {\n\tcanonicalName = \"Lingala\",\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt\",\n}\n\nm[\"lo\"] = {\n\tcanonicalName = \"Lao\",\n\totherNames = {\"Laotian\"},\n\tscripts = {\"Laoo\"},\n\tfamily = \"tai-swe\",\n\ttranslit_module = \"lo-translit\",\n}\n\nm[\"lt\"] = {\n\tcanonicalName = \"Lithuanice\",\n\totherNames = {\"Lithuanica\", \"Lithuanicae\", \"Lithuanici\", \"Lithuanicum\", \"Lithuanica\", \"Lithuanicae\", \"lietuvių\", \n\t\t\"Lithuanicus\", \"Lithuanica\", \"Lithuanicarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"bat\",\n\tancestors = {\"olt\"},\n\tentry_name = {\n\t\tfrom = {\"[áãà]\", \"[ÁÃÀ]\", \"[éẽè]\", \"[ÉẼÈ]\", \"[íĩì]\", \"[ÍĨÌ]\", \"[ýỹ]\", \"[ÝỸ]\", \"ñ\", \"[óõò]\", \"[ÓÕÒ]\", \"[úũù]\", \"[ÚŨÙ]\", ACUTE, GRAVE, TILDE},\n\t\tto   = {\"a\",       \"A\",     \"e\",     \"E\",     \"i\",     \"I\",     \"y\",   \"Y\",   \"n\",   \"o\",    \"O\",     \"u\",      \"U\"}} ,\n}\n\nm[\"lu\"] = {\n\tcanonicalName = \"Luba-Katanga\",\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt\",\n}\n\nm[\"lv\"] = {\n\tcanonicalName = \"Lettice\",\n\totherNames = {\"Lettica\", \"Letticae\", \"Lettici\", \"Letticum\", \"Lettica\", \"Letticae\", \"latviešu\", \n\t\t\"Letticus\", \"Lettica\", \"Letticarum\", \"Lettonica\", \"Lettish\", \"Lett\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"bat\",\n}\n\n-- 1=nomsgf, 2=nomplf, 3=nomplm, 4=nomsgn, 5=nompln, 6=gensgf, 7=ipsa, 8=nomsgm, 9=ablsgf, 10=genplf\nm[\"ma\"] = {\n\tcanonicalName = \"Magare\",\n\totherNames = {\"Magara\", \"Magarae\", \"Magari\", \"Magarum\", \"Magara\", \"Magarae\", \"léngua magara\", \n\t\t\"Magarus\", \"Magara\", \"Magararum\", \"Magarian\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"roa-itd\",\n}\n\nm[\"mg\"] = {\n\t\"Madagascariense\", 7930, \"poz-bre\",\n\totherNames = {\"Madagascariensis\", \"Madagascarienses\", \"Madagascarienses\", \"Madagascariense\", \"Madagascariensia\", \"Madagascariensis\", \"malagasy\", \n\t\t\"Madagascariensis\", \"Madagascariensi\", \"Madagascariensium\", \"Betsimisaraka Malagasy\", \"Betsimisaraka\", \"Northern Betsimisaraka Malagasy\", \"Northern Betsimisaraka\", \"Southern Betsimisaraka Malagasy\", \"Southern Betsimisaraka\", \"Bara Malagasy\", \"Bara\", \"Masikoro Malagasy\", \"Masikoro\", \"Antankarana\", \"Antankarana Malagasy\", \"Plateau Malagasy\", \"Sakalava\", \"Tandroy Malagasy\", \"Tandroy\", \"Tanosy\", \"Tanosy Malagasy\", \"Tesaka\", \"Tsimihety\", \"Tsimihety Malagasy\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"poz-bre\",\n}\n\nm[\"mh\"] = {\n\t\"Marsaliense\", 36280, \"poz-mic\",\n\totherNames = {\"Marsaliensis\", \"Marsalienses\", \"Marsalienses\", \"Marsaliense\", \"Marsaliensia\", \"Marsaliensis\", \"Kajin M̧ajeļ\", \n\t\"Marsaliensis\", \"Marsaliensi\", \"Marsaliensium\", \"Kajin Majōl\", \"Marshallese\", \"Ebon\"},\n\tscripts = {\"Latn\"},\n\tsort_key = {\n\t\tfrom = {\"ā\" , \"ļ\" , \"m̧\" , \"ņ\" , \"n̄\"  , \"o̧\" , \"ō\"  , \"ū\" },\n\t\tto   = {\"a~\", \"l~\", \"m~\", \"n~\", \"n~~\", \"o~\", \"o~~\", \"u~\"}} ,\n}\n\nm[\"mi\"] = {\n\t\"Maorice\", 36451, \"poz-pep\",\n\totherNames = {\"Maorica\", \"Maoricae\", \"Maorici\", \"Maoricum\", \"Maorica\", \"Maoricae\", \"Māori\", \n\t\t\"Maoricus\", \"Maorica\", \"Maoricarum\"},\n\tscripts = {\"Latn\"},\n}\n\nm[\"mk\"] = {\n\t\"Macedonice\", 9296, \"zls\",\n\totherNames = {\"Macedonica\", \"Macedonicae\", \"Macedonici\", \"Macedonicum\", \"Macedonica\", \"Macedonicae\", \"Македонски јазик\", \n\t\"Macedonicus\", \"Macedonica\", \"Macedonicarum\" },\n\tscripts = {\"Cyrl\"},\n\ttranslit_module = \"mk-translit\",\n\tentry_name = {\n\t\tfrom = {ACUTE},\n\t\tto   = {}},\n}\n\nm[\"ml\"] = {\n\t\"Malabarice\", 36236, \"dra\",\n\totherNames = {\"Malabarica\", \"Malabaricae\", \"Malabarici\", \"Malabaricum\", \"Malabarica\", \"Malabaricae\", \"മലയാളം\", \n\t\"Malabaricus\", \"Malabarica\", \"Malabaricarum\", \"Malayalam\" },\n\tscripts = {\"Mlym\"},\n\ttranslit_module = \"ml-translit\",\n}\n\nm[\"mn\"] = {\n\tcanonicalName = \"Mogolice\",\n\totherNames = {\"Mogolica\", \"Mogolicae\", \"Mogolici\", \"Mogolicum\", \"Mogolica\", \"Mogolicae\", \"Монгол хэл\", \n\t\t\"Mogolicus\", \"Mogolica\", \"Mogolicarum\", \"Khalkha Mongolian\"},\n\tscripts = {\"Cyrl\", \"Mong\"},\n\tfamily = \"xgn\",\n\tancestors = {\"cmg\"},\n\ttranslit_module = \"mn-translit\",\n}\n\nm[\"mr\"] = {\n\tcanonicalName = \"Marathi\",\n\tscripts = {\"Deva\", \"Modi\"},\n\tfamily = \"inc\",\n\tancestors = {\"omr\"},\n\ttranslit_module = \"hi-translit\",\n}\n\nm[\"ms\"] = {\n\tcanonicalName = \"Malaice\",\n\totherNames = {\"Malaica\", \"Malaicae\", \"Malaici\", \"Malaicum\", \"Malaica\", \"Malaicae\", \"Bahasa Melayu\", \n\t\t\"Malaicus\", \"Malaica\", \"Malaicarum\"},\n\tscripts = {\"Latn\", \"Arab\"},\n\tfamily = \"poz-mly\",\n}\n\nm[\"mt\"] = {\n\tcanonicalName = \"Melitense\",\n\totherNames = {\"Melitensis\", \"Melitenses\", \"Melitenses\", \"Melitense\", \"Melitensia\", \"Melitensis\", \"Malti\", \n\t\"Melitensis\", \"Melitensi\", \"Melitensium\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"sem-arb\",\n\tancestors = {\"sqr\"},\n}\n\nm[\"my\"] = {\n\tcanonicalName = \"Birmanice\",\n\totherNames = {\"Birmanica\", \"Birmanicae\", \"Birmanici\", \"Birmanicum\", \"Birmanica\", \"Birmanicae\", \"မ္ရန္‌မာစာ\", \n\t\t\"Birmanicus\", \"Birmanica\", \"Birmanicarum\", \"Burmese\", \"Myanmar\"},\n\tscripts = {\"Mymr\"},\n\tfamily = \"tbq-brm\",\n\tancestors = {\"obr\"},\n\ttranslit_module = \"my-translit\",\n}\n\nm[\"na\"] = {\n\tcanonicalName = \"Nauruane\",\n\totherNames = {\"Nauruana\", \"Nauruanae\", \"Nauruani\", \"Nauruanum\", \"Nauruana\", \"Nauruanae\", \"Nauru\", \n\t\t\"Nauruanus\", \"Nauruana\", \"Nauruanarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"poz-mic\",\n}\n\nm[\"nb\"] = {\n\tcanonicalName = \"Dano-Norvegice\",\n\totherNames = {\"Dano-Norvegica\", \"Dano-Norvegicae\", \"Dano-Norvegici\", \"Dano-Norvegicum\", \"Dano-Norvegica\", \"Dano-Norvegicae\", \"Bokmål\",\n\t\"Dano-Norvegicus\", \"Dano-Norvegica\", \"Dano-Norvegicarum\", \"Norwegian\", \"Norsk\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"gmq\",\n\tancestors = {\"gmq-mno\"},\n\twikimedia_codes = {\"no\"},\n}\n\nm[\"nd\"] = {\n\tcanonicalName = \"Northern Ndebele\",\n\totherNames = {\"North Ndebele\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt-ngu\",\n}\n\nm[\"ne\"] = {\n\tcanonicalName = \"Nepalense\",\n\totherNames = {\"Nepalensis\", \"Nepalenses\", \"Nepalenses\", \"Nepalense\", \"Nepalensia\", \"Nepalensis\", \"नेपाली\", \n\t\t\"Nepalensis\", \"Nepalensi\", \"Nepalensium\", \"Nepalese\"},\n\tscripts = {\"Deva\"},\n\tfamily = \"inc\",\n\ttranslit_module = \"ne-translit\",\n}\n\nm[\"ng\"] = {\n\tcanonicalName = \"Ndonga\",\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt\",\n}\n\nm[\"nl\"] = {\n\tcanonicalName = \"Batave\",\n\totherNames = {\"Batava\", \"Batavae\", \"Batavi\", \"Batavum\", \"Batava\", \"Batavae\", \"Nederlands\", \n\t\t\"Batavus\", \"Batava\", \"Batavarum\", \"Netherlandic\", \"Flemish\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"gmw\",\n\tancestors = {\"dum\"},\n\tsort_key = {\n\t\tfrom = {\"[äáâå]\", \"[ëéê]\", \"[ïíî]\", \"[öóô]\", \"[üúû]\", \"ç\", \"ñ\", \"^-\"},\n\t\tto   = {\"a\"\t , \"e\"\t, \"i\"\t, \"o\"\t, \"u\"\t, \"c\", \"n\"}} ,\n}\n\nm[\"nn\"] = {\n\tcanonicalName = \"Neonorvegice\",\n\totherNames = {\"Neonorvegica\", \"Neonorvegicae\", \"Neonorvegici\", \"Neonorvegicum\", \"Neonorvegica\", \"Neonorvegicae\", \"Nynorsk\", \n\t\t\"Neonorvegicus\", \"Neonorvegica\", \"Neonorvegicarum\", \"New Norwegian\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"gmq\",\n\tancestors = {\"gmq-mno\"},\n}\n\nm[\"no\"] = {\n\tcanonicalName = \"Norvegice\",\n\totherNames = {\"Norvegica\", \"Norvegicae\", \"Norvegici\", \"Norvegicum\", \"Norvegica\", \"Norvegicae\", \"Norsk\", \n\t\t\"Norvegicus\", \"Norvegica\", \"Norvegicarum\", \"Norwegian\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"gmq\",\n\tancestors = {\"gmq-mno\"},\n}\n\nm[\"nr\"] = {\n\tcanonicalName = \"Southern Ndebele\",\n\totherNames = {\"South Ndebele\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt-ngu\",\n}\n\nm[\"nv\"] = {\n\tcanonicalName = \"Navajo\",\n\tscripts = {\"nv-Latn\"},\n\tfamily = \"apa\",\n\tsort_key = {\n\t\tfrom = {\"[áą]\", \"[éę]\", \"[íį]\", \"[óǫ]\", \"ń\", \"^n([djlt])\", \"ł\" , \"[ʼ’']\", ACUTE},\n\t\tto   = {\"a\"   , \"e\"   , \"i\"   , \"o\"   , \"n\", \"ni%1\"\t  , \"l\"}}, -- the copyright sign is used to guarantee that ł will always be sorted after all other words with l\n}\n\nm[\"ny\"] = {\n\tcanonicalName = \"Chichewa\",\n\totherNames = {\"Chicheŵa\", \"Chinyanja\", \"Nyanja\", \"Chewa\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt\",\n\tentry_name = {\n\t\tfrom = {ACUTE},\n\t\tto   = {}},\n}\n\nm[\"oc\"] = {\n\tcanonicalName = \"Occitane\",\n\totherNames = {\"Occitana\", \"Occitanae\", \"Occitani\", \"Occitanum\", \"Occitana\", \"Occitanae\", \"occitan\", \n\t\t\"Occitanus\", \"Occitana\", \"Occitanarum\",\n\t\t\"Provençal\", \"Auvergnat\", \"Auvernhat\", \"Gascon\", \"Languedocien\", \"Lengadocian\", \"Shuadit\", \"Chouhadite\", \"Chouhadit\", \"Chouadite\", \"Chouadit\", \"Shuhadit\", \"Judeo-Provençal\", \"Judeo-Provencal\", \"Judeo-Comtadin\"},\n\tscripts = {\"Latn\", \"Hebr\"},\n\tfamily = \"roa\",\n\tancestors = {\"pro\"},\n\tsort_key = {\n\t\tfrom = {\"[àá]\", \"[èé]\", \"[íï]\", \"[òó]\", \"[úü]\", \"ç\", \"([lns])·h\"},\n\t\tto   = {\"a\"   , \"e\"   , \"i\"   , \"o\"   , \"u\"   , \"c\", \"%1h\"\t  }} ,\n}\n\nm[\"oj\"] = {\n\t\"Ojibwayense\",\n\t\"Q33875\",\n\t\"alg\",\n\totherNames = {\"Ojibwayensis\", \"Ojibwayenses\", \"Ojibwayenses\", \"Ojibwayense\", \"Ojibwayensia\", \"Ojibwayensis\", \"Anishinaabemowin / ᐊᓂᔑᓈᐯᒧᐎᓐ\", \n\t\"Ojibwayensis\", \"Ojibwayensi\", \"Ojibwayensium\"},\n\taliases = {\"Ojibway\", \"Ojibwa\"},\n\tvarieties = {{\"Chippewa\", \"Ojibwemowin\", \"Southwestern Ojibwa\"}},\n\tscripts = {\"Cans\", \"Latn\"},\n\tsort_key = {\n\t\tfrom = {\"aa\", \"ʼ\",  \"ii\", \"oo\", \"sh\", \"zh\"},\n\t\tto   = {\"a~\", \"h~\", \"i~\", \"o~\", \"s~\", \"z~\"}} ,\n}\n\nm[\"om\"] = {\n\tcanonicalName = \"Oromo\",\n\totherNames = {\"Orma\", \"Borana-Arsi-Guji Oromo\", \"West Central Oromo\"},\n\tscripts = {\"Latn\", \"Ethi\"},\n\tfamily = \"cus\",\n}\n\nm[\"or\"] = {\n\tcanonicalName = \"Oriya\",\n\totherNames = {\"Odia\", \"Oorya\"},\n\tscripts = {\"Orya\"},\n\tfamily = \"inc\",\n\tancestors = {\"pka\"},\n}\n\nm[\"os\"] = {\n\tcanonicalName = \"Alane\",\n\totherNames = {\"Ossete\", \"Ossetic\", \"Digor\", \"Iron\"},\n\tscripts = {\"Cyrl\", \"Geor\", \"Latn\"},\n\tfamily = \"ira\",\n\ttranslit_module = \"os-translit\",\n\tancestors = {\"oos\"},\n\tentry_name = {\n\t\tfrom = {GRAVE, ACUTE},\n\t\tto   = {}} ,\n}\n\nm[\"pa\"] = {\n\tcanonicalName = \"Punjabi\",\n\totherNames = {\"Panjabi\"},\n\tscripts = {\"Guru\", \"Arab\", \"Deva\"},\n\tfamily = \"inc\",\n\ttranslit_module = \"pa-translit\",\n\tancestors = {\"psu\"},\n}\n\nm[\"pi\"] = {\n\tcanonicalName = \"Pali\",\n\tscripts = {\"Latn\", \"Deva\", \"Sinh\", \"Mymr\", \"Khmr\", \"Thai\"},\n\tfamily = \"inc\",\n\tancestors = {\"bh\"},\n\tsort_key = {\n\t\tfrom = {\"ā\", \"ī\", \"ū\", \"ḍ\", \"ḷ\", \"[ṁṃ]\", \"[ṇñṅ]\", \"ṭ\"},\n\t\tto   = {\"a\", \"i\", \"u\", \"d\", \"l\", \"m\"   , \"n\"\t, \"t\"}} ,\n}\n\nm[\"pl\"] = {\n\tcanonicalName = \"Polonice\",\n\totherNames = {\"Polonica\", \"Polonicae\", \"Polonici\", \"Polonicum\", \"Polonica\", \"Polonicae\", \"język polski\",\n\t\t\"Polonicus\", \"Polonica\", \"Polonicarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"zlw\",\n\tancestors = {\"zlw-opl\"},\n\tsort_key = {\n\t\tfrom = {\"[Ąą]\", \"[Ćć]\", \"[Ęę]\", \"[Łł]\", \"[Ńń]\", \"[Óó]\", \"[Śś]\", \"[Żż]\", \"[Źź]\"},\n\t\tto   = {\n\t\t\t\"a\" .. u(0x10FFFF),\n\t\t\t\"c\" .. u(0x10FFFF),\n\t\t\t\"e\" .. u(0x10FFFF),\n\t\t\t\"l\" .. u(0x10FFFF),\n\t\t\t\"n\" .. u(0x10FFFF),\n\t\t\t\"o\" .. u(0x10FFFF),\n\t\t\t\"s\" .. u(0x10FFFF),\n\t\t\t\"z\" .. u(0x10FFFF),\n\t\t\t\"z\" .. u(0x10FFFE)}} ,\n}\n\nm[\"ps\"] = {\n\tcanonicalName = \"Afganice\",\n\totherNames = {\"Afganica\", \"Afganicae\", \"Afganici\", \"Afganicum\", \"Afganica\", \"Afganicae\", \"پښتو\", \n\t\t\"Afganicus\", \"Afganica\", \"Afganicarum\", \"Pashtun\", \"Pushto\", \"Pashtu\", \"Central Pashto\", \"Northern Pashto\", \"Southern Pashto\", \"Pukhto\", \"Pakhto\", \"Pakkhto\", \"Afghani\"},\n\tscripts = {\"ps-Arab\"},\n\tfamily = \"ira-eas\",\n}\n\nm[\"pt\"] = {\n\tcanonicalName = \"Lusitane\",\n\totherNames = {\"Lusitana\", \"Lusitanae\", \"Lusitani\", \"Lusitanum\", \"Lusitana\", \"Lusitanae\", \"português\", \n\t\t\"Lusitanus\", \"Lusitana\", \"Lusitanarum\", \"Modern Portuguese\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"roa\",\n\tancestors = {\"roa-opt\"},\n\tsort_key = {\n\t\tfrom = {\"[àãáâä]\", \"[èẽéêë]\", \"[ìĩíï]\", \"[òóôõö]\", \"[üúùũ]\", \"ç\", \"ñ\"},\n\t\tto   = {\"a\"\t  , \"e\"\t  , \"i\"\t , \"o\"\t  , \"u\"\t , \"c\", \"n\"}} ,\n}\n\nm[\"qu\"] = {\n\tcanonicalName = \"Quechua\",\n\totherNames = {\"Quechua\", \"Quechuae\", \"Quechui\", \"Quechuum\", \"Quechua\", \"Quechuae\", \"Runasimi\", \n\t\t\"Quechuus\", \"Quechua\", \"Quechuarum\", \"Qhichwa simi\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"qwe\",\n}\n\nm[\"rm\"] = {\n\tcanonicalName = \"Raetice\",\n\totherNames = {\"Raetica\", \"Raeticae\", \"Raetici\", \"Raeticum\", \"Raetica\", \"Raeticae\", \"rumantsch\", \n\t\t\"Raeticus\", \"Raetica\", \"Raeticarum\", \"Romansh\", \"Romanche\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"roa\",\n}\n\nm[\"rn\"] = {\n\tcanonicalName = \"Kirundi\",\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt\",\n}\n\nm[\"ro\"] = {\n\tcanonicalName = \"Dacoromane\",\n\totherNames = {\"Dacoromana\", \"Dacoromanae\", \"Dacoromani\", \"Dacoromanum\", \"Dacoromana\", \"Dacoromanae\", \"româna\", \n\t\t\"Dacoromanus\", \"Dacoromana\", \"Dacoromanarum\", \"Daco-Romanian\", \"Roumanian\", \"Rumanian\"},\n\tscripts = {\"Latn\", \"Cyrl\"},\n\tfamily = \"roa\",\n\tsort_key = {\n        from = {\"ă\" , \"â\"  , \"î\" , \"ș\" , \"ț\" },\n        to   = {\"a~\", \"a~~\", \"i~\", \"s~\", \"t~\"}},\n}\n\nm[\"ru\"] = {\n\tcanonicalName = \"Ruthenice\",\n\totherNames = {\"Ruthenica\", \"Ruthenicae\", \"Ruthenici\", \"Ruthenicum\", \"Ruthenica\", \"Ruthenicae\", \"русский язык\", \n\t\t\"Ruthenicus\", \"Ruthenica\", \"Ruthenicarum\"},\n\tscripts = {\"Cyrl\"},\n\tfamily = \"zle\",\n\ttranslit_module = \"ru-translit\",\n\tsort_key = {\n\t\tfrom = {\"ё\"},\n\t\tto   = {\"е\" .. mw.ustring.char(0x10FFFF)}},\n\tentry_name = {\n\t\tfrom = {\"Ѐ\", \"ѐ\", \"Ѝ\", \"ѝ\", GRAVE, ACUTE},\n\t\tto   = {\"Е\", \"е\", \"И\", \"и\"}},\n}\n\nm[\"rw\"] = {\n\tcanonicalName = \"Kinyarwanda\",\n\totherNames = {\"Rwanda\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt\",\n}\n\nm[\"sa\"] = {\n\tcanonicalName = \"Sanscrite\",\n\totherNames = {\"Sanscrita\", \"Sanscritae\", \"Sanscriti\", \"Sanscritum\", \"Sanscrita\", \"Sanscritae\", \"संस्कृत\", \n\t\t\"Sanscritus\", \"Sanscrita\", \"Sanscritarum\"},\n\tscripts = {\"Deva\", \"Beng\", \"Brah\", \"Gran\", \"Gujr\", \"Guru\", \"Khar\", \"Knda\", \"Mlym\", \"Mymr\", \"Orya\", \"Shrd\", \"Sinh\", \"Taml\", \"Telu\", \"Thai\", \"Tibt\"},\n\tfamily = \"inc\",\n\ttranslit_module = \"sa-translit\",\n}\n\n-- 1=nomsgf, 2=nomplf, 3=nomplm, 4=nomsgn, 5=nompln, 6=gensgf, 7=ipsa, 8=nomsgm, 9=ablsgf, 10=genplf\nm[\"sc\"] = {\n\t\"Sarde\", \"Q33976\", \"roa\",\n\totherNames = {\"Sarda\", \"Sardae\", \"Sardi\", \"Sardum\", \"Sarda\", \"Sardae\", \"sarda\", \n\t\t\"Sardus\", \"Sarda\", \"Sardarum\", \"Campidanese\", \"Campidanese Sardinian\", \"Logudorese\", \"Logudorese Sardinian\", \"Nuorese\", \"Nuorese Sardinian\"},\n\tscripts = {\"Latn\"},\n}\n\nm[\"sd\"] = {\n\tcanonicalName = \"Sindhi\",\n\tscripts = {\"sd-Arab\", \"Deva\"},\n\tfamily = \"inc\",\n}\n\n-- otherNames is used for inflected forms: 1=nomsgf, 2=nomplf, 3=nomplm, 4=nomsgn, 5=nompln, 6=gensgf\nm[\"se\"] = {\n\tcanonicalName = \"Lapponica Septentrionali\",\n\totherNames = {\"Lapponica Septentrionalis\", \"Lapponicae Septentrionales\", \"Lapponici Septentrionales\", \"Lapponicum Septentrionale\", \"Lapponica Septentrionalia\", \"Lapponicae Septentrionalis\", \"Davvisámegiella\",\n\t\t\"Lapponicus Septentrionalis\", \"Lapponica Septentrionali\", \"Lapponicarum Septentrionalium\", \"Samica septentrionalis\", \"North Sami\", \"Northern Saami\", \"North Saami\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"smi\",\n\tentry_name = {\n\t\tfrom = {\"([đflmnŋrsšŧv])'%1\"},\n\t\tto   = {\"%1%1\"} },\n}\n\nm[\"sg\"] = {\n\tcanonicalName = \"Sango\",\n\tscripts = {\"Latn\"},\n\tfamily = \"crp\",\n}\n\nm[\"sh\"] = {\n\tcanonicalName = \"Servocroate\",\n\totherNames = {\"Servocroata\", \"Servocroatae\", \"Servocroati\", \"Servocroatum\", \"Servocroata\", \"Servocroatae\", \"srpskohrvatski\", \n\t\t\"Servocroatus\", \"Servocroata\", \"Servocroatarum\", \"BCS\", \"Croato-Serbian\", \"Serbocroatian\", \"Bosnian\", \"Croatian\", \"Montenegrin\", \"Serbian\"},\n\tscripts = {\"Latn\", \"Cyrl\"},\n\tfamily = \"zls\",\n\tentry_name = {\n\t\tfrom = {\"[ȀÀȂÁĀ]\", \"[ȁàȃáā]\", \"[ȄÈȆÉĒ]\", \"[ȅèȇéē]\", \"[ȈÌȊÍĪ]\", \"[ȉìȋíī]\", \"[ȌÒȎÓŌ]\", \"[ȍòȏóō]\", \"[ȐȒŔ]\", \"[ȑȓŕ]\", \"[ȔÙȖÚŪ]\", \"[ȕùȗúū]\", \"Ѐ\", \"ѐ\", \"[ӢЍ]\", \"[ӣѝ]\", \"[Ӯ]\", \"[ӯ]\", GRAVE, ACUTE, DGRAVE, INVBREVE, MACRON},\n\t\tto   = {\"A\"\t  , \"a\"\t  , \"E\"\t  , \"e\"\t  , \"I\"\t  , \"i\"\t  , \"O\"\t  , \"o\"\t  , \"R\"\t, \"r\"\t, \"U\"\t  , \"u\"\t  , \"Е\", \"е\", \"И\"   , \"и\", \"У\", \"у\"   }},\n\twikimedia_codes = {\"sh\", \"bs\", \"hr\", \"sr\"},\n}\n\nm[\"si\"] = {\n\tcanonicalName = \"Sinhalese\",\n\totherNames = {\"Singhalese\", \"Sinhala\"},\n\tscripts = {\"Sinh\"},\n\tfamily = \"inc\",\n\tancestors = {\"pmh\"},\n\ttranslit_module = \"si-translit\",\n}\n\nm[\"sk\"] = {\n\tcanonicalName = \"Slovace\",\n\totherNames = {\"Slovaca\", \"Slovacae\", \"Slovaci\", \"Slovacum\", \"Slovaca\", \"Slovacae\", \"slovenčina\", \n\t\t\"Slovacus\", \"Slovaca\", \"Slovacarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"zlw\",\n\tsort_key = {\n\t\tfrom = {\"[áä]\", \"é\", \"í\", \"[óô]\", \"ú\", \"ý\", \"ŕ\", \"ĺ\"},\n\t\tto   = {\"a\"   , \"e\", \"i\", \"o\"   , \"u\", \"y\", \"r\", \"l\"}} ,\n}\n\nm[\"sl\"] = {\n\tcanonicalName = \"Slovene\",\n\totherNames = {\"Slovena\", \"Slovenae\", \"Sloveni\", \"Slovenum\", \"Slovena\", \"Slovenae\", \"slovenščina\", \n\t\t\"Slovenus\", \"Slovena\", \"Slovenarum\", \"Slovenian\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"zls\",\n\tentry_name = {\n\t\tfrom = {\"[ÁÀÂȂȀ]\", \"[áàâȃȁ]\", \"[ÉÈÊȆȄỆẸ]\", \"[éèêȇȅệẹə]\", \"[ÍÌÎȊȈ]\", \"[íìîȋȉ]\", \"[ÓÒÔȎȌỘỌ]\", \"[óòôȏȍộọ]\", \"[ŔȒȐ]\", \"[ŕȓȑ]\", \"[ÚÙÛȖȔ]\", \"[úùûȗȕ]\", \"ł\", GRAVE, ACUTE, DGRAVE, INVBREVE, CIRC, DOTBELOW},\n\t\tto   = {\"A\"\t  , \"a\"\t  , \"E\"\t\t, \"e\"\t\t , \"I\"\t  , \"i\"\t  , \"O\"\t\t, \"o\"\t\t, \"R\"\t, \"r\"\t, \"U\"\t  , \"u\"\t  , \"l\"}} ,\n}\n\nm[\"sm\"] = {\n\tcanonicalName = \"Samoane\",\n\totherNames = {\"Samoana\", \"Samoanae\", \"Samoani\", \"Samoanum\", \"Samoana\", \"Samoanae\", \"gagana Sāmoa\", \n\t\t\"Samoanus\", \"Samoana\", \"Samoanarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"poz-pol\",\n}\n\nm[\"sn\"] = {\n\tcanonicalName = \"Shona\",\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt\",\n}\n\nm[\"so\"] = {\n\tcanonicalName = \"Somali\",\n\tscripts = {\"Latn\", \"Arab\", \"Osma\"},\n\tfamily = \"cus\",\n\tentry_name = {\n\t\tfrom = {\"[ÁÀÂ]\", \"[áàâ]\", \"[ÉÈÊ]\", \"[éèê]\", \"[ÍÌÎ]\", \"[íìî]\", \"[ÓÒÔ]\", \"[óòô]\", \"[ÚÙÛ]\", \"[úùû]\", \"[ÝỲ]\", \"[ýỳ]\"},\n\t\tto   = {\"A\"\t  , \"a\"\t  , \"E\"\t, \"e\" , \"I\"\t  , \"i\"\t  , \"O\"\t, \"o\"\t, \"U\"  , \"u\", \"Y\", \"y\"}} ,\n}\n\nm[\"sq\"] = {\n\tcanonicalName = \"Illyrice\",\n\totherNames = {\"Illyrica\", \"Illyricae\", \"Illyrici\", \"Illyricum\", \"Illyrica\", \"Illyricae\", \"shqipja\", \n\t\t\"Illyricus\", \"Illyrica\", \"Illyricarum\"},\n\tscripts = {\"Latn\", \"Elba\"},\n\tfamily = \"sqj\",\n\tsort_key = {\n\t\tfrom = { '[âãä]', '[ÂÃÄ]', '[êẽë]', '[ÊẼË]', 'ĩ', 'Ĩ', 'õ', 'Õ', 'ũ', 'Ũ', 'ỹ', 'Ỹ', 'ç', 'Ç' },\n\t\tto   = {     'a',     'A',     'e',     'E', 'i', 'I', 'o', 'O', 'u', 'U', 'y', 'Y', 'c', 'C' } } ,\n}\n\nm[\"sr\"] = {\n\tcanonicalName = \"Service\",\n\totherNames = {\"Servica\", \"Servicae\", \"Servici\", \"Servicum\", \"Servica\", \"Servicae\", \"српски / srpski\", \n\t\t\"Servicus\", \"Servica\", \"Servicarum\"},\n\tscripts = {\"Latn\", \"Cyrl\"},\n\tfamily = \"zls\",\n\ttranslit_module = \"sh-translit\",\n\tentry_name = {\n\t\tfrom = {\"[ȀÀȂÁĀ]\", \"[ȁàȃáā]\", \"[ȄÈȆÉĒ]\", \"[ȅèȇéē]\", \"[ȈÌȊÍĪ]\", \"[ȉìȋíī]\", \"[ȌÒȎÓŌ]\", \"[ȍòȏóō]\", \"[ȐȒŔ]\", \"[ȑȓŕ]\", \"[ȔÙȖÚŪ]\", \"[ȕùȗúū]\", \"Ѐ\", \"ѐ\", \"[ӢЍ]\", \"[ӣѝ]\", \"[Ӯ]\", \"[ӯ]\", GRAVE, ACUTE, DGRAVE, INVBREVE, MACRON},\n\t\tto   = {\"A\"\t  , \"a\"\t  , \"E\"\t  , \"e\"\t  , \"I\"\t  , \"i\"\t  , \"O\"\t  , \"o\"\t  , \"R\"\t, \"r\"\t, \"U\"\t  , \"u\"\t  , \"Е\", \"е\", \"И\"   , \"и\", \"У\", \"у\"   }},\n\twikimedia_codes = {\"sh\", \"bs\", \"hr\", \"sr\"},\n}\n\nm[\"ss\"] = {\n\tcanonicalName = \"Swazi\",\n\totherNames = {\"Swati\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt-ngu\",\n}\n\nm[\"st\"] = {\n\tcanonicalName = \"Sotho Meridionali\",\n\totherNames = {\"Sesotho\", \"Southern Sesotho\", \"Southern Sotho\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt\",\n}\n\nm[\"su\"] = {\n\tcanonicalName = \"Sondaice\",\n\tscripts = {\"Latn\", \"Sund\"},\n\tfamily = \"poz-msa\",\n\ttranslit_module = \"su-translit\",\n}\n\nm[\"sv\"] = {\n\tcanonicalName = \"Suecice\",\n\totherNames = {\"Suecica\", \"Suecicae\", \"Suecici\", \"Suecicum\", \"Suecica\", \"Suecicae\", \"svenska\", \n\t\t\"Suecicus\", \"Suecica\", \"Suecicarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"gmq\",\n\tancestors = {\"gmq-osw\"},\n}\n\nm[\"sw\"] = {\n\tcanonicalName = \"Suahelice\",\n\totherNames = {\"Suahelica\", \"Suahelicae\", \"Suahelici\", \"Suahelicum\", \"Suahelica\", \"Suahelicae\", \"Kiswahili\", \n\t\t\"Suahelicus\", \"Suahelica\", \"Suahelicarum\", \"Settler Swahili\", \"KiSetla\", \"KiSettla\", \"Setla\", \"Settla\", \"Kitchen Swahili\", \"Kihindi\", \"Indian Swahili\", \"KiShamba\", \"Kishamba\", \"Field Swahili\", \"Kibabu\", \"Asian Swahili\", \"Kimanga\", \"Arab Swahili\", \"Kitvita\", \"Army Swahili\"},\n\tscripts = {\"Latn\", \"Arab\"},\n\tfamily = \"bnt\",\n\tsort_key = {\n\t\tfrom = {\"ng'\", \"^-\"},\n\t\tto   = {\"ngz\"}} ,\n}\n\nm[\"ta\"] = {\n\tcanonicalName = \"Tamulice\",\n\totherNames = {\"Tamulica\", \"Tamulicae\", \"Tamulici\", \"Tamulicum\", \"Tamulica\", \"Tamulicae\", \"தமிழ்\", \n\t\t\"Tamulicus\", \"Tamulica\", \"Tamulicarum\", \"Tamil\"},\n\tscripts = {\"Taml\"},\n\tfamily = \"dra\",\n\tancestors = {\"oty\"},\n\ttranslit_module = \"ta-translit\",\n}\n\nm[\"te\"] = {\n\tcanonicalName = \"Teluguice\",\n\tscripts = {\"Telu\"},\n\tfamily = \"dra\",\n\ttranslit_module = \"te-translit\",\n}\n\nm[\"tg\"] = {\n\tcanonicalName = \"Tadzikice\",\n\totherNames = {\"Tadzikica\", \"Tadzikicae\", \"Tadzikici\", \"Tadzikicum\", \"Tadzikica\", \"Tadzikicae\", \"Тоҷикӣ\", \n\t\t\"Tadzikicus\", \"Tadzikica\", \"Tadzikicarum\", \"Tajik\", \"Tadjik\", \"Tadzhik\", \"Tajiki\", \"Tajik Persian\"},\n\tscripts = {\"Cyrl\", \"fa-Arab\", \"Latn\"},\n\tfamily = \"ira-wes\",\n\tancestors = {\"fa\"},\n\ttranslit_module = \"tg-translit\",\n\t\tsort_key = {\n\t\tfrom = {\"Ё\", \"ё\"},\n\t\tto   = {\"Е\" , \"е\"}} ,\n\tentry_name = {\n\t\tfrom = {ACUTE},\n\t\tto   = {}} ,\n}\n\nm[\"th\"] = {\n\tcanonicalName = \"Siamense\",\n\totherNames = {\"Siamensis\", \"Siamenses\", \"Siamenses\", \"Siamense\", \"Siamensia\", \"Siamensis\", \"ภาษาไทย\", \n\t\t\"Siamensis\", \"Siamensi\", \"Siamensium\", \"Thai\"},\n\tscripts = {\"Thai\"},\n\tfamily = \"tai-swe\",\n\ttranslit_module = \"th-translit\",\n\tentry_name = {\n\t\tfrom = { \"-\" },\n\t\tto = {}} ,\n}\n\nm[\"ti\"] = {\n\tcanonicalName = \"Tigrinya\",\n\tscripts = {\"Ethi\"},\n\tfamily = \"sem-eth\",\n\ttranslit_module = \"Ethi-translit\",\n}\n\nm[\"tk\"] = {\n\tcanonicalName = \"Turcomannice\",\n\totherNames = {\"Turcomannica\", \"Turcomannicae\", \"Turcomannici\", \"Turcomannicum\", \"Turcomannica\", \"Turcomannicae\", \"Türkmençe\", \n\t\t\"Turcomannicus\", \"Turcomannica\", \"Turcomannicarum\", \"Tүркменче\", \"Türkmen dili\", \"تورکمن ﺗﻴﻠی\"},\n\tscripts = {\"Latn\", \"Cyrl\"},\n\tfamily = \"trk-ogz\",\n}\n\nm[\"tl\"] = {\n\tcanonicalName = \"Tagale\",\n\totherNames = {\"Tagala\", \"Tagalae\", \"Tagali\", \"Tagalum\", \"Tagala\", \"Tagalae\", \"Wikang Tagalog\", \n\t\t\"Tagalus\", \"Tagala\", \"Tagalarum\"},\n\tscripts = {\"Latn\", \"Tglg\"},\n\tfamily = \"phi\",\n}\n\nm[\"tn\"] = {\n\tcanonicalName = \"Tswana\",\n\totherNames = {\"Setswana\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt\",\n}\n\nm[\"to\"] = {\n\tcanonicalName = \"Tongane\",\n\totherNames = {\"Tongana\", \"Tonganae\", \"Tongani\", \"Tonganum\", \"Tongana\", \"Tonganae\", \"lea fakatonga\", \n\t\t\"Tonganus\", \"Tongana\", \"Tonganarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"poz-pol\",\n}\n\nm[\"tr\"] = {\n\tcanonicalName = \"Turcice\",\n\totherNames = {\"Turcica\", \"Turcicae\", \"Turcici\", \"Turcicum\", \"Turcica\", \"Turcicae\", \"Türkçe\", \n\t\t\"Turcicus\", \"Turcica\", \"Turcicarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"trk-ogz\",\n\tancestors = {\"ota\"},\n}\n\nm[\"ts\"] = {\n\tcanonicalName = \"Tsonga\",\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt\",\n}\n\nm[\"tt\"] = {\n\tcanonicalName = \"Tatarice\",\n\totherNames = {\"Tatarica\", \"Tataricae\", \"Tatarici\", \"Tataricum\", \"Tatarica\", \"Tataricae\", \"татарча / tatarça\", \n\t\t\"Tataricus\", \"Tatarica\", \"Tataricarum\"},\n\tscripts = {\"Cyrl\", \"Latn\", \"Arab\", \"tt-Arab\"},\n\tfamily = \"trk-kip\",\n\ttranslit_module = \"tt-translit\",\n}\n\nm[\"ty\"] = {\n\tcanonicalName = \"Tahitiane\",\n\totherNames = {\"Tahitiana\", \"Tahitianae\", \"Tahitiani\", \"Tahitianum\", \"Tahitiana\", \"Tahitianae\", \"reo Mā’ohi\",\n\t\t\"Tahitianus\", \"Tahitiana\", \"Tahitianarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"poz-pol\",\n}\n\nm[\"ug\"] = {\n\tcanonicalName = \"Uyghur\",\n\totherNames = {\"Uigur\", \"Uighur\", \"Uygur\"},\n\tscripts = {\"ug-Arab\", \"Latn\", \"Cyrl\"},\n\tfamily = \"trk\",\n\tancestors = {\"chg\"},\n\ttranslit_module = \"ug-translit\",\n}\n\nm[\"uk\"] = {\n\tcanonicalName = \"Ucrainice\",\n\totherNames = {\"Ucrainica\", \"Ucrainicae\", \"Ucrainici\", \"Ucrainicum\", \"Ucrainica\", \"Ucrainicae\", \"українська\", \n\t\t\"Ucrainicus\", \"Ucrainica\", \"Ucrainicarum\"},\n\tscripts = {\"Cyrl\"},\n\tfamily = \"zle\",\n\ttranslit_module = \"uk-translit\",\n\tentry_name = {\n\t\tfrom = {\"Ѐ\", \"ѐ\", \"Ѝ\", \"ѝ\", GRAVE, ACUTE},\n\t\tto   = {\"Е\", \"е\", \"И\", \"и\"}},\n} \nm[\"ur\"] = {\n\tcanonicalName = \"Urdu\",\n\totherNames = {\"Urdu\"},\n\tscripts = {\"ur-Arab\"},\n\tfamily = \"inc\",\n\tancestors = {\"psu\"},\n\tentry_name = {\n\t\tfrom = {u(0x064B), u(0x064C), u(0x064D), u(0x064E), u(0x064F), u(0x0650), u(0x0651), u(0x0652)},\n\t\tto   = {}} ,\n}\n\nm[\"uz\"] = {\n\tcanonicalName = \"Usbece\",\n\totherNames = {\"Northern Uzbek\", \"Southern Uzbek\"},\n\tscripts = {\"Latn\", \"Cyrl\", \"fa-Arab\"},\n\tfamily = \"trk\",\n\tancestors = {\"chg\"},\n}\n\nm[\"ve\"] = {\n\tcanonicalName = \"Venda\",\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt\",\n}\n\n-- otherNames is used for inflected forms: 1=nomsgf, 2=nomplf, 3=nomplm, 4=nomsgn, 5=nompln, 6=gensgf\nm[\"vi\"] = {\n\tcanonicalName = \"Vietnamice\",\n\totherNames = {\"Vietnamica\", \"Vietnamicae\", \"Vietnamici\", \"Vietnamicum\", \"Vietnamica\", \"Vietnamicae\", \"tiếng Việt\", \n\t\t\"Vietnamicus\", \"Vietnamica\", \"Vietnamicarum\", \"Annamese\", \"Annamite\"},\n\tscripts = {\"Latn\", \"Hani\"},\n\tfamily = \"mkh-vie\",\n\tancestors = {\"mkh-mvi\"},\n}\n\nm[\"vo\"] = {\n\tcanonicalName = \"Volapük\",\n\tscripts = {\"Latn\"},\n\tfamily = \"art\",\n}\n\nm[\"wa\"] = {\n\tcanonicalName = \"Vallonice\",\n\totherNames = {\"Vallonica\", \"Vallonicae\", \"Vallonici\", \"Vallonicum\", \"Vallonica\", \"Vallonicae\", \"walon\", \n\t\t\"Vallonicus\", \"Vallonica\", \"Vallonicarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"roa\",\n\tancestors = {\"fro\"},\n\tsort_key = {\n\t\tfrom = {\"[áàâäå]\", \"[éèêë]\", \"[íìîï]\", \"[óòôö]\", \"[úùûü]\", \"[ýỳŷÿ]\", \"ç\", \"'\"},\n\t\tto   = {\"a\"\t  , \"e\"\t , \"i\"\t , \"o\"\t , \"u\"\t , \"y\"\t , \"c\"}} ,\n}\n\nm[\"wo\"] = {\n\tcanonicalName = \"Wolof\",\n\totherNames = {\"Gambian Wolof\"}, -- the subsumed dialect 'wof'\n\tscripts = {\"Latn\", \"Arab\"},\n\tfamily = \"alv-sng\",\n}\n\nm[\"xh\"] = {\n\tcanonicalName = \"Xhosa\",\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt-ngu\",\n}\n\nm[\"yi\"] = {\n\tcanonicalName = \"Iudaeogermanice\",\n\totherNames = {\"Iudaeogermanica\", \"Iudaeogermanicae\", \"Iudaeogermanici\", \"Iudaeogermanicum\", \"Iudaeogermanica\", \"Iudaeogermanicae\", \"יידיש\", \n\t\t\"Iudaeogermanicus\", \"Iudaeogermanica\", \"Iudaeogermanicarum\", \"Jiddisch\"},\n\tscripts = {\"Hebr\"},\n\tfamily = \"gmw\",\n\tancestors = {\"gmh\"},\n\ttranslit_module = \"yi-translit\",\n}\n\nm[\"yo\"] = {\n\tcanonicalName = \"Yoruba\",\n\tscripts = {\"Latn\"},\n\tfamily = \"alv-von\",\n}\n\nm[\"za\"] = {\n\tcanonicalName = \"Zhuang\",\n\tscripts = {\"Latn\", \"Hani\"},\n\tfamily = \"tai\",\n}\n\nm[\"zh\"] = {\n\tcanonicalName = \"Sinice\",\n\totherNames = {\"Sinica\", \"Sinicae\", \"Sinici\", \"Sinicum\", \"Sinica\", \"Sinicae\", \"中文\", \n\t\t\"Sinicus\", \"Sinica\", \"Sinicarum\"},\n\tscripts = {\"Hani\"},\n\tfamily = \"sit\",\n\tancestors = {\"ltc\"},\n}\n\nm[\"zu\"] = {\n\tcanonicalName = \"Zuluane\",\n\totherNames = {\"Zuluana\", \"Zuluanae\", \"Zuluani\", \"Zuluanum\", \"Zuluana\", \"Zuluanae\", \"isiZulu\", \n\t\t\"Zuluanus\", \"Zuluana\", \"Zuluanarum\"},\n\tscripts = {\"Latn\"},\n\tfamily = \"bnt-ngu\",\n}\n\nreturn m";
+
+
+test "parent phase profile retains unavailable CPU separately from elapsed wall" {
+    var consume: ParentPhaseTotals = .{};
+    consume.record(.{ .cpu_ns = 40, .wall_ns = 100 }, .{ .cpu_ns = 70, .wall_ns = 180 });
+    consume.record(.{ .cpu_ns = null, .wall_ns = 200 }, .{ .cpu_ns = 90, .wall_ns = 240 });
+    var total: ParentPhaseTotals = .{};
+    total.merge(consume);
+    try std.testing.expectEqual(@as(u64, 2), total.calls);
+    try std.testing.expectEqual(@as(u64, 30), total.cpu_ns);
+    try std.testing.expectEqual(@as(u64, 120), total.wall_ns);
+    try std.testing.expectEqual(@as(u64, 1), total.cpu_clock_misses);
+}
+
+const LoLiteralSwitchTest = struct {
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tlowiktionary\n# dump-date\t20261001\n# content-language\tlo\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tແມ່ແບບ\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tໝວດ\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n";
+    const registry = "# content-language\tlo\n# mediawiki\nlo\tລາວ\nen\tEnglish\nfr\tFrench\nde\tGerman\nth\tThai\n";
+    const authority = @embedFile("lo-codetolang-p64415-r458666.wikitext");
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8, source: []const u8) !void {
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{root, "language-registry.tsv"}), .data = registry });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{root, "manifest.jsonl"}), .data = "" });
+        const index_path = try std.fs.path.join(a, &.{root, "page-index.tsv"});
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = "0\t0\tແມ່ແບບ:codetolang\t\t64415\t458666\t2017-01-01T00:00:00Z\tA\twikitext\t10\t1\t0\n" });
+        var writer = try dump_source.TemplateSourceWriter.init(io, a, root); defer writer.deinit();
+        try writer.append(0, 64415, 458666, source);
+        try writer.finish(index_path);
+    }
+};
+
+test "literal code language switch validates complete source and existing owners" {
+    const a = std.testing.allocator;
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(LoLiteralSwitchTest.registry);
+    try std.testing.expect(try importLiteralLanguageNameSwitch(a, &registry, LoLiteralSwitchTest.authority));
+    try std.testing.expectEqualStrings("lo", registry.resolveTrusted("ພາສາລາວ").?.code);
+    try std.testing.expectEqualStrings("ລາວ", registry.resolveTrusted("ພາສາລາວ").?.heading);
+    try std.testing.expect(registry.resolveTrusted("ກະລຸນາຊ່ອຍເພີ່ມຂໍ້ມູນ") == null);
+    try std.testing.expect(registry.resolveTrusted("unknown") == null);
+    try std.testing.expect(try importLiteralLanguageNameSwitch(a, &registry, "{{#switch:{{{1|}}}|zz=Unregistered label|#default=Default label}}"));
+    try std.testing.expect(registry.resolveTrusted("Unregistered label") == null);
+    try std.testing.expect(registry.resolveTrusted("Default label") == null);
+    for ([_][]const u8{
+        "{{#switch:{{{1|}}}|lo=New literal|en={{dynamic}}|#default=Default}}",
+        "{{#switch:{{{1|}}}|lo=New literal|lo=Duplicate|#default=Default}}",
+        "{{#switch:{{{2|}}}|lo=New literal|#default=Default}}",
+        "{{#switch:{{{1|}}}|lo=New literal|#default=Default}}extra",
+    }) |source| {
+        try std.testing.expect(!try importLiteralLanguageNameSwitch(a, &registry, source));
+        try std.testing.expect(registry.resolveTrusted("New literal") == null);
+    }
+    var conflict = language_registry.Registry.empty(a); defer conflict.deinit();
+    try conflict.addTsv(LoLiteralSwitchTest.registry ++ "fr\tFrench\tພາສາລາວ\n");
+    try std.testing.expect(try importLiteralLanguageNameSwitch(a, &conflict, LoLiteralSwitchTest.authority));
+    try std.testing.expectEqualStrings("fr", conflict.resolve("ພາສາລາວ").?.code);
+    try std.testing.expect(conflict.resolveTrusted("ພາສາລາວ") == null);
+    try registry.addLocalAlias("ພາສາລາວ", "fr");
+    try std.testing.expect(registry.resolveTrusted("ພາສາລາວ") == null);
+}
+
+test "normal literal language switch loader authenticates template source bytes" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var ns = try namespace_registry.Registry.init(a, LoLiteralSwitchTest.namespaces); defer ns.deinit();
+    try LoLiteralSwitchTest.install(io, a, root, LoLiteralSwitchTest.authority);
+    var registry = try loadLanguageRegistry(io, a, root, &ns); defer registry.deinit();
+    try std.testing.expectEqualStrings("lo", registry.resolveTrusted("ພາສາລາວ").?.code);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{root, "template-source.bin"}), .data = "mutated authority" });
+    try std.testing.expectError(error.InvalidTemplateSourceIndex, loadLanguageRegistry(io, a, root, &ns));
+}
+
+test "normal literal switch Writer preserves complete actual Lao page and unowned prefix" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var expected: [2]?[]const u8 = .{null, null};
+    for ([_]bool{false, true}) |normal_loader| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        var ns = try namespace_registry.Registry.init(a, LoLiteralSwitchTest.namespaces); defer ns.deinit();
+        try LoLiteralSwitchTest.install(io, a, root, if (normal_loader) LoLiteralSwitchTest.authority else "unsupported");
+        var registry = try loadLanguageRegistry(io, a, root, &ns); defer registry.deinit();
+        // Independently stated exact source declaration is the body oracle;
+        // the second branch must acquire the same owner through normal loading.
+        if (!normal_loader) try registry.addLocalAlias("ພາສາລາວ", "lo");
+        const codes = languageCodes(&registry, &ns);
+        const output = try std.fs.path.join(a, &.{root, "blobs"});
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+        writer.language_codes = codes;
+        const source = @embedFile("lo-actual-p10416-r458986.wikitext");
+        try std.testing.expectEqual(@as(usize, 460), source.len);
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ອ", source, source, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        for ([_][]const u8{"ລາວ"}, 0..) |owner, ordinal| {
+            var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+            const path = try std.fs.path.join(a, &.{output, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(owner, &filename)});
+            var mapped = try mmapPath(io, path); defer mapped.deinit();
+            const blob = try encoder.blob_format.inspect(mapped.bytes); const metadata = try blob.languageMetadata();
+            try std.testing.expectEqualStrings("lo", metadata.code);
+            var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+            const record = (try index.find("ອ")) orelse return error.TestUnexpectedResult;
+            const doc = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+            const complete = try std.json.Stringify.valueAlloc(a, doc, .{});
+            if (!normal_loader) expected[ordinal] = complete else try std.testing.expectEqualStrings(expected[ordinal].?, complete);
+            var links: usize = 0; var bold: usize = 0;
+            for (doc.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+                if (span.kind == .link) links += 1;
+                if (span.bold) bold += 1;
+            };
+            try std.testing.expectEqual(@as(usize, 2), links);
+            try std.testing.expectEqual(@as(usize, 1), bold);
+            try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, doc));
+        }
     }
 }

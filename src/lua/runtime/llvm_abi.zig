@@ -808,6 +808,79 @@ export fn dict_lua_function_error() callconv(.c) rt.FunctionResult {
     return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
 }
 
+// Called only by compiler-owned module roots; the diagnostic is native-rodata.
+// No mutable Lua global or user chunk executes before a syntax load failure.
+export fn dict_lua_module_syntax_error(ctx: *rt.Context, message: [*]const u8, len: usize) callconv(.c) rt.FunctionResult {
+    if (dict_lua_check_execution_budget(ctx) != 0) return dict_lua_function_error();
+    ctx.setLuaError(.{ .string = message[0..len] });
+    ctx.setAotErrorName("LuaRaised");
+    return dict_lua_function_error();
+}
+
+test "syntax error native roots fail repeatedly without poisoning unrelated modules" {
+    const Probe = struct {
+        var attempts: usize = 0;
+        const diagnostic = "error loading module 'Module:Broken': UnexpectedToken";
+        fn broken(ctx: *rt.Context, _: *const rt.Captures, _: [*]const rt.Value, _: usize, _: ?[*]rt.Value, _: usize) callconv(.c) rt.FunctionResult {
+            attempts += 1;
+            return dict_lua_module_syntax_error(ctx, diagnostic.ptr, diagnostic.len);
+        }
+        fn good(_: *rt.Context, _: *const rt.Captures, _: [*]const rt.Value, _: usize, _: ?[*]rt.Value, _: usize) callconv(.c) rt.FunctionResult {
+            return .{ .values_ptr = null, .values_len = 0, .status = 0, .reserved = 0 };
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.initProgram(arena.allocator(), 0, 2);
+    defer ctx.deinit();
+    const roots = [_]rt.FunctionFn{ Probe.broken, Probe.good };
+    ctx.module_root_entries = &roots;
+    ctx.package_loaded = try ctx.newTable();
+    Probe.attempts = 0;
+    for (0..2) |_| {
+        try std.testing.expectError(error.AotCallFailed, ctx.requireModuleId(0, "Module:Broken"));
+        try std.testing.expect(ctx.last_error_present);
+        try std.testing.expectEqualStrings(Probe.diagnostic, ctx.last_error.string);
+        ctx.clearLuaError();
+        ctx.clearAotErrorName();
+    }
+    try std.testing.expectEqual(@as(usize, 2), Probe.attempts);
+    try ctx.package_loaded.?.rawSet(ctx.allocator, .{ .string = "Module:Broken" }, .{ .string = "override" });
+    const override = try ctx.requireModuleId(0, "Module:Broken");
+    try std.testing.expectEqualStrings("override", override.string);
+    try std.testing.expectEqual(@as(usize, 2), Probe.attempts);
+    const good = try ctx.requireModuleId(1, "Module:Good");
+    try std.testing.expect(good == .boolean and good.boolean);
+}
+
+test "syntax root does not replace a fatal CPU budget diagnostic" {
+    const Probe = struct {
+        var now: u64 = 0;
+        fn clock() error{LuaCpuClockUnavailable}!u64 { return now; }
+    };
+    var ctx = try rt.Context.initProgram(std.testing.allocator, 0, 1);
+    defer ctx.deinit();
+    Probe.now = 0;
+    var budget: rt.execution_budget.Budget = .{ .limit_ns = 10, .clock = Probe.clock };
+    var scope = try budget.enter();
+    Probe.now = 20;
+    var exhausted = false;
+    for (0..rt.execution_budget.sample_period) |_| {
+        rt.execution_budget.check() catch |err| {
+            try std.testing.expect(err == error.LuaCpuLimit);
+            exhausted = true;
+            break;
+        };
+    }
+    try std.testing.expect(exhausted);
+    const message = "syntax diagnostic must not replace fatal quota";
+    const result = dict_lua_module_syntax_error(&ctx, message.ptr, message.len);
+    try std.testing.expectEqual(@as(u32, 1), result.status);
+    try std.testing.expectEqualStrings("LuaCpuLimit", ctx.aotErrorName().?);
+    try std.testing.expect(!ctx.last_error_present);
+    try std.testing.expectError(error.LuaCpuLimit, scope.finish());
+}
+
 test "LLVM ABI layouts and primitive helpers" {
     var ctx = try rt.Context.init(std.testing.allocator, 1);
     defer ctx.deinit();

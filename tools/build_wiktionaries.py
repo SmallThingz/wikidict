@@ -705,6 +705,12 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
         if key in languages:raise ValueError('Duplicate language registry identity')
         languages[key]=record
     result={}
+    def discover(root, directory, names, edition, date):
+        # A complete explicit selection supersedes discovery, not validation.
+        # Paired generations still validate together if either member is needed.
+        if all(name in (overrides or {}) for name in names):
+            return {}
+        return discover_auxiliary_generation(root, directory, names, edition, date)
     for edition,date in groups:
         snapshots={}
         captured=captures.get(edition)
@@ -724,48 +730,49 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
             capture=record
             for marker in ('auxiliary-basic.complete.json','auxiliary-all.complete.json'):
                 if (root/marker).exists():validate_capture_artifacts(root,read_small_json(root/marker))
-            preferred=discover_auxiliary_generation(root,'wikibase-entities',
+            preferred=discover(root,'wikibase-entities',
                 ('wikibase-entities','wikibase-entity-terms'),edition,date)
-            message_snapshots=discover_auxiliary_generation(root,'language-messages-loop-v1',
+            message_snapshots=discover(root,'language-messages-loop-v1',
                 ('language-fallbacks','interface-messages'),edition,date)
             if not message_snapshots:
-                message_snapshots=discover_auxiliary_generation(root,'language-messages',
+                message_snapshots=discover(root,'language-messages',
                     ('language-fallbacks','interface-messages'),edition,date)
             preferred.update(message_snapshots)
-            preferred.update(discover_auxiliary_generation(root,'commons-data',
+            preferred.update(discover(root,'commons-data',
                 ('commons-data',),edition,date))
-            names_generation=discover_auxiliary_generation(root,'language-names-autonyms-v1',
+            names_generation=discover(root,'language-names-autonyms-v1',
                 ('language-names',),edition,date)
             if not names_generation:
-                names_generation=discover_auxiliary_generation(root,'language-names',
+                names_generation=discover(root,'language-names',
                     ('language-names',),edition,date)
             preferred.update(names_generation)
-            preferred.update(discover_auxiliary_generation(root,'date-numbering',
+            preferred.update(discover(root,'date-numbering',
                 ('date-numbering',),edition,date))
-            preferred.update(discover_auxiliary_generation(root,'wikibase-page-links',
+            preferred.update(discover(root,'wikibase-page-links',
                 ('wikibase-page-links',),edition,date))
-            preferred.update(discover_auxiliary_generation(root,'site-info',
+            preferred.update(discover(root,'site-info',
                 ('site-info',),edition,date))
-            preferred.update(discover_auxiliary_generation(root,'site-statistics-format-v1',
+            preferred.update(discover(root,'site-statistics-format-v1',
                 ('site-statistics-format',),edition,date))
-            preferred.update(discover_auxiliary_generation(root,'category-statistics-format-v1',
+            preferred.update(discover(root,'category-statistics-format-v1',
                 ('category-statistics-format',),edition,date))
             for name in AUXILIARY_SNAPSHOT_NAMES:
-                if name in preferred:continue
+                if name in preferred or name in (overrides or {}):continue
                 path=root/(auxiliary_snapshot_filename(name))
                 sidecar=root/(auxiliary_manifest_filename(name))
                 present=[p.exists() or p.is_symlink() for p in (path,sidecar)]
                 if any(present) and (not all(present) or not path.is_file() or not sidecar.is_file()):raise ValueError(f'Uncommitted auxiliary snapshot: {path}')
                 if all(present):snapshots[name]=path
             snapshots.update(preferred)
-            from prepare_magic_words_category import selected_snapshot_root
-            magic_root=selected_snapshot_root(root)
-            if magic_root.exists() or magic_root.is_symlink():
-                if magic_root.is_symlink() or not magic_root.is_dir():raise ValueError('Unsafe magic-word capture root')
-                path=magic_root/'magic-words.tsv'
-                from prepare_magic_words_category import validate_snapshot
-                validate_snapshot(path,edition,date)
-                snapshots['magic-words']=path
+            if "magic-words" not in (overrides or {}):
+                from prepare_magic_words_category import selected_snapshot_root
+                magic_root=selected_snapshot_root(root)
+                if magic_root.exists() or magic_root.is_symlink():
+                    if magic_root.is_symlink() or not magic_root.is_dir():raise ValueError('Unsafe magic-word capture root')
+                    path=magic_root/'magic-words.tsv'
+                    from prepare_magic_words_category import validate_snapshot
+                    validate_snapshot(path,edition,date)
+                    snapshots['magic-words']=path
         elif (downloads/edition/date/'namespace-registry.tsv').is_file():
             snapshots['namespace-registry']=downloads/edition/date/'namespace-registry.tsv'
         snapshots.update(overrides or {})

@@ -23,7 +23,8 @@ typedef enum dict_status {
     DICT_INTERNAL_ERROR = 5
 } dict_status;
 
-#define DICT_ABI_VERSION 4u
+// ABI6 requires font_scale_basis support, including normal-body identity.
+#define DICT_ABI_VERSION 6u
 
 uint32_t dict_abi_version(void);
 

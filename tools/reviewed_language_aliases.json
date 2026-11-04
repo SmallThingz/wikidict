@@ -1,0 +1,210 @@
+{
+  "schema": "wikidict.reviewed-language-aliases.v1",
+  "records": [
+    {
+      "id": "nwe-urdu-exact-v1",
+      "code": "ur",
+      "alias": "اُردو",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://www.newworldencyclopedia.org/entry/Urdu",
+      "observed_date": "2026-11-03",
+      "evidence": "The language infobox displays Urdu, exact native spelling اُردو, and ISO 639-1 ur.",
+      "rationale": "Reviewed exact spelling only; not MediaWiki autonym or dump-local evidence. Independent Rekhta corroborates language identity with different fully pointed spelling, not these exact bytes."
+    },
+    {
+      "id": "csb-arabsczi-wikidata-category-v1",
+      "code": "ar",
+      "alias": "arabsczi",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://www.wikidata.org/w/index.php?title=Q7142653&oldid=2559215070",
+      "observed_date": "2026-11-04",
+      "evidence": "The retained csbwiktionary template Szablóna:arabsczi (page 1806, revision 4255) displays arabsczi and links exactly Kategòrëjô:Arabsczi. Wikidata Q7142653 revision 2559215070 has that exact csbwiktionary sitelink and category-main-topic P301 Q13955. Q13955 revision 2556431588 has ISO 639-1 P218 ar. The independently published Polish Wiktionary entry arabsczi revision 6525339 also defines this Kashubian adjective as arabski, the existing preferred label for ar in the pinned registry.",
+      "rationale": "Editorial exact alias supported by the retained label-to-category link and an independently captured category-to-language-to-code chain. This is not a MediaWiki preferred-name claim, automatic category inference, case fold, fuzzy spelling repair or edition default. Keep existing arabski display heading and all unrelated registry rows.",
+      "references": [
+        "https://www.wikidata.org/w/index.php?title=Q13955&oldid=2556431588",
+        "https://pl.wiktionary.org/w/index.php?title=arabsczi&oldid=6525339"
+      ]
+    },
+    {
+      "id": "csb-albansczi-wikidata-category-v1",
+      "code": "sq",
+      "alias": "albańsczi",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://www.wikidata.org/w/index.php?title=Q8230789&oldid=2532709646",
+      "observed_date": "2026-11-04",
+      "evidence": "The retained csbwiktionary template Szablóna:albańsczi (page 1801, revision 4250) displays albańsczi and links exactly Kategòrëjô:Albańsczi. Wikidata Q8230789 revision 2532709646 has that exact csbwiktionary sitelink and category-main-topic P301 Q8748. Q8748 revision 2563638175 has ISO 639-1 P218 sq. The independently published Polish Wiktionary entry albańsczi revision 6512449 also defines this Kashubian adjective as albański, the existing preferred label for sq in the pinned registry.",
+      "rationale": "Editorial exact alias supported by the retained label-to-category link and an independently captured category-to-language-to-code chain. This is not a MediaWiki preferred-name claim, automatic category inference, case fold, fuzzy spelling repair or edition default. Keep existing albański display heading and all unrelated registry rows.",
+      "references": [
+        "https://www.wikidata.org/w/index.php?title=Q8748&oldid=2563638175",
+        "https://pl.wiktionary.org/w/index.php?title=alba%C5%84sczi&oldid=6512449"
+      ]
+    },
+    {
+      "id": "csb-ru-category-exact-label-v1",
+      "code": "ru",
+      "alias": "rusczi",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://www.wikidata.org/w/index.php?title=Q7143018&oldid=2559207710",
+      "observed_date": "2026-11-04",
+      "evidence": "Retained Szablóna:rusczi page 2611, revision 5883, directly displays rusczi and links exactly Kategòrëjô:Rusczi. Wikidata Q7143018 revision 2559207710 has that exact csbwiktionary sitelink and P301 Q7737. Q7737 revision 2564475141 has P218 ru; this exact code is already registered in the retained CSB language registry.",
+      "rationale": "Reviewed exact alias from a direct static template/category-to-language-to-ISO authority join. Preserve preferred heading rosyjski and unrelated rows. No transliteration, fuzzy matching, edition default, automatic category inference, or POS inference.",
+      "references": [
+        "https://www.wikidata.org/w/index.php?title=Q7737&oldid=2564475141"
+      ]
+    },
+    {
+      "id": "csb-sr-category-exact-label-v1",
+      "code": "sr",
+      "alias": "serbsczi",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://www.wikidata.org/w/index.php?title=Q8731431&oldid=2513795284",
+      "observed_date": "2026-11-04",
+      "evidence": "Retained Szablóna:serbsczi page 2602, revision 5864, directly displays serbsczi and links exactly Kategòrëjô:Serbsczi. Wikidata Q8731431 revision 2513795284 has that exact csbwiktionary sitelink and P301 Q9299. Q9299 revision 2556432967 has P218 sr; this exact code is already registered in the retained CSB language registry.",
+      "rationale": "Reviewed exact alias from a direct static template/category-to-language-to-ISO authority join. Preserve preferred heading serbski and unrelated rows. No transliteration, fuzzy matching, edition default, automatic category inference, or POS inference.",
+      "references": [
+        "https://www.wikidata.org/w/index.php?title=Q9299&oldid=2556432967"
+      ]
+    },
+    {
+      "id": "csb-pl-category-exact-label-v1",
+      "code": "pl",
+      "alias": "pòlsczi",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://www.wikidata.org/w/index.php?title=Q6916114&oldid=2555581834",
+      "observed_date": "2026-11-04",
+      "evidence": "Retained Szablóna:pòlsczi page 1919, revision 4571, directly displays pòlsczi and links exactly Kategòrëjô:Pòlsczi. Wikidata Q6916114 revision 2555581834 has that exact csbwiktionary sitelink and P301 Q809. Q809 revision 2558978163 has P218 pl; this exact code is already registered in the retained CSB language registry.",
+      "rationale": "Reviewed exact alias from a direct static template/category-to-language-to-ISO authority join. Preserve preferred heading polski and unrelated rows. No transliteration, fuzzy matching, edition default, automatic category inference, or POS inference.",
+      "references": [
+        "https://www.wikidata.org/w/index.php?title=Q809&oldid=2558978163"
+      ]
+    },
+    {
+      "id": "csb-ja-category-exact-label-v1",
+      "code": "ja",
+      "alias": "japòńsczi",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://www.wikidata.org/w/index.php?title=Q7142634&oldid=2558860607",
+      "observed_date": "2026-11-04",
+      "evidence": "Retained Szablóna:japòńsczi page 2150, revision 5119, directly displays japòńsczi and links exactly Kategòrëjô:Japòńsczi. Wikidata Q7142634 revision 2558860607 has that exact csbwiktionary sitelink and P301 Q5287. Q5287 revision 2558862424 has P218 ja; this exact code is already registered in the retained CSB language registry.",
+      "rationale": "Reviewed exact alias from a direct static template/category-to-language-to-ISO authority join. Preserve preferred heading japoński and unrelated rows. No transliteration, fuzzy matching, edition default, automatic category inference, or POS inference.",
+      "references": [
+        "https://www.wikidata.org/w/index.php?title=Q5287&oldid=2558862424"
+      ]
+    },
+    {
+      "id": "csb-hsb-category-exact-label-v1",
+      "code": "hsb",
+      "alias": "górnosorbsczi",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://www.wikidata.org/w/index.php?title=Q8888215&oldid=2532895718",
+      "observed_date": "2026-11-04",
+      "evidence": "Retained Szablóna:górnosorbsczi page 2280, revision 5429, directly displays górnosorbsczi and links exactly Kategòrëjô:Górnosorbsczi. Wikidata Q8888215 revision 2532895718 has that exact csbwiktionary sitelink and P301 Q13248. Q13248 revision 2563842134 has P220 hsb; this exact code is already registered in the retained CSB language registry.",
+      "rationale": "Reviewed exact alias from a direct static template/category-to-language-to-ISO authority join. Preserve preferred heading górnołużycki and unrelated rows. No transliteration, fuzzy matching, edition default, automatic category inference, or POS inference.",
+      "references": [
+        "https://www.wikidata.org/w/index.php?title=Q13248&oldid=2563842134"
+      ]
+    },
+    {
+      "id": "csb-cs-category-exact-label-v1",
+      "code": "cs",
+      "alias": "czesczi",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://www.wikidata.org/w/index.php?title=Q8943941&oldid=2541538781",
+      "observed_date": "2026-11-04",
+      "evidence": "Retained Szablóna:czesczi page 1985, revision 4757, directly displays czesczi and links exactly Kategòrëjô:Czesczi. Wikidata Q8943941 revision 2541538781 has that exact csbwiktionary sitelink and P301 Q9056. Q9056 revision 2560736638 has P218 cs; this exact code is already registered in the retained CSB language registry.",
+      "rationale": "Reviewed exact alias from a direct static template/category-to-language-to-ISO authority join. Preserve preferred heading czeski and unrelated rows. No transliteration, fuzzy matching, edition default, automatic category inference, or POS inference.",
+      "references": [
+        "https://www.wikidata.org/w/index.php?title=Q9056&oldid=2560736638"
+      ]
+    },
+    {
+      "id": "csb-ko-category-exact-label-v1",
+      "code": "ko",
+      "alias": "kòrejańsczi",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://www.wikidata.org/w/index.php?title=Q6434832&oldid=2540117152",
+      "observed_date": "2026-11-04",
+      "evidence": "Retained Szablóna:kòrejańsczi page 2163, revision 5143, directly displays kòrejańsczi and links exactly Kategòrëjô:Kòrejańsczi. Wikidata Q6434832 revision 2540117152 has that exact csbwiktionary sitelink and P301 Q9176. Q9176 revision 2563639501 has P218 ko; this exact code is already registered in the retained CSB language registry.",
+      "rationale": "Reviewed exact alias from a direct static template/category-to-language-to-ISO authority join. Preserve preferred heading koreański and unrelated rows. No transliteration, fuzzy matching, edition default, automatic category inference, or POS inference.",
+      "references": [
+        "https://www.wikidata.org/w/index.php?title=Q9176&oldid=2563639501"
+      ]
+    },
+    {
+      "id": "csb-en-category-exact-label-v1",
+      "code": "en",
+      "alias": "anielsczi",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://www.wikidata.org/w/index.php?title=Q7923975&oldid=2557581340",
+      "observed_date": "2026-11-04",
+      "evidence": "Retained Szablóna:anielsczi page 1878, revision 4423, directly displays anielsczi and links exactly Kategòrëjô:Anielsczi. Wikidata Q7923975 revision 2557581340 has that exact csbwiktionary sitelink and P301 Q1860. Q1860 revision 2564314236 has P218 en; this exact code is already registered in the retained CSB language registry.",
+      "rationale": "Reviewed exact alias from a direct static template/category-to-language-to-ISO authority join. Preserve preferred heading angielski and unrelated rows. No transliteration, fuzzy matching, edition default, automatic category inference, or POS inference.",
+      "references": [
+        "https://www.wikidata.org/w/index.php?title=Q1860&oldid=2564314236"
+      ]
+    },
+    {
+      "id": "tg-niderlandi-wikidata-category-v1",
+      "code": "nl",
+      "alias": "Нидерландӣ",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://www.wikidata.org/w/index.php?title=Q7237533&oldid=2547640548",
+      "observed_date": "2026-11-04",
+      "evidence": "Retained tgwiktionary Шаблон:-nl- page1594 revision119536 displays exact Нидерландӣ and emits the static category target Category:Забони нидерландӣ (localized namespace Гурӯҳ). Q7237533 revision2547640548 has that exact tgwiktionary category sitelink and P301 Q7411. Q7411 revision2548091849 has ISO639-1 P218 nl. Both complete primary entity responses are retained. The literal lowercase Шаблон:nl page1581 revision20001 corroborates the source spelling but is not independently treated as an ISO mapping.",
+      "rationale": "Reviewed exact heading alias only. Preserve preferred ҳолландӣ and upstream registry bytes; no code-template guessing, automatic category inference, case folding, source-banner trust promotion, edition default, or POS inference.",
+      "references": [
+        "https://www.wikidata.org/w/index.php?title=Q7411&oldid=2548091849",
+        "https://tg.wiktionary.org/w/index.php?title=%D0%A8%D0%B0%D0%B1%D0%BB%D0%BE%D0%BD:-nl-&oldid=119536"
+      ]
+    },
+    {
+      "id": "csb-nl-holandzczi-category-exact-label-v1",
+      "code": "nl",
+      "alias": "hòlandzczi",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://www.wikidata.org/w/index.php?title=Q7237533&oldid=2547640548",
+      "observed_date": "2026-11-04",
+      "evidence": "Retained Szablóna:hòlandzczi, page2052 revision4844, emits exactly [[:Kategòrëjô:Hòlandzczi|hòlandzczi]] plus its hidden index category. The already-retained official Wikidata response binds Q7237533 revision2547640548 to that exact csbwiktionary category sitelink and P301 Q7411. Q7411 revision2548091849 has ISO639-1 P218 nl. The pinned CSB registry already registers nl with preferred heading niderlandzki and aliases Niderlandzki/Nederlands/nl/Dutch/nld/dut, but has no exact hòlandzczi alias.",
+      "rationale": "Editorial exact alias, independently joined from a retained local label/category source to the registered ISO owner. This is not a new captured preferred-name row, case/diacritic folding, an edition default or a parser change. Preserve preferred niderlandzki and all unrelated rows. Four retained source samples remain unresolved in CSB03; the historical27 source associations are not a current failure count or a promise of27 repaired pages.",
+      "references": [
+        "https://www.wikidata.org/w/index.php?title=Q7411&oldid=2548091849"
+      ]
+    },
+    {
+      "id": "su-basa-sunda-cldr49-exact-v1",
+      "code": "su",
+      "alias": "Basa Sunda",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://unicode.org/cldr/charts/49/summary/su.html",
+      "observed_date": "2026-11-04",
+      "evidence": "Unicode CLDR 49 Locale Data Summary for Sundanese [su], Locale Display Names / Languages (O-S), lists language code su with native value Basa Sunda. Independently, retained suwiktionary Citakan:sunda page 3366 revision 19983 emits the exact literal Basa Sunda before includeonly category markup; milu page 6891 revision 23345 authors =={{sunda}}== and the ordinary published Reader preserves the exact Basa Sunda heading under an Unclassified record.",
+      "rationale": "One editorial exact alias backed by independent explicit code-to-label authority and the authenticated dump-local heading template. Preserve the installed su code and preferred display Sunda. Do not infer language from the edition, POS parameter, template spelling, category sortkey alone or script. This is not an upstream captured row, a preferred-name replacement, a case fold, or a general language-prefix rule. Existing live conflict and installed-code checks remain authoritative."
+    },
+    {
+      "id": "scn-corsu-wikidata-category-lower-v1",
+      "code": "co",
+      "alias": "còrsu",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://www.wikidata.org/wiki/Q9577481",
+      "observed_date": "2026-11-04",
+      "evidence": "Retained SCN Template:-co- page9724 revision104528 supplies the exact linked heading target còrsu and visible Còrsu, and emits Catigurìa:Palori n lingua còrsa. The retained official Wikidata response (SHA256 8bc247572bf3a9f741643fbf9ba87fa09d70546d5cadfd2f321cbbfa33ebcee8) binds that exact scnwiktionary category through Q9577481 P301 Q33111 to non-deprecated P218 co. The exact two spellings are separately reviewed in curation.unselected.tsv. API props=claims|sitelinks omitted revision information; no Wikidata revision is asserted.",
+      "rationale": "One exact editorial alias, not a captured preferred-name row, automatic case folding, template-name inference, icon authority or edition default. Preserve existing co preferred name and all registry rows. Recognition still requires the separately reviewed normal heading resolver; ordinary build and complete Reader semantics are not earned by this curation.",
+      "references": [
+        "https://www.wikidata.org/wiki/Q33111"
+      ]
+    },
+    {
+      "id": "scn-corsu-wikidata-category-capitalized-v1",
+      "code": "co",
+      "alias": "Còrsu",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://www.wikidata.org/wiki/Q9577481",
+      "observed_date": "2026-11-04",
+      "evidence": "Retained SCN Template:-co- page9724 revision104528 supplies the exact linked heading target còrsu and visible Còrsu, and emits Catigurìa:Palori n lingua còrsa. The retained official Wikidata response (SHA256 8bc247572bf3a9f741643fbf9ba87fa09d70546d5cadfd2f321cbbfa33ebcee8) binds that exact scnwiktionary category through Q9577481 P301 Q33111 to non-deprecated P218 co. The exact two spellings are separately reviewed in curation.unselected.tsv. API props=claims|sitelinks omitted revision information; no Wikidata revision is asserted.",
+      "rationale": "One exact editorial alias, not a captured preferred-name row, automatic case folding, template-name inference, icon authority or edition default. Preserve existing co preferred name and all registry rows. Recognition still requires the separately reviewed normal heading resolver; ordinary build and complete Reader semantics are not earned by this curation.",
+      "references": [
+        "https://www.wikidata.org/wiki/Q33111"
+      ]
+    }
+  ]
+}

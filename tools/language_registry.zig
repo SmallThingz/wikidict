@@ -53,6 +53,8 @@ pub const SourceLanguageBanner = struct {
     authority: enum { known_names, literal_code } = .known_names,
 };
 
+pub const SourceLanguageParagraph = struct { label: []const u8, category: []const u8 };
+
 pub const Registry = struct {
     arena: std.heap.ArenaAllocator,
     names: std.StringHashMapUnmanaged([]const u8) = .empty,
@@ -67,7 +69,9 @@ pub const Registry = struct {
     headings: std.StringHashMapUnmanaged([]const u8) = .empty,
     arabic_articleless_names: std.StringHashMapUnmanaged(?DerivedPreferredName) = .empty,
     local_aliases: std.StringHashMapUnmanaged(?[]const u8) = .empty,
+    reviewed_aliases: std.StringHashMapUnmanaged([]const u8) = .empty,
     source_banners: std.StringHashMapUnmanaged(?SourceLanguageBanner) = .empty,
+    source_paragraphs: std.StringHashMapUnmanaged(?SourceLanguageParagraph) = .empty,
     content_code: ?[]const u8 = null,
     link_trail_ranges: []const LinkTrailRange = &default_link_trail_ranges,
     link_trail_configured: bool = false,
@@ -91,7 +95,9 @@ pub const Registry = struct {
         self.canonical_names.deinit(self.arena.allocator());
         self.arabic_articleless_names.deinit(self.arena.allocator());
         self.local_aliases.deinit(self.arena.allocator());
+        self.reviewed_aliases.deinit(self.arena.allocator());
         self.source_banners.deinit(self.arena.allocator());
+        self.source_paragraphs.deinit(self.arena.allocator());
         self.arena.deinit();
         self.* = undefined;
     }
@@ -123,7 +129,7 @@ pub const Registry = struct {
         // preferred labels. Admit that exact existing alias for the same owner;
         // other ordinary aliases, code aliases, and conflicts retain their trust.
         if (self.names.get(value)) |owner| {
-            if (!self.trusted_names.contains(value) and !self.isTrustedAutonym(value, owner)) {
+            if (!self.trusted_names.contains(value) and !self.isTrustedReviewed(value, owner) and !self.isTrustedAutonym(value, owner)) {
                 const preferred = self.headings.get(owner) orelse return null;
                 const preferred_owner = self.names.get(preferred) orelse return null;
                 if (!self.trusted_names.contains(preferred) or
@@ -132,6 +138,16 @@ pub const Registry = struct {
             }
         } else if (self.fallbackCode(value) == null) return null;
         return self.resolve(value);
+    }
+
+    /// Editorial aliases classify only their exact heading; they cannot seed
+    /// source-derived equivalence for additional template names.
+    pub fn resolveSourceTrusted(self: *const Registry, value: []const u8) ?Resolved {
+        if (self.reviewed_aliases.contains(value)) {
+            const owner = self.names.get(value) orelse return null;
+            if (!self.trusted_names.contains(value) and !self.isTrustedAutonym(value, owner)) return null;
+        }
+        return self.resolveTrusted(value);
     }
 
     pub fn resolveStrong(self: *const Registry, value: []const u8) ?Resolved {
@@ -180,7 +196,14 @@ pub const Registry = struct {
                 if (self.arabic_articleless_names.get(value)) |article|
                     if (article == null) return null;
             }
+            if (self.reviewed_aliases.get(value)) |reviewed|
+                if (!std.mem.eql(u8, reviewed, local_code)) return null;
             return local_code;
+        }
+        if (self.reviewed_aliases.get(value)) |reviewed| {
+            if (!self.codes.contains(reviewed)) return null;
+            if (article_code) |other| if (!std.mem.eql(u8, other, reviewed)) return null;
+            return reviewed;
         }
         return article_code;
     }
@@ -223,6 +246,11 @@ pub const Registry = struct {
             const owner = entry.value_ptr.* orelse return false;
             if (!std.mem.eql(u8, owner, code_value)) return false;
         }
+        var reviewed = self.reviewed_aliases.iterator();
+        while (reviewed.next()) |entry| {
+            if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, value) and
+                !std.mem.eql(u8, entry.value_ptr.*, code_value)) return false;
+        }
         return found or !require_known;
     }
     fn sourceBannerNamesAllowed(self: *const Registry, code_value: []const u8, proof: SourceLanguageBanner) bool {
@@ -250,6 +278,36 @@ pub const Registry = struct {
         const proof = (self.source_banners.get(code_value) orelse return false) orelse return false;
         return proof.level == level and std.mem.eql(u8, proof.heading, heading) and
             self.sourceBannerNamesAllowed(code_value, proof);
+    }
+
+    pub fn sourceParagraphNameMatches(self: *const Registry, code_value: []const u8, label: []const u8) bool {
+        // A reviewed-only alias cannot seed a source declaration. The exact
+        // independently stored name and all ordinary conflict checks are required.
+        const owner = self.names.get(label) orelse return false;
+        if (self.codes.contains(label) or !std.mem.eql(u8, owner, code_value) or
+            !self.sourceBannerNameMatches(code_value, label)) return false;
+        const trusted = self.resolveStrong(label) orelse self.resolveSourceTrusted(label) orelse return false;
+        return std.mem.eql(u8, trusted.code, code_value);
+    }
+    pub fn addSourceLanguageParagraph(self: *Registry, code_value: []const u8, proof: SourceLanguageParagraph) !void {
+        if (!self.sourceParagraphNameMatches(code_value, proof.label)) return;
+        if (self.source_paragraphs.getPtr(code_value)) |stored| {
+            if (stored.*) |previous| {
+                if (!std.mem.eql(u8, previous.label, proof.label) or
+                    !std.mem.eql(u8, previous.category, proof.category)) stored.* = null;
+            }
+            return;
+        }
+        const a = self.arena.allocator();
+        try self.source_paragraphs.put(a, try a.dupe(u8, code_value), .{
+            .label = try a.dupe(u8, proof.label), .category = try a.dupe(u8, proof.category),
+        });
+    }
+    pub fn matchesSourceLanguageParagraph(self: *const Registry, code_value: []const u8, line: []const u8) bool {
+        const proof = (self.source_paragraphs.get(code_value) orelse return false) orelse return false;
+        return self.sourceParagraphNameMatches(code_value, proof.label) and
+            line.len == proof.label.len + proof.category.len and
+            std.mem.startsWith(u8, line, proof.label) and std.mem.endsWith(u8, line, proof.category);
     }
 
     pub fn content(self: *const Registry) ?Resolved {
@@ -644,6 +702,11 @@ pub const Registry = struct {
             const label = fields.next().?;
             try self.trustLocalHeading(code_value, label);
         }
+        var reviewed_lines = std.mem.splitScalar(u8, source, '\n');
+        while (reviewed_lines.next()) |line| {
+            if (std.mem.eql(u8, line, "# reviewed-alias")) return error.InvalidLanguageRegistry;
+            if (std.mem.startsWith(u8, line, "# reviewed-alias\t")) try self.addReviewedMarker(line);
+        }
         // Curated ANG historical heading from the 20261001 archive: thirteen
         // uses "Níwe Englisc"; its language category describes Modern English,
         // whose captured Nīwenglisc entry and sprǣcnaman register identify en.
@@ -684,6 +747,98 @@ pub const Registry = struct {
         }
     }
 
+    /// Module:langues/data stores literal names in l[code].nom. Its retained
+    /// get_nom provider reads that field; aliases copy already-created records.
+    /// Stage the complete immutable table before admitting any local evidence.
+    pub fn addNomLanguageDataLua(self: *Registry, source: []const u8) !void {
+        var chunk = lua_parser.parse(self.arena.child_allocator, source) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return,
+        };
+        defer chunk.deinit();
+        const temporary = chunk.arena.allocator();
+        var labels: std.StringHashMapUnmanaged(?[]const u8) = .empty;
+        var initialized = false;
+        var exported = false;
+        for (chunk.body) |stmt| {
+            if (exported) return;
+            switch (stmt.*) {
+                .local_assign => |v| {
+                    if (initialized or v.names.len != 1 or !std.mem.eql(u8, v.names[0], "l") or v.values.len != 1) return;
+                    const fields = literalTable(v.values[0]) orelse return;
+                    if (fields.len != 0) return;
+                    initialized = true;
+                },
+                .assign => |v| {
+                    if (!initialized or v.targets.len != 1 or v.values.len != 1) return;
+                    const target = switch (v.targets[0]) { .index => |x| x, else => return };
+                    if (!literalName(target.object, "l")) return;
+                    const key = literalString(target.key) orelse return;
+                    var label: ?[]const u8 = null;
+                    switch (v.values[0].*) {
+                        .table => |table| {
+                            for (table.fields) |field| {
+                                const row: LuaLiteralField = switch (field) {
+                                    .named => |named| .{ .key = named.name, .value = named.value },
+                                    .keyed => |keyed| .{ .key = literalString(keyed.key) orelse return, .value = keyed.value },
+                                    .list => return,
+                                };
+                                if (!nomLiteralValue(row.value, 0)) return;
+                                if (std.mem.eql(u8, row.key, "nom")) {
+                                    if (label != null) return;
+                                    label = literalString(row.value) orelse return;
+                                    if (!validLocalHeading(label.?)) return;
+                                }
+                            }
+                        },
+                        .index => |alias| {
+                            if (!literalName(alias.object, "l")) return;
+                            const prior = literalString(alias.key) orelse return;
+                            label = labels.get(prior) orelse null;
+                        },
+                        else => return,
+                    }
+                    // Sequential overwrites and already-created record aliases
+                    // retain Lua table semantics; nested record mutation is absent.
+                    try labels.put(temporary, key, label);
+                },
+                .return_stmt => |v| {
+                    if (!initialized or v.values.len != 1 or !literalName(v.values[0], "l")) return;
+                    exported = true;
+                },
+                else => return,
+            }
+        }
+        if (!exported) return;
+        var rows = labels.iterator();
+        while (rows.next()) |row| {
+            const label = row.value_ptr.* orelse continue;
+            const code_value = self.registeredLocalCode(row.key_ptr.*) orelse continue;
+            try self.addLocalAlias(label, code_value);
+            // The heading provider applies ucfirst. Promote only its exact
+            // already-registered ASCII first-letter spelling, never casefold.
+            if (try nomCapitalizationAlloc(temporary, label)) |capital| {
+                if (self.names.get(capital)) |owner| if (std.mem.eql(u8, owner, code_value))
+                    try self.addLocalAlias(capital, code_value);
+            }
+        }
+        // Finish competing source rows before promoting any existing alias.
+        rows = labels.iterator();
+        while (rows.next()) |row| {
+            const label = row.value_ptr.* orelse continue;
+            const code_value = self.registeredLocalCode(row.key_ptr.*) orelse continue;
+            try self.trustNomExisting(code_value, label);
+            if (try nomCapitalizationAlloc(temporary, label)) |capital|
+                try self.trustNomExisting(code_value, capital);
+        }
+    }
+
+    fn trustNomExisting(self: *Registry, code_value: []const u8, name: []const u8) !void {
+        if (self.localHeadingMatches(code_value, name) and
+            self.sourceBannerLiteralCodeNameCompatible(code_value, name))
+            try self.trustAlias(name);
+    }
+
     pub fn addLua(self: *Registry, source: []const u8) !void {
         const owned = self.arena.allocator();
         var p: usize = 0;
@@ -719,6 +874,52 @@ pub const Registry = struct {
         for (value) |ch| if (ch < 'a' or ch > 'z') return null;
         const resolved_code = self.names.get(value) orelse return null;
         return if (self.codes.contains(resolved_code)) resolved_code else null;
+    }
+
+    fn isTrustedReviewed(self: *const Registry, name: []const u8, owner: []const u8) bool {
+        const reviewed = self.reviewed_aliases.get(name) orelse return false;
+        if (!self.codes.contains(reviewed) or self.ambiguous.contains(name) or !std.mem.eql(u8, reviewed, owner)) return false;
+        if (self.local_aliases.get(name)) |local| {
+            const code_value = local orelse return false;
+            if (!std.mem.eql(u8, code_value, owner)) return false;
+        }
+        return true;
+    }
+
+    // Editorial evidence is separate from source names and strong banner proof.
+    // The marker binds the exact reviewed file, not a claimed upstream capture.
+    fn addReviewedMarker(self: *Registry, line: []const u8) !void {
+        var fields = std.mem.splitScalar(u8, line, '\t');
+        _ = fields.next();
+        const code_value = fields.next() orelse return error.InvalidLanguageRegistry;
+        const name = fields.next() orelse return error.InvalidLanguageRegistry;
+        const reference = fields.next() orelse return error.InvalidLanguageRegistry;
+        const digest = fields.next() orelse return error.InvalidLanguageRegistry;
+        if (fields.next() != null) return error.InvalidLanguageRegistry;
+        const evidence = @embedFile("reviewed_language_aliases.json");
+        var hash: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(evidence, &hash, .{});
+        if (!std.mem.eql(u8, digest, &std.fmt.bytesToHex(hash, .lower))) return error.InvalidLanguageRegistry;
+        const parsed = try std.json.parseFromSlice(struct {
+            schema: []const u8,
+            records: []const struct { id: []const u8, code: []const u8, alias: []const u8, authority_kind: []const u8 },
+        }, self.arena.allocator(), evidence, .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
+        if (!std.mem.eql(u8, parsed.value.schema, "wikidict.reviewed-language-aliases.v1")) return error.InvalidLanguageRegistry;
+        var matches: usize = 0;
+        for (parsed.value.records) |record| {
+            if (std.mem.eql(u8, reference, record.id) and std.mem.eql(u8, code_value, record.code) and
+                std.mem.eql(u8, name, record.alias) and std.mem.eql(u8, record.authority_kind, "reviewed_public_reference")) matches += 1;
+        }
+        if (matches != 1 or !validLocalHeading(name) or !self.codes.contains(code_value)) return error.InvalidLanguageRegistry;
+        if (self.ambiguous.contains(name)) return;
+        if (self.names.get(name)) |owner| if (!std.mem.eql(u8, owner, code_value)) return;
+        if (self.local_aliases.get(name)) |local| {
+            const owner = local orelse return;
+            if (!std.mem.eql(u8, owner, code_value)) return;
+        }
+        const owned = self.arena.allocator();
+        try self.reviewed_aliases.put(owned, try owned.dupe(u8, name), try owned.dupe(u8, code_value));
     }
 
     /// Import an explicit dump-local label without changing canonical headings
@@ -3117,4 +3318,150 @@ test "positional language data rejects root escapes early exports mutations and 
     try valid.addTsv(PositionalDataTest.registry);
     try positionalLanguageDataImport(&valid, "local function unrelated() return {} end; " ++ PositionalDataTest.table ++ PositionalDataTest.finish, "languages/data/2");
     try std.testing.expectEqualStrings("sh", valid.resolveTrusted("ဆာဘို-ခရိုအေးရှား").?.code);
+}
+
+const ReviewedAliasTest = struct {
+    fn marker(a: std.mem.Allocator) ![]const u8 {
+        var hash: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(@embedFile("reviewed_language_aliases.json"), &hash, .{});
+        return std.fmt.allocPrint(a, "# reviewed-alias\tur\tاُردو\tnwe-urdu-exact-v1\t{s}\n", .{std.fmt.bytesToHex(hash, .lower)});
+    }
+};
+
+test "reviewed exact alias is provenance-bound and preserves source conflicts" {
+    const a = std.testing.allocator;
+    const marker = try ReviewedAliasTest.marker(a); defer a.free(marker);
+    const rows = try std.mem.concat(a, u8, &.{"# mediawiki\nur\tUrdu\tاردو\n", marker}); defer a.free(rows);
+    var registry = Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(rows);
+    try std.testing.expectEqualStrings("ur", registry.resolveTrusted("اُردو").?.code);
+    try std.testing.expectEqualStrings("Urdu", registry.resolveTrusted("اُردو").?.heading);
+    try std.testing.expect(registry.resolveStrong("اُردو") == null);
+    try std.testing.expect(registry.resolveSourceTrusted("اُردو") == null);
+    try std.testing.expect(!registry.sourceBannerNameMatches("ur", "اُردو"));
+    try registry.addTsv("# mediawiki\nfr\tFrench\n");
+    try std.testing.expect(registry.sourceBannerLiteralCodeNameCompatible("ur", "اُردو"));
+    try std.testing.expect(!registry.sourceBannerLiteralCodeNameCompatible("fr", "اُردو"));
+    try std.testing.expect(!registry.sourceBannerNameMatches("fr", "اُردو"));
+    for ([_][]const u8{"اُردُو", "اُرْدُو", "unknown"}) |name| try std.testing.expect(registry.resolveTrusted(name) == null);
+    try registry.addLocalAlias("اُردو", "ur");
+    try registry.addTsv("# mediawiki\nfr\tFrench\tاُردو\n");
+    try std.testing.expect(registry.resolveTrusted("اُردو") == null);
+    var wrong = Registry.empty(a); defer wrong.deinit();
+    try std.testing.expectError(error.InvalidLanguageRegistry, wrong.addTsv(marker));
+    var malformed = Registry.empty(a); defer malformed.deinit();
+    try std.testing.expectError(error.InvalidLanguageRegistry, malformed.addTsv("ur\tUrdu\n# reviewed-alias\tur\tاُردو\twrong\tbad\n"));
+    var conflict = Registry.empty(a); defer conflict.deinit();
+    try conflict.addTsv("# mediawiki\nur\tUrdu\nfr\tFrench\tاُردو\n");
+    try conflict.addTsv(rows);
+    try std.testing.expectEqualStrings("fr", conflict.resolve("اُردو").?.code);
+    var ambiguous = Registry.empty(a); defer ambiguous.deinit();
+    try ambiguous.addTsv("# mediawiki\nur\tUrdu\tاُردو\nfr\tFrench\tاُردو\n");
+    try ambiguous.addTsv(rows);
+    try std.testing.expect(ambiguous.isAmbiguous("اُردو"));
+    try std.testing.expect(ambiguous.resolveTrusted("اُردو") == null);
+}
+
+fn nomCapitalizationAlloc(a: std.mem.Allocator, source: []const u8) !?[]const u8 {
+    if (source.len == 0 or !std.ascii.isLower(source[0])) return null;
+    const result = try a.dupe(u8, source);
+    result[0] = std.ascii.toUpper(result[0]);
+    return result;
+}
+fn nomLiteralValue(expression: *const lua_parser.Expr, depth: usize) bool {
+    if (depth > 32) return false;
+    return switch (expression.*) {
+        .nil_lit, .bool_lit, .number, .string => true,
+        .table => |value| valid: {
+            for (value.fields) |field| switch (field) {
+                .list => |item| if (!nomLiteralValue(item, depth + 1)) break :valid false,
+                .named => |item| if (!nomLiteralValue(item.value, depth + 1)) break :valid false,
+                .keyed => |item| if (!nomLiteralValue(item.key, depth + 1) or !nomLiteralValue(item.value, depth + 1)) break :valid false,
+            };
+            break :valid true;
+        },
+        else => false,
+    };
+}
+
+test "literal nom language data stages immutable records and preserves existing conflicts" {
+    const a = std.testing.allocator;
+    const source = "local l={}\nl['shy']={nom='tacawit'}\nl['en']={nom='taglizit'}\nl['eng']=l['en']\nreturn l";
+    var r = Registry.empty(a); defer r.deinit();
+    try r.addTsv("# mediawiki\nshy\tShawiya\tTacawit\ttacawit\nen\tEnglish\teng\n");
+    try r.addNomLanguageDataLua(source);
+    try std.testing.expectEqualStrings("shy", r.resolveTrusted("Tacawit").?.code);
+    try std.testing.expectEqualStrings("shy", r.resolveTrusted("tacawit").?.code);
+    try std.testing.expectEqualStrings("Shawiya", r.resolveTrusted("Tacawit").?.heading);
+    try std.testing.expect(r.resolveTrusted("TACAWIT") == null);
+    try std.testing.expectEqualStrings("en", r.resolveTrusted("taglizit").?.code);
+    try r.addLocalAlias("Tacawit", "en");
+    // Ordinary already-trusted metadata keeps its original owner; conflicting
+    // local evidence must not become a source-banner owner for another code.
+    try std.testing.expect(!r.sourceBannerNameMatches("en", "Tacawit"));
+    var conflict = Registry.empty(a); defer conflict.deinit();
+    try conflict.addTsv("# mediawiki\nshy\tShawiya\nen\tEnglish\tTacawit\ttacawit\n");
+    try conflict.addNomLanguageDataLua(source);
+    try std.testing.expectEqualStrings("en", conflict.resolve("Tacawit").?.code);
+    try std.testing.expect(conflict.resolveTrusted("tacawit") == null);
+    for ([_][]const u8{
+        "local l={}; l['shy']={nom=dynamic()}; return l",
+        "local l={}; l['shy']={nom='tacawit'}; mutate(l); return l",
+        "local l={}; l['shy']={nom='tacawit'}; l['shy'].nom='French'; return l",
+        "local l={}; l['shy']={nom='tacawit'}; local alias=l; return l",
+        "local l={}; l['shy']={nom='tacawit'}; return {}",
+        "local l={}; l['shy']={nom='tacawit',nom='French'}; return l",
+        "local l={}; l['shy']={nom='tacawit',extra=dynamic()}; return l",
+        "local l={}; l['shy']={nom='{{{label}}}'}; return l",
+        "local l={}; l['shy']={nom='<nowiki>tacawit</nowiki>'}; return l",
+        "local l={}; l['shy']={nom=' tacawit'}; return l",
+        "local l={}; if test then l['shy']={nom='tacawit'} end; return l",
+    }) |bad| {
+        var declined = Registry.empty(a); defer declined.deinit();
+        try declined.addTsv("# mediawiki\nshy\tShawiya\tTacawit\ttacawit\n");
+        try declined.addNomLanguageDataLua(bad);
+        try std.testing.expect(declined.resolveTrusted("Tacawit") == null);
+    }
+}
+
+test "retained complete nom provider data supports source aliases and sequential overwrites" {
+    var r = Registry.empty(std.testing.allocator); defer r.deinit();
+    try r.addTsv("# mediawiki\nshy\tShawiya\tTacawit\ttacawit\nen\tEnglish\n");
+    // Exact Amṣada:langues/data p4218/r16379; retained get_nom p4217/r6746
+    // reads this literal nom, and section langue p4232/r6830 applies ucfirst.
+    const source = @embedFile("testdata/shy-nom-data.lua");
+    try std.testing.expectEqual(@as(usize, 208324), source.len);
+    try r.addNomLanguageDataLua(source);
+    try std.testing.expectEqualStrings("shy", r.resolveTrusted("Tacawit").?.code);
+    try std.testing.expectEqualStrings("Shawiya", r.resolveTrusted("Tacawit").?.heading);
+    try std.testing.expect(r.resolve("Unrelated") == null);
+}
+
+test "reviewed TG Dutch label preserves preferred name exact trust and conflict veto" {
+    const a = std.testing.allocator;
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(@embedFile("reviewed_language_aliases.json"), &hash, .{});
+    const marker = try std.fmt.allocPrint(a, "# reviewed-alias\tnl\tНидерландӣ\ttg-niderlandi-wikidata-category-v1\t{s}\n", .{std.fmt.bytesToHex(hash, .lower)});
+    defer a.free(marker);
+    const original = "# mediawiki\nnl\tҳолландӣ\tҲолландӣ\tNederlands\tnl\tDutch\tnld\tdut\nen\tEnglish\n";
+    var registry = Registry.empty(a);
+    defer registry.deinit();
+    try registry.addTsv(original);
+    try std.testing.expect(registry.resolveTrusted("Нидерландӣ") == null);
+    try registry.addTsv(marker);
+    const owner = registry.resolveTrusted("Нидерландӣ") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("nl", owner.code);
+    try std.testing.expectEqualStrings("ҳолландӣ", owner.heading);
+    try std.testing.expect(registry.resolveStrong("Нидерландӣ") == null);
+    try std.testing.expect(registry.resolveSourceTrusted("Нидерландӣ") == null);
+    try std.testing.expect(registry.resolveTrusted("нидерландӣ") == null);
+    try std.testing.expect(!registry.sourceBannerNameMatches("nl", "Нидерландӣ"));
+    try std.testing.expectEqualStrings("en", (registry.resolveTrusted("English") orelse return error.TestUnexpectedResult).code);
+    try registry.addLocalAlias("Нидерландӣ", "en");
+    try std.testing.expect(registry.resolveTrusted("Нидерландӣ") == null);
+    var ambiguous = Registry.empty(a);
+    defer ambiguous.deinit();
+    try ambiguous.addTsv("# mediawiki\nnl\tҳолландӣ\tНидерландӣ\nen\tEnglish\tНидерландӣ\n");
+    try ambiguous.addTsv(marker);
+    try std.testing.expect(ambiguous.resolveTrusted("Нидерландӣ") == null);
 }

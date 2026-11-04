@@ -1,5 +1,6 @@
 test {
     _ = @import("parser/root.zig");
+    _ = @import("parse_pipeline.zig");
     _ = @import("direct/analysis.zig");
     _ = @import("direct/emitter.zig");
     _ = @import("direct/program.zig");
@@ -25,6 +26,35 @@ const llvm_emitter = @import("direct/emitter.zig");
 const llvm_shapes = @import("direct/shapes.zig");
 const llvm_module_model = @import("direct/module_model.zig");
 const llvm_program = @import("direct/program.zig");
+
+test "syntax error module has an ordinary failing native root without a source batch" {
+    const record = llvm_program.ModuleRecord{
+        .title = "Module:Broken", .path = "modules/broken.lua", .source_bytes = 6,
+        .source_index = 0, .function_base = 40, .function_count = 1,
+        .root_function = 40, .export_shape_id = null,
+        .syntax_error = "error loading module 'Module:Broken': UnexpectedToken",
+    };
+    try std.testing.expect(!llvm_program.needsLlvmBatch(record));
+    var generated = try llvm_program.generate(std.testing.allocator, &.{record});
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "define %FunctionResult @lua_f_40") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "@dict_lua_module_syntax_error") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "error loading module") != null);
+    var invalid = record;
+    invalid.static_root = true;
+    try std.testing.expectError(error.InvalidSyntaxErrorRoot, llvm_program.generate(std.testing.allocator, &.{invalid}));
+    invalid = record;
+    invalid.template_eligible = true;
+    try std.testing.expectError(error.InvalidSyntaxErrorRoot, llvm_program.generate(std.testing.allocator, &.{invalid}));
+    invalid = record;
+    invalid.syntax_error = "";
+    try std.testing.expectError(error.InvalidSyntaxErrorRoot, llvm_program.generate(std.testing.allocator, &.{invalid}));
+    invalid = record;
+    invalid.eager_order = 0;
+    try std.testing.expectError(error.InvalidSyntaxErrorRoot, llvm_program.generate(std.testing.allocator, &.{invalid}));
+}
 
 test "static module root table omits generated root symbol" {
     const records = [_]llvm_program.ModuleRecord{

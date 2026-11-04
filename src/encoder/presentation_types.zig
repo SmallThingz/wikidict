@@ -4,6 +4,7 @@ const format = @import("blob_format.zig");
 pub const schema = "dict.presentation.v3";
 pub const Role = enum { normal, label, pronunciation, headword, example, quotation, citation, reference };
 pub const InlineKind = enum { text, link, external_link, line_break };
+pub const FontScaleBasis = enum { context, normal_body };
 pub const Span = struct {
     kind: InlineKind = .text,
     text: []const u8 = "",
@@ -15,6 +16,9 @@ pub const Span = struct {
     explanation: []const u8 = "",
     foreground: ?[]const u8 = null,
     background: ?[]const u8 = null,
+    /// Numeric size relative to the selected unscaled typography basis.
+    font_scale: ?f32 = null,
+    font_scale_basis: FontScaleBasis = .context,
     bold: bool = false,
     italic: bool = false,
     code: bool = false,
@@ -30,7 +34,12 @@ pub const Span = struct {
         try jw.beginObject();
         inline for (@typeInfo(Span).@"struct".field_names) |field_name| {
             const background_field = comptime std.mem.eql(u8, field_name, "background");
-            if (!background_field or self.background != null) {
+            const scale_field = comptime std.mem.eql(u8, field_name, "font_scale");
+            const basis_field = comptime std.mem.eql(u8, field_name, "font_scale_basis");
+            if ((!background_field or self.background != null) and
+                (!scale_field or (self.font_scale != null and (self.font_scale.? != 1 or self.font_scale_basis == .normal_body))) and
+                (!basis_field or self.font_scale_basis != .context))
+            {
                 try jw.objectField(field_name);
                 try jw.write(@field(self, field_name));
             }
@@ -208,6 +217,8 @@ pub const ValidationError = error{InvalidPresentation};
 
 fn validateSpanColors(spans: []const Span) ValidationError!void {
     for (spans) |span| {
+        if (span.font_scale) |scale| if (!std.math.isFinite(scale) or scale < 0) return error.InvalidPresentation;
+        if (span.font_scale_basis == .normal_body and span.font_scale == null) return error.InvalidPresentation;
         if (span.foreground) |color| if (!isCanonicalRgb(color)) return error.InvalidPresentation;
         if (span.background) |color| if (!isCanonicalRgb(color)) return error.InvalidPresentation;
     }

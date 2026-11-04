@@ -11,21 +11,26 @@ pub const background_magic = "DPR6";
 pub const nested_magic = "DPR7";
 pub const cell_blocks_magic = "DPR8";
 pub const reference_items_magic = "DPR9";
-const Version = enum { plain, explained, colored, anchored, span_background, nested_tables, cell_blocks, reference_items };
+pub const font_scale_magic = "DPRA";
+pub const font_scale_basis_magic = "DPRB";
+const Version = enum { plain, explained, colored, anchored, span_background, nested_tables, cell_blocks, reference_items, font_scale, font_scale_basis };
 fn hasRgb(version: Version) bool {
-    return version == .colored or version == .anchored or version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items;
+    return version == .colored or version == .anchored or version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis;
 }
 fn hasAnchorFields(version: Version) bool {
-    return version == .anchored or version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items;
+    return version == .anchored or version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis;
 }
 fn hasSpanBackgroundFields(version: Version) bool {
-    return version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items;
+    return version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis;
 }
 fn hasNestedFields(version: Version) bool {
-    return version == .nested_tables or version == .cell_blocks or version == .reference_items;
+    return version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis;
 }
 fn hasCellBlockFields(version: Version) bool {
-    return version == .cell_blocks or version == .reference_items;
+    return version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis;
+}
+fn hasReferenceFields(version: Version) bool {
+    return version == .reference_items or version == .font_scale or version == .font_scale_basis;
 }
 const max_items: usize = 1 << 20;
 const max_string_bytes: usize = 32 * 1024 * 1024;
@@ -159,6 +164,17 @@ const Encoder = struct {
             if (background) |color| {
                 if (!types.isCanonicalRgb(color)) return error.InvalidPresentation;
                 try self.string(color);
+            }
+        }
+        const scale = spanScale(value);
+        const basis = spanScaleBasis(value);
+        if (scale) |n| if (!std.math.isFinite(n) or n < 0) return error.InvalidPresentation;
+        if (basis == .normal_body and (scale == null or self.version != .font_scale_basis)) return error.InvalidPresentation;
+        if (self.version == .font_scale or self.version == .font_scale_basis) {
+            try self.byte(@intFromBool(scale != null));
+            if (scale) |n| {
+                try self.writeU32(@bitCast(n));
+                if (self.version == .font_scale_basis) try self.byte(@intFromEnum(basis));
             }
         }
     }
@@ -312,12 +328,12 @@ const Encoder = struct {
             if (kind == @backingInt(types.ReferenceKind.note)) {
                 const ordinal = reference.group_number orelse return error.InvalidPresentation;
                 if (ordinal == 0) return error.InvalidPresentation;
-                if (self.version == .reference_items) try self.byte(kind);
+                if (hasReferenceFields(self.version)) try self.byte(kind);
                 try self.index(reference.number);
                 try self.index(ordinal);
                 try self.string(reference.name);
             } else {
-                if (self.version != .reference_items or reference.group_number != null or reference.name.len != 0)
+                if (!hasReferenceFields(self.version) or reference.group_number != null or reference.name.len != 0)
                     return error.InvalidPresentation;
                 try self.byte(kind);
                 try self.index(reference.number);
@@ -574,7 +590,7 @@ const Reader = struct {
         const kind = try self.enumValue(types.InlineKind);
         const role = try self.enumValue(types.Role);
         const flags = try self.byte();
-        return .{
+        var result: types.Span = .{
             .kind = kind,
             .role = role,
             .bold = flags & (1 << 0) != 0,
@@ -603,9 +619,16 @@ const Reader = struct {
                 break :background value;
             } else null,
         };
+        if ((self.version == .font_scale or self.version == .font_scale_basis) and try self.presence()) {
+            const n: f32 = @bitCast(try self.readU32());
+            if (!std.math.isFinite(n) or n < 0) return error.InvalidPresentation;
+            if (self.version == .font_scale_basis) result.font_scale_basis = try self.enumValue(types.FontScaleBasis);
+            result.font_scale = if (n == 1 and result.font_scale_basis == .context) null else n;
+        }
+        return result;
     }
     fn spans(self: *Reader) ![]const types.Span {
-        const len = try self.count(if (hasSpanBackgroundFields(self.version)) 33 else if (hasRgb(self.version)) 32 else if (self.version == .explained) 31 else 27);
+        const len = try self.count(if (self.version == .font_scale or self.version == .font_scale_basis) 34 else if (hasSpanBackgroundFields(self.version)) 33 else if (hasRgb(self.version)) 32 else if (self.version == .explained) 31 else 27);
         const out = try self.a.alloc(types.Span, len);
         for (out) |*value| value.* = try self.span();
         return out;
@@ -738,10 +761,10 @@ const Reader = struct {
         return .{ .lexemes = lexemes, .other_sections = try self.indices() };
     }
     fn references(self: *Reader) ![]const types.Reference {
-        const len = try self.count(if (self.version == .reference_items) 13 else 20);
+        const len = try self.count(if (hasReferenceFields(self.version)) 13 else 20);
         const out = try self.a.alloc(types.Reference, len);
         for (out) |*reference| {
-            const kind = if (self.version == .reference_items) try self.enumValue(types.ReferenceKind) else types.ReferenceKind.note;
+            const kind = if (hasReferenceFields(self.version)) try self.enumValue(types.ReferenceKind) else types.ReferenceKind.note;
             reference.* = .{
                 .kind = kind,
                 .number = try self.index(),
@@ -764,6 +787,80 @@ const Reader = struct {
         return out;
     }
 };
+
+fn spanScaleBasis(value: anytype) types.FontScaleBasis {
+    if (comptime @hasField(@TypeOf(value), "font_scale_basis")) return value.font_scale_basis;
+    return .context;
+}
+fn spanScale(value: anytype) ?f32 {
+    if (comptime @hasField(@TypeOf(value), "font_scale")) {
+        if (value.font_scale) |n| return if (n == 1 and spanScaleBasis(value) == .context) null else n;
+    }
+    return null;
+}
+fn spansHaveScale(values: anytype) bool {
+    for (values) |value| if (spanScale(value) != null) return true;
+    return false;
+}
+fn tableHasScale(table: anytype, depth: usize) bool {
+    // The encoder independently rejects excess depth; selection stays bounded.
+    if (depth > types.max_table_depth) return false;
+    if (spansHaveScale(table.caption)) return true;
+    for (table.rows) |row| for (row.cells) |cell| {
+        if (spansHaveScale(cell.spans)) return true;
+        if (comptime @hasField(@TypeOf(cell), "nested_table")) if (cell.nested_table) |child| {
+            if (tableHasScale(child, depth + 1)) return true;
+        };
+        if (comptime @hasField(@TypeOf(cell), "blocks")) if (cell.blocks) |blocks| {
+            for (blocks) |block| {
+                if (spansHaveScale(block.spans)) return true;
+                if (block.table) |child| if (tableHasScale(child, depth + 1)) return true;
+            }
+        };
+    };
+    return false;
+}
+fn hasFontScale(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
+    if (spansHaveScale(display) or spansHaveScale(preamble)) return true;
+    for (sections) |section| for (section.blocks) |block| {
+        if (spansHaveScale(block.spans)) return true;
+        if (block.table) |table| if (tableHasScale(table, 1)) return true;
+    };
+    for (references) |reference| if (spansHaveScale(reference.spans)) return true;
+    return false;
+}
+
+fn spansHaveBodyScale(values: anytype) bool {
+    for (values) |value| if (spanScaleBasis(value) == .normal_body) return true;
+    return false;
+}
+fn tableHasBodyScale(table: anytype, depth: usize) bool {
+    // The encoder independently rejects excess depth; selection stays bounded.
+    if (depth > types.max_table_depth) return false;
+    if (spansHaveBodyScale(table.caption)) return true;
+    for (table.rows) |row| for (row.cells) |cell| {
+        if (spansHaveBodyScale(cell.spans)) return true;
+        if (comptime @hasField(@TypeOf(cell), "nested_table")) if (cell.nested_table) |child| {
+            if (tableHasBodyScale(child, depth + 1)) return true;
+        };
+        if (comptime @hasField(@TypeOf(cell), "blocks")) if (cell.blocks) |blocks| {
+            for (blocks) |block| {
+                if (spansHaveBodyScale(block.spans)) return true;
+                if (block.table) |child| if (tableHasBodyScale(child, depth + 1)) return true;
+            }
+        };
+    };
+    return false;
+}
+fn hasBodyFontScale(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
+    if (spansHaveBodyScale(display) or spansHaveBodyScale(preamble)) return true;
+    for (sections) |section| for (section.blocks) |block| {
+        if (spansHaveBodyScale(block.spans)) return true;
+        if (block.table) |table| if (tableHasBodyScale(table, 1)) return true;
+    };
+    for (references) |reference| if (spansHaveBodyScale(reference.spans)) return true;
+    return false;
+}
 
 fn spansHaveExplanation(values: anytype) bool {
     for (values) |span_value| {
@@ -895,12 +992,14 @@ fn versionMagic(version: Version) []const u8 {
         .nested_tables => nested_magic,
         .cell_blocks => cell_blocks_magic,
         .reference_items => reference_items_magic,
+        .font_scale => font_scale_magic,
+        .font_scale_basis => font_scale_basis_magic,
     };
 }
 
 pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     if (!std.mem.eql(u8, stored.schema, types.schema)) return error.InvalidPresentation;
-    const version: Version = if (hasReferenceFragments(stored.entry.references)) .reference_items else if (hasCellBlocks(stored.entry.sections)) .cell_blocks else if (hasNestedTables(stored.entry.sections)) .nested_tables else if (hasSpanBackground(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .span_background else if (hasAnchors(stored.entry.sections)) .anchored else if (hasColor(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .colored else if (hasExplanation(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .explained else .plain;
+    const version: Version = if (hasBodyFontScale(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .font_scale_basis else if (hasFontScale(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .font_scale else if (hasReferenceFragments(stored.entry.references)) .reference_items else if (hasCellBlocks(stored.entry.sections)) .cell_blocks else if (hasNestedTables(stored.entry.sections)) .nested_tables else if (hasSpanBackground(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .span_background else if (hasAnchors(stored.entry.sections)) .anchored else if (hasColor(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .colored else if (hasExplanation(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .explained else .plain;
     var encoder: Encoder = .{ .a = a, .version = version };
     defer encoder.deinit();
     try encoder.out.appendSlice(a, versionMagic(version));
@@ -923,7 +1022,7 @@ pub fn encodeBuildAlloc(
     references_value: anytype,
     media_value: anytype,
 ) ![]u8 {
-    const version: Version = if (hasReferenceFragments(references_value)) .reference_items else if (hasCellBlocks(sections)) .cell_blocks else if (hasNestedTables(sections)) .nested_tables else if (hasSpanBackground(display_title, sections, @as([]const types.Span, &.{}), references_value)) .span_background else if (hasAnchors(sections)) .anchored else if (hasColor(display_title, sections, @as([]const types.Span, &.{}), references_value)) .colored else if (hasExplanation(display_title, sections, @as([]const types.Span, &.{}), references_value)) .explained else .plain;
+    const version: Version = if (hasBodyFontScale(display_title, sections, @as([]const types.Span, &.{}), references_value)) .font_scale_basis else if (hasFontScale(display_title, sections, @as([]const types.Span, &.{}), references_value)) .font_scale else if (hasReferenceFragments(references_value)) .reference_items else if (hasCellBlocks(sections)) .cell_blocks else if (hasNestedTables(sections)) .nested_tables else if (hasSpanBackground(display_title, sections, @as([]const types.Span, &.{}), references_value)) .span_background else if (hasAnchors(sections)) .anchored else if (hasColor(display_title, sections, @as([]const types.Span, &.{}), references_value)) .colored else if (hasExplanation(display_title, sections, @as([]const types.Span, &.{}), references_value)) .explained else .plain;
     var encoder: Encoder = .{ .a = a, .version = version };
     defer encoder.deinit();
     try encoder.out.appendSlice(a, versionMagic(version));
@@ -972,7 +1071,7 @@ fn decodeImpl(
     metrics: ?*DecodeMetrics,
 ) !types.Stored {
     if (payload.len < magic.len) return error.InvalidPresentation;
-    const version: Version = if (std.mem.eql(u8, payload[0..magic.len], magic)) .plain else if (std.mem.eql(u8, payload[0..explained_magic.len], explained_magic)) .explained else if (std.mem.eql(u8, payload[0..color_magic.len], color_magic)) .colored else if (std.mem.eql(u8, payload[0..anchor_magic.len], anchor_magic)) .anchored else if (std.mem.eql(u8, payload[0..background_magic.len], background_magic)) .span_background else if (std.mem.eql(u8, payload[0..nested_magic.len], nested_magic)) .nested_tables else if (std.mem.eql(u8, payload[0..cell_blocks_magic.len], cell_blocks_magic)) .cell_blocks else if (std.mem.eql(u8, payload[0..reference_items_magic.len], reference_items_magic)) .reference_items else return error.InvalidPresentation;
+    const version: Version = if (std.mem.eql(u8, payload[0..magic.len], magic)) .plain else if (std.mem.eql(u8, payload[0..explained_magic.len], explained_magic)) .explained else if (std.mem.eql(u8, payload[0..color_magic.len], color_magic)) .colored else if (std.mem.eql(u8, payload[0..anchor_magic.len], anchor_magic)) .anchored else if (std.mem.eql(u8, payload[0..background_magic.len], background_magic)) .span_background else if (std.mem.eql(u8, payload[0..nested_magic.len], nested_magic)) .nested_tables else if (std.mem.eql(u8, payload[0..cell_blocks_magic.len], cell_blocks_magic)) .cell_blocks else if (std.mem.eql(u8, payload[0..reference_items_magic.len], reference_items_magic)) .reference_items else if (std.mem.eql(u8, payload[0..font_scale_magic.len], font_scale_magic)) .font_scale else if (std.mem.eql(u8, payload[0..font_scale_basis_magic.len], font_scale_basis_magic)) .font_scale_basis else return error.InvalidPresentation;
     var reader: Reader = .{ .a = a, .version = version, .bytes = payload, .pos = magic.len, .metrics = metrics };
     const display_title = try reader.spans();
     const sections = try reader.sections();
@@ -1936,4 +2035,165 @@ test "DPR9 reference tags and semantic invariants reject malformed input" {
     const notes = try decodeAlloc(a, encoder.out.items, "entry", .supplemental, null);
     try std.testing.expectEqual(types.ReferenceKind.note, notes.entry.references[0].kind);
     try std.testing.expectEqual(@as(usize, 4), notes.entry.references[0].number);
+}
+
+test "DPRA preserves ARchar scale and all DPR9 reference and ordered cell fields" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const rich = [_]types.Span{.{ .kind = .link, .text = "سبتمبر", .target = "سبتمبر", .classes = "AR", .font_scale = 1.25, .small = true, .superscript = true, .subscript = true, .background = "#abcdef" }};
+    const refs = [_]types.Reference{
+        .{ .kind = .fragment, .number = 8, .group_number = null, .group = "notes", .spans = &rich },
+        .{ .number = 2, .group_number = 1, .name = "parent", .group = "notes", .spans = &rich },
+    };
+    const child = [_]types.Block{.{ .kind = .heading, .level = 3, .anchor = "child", .spans = &rich }};
+    const cells = [_]types.Cell{.{ .blocks = &child }};
+    const rows = [_]types.Row{.{ .cells = &cells }};
+    const blocks = [_]types.Block{.{ .kind = .table, .table = .{ .caption = &rich, .rows = &rows } }};
+    const sections = [_]types.Section{.{ .level = 2, .title = "Body", .anchor = "body", .blocks = &blocks }};
+    const stored: types.Stored = .{ .entry = .{ .title = "entry", .kind = .supplemental, .display_title = &rich, .preamble_spans = &rich, .sections = &sections, .references = &refs } };
+    const bytes = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings("DPRA", bytes[0..4]);
+    const decoded = try decodeAlloc(a, bytes, "entry", .supplemental, null);
+    try std.testing.expectEqualStrings(try std.json.Stringify.valueAlloc(a, stored, .{}), try std.json.Stringify.valueAlloc(a, decoded, .{}));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    const built = try encodeBuildAlloc(a, &rich, &sections, types.Layout{}, &refs, @as([]const types.Media, &.{}));
+    const build_decoded = try decodeAlloc(a, built, "entry", .supplemental, null);
+    try std.testing.expectEqual(@as(?f32, 1.25), build_decoded.entry.sections[0].blocks[0].table.?.rows[0].cells[0].blocks.?[0].spans[0].font_scale);
+}
+
+test "font scale selection recurses into nested tables and canonical identity retains legacy bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var spans = [_]types.Span{.{ .text = "sized", .font_scale = 1 }};
+    const child_cells = [_]types.Cell{.{ .spans = &spans }};
+    const child_rows = [_]types.Row{.{ .cells = &child_cells }};
+    const cells = [_]types.Cell{.{ .nested_table = .{ .rows = &child_rows } }};
+    const rows = [_]types.Row{.{ .cells = &cells }};
+    const blocks = [_]types.Block{.{ .kind = .table, .table = .{ .rows = &rows } }};
+    const sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &blocks }};
+    const stored: types.Stored = .{ .entry = .{ .title = "entry", .kind = .supplemental, .sections = &sections } };
+    const identity = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings("DPR7", identity[0..4]);
+    spans[0].font_scale = null;
+    try std.testing.expectEqualSlices(u8, identity, try encodeAlloc(a, stored));
+    spans[0].font_scale = 0;
+    const zero = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings("DPRA", zero[0..4]);
+    const decoded = try decodeAlloc(a, zero, "entry", .supplemental, null);
+    try std.testing.expectEqual(@as(?f32, 0), decoded.entry.sections[0].blocks[0].table.?.rows[0].cells[0].nested_table.?.rows[0].cells[0].spans[0].font_scale);
+    const built = try encodeBuildAlloc(a, @as([]const types.Span, &.{}), &sections, types.Layout{}, @as([]const types.Reference, &.{}), @as([]const types.Media, &.{}));
+    try std.testing.expectEqualStrings("DPRA", built[0..4]);
+}
+
+test "font scale codec rejects malformed numeric fields without rejecting valid zero" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |invalid| {
+        var encoder: Encoder = .{ .a = a, .version = .font_scale };
+        defer encoder.deinit();
+        try std.testing.expectError(error.InvalidPresentation, encoder.span(types.Span{ .font_scale = invalid }));
+    }
+    var encoder: Encoder = .{ .a = a, .version = .font_scale };
+    defer encoder.deinit();
+    try encoder.span(types.Span{ .font_scale = 1.25 });
+    const encoded = encoder.out.items;
+    var truncated: Reader = .{ .a = a, .version = .font_scale, .bytes = encoded[0 .. encoded.len - 1] };
+    try std.testing.expectError(error.InvalidPresentation, truncated.span());
+    const bad = try a.dupe(u8, encoded);
+    std.mem.writeInt(u32, bad[bad.len - 4 ..][0..4], @bitCast(std.math.inf(f32)), .little);
+    var nonfinite: Reader = .{ .a = a, .version = .font_scale, .bytes = bad };
+    try std.testing.expectError(error.InvalidPresentation, nonfinite.span());
+}
+
+test "DPRB body identity and zero retain references ordered cells and nested selection" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_]f32{ 1, 0, 1.25 }) |number| {
+        const rich = [_]types.Span{.{ .kind = .link, .text = "body", .target = "Target", .font_scale = number, .font_scale_basis = .normal_body, .small = true, .superscript = true, .subscript = true, .background = "#abcdef" }};
+        const refs = [_]types.Reference{
+            .{ .kind = .fragment, .number = 8, .group_number = null, .group = "notes", .spans = &rich },
+            .{ .number = 2, .group_number = 1, .name = "parent", .group = "notes", .spans = &rich },
+        };
+        const nested_cells = [_]types.Cell{.{ .spans = &rich }};
+        const nested_rows = [_]types.Row{.{ .cells = &nested_cells }};
+        const child = [_]types.Block{.{ .kind = .heading, .level = 3, .anchor = "child", .spans = &rich }};
+        const cells = [_]types.Cell{ .{ .blocks = &child }, .{ .nested_table = .{ .rows = &nested_rows } } };
+        const rows = [_]types.Row{.{ .cells = &cells }};
+        const blocks = [_]types.Block{.{ .kind = .table, .table = .{ .caption = &rich, .rows = &rows } }};
+        const sections = [_]types.Section{.{ .level = 2, .title = "Body", .anchor = "body", .blocks = &blocks }};
+        const stored: types.Stored = .{ .entry = .{ .title = "entry", .kind = .supplemental, .display_title = &rich, .preamble_spans = &rich, .sections = &sections, .references = &refs } };
+        const bytes = try encodeAlloc(a, stored);
+        try std.testing.expectEqualStrings("DPRB", bytes[0..4]);
+        const decoded = try decodeAlloc(a, bytes, "entry", .supplemental, null);
+        try std.testing.expectEqualDeep(stored, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+        const built = try encodeBuildAlloc(a, &rich, &sections, types.Layout{}, &refs, @as([]const types.Media, &.{}));
+        try std.testing.expectEqualStrings("DPRB", built[0..4]);
+        const build_decoded = try decodeAlloc(a, built, "entry", .supplemental, null);
+        try std.testing.expectEqualDeep(sections[0], build_decoded.entry.sections[0]);
+        const nested_only = try encodeBuildAlloc(a, @as([]const types.Span, &.{}), &sections, types.Layout{}, @as([]const types.Reference, &.{}), @as([]const types.Media, &.{}));
+        try std.testing.expectEqualStrings("DPRB", nested_only[0..4]);
+        const json = try std.json.Stringify.valueAlloc(a, rich[0], .{});
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"font_scale_basis\":\"normal_body\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"font_scale\":") != null);
+    }
+}
+
+test "context-only scale keeps exact DPRA span bytes and legacy identity JSON" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var encoder: Encoder = .{ .a = a, .version = .font_scale };
+    defer encoder.deinit();
+    try encoder.span(types.Span{ .font_scale = 1.25 });
+    // Old DPRA empty span: 3 flags, 7 empty strings, two absent paints,
+    // scale presence, then little-endian 1.25f. No basis byte is added.
+    const absent_fields: [33]u8 = @splat(0);
+    const old_bytes = absent_fields ++ [_]u8{ 1, 0, 0, 0xa0, 0x3f };
+    try std.testing.expectEqualSlices(u8, &old_bytes, encoder.out.items);
+    var reader: Reader = .{ .a = a, .version = .font_scale, .bytes = &old_bytes };
+    const decoded = try reader.span();
+    try std.testing.expectEqual(@as(?f32, 1.25), decoded.font_scale);
+    try std.testing.expectEqual(types.FontScaleBasis.context, decoded.font_scale_basis);
+    const plain_json = try std.json.Stringify.valueAlloc(a, types.Span{}, .{});
+    const identity_json = try std.json.Stringify.valueAlloc(a, types.Span{ .font_scale = 1 }, .{});
+    try std.testing.expectEqualStrings(plain_json, identity_json);
+    try std.testing.expect(std.mem.indexOf(u8, plain_json, "font_scale") == null);
+    const scaled_json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+    try std.testing.expect(std.mem.indexOf(u8, scaled_json, "font_scale_basis") == null);
+}
+
+test "DPRB count floor admits absent scales and rejects invalid basis pairs and bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var values: [64]types.Span = @splat(.{});
+    values[63] = .{ .font_scale = 1, .font_scale_basis = .normal_body };
+    var encoder: Encoder = .{ .a = a, .version = .font_scale_basis };
+    defer encoder.deinit();
+    try encoder.spans(&values);
+    var reader: Reader = .{ .a = a, .version = .font_scale_basis, .bytes = encoder.out.items };
+    try std.testing.expectEqualDeep(@as([]const types.Span, &values), try reader.spans());
+    var invalid: Encoder = .{ .a = a, .version = .font_scale_basis };
+    defer invalid.deinit();
+    try std.testing.expectError(error.InvalidPresentation, invalid.span(types.Span{ .font_scale_basis = .normal_body }));
+    for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |number| {
+        try std.testing.expectError(error.InvalidPresentation, invalid.span(types.Span{ .font_scale = number, .font_scale_basis = .normal_body }));
+    }
+    var single: Encoder = .{ .a = a, .version = .font_scale_basis };
+    defer single.deinit();
+    try single.span(types.Span{ .font_scale = 1, .font_scale_basis = .normal_body });
+    const bad = try a.dupe(u8, single.out.items);
+    bad[bad.len - 1] = 2;
+    var unknown: Reader = .{ .a = a, .version = .font_scale_basis, .bytes = bad };
+    try std.testing.expectError(error.InvalidPresentation, unknown.span());
+    var truncated: Reader = .{ .a = a, .version = .font_scale_basis, .bytes = single.out.items[0 .. single.out.items.len - 1] };
+    try std.testing.expectError(error.InvalidPresentation, truncated.span());
+    var old: Encoder = .{ .a = a, .version = .font_scale };
+    defer old.deinit();
+    try std.testing.expectError(error.InvalidPresentation, old.span(types.Span{ .font_scale = 1, .font_scale_basis = .normal_body }));
 }

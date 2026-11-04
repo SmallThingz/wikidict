@@ -109,7 +109,7 @@ fn installStrict(ctx: *rt.Context) !Value {
 fn baseRequire(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
     if (std.mem.eql(u8, args[0].string, "strict")) {
-        if (ctx.package_loaded) |loaded| if (loaded.rawGet(.{ .string = "strict" })) |value|
+        if (ctx.package_loaded) |loaded| if (rt.Context.rawGetRuntimeBookkeeping(loaded, .{ .string = "strict" })) |value|
             return bufferedOne(result_buffer, value);
         return bufferedOne(result_buffer, try installStrict(ctx));
     }
@@ -128,6 +128,9 @@ fn mainModuleLoader(raw: ?*anyopaque, ctx: *rt.Context, args: []const Value, res
     if (args.len == 0 or args[0] != .string) return error.StringExpected;
     const state: *MainModuleLoaderCtx = @ptrCast(@alignCast(raw orelse return error.MissingModuleLoader));
     const module_id = ctx.resolveModule(args[0].string) catch return bufferedOne(result_buffer, .nil);
+    // Read the immutable compile diagnostic before caching a loader function.
+    // No rejected Lua body executes at this boundary.
+    try ctx.checkModuleLoadError(module_id);
     const key: Value = .{ .number = @floatFromInt(module_id) };
     if (state.cache.rawGet(key)) |loader| return bufferedOne(result_buffer, loader);
     const loader_ctx = try ctx.allocator.create(ModuleLoaderCtx);
@@ -182,7 +185,10 @@ fn baseGetMetatable(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, resul
     if (args.len == 0) return bufferedOne(result_buffer, .nil);
     const runtime = ctx;
     const mt: ?*rt.Table = switch (args[0]) {
-        .table => |t| t.metatable,
+        .table => |t| blk: {
+            t.notePackageStateAccess();
+            break :blk t.metatable;
+        },
         .string => runtime.string_metatable,
         else => null,
     };
@@ -192,6 +198,7 @@ fn baseGetMetatable(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, resul
 }
 fn baseSetMetatable(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     if (args.len < 2 or args[0] != .table) return error.TableExpected;
+    args[0].table.notePackageStateAccess();
     if (args[0].table.metatable) |old| if (old.rawGet(.{ .string = "__metatable" }) != null) return error.ProtectedMetatable;
     try rt.noteInvokeTableMutation(args[0].table);
     args[0].table.metatable = switch (args[1]) {
@@ -380,6 +387,7 @@ fn iteratorTripleFromCall(runtime: *rt.Context, callable: Value, object: Value, 
 
 fn iterationMetamethod(object: Value, name: []const u8) ?Value {
     if (object != .table) return null;
+    object.table.notePackageStateAccess();
     const metatable = object.table.metatable orelse return null;
     return metatable.rawGet(.{ .string = name });
 }
@@ -488,6 +496,41 @@ fn basePcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffe
     return out;
 }
 
+test "protected module loading preserves failure payload and package override" {
+    const Probe = struct {
+        const diagnostic = "error loading module 'Module:Broken': UnexpectedToken";
+        fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            ctx.setLuaError(.{ .string = diagnostic });
+            return error.LuaRaised;
+        }
+        fn require(_: ?*anyopaque, ctx: *rt.Context, _: []const Value, buffer: ?[]Value) ![]const Value {
+            return bufferedOne(buffer, try ctx.requireModuleId(0, "Module:Broken"));
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.initProgram(arena.allocator(), global_abi.count, 1);
+    defer ctx.deinit();
+    try rt.bindGlobalTable(&ctx, null, global_abi.id("_G"));
+    try install(&ctx);
+    const roots = [_]rt.FunctionFn{rt.stabilize(Probe.root)};
+    ctx.module_root_entries = &roots;
+    const require = try ctx.newNativeBuffered(null, Probe.require);
+    const pcall = ctx.getGlobal(global_abi.id("pcall"));
+    try ctx.setGlobal(global_abi.id("error"), .nil);
+    for (0..2) |_| {
+        const result = try ctx.callValue(pcall, &.{require});
+        defer rt.freeResults(result);
+        try std.testing.expectEqual(@as(usize, 2), result.len);
+        try std.testing.expect(!result[0].boolean);
+        try std.testing.expectEqualStrings(Probe.diagnostic, result[1].string);
+    }
+    try ctx.package_loaded.?.rawSet(ctx.allocator, .{ .string = "Module:Broken" }, .{ .string = "override" });
+    const overridden = try ctx.callValue(pcall, &.{require});
+    defer rt.freeResults(overridden);
+    try std.testing.expect(overridden[0].boolean);
+    try std.testing.expectEqualStrings("override", overridden[1].string);
+}
 test "CPU quota bypasses pcall and xpcall without invoking an error handler" {
     const Probe = struct {
         var now: u64 = 0;
@@ -2977,4 +3020,136 @@ test "invoke result stringification uses native table concat boundaries for nil 
     // table.concat must reject that nil, rather than silently drop the tail.
     try std.testing.expectError(error.AotCallFailed, invokeResultsToString(&runtime, &.{ .{ .string = "first" }, .nil, .{ .string = "tail" } }));
     try std.testing.expectEqualStrings("InvalidValue", runtime.aotErrorName().?);
+}
+
+test "package source loader raises syntax diagnostics before returning a cached loader" {
+    const Probe = struct {
+        var bad_entries: usize = 0;
+        var good_entries: usize = 0;
+        const diagnostic = "error loading module 'Module:Broken': UnexpectedToken";
+        fn lookup(_: ?*const anyopaque, module_name: []const u8) ?u32 {
+            if (std.mem.eql(u8, module_name, "Module:Broken") or std.mem.eql(u8, module_name, "Alias:Broken")) return 0;
+            return if (std.mem.eql(u8, module_name, "Module:Good")) 1 else null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return if (id == 0) "Module:Broken" else if (id == 1) "Module:Good" else null;
+        }
+        fn diagnosticFor(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return if (id == 0) diagnostic else null;
+        }
+        fn bad(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            bad_entries += 1;
+            try ctx.checkModuleLoadError(0);
+            return error.SyntaxRootMustFail;
+        }
+        fn good(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            good_entries += 1;
+            return one(ctx.allocator, .{ .string = "loaded" });
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.initProgram(arena.allocator(), global_abi.count, 2);
+    defer ctx.deinit();
+    const roots = [_]rt.FunctionFn{rt.stabilize(Probe.bad), rt.stabilize(Probe.good)};
+    ctx.module_root_entries = &roots;
+    ctx.configureModules(null, Probe.lookup, Probe.name);
+    ctx.configureModuleLoadErrors(Probe.diagnosticFor);
+    try rt.bindGlobalTable(&ctx, null, global_abi.id("_G"));
+    try install(&ctx);
+    Probe.bad_entries = 0;
+    Probe.good_entries = 0;
+    const package = ctx.getGlobal(global_abi.id("package"));
+    const loaders = try ctx.getIndex(package, .{ .string = "loaders" });
+    const main_loader = try ctx.getIndex(loaders, .{ .number = 2 });
+    const protected = ctx.getGlobal(global_abi.id("pcall"));
+    for ([_][]const u8{ "Module:Broken", "Alias:Broken", "Module:Broken" }) |name| {
+        const failure = try ctx.callValue(protected, &.{ main_loader, .{ .string = name } });
+        defer rt.freeResults(failure);
+        try std.testing.expect(failure.len == 2 and !failure[0].boolean);
+        try std.testing.expectEqualStrings(Probe.diagnostic, failure[1].string);
+    }
+    try std.testing.expectEqual(@as(usize, 0), Probe.bad_entries);
+    try std.testing.expect(ctx.package_loaded.?.rawGet(.{ .string = "Module:Broken" }) == null);
+    try ctx.package_loaded.?.rawSet(ctx.allocator, .{ .string = "Module:Broken" }, .{ .string = "override" });
+    const cached = try ctx.requireByName("Module:Broken");
+    try std.testing.expectEqualStrings("override", cached.string);
+    const still_bad = try ctx.callValue(protected, &.{ main_loader, .{ .string = "Module:Broken" } });
+    defer rt.freeResults(still_bad);
+    try std.testing.expect(!still_bad[0].boolean);
+    try std.testing.expectEqualStrings(Probe.diagnostic, still_bad[1].string);
+    try std.testing.expectEqual(@as(usize, 0), Probe.bad_entries);
+    const loader = try ctx.callValue(main_loader, &.{.{ .string = "Module:Good" }});
+    defer rt.freeResults(loader);
+    try std.testing.expect(loader.len == 1 and loader[0] == .callable);
+    try std.testing.expectEqual(@as(usize, 0), Probe.good_entries);
+    const value = try ctx.callValue(loader[0], &.{});
+    defer rt.freeResults(value);
+    try std.testing.expectEqualStrings("loaded", value[0].string);
+    try std.testing.expectEqual(@as(usize, 1), Probe.good_entries);
+}
+
+
+test "package loaded metatable observations and writes preserve fresh page state" {
+    const Probe = struct {
+        var write: bool = false;
+        fn lookup(_: ?*const anyopaque, text: []const u8) ?u32 {
+            return if (std.mem.eql(u8, text, "Module:Metatable")) 0 else null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return if (id == 0) "Module:Metatable" else null;
+        }
+        fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            const loaded = ctx.package_loaded.?;
+            var buffer: [1]Value = undefined;
+            var observed: Value = .nil;
+            if (write) {
+                const selected: *rt.Table = @ptrCast(@alignCast(ctx.host.?));
+                _ = try baseSetMetatable(null, ctx, &.{ .{ .table = loaded }, .{ .table = selected } }, &buffer);
+                observed = .{ .boolean = true };
+            } else {
+                const values = try baseGetMetatable(null, ctx, &.{.{ .table = loaded }}, &buffer);
+                observed = values[0];
+            }
+            const result = try ctx.newTable();
+            try result.rawSet(ctx.allocator, .{ .string = "seen" }, observed);
+            const out = try std.heap.smp_allocator.alloc(Value, 1);
+            out[0] = .{ .table = result };
+            return out;
+        }
+    };
+    for ([_]bool{ false, true }) |write| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var source = try rt.Context.initProgram(a, 0, 1);
+        defer source.deinit();
+        const roots = [_]rt.FunctionFn{rt.stabilize(Probe.root)};
+        source.module_root_entries = &roots;
+        source.configureModules(null, Probe.lookup, Probe.name);
+        var eligible = [_]bool{false};
+        var rejected = [_]bool{false};
+        source.module_template_eligible = &eligible;
+        source.module_template_rejected = &rejected;
+        Probe.write = write;
+        for (0..3) |page_number| {
+            var page = try source.forkProgram(a);
+            defer page.deinit();
+            page.module_template_context = &source;
+            page.module_template_eligible = &eligible;
+            page.module_template_rejected = &rejected;
+            const selected = try page.newTable();
+            page.setHost(selected);
+            page.package_loaded = try page.newPackageLoadedTable();
+            if (!write and page_number != 0) page.package_loaded.?.metatable = selected;
+            const result = try page.requireByName("Module:Metatable");
+            if (write) {
+                try std.testing.expect(page.package_loaded.?.metatable == selected);
+            } else {
+                const seen = result.table.rawGet(.{ .string = "seen" }) orelse .nil;
+                const expected: Value = if (page_number == 0) .nil else .{ .table = selected };
+                try std.testing.expect(rt.rawEqual(seen, expected));
+            }
+        }
+    }
 }

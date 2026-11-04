@@ -148,7 +148,7 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
                 .matched = matched,
                 .kind = kind,
                 .formatting = formatting,
-                .attributes = .{ .classes = owned_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set, .foreground = owned_foreground, .foreground_set = attributes.foreground_set },
+                .attributes = .{ .classes = owned_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set, .foreground = owned_foreground, .foreground_set = attributes.foreground_set, .font_scale = attributes.font_scale, .font_scale_basis = attributes.font_scale_basis, .font_scale_set = attributes.font_scale_set },
                 .target = owned_target,
                 .tag_name = hidden_tag,
                 .link_quotes = link_quotes,
@@ -955,7 +955,7 @@ pub fn compileClassifiedWithHeadingAnchorsAlloc(
             explained = explained or span.explanation.len != 0;
             styled_self = styled_self or (span.self_link and span.text.len != 0);
             styled = styled or (span.kind == .text and span.text.len != 0 and span.target.len == 0 and
-                (@as(u8, @bitCast(span.flags)) != 0 or span.foreground != null or span.background != null or span.classes.len != 0 or
+                (@as(u8, @bitCast(span.flags)) != 0 or span.foreground != null or span.background != null or span.font_scale != null or span.classes.len != 0 or
                     span.language.len != 0 or span.direction.len != 0 or span.role != .normal));
             if ((span.kind == .link or span.kind == .external_link) and span.target.len != 0 and span.text.len != 0) {
                 navigable = true;
@@ -2771,7 +2771,8 @@ test "reported missing internal targets encode semantic diagnostic without rejec
     for (standalone_decoded.entry.sections) |section| for (section.blocks) |block_value| {
         if (block_value.table) |table_value| for (table_value.rows) |row| for (row.cells) |cell| for (cell.spans) |span| {
             if (std.mem.eql(u8, span.text, "[missing parameter]")) {
-                try std.testing.expect(span.kind == .text and span.small);
+                try std.testing.expect(span.kind == .text and !span.small);
+                try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001);
                 try std.testing.expectEqualStrings("", span.target);
                 standalone_found = true;
             }
@@ -2901,7 +2902,11 @@ test "authenticated missing target copied into wiki caption and cell stays nonac
                 for (cell.spans) |span| {
                     try std.testing.expect(span.kind == .text and span.target.len == 0);
                     try visible.appendSlice(a, span.text);
-                    if (std.mem.eql(u8, span.text, "cell")) small_label = span.small;
+                    if (std.mem.eql(u8, span.text, "cell")) {
+                        try std.testing.expect(!span.small);
+                        try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001);
+                        small_label = true;
+                    }
                 }
                 cell_found = cell_found or (small_label and std.mem.indexOf(u8, visible.items, "cell [missing template]") != null);
             };
@@ -4742,7 +4747,11 @@ test "closed newline external recovery cannot borrow closure across source domai
         if (span.role == .reference) {
             sic_markers += 1;
             try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "#reference-{d}", .{sic_markers}), span.target);
-        } else if (span.small and span.superscript) try sic_text.appendSlice(a, span.text);
+        } else if (span.superscript) {
+            try std.testing.expect(!span.small);
+            try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001);
+            try sic_text.appendSlice(a, span.text);
+        }
     };
     try std.testing.expectEqual(@as(usize, 2), sic_markers);
     try std.testing.expectEqualStrings("[sic]", sic_text.items);
@@ -5650,10 +5659,28 @@ test "Norwegian translation list tail survives wrapper recovery and complete cod
     try std.testing.expect(witness.german and witness.first and witness.other and witness.after and witness.focus and after_heading);
     try std.testing.expect(report.malformed_table and report.literal_markup);
     for ([_][]const u8{
-        "before |}", "* before |} after", "* |} suffix |}",
+        "* before |} after", "* |} suffix |}",
         "* before |}<!-- hidden |}", "* before |}<includeonly>hidden |}",
         "[[Target|label |}]]",
     }) |strict| try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "Norsk", "no", strict, null));
+    // The ordinary physical-line tail has independent source authority;
+    // nested action labels above and raw semantic spans below do not.
+    const plain_tail = try compileAlloc(a, "entry", .language, "Norsk", "no", "before |}", null);
+    const plain_reference = try compileAlloc(a, "entry", .language, "Norsk", "no", "before <nowiki>|}</nowiki>", null);
+    try std.testing.expectEqualSlices(u8, plain_reference, plain_tail);
+    const plain_stored = try codec.decodeAlloc(a, plain_tail, "entry", .language, .{ .code = "no", .heading = "Norsk" });
+    var plain_visible: std.ArrayList(u8) = .empty;
+    for (plain_stored.entry.sections) |section| for (section.blocks) |block| {
+        try std.testing.expect(block.table == null);
+        for (block.spans) |span| {
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+            try plain_visible.appendSlice(a, span.text);
+        }
+    };
+    try std.testing.expectEqualStrings("before |}", plain_visible.items);
+    try std.testing.expectEqual(@as(usize, 0), plain_stored.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 0), plain_stored.entry.media.len);
+    try std.testing.expectEqualSlices(u8, plain_tail, try codec.encodeAlloc(a, plain_stored));
     const raw = [_]compiler.Span{.{ .text = "|}" }};
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
     // Entity and protected authorship keep their existing literal contracts;
@@ -6070,4 +6097,634 @@ test "KBD retained conjugation tables keep all missing parameter diagnostics bod
     try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "entry", .language, "English", "en", "[{{{stem}}}]", null));
     const target = [_]compiler.Span{.{ .kind = .link, .text = "diagnostic", .target = "{{deferred}}", .generated_diagnostic = true }};
     try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &target, null));
+}
+
+// Append only to presentation_document.zig in the selected private candidate.
+// Scoped raw-text/Reader-field regression, not a full saved-page expansion.
+// Full UG02 Reader output remains the independent complete-body baseline.
+test "UG exact noun classification preserves scoped body actions and codec under explicit owners" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const first = "بىرەر كىشى ياكى نەرسىگە يېتىدىغان مەنپەئەت، نەپ";
+    const quote = "قىلىدىغان ئىش بولمىسا، ئۆيگە بېرىپ ئۆز ئىشىمىزنى قىلساق شۇ پايدا ئەمەسمۇ؟";
+    const second = "‹س ئىقتىساد› ئىشلەپچىقرىش، سودا-سېتىق ۋە تۈرلۈك تىجارەت يوللىرى ئارقىلىق كىرگۈزگەن كىرىمىدىن، تەننەرخى ياكى دەسمايىنى ۋە باجنى چىقىرىۋەتكەندىن كېيىنكى ئاشقان سومما، نەپ.";
+    // Explicit entity literal exercises the observed visible IPA. This does not
+    // reconstruct the unavailable current full expanded template output.
+    const tail = "'''پايدا''' / &lt;pɑyɗɑ&gt; /\n# " ++ first ++ "\n#* " ++ quote ++ "\n# " ++ second ++ "\n==== مەنىداش سۆزلەر ====\n* [[نەپ]]، [[مەنپەئەت]]\n==== قارشى مەنىلىك سۆزلەر ====\n* [[زىيان]]، [[زەرەر]]\n";
+    const source = "=== ئومۇمىي ئىسىم ===\n" ++ tail;
+    const canonical = "=== Noun ===\n" ++ tail;
+    const Owner = struct { heading: []const u8, code: []const u8 };
+    for ([_]Owner{
+        .{ .heading = "ئۇيغۇرچە / Uyghurche", .code = "ug" },
+        .{ .heading = "English", .code = "en" },
+    }) |owner| {
+        // Authority is supplied explicitly by this scoped control, independently
+        // of the localized POS label. No language alias or inference is tested.
+        const bytes = try compileClassifiedWithHeadingAnchorsAlloc(a, "پايدا", .language, owner.heading, owner.code, MissingText.untracked(source), null, .{}, null, null, null, .{}, null, null, &.{}, null, &.{}, .{ .heading = owner.heading, .code = owner.code });
+        const reference = try compileClassifiedWithHeadingAnchorsAlloc(a, "پايدا", .language, owner.heading, owner.code, MissingText.untracked(canonical), null, .{}, null, null, null, .{}, null, null, &.{}, null, &.{}, .{ .heading = owner.heading, .code = owner.code });
+        const stored = try codec.decodeAlloc(a, bytes, "پايدا", .language, .{ .code = owner.code, .heading = owner.heading });
+        const expected = try codec.decodeAlloc(a, reference, "پايدا", .language, .{ .code = owner.code, .heading = owner.heading });
+        try std.testing.expectEqualStrings(owner.heading, stored.entry.language.?);
+        try std.testing.expectEqualStrings(owner.code, stored.entry.language_code);
+        try std.testing.expectEqual(@as(usize, 3), stored.entry.sections.len);
+        try std.testing.expectEqualStrings("ئومۇمىي ئىسىم", stored.entry.sections[0].title);
+        try std.testing.expectEqualDeep(expected.entry.organization, stored.entry.organization);
+        for (expected.entry.sections, stored.entry.sections) |before, after|
+            try std.testing.expectEqualDeep(before.blocks, after.blocks);
+        try std.testing.expectEqualDeep(expected.entry.display_title, stored.entry.display_title);
+        try std.testing.expectEqualDeep(expected.entry.references, stored.entry.references);
+        try std.testing.expectEqualDeep(expected.entry.media, stored.entry.media);
+        try std.testing.expectEqual(@as(usize, 1), stored.entry.organization.lexemes.len);
+        const noun = stored.entry.organization.lexemes[0];
+        try std.testing.expectEqualStrings("Noun", noun.kind);
+        try std.testing.expectEqualStrings(owner.heading, noun.language);
+        try std.testing.expectEqual(@as(usize, 0), noun.section);
+        try std.testing.expectEqual(@as(usize, 2), noun.definitions.len);
+        try std.testing.expectEqualSlices(usize, &.{ 1, 2 }, noun.related_sections);
+        const blocks = stored.entry.sections[noun.section].blocks;
+        try std.testing.expectEqual(@as(usize, 1), noun.definitions[0].block);
+        try std.testing.expectEqual(@as(usize, 3), noun.definitions[1].block);
+        try std.testing.expectEqualSlices(usize, &.{2}, noun.definitions[0].quotations);
+        try std.testing.expectEqual(@as(usize, 0), noun.definitions[1].quotations.len);
+        try std.testing.expectEqualStrings(first, blocks[1].spans[0].text);
+        try std.testing.expectEqualStrings(quote, blocks[2].spans[0].text);
+        try std.testing.expectEqualStrings(second, blocks[3].spans[0].text);
+        try std.testing.expect(blocks[2].kind == .quotation and blocks[2].depth == 2);
+        try std.testing.expectEqualStrings("#*", blocks[2].list_path);
+        for (noun.definitions) |sense| {
+            try std.testing.expect(sense.parent == null and sense.form == null);
+            try std.testing.expectEqualStrings("#", blocks[sense.block].list_path);
+        }
+        var headword = false;
+        var intro: std.ArrayList(u8) = .empty;
+        for (blocks[0].spans) |span| {
+            try intro.appendSlice(a, span.text);
+            if (std.mem.eql(u8, span.text, "پايدا")) headword = span.bold;
+        }
+        try std.testing.expect(headword);
+        try std.testing.expectEqualStrings("پايدا / <pɑyɗɑ> /", intro.items);
+        const targets = [_][]const u8{ "نەپ", "مەنپەئەت", "زىيان", "زەرەر" };
+        var links: usize = 0;
+        for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (span.kind == .link) {
+                try std.testing.expect(links < targets.len);
+                try std.testing.expectEqualStrings(targets[links], span.text);
+                try std.testing.expectEqualStrings(targets[links], span.target);
+                links += 1;
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 4), links);
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeBuildAlloc(a, stored.entry.display_title, stored.entry.sections, stored.entry.organization, stored.entry.references, stored.entry.media));
+    }
+}
+
+// Append only to presentation_document.zig in the selected private candidate.
+// Authored scoped body from raw p22/r356746 and observed AST04 Reader fields.
+// Omits template-generated headings, subject labels, translation grids and media.
+// Full published-page Reader evidence remains separate and is not reconstructed.
+test "AST exact noun classification preserves three senses source actions styles and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const first = "Órganu muscular carnosu y móvil, asitiáu nel interior de la boca, que pertime percibir el sentíu del gustu y d'articular dellos soníos.";
+    const second = "Sistema de comunicación que consiste en facer usu de soníos y/o xestos pa espresar pensamientos y sentimientos.";
+    const third = "Sistema de comunicación oral y natural propiu a una determinada comunidá o grupu humanos.";
+    const origin = "=== Etimoloxía ===\n* Del ''[[lingua]]'', de mesmu significáu.\n";
+    const tail = "''femenín singular'' '''llingua'''; ''plural'' '''[[llingües]]'''\n# Órganu muscular carnosu y móvil, asitiáu nel interior de la [[boca]], que pertime percibir el [[sentíu]] del [[gustu]] y d'articular dellos [[soníu|soníos]].\n# " ++ second ++ "\n# " ++ third ++ "\n=== Sinónimos ===\n* [[parpayuela]]\n* [[llinguaxe]] ~ [[llinguax]]\n* [[idioma]]\n";
+    const source = origin ++ "== Sustantivu ==\n" ++ tail;
+    const canonical = origin ++ "== Noun ==\n" ++ tail;
+    const Owner = struct { heading: []const u8, code: []const u8 };
+    const Text = struct {
+        fn join(allocator: A, spans: anytype) ![]const u8 {
+            var out: std.ArrayList(u8) = .empty;
+            for (spans) |span| try out.appendSlice(allocator, span.text);
+            return out.toOwnedSlice(allocator);
+        }
+    };
+    for ([_]Owner{ .{ .heading = "asturianu", .code = "ast" }, .{ .heading = "English", .code = "en" } }) |owner| {
+        const bytes = try compileClassifiedWithHeadingAnchorsAlloc(a, "llingua", .language, owner.heading, owner.code, MissingText.untracked(source), null, .{}, null, null, null, .{}, null, null, &.{}, null, &.{}, .{ .heading = owner.heading, .code = owner.code });
+        const reference = try compileClassifiedWithHeadingAnchorsAlloc(a, "llingua", .language, owner.heading, owner.code, MissingText.untracked(canonical), null, .{}, null, null, null, .{}, null, null, &.{}, null, &.{}, .{ .heading = owner.heading, .code = owner.code });
+        const stored = try codec.decodeAlloc(a, bytes, "llingua", .language, .{ .code = owner.code, .heading = owner.heading });
+        const expected = try codec.decodeAlloc(a, reference, "llingua", .language, .{ .code = owner.code, .heading = owner.heading });
+        try std.testing.expectEqualStrings(owner.heading, stored.entry.language.?);
+        try std.testing.expectEqualStrings(owner.code, stored.entry.language_code);
+        try std.testing.expectEqual(@as(usize, 3), stored.entry.sections.len);
+        try std.testing.expectEqualStrings("Sustantivu", stored.entry.sections[1].title);
+        try std.testing.expectEqualDeep(expected.entry.organization, stored.entry.organization);
+        for (expected.entry.sections, stored.entry.sections) |before, after|
+            try std.testing.expectEqualDeep(before.blocks, after.blocks);
+        try std.testing.expectEqualDeep(expected.entry.display_title, stored.entry.display_title);
+        try std.testing.expectEqualDeep(expected.entry.references, stored.entry.references);
+        try std.testing.expectEqualDeep(expected.entry.media, stored.entry.media);
+        try std.testing.expectEqual(@as(usize, 1), stored.entry.organization.lexemes.len);
+        const noun = stored.entry.organization.lexemes[0];
+        try std.testing.expectEqualStrings("Noun", noun.kind);
+        try std.testing.expectEqualStrings(owner.heading, noun.language);
+        try std.testing.expectEqual(@as(usize, 1), noun.section);
+        try std.testing.expectEqualSlices(usize, &.{0}, noun.introduction);
+        try std.testing.expectEqualSlices(usize, &.{2}, noun.related_sections);
+        try std.testing.expectEqualSlices(usize, &.{0}, stored.entry.organization.other_sections);
+        try std.testing.expectEqual(@as(usize, 3), noun.definitions.len);
+        const blocks = stored.entry.sections[noun.section].blocks;
+        for (noun.definitions, 0..) |sense, i| {
+            try std.testing.expectEqual(i + 1, sense.block);
+            try std.testing.expect(sense.parent == null and sense.form == null);
+            try std.testing.expectEqual(@as(usize, 0), sense.quotations.len);
+            try std.testing.expectEqualStrings("#", blocks[sense.block].list_path);
+        }
+        try std.testing.expectEqualStrings(first, try Text.join(a, blocks[1].spans));
+        try std.testing.expectEqualStrings(second, try Text.join(a, blocks[2].spans));
+        try std.testing.expectEqualStrings(third, try Text.join(a, blocks[3].spans));
+        const targets = [_][]const u8{ "boca", "sentíu", "gustu", "soníu" };
+        const labels = [_][]const u8{ "boca", "sentíu", "gustu", "soníos" };
+        var links: usize = 0;
+        for (blocks[1].spans) |span| if (span.kind == .link) {
+            try std.testing.expect(links < targets.len);
+            try std.testing.expectEqualStrings(targets[links], span.target);
+            try std.testing.expectEqualStrings(labels[links], span.text);
+            links += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 4), links);
+        var headword = false;
+        var plural = false;
+        for (blocks[0].spans) |span| {
+            if (std.mem.eql(u8, span.text, "llingua")) headword = span.bold;
+            if (span.kind == .link and std.mem.eql(u8, span.target, "llingües")) {
+                try std.testing.expectEqualStrings("llingües", span.text);
+                plural = span.bold;
+            }
+        }
+        try std.testing.expect(headword and plural);
+        var etymology_link = false;
+        for (stored.entry.sections[0].blocks[0].spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "lingua")) {
+            try std.testing.expectEqualStrings("lingua", span.text);
+            etymology_link = span.italic;
+        };
+        try std.testing.expect(etymology_link);
+        const synonym_targets = [_][]const u8{ "parpayuela", "llinguaxe", "llinguax", "idioma" };
+        var synonyms: usize = 0;
+        for (stored.entry.sections[2].blocks) |block| for (block.spans) |span| if (span.kind == .link) {
+            try std.testing.expect(synonyms < synonym_targets.len);
+            try std.testing.expectEqualStrings(synonym_targets[synonyms], span.target);
+            try std.testing.expectEqualStrings(synonym_targets[synonyms], span.text);
+            synonyms += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 4), synonyms);
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeBuildAlloc(a, stored.entry.display_title, stored.entry.sections, stored.entry.organization, stored.entry.references, stored.entry.media));
+    }
+}
+
+test "scope collection and fragment replay preserve explicit numeric identity cancellation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Fragment scope observations own multiline body spans, not single-line inline spans.
+    const source = "<span style=\"font-size:125%\"><span style=\"font-size:80%\">cancel\n</span>parent</span>outside";
+    const observation = try observePreScopesAlloc(a, "entry", source, .{}, null, null, null, .{}, null);
+    try std.testing.expectEqual(@as(usize, 2), observation.scopes.len);
+    const outer = observation.scopes[0];
+    const inner = observation.scopes[1];
+    try std.testing.expectEqual(@as(?f32, 1.25), outer.attributes.font_scale);
+    try std.testing.expect(outer.attributes.font_scale_set);
+    // null alone is ambiguous: the explicit bit must survive Collector copying
+    // to stop the replay inheriting 125% again after 125% * 80% cancels to 1.
+    try std.testing.expect(inner.attributes.font_scale == null and inner.attributes.font_scale_set);
+    const cut = std.mem.indexOf(u8, source, "cancel") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(cut, inner.body_start);
+    const initial = [_]FragmentPreContext.Initial{
+        .{ .body_end = inner.body_end - cut, .resume_at = inner.resume_at - cut, .kind = inner.kind, .formatting = inner.formatting, .attributes = inner.attributes },
+        .{ .body_end = outer.body_end - cut, .resume_at = outer.resume_at - cut, .kind = outer.kind, .formatting = outer.formatting, .attributes = outer.attributes },
+    };
+    var renderer: compiler.Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBodyWithFragmentPre(source[cut..], .{ .initial = &initial });
+    var seen: usize = 0;
+    for (blocks) |block| for (block.spans) |span| {
+        if (std.mem.indexOf(u8, span.text, "cancel") != null) {
+            try std.testing.expect(span.font_scale == null and span.font_scale_set);
+            seen += 1;
+        }
+        if (std.mem.indexOf(u8, span.text, "parent") != null) {
+            try std.testing.expectEqual(@as(?f32, 1.25), span.font_scale);
+            seen += 1;
+        }
+        if (std.mem.indexOf(u8, span.text, "outside") != null) {
+            try std.testing.expect(span.font_scale == null);
+            seen += 1;
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 3), seen);
+    try std.testing.expect(!renderer.fallbacks.unclosed_formatting and !renderer.fallbacks.render_limit);
+
+    // The other fragment edge must admit the same observed SPAN scopes too.
+    const trailing = [_]FragmentPreContext.Trailing{
+        .{ .opening_start = outer.opening_start, .body_start = outer.body_start, .kind = outer.kind, .formatting = outer.formatting, .attributes = outer.attributes },
+        .{ .opening_start = inner.opening_start, .body_start = inner.body_start, .kind = inner.kind, .formatting = inner.formatting, .attributes = inner.attributes },
+    };
+    var prefix_renderer: compiler.Renderer = .{ .a = a, .context = .{} };
+    const prefix = try prefix_renderer.renderBodyWithFragmentPre(source[0..inner.body_end], .{ .trailing = &trailing });
+    var prefix_seen: usize = 0;
+    for (prefix) |block| for (block.spans) |span| if (std.mem.indexOf(u8, span.text, "cancel") != null) {
+        try std.testing.expect(span.font_scale == null and span.font_scale_set);
+        prefix_seen += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), prefix_seen);
+    try std.testing.expect(!prefix_renderer.fallbacks.unclosed_formatting and !prefix_renderer.fallbacks.render_limit);
+
+    // A non-leading multiline inclusion wrapper uses the same observed kind.
+    const inclusion_source = "prefix<noinclude>inner\n</noinclude>outside";
+    const inclusion = try observePreScopesAlloc(a, "entry", inclusion_source, .{}, null, null, null, .{}, null);
+    try std.testing.expectEqual(@as(usize, 1), inclusion.scopes.len);
+    const wrapper = inclusion.scopes[0];
+    try std.testing.expectEqual(FragmentPreContext.Kind.formatting, wrapper.kind);
+    const inclusion_initial = [_]FragmentPreContext.Initial{.{ .body_end = wrapper.body_end - wrapper.body_start, .resume_at = wrapper.resume_at - wrapper.body_start, .kind = wrapper.kind, .formatting = wrapper.formatting, .attributes = wrapper.attributes }};
+    var inclusion_suffix: compiler.Renderer = .{ .a = a, .context = .{} };
+    const suffix_blocks = try inclusion_suffix.renderBodyWithFragmentPre(inclusion_source[wrapper.body_start..], .{ .initial = &inclusion_initial });
+    var suffix_words: usize = 0;
+    for (suffix_blocks) |block| for (block.spans) |span| {
+        if (std.mem.indexOf(u8, span.text, "inner") != null) suffix_words += 1;
+        if (std.mem.indexOf(u8, span.text, "outside") != null) suffix_words += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 2), suffix_words);
+    try std.testing.expect(!inclusion_suffix.fallbacks.unclosed_formatting and !inclusion_suffix.fallbacks.render_limit);
+    const inclusion_trailing = [_]FragmentPreContext.Trailing{.{ .opening_start = wrapper.opening_start, .body_start = wrapper.body_start, .kind = wrapper.kind, .formatting = wrapper.formatting, .attributes = wrapper.attributes }};
+    var inclusion_prefix: compiler.Renderer = .{ .a = a, .context = .{} };
+    const prefix_blocks = try inclusion_prefix.renderBodyWithFragmentPre(inclusion_source[0..wrapper.body_end], .{ .trailing = &inclusion_trailing });
+    var prefix_words: usize = 0;
+    for (prefix_blocks) |block| for (block.spans) |span| {
+        if (std.mem.indexOf(u8, span.text, "prefix") != null) prefix_words += 1;
+        if (std.mem.indexOf(u8, span.text, "inner") != null) prefix_words += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 2), prefix_words);
+    try std.testing.expect(!inclusion_prefix.fallbacks.unclosed_formatting and !inclusion_prefix.fallbacks.render_limit);
+
+    // A non-formatting DIV cannot be forged into this narrow formatting kind.
+    var rejected: compiler.Renderer = .{ .a = a, .context = .{} };
+    const bad_initial = [_]FragmentPreContext.Initial{.{ .body_end = 1, .resume_at = 7, .kind = .formatting }};
+    try std.testing.expectError(error.InvalidPreContext, rejected.renderBodyWithFragmentPre("x</div>", .{ .initial = &bad_initial }));
+    const bad_trailing = [_]FragmentPreContext.Trailing{.{ .opening_start = 0, .body_start = 5, .kind = .formatting }};
+    try std.testing.expectError(error.InvalidPreContext, rejected.renderBodyWithFragmentPre("<div>x", .{ .trailing = &bad_trailing }));
+
+}
+
+test "complete retained OC nicard reference angles preserve full body actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Complete authenticated p14558/r350147 expanded page, 3258 bytes.
+    const source = "<h1 style=\"clear: both; font-family: sans-serif; font-weight: bold; font-size: 1.3em; line-height: 1.3em; padding: 0.5em; background-color: #F7EED6; color:#000; border-top: 1px solid #AAA; border-bottom: 1px solid #AAA;\">[[occitan|Occitan]]</h1>[[Categoria:occitan]]\n\n<h3 style=\"border-bottom: 1px #AAA dotted;\" title=\"Entre-senhas fonologicas sul mot : niçard\"> [[prononciacion|Prononciacion]]  </h3>\n<nowiki>/</nowiki><span class=\"pron-AFI-SAMPA\"><span lang=\"en\" class=\"AFI\" style=\"font-family: 'DejaVu Sans', 'Segoe UI', 'Segoe UI Symbol', 'Lucida Grande', 'Arial Unicode MS', 'Lucida Sans Unicode', 'Charis SIL', 'Doulos SIL', Gentium, GentiumAlt, 'Adobe Pi Std', Code2000, 'Chrysanthi Unicode', 'TITUS Cyberbit Basic', 'Bitstream Cyberbit', 'Hiragino Kaku Gothic Pro', 'Matrix Unicode', sans-serif;\"><span title=\"AFI\">niˈsart</span></span></span><nowiki>/</nowiki><span class=\"AFI-e-SAMPA\" style=\"display:none;\">, </span><span class=\"SAMPA\" style=\"display:none;\">[[Annèxa:Prononciacion|<span title=\"X-SAMPA\">/<span class=\"X-SAMPA\">niˈsart</span>/</span>]]</span>\n\nFrança (Bearn) : escotar « niçard » [[Fichièr:LL-Q14185 (oci)-Davidgrosclaude-niçard.wav]]\n<h2 style=\"font-family: sans-serif; font-weight: bold; font-size: 1.2em; line-height: 1.2em; padding: 0.5em; border-top: 1px dotted #AAA; border-bottom: 1px dotted #AAA;\"><span style=\"padding-right: 0.5em;\">[[Fichièr:Open book 01.svg|25px|middle|link=]]</span>Adjectiu   </h2>\n[[Categoria:occitan|niçard]]\n[[Categoria:Adjectius en occitan|niçard]]\n'''niçard'''; ''feminin'' : '''niçarda'''\n\n# Originari de [[Niça]].\n\n<h2 style=\"font-family: sans-serif; font-weight: bold; font-size: 1.2em; line-height: 1.2em; padding: 0.5em; border-top: 1px dotted #AAA; border-bottom: 1px dotted #AAA;\"><span style=\"padding-right: 0.5em;\">[[Fichièr:Open book 01.svg|25px|middle|link=]]</span>Nom comun  [[Categoria:occitan]][[Categoria:Noms comuns en occitan]] </h2>\n'''niçard''' <span style=\"color:#002000;\">''masculin''</span>\n\n# Varietat regionala de l'[[occitan]] que si parla dins la part bassa dau [[w:Comtat de Niça|Comtat de Niça]], a l'entorn de la vila de [[Niça]]. Es un sosdialècte dau [[provençau]] segon la classificacion dialectologica<ref>En [[w:nòrma classica|nòrma classica]], s'escriu ''niçard niçarda''. En [[w:nòrma mistralenca|nòrma mistralenca]], s'escriu ''<niçart niçarda>'' o mens correctament ''<[[nissart]] nissarda>''.</ref>.\n\n \n<h3 style=\"border-bottom: 1px #AAA dotted;\" title=\"\"> [[traduccion|Traduccions]]  </h3>\n{|  width=\"100%\" style=\"background-color: #FAFAFA; color:#000; border: 1px solid #AAA; margin: 1em 0;\"\n\n|- class=\"mw-collapsible-content\"\n| valign=\"top\" width=\"50%\" style=\"padding: 4px 8px 12px; background-color: #FFF; color:#000; border: 1px dotted #AAA;\" |\n* \n* [[francés]]: [[niçois#fr|niçois]] [[:fr:niçois|<small><sup>(fr)</sup></small>]]\n* \n* [[italian]]: [[nizzardo#it|nizzardo]] [[:it:nizzardo|<small><sup>(it)</sup></small>]]\n* \n* [[sicilian]]: [[nizzardu#scn|nizzardu]] [[:scn:nizzardu|<small><sup>(scn)</sup></small>]]\n* \n* [[còrs]]: [[nizzardu#co|nizzardu]] [[:co:nizzardu|<small><sup>(co)</sup></small>]]\n|}\n===Nòtas===\n<references />\n\n[[Categoria:Gentilicis en occitan]]\n\n[[en:niçard]]\n[[fi:niçard]]\n[[fr:niçard]]";
+    const namespace_source = "# wikidict-namespace-registry-v1\n# wiki\tocwiktionary\n# dump-date\t20261001\n# content-language\toc\n-2\tMèdia\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n-1\tEspecial\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\tDiscutir\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDiscuter\n2\tUtilizaire\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\tUtilisator\n3\tDiscussion Utilizaire\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDiscussion Utilisateur\tDiscussion Utilisator\tDiscutida Utilisator\n4\tWikiccionari\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\tWiktionary\n5\tDiscussion Wikiccionari\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWiktionary talk\n6\tFichièr\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\tImatge\n7\tDiscussion Fichièr\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDiscussion Fichier\tDiscussion Image\tDiscussion Imatge\tDiscutida Imatge\tImage talk\tImatge Discussió\n8\tMediaWiki\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\tMediaòiqui\n9\tDiscussion MediaWiki\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDiscussion Mediaòiqui\tDiscutida Mediaòiqui\n10\tModèl\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n11\tDiscussion Modèl\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDiscussion Modèle\tDiscutida Modèl\n12\tAjuda\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n13\tDiscussion Ajuda\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDiscussion Aide\tDiscutida Ajuda\n14\tCategoria\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n15\tDiscussion Categoria\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDiscussion Catégorie\tDiscutida Categoria\n100\tAnnèxa\tAnnèxa\tcase-sensitive\t1\t0\t0\t\tsupplemental\tunclassified_subject_retained\n101\tDiscussion Annèxa\tDiscussion Annèxa\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\tMòdul\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\tMòdul Discussió\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\tEvent\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\tEvent talk\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
+    try std.testing.expectEqual(@as(usize, 3258), source.len);
+    var namespaces = try NamespaceRegistry.init(a, namespace_source);
+    defer namespaces.deinit();
+    // Change only the authored opening angle to an explicit literal entity.
+    // Child wiki action, tail, styles, references and complete page stay intact.
+    const reference_source = try std.mem.replaceOwned(u8, a, source, "<[[nissart]] nissarda>", "&lt;[[nissart]] nissarda>");
+    var actual_report: Fallbacks = .{};
+    var expected_report: Fallbacks = .{};
+    const actual = try compileReportedWithLinkTrailAlloc(a, "niçard", .language, "Occitan", "oc", source, null, .{}, &namespaces, &actual_report);
+    const expected = try compileReportedWithLinkTrailAlloc(a, "niçard", .language, "Occitan", "oc", reference_source, null, .{}, &namespaces, &expected_report);
+    try std.testing.expectEqualSlices(u8, expected, actual);
+    try std.testing.expectEqualDeep(expected_report, actual_report);
+    const stored = try codec.decodeAlloc(a, actual, "niçard", .language, .{ .code = "oc", .heading = "Occitan" });
+    try std.testing.expectEqualStrings("DPRB", actual[0..4]);
+    var sized_headings: u8 = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| {
+        if (block.kind != .heading) continue;
+        for (block.spans) |span| {
+            const language_title = std.mem.eql(u8, span.text, "Occitan");
+            const adjective_title = std.mem.indexOf(u8, span.text, "Adjectiu") != null;
+            const noun_title = std.mem.indexOf(u8, span.text, "Nom comun") != null;
+            if (!language_title and !adjective_title and !noun_title) continue;
+            try std.testing.expectEqual(blobs.presentation_types.FontScaleBasis.normal_body, span.font_scale_basis);
+            try std.testing.expectEqual(@as(?f32, if (language_title) 1.3 else 1.2), span.font_scale);
+            if (language_title) {
+                try std.testing.expect(span.kind == .link);
+                try std.testing.expectEqualStrings("occitan", span.target);
+            }
+            sized_headings |= if (language_title) @as(u8, 1) else if (adjective_title) 2 else 4;
+        }
+    };
+    try std.testing.expectEqual(@as(u8, 7), sized_headings);
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, stored));
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.references.len);
+    var reference_text: std.ArrayList(u8) = .empty;
+    var nissart_actions: usize = 0;
+    for (stored.entry.references[0].spans) |span| {
+        try reference_text.appendSlice(a, span.text);
+        if (span.kind == .link and std.mem.eql(u8, span.target, "nissart")) {
+            nissart_actions += 1;
+            try std.testing.expectEqualStrings("nissart", span.text);
+            try std.testing.expect(span.italic);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), nissart_actions);
+    try std.testing.expectEqualStrings("En nòrma classica, s'escriu niçard niçarda. En nòrma mistralenca, s'escriu <niçart niçarda> o mens correctament <nissart nissarda>.", reference_text.items);
+    var definitions: usize = 0;
+    var tables: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| {
+        if (block.kind == .definition) definitions += 1;
+        if (block.table != null) tables += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 2), definitions);
+    try std.testing.expectEqual(@as(usize, 1), tables);
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.media.len);
+    try std.testing.expect(stored.entry.media[0].kind == .audio);
+    const raw = [_]compiler.Span{.{ .text = "<nissart nissarda>" }};
+    const split = [_]compiler.Span{
+        .{ .text = "<" },
+        .{ .kind = .link, .text = "nissart", .target = "nissart" },
+        .{ .text = " nissarda>" },
+    };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &split, null));
+    const unresolved = [_]compiler.Span{.{ .kind = .link, .text = "label", .target = "{{missing}}", .provenance = .protected_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &unresolved, null));
+}
+
+test "complete retained SD claptrap inline close preserves original body styles and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "=== سنڌي ===\n# ڏيکاءُ\n# مَڪر\n\n== انگريزي ==\n# Something that is showy or pretentious, often used to describe empty talk\n# Deceit or trickery, suitable for situations where \"claptrap\" implies something misleading or insincere\n\n===لاڳاپيل لفظ ۽ اصطلاح===\n=== [[Image:trans.png|30px]] ترجما ===\n== رومن سنڌي / (لپي مَٽَ) ==|}\n''Ddekhhau''\n''Makar''\n\n\n[[زمرو:انڊس رومن سنڌي]]\n[[زمرو:سنڌو رومن سنڌي]]\n[[category:Indus Roman Sindhi]]\n\n\n\n[[زمرو:اصطلاح]]\n[[زمرو: رومن سنڌي]]\n[[Category: Transliteration]]";
+    const namespace_source = "# wikidict-namespace-registry-v1\n# wiki\tsdwiktionary\n# dump-date\t20261001\n# content-language\tsd\n-2\tذريعات\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n-1\tخاص\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\tبحث\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n2\tواپرائيندڙ\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\tيوزر\n3\tواپرائيندڙ بحث\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tيوزر بحث\n4\tWiktionary\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\n5\tWiktionary بحث\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWiktionary talk\n6\tفائل\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\tعڪس\n7\tفائل بحث\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tImage talk\tعڪس بحث\n8\tذريعات وڪي\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n9\tذريعات وڪي بحث\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n10\tسانچو\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tسنچو\n11\tسانچو بحث\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tسنچو بحث\n12\tمدد\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n13\tمدد بحث\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n14\tزمرو\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n15\tزمرو بحث\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\tماڊيول\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\tماڊيول بحث\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\tEvent\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\tEvent talk\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
+    try std.testing.expectEqual(@as(usize, 608), source.len);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, "|}"));
+    var namespaces = try NamespaceRegistry.init(a, namespace_source);
+    defer namespaces.deinit();
+    const reference = try std.mem.replaceOwned(u8, a, source, "|}", "<nowiki>|}</nowiki>");
+    var actual_report: Fallbacks = .{};
+    var expected_report: Fallbacks = .{};
+    const actual = try compileReportedWithLinkTrailAlloc(a, "claptrap", .language, "Unclassified", "", source, null, .{}, &namespaces, &actual_report);
+    const expected = try compileReportedWithLinkTrailAlloc(a, "claptrap", .language, "Unclassified", "", reference, null, .{}, &namespaces, &expected_report);
+    try std.testing.expectEqualSlices(u8, expected, actual);
+    try std.testing.expectEqualDeep(expected_report, actual_report);
+    const stored = try codec.decodeAlloc(a, actual, "claptrap", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, stored));
+    var definitions: usize = 0;
+    var literal_close = false;
+    var roman_one = false;
+    var roman_two = false;
+    for (stored.entry.sections) |section| for (section.blocks) |block| {
+        try std.testing.expect(block.table == null);
+        if (block.kind == .definition) definitions += 1;
+        for (block.spans) |span| {
+            if (std.mem.indexOf(u8, span.text, "|}") != null) literal_close = true;
+            if (span.italic and std.mem.eql(u8, span.text, "Ddekhhau")) roman_one = true;
+            if (span.italic and std.mem.eql(u8, span.text, "Makar")) roman_two = true;
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 4), definitions);
+    try std.testing.expect(literal_close and roman_one and roman_two);
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.media.len);
+    try std.testing.expectEqualStrings("trans.png", stored.entry.media[0].file);
+    const raw = [_]compiler.Span{.{ .text = "ordinary |}" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+    const target = [_]compiler.Span{.{ .kind = .link, .text = "label", .target = "{{unresolved}}", .provenance = .protected_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &target, null));
+}
+
+test "complete retained KAA teberik double angles preserve both definitions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "Atlıq.\n\n# Áshirepi, qımbatlı, qádirli.\n# Awıs. Káramatlı, sharapatlı, baxıt beriwshi, húrmetli.  Jurınnıń góne shapanın, Tuwmay júrgen hayallar, Teberik dep bólisti (<<Qırq qız>>).";
+    try std.testing.expectEqual(@as(usize, 200), source.len);
+    const reference = try std.mem.replaceOwned(u8, a, source, "<<Qırq qız>>", "&lt;&lt;Qırq qız&gt;&gt;");
+    var actual_report: Fallbacks = .{};
+    var expected_report: Fallbacks = .{};
+    const actual = try compileReportedAlloc(a, "teberik", .language, "Unclassified", "", source, null, &actual_report);
+    const expected = try compileReportedAlloc(a, "teberik", .language, "Unclassified", "", reference, null, &expected_report);
+    try std.testing.expectEqualSlices(u8, expected, actual);
+    try std.testing.expect(actual_report.literal_markup and !expected_report.literal_markup);
+    expected_report.literal_markup = true;
+    try std.testing.expectEqualDeep(expected_report, actual_report);
+    const stored = try codec.decodeAlloc(a, actual, "teberik", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, stored));
+    const definitions = [_][]const u8{
+        "Áshirepi, qımbatlı, qádirli.",
+        "Awıs. Káramatlı, sharapatlı, baxıt beriwshi, húrmetli.  Jurınnıń góne shapanın, Tuwmay júrgen hayallar, Teberik dep bólisti (<<Qırq qız>>).",
+    };
+    var seen: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| {
+        if (block.kind != .definition) continue;
+        try std.testing.expect(seen < definitions.len);
+        var visible: std.ArrayList(u8) = .empty;
+        for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+        }
+        try std.testing.expectEqualStrings(definitions[seen], visible.items);
+        seen += 1;
+    };
+    try std.testing.expectEqual(definitions.len, seen);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.media.len);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+    const raw = [_]compiler.Span{.{ .text = "<<Qırq qız>>" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+    const unresolved = [_]compiler.Span{.{ .kind = .link, .text = "label", .target = "{{target}}", .provenance = .protected_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &unresolved, null));
+}
+
+test "complete retained IG Okwu ojoo bracket label preserves body media and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "\n'''Okwu Ọjọọ'''\n\n==Nkọwa==\nNke a bụ ụka maọbụ okwu na adịghị mma.\n\n===Nkejiasụsụ===\nAha\n\n===Ọmụmaatụ===\nỌ gwara ya okwu ọjọọ\n\n===Mkpọpụta===\n[[File:Ig-Okwu ọjọọ.ogg|thumb|left]]\n\n\n\n\n\n\n===Olumba===\n\n=Ntụghari n'asụsụ ọzọ=\n\n=Bekee=\n[https://en.wiktionary.org/wiki/[bad word bad word]\n\n[[Òtù:aha]]";
+    const namespace_source = "# wikidict-namespace-registry-v1\n# wiki\tigwiktionary\n# dump-date\t20261001\n# content-language\tig\n-2\tMidia\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\tNká\n-1\tỌpụrụiche\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\tIhü kárírí\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\tŃkàtá\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tOkwu\tṄkàtá\n2\tOjiarụ\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\tỌ'bànifé\tỌbanife\n3\tŃkàtá ojiarụ\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tOkwu ọ'bànifé\tOkwu ọbanife\tṄkàtá ojiarụ\n4\tWiktionary\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\n5\tŃkàtá Wiktionary\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tOkwu Wiktionary\tWiktionary talk\tṄkàtá Wiktionary\n6\tFaịlụ\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\tUsòrò\tÁkwúkwó orünotu\n7\tŃkàtá faịlụ\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tImage talk\tOkwu usòrò\tOkwu ákwúkwó orünotu\tṄkàtá faịlụ\n8\tMidiaWiki\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\tNkáWiki\n9\tŃkàtá MidiaWiki\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tOkwu MidiaWiki\tOkwu NkáWiki\tṄkàtá MidiaWiki\n10\tTempleeti\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tÀtụ\n11\tŃkàtá templeeti\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tOkwu àtụ\tṄkàtá templeeti\n12\tEnyemaka\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tNkwadọ\tNkwádọ\n13\tŃkàtá enyemaka\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tOkwu nkwadọ\tOkwu nkwádọ\tṄkàtá enyemaka\n14\tOtú\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tÉbéonọr\tÒtù\n15\tŃkàtá otú\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tOkwu ébéonọr\tOkwu òtù\tṄkàtá otú\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\tModule\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\tModule talk\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\tEvent\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\tEvent talk\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
+    try std.testing.expectEqual(@as(usize, 355), source.len);
+    var namespaces = try NamespaceRegistry.init(a, namespace_source);
+    defer namespaces.deinit();
+    const reference_source = try std.mem.replaceOwned(u8, a, source, "wiki/[bad", "wiki/ [bad");
+    var actual_report: Fallbacks = .{};
+    var expected_report: Fallbacks = .{};
+    const actual = try compileReportedWithLinkTrailAlloc(a, "Okwu ọjọọ", .language, "Unclassified", "", source, null, .{}, &namespaces, &actual_report);
+    const expected = try compileReportedWithLinkTrailAlloc(a, "Okwu ọjọọ", .language, "Unclassified", "", reference_source, null, .{}, &namespaces, &expected_report);
+    try std.testing.expectEqualSlices(u8, expected, actual);
+    try std.testing.expectEqualDeep(expected_report, actual_report);
+    const stored = try codec.decodeAlloc(a, actual, "Okwu ọjọọ", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, stored));
+    var external: usize = 0;
+    var bold_headword = false;
+    var gloss = false;
+    var example = false;
+    for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (span.kind == .external_link) {
+            external += 1;
+            try std.testing.expectEqualStrings("https://en.wiktionary.org/wiki/", span.target);
+            try std.testing.expectEqualStrings("[bad word bad word", span.text);
+        }
+        if (span.bold and std.mem.eql(u8, span.text, "Okwu Ọjọọ")) bold_headword = true;
+        if (std.mem.indexOf(u8, span.text, "Nke a bụ ụka maọbụ okwu na adịghị mma.") != null) gloss = true;
+        if (std.mem.indexOf(u8, span.text, "Ọ gwara ya okwu ọjọọ") != null) example = true;
+    };
+    try std.testing.expectEqual(@as(usize, 1), external);
+    try std.testing.expect(bold_headword and gloss and example);
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.media.len);
+    try std.testing.expect(stored.entry.media[0].kind == .audio);
+    try std.testing.expectEqualStrings("Ig-Okwu ọjọọ.ogg", stored.entry.media[0].file);
+    // Parsing the source owns this boundary; forged residual spans do not.
+    const raw = [_]compiler.Span{.{ .text = "[https://en.wiktionary.org/wiki/[bad word bad word]" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+    const unsafe = [_]compiler.Span{.{ .kind = .external_link, .text = "label", .target = "https://example.test/{{unresolved}}", .provenance = .protected_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &unsafe, null));
+    var styled: compiler.Renderer = .{ .a = a, .context = .{} };
+    const styled_spans = try styled.parseSpans("''[https://example.test/[word]'' tail", .{});
+    var styled_links: usize = 0;
+    for (styled_spans) |span| if (span.kind == .external_link) {
+        styled_links += 1;
+        try std.testing.expect(span.flags.italic);
+        try std.testing.expectEqualStrings("[word", span.text);
+        try std.testing.expectEqualStrings("https://example.test/", span.target);
+    };
+    try std.testing.expectEqual(@as(usize, 1), styled_links);
+}
+
+test "complete retained YI world computed names preserve tables actions styles and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "[[category:{{{VERSION}}}]]\n{| border=\"0\" cellpadding=\"3\" align=\"center\"\n|+ <font size=\"4\">'''וועלט'''</font> &nbsp; </span dir=\"ltr\" ></span>&nbsp; <small>{{{VERSION}}}/15801</small></span> &nbsp; <small>[//yi.wiktionary.org/w/index.php?title=:%D7%95%D7%95%D7%A2%D7%9C%D7%98&action=purge ↺]</small> &nbsp; <small>[//yi.wiktionary.org/w/index.php?title=:%D7%95%D7%95%D7%A2%D7%9C%D7%98&diff=15801&oldid=6055 δ]</small> &nbsp; [[google:וועלט|*]]\n! ראָמאַניזאַציע: !!<span dir=\"ltr\">velt  &nbsp; [[google:velt|*]]</span> !! <span dir=\"ltr\">romanizatsye:</span>\n|-\n| colspan=\"3\" align=\"center\" | [[category:סובסטאַנטיוו - substantiv]]\n{| style=\"background:#efefef\" border=\"0\" cellpadding=\"3\" align=\"center\" width=100%\n|-\n| align=\"left\" | ''סובסטאַנטיוו'' <br /> ‫װעלטן\n| align=\"center\" | &nbsp;\n| align=\"right\" | <span dir=\"ltr\">''substantiv'' f</span><br /> veltn\n|}\n|-\n| colspan=\"3\" align=\"center\" style=\"background:#efefef\" | {{about_templates_{{{TEMPLATES}}}}} {{about_templates_{{{TEMPLATES_YIVO}}}}}\n|-\n| colspan=\"3\" align=\"center\" style=\"background:#efefef\" | \n{| style=\"background:#efefef\" border=\"0\" cellpadding=\"3\" align=\"center\" width=100%\n|-\n| align=\"left\" valign=\"middle\" | \n| align=\"center\" | &nbsp;\n| align=\"right\" valign=\"middle\" | <span dir=\"ltr\"></span>\n|}\n|-\n| align=\"left\" | ???:\n| align=\"center\" |//\n| align=\"right\" | <span dir=\"ltr\">IPA:</span>\n|-\n| align=\"left\" | ???:\n| align=\"center\" | []\n| align=\"right\" | <span dir=\"ltr\">SAMPA:</span>\n|-\n| align=\"left\" | ‫װאַריאַנט(ן):\n| align=\"center\" | \n| align=\"right\" | <span dir=\"ltr\">variant(n):</span>\n|-\n| align=\"left\" | אונגאַריש:\n| align=\"center\" | <span dir=\"ltr\"></span>\n| align=\"right\" | <span dir=\"ltr\">ungarish:</span>\n|-\n| align=\"left\" | איטאַליעניש:\n| align=\"center\" | <span dir=\"ltr\">mondo ''m''</span>\n| align=\"right\" | <span dir=\"ltr\">italyenish:</span>\n|-\n| align=\"left\" | איסלענדיש:\n| align=\"center\" | <span dir=\"ltr\"></span>\n| align=\"right\" | <span dir=\"ltr\">islendish:</span>\n|-\n| align=\"left\" | אַראַביש:\n| align=\"center\" | <span dir=\"ltr\"></span>\n| align=\"right\" | <span dir=\"ltr\">arabish:</span>\n|-\n| align=\"left\" | בולגאריש:\n| align=\"center\" | <span dir=\"ltr\">{{{BG}}}</span>\n| align=\"right\" | <span dir=\"ltr\">bulgarish:</span>\n|-\n| align=\"left\" | גריכיש:\n| align=\"center\" | <span dir=\"ltr\">{{{EL}}}</span>\n| align=\"right\" | <span dir=\"ltr\">grikhish:</span>\n|-\n| align=\"left\" | דײַטש:\n| align=\"center\" | <span dir=\"ltr\">[[:de:Welt|Welt]] ''f''</span>\n| align=\"right\" | <span dir=\"ltr\">daytsh:</span>\n|-\n| align=\"left\" | דעניש:\n| align=\"center\" | <span dir=\"ltr\">{{{DA}}}</span>\n| align=\"right\" | <span dir=\"ltr\">denish:</span>\n|-\n| align=\"left\" | האָלענדיש:\n| align=\"center\" | <span dir=\"ltr\">[[:nl:wereld|wereld]] ''m''</span>\n| align=\"right\" | <span dir=\"ltr\">holendish:</span>\n|-\n| align=\"left\" | העברעיש:\n| align=\"center\" | <span dir=\"rtl\">עולם<br /><span dir=\"ltr\">(O'lam) m</span></span>\n| align=\"right\" | <span dir=\"ltr\">hebreish:</span>\n|-\n| align=\"left\" | ‫װוילערישע לשון:\n| align=\"center\" | <span dir=\"rtl\"></span><br /><span dir=\"ltr\">{{{SLANG_YIVO}}}</span>\n| align=\"right\" | <span dir=\"ltr\">voylerishe loshn:</span>\n|-\n| align=\"left\" | טערקיש:\n| align=\"center\" | <span dir=\"ltr\">Dünya, Yerküre, Evren</span>\n| align=\"right\" | <span dir=\"ltr\">terkish:</span>\n|-\n| align=\"left\" | טשעכיש:\n| align=\"center\" | <span dir=\"ltr\">svět ''m''</span>\n| align=\"right\" | <span dir=\"ltr\">tshekhish:</span>\n|-\n| align=\"left\" | יאַפּאַניש:\n| align=\"center\" | <span dir=\"ltr\">世界 (せかい, sekai), 界 (かい, kai)</span>\n| align=\"right\" | <span dir=\"ltr\">yapanish:</span>\n|-\n| align=\"left\" | כינעזיש:\n| align=\"center\" | <span dir=\"ltr\">{{{ZH}}}</span>\n| align=\"right\" | <span dir=\"ltr\">khinezish:</span>\n|-\n| align=\"left\" | לאַטייניש:\n| align=\"center\" | <span dir=\"ltr\">mundus</span>\n| align=\"right\" | <span dir=\"ltr\">lateynish:</span>\n|-\n| align=\"left\" | ליטוויש:\n| align=\"center\" | <span dir=\"ltr\"></span>\n| align=\"right\" | <span dir=\"ltr\">litvish:</span>\n|-\n| align=\"left\" | לעטיש:\n| align=\"center\" | <span dir=\"ltr\">pasaulis ''m''</span>\n| align=\"right\" | <span dir=\"ltr\">letish:</span>\n|-\n| align=\"left\" | נארוועגיש:\n| align=\"center\" | <span dir=\"ltr\">{{{NN}}}</span>\n| align=\"right\" | <span dir=\"ltr\">norvegish:</span>\n|-\n| align=\"left\" | סלאוואַקיש:\n| align=\"center\" | <span dir=\"ltr\">{{{SK}}}</span>\n| align=\"right\" | <span dir=\"ltr\">slovakish:</span>\n|-\n| align=\"left\" | ‫סלאָװעניש:\n| align=\"center\" | <span dir=\"ltr\">svet ''m''</span>\n| align=\"right\" | <span dir=\"ltr\">slovenish:</span>\n|-\n| align=\"left\" | סערביש:\n| align=\"center\" | <span dir=\"ltr\"></span>\n| align=\"right\" | <span dir=\"ltr\">serbish:</span>\n|-\n| align=\"left\" | ענגליש:\n| align=\"center\" | <span dir=\"ltr\">[[:en:world|world]]</span>\n| align=\"right\" | <span dir=\"ltr\">english:</span>\n|-\n| align=\"left\" | עסטיש:\n| align=\"center\" | <span dir=\"ltr\">{{{ET}}}</span>\n| align=\"right\" | <span dir=\"ltr\">estish:</span>\n|-\n| align=\"left\" | עספּעראַנטאָ:\n| align=\"center\" | <span dir=\"ltr\">mondo</span>\n| align=\"right\" | <span dir=\"ltr\">esperanto:</span>\n|-\n| align=\"left\" | פּאָרטוגעזיש:\n| align=\"center\" | <span dir=\"ltr\">[[:pt:mundo|mundo]] ''m''</span>\n| align=\"right\" | <span dir=\"ltr\">portugezish:</span>\n|-\n| align=\"left\" | פּױליש:\n| align=\"center\" | <span dir=\"ltr\">świat ''m''</span>\n| align=\"right\" | <span dir=\"ltr\">poylish:</span>\n|-\n| align=\"left\" | פֿיניש:\n| align=\"center\" | <span dir=\"ltr\">{{{FI}}}</span>\n| align=\"right\" | <span dir=\"ltr\">finish:</span>\n|-\n| align=\"left\" | פֿראַנצױזיש:\n| align=\"center\" | <span dir=\"ltr\">monde ''m''</span>\n| align=\"right\" | <span dir=\"ltr\">frantsoyzish:</span>\n|-\n| align=\"left\" | רומעניש:\n| align=\"center\" | <span dir=\"ltr\">lume ''f''</span>\n| align=\"right\" | <span dir=\"ltr\">rumenish:</span>\n|-\n| align=\"left\" | רוסיש:\n| align=\"center\" | <span dir=\"ltr\">[[:ru:мир|мир]], свет</span>\n| align=\"right\" | <span dir=\"ltr\">rusish:</span>\n|-\n| align=\"left\" | שװעדיש:\n| align=\"center\" | <span dir=\"ltr\">värld ''c''</span>\n| align=\"right\" | <span dir=\"ltr\">shvedish:</span>\n|-\n| align=\"left\" | שפּאַניש:\n| align=\"center\" | <span dir=\"ltr\">mundo ''m''</span>\n| align=\"right\" | <span dir=\"ltr\">shpanish:</span>\n|-\n| align=\"left\" | NB:\n| align=\"center\" | <span dir=\"ltr\">{{{NB}}}</span>\n| align=\"right\" | <span dir=\"ltr\">NB:</span>\n|}\n\n{{{CATEGORIES}}}\n\n\n<center>\n<s>וועלט</s> &nbsp; [[google:וועלט|*]]\n</center>\n\n[[קאַטעגאָריע:!]]\n[[קאַטעגאָריע:װ]]\n[[קאַטעגאָריע:ייִדיש]]";
+    const namespace_source = "# wikidict-namespace-registry-v1\n# wiki\tyiwiktionary\n# dump-date\t20261001\n# content-language\tyi\n-2\tמעדיע\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n-1\tבאַזונדער\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\tבאזונדער\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\tרעדן\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n2\tבאַניצער\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\tבאַניצערין\tבאנוצער\tבאניצער\tמשתמש\tמשתמשת\n3\tבאַניצער רעדן\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tבאַניצערין רעדן\tבאנוצער רעדן\tבאניצער רעדן\tשיחת משתמש\tשיחת משתמשת\n4\tװיקיװערטערבוך\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\tWiktionary\tוויקיווערטערבוך\n5\tװיקיװערטערבוך רעדן\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWiktionary talk\tוויקיווערטערבוך רעדן\n6\tטעקע\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\tבילד\tתמונה\n7\tטעקע רעדן\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tImage talk\tבילד רעדן\tשיחת תמונה\n8\tמעדיעװיקי\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\tמעדיעוויקי\n9\tמעדיעװיקי רעדן\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tמעדיעוויקי רעדן\n10\tמוסטער\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n11\tמוסטער רעדן\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n12\tהילף\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n13\tהילף רעדן\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n14\tקאַטעגאָריע\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tקאטעגאריע\n15\tקאַטעגאָריע רעדן\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tקאטעגאריע רעדן\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\tיחידה\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\tשיחת יחידה\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\tאירוע\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\tשיחת אירוע\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
+    try std.testing.expectEqual(@as(usize, 6765), source.len);
+    var namespaces = try NamespaceRegistry.init(a, namespace_source);
+    defer namespaces.deinit();
+    var reference_source: []const u8 = source;
+    for ([_][]const u8{ "{{about_templates_{{{TEMPLATES}}}}}", "{{about_templates_{{{TEMPLATES_YIVO}}}}}" }) |token| {
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, token));
+        reference_source = try std.mem.replaceOwned(u8, a, reference_source, token, try std.fmt.allocPrint(a, "<nowiki>{s}</nowiki>", .{token}));
+    }
+    var actual_report: Fallbacks = .{};
+    var reference_report: Fallbacks = .{};
+    // No language or POS is inferred from this headingless table page.
+    const actual = try compileReportedWithLinkTrailAlloc(a, "וועלט", .language, "Unclassified", "", source, null, .{}, &namespaces, &actual_report);
+    const expected = try compileReportedWithLinkTrailAlloc(a, "וועלט", .language, "Unclassified", "", reference_source, null, .{}, &namespaces, &reference_report);
+    try std.testing.expectEqualSlices(u8, expected, actual);
+    try std.testing.expectEqualDeep(reference_report, actual_report);
+    const stored = try codec.decodeAlloc(a, actual, "וועלט", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, stored));
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.organization.lexemes.len);
+    var tables: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| {
+        if (block.table != null) tables += 1;
+    };
+    try std.testing.expect(tables != 0);
+    // Missing valid titles still use the existing reported redlink conversion.
+    var missing_report: Fallbacks = .{};
+    const missing = try a.alloc(compiler.Span, 1);
+    missing[0] = .{ .kind = .template, .text = "ordinary_missing|argument", .target = "ordinary_missing" };
+    try validateSpans(a, missing, &missing_report);
+    try std.testing.expect(missing_report.missing_template);
+    try std.testing.expectEqualStrings("Template:ordinary_missing", missing[0].target);
+    const raw = [_]compiler.Span{.{ .text = "{{about_templates_{{{TEMPLATES}}}}}" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+    const target = [_]compiler.Span{.{ .kind = .link, .text = "label", .target = "about_templates_{{{TEMPLATES}}}", .provenance = .protected_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &target, null));
+}
+
+test "heading typography source trees preserve whole document except explicit basis through codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const body_source = "<h2 style=\"font-size:125%\"><small>Head [[Target|child]]</small></h2>\nordinary [[Sibling]]\n# meaning<ref>note [[Note]]</ref>\n<references />";
+    const context_source = "<h2><span style=\"font-size:125%\"><small>Head [[Target|child]]</small></span></h2>\nordinary [[Sibling]]\n# meaning<ref>note [[Note]]</ref>\n<references />";
+    const body_bytes = try compileAlloc(a, "entry", .supplemental, null, "", body_source, null);
+    const context_bytes = try compileAlloc(a, "entry", .supplemental, null, "", context_source, null);
+    try std.testing.expectEqualStrings("DPRB", body_bytes[0..4]);
+    try std.testing.expectEqualStrings("DPRA", context_bytes[0..4]);
+    const body = try codec.decodeAlloc(a, body_bytes, "entry", .supplemental, null);
+    const contextual = try codec.decodeAlloc(a, context_bytes, "entry", .supplemental, null);
+    try std.testing.expectEqualSlices(u8, body_bytes, try codec.encodeAlloc(a, body));
+    try std.testing.expectEqualSlices(u8, context_bytes, try codec.encodeAlloc(a, contextual));
+    var heading_spans: usize = 0;
+    var child_actions: usize = 0;
+    for (body.entry.sections) |section| for (section.blocks) |block| {
+        for (@constCast(block.spans)) |*span| {
+            if (block.kind == .heading) {
+                try std.testing.expectApproxEqAbs(@as(f32, 1.25 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001);
+                try std.testing.expectEqual(blobs.presentation_types.FontScaleBasis.normal_body, span.font_scale_basis);
+                try std.testing.expect(!span.small);
+                if (span.kind == .link and std.mem.eql(u8, span.target, "Target")) child_actions += 1;
+                // Compare every other semantic field against the other source tree.
+                span.font_scale_basis = .context;
+                heading_spans += 1;
+            } else {
+                try std.testing.expect(span.font_scale == null);
+                try std.testing.expectEqual(blobs.presentation_types.FontScaleBasis.context, span.font_scale_basis);
+            }
+        }
+    };
+    try std.testing.expect(heading_spans >= 2);
+    try std.testing.expectEqual(@as(usize, 1), child_actions);
+    try std.testing.expectEqualDeep(contextual, body);
+    try std.testing.expectEqualSlices(u8, context_bytes, try codec.encodeAlloc(a, body));
+}
+
+test "fragment replay retains body identity set marker without changing ordinary sibling basis" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<span style=\"font-size:100%\">inside\n</span>outside";
+    const observation = try observePreScopesAlloc(a, "entry", source, .{}, null, null, null, .{}, null);
+    try std.testing.expectEqual(@as(usize, 1), observation.scopes.len);
+    const scope = observation.scopes[0];
+    var attributes = scope.attributes;
+    attributes.font_scale = 1;
+    attributes.font_scale_basis = .normal_body;
+    attributes.font_scale_set = true;
+    const initial = [_]FragmentPreContext.Initial{.{
+        .body_end = scope.body_end - scope.body_start,
+        .resume_at = scope.resume_at - scope.body_start,
+        .kind = scope.kind,
+        .formatting = scope.formatting,
+        .attributes = attributes,
+    }};
+    var renderer: compiler.Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBodyWithFragmentPre(source[scope.body_start..], .{ .initial = &initial });
+    var seen: u8 = 0;
+    for (blocks) |block| for (block.spans) |span| {
+        if (std.mem.indexOf(u8, span.text, "inside") != null) {
+            try std.testing.expectEqual(@as(?f32, 1), span.font_scale);
+            try std.testing.expectEqual(compiler.FontScaleBasis.normal_body, span.font_scale_basis);
+            try std.testing.expect(span.font_scale_set);
+            seen |= 1;
+        }
+        if (std.mem.indexOf(u8, span.text, "outside") != null) {
+            try std.testing.expect(span.font_scale == null);
+            try std.testing.expectEqual(compiler.FontScaleBasis.context, span.font_scale_basis);
+            seen |= 2;
+        }
+    };
+    try std.testing.expectEqual(@as(u8, 3), seen);
+}
+
+test "complete retained PNB ilzam big text preserves source body and numeric size through codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // p220/r22725; retained ordinary source, not an invented language owner.
+    const source = "==[[||ناں]]==\n\n<big>شکیت، دوش</big> \n\n\n[[Category:پنجابی وکشنری]]";
+    try std.testing.expectEqual(@as(usize, 88), source.len);
+    const reference = "==[[||ناں]]==\n\n<span style='font-size:120%'>شکیت، دوش</span> \n\n\n[[Category:پنجابی وکشنری]]";
+    var actual_report: Fallbacks = .{};
+    var expected_report: Fallbacks = .{};
+    const actual = try compileReportedAlloc(a, "الزام", .language, "Unclassified", "", source, null, &actual_report);
+    const expected = try compileReportedAlloc(a, "الزام", .language, "Unclassified", "", reference, null, &expected_report);
+    try std.testing.expectEqualSlices(u8, expected, actual);
+    try std.testing.expectEqualDeep(expected_report, actual_report);
+    const stored = try codec.decodeAlloc(a, actual, "الزام", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqualStrings("الزام", stored.entry.title);
+    try std.testing.expectEqualStrings("", stored.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.media.len);
+    var sized: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (!std.mem.eql(u8, span.text, "شکیت، دوش")) continue;
+        try std.testing.expect(span.kind == .text and span.target.len == 0 and !span.small);
+        try std.testing.expectEqual(@as(?f32, 1.2), span.font_scale);
+        try std.testing.expectEqual(types.FontScaleBasis.context, span.font_scale_basis);
+        sized += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), sized);
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, stored));
 }

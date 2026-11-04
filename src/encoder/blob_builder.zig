@@ -48,6 +48,7 @@ pub const LanguageCodes = struct {
     content_fn: ?*const fn (?*const anyopaque) ?ResolvedLanguage = null,
     boundary_fn: ?*const fn (?*const anyopaque, []const u8) bool = null,
     source_banner_fn: ?*const fn (?*const anyopaque, []const u8, []const u8, u8) bool = null,
+    source_paragraph_fn: ?*const fn (?*const anyopaque, []const u8, []const u8) bool = null,
     source_category_ctx: ?*anyopaque = null,
     source_category_fn: ?*const fn (?*anyopaque, []const u8) anyerror!?ResolvedLanguage = null,
     link_trail: blobs.document_ir.LinkTrail = .{},
@@ -587,7 +588,46 @@ fn resolveAmExternalCategoryHeading(codes: LanguageCodes, value: []const u8) ?Re
     return null;
 }
 
+// An observed static SVG icon contributes no language authority. Both complete
+// linked names must independently resolve through the existing trusted registry.
+fn resolveNeutralIconLinkedHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
+    const namespaces = codes.namespace_catalog orelse return null;
+    const heading = std.mem.trim(u8, value, " \t\r\n");
+    if (heading.len > 4096 or !std.unicode.utf8ValidateSlice(heading) or
+        !std.mem.startsWith(u8, heading, "[[")) return null;
+    const icon_end = std.mem.indexOf(u8, heading, "]]") orelse return null;
+    const icon = heading[2..icon_end];
+    if (std.mem.indexOfAny(u8, icon, "[]{}<>&#\r\n") != null) return null;
+    const pipe = std.mem.indexOfScalar(u8, icon, '|') orelse return null;
+    const file_target = icon[0..pipe];
+    const file = namespaces.ofTitle(file_target);
+    if (file.id != 6 or std.mem.trim(u8, file.text, " \t").len == 0 or
+        !std.ascii.endsWithIgnoreCase(file.text, ".svg")) return null;
+    var options = std.mem.splitScalar(u8, icon[pipe + 1 ..], '|');
+    var size = options.next() orelse return null;
+    if (std.mem.eql(u8, size, "border")) size = options.next() orelse return null;
+    if (options.next() != null or size.len < 3 or !std.mem.endsWith(u8, size, "px")) return null;
+    const digits = size[0 .. size.len - 2];
+    for (digits) |digit| if (digit < '0' or digit > '9') return null;
+    const width = std.fmt.parseInt(u16, digits, 10) catch return null;
+    if (width == 0 or width > 4096) return null;
+    const suffix = heading[icon_end + 2 ..];
+    if (suffix.len == 0 or suffix[0] != ' ') return null;
+    const linked = std.mem.trim(u8, suffix, " ");
+    if (!std.mem.startsWith(u8, linked, "[[") or !std.mem.endsWith(u8, linked, "]]")) return null;
+    const body = linked[2 .. linked.len - 2];
+    if (std.mem.indexOfAny(u8, body, "[]{}<>&#:\r\n\t\"'") != null) return null;
+    const separator = std.mem.indexOfScalar(u8, body, '|') orelse return null;
+    const target = std.mem.trim(u8, body[0..separator], " ");
+    const label = std.mem.trim(u8, body[separator + 1 ..], " ");
+    if (std.mem.indexOfScalar(u8, label, '|') != null or target.len == 0 or label.len == 0) return null;
+    const owner = codes.resolveStrong(target) orelse codes.resolveTrusted(target) orelse return null;
+    const displayed = codes.resolveStrong(label) orelse codes.resolveTrusted(label) orelse return null;
+    return if (std.mem.eql(u8, owner.code, displayed.code)) owner else null;
+}
+
 fn resolveLinkedHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
+    if (resolveNeutralIconLinkedHeading(codes, value)) |resolved| return resolved;
     if (resolveAmExternalCategoryHeading(codes, value)) |resolved| return resolved;
     const heading = std.mem.trim(u8, value, " \t\r\n");
     if (!std.mem.startsWith(u8, heading, "[[") or !std.mem.endsWith(u8, heading, "]]")) return null;
@@ -1018,9 +1058,133 @@ fn resolveCategorizedLinkedHeading(codes: LanguageCodes, value: []const u8) ?Res
     return if (categories != 0) language else null;
 }
 
+// Both the exact Help target and the complete visible label must already be
+// trusted names for the same language. Source-authenticated code templates can
+// supply such a target; stripping a namespace or reading a category cannot.
+fn resolveSourceLinkedBanner(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
+    const namespaces = codes.namespace_catalog orelse return null;
+    if (value.len > 4096) return null;
+    const syntax = blobs.wikitext_syntax;
+    const heading = std.mem.trim(u8, value, " \t\r\n");
+    const tag = syntax.tagAt(heading, 0) orelse return null;
+    if (!tag.is("span") or tag.closing or tag.self_closing) return null;
+    const classes = tag.attr("class") orelse return null;
+    if (classes.len == 0) return null;
+    for (classes) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '-' and byte != '_' and byte != ' ') return null;
+    const attrs = std.mem.trim(u8, tag.attrs, " \t");
+    if (attrs.len != classes.len + "class=\"\"".len or
+        !std.mem.startsWith(u8, attrs, "class=\"") or attrs[attrs.len - 1] != '"') return null;
+    const pair = syntax.matchingTag(heading, tag) orelse return null;
+    if (pair.end != heading.len) return null;
+    var rest = std.mem.trim(u8, heading[tag.end..pair.inner_end], " \t");
+    if (!std.mem.startsWith(u8, rest, "[[")) return null;
+    const end = std.mem.indexOf(u8, rest, "]]") orelse return null;
+    const body = rest[2..end];
+    if (std.mem.indexOfAny(u8, body, "[]{}<>&\r\n") != null) return null;
+    const pipe = std.mem.indexOfScalar(u8, body, '|') orelse return null;
+    const target = std.mem.trim(u8, body[0..pipe], " \t");
+    const label = std.mem.trim(u8, body[pipe + 1 ..], " \t");
+    if (target.len == 0 or target[0] == ':' or std.mem.indexOfAny(u8, target, "#|") != null or
+        label.len == 0 or std.mem.indexOfScalar(u8, label, '|') != null or namespaces.ofTitle(target).id != 12) return null;
+    const owner = codes.resolveTrusted(target) orelse return null;
+    const displayed = codes.resolveTrusted(label) orelse return null;
+    if (!std.mem.eql(u8, owner.code, displayed.code)) return null;
+    rest = std.mem.trim(u8, rest[end + 2 ..], " \t");
+    while (rest.len != 0) {
+        if (!std.mem.startsWith(u8, rest, "[[")) return null;
+        const close = std.mem.indexOf(u8, rest, "]]") orelse return null;
+        const category = rest[2..close];
+        if (std.mem.indexOfAny(u8, category, "[]{}<>&\r\n") != null) return null;
+        const delimiter = std.mem.indexOfScalar(u8, category, '|') orelse category.len;
+        const title = std.mem.trim(u8, category[0..delimiter], " \t");
+        if (title.len == 0 or title[0] == ':' or std.mem.indexOfScalar(u8, title, '#') != null or
+            namespaces.ofTitle(title).id != 14 or std.mem.trim(u8, namespaces.ofTitle(title).text, " \t").len == 0 or
+            (delimiter != category.len and std.mem.indexOfScalar(u8, category[delimiter + 1 ..], '|') != null)) return null;
+        rest = std.mem.trim(u8, rest[close + 2 ..], " \t");
+    }
+    return owner;
+}
+
+// Samafomot:pükatiäd (p25264/r160421) repeats the explicit code in
+// span.id and a small suffix. Keep the whole heading; the trusted name and
+// both code fields must independently agree before it can name an owner.
+fn resolveCodedSpanHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
+    const syntax = blobs.wikitext_syntax;
+    const heading = std.mem.trim(u8, value, " \t\r\n");
+    const span = syntax.tagAt(heading, 0) orelse return null;
+    if (!span.is("span") or span.closing or span.self_closing) return null;
+    const attrs = std.mem.trim(u8, span.attrs, " \t");
+    if (!std.mem.startsWith(u8, attrs, "id=")) return null;
+    const code = attrs[3..];
+    if (code.len < 2 or code.len > 128) return null;
+    for (code) |byte| if (!std.ascii.isLower(byte) and !std.ascii.isDigit(byte) and byte != '-') return null;
+    const registered = codes.resolve(code) orelse return null;
+    if (!std.mem.eql(u8, registered.code, code)) return null;
+    const pair = syntax.matchingTag(heading, span) orelse return null;
+    const body = heading[span.end..pair.inner_end];
+    const suffix_at = std.mem.indexOf(u8, body, " <small>(") orelse return null;
+    const label = body[0..suffix_at];
+    if (label.len == 0 or !std.mem.eql(u8, label, std.mem.trim(u8, label, " \t\r\n")) or
+        std.mem.indexOfAny(u8, label, "[]{}<>&|\r\n\t") != null) return null;
+    const suffix = body[suffix_at + " <small>(".len ..];
+    if (suffix.len != code.len + ")</small>".len or !std.mem.startsWith(u8, suffix, code) or
+        !std.mem.endsWith(u8, suffix, ")</small>")) return null;
+    const named = codes.resolveStrong(label) orelse codes.resolveTrusted(label) orelse return null;
+    if (!std.mem.eql(u8, named.code, code)) return null;
+    var tail = std.mem.trim(u8, heading[pair.end..], " \t");
+    while (tail.len != 0) {
+        const namespaces = codes.namespace_catalog orelse return null;
+        if (!std.mem.startsWith(u8, tail, "[[")) return null;
+        const end = std.mem.indexOf(u8, tail, "]]") orelse return null;
+        const link = tail[2..end];
+        if (link.len == 0 or link[0] == ':' or std.mem.indexOfAny(u8, link, "[]{}<>&|\r\n") != null) return null;
+        const category = namespaces.ofTitle(link);
+        if (category.id != 14 or category.text.len == 0) return null;
+        if (codes.resolve(category.text)) |other| if (!std.mem.eql(u8, code, other.code)) return null;
+        tail = std.mem.trim(u8, tail[end + 2 ..], " \t");
+    }
+    return named;
+}
+
 // Language templates can append invisible category links inside a heading.
 // Accept only a whole trusted name followed by categories for that same language.
+// A neutral file icon decorates one independently trusted whole language name.
+// Neither the filename nor a code-shaped template title supplies ownership.
+fn resolveFlaggedLanguageHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
+    const namespaces = codes.namespace_catalog orelse return null;
+    const heading = std.mem.trim(u8, value, " \t");
+    if (heading.len > 4096 or !std.mem.startsWith(u8, heading, "<big>") or
+        !std.mem.endsWith(u8, heading, "</big>")) return null;
+    const body = heading[5 .. heading.len - 6];
+    if (!std.mem.startsWith(u8, body, "[[")) return null;
+    const end = std.mem.indexOf(u8, body, "]]") orelse return null;
+    const image = body[2..end];
+    const pipe = std.mem.indexOfScalar(u8, image, '|') orelse return null;
+    const target = image[0..pipe];
+    if (std.mem.indexOfAny(u8, target, "[]{}<>&#\r\n") != null) return null;
+    const file = namespaces.ofTitle(target);
+    if (file.id != 6 or std.mem.trim(u8, file.text, " \t").len == 0) return null;
+    var option = image[pipe + 1 ..];
+    // An empty final file option does not introduce a link target or caption.
+    if (std.mem.endsWith(u8, option, "|")) option = option[0 .. option.len - 1];
+    if (option.len < 3 or !std.mem.endsWith(u8, option, "px")) return null;
+    const digits = option[0 .. option.len - 2];
+    for (digits) |digit| if (digit < '0' or digit > '9') return null;
+    const width = std.fmt.parseInt(u16, digits, 10) catch return null;
+    if (width == 0 or width > 4096) return null;
+    const suffix = body[end + 2 ..];
+    if (suffix.len == 0 or suffix[0] != ' ') return null;
+    const label = std.mem.trim(u8, suffix, " ");
+    if (label.len == 0 or std.mem.indexOfAny(u8, label, "[]{}<>&|=\"'\r\n\t") != null) return null;
+    const language = codes.resolveStrong(label) orelse codes.resolveTrusted(label) orelse return null;
+    if (std.mem.eql(u8, label, language.code)) return null;
+    return language;
+}
+
 fn resolveCategorizedHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
+    if (resolveFlaggedLanguageHeading(codes, value)) |language| return language;
+    if (resolveCodedSpanHeading(codes, value)) |language| return language;
+    if (resolveSourceLinkedBanner(codes, value)) |language| return language;
     if (resolveCategorizedLinkedHeading(codes, value)) |language| return language;
     const namespaces = codes.namespace_catalog orelse return null;
     const heading = std.mem.trim(u8, value, " \t\r\n");
@@ -1695,6 +1859,32 @@ fn languageSections(source: []const u8, context: *const LanguageMarkers) languag
         }.accepts,
     };
     return iterator;
+}
+
+fn rawPrefixParagraphLanguage(codes: LanguageCodes, raw_source: ?[]const u8, source: []const u8, raw_sections: []const language_source.Section, rendered: []const language_source.Section) ?ResolvedLanguage {
+    const raw = raw_source orelse return null;
+    const namespaces = codes.namespace_catalog orelse return null;
+    const matches = codes.source_paragraph_fn orelse return null;
+    if (rendered.len != 0 or raw_sections.len != 1 or !raw_sections[0].hyphen_marker) return null;
+    const first = raw_sections[0];
+    const offset = @intFromPtr(first.source.ptr) - @intFromPtr(raw.ptr);
+    if (offset > raw.len or std.mem.trim(u8, raw[0..offset], "\r\n").len != 0) return null;
+    const canonical = resolveSection(codes, first) orelse return null;
+    const line = std.mem.trimEnd(u8, first.source[0 .. std.mem.indexOfScalar(u8, first.source, '\n') orelse first.source.len], "\r");
+    if (line.len != canonical.code.len + 6 or !std.mem.startsWith(u8, line, "{{-") or
+        !std.mem.endsWith(u8, line, "-}}") or !std.mem.eql(u8, line[3 .. line.len - 3], canonical.code)) return null;
+    // Preserve the original expanded paragraph, including the exact emitted
+    // hidden category. A label elsewhere in prose supplies no provenance.
+    const expanded = std.mem.trimStart(u8, source, "\r\n");
+    const expanded_line = std.mem.trimEnd(u8, expanded[0 .. std.mem.indexOfScalar(u8, expanded, '\n') orelse expanded.len], "\r");
+    if (!matches(codes.ctx, canonical.code, expanded_line)) return null;
+    var categories: language_source.CategoryIterator = .{ .source = source };
+    while (categories.next()) |target| {
+        const title = namespaces.ofTitle(target);
+        if (title.id != 14) continue;
+        if (codes.resolve(title.text)) |other| if (!std.mem.eql(u8, canonical.code, other.code)) return null;
+    }
+    return canonical;
 }
 
 fn unsectionedLanguage(codes: LanguageCodes, source: []const u8) ?ResolvedLanguage {
@@ -2989,7 +3179,8 @@ fn processMain(
             assameseSupportLanguage(codes, source, raw_source) orelse
             (try teluguSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items));
         const explicit = if (page_sections.items.len == 0)
-            unsectionedLanguage(codes, raw_source orelse source) orelse unsectionedExpandedLanguage(codes, source) orelse unsectionedAfrikaansExpandedLanguage(codes, source)
+            rawPrefixParagraphLanguage(codes, raw_source, source, raw_sections.items, page_sections.items) orelse
+                unsectionedLanguage(codes, raw_source orelse source) orelse unsectionedExpandedLanguage(codes, source) orelse unsectionedAfrikaansExpandedLanguage(codes, source)
         else
             support;
         if (support != null) fallbacks.unresolved_language_heading = unresolved_before_sections;
@@ -10832,4 +11023,321 @@ test "Writer nested block DIV and hidden scopes preserve owner quotes citations 
             }
         }
     }
+}
+
+const CodedSpanHeadingTest = struct {
+    const ns = "# wikidict-namespace-registry-v1\n# wiki\tvowiktionary\n# dump-date\t20261001\n# content-language\tvo\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tMagod\tFile\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tfiles\n" ++
+        "10\tSamafomot\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tKlad\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n";
+    const heading = "<span id=vo>Volapük <small>(vo)</small></span>[[Klad:Pads valik in Volapük]]";
+    fn resolve(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+        if (std.mem.eql(u8, name, "vo") or std.mem.eql(u8, name, "Volapük")) return .{ .code = "vo", .heading = "Volapük" };
+        return TestLanguages.resolve(null, name);
+    }
+    fn trusted(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+        if (std.mem.eql(u8, name, "Volapük")) return resolve(null, name);
+        if (std.mem.eql(u8, name, "English") or std.mem.eql(u8, name, "French")) return TestLanguages.resolve(null, name);
+        return null;
+    }
+    fn get(ctx: ?*const anyopaque, name: []const u8) ?[]const u8 {
+        return (resolve(ctx, name) orelse return null).code;
+    }
+    fn codes(namespaces: *const @import("namespace_registry").Registry) LanguageCodes {
+        return .{ .namespace_catalog = namespaces, .get_fn = get, .resolve_fn = resolve, .trusted_fn = trusted };
+    }
+};
+
+test "coded span language heading requires matching explicit fields and trusted whole name" {
+    const a = std.testing.allocator;
+    var namespaces = try @import("namespace_registry").Registry.init(a, CodedSpanHeadingTest.ns);
+    defer namespaces.deinit();
+    const codes = CodedSpanHeadingTest.codes(&namespaces);
+    try std.testing.expectEqualStrings("vo", (resolveCodedSpanHeading(codes, CodedSpanHeadingTest.heading) orelse return error.TestUnexpectedResult).code);
+    try std.testing.expectEqualStrings("en", (resolveCodedSpanHeading(codes, "<span id=en>English <small>(en)</small></span>") orelse return error.TestUnexpectedResult).code);
+    for ([_][]const u8{
+        "Volapük (vo)",
+        "<span id=vo>Volapük <small>(en)</small></span>",
+        "<span id=en>Volapük <small>(en)</small></span>",
+        "<span id=vo>Unknown <small>(vo)</small></span>",
+        "<span id=vo>vo <small>(vo)</small></span>",
+        "<span id=unknown>Volapük <small>(unknown)</small></span>",
+        "<span id=vo style='display:none'>Volapük <small>(vo)</small></span>",
+        "<span id=vo id=en>Volapük <small>(vo)</small></span>",
+        "<span id=vo><span>Volapük</span> <small>(vo)</small></span>",
+        "<span id=vo>Volapük <small class=x>(vo)</small></span>",
+        "<span id=vo>Volapük <small>(vo)</small> extra</span>",
+        "prefix <span id=vo>Volapük <small>(vo)</small></span>",
+        "<span id=vo>Volapük <small>(vo)</small></span> extra",
+        "<nowiki><span id=vo>Volapük <small>(vo)</small></span></nowiki>",
+        "<span id=vo>Volapük <small>(vo)</small>",
+        "<span id=vo>Volapük <small>(vo)</small></span>[[Target]]",
+        "<span id=vo>Volapük <small>(vo)</small></span>[[:Klad:Volapük]]",
+        "<span id=vo>Volapük <small>(vo)</small></span>[[Klad:English]]",
+    }) |bad| {
+        errdefer std.debug.print("coded span negative: {s}\n", .{bad});
+        try std.testing.expect(resolveCodedSpanHeading(codes, bad) == null);
+    }
+    var untrusted = codes;
+    untrusted.trusted_fn = struct {
+        fn reject(_: ?*const anyopaque, _: []const u8) ?ResolvedLanguage { return null; }
+    }.reject;
+    try std.testing.expect(resolveCodedSpanHeading(untrusted, CodedSpanHeadingTest.heading) == null);
+    var conflicting = codes;
+    conflicting.trusted_fn = struct {
+        fn wrong(_: ?*const anyopaque, _: []const u8) ?ResolvedLanguage { return .{ .code = "en", .heading = "English" }; }
+    }.wrong;
+    try std.testing.expect(resolveCodedSpanHeading(conflicting, CodedSpanHeadingTest.heading) == null);
+}
+
+test "coded span Writer retains whole visible heading body actions styles and codec" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var namespaces = try @import("namespace_registry").Registry.init(a, CodedSpanHeadingTest.ns);
+    defer namespaces.deinit();
+    const codes = CodedSpanHeadingTest.codes(&namespaces);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // Exact source-instantiated pükatiäd heading; the varied body is a synthetic
+    // conservation control, not a claimed captured expansion of nen.
+    const body = "=" ++ CodedSpanHeadingTest.heading ++ "=\n" ++
+        "===pronimag===\n:[[LFB]]: []\n" ++
+        "===präpod===\n'''nen''' ''marked'' [[Target|label]]\n# sense\n#: quotation\n" ++
+        "===tümolog===\norigin [[Origin]]<ref>reference [[Citation]]</ref>\n" ++
+        "===[[Magod:ArieDeJong.png|30px]] tradutods rigik===\n" ++
+        "===pedefom===\n" ++
+        "===koboyüm===\n" ++
+        "===tradutods===\n{| class=wikitable\n| bgcolor=#ffffcc | English || [[without]] || [[sem]]\n|}\n<references/>\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "synthetic-coded-nen", body, body, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    var mapped = try mmapPath(io, try languageBlobPathAlloc(a, root, "Volapük"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("vo", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("synthetic-coded-nen")) orelse return error.TestUnexpectedResult;
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    var report: presentation_document.Fallbacks = .{};
+    const reference_payload = try presentation_document.compileReportedWithLinkTrailAlloc(a, record.title, .language, "Volapük", "vo", body, null, .{}, &namespaces, &report);
+    const reference = try blobs.presentation_codec.decodeAlloc(a, reference_payload, record.title, .language, metadata);
+    try std.testing.expectEqualDeep(reference, decoded);
+    try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, decoded));
+    try std.testing.expectEqual(@as(usize, 8), decoded.entry.sections.len);
+    var heading_text: std.ArrayList(u8) = .empty;
+    var code_small = false;
+    try std.testing.expect(decoded.entry.sections[0].blocks[0].kind == .heading);
+    for (decoded.entry.sections[0].blocks[0].spans) |span| {
+        try heading_text.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.text, "(vo)")) {
+            try std.testing.expect(!span.small);
+            try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001);
+            code_small = true;
+        }
+    }
+    try std.testing.expectEqualStrings("Volapük (vo)", heading_text.items);
+    try std.testing.expect(code_small);
+    try std.testing.expectEqual(@as(usize, 0), decoded.entry.organization.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.media.len);
+}
+
+const FlaggedLanguageHeadingTest = struct {
+    const ns = "# wikidict-namespace-registry-v1\n# wiki\ttgwiktionary\n# dump-date\t20261001\n# content-language\ttg\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tImage\tFile\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tfiles\n" ++
+        "10\tШаблон\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tГурӯҳ\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n";
+    const heading = "<big>[[Image:Flag of Netherlands.svg|50px|]] Нидерландӣ</big>";
+    fn resolve(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+        if (std.mem.eql(u8, name, "nl") or std.mem.eql(u8, name, "Нидерландӣ") or std.mem.eql(u8, name, "ҳолландӣ")) return .{ .code = "nl", .heading = "ҳолландӣ" };
+        return TestLanguages.resolve(null, name);
+    }
+    fn trusted(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+        if (std.mem.eql(u8, name, "Нидерландӣ") or std.mem.eql(u8, name, "ҳолландӣ")) return resolve(null, name);
+        if (std.mem.eql(u8, name, "English")) return TestLanguages.resolve(null, name);
+        return null;
+    }
+    fn get(ctx: ?*const anyopaque, name: []const u8) ?[]const u8 {
+        return (resolve(ctx, name) orelse return null).code;
+    }
+    fn codes(namespaces: *const @import("namespace_registry").Registry) LanguageCodes {
+        return .{ .namespace_catalog = namespaces, .get_fn = get, .resolve_fn = resolve, .trusted_fn = trusted };
+    }
+};
+
+test "flagged big heading requires independently trusted whole language name" {
+    const a = std.testing.allocator;
+    var namespaces = try @import("namespace_registry").Registry.init(a, FlaggedLanguageHeadingTest.ns);
+    defer namespaces.deinit();
+    const codes = FlaggedLanguageHeadingTest.codes(&namespaces);
+    try std.testing.expectEqualStrings("nl", (resolveFlaggedLanguageHeading(codes, FlaggedLanguageHeadingTest.heading) orelse return error.TestUnexpectedResult).code);
+    try std.testing.expectEqualStrings("en", (resolveFlaggedLanguageHeading(codes, "<big>[[Image:Any.svg|50px]] English</big>") orelse return error.TestUnexpectedResult).code);
+    for ([_][]const u8{
+        "<big>[[Image:Flag of Netherlands.svg|50px|]] Unknown</big>",
+        "<big>[[Image:Flag of Netherlands.svg|50px|]] nl</big>",
+        "<big>[[Image:Flag of Netherlands.svg|50px|]] нидерландӣ</big>",
+        "<big>[[Image:Flag of Netherlands.svg|50px|]] Нидерландӣ extra</big>",
+        "<big>[[Image:Flag.svg|50px|]] <small>Нидерландӣ</small></big>",
+        "<big>[[Image:Flag.svg|50px|caption]] Нидерландӣ</big>",
+        "<big>[[Image:Flag.svg|50px|link=Target]] Нидерландӣ</big>",
+        "<big>[[Image:Flag.svg|0px|]] Нидерландӣ</big>",
+        "<big>[[Image:Flag.svg|4097px|]] Нидерландӣ</big>",
+        "<big>[[Image:Flag.svg|50px||]] Нидерландӣ</big>",
+        "<big>[[Target|50px|]] Нидерландӣ</big>",
+        "<big>[[Image:Flag.svg|50px|]] {{Нидерландӣ}}</big>",
+        "<big class=x>[[Image:Flag.svg|50px|]] Нидерландӣ</big>",
+        "<nowiki><big>[[Image:Flag.svg|50px|]] Нидерландӣ</big></nowiki>",
+        "prefix <big>[[Image:Flag.svg|50px|]] Нидерландӣ</big>",
+        "<big>[[Image:Flag.svg|50px|]] Нидерландӣ</big> trailing",
+        "<big>[[Image:Flag.svg|50px|]] Нидерландӣ",
+    }) |bad| {
+        errdefer std.debug.print("flagged heading negative: {s}\n", .{bad});
+        try std.testing.expect(resolveFlaggedLanguageHeading(codes, bad) == null);
+    }
+    var untrusted = codes;
+    untrusted.trusted_fn = struct {
+        fn reject(_: ?*const anyopaque, _: []const u8) ?ResolvedLanguage { return null; }
+    }.reject;
+    try std.testing.expect(resolveFlaggedLanguageHeading(untrusted, FlaggedLanguageHeadingTest.heading) == null);
+}
+
+test "flagged TG Writer keeps complete source instantiated body sound actions and codec" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var namespaces = try @import("namespace_registry").Registry.init(a, FlaggedLanguageHeadingTest.ns);
+    defer namespaces.deinit();
+    const codes = FlaggedLanguageHeadingTest.codes(&namespaces);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // All five retained template bodies instantiated from source. This is a
+    // conservation fixture, not a new captured expansion or visual-metric proof.
+    const body = "== <big>[[Image:Flag of Netherlands.svg|50px|]] Нидерландӣ</big> ==\n\n[[Category:Забони нидерландӣ|Tadzjieks]]\n{| border=0  width=100%\n|-\n|bgcolor=\"#CD7F32\" valign=top width=48%|\n{|\n[[w:ҷонишин|Ҷонишин]]\n|}\n|}\n[[Category:Ҷонишинҳои нидерландӣ]] <small><small></small></small>\n:*Deine mudda: [[Media:nl-Tadzjieks.ogg|Tadzjieks]]\n===Сифат===\n[[Гурӯҳ:Сифатҳои нидерландӣ]]\n#'''Tadzjieks''' <sup>''ҷинси миёна''</sup> - [[Тоҷикӣ]];";
+    const raw = "{{-nl-}}\n{{-pron-|{{nl}}}}\n:*{{sound}}: [[Media:nl-Tadzjieks.ogg|Tadzjieks]]\n===Сифат===\n[[Гурӯҳ:Сифатҳои нидерландӣ]]\n#'''Tadzjieks''' {{n}} - [[Тоҷикӣ]];";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "Tadzjieks", body, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    var mapped = try mmapPath(io, try languageBlobPathAlloc(a, root, "ҳолландӣ"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("nl", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("Tadzjieks")) orelse return error.TestUnexpectedResult;
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    var report: presentation_document.Fallbacks = .{};
+    const reference_payload = try presentation_document.compileReportedWithLinkTrailAlloc(a, record.title, .language, "ҳолландӣ", "nl", body, null, .{}, &namespaces, &report);
+    const reference = try blobs.presentation_codec.decodeAlloc(a, reference_payload, record.title, .language, metadata);
+    try std.testing.expectEqualDeep(reference, decoded);
+    try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, decoded));
+    try std.testing.expectEqual(@as(usize, 0), decoded.entry.organization.lexemes.len);
+    // The source's sound text is intentional input and must remain visible.
+    var sound_visible = false;
+    var definition = false;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| {
+        if (block.kind == .definition) definition = true;
+        for (block.spans) |span| if (std.mem.indexOf(u8, span.text, "Deine mudda") != null) { sound_visible = true; };
+    };
+    try std.testing.expect(sound_visible and definition);
+}
+
+test "retained SCN static icon language headings require independently trusted same owner names" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tscnwiktionary\n# dump-date\t20261001\n# content-language\tscn\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tImage\tFile\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tmedia\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCatigurìa\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const Local = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            inline for (.{ .{ "scn", "scn", "sicilianu" }, .{ "sicilianu", "scn", "sicilianu" }, .{ "Sicilianu", "scn", "sicilianu" }, .{ "co", "co", "corsu" }, .{ "corsu", "co", "corsu" }, .{ "Corsu", "co", "corsu" }, .{ "còrsu", "co", "corsu" }, .{ "Còrsu", "co", "corsu" }, .{ "English", "en", "English" }, .{ "en", "en", "English" } }) |row|
+                if (std.mem.eql(u8, value, row[0])) return .{ .code = row[1], .heading = row[2] };
+            return null;
+        }
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (resolve(ctx, value)) |owner| owner.code else null;
+        }
+        fn trusted(ctx: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "scn") or std.mem.eql(u8, value, "co") or std.mem.eql(u8, value, "en")) return null;
+            const curated: *const bool = @ptrCast(@alignCast(ctx orelse return null));
+            if (!curated.* and (std.mem.eql(u8, value, "còrsu") or std.mem.eql(u8, value, "Còrsu"))) return null;
+            return resolve(ctx, value);
+        }
+        fn strong(ctx: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (!std.mem.eql(u8, value, "sicilianu") and !std.mem.eql(u8, value, "corsu") and !std.mem.eql(u8, value, "English")) return null;
+            return resolve(ctx, value);
+        }
+    };
+    const reviewed_curation = true;
+    const codes: LanguageCodes = .{ .ctx = &reviewed_curation, .namespace_catalog = &namespaces, .get_fn = Local.get, .resolve_fn = Local.resolve, .trusted_fn = Local.trusted, .strong_fn = Local.strong };
+    try std.testing.expectEqualStrings("scn", codes.code("scn").?);
+    try std.testing.expectEqualStrings("co", codes.code("co").?);
+    const scn_source = "<includeonly>__NOEDITSECTION__ __NOTOC__</includeonly>\n==[[Image:Flag_of_Sicily.svg|40px]] [[sicilianu|Sicilianu]]==\n\n[[Category:Palori n sicilianu]]\n<noinclude>[[Category:Template lingua vucàbbulu|scn]]</noinclude><noinclude>[[Category:Template]]</noinclude>";
+    const co_source = "<includeonly>__NOEDITSECTION__ __NOTOC__</includeonly>\n==[[Image:Flag of Corsica.svg|border|45px]] [[còrsu|Còrsu]]==\n\n[[Category:Palori n lingua còrsa]]\n<noinclude>[[Category:Template lingua vucàbbulu|co]]</noinclude><noinclude>[[Category:Template]]</noinclude>";
+    const raw_page = "{{-scn-}}\n{{-noun-}}\n'''dicembri''' {{s}} {{m}} (puru scrittu '''[[dicièmmuru]]''' o '''[[dicèmmiru]]''' o '''[[dicembru]]''' o '''[[dicèmmuru]]''' o '''[[dicièmmiru]]''' o '''[[ricièmmiru]]''' o '''[[ricièmmuru]]''')\n# E' l'[[ùrtumu]] [[misi]] di l'annu ntô calinnariu.\n\n{{-pron-}}\n* [dic'''e'''mbri]\n* {{IPA|/d̪ɪ'ɕɛmbɾɪ/|/d̪ɪ'ɕɛmmɾɪ/|lang=scn}} \n\n{{-hyph-}}\n'''di | cem | bri'''\n\n{{-standard6-}}\ndicèmmiru, dicèmmuru, dicembru\n\n{{-etym-}}\nVeni di lu latinu \"[[december]]\".\n\n{{-rel-}}\n[[nuvèmmiru]]\n\n{{-trans-}}\n{| border=0  width=100%\n|-\n|bgcolor=\"{{bgclr}}\" valign=top width=48%|\n{|\n:*{{it}}: [[dicembre]]\n:*{{es}}: [[diciembre]]\n:*{{zh}}: [[十二月]] (shi'eryue)\n:*{{fi}}: [[joulukuu]]\n:*{{gl}}: [[decembro]]\n:*{{co}}: [[dicembri]]\n:*{{ast}}: [[avientu]]\n:*{{oc}}: [[decembre]]\n:*{{frp}}: [[dècembro]]\n|}\n| width=1% |\n|bgcolor=\"{{bgclr}}\" valign=top width=48%|\n{|\n:*{{fr}}: [[décembre]]\n:*{{ja}}: [[十二月]] (junigatsu)\n:*{{en}}: [[December]]\n:*{{de}}: [[Dezember]]\n:*{{cy}}: [[Rhagfyr]]\n|}\n|}\n\n\n{{-co-}}\n{{-noun-}}\n'''dicembri''' {{s}} {{m}} {{ultram}}\n#[[dicèmmiru]]\n\n{{-pron-}}\n* [dic'''e'''mbri]\n* {{IPA|/di'tʃɛ̃bri/|lang=co}} \n* {{hyphen}}: '''di | cem | bri'''\n\n{{-etym-}}\nVeni di lu latinu \"[[december]]\".\n\n{{-rel-}}\n[[ghjinnaghju]]\n\n[[Catigurìa:Sustantivi siciliani]]\n[[Category:Sustantivi còrsi]]\n[[Category:Prununza (scn)]]\n[[Category:Prununza (co)]]";
+    try std.testing.expectEqual(@as(usize, 260), scn_source.len);
+    try std.testing.expectEqual(@as(usize, 265), co_source.len);
+    try std.testing.expectEqual(@as(usize, 1400), raw_page.len);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, raw_page, "{{-scn-}}"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, raw_page, "{{-co-}}"));
+    const Fixture = struct { source: []const u8, owner: []const u8 };
+    for ([_]Fixture{ .{ .source = scn_source, .owner = "scn" }, .{ .source = co_source, .owner = "co" } }) |fixture| {
+        var lines = std.mem.splitScalar(u8, fixture.source, '\n');
+        var headings: usize = 0;
+        while (lines.next()) |line| if (blobs.wikitext_syntax.controlHeading(line, null)) |heading| {
+            try std.testing.expectEqual(@as(u8, 2), heading.level);
+            const owner = resolveLinkedHeading(codes, heading.title) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings(fixture.owner, owner.code);
+            headings += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 1), headings);
+    }
+    const unreviewed_curation = false;
+    var without_curation = codes;
+    without_curation.ctx = &unreviewed_curation;
+    try std.testing.expect(resolveLinkedHeading(without_curation, "[[Image:Flag of Corsica.svg|border|45px]] [[còrsu|Còrsu]]") == null);
+    try std.testing.expectEqualStrings("scn", resolveLinkedHeading(without_curation, "[[Image:Flag_of_Sicily.svg|40px]] [[sicilianu|Sicilianu]]").?.code);
+    // The icon filename never supplies a language owner.
+    try std.testing.expectEqualStrings("en", resolveLinkedHeading(codes, "[[Image:Flag_of_Sicily.svg|40px]] [[English|English]]").?.code);
+    for ([_][]const u8{
+        "[[Media:Flag.svg|40px]] [[sicilianu|Sicilianu]]",                  "[[w:File:Flag.svg|40px]] [[sicilianu|Sicilianu]]",
+        "[[Image:|40px]] [[sicilianu|Sicilianu]]",                          "[[Image:audio.ogg|40px]] [[sicilianu|Sicilianu]]",
+        "[[Image:Flag.svg|0px]] [[sicilianu|Sicilianu]]",                   "[[Image:Flag.svg|4097px]] [[sicilianu|Sicilianu]]",
+        "[[Image:Flag.svg|40em]] [[sicilianu|Sicilianu]]",                  "[[Image:Flag.svg|border]] [[sicilianu|Sicilianu]]",
+        "[[Image:Flag.svg|40px|border]] [[sicilianu|Sicilianu]]",           "[[Image:Flag.svg|40px|caption]] [[sicilianu|Sicilianu]]",
+        "[[Image:Flag.svg|40px|link=English]] [[sicilianu|Sicilianu]]",     "[[Image:Flag.svg|40px|]] [[sicilianu|Sicilianu]]",
+        "[[Image:Flag.svg|40px]] [[còrsu|Sicilianu]]",
+        "[[Image:Flag.svg|40px]] [[Unknown|Sicilianu]]",                    "[[Image:Flag.svg|40px]] [[sicilianu|Unknown]]",
+        "[[Image:Flag.svg|40px]] [[scn|Sicilianu]]",                        "[[Image:Flag.svg|40px]] [[sicilianu|scn]]",
+        "[[Image:Flag.svg|40px]] [[sicilianu|Sicilianu]] extra",            "[[Image:Flag.svg|40px]] [[sicilianu|Sicilianu]] [[English|English]]",
+        "[[Image:{{flag}}.svg|40px]] [[sicilianu|Sicilianu]]",              "[[Image:&flag;.svg|40px]] [[sicilianu|Sicilianu]]",
+        "[[Image:Flag.svg|40px]][[sicilianu|Sicilianu]]",                   "[[Image:Flag.svg|40px]] [[sicilianu#part|Sicilianu]]",
+        "[[Image:Flag.svg|40px]] [[sicilianu|Sicilianu|extra]]",            "[[Image:Flag\xff.svg|40px]] [[sicilianu|Sicilianu]]",
+        "<nowiki>[[Image:Flag.svg|40px]] [[sicilianu|Sicilianu]]</nowiki>",
+    }) |source| {
+        errdefer std.debug.print("SCN neutral-icon negative: {s}\n", .{source});
+        try std.testing.expect(resolveLinkedHeading(codes, source) == null);
+    }
+    var no_catalog = codes;
+    no_catalog.namespace_catalog = null;
+    try std.testing.expect(resolveLinkedHeading(no_catalog, "[[Image:Flag.svg|40px]] [[sicilianu|Sicilianu]]") == null);
 }

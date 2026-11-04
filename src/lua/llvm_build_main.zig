@@ -276,6 +276,7 @@ fn planEagerInit(
     @memset(blocked, false);
     for (candidate, records) |*out, record|
         out.* = record.root_bootstrap_safe and
+            record.syntax_error == null and
             (record.root_requires.len == 0 or stable_require);
 
     // Eager preparation is an optimization for hot executable roots. O2 already
@@ -415,6 +416,7 @@ fn planModuleTemplates(
     @memset(blocked, false);
     for (candidate, records) |*out, record|
         out.* = record.root_bootstrap_safe and
+            record.syntax_error == null and
             !record.static_root and
             !record.synth_root and
             (record.root_requires.len == 0 or stable_require);
@@ -688,6 +690,24 @@ fn analyzeManifest(
         try slot.wait();
         defer slot.release();
         const row = slot.row;
+        if (slot.syntax_error) |diagnostic| {
+            const module_index: u32 = @intCast(records.items.len);
+            try records.append(a, .{
+                .title = try a.dupe(u8, row.title),
+                .path = try a.dupe(u8, row.path),
+                .source_bytes = row.bytes,
+                .source_index = module_index,
+                .function_base = function_base,
+                .function_count = 1,
+                .root_function = function_base,
+                .export_shape_id = null,
+                .syntax_error = try a.dupe(u8, diagnostic),
+            });
+            try dead_functions_by_module.append(a, 0);
+            function_stats.functions += 1;
+            function_base = std.math.add(u32, function_base, 1) catch return error.TooManyFunctions;
+            continue;
+        }
         if (slot.dynamic and !all_reachable) {
             all_reachable = true;
             for (queued, 0..) |*seen, id| {
@@ -1072,6 +1092,7 @@ fn appendModuleToBatch(
     uri_query_shape_id: ?u32,
 ) !void {
     const path = try sourcePath(scratch, source_root, record.path);
+    std.debug.assert(record.syntax_error == null);
     const source = try readAll(io, scratch, path);
     var chunk = try lua.parse(scratch, source);
     defer chunk.deinit();
@@ -1239,14 +1260,16 @@ fn emitBatches(
     }
     try plan.flush();
     var static_roots: usize = 0;
+    var syntax_error_roots: usize = 0;
     var bodyless_synth_roots: usize = 0;
     for (records) |record| {
         static_roots += @intFromBool(record.static_root);
+        syntax_error_roots += @intFromBool(record.syntax_error != null);
         bodyless_synth_roots += @intFromBool(record.synth_root and !program.needsLlvmBatch(record));
     }
     std.debug.print("LLVM_STATIC_ROOTS modules={d} emitted={d}\n", .{ static_roots, emitted });
     std.debug.print("LLVM_BODYLESS_SYNTH_ROOTS modules={d}\n", .{bodyless_synth_roots});
-    if (emitted + static_roots + bodyless_synth_roots != records.len)
+    if (emitted + static_roots + bodyless_synth_roots + syntax_error_roots != records.len)
         return error.IncompleteLlvmEmission;
 }
 
@@ -1275,6 +1298,7 @@ fn knownMethodCandidates(io: std.Io, a: A, source_root: []const u8, records: []c
     defer scratch_arena.deinit();
     for (records, 0..) |record, module_id| {
         const is_languages = std.mem.eql(u8, record.title, "Module:languages");
+        if (record.syntax_error != null) continue;
         const is_parser = std.mem.eql(u8, record.title, "Module:parser");
         if (!is_languages and !is_parser) continue;
         const scratch = scratch_arena.allocator();
@@ -1440,6 +1464,7 @@ fn buildFrameArgShape(
     var scratch_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer scratch_arena.deinit();
     for (records) |record| {
+        if (record.syntax_error != null) continue;
         const scratch = scratch_arena.allocator();
         const path = try sourcePath(scratch, source_root, record.path);
         const source = try readAll(io, scratch, path);
@@ -1691,6 +1716,7 @@ fn buildDynamicObjectShapes(
     defer scratch_arena.deinit();
 
     for (records) |record| {
+        if (record.syntax_error != null) continue;
         const scratch = scratch_arena.allocator();
         const path = try sourcePath(scratch, source_root, record.path);
         const source = try readAll(io, scratch, path);

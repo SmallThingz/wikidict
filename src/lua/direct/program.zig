@@ -35,9 +35,11 @@ pub const ModuleRecord = struct {
     static_root_blob: []const u8 = &.{},
     synth_root: bool = false,
     synth_callable_root: bool = false,
+    syntax_error: ?[]const u8 = null,
 };
 
 pub fn needsLlvmBatch(record: ModuleRecord) bool {
+    if (record.syntax_error != null) return false;
     if (record.static_root) return false;
     return !(record.synth_root and record.function_count == 1);
 }
@@ -52,6 +54,16 @@ fn requireU32(value: usize) !u32 {
 }
 
 fn validateRecords(a: A, records: []const ModuleRecord) !void {
+    for (records) |record| if (record.syntax_error) |diagnostic| {
+        if (diagnostic.len == 0) return error.InvalidSyntaxErrorRoot;
+        if (record.static_root or record.synth_root or record.synth_callable_root or
+            record.root_pure or record.root_bootstrap_safe or record.template_eligible or
+            record.load_data_snapshot or record.eager_order != std.math.maxInt(u32) or
+            record.direct_exports.len != 0 or record.frame_entry_functions.len != 0 or
+            record.export_shape_id != null or record.root_requires.len != 0 or
+            record.module_requirements.len != 0 or record.function_count != 1)
+            return error.InvalidSyntaxErrorRoot;
+    };
     const sorted = try a.alloc(u32, records.len);
     defer a.free(sorted);
     for (sorted, 0..) |*id, index| id.* = @intCast(index);
@@ -121,6 +133,21 @@ pub fn generate(a: A, records: []const ModuleRecord) !llvm.Module {
         const root_name = try std.fmt.allocPrint(a, "lua_f_{d}", .{record.root_function});
         defer a.free(root_name);
         roots[index] = try m.addFunction(root_name, generated_fn_ty);
+        if (record.syntax_error) |diagnostic| {
+            const leaf_ty = try m.functionType(m.types.function_result, &.{ m.types.ptr, m.types.ptr, m.types.i64 });
+            const leaf = m.getFunction("dict_lua_module_syntax_error") orelse
+                try m.addFunction("dict_lua_module_syntax_error", leaf_ty);
+            const message_name = try std.fmt.allocPrint(a, "module_syntax_error_{d}", .{index});
+            defer a.free(message_name);
+            const message = try m.addGlobal(message_name, try llvm.arrayType(m.types.i8, diagnostic.len), try llvm.constString(m.context, diagnostic), .private, 1);
+            const root_block = try llvm.appendBlock(m.context, roots[index], "entry");
+            const root_builder = try llvm.createBuilder(m.context);
+            defer llvm.disposeBuilder(root_builder);
+            llvm.position(root_builder, root_block);
+            try llvm.ret(root_builder, try llvm.call(root_builder, leaf, &.{
+                try llvm.param(roots[index], 0), message, try llvm.constInt(m.types.i64, diagnostic.len),
+            }));
+        }
     }
 
     const accessor_ty = try m.functionType(m.types.ptr, &.{});
@@ -313,6 +340,10 @@ pub fn writeMetadata(
     try metadata.writeU32(w, uri_query_shape_id orelse std.math.maxInt(u32));
 
     for (records) |record| try metadata.writeString(w, record.title);
+
+    // Empty means no load error. Diagnostic bytes are immutable program data,
+    // not source or a second executable representation.
+    for (records) |record| try metadata.writeString(w, record.syntax_error orelse "");
 
     for (lookup_entries) |entry| {
         if (entry.id >= module_count) return error.InvalidModuleLookupId;

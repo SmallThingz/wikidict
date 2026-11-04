@@ -167,7 +167,7 @@ fn literalCodeHeading(heading: []const u8, level: u8, behavior: ?*const Behavior
     if (pair.end != heading.len) return null;
     const inner = std.mem.trim(u8, heading[div.end..pair.inner_end], " \t");
     const body = unwrapNeutral(inner, "big") orelse return null;
-    if (!std.mem.startsWith(u8, body, "[[")) return null;
+    if (!std.mem.startsWith(u8, body, "[[")) return literalCodeBareHeading(heading, level, body, registry, code);
     const link = syntax.balanced(body, 0) orelse return null;
     const label_body = body[2..link.inner_end];
     const pipe = std.mem.indexOfScalar(u8, label_body, '|');
@@ -259,4 +259,65 @@ fn parseLiteralCode(source: []const u8, ns: *const namespaces.Registry, behavior
         cursor = end;
     }
     return result;
+}
+
+// A headingless literal declaration needs its own proof. It must never be
+// represented as a fabricated H1/H2 or promoted to an ordinary registry alias.
+pub fn parseParagraph(source: []const u8, ns: *const namespaces.Registry, behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8) ?languages.SourceLanguageParagraph {
+    if (source.len > 4096 or containsControl(behavior, source)) return null;
+    const split = std.mem.indexOf(u8, source, "<noinclude>") orelse return null;
+    const label = source[0..split];
+    if (!plain(label) or !std.mem.eql(u8, label, std.mem.trim(u8, label, " ")) or
+        !registry.sourceParagraphNameMatches(code, label)) return null;
+    const doc_start = split + "<noinclude>".len;
+    const doc_end = std.mem.indexOfPos(u8, source, doc_start, "</noinclude>") orelse return null;
+    const documentation = source[doc_start..doc_end];
+    if (!hiddenCategory(documentation, ns, behavior) or
+        std.mem.indexOfScalar(u8, documentation, '|') != null) return null;
+    const tail = source[doc_end + "</noinclude>".len..];
+    const open = "<includeonly>";
+    const close = "</includeonly>";
+    if (!std.mem.startsWith(u8, tail, open) or !std.mem.endsWith(u8, tail, close) or
+        tail.len < open.len + close.len) return null;
+    const category = tail[open.len .. tail.len - close.len];
+    if (!hiddenCategory(category, ns, behavior) or std.mem.indexOfScalar(u8, category, '|') != null or
+        !std.mem.eql(u8, category, std.mem.trim(u8, category, " \t\r\n"))) return null;
+    const target = ns.ofTitle(category[2 .. category.len - 2]);
+    if (!std.mem.eql(u8, target.text, label)) return null;
+    return .{ .label = label, .category = category };
+}
+
+// Retained DV -dv- p2048/r3925 uses a bare name inside the same neutral
+// explicit-code wrapper. The code supplies authority; the label is no alias.
+fn literalCodeBareHeading(heading: []const u8, level: u8, body: []const u8, registry: *const languages.Registry, code: []const u8) ?languages.SourceLanguageBanner {
+    const small = std.mem.indexOf(u8, body, "<small>") orelse return null;
+    const label = std.mem.trimEnd(u8, body[0..small], " \t");
+    if (!plain(label) or std.mem.indexOfAny(u8, label, ":#") != null or
+        !registry.sourceBannerLiteralCodeNameCompatible(code, label)) return null;
+    var tail = unwrapNeutral(body[small..], "small") orelse return null;
+    if (std.mem.startsWith(u8, tail, "<")) tail = unwrapNeutral(tail, "small") orelse return null;
+    if (tail.len != code.len + 2 or tail[0] != '(' or tail[tail.len - 1] != ')' or
+        !std.mem.eql(u8, tail[1 .. tail.len - 1], code)) return null;
+    return .{ .heading = heading, .level = level, .target = label, .label = label, .authority = .literal_code };
+}
+
+// A code-named template may spell its language through an interface message
+// while linking to one exact Help page. The message key repeats the registered
+// code; neither the namespace nor the translated message supplies an alias.
+pub fn messageLinkTarget(source: []const u8, ns: *const namespaces.Registry, code: []const u8) ?[]const u8 {
+    if (source.len > 4096 or code.len == 0) return null;
+    const input = std.mem.trim(u8, source, " \t\r\n");
+    if (!std.mem.startsWith(u8, input, "[[")) return null;
+    const separator = std.mem.indexOf(u8, input, "|{{int:wikt-") orelse return null;
+    const target = input[2..separator];
+    if (!plain(target) or std.mem.indexOfScalar(u8, target, '#') != null or
+        !std.mem.eql(u8, target, std.mem.trim(u8, target, " ")) or ns.ofTitle(target).id != 12) return null;
+    var rest = input[separator + "|{{int:wikt-".len ..];
+    if (!std.mem.startsWith(u8, rest, code)) return null;
+    rest = rest[code.len..];
+    if (!std.mem.startsWith(u8, rest, "}}]]<noinclude>")) return null;
+    rest = rest["}}]]<noinclude>".len..];
+    if (!std.mem.endsWith(u8, rest, "</noinclude>")) return null;
+    if (!hiddenCategory(rest[0 .. rest.len - "</noinclude>".len], ns, null)) return null;
+    return target;
 }

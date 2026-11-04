@@ -1133,13 +1133,27 @@ fn compilerPipelineProbe(h: *Harness, compiler: []const u8, leaf_bc: []const u8,
     const serial_metadata = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ serial, "program.meta" }), h.a, .unlimited);
     const parallel_metadata = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ parallel, "program.meta" }), h.a, .unlimited);
     try h.require(std.mem.eql(u8, serial_metadata, parallel_metadata), "parallel parsing preserves emitted program metadata");
-    // A dynamic target must widen conservatively and surface the syntax error;
-    // failure must drain/join parser workers rather than hanging the process.
-    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = usage_path, .data = "D\tmodule\n" });
-    _ = try h.run(&.{ compiler, manifest, root, parallel, "--analysis-only", "--parse-workers", "4" }, 1);
-    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = usage_path, .data = "P\tModule:Root\t1\n" });
-    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = root_source, .data = "return {run=function(name) return require(name) end}" });
-    _ = try h.run(&.{ compiler, manifest, root, parallel, "--analysis-only", "--parse-workers", "4" }, 1);
+    // Both dynamic signals must widen to include the invalid module. Syntax
+    // diagnostics are deferred to require, exercised by loadDataCacheProbe below;
+    // analysis must still finish and join every parser worker within its deadline.
+    for (0..2) |mode| {
+        try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = usage_path, .data = if (mode == 0) "D\tmodule\n" else "P\tModule:Root\t1\n" });
+        if (mode == 1) try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = root_source, .data = "return {run=function(name) return require(name) end}" });
+        const analyzed = try std.process.run(h.a, h.io, .{
+            .argv = &.{ compiler, manifest, root, parallel, "--analysis-only", "--parse-workers", "4" },
+            .stdout_limit = .limited(16 * 1024 * 1024),
+            .stderr_limit = .limited(4 * 1024 * 1024),
+            .timeout = (std.Io.Timeout{ .duration = .{ .raw = .fromSeconds(180), .clock = .awake } }).toDeadline(h.io),
+        });
+        if (analyzed.term != .exited or analyzed.term.exited != 0) {
+            std.debug.print("dynamic analysis child failed: {any}\n{s}\n{s}\n", .{ analyzed.term, analyzed.stdout, analyzed.stderr });
+            return error.ChildFailed;
+        }
+        try h.require(std.mem.indexOf(u8, analyzed.stderr, "LLVM_PARSE selected=3/3 workers=4\n") != null and
+            std.mem.indexOf(u8, analyzed.stderr, "LLVM_ANALYSIS_ONLY_DONE modules=3\n") != null,
+            "both dynamic signals select every module and finish parallel analysis with deferred syntax diagnostics");
+        h.checks += 1;
+    }
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = unused, .data = "return {ok=true}" });
     _ = try h.run(&.{ compiler, manifest, root, parallel, "--analysis-only", "--parse-workers", "4" }, 0);
 }
@@ -1796,13 +1810,16 @@ fn contentLanguageCaseProbe(h: *Harness, pipeline: []const u8, verifier: []const
 }
 
 fn loadDataCacheProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
+    // Exact retained ndswiktionary page14490/rev48608 source, copied unchanged
+    // from its authenticated extraction manifest during candidate preparation.
+    const invalid_nds = @embedFile("fixtures/nds-kardinaltalen.lua");
     const namespaces = try std.fs.path.join(h.a, &.{ dir, "load-data-namespaces.tsv" });
     const languages = try std.fs.path.join(h.a, &.{ dir, "load-data-languages.tsv" });
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = namespaces, .data = "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
         "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
         "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
         "14\tCategory\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n" ++
-        "828\tModule\tModule\tcase-sensitive\t1\t0\t0\tScribunto\tcompile_only\tmodules\n" });
+        "828\tModule\tModule\tcase-sensitive\t1\t0\t0\tScribunto\tcompile_only\tmodules\tModul\n" });
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = languages, .data = "# wikidict-language-registry-v2\n# content-language\ten\n# mediawiki\nen\tEnglish\ten\teng\n# iso-639-3\n" });
     const probe =
         \\local p = {}
@@ -1812,6 +1829,53 @@ fn loadDataCacheProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, b
         \\local contents = mw.site.contentNamespaces
         \\function p.run()
         \\    assert(namespaces == mw.site.namespaces and subjects == mw.site.subjectNamespaces)
+        \\    local bad = 'Modul:Kardinaltalen'
+        \\    local function fails(loader)
+        \\        local ok, message = pcall(loader, bad)
+        \\        assert(not ok and type(message) == 'string')
+        \\        assert(string.find(message, bad, 1, true) and string.find(message, 'UnexpectedToken', 1, true))
+        \\    end
+        \\    fails(require); fails(require)
+        \\    fails(package.loaders[2])
+        \\    package.loaded[bad] = false
+        \\    fails(require)
+        \\    assert(package.loaded[bad] == false)
+        \\    package.loaded[bad] = nil
+        \\    fails(require)
+        \\    assert(package.loaded[bad] == nil)
+        \\    fails(mw.loadData); fails(mw.loadData)
+        \\    local caught, transformed = xpcall(function() return require(bad) end, function(message) return 'caught:' .. message end)
+        \\    assert(not caught and string.find(transformed, 'caught:', 1, true) == 1)
+        \\    package.loaded[bad] = 'syntax override'
+        \\    assert(require(bad) == 'syntax override')
+        \\    fails(package.loaders[2])
+        \\    package.loaded[bad] = nil
+        \\    fails(require)
+        \\    local false_name = 'Module:Syntax False Cache Control'
+        \\    package.loaded[false_name] = nil
+        \\    package.loaded.__nds_false_loads = 0
+        \\    assert(require(false_name) == false and require(false_name) == false)
+        \\    assert(package.loaded.__nds_false_loads == 2)
+        \\    package.loaded[false_name] = nil
+        \\    assert(require(false_name) == false and package.loaded.__nds_false_loads == 3)
+        \\    package.loaded[false_name] = false
+        \\    assert(require(false_name) == false and package.loaded.__nds_false_loads == 4)
+        \\    package.loaded[false_name] = 0
+        \\    assert(require(false_name) == 0 and package.loaded.__nds_false_loads == 4)
+        \\    package.loaded[false_name] = ''
+        \\    assert(require(false_name) == '' and package.loaded.__nds_false_loads == 4)
+        \\    local nil_name = 'Module:Syntax Nil Cache Control'
+        \\    package.loaded[nil_name] = nil
+        \\    package.loaded.__nds_nil_loads = 0
+        \\    assert(require(nil_name) == true and require(nil_name) == true)
+        \\    assert(package.loaded.__nds_nil_loads == 1)
+        \\    package.loaded[nil_name] = false
+        \\    assert(require(nil_name) == true and package.loaded.__nds_nil_loads == 2)
+        \\    local explicit_false = 'Module:Syntax Explicit False Nil Control'
+        \\    package.loaded[explicit_false] = nil
+        \\    package.loaded.__nds_explicit_false_loads = 0
+        \\    assert(require(explicit_false) == false and require(explicit_false) == false)
+        \\    assert(package.loaded.__nds_explicit_false_loads == 2)
         \\    assert(talks == mw.site.talkNamespaces and contents == mw.site.contentNamespaces)
         \\    assert(namespaces ~= subjects and subjects ~= talks and talks ~= contents)
         \\    assert(namespaces[10] and namespaces[10] == namespaces.Template)
@@ -1846,6 +1910,12 @@ fn loadDataCacheProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, b
             .{ .title = "Module:LoadDataProbe", .ns = 828, .id = 4, .body = probe },
             .{ .title = "Module:headword/data", .ns = 828, .id = 5, .body = if (dynamic) page_data else static_data },
             .{ .title = "Module:glossary/data", .ns = 828, .id = 6, .body = "return {title=mw.title.getCurrentTitle().text}" },
+            .{ .title = "Modul:Kardinaltalen", .ns = 828, .id = 14490, .body = invalid_nds },
+            .{ .title = "Module:Syntax False Cache Control", .ns = 828, .id = 14491, .body = "package.loaded.__nds_false_loads = (package.loaded.__nds_false_loads or 0) + 1; return false" },
+            .{ .title = "Module:Syntax Nil Cache Control", .ns = 828, .id = 14492, .body = "package.loaded.__nds_nil_loads = (package.loaded.__nds_nil_loads or 0) + 1; return nil" },
+            .{ .title = "Module:Syntax Explicit False Nil Control", .ns = 828, .id = 14493, .body = "package.loaded.__nds_explicit_false_loads = (package.loaded.__nds_explicit_false_loads or 0) + 1; package.loaded['Module:Syntax Explicit False Nil Control'] = false; return nil" },
+            .{ .title = "Syntax Invoke", .ns = 0, .id = 7, .body = "==English==\n# {{#iferror:{{#invoke:Kardinaltalen|zahlenlinktabelle}}|SYNTAX INVOKE CAUGHT|BAD SYNTAX ACCEPTANCE}}\n" },
+            .{ .title = "Syntax Independent", .ns = 0, .id = 8, .body = "==English==\n# INDEPENDENT CONTROL\n" },
         });
         _ = try h.run(&.{ pipeline, dump, root, "--namespace-registry-snapshot", namespaces, "--language-registry-snapshot", languages, "--llvm-workers", "1", "--page-workers", "1" }, 0);
         _ = try verifyFixture(h, verifier, root, null);
@@ -1856,6 +1926,10 @@ fn loadDataCacheProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, b
         }
         const fallbacks = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ root, "fallback-pages.jsonl" }), h.a, .limited(4096));
         try h.require(std.mem.trim(u8, fallbacks, " \t\r\n").len == 0, "compiled static and page-sensitive data modules publish without fallback diagnostics");
+        const invoked = try h.run(&.{ bin, "lookup", "Syntax Invoke", "--root", root, "--language", "English", "--details" }, 0);
+        try h.require(std.mem.indexOf(u8, invoked, "SYNTAX INVOKE CAUGHT") != null and std.mem.indexOf(u8, invoked, "BAD SYNTAX ACCEPTANCE") == null, "actual compiler-generated syntax root fails at the existing invoke boundary");
+        const independent = try h.run(&.{ bin, "lookup", "Syntax Independent", "--root", root, "--language", "English", "--details" }, 0);
+        try h.require(std.mem.indexOf(u8, independent, "INDEPENDENT CONTROL") != null and std.mem.indexOf(u8, independent, "Lua error") == null, "retained invalid module does not prevent unrelated dictionary content");
     }
 }
 
@@ -2004,7 +2078,13 @@ fn localizedEditionProbe(h: *Harness, pipeline: []const u8, verifier: []const u8
             "assert(mw.title.new('Module:Data').prefixedText == 'Modul:Data'); " ++
             "local data = require('Module:Alias'); " ++
             "assert(mw.loadData('Modul:Data').word == data.word); " ++
-            "package.loaded['Module:Alias'] = false; assert(require('Module:Alias') == false); " ++
+            "package.loaded['Module:Alias'] = false; local reloaded = require('Module:Alias'); " ++
+            "assert(type(reloaded) == 'table' and reloaded.word == data.word, 'false alias reload content'); " ++
+            "assert(package.loaded['Module:Alias'] == reloaded, 'false alias reload cache publication'); " ++
+            "local raw_override = {word='raw alias override'}; package.loaded['Module:Alias'] = raw_override; " ++
+            "assert(require('Module:Alias') == raw_override, 'truthy raw alias override identity'); " ++
+            "assert(require('Modul:Data').word == data.word, 'raw alias override preserves canonical content'); " ++
+            "package.loaded['Module:Alias'] = reloaded; " ++
             "return data.word .. '; ' .. require('Module:RedirectProbe').run() end; return export" },
         .{ .title = "Modul:Data", .ns = 828, .id = 4, .body = "return {word='localized native module'}" },
         .{ .title = "Modul:Alias", .ns = 828, .id = 5, .body = "#REDIRECT [[Module:Data]]", .redirect = "Module:Data" },
@@ -2030,6 +2110,8 @@ fn localizedEditionProbe(h: *Harness, pipeline: []const u8, verifier: []const u8
     _ = try h.run(&.{ pipeline, german_xml, german_root, "--namespace-registry-snapshot", german_ns, "--language-registry-snapshot", german_languages, "--magic-words-snapshot", german_magic, "--llvm-workers", "1", "--page-workers", "1", "--now-unix", "1791072000" }, 0);
     _ = try h.run(&.{ verifier, german_root }, 0);
     const word = try h.run(&.{ bin, "lookup", "Wort", "--root", german_root, "--language", "Deutsch", "--details" }, 0);
+    if (std.mem.indexOf(u8, word, "localized native module") == null)
+        std.debug.print("localized native fixture lookup output:\n{s}\n", .{word});
     try h.require(std.mem.indexOf(u8, word, "localized native module") != null, "localized templates, invokes, module aliases and raw package overrides survive native compilation");
     try h.require(std.mem.indexOf(u8, word, "case-sensitive wrapper lifecycle verified") != null, "compiled Scribunto redirect wrappers retain distinct identities, cached execution and independent package overrides");
     try h.require(std.mem.indexOf(u8, word, "Local title magic: Wort / Wort / Other / Nested") != null, "edition-local title magic resolves bare names and expanded colon parameters before native publication");

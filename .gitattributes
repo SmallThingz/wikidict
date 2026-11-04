@@ -1,0 +1,4 @@
+# Captured upstream fixtures retain their original whitespace for regression tests.
+tools/fixtures/nds-kardinaltalen.lua -whitespace
+tools/reviewed_alias_p10_r229761.wikitext -whitespace
+tools/testdata/shy-nom-data.lua -whitespace

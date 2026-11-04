@@ -322,7 +322,7 @@ pub fn build(b: *std.Build) void {
     const run_bundle_pipeline_tests = b.addRunArtifact(bundle_pipeline_tests);
     const run_bundle_pipeline_tests_only = b.addRunArtifact(bundle_pipeline_tests);
 
-    const blob_build_tests = b.addTest(.{
+    const blob_build_test_options: std.Build.TestOptions = .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("tools/blob_build.zig"),
             .target = b.graph.host,
@@ -338,7 +338,8 @@ pub fn build(b: *std.Build) void {
             },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
+    };
+    const blob_build_tests = b.addTest(blob_build_test_options);
     blob_build_tests.root_module.linkSystemLibrary("bz2", .{});
     blob_build_tests.root_module.linkSystemLibrary("zstd", .{});
     blob_build_tests.root_module.addImport("namespace_registry", namespace_registry_test_mod);
@@ -361,10 +362,11 @@ pub fn build(b: *std.Build) void {
     blob_file_tools_tests.root_module.addImport("xz", blob_xz_test_mod);
     const run_blob_file_tools_tests = b.addRunArtifact(blob_file_tools_tests);
 
-    const encoder_tests = b.addTest(.{
+    const encoder_test_options: std.Build.TestOptions = .{
         .root_module = encoder_mod_test,
         .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
+    };
+    const encoder_tests = b.addTest(encoder_test_options);
     const blob_encoder_tests = b.addTest(.{
         .root_module = blob_encoder_mod_test,
         .test_runner = .{ .path = test_runner, .mode = .simple },
@@ -398,7 +400,7 @@ pub fn build(b: *std.Build) void {
     blob_query_tests.root_module.link_libc = true;
     blob_query_tests.use_llvm = true;
     blob_query_tests.use_lld = true;
-    const lua_tests = b.addTest(.{
+    const lua_test_options: std.Build.TestOptions = .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/lua/tests.zig"),
             .target = target,
@@ -410,7 +412,8 @@ pub fn build(b: *std.Build) void {
             },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
+    };
+    const lua_tests = b.addTest(lua_test_options);
     lua_tests.root_module.addImport("namespace_registry", namespace_registry_test_mod);
     lua_tests.root_module.addImport("missing_dependency", missing_dependency_test_mod);
     lua_tests.root_module.linkSystemLibrary("LLVM", .{ .use_pkg_config = .no });
@@ -462,14 +465,12 @@ pub fn build(b: *std.Build) void {
     });
     value_leaf_test_obj.use_llvm = true;
     const value_leaf_test_bc = value_leaf_test_obj.getEmittedLlvmBc();
-    const lua_core_tests = b.addTest(.{
+    const lua_core_test_options: std.Build.TestOptions = .{
         .root_module = zig_runtime_test_mod,
         .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
-    const lua_core_tests_standalone = b.addTest(.{
-        .root_module = zig_runtime_test_mod,
-        .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
+    };
+    const lua_core_tests = b.addTest(lua_core_test_options);
+    const lua_core_tests_standalone = b.addTest(lua_core_test_options);
     const global_index_test_mod = b.createModule(.{
         .root_source_file = b.path("src/lua/runtime/global_shape_index.zig"),
         .target = target,
@@ -529,15 +530,13 @@ pub fn build(b: *std.Build) void {
             .{ .name = "lua_static_literal_format", .module = static_literal_format_test_mod },
         },
     });
-    const lua_abi_tests = b.addTest(.{
+    const lua_abi_test_options: std.Build.TestOptions = .{
         .root_module = lua_abi_test_mod,
         .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
-    const lua_abi_tests_standalone = b.addTest(.{
-        .root_module = lua_abi_test_mod,
-        .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
-    const lua_stdlib_tests = b.addTest(.{
+    };
+    const lua_abi_tests = b.addTest(lua_abi_test_options);
+    const lua_abi_tests_standalone = b.addTest(lua_abi_test_options);
+    const lua_stdlib_test_options: std.Build.TestOptions = .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/lua/runtime/stdlib.zig"),
             .target = target,
@@ -549,7 +548,8 @@ pub fn build(b: *std.Build) void {
             },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
+    };
+    const lua_stdlib_tests = b.addTest(lua_stdlib_test_options);
     const lua_ustring_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/lua/runtime/ustring.zig"),
@@ -578,7 +578,7 @@ pub fn build(b: *std.Build) void {
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
     lua_scribunto_tests.root_module.addImport("missing_dependency", missing_dependency_test_mod);
-    const lua_wikitext_tests = b.addTest(.{
+    const lua_wikitext_test_options: std.Build.TestOptions = .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/lua/runtime/wikitext.zig"),
             .target = target,
@@ -593,7 +593,8 @@ pub fn build(b: *std.Build) void {
             },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
-    });
+    };
+    const lua_wikitext_tests = b.addTest(lua_wikitext_test_options);
     lua_wikitext_tests.root_module.addImport("missing_dependency", missing_dependency_test_mod);
     const blob_wasm_smoke = b.addObject(.{
         .name = "dict-blob-wasm-smoke",
@@ -755,6 +756,25 @@ pub fn build(b: *std.Build) void {
     storage_run.step.dependOn(&storage_unit_run.step);
     b.step("test-storage", "Exercise after-compression indexes and selective real XZ block decoding").dependOn(&storage_run.step);
     if (target.result.os.tag == b.graph.host.result.os.tag and target.result.cpu.arch == b.graph.host.result.cpu.arch) test_step.dependOn(&storage_run.step);
+
+    // Separate Compile steps share the exact test options but have no full-suite
+    // execution dependencies. The normal test chain above remains serialized.
+    const prepared_tests = [_]struct { name: []const u8, artifact: *std.Build.Step.Compile }{
+        .{ .name = "encoder", .artifact = b.addTest(encoder_test_options) },
+        .{ .name = "lua", .artifact = b.addTest(lua_test_options) },
+        .{ .name = "lua_core", .artifact = lua_core_tests_standalone },
+        .{ .name = "lua_abi", .artifact = lua_abi_tests_standalone },
+        .{ .name = "lua_stdlib", .artifact = b.addTest(lua_stdlib_test_options) },
+        .{ .name = "lua_wikitext", .artifact = b.addTest(lua_wikitext_test_options) },
+        .{ .name = "tools", .artifact = b.addTest(blob_build_test_options) },
+    };
+    const prepare_tests = b.step("prepare-tests", "Compile full test executables for runtime-filtered qualification");
+    for (prepared_tests) |prepared| {
+        const install = b.addInstallArtifact(prepared.artifact, .{
+            .dest_sub_path = b.fmt("wikidict-tests/{s}", .{prepared.name}),
+        });
+        prepare_tests.dependOn(&install.step);
+    }
 }
 
 fn bundleValueLeafObject(b: *std.Build) *std.Build.Step.Compile {

@@ -132,6 +132,7 @@ pub const FunctionResult = extern struct {
 pub const FunctionFn = *const fn (*Context, *const Captures, [*]const Value, usize, ?[*]Value, usize) callconv(.c) FunctionResult;
 pub const ModuleLookupFn = *const fn (?*const anyopaque, []const u8) ?u32;
 pub const ModuleNameFn = *const fn (?*const anyopaque, u32) ?[]const u8;
+pub const ModuleLoadErrorFn = ModuleNameFn;
 pub const ModuleRequirement = struct {
     module_id: u32,
     requested: []const u8,
@@ -598,8 +599,8 @@ pub const Table = struct {
     dense_prefix_valid: bool = true,
     // Identity-key iteration may depend on arena addresses or function allocation order.
     has_identity_key: bool = false,
-    // Package/module-cache state is explicitly reconstructed by module-template
-    // promotion and therefore may be mutated during an otherwise reusable root.
+    // Marks the remapped package.loaded singleton. Runtime module-cache
+    // bookkeeping is reconstructed; explicit user contents remain page state.
     module_template_reconstructable: bool = false,
     // Worker-lifetime immutable data graphs may be shared directly by
     // page/invoke contexts and by the worker-global module-template graph.
@@ -625,7 +626,17 @@ pub const Table = struct {
             self.field_cache_epoch += 1;
     }
 
+    pub fn notePackageStateAccess(self: *const Table) void {
+        if (module_template_effect_probe != null and self.module_template_reconstructable) {
+            // The package singleton is remapped, not snapshotted. Its user-visible
+            // contents (including misses, false, iteration, length and writes) are page state.
+            noteModuleTemplateEffectReason(1 << 1);
+            markModuleTemplateEffect();
+        }
+    }
+
     fn markMutated(self: *Table) !void {
+        self.notePackageStateAccess();
         try noteInvokeTableMutation(self);
         if (module_template_effect_probe != null and self.native_metatable_namespace != null) {
             // A builtin type is shared by every object of that type. Returning
@@ -641,8 +652,7 @@ pub const Table = struct {
         if (module_template_effect_probe != null and
             self.module_template_probe_id != module_template_probe_owner_id and
             self.module_template_mutation_probe == null and
-            !self.has_export_guard and
-            !self.module_template_reconstructable)
+            !self.has_export_guard)
         {
             noteModuleTemplateEffectReason(1 << 1);
             markModuleTemplateEffect();
@@ -882,6 +892,7 @@ pub const Table = struct {
     }
 
     pub fn rawGetSlot(self: *const Table, slot: u32) ?Value {
+        self.notePackageStateAccess();
         if (self.shape == null and self.native_namespace == null) return null;
         const value = self.slotPtr(slot) orelse return null;
         return if (value.* == .nil) null else value.*;
@@ -923,6 +934,7 @@ pub const Table = struct {
     }
 
     pub fn rawGetChoice(self: *const Table, choice: u32, key: Value) ?Value {
+        self.notePackageStateAccess();
         if (choice >= self.choices.len) return null;
         const cell = self.choices[choice];
         if (cell.value == .nil or !rawEqual(cell.key, key)) return null;
@@ -943,6 +955,7 @@ pub const Table = struct {
         self.choices[choice] = .{ .key = key, .value = value };
     }
     pub fn rawGet(self: *const Table, key: Value) ?Value {
+        self.notePackageStateAccess();
         if (key == .number) return self.rawGetNumber(key.number);
         if (self.slotForKey(key)) |slot| if (self.rawGetSlot(slot)) |value| return value;
         return self.rawGetAfterSlot(key);
@@ -951,6 +964,7 @@ pub const Table = struct {
     // The caller has already resolved the structural slot. A nil slot does
     // not erase live choice/map overrides, including iterator-written nils.
     fn rawGetAfterSlot(self: *const Table, key: Value) ?Value {
+        self.notePackageStateAccess();
         for (self.choices) |cell| {
             if (cell.value != .nil and rawEqual(cell.key, key)) return cell.value;
         }
@@ -958,6 +972,7 @@ pub const Table = struct {
     }
 
     pub fn rawGetHashedString(self: *const Table, name: []const u8, key_hash: u64) ?Value {
+        self.notePackageStateAccess();
         const key = Value{ .string = name };
         if (self.slotForString(name, key_hash)) |slot| if (self.rawGetSlot(slot)) |value| return value;
         for (self.choices) |cell| {
@@ -983,6 +998,7 @@ pub const Table = struct {
     // The caller proves the immutable shape lookup result. A missing/nil slot
     // still probes the live map and records witnesses for inherited lookups.
     fn ownHashedStringValuePtrAtSlot(self: *Table, name: []const u8, key_hash: u64, slot: ?u32, witness: ?*OwnMissWitness) ?*Value {
+        self.notePackageStateAccess();
         if (slot) |known| {
             const value = self.slotPtr(known) orelse return null;
             if (witness) |miss| miss.slot = value;
@@ -995,6 +1011,7 @@ pub const Table = struct {
     }
 
     pub fn rawGetNumber(self: *const Table, number: f64) ?Value {
+        self.notePackageStateAccess();
         if (self.arraySlotForNumber(number)) |slot| if (self.rawGetArraySlot(slot)) |value| return value;
         if (!self.numeric_mirror_disabled and self.numeric_mirror.len != 0) if (positiveInteger(number)) |index| if (index <= self.numeric_mirror.len) {
             const value = self.numeric_mirror[index - 1];
@@ -1156,6 +1173,7 @@ pub const Table = struct {
         }
 
         pub fn next(self: *Iterator) ?Entry {
+            self.table.notePackageStateAccess();
             while (self.slot < self.table.slotCount()) {
                 const index = self.slot;
                 self.slot += 1;
@@ -1182,6 +1200,7 @@ pub const Table = struct {
     };
 
     pub fn iterator(self: *Table) Iterator {
+        self.notePackageStateAccess();
         // Iterator.Entry exposes mutable value pointers. Existing callers only
         // read them, but invalidate the auxiliary mirror before exposing one.
         if (self.allStringShape() and self.has_hashed_number) {
@@ -1197,6 +1216,7 @@ pub const Table = struct {
     }
 
     pub fn rawLen(self: *const Table) usize {
+        self.notePackageStateAccess();
         if (self.allStringShape() and self.dense_prefix_valid) return self.dense_prefix_len;
         var low: usize = if (self.append_index == 0) 0 else self.append_index - 1;
         if (low != 0 and !self.hasArrayIndex(low)) {
@@ -2072,6 +2092,7 @@ pub const Context = struct {
     module_lookup_ctx: ?*const anyopaque = null,
     module_lookup: ?ModuleLookupFn = null,
     module_name: ?ModuleNameFn = null,
+    module_load_error: ?ModuleLoadErrorFn = null,
     module_requirements_ctx: ?*const anyopaque = null,
     module_requirements: ?ModuleRequirementsFn = null,
     static_module_ctx: ?*const anyopaque = null,
@@ -2164,6 +2185,7 @@ pub const Context = struct {
         child.module_lookup_ctx = self.module_lookup_ctx;
         child.module_lookup = self.module_lookup;
         child.module_name = self.module_name;
+        child.module_load_error = self.module_load_error;
         child.module_requirements_ctx = self.module_requirements_ctx;
         child.module_requirements = self.module_requirements;
         child.static_module_ctx = self.static_module_ctx;
@@ -2608,6 +2630,19 @@ pub const Context = struct {
         self.module_lookup_ctx = host;
         self.module_lookup = lookup;
         self.module_name = name;
+        self.module_load_error = null;
+    }
+
+    pub fn configureModuleLoadErrors(self: *Context, load_error: ModuleLoadErrorFn) void {
+        self.module_load_error = load_error;
+    }
+
+    pub fn checkModuleLoadError(self: *Context, module_id: u32) !void {
+        const lookup = self.module_load_error orelse return;
+        const diagnostic = lookup(self.module_lookup_ctx, module_id) orelse return;
+        try checkExecutionBudget(self);
+        self.setLuaError(.{ .string = diagnostic });
+        return error.LuaRaised;
     }
 
     pub fn configureModuleRequirements(
@@ -2661,7 +2696,7 @@ pub const Context = struct {
                     const module_id: u32 = @intCast(module_id_usize);
                     const value = state.value orelse state.preinitialized orelse continue;
                     const name = self.canonicalModuleName(module_id, null) orelse continue;
-                    try loaded.rawSet(self.allocator, .{ .string = name }, value);
+                    try self.rawSetRuntimeBookkeeping(loaded, .{ .string = name }, value);
                     state.deferred_require_visibility = false;
                 }
             }
@@ -2683,7 +2718,29 @@ pub const Context = struct {
         try table.rawSet(self.allocator, key, value);
     }
 
+    // These scopes cover only runtime cache observations, never module roots
+    // or user code. Explicit Lua reads retain the ordinary table read probe.
+    pub fn rawGetRuntimeBookkeeping(table: *const Table, key: Value) ?Value {
+        const suspended = suspendModuleTemplateEffectProbe();
+        defer resumeModuleTemplateEffectProbe(suspended);
+        return table.rawGet(key);
+    }
+
+    fn rawGetSlotRuntimeBookkeeping(table: *const Table, slot: u32) ?Value {
+        const suspended = suspendModuleTemplateEffectProbe();
+        defer resumeModuleTemplateEffectProbe(suspended);
+        return table.rawGetSlot(slot);
+    }
+
+    fn rawGetAfterSlotRuntimeBookkeeping(table: *const Table, key: Value) ?Value {
+        const suspended = suspendModuleTemplateEffectProbe();
+        defer resumeModuleTemplateEffectProbe(suspended);
+        return table.rawGetAfterSlot(key);
+    }
+
     fn packageLoadedModuleGet(self: *Context, module_id: u32, requested: ?[]const u8) ?Value {
+        const suspended = suspendModuleTemplateEffectProbe();
+        defer resumeModuleTemplateEffectProbe(suspended);
         const loaded = self.package_loaded orelse return null;
         if (module_id < self.package_loaded_module_slots.len and self.program_shapes_validated) {
             if (self.package_loaded_shape_id) |shape_id| if (shape_id < self.program_shapes.len and
@@ -2724,6 +2781,7 @@ pub const Context = struct {
         if (self.package_observable) return null;
         const state = self.moduleState(module_id) orelse return null;
         const value = state.value orelse state.preinitialized orelse return null;
+        if (!value.truthy()) return null;
         if (self.packageLoadedModuleGet(module_id, null)) |visible|
             if (!rawEqual(visible, value)) return null;
         if (!self.eager_bootstrap) state.deferred_require_visibility = true;
@@ -3655,6 +3713,8 @@ pub const Context = struct {
                 self.module_template_rejected[module_id] = true;
             return null;
         };
+        const source_value = source_state.value orelse source_state.preinitialized orelse return null;
+        if (!source_value.truthy()) return null;
         for (source_state.template_overrides) |override| {
             if (self.moduleStateConst(override.module_id)) |existing|
                 if (existing.value != null or existing.preinitialized != null)
@@ -4027,15 +4087,31 @@ pub const Context = struct {
     }
 
     pub fn loadModule(self: *Context, module_id: u32, requested: ?[]const u8) anyerror!Value {
+        return self.loadModuleMode(module_id, requested, false);
+    }
+
+    fn loadModuleMode(self: *Context, module_id: u32, requested: ?[]const u8, reload: bool) anyerror!Value {
         if (module_id >= self.module_count or module_id >= self.module_root_entries.len) return error.BadModuleId;
         if (self.moduleState(module_id)) |existing| {
-            if (existing.value) |value| return value;
-            if (existing.preinitialized) |value|
+            if (!reload) if (existing.value) |value| if (value.truthy()) return value;
+            if (!reload) if (existing.preinitialized) |value| if (value.truthy())
                 if (try self.adoptPreinitialized(module_id, requested, existing, value)) |adopted|
                     return adopted;
             if (existing.loading) return error.ModuleLoadLoop;
+            if (reload) {
+                existing.value = null;
+                existing.preinitialized = null;
+            }
         }
-        if (try self.instantiateModuleTemplate(module_id, requested)) |templated|
+        if (reload) {
+            // A public cache invalidation must not resurrect an old template
+            // after this reload fails and leaves no installed state value.
+            if (module_id < self.module_template_eligible.len)
+                self.module_template_eligible[module_id] = false;
+            if (module_id < self.module_template_rejected.len)
+                self.module_template_rejected[module_id] = true;
+        }
+        if (!reload) if (try self.instantiateModuleTemplate(module_id, requested)) |templated|
             return templated;
         const dynamic_template_probe = self.dynamicModuleTemplateCandidate(module_id);
         var observed_template_effect = false;
@@ -4097,7 +4173,13 @@ pub const Context = struct {
             };
         };
         if (value == .nil) {
-            if (self.packageLoadedModuleGet(module_id, requested)) |existing| value = existing;
+            // A forced public reload uses the requested key, including false;
+            // an old canonical alias entry must not hide that value.
+            if (reload and requested != null) {
+                if (self.package_loaded) |loaded| {
+                    if (rawGetRuntimeBookkeeping(loaded, .{ .string = requested.? })) |existing| value = existing;
+                }
+            } else if (self.packageLoadedModuleGet(module_id, requested)) |existing| value = existing;
             if (value == .nil) value = .{ .boolean = true };
         }
         try self.packageLoadedModuleSet(module_id, requested, value);
@@ -4179,15 +4261,38 @@ pub const Context = struct {
         return lookup(self.module_lookup_ctx, normalized) orelse missingModule(raw_name);
     }
 
+    fn requireMissMustReload(self: *const Context, module_id: u32, requested_cache: ?Value, canonical_cache: ?Value) bool {
+        if (requested_cache) |value| return !value.truthy();
+        if (canonical_cache) |value| return !value.truthy();
+        const state = self.moduleStateConst(module_id) orelse return false;
+        if (state.value) |value| {
+            if (!value.truthy()) return true;
+            return self.package_loaded != null and !state.deferred_require_visibility;
+        }
+        if (state.preinitialized) |value| return !value.truthy();
+        return false;
+    }
+
     pub fn requireModuleId(self: *Context, module_id: u32, raw_name: []const u8) anyerror!Value {
         const canonical = self.canonicalModuleName(module_id, null);
         const canonical_request = if (canonical) |name| std.mem.eql(u8, name, raw_name) else false;
-        if (canonical_request) {
-            if (self.packageLoadedModuleGet(module_id, raw_name)) |value| return value;
-        } else if (self.package_loaded) |loaded| if (loaded.rawGet(.{ .string = raw_name })) |value| return value;
+        const canonical_cache = self.packageLoadedModuleGet(module_id, raw_name);
+        const requested_cache = if (canonical_request) canonical_cache else if (self.package_loaded) |loaded|
+            rawGetRuntimeBookkeeping(loaded, .{ .string = raw_name }) else null;
+        if (requested_cache) |value| if (value.truthy()) return value;
         if (self.eager_bootstrap)
             return self.preparedModuleValue(module_id) orelse error.EagerDependencyNotInitialized;
-        const value = try self.loadModule(module_id, raw_name);
+        // Loader-search syntax failures precede mutation of package.loaded.
+        // This getter is supplied by the separate syntax-error-root change.
+        try self.checkModuleLoadError(module_id);
+        // Clear an old false only after a valid loader has been found. A nil
+        // result then defaults to true, while a false written by the loader
+        // remains distinguishable by the post-root raw cache read.
+        if (requested_cache) |cached| if (!cached.truthy()) {
+            if (self.package_loaded) |loaded|
+                try self.rawSetRuntimeBookkeeping(loaded, .{ .string = raw_name }, .nil);
+        };
+        const value = try self.loadModuleMode(module_id, raw_name, self.requireMissMustReload(module_id, requested_cache, canonical_cache));
         if (!canonical_request) if (self.package_loaded) |loaded|
             try self.rawSetRuntimeBookkeeping(loaded, .{ .string = raw_name }, value);
         if (self.moduleState(module_id)) |state| state.deferred_require_visibility = false;
@@ -4205,23 +4310,17 @@ pub const Context = struct {
             {
                 const key = Value{ .string = raw_name };
                 const slot = loaded.slotForKey(key);
-                if (slot) |known| if (loaded.rawGetSlot(known)) |value| return value;
-                if (loaded.rawGetAfterSlot(key)) |value| return value;
+                if (slot) |known| if (rawGetSlotRuntimeBookkeeping(loaded, known)) |value| if (value.truthy()) return value;
+                if (rawGetAfterSlotRuntimeBookkeeping(loaded, key)) |value| if (value.truthy()) return value;
                 if (slot) |known| if (known < self.package_loaded_slot_modules.len) {
                     const module_id = self.package_loaded_slot_modules[known];
                     if (module_id < self.module_count) if (self.canonicalModuleName(module_id, null)) |canonical| {
                         if (std.mem.eql(u8, canonical, raw_name)) {
-                            // A resolved ID does not authorize executing a root
-                            // before the eager dependency graph has admitted it.
-                            if (self.eager_bootstrap)
-                                return self.preparedModuleValue(module_id) orelse error.EagerDependencyNotInitialized;
-                            const value = try self.loadModule(module_id, raw_name);
-                            if (self.moduleState(module_id)) |state| state.deferred_require_visibility = false;
-                            return value;
+                            return self.requireModuleId(module_id, raw_name);
                         }
                     };
                 };
-            } else if (loaded.rawGet(.{ .string = raw_name })) |value| return value;
+            } else if (rawGetRuntimeBookkeeping(loaded, .{ .string = raw_name })) |value| if (value.truthy()) return value;
         }
         return self.requireModuleId(try self.resolveModule(raw_name), raw_name);
     }
@@ -4626,6 +4725,7 @@ pub const Context = struct {
     }
 
     pub fn metamethod(_: *Context, value: Value, name: []const u8) ?Value {
+        if (value == .table) value.table.notePackageStateAccess();
         const mt = switch (value) {
             .table => |table| table.metatable,
             else => null,
@@ -4770,6 +4870,7 @@ pub const Context = struct {
     }
 
     pub fn getFieldAtSite(self: *Context, object: Value, name: []const u8, key_hash: u64, site_id: u64) anyerror!Value {
+        if (object == .table) object.table.notePackageStateAccess();
         if (object != .table or self.field_cache_nonce == 0 or object.table.field_cache_nonce == 0 or
             object.table.native_namespace != null or !object.table.owns_slots or object.table.global_tail != null or object.table.choices.len != 0)
             return self.getHashedField(object, name, key_hash);
@@ -9187,16 +9288,21 @@ test "canonical requires reuse resolved package slots without repeating name loo
         try std.testing.expectEqual(@as(f64, 81), (try ctx.requireModuleId(0, "Module:slot-probe")).number);
         loaded.choices[0].value = .nil;
         try loaded.map.putContext(a, fields[0], .nil, .{});
-        // Retained nil cells are absent; the existing module state supplies
-        // its result rather than exposing an internal tombstone as a value.
+        // Clearing the public cache reloads once; the restored truthy entry
+        // then supplies the direct-ID require without another root call.
         try std.testing.expectEqual(@as(f64, 42), (try ctx.requireByName("Module:slot-probe")).number);
         try std.testing.expectEqual(@as(f64, 42), (try ctx.requireModuleId(0, "Module:slot-probe")).number);
-        try std.testing.expectEqual(@as(u32, 1), Probe.roots);
+        try std.testing.expectEqual(@as(u32, 2), Probe.roots);
         _ = loaded.map.removeContext(fields[0], .{});
         try loaded.rawSet(a, .{ .string = "arbitrary-loaded-key" }, .{ .boolean = false });
+        const before_missing = Probe.lookups;
+        try std.testing.expectError(error.ModuleNotFound, ctx.requireByName("arbitrary-loaded-key"));
+        // The test namespace registry rejects this unqualified name before
+        // a normalized lookup; only the initial exact-name lookup occurs.
+        try std.testing.expectEqual(before_missing + 1, Probe.lookups);
+        try std.testing.expect(!loaded.rawGet(.{ .string = "arbitrary-loaded-key" }).?.boolean);
+        try std.testing.expectEqual(@as(u32, 2), Probe.roots);
         const before = Probe.lookups;
-        try std.testing.expect(!(try ctx.requireByName("arbitrary-loaded-key")).boolean);
-        try std.testing.expectEqual(before, Probe.lookups);
 
         // Redirect spelling keeps its separate package entry and ordinary ID
         // resolution; the inverse covers canonical names only.
@@ -9540,4 +9646,574 @@ test "title values refuse module template portability before stable sharing" {
     try ordinary.rawSet(a, .{ .string = "value" }, .{ .number = 7 });
     const copied = try clone.cloneValue(.{ .table = ordinary });
     try std.testing.expectEqual(@as(f64, 7), copied.table.rawGet(.{ .string = "value" }).?.number);
+}
+
+test "module syntax diagnostics use immutable metadata without loading a root" {
+    const Probe = struct {
+        const diagnostic = "error loading module 'Module:Broken': UnexpectedToken";
+        fn lookup(_: ?*const anyopaque, module_name: []const u8) ?u32 {
+            return if (std.mem.eql(u8, module_name, "Module:Broken")) 0 else null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return if (id == 0) "Module:Broken" else null;
+        }
+        fn diagnosticFor(raw: ?*const anyopaque, id: u32) ?[]const u8 {
+            const host: *const u8 = @ptrCast(@alignCast(raw.?));
+            std.debug.assert(host.* == 17);
+            return if (id == 0) diagnostic else null;
+        }
+    };
+    var ctx = try Context.initProgram(std.testing.allocator, 0, 1);
+    defer ctx.deinit();
+    const host: u8 = 17;
+    ctx.configureModules(&host, Probe.lookup, Probe.name);
+    ctx.configureModuleLoadErrors(Probe.diagnosticFor);
+    try std.testing.expect(ctx.moduleState(0) == null);
+    for (0..2) |_| {
+        try std.testing.expectError(error.LuaRaised, ctx.checkModuleLoadError(0));
+        try std.testing.expectEqualStrings(Probe.diagnostic, ctx.last_error.string);
+        try std.testing.expect(ctx.moduleState(0) == null);
+        ctx.clearLuaError();
+    }
+    try ctx.checkModuleLoadError(1);
+    try std.testing.expect(!ctx.last_error_present);
+    ctx.configureModules(null, Probe.lookup, Probe.name);
+    try ctx.checkModuleLoadError(0);
+    try std.testing.expect(!ctx.last_error_present);
+}
+
+test "module loader syntax diagnostics do not replace a fatal execution budget" {
+    const Probe = struct {
+        var now: u64 = 0;
+        fn clock() error{LuaCpuClockUnavailable}!u64 { return now; }
+        fn lookup(_: ?*const anyopaque, _: []const u8) ?u32 { return 0; }
+        fn name(_: ?*const anyopaque, _: u32) ?[]const u8 { return "Module:Broken"; }
+        fn diagnostic(_: ?*const anyopaque, _: u32) ?[]const u8 { return "UnexpectedToken"; }
+    };
+    var ctx = try Context.initProgram(std.testing.allocator, 0, 1);
+    defer ctx.deinit();
+    ctx.configureModules(null, Probe.lookup, Probe.name);
+    ctx.configureModuleLoadErrors(Probe.diagnostic);
+    Probe.now = 0;
+    var budget: execution_budget.Budget = .{ .limit_ns = 10, .clock = Probe.clock };
+    var scope = try budget.enter();
+    Probe.now = 20;
+    var exhausted = false;
+    for (0..execution_budget.sample_period) |_| {
+        execution_budget.check() catch |err| {
+            try std.testing.expect(err == error.LuaCpuLimit);
+            exhausted = true;
+            break;
+        };
+    }
+    try std.testing.expect(exhausted);
+    try std.testing.expectError(error.LuaCpuLimit, ctx.checkModuleLoadError(0));
+    try std.testing.expectEqualStrings("LuaCpuLimit", ctx.aotErrorName().?);
+    try std.testing.expect(!ctx.last_error_present);
+    try std.testing.expectError(error.LuaCpuLimit, scope.finish());
+}
+
+// Append to core.zig only in the private combined candidate. UNEXECUTED.
+// Requires cache-truthiness.peer.patch, its clear-false followup, and the
+// separately owned checkModuleLoadError getter. No Lua sentinel is introduced.
+const RequireNilFalseControl = struct {
+    fn lookup(_: ?*const anyopaque, name_value: []const u8) ?u32 {
+        if (std.mem.eql(u8, name_value, "Module:NilResult")) return 0;
+        if (std.mem.eql(u8, name_value, "Module:WritesFalse")) return 1;
+        return null;
+    }
+    fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+        return switch (id) {
+            0 => "Module:NilResult",
+            1 => "Module:WritesFalse",
+            else => null,
+        };
+    }
+    fn countRoot(ctx: *Context) !void {
+        const before: f64 = switch (ctx.getGlobal(0)) {
+            .number => |number| number,
+            else => 0,
+        };
+        try ctx.setGlobal(0, .{ .number = before + 1 });
+    }
+    fn nilResult(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        try countRoot(ctx);
+        return &.{};
+    }
+    fn writesFalse(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        try countRoot(ctx);
+        const loaded = ctx.package_loaded orelse return error.MissingPackageLoaded;
+        try loaded.rawSet(ctx.allocator, .{ .string = "Module:WritesFalse" }, .{ .boolean = false });
+        return &.{};
+    }
+};
+
+test "require caller seeded false followed by nil loader becomes cached true" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 1, 2);
+    defer ctx.deinit();
+    const roots = [_]FunctionFn{
+        stabilize(RequireNilFalseControl.nilResult),
+        stabilize(RequireNilFalseControl.writesFalse),
+    };
+    ctx.module_root_entries = &roots;
+    ctx.configureModules(null, RequireNilFalseControl.lookup, RequireNilFalseControl.name);
+    ctx.package_loaded = try ctx.newTable();
+    const key: Value = .{ .string = "Module:NilResult" };
+    try ctx.package_loaded.?.rawSet(ctx.allocator, key, .{ .boolean = false });
+    try std.testing.expect((try ctx.requireByName(key.string)).boolean);
+    try std.testing.expect(ctx.package_loaded.?.rawGet(key).?.boolean);
+    try std.testing.expect((try ctx.requireByName(key.string)).boolean);
+    try std.testing.expectEqual(@as(f64, 1), ctx.moduleState(0).?.globals.?[0].number);
+    // The ID entry point must also distinguish old false from a root write.
+    try ctx.package_loaded.?.rawSet(ctx.allocator, key, .{ .boolean = false });
+    try std.testing.expect((try ctx.requireModuleId(0, key.string)).boolean);
+    try std.testing.expect(ctx.package_loaded.?.rawGet(key).?.boolean);
+    try std.testing.expectEqual(@as(f64, 2), ctx.moduleState(0).?.globals.?[0].number);
+}
+
+test "require loader writing false then returning nil remains false and reruns" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 1, 2);
+    defer ctx.deinit();
+    const roots = [_]FunctionFn{
+        stabilize(RequireNilFalseControl.nilResult),
+        stabilize(RequireNilFalseControl.writesFalse),
+    };
+    ctx.module_root_entries = &roots;
+    ctx.configureModules(null, RequireNilFalseControl.lookup, RequireNilFalseControl.name);
+    ctx.package_loaded = try ctx.newTable();
+    const key: Value = .{ .string = "Module:WritesFalse" };
+    try ctx.package_loaded.?.rawSet(ctx.allocator, key, .{ .boolean = false });
+    try std.testing.expect(!(try ctx.requireByName(key.string)).boolean);
+    try std.testing.expect(!ctx.package_loaded.?.rawGet(key).?.boolean);
+    try std.testing.expect(!(try ctx.requireModuleId(1, key.string)).boolean);
+    try std.testing.expect(!ctx.package_loaded.?.rawGet(key).?.boolean);
+    try std.testing.expectEqual(@as(f64, 2), ctx.moduleState(1).?.globals.?[0].number);
+}
+
+// Private core.zig append; UNEXECUTED. Requires both cache peer patches and
+// main's loader-boundary patch, including forkProgram callback inheritance.
+const RequireCacheControl = struct {
+    const canonical = "Module:CacheControl";
+    const alias = "Alias:CacheControl";
+    const single_keys = [_]Value{.{ .string = canonical }};
+    const dual_keys = [_]Value{ .{ .string = alias }, .{ .string = canonical } };
+    const shapes = [_]Shape{
+        .{ .keys = .{ .boxed = &single_keys }, .sorted_string_slots = &.{0}, .field_count = 1, .open = true, .all_string_keys = true },
+        .{ .keys = .{ .boxed = &dual_keys }, .sorted_string_slots = &.{ 0, 1 }, .field_count = 2, .open = true, .all_string_keys = true },
+    };
+    fn lookup(_: ?*const anyopaque, text: []const u8) ?u32 {
+        return if (std.mem.eql(u8, text, canonical) or std.mem.eql(u8, text, alias)) 0 else null;
+    }
+    fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+        return if (id == 0) canonical else null;
+    }
+    // Ordinary map, canonical slot plus dynamic alias, then two known slots.
+    fn loaded(ctx: *Context, mode: usize) !void {
+        if (mode != 0) {
+            ctx.program_shapes = &shapes;
+            ctx.program_shapes_validated = true;
+            ctx.package_loaded_shape_id = @intCast(mode - 1);
+            ctx.package_loaded_module_slots = if (mode == 1) &.{0} else &.{1};
+            ctx.package_loaded_slot_modules = if (mode == 1) &.{0} else &.{ std.math.maxInt(u32), 0 };
+        }
+        ctx.package_loaded = try ctx.newPackageLoadedTable();
+    }
+    fn increment(ctx: *Context) !f64 {
+        const count: f64 = switch (ctx.getGlobal(0)) { .number => |n| n, else => 0 };
+        try ctx.setGlobal(0, .{ .number = count + 1 });
+        return count + 1;
+    }
+    fn returnFalse(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        _ = try increment(ctx);
+        const result = try std.heap.smp_allocator.alloc(Value, 1);
+        result[0] = .{ .boolean = false };
+        return result;
+    }
+    fn returnCount(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        const count = try increment(ctx);
+        const result = try std.heap.smp_allocator.alloc(Value, 1);
+        result[0] = .{ .number = count };
+        return result;
+    }
+    fn calls(ctx: *Context) f64 {
+        const state = ctx.moduleState(0) orelse return 0;
+        const globals = state.globals orelse return 0;
+        return switch (globals[0]) { .number => |n| n, else => 0 };
+    }
+};
+
+test "require false-returning roots rerun through canonical alias and structural caches" {
+    const F = RequireCacheControl;
+    for (0..3) |mode| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var ctx = try Context.initProgram(arena.allocator(), 1, 1);
+        defer ctx.deinit();
+        const roots = [_]FunctionFn{stabilize(F.returnFalse)};
+        ctx.module_root_entries = &roots;
+        ctx.configureModules(null, F.lookup, F.name);
+        try F.loaded(&ctx, mode);
+        try std.testing.expect(!(try ctx.requireByName(F.canonical)).boolean);
+        try std.testing.expect(!(try ctx.requireModuleId(0, F.canonical)).boolean);
+        try std.testing.expect(!(try ctx.requireByName(F.alias)).boolean);
+        try std.testing.expect(!(try ctx.requireByName(F.alias)).boolean);
+        try std.testing.expectEqual(@as(f64, 4), F.calls(&ctx));
+        try std.testing.expect(!ctx.package_loaded.?.rawGet(.{ .string = F.canonical }).?.boolean);
+        try std.testing.expect(!ctx.package_loaded.?.rawGet(.{ .string = F.alias }).?.boolean);
+    }
+}
+
+test "require cleared nil and false reload prior truthy state while initial aliases share identity" {
+    const F = RequireCacheControl;
+    for (0..3) |mode| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var ctx = try Context.initProgram(arena.allocator(), 1, 1);
+        defer ctx.deinit();
+        const roots = [_]FunctionFn{stabilize(F.returnCount)};
+        ctx.module_root_entries = &roots;
+        ctx.configureModules(null, F.lookup, F.name);
+        try F.loaded(&ctx, mode);
+        const key: Value = .{ .string = F.canonical };
+        const alias_key: Value = .{ .string = F.alias };
+        try std.testing.expectEqual(@as(f64, 1), (try ctx.requireByName(F.canonical)).number);
+        try std.testing.expectEqual(@as(f64, 1), (try ctx.requireByName(F.alias)).number);
+        try std.testing.expectEqual(@as(f64, 1), F.calls(&ctx));
+        try ctx.package_loaded.?.rawSet(ctx.allocator, key, .nil);
+        try std.testing.expectEqual(@as(f64, 2), (try ctx.requireByName(F.canonical)).number);
+        try ctx.package_loaded.?.rawSet(ctx.allocator, key, .{ .boolean = false });
+        try std.testing.expectEqual(@as(f64, 3), (try ctx.requireModuleId(0, F.canonical)).number);
+        try ctx.package_loaded.?.rawSet(ctx.allocator, alias_key, .{ .boolean = false });
+        try std.testing.expectEqual(@as(f64, 4), (try ctx.requireByName(F.alias)).number);
+        try std.testing.expectEqual(@as(f64, 4), F.calls(&ctx));
+        // Retain the repository's numeric-module alias identity contract.
+        try ctx.package_loaded.?.rawSet(ctx.allocator, alias_key, .nil);
+        try std.testing.expectEqual(@as(f64, 4), (try ctx.requireByName(F.alias)).number);
+        try std.testing.expectEqual(@as(f64, 4), F.calls(&ctx));
+    }
+}
+
+test "require zero and empty string are truthy hits without any module state" {
+    const F = RequireCacheControl;
+    for (0..3) |mode| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var ctx = try Context.initProgram(arena.allocator(), 1, 1);
+        defer ctx.deinit();
+        const roots = [_]FunctionFn{stabilize(F.returnFalse)};
+        ctx.module_root_entries = &roots;
+        ctx.configureModules(null, F.lookup, F.name);
+        try F.loaded(&ctx, mode);
+        for ([_]Value{ .{ .number = 0 }, .{ .string = "" } }) |value| {
+            try ctx.package_loaded.?.rawSet(ctx.allocator, .{ .string = F.canonical }, value);
+            try ctx.package_loaded.?.rawSet(ctx.allocator, .{ .string = F.alias }, value);
+            try std.testing.expect(rawEqual(value, try ctx.requireByName(F.canonical)));
+            try std.testing.expect(rawEqual(value, try ctx.requireByName(F.alias)));
+            try std.testing.expect(rawEqual(value, try ctx.requireModuleId(0, F.canonical)));
+            try std.testing.expect(ctx.moduleState(0) == null);
+        }
+    }
+}
+
+test "require false preinitialization declines deferred cache and preserves eager admission" {
+    const F = RequireCacheControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 1, 1);
+    defer ctx.deinit();
+    const roots = [_]FunctionFn{stabilize(F.returnCount)};
+    ctx.module_root_entries = &roots;
+    ctx.configureModules(null, F.lookup, F.name);
+    try F.loaded(&ctx, 0);
+    try ctx.preinitializeModule(0, .{ .boolean = false }, false);
+    var ignored: Value = undefined;
+    try std.testing.expect(ctx.deferStaticRequireRef(0, &ignored) == null);
+    ctx.beginEagerBootstrap();
+    const eager = ctx.requireModuleId(0, F.canonical) catch |err| {
+        ctx.endEagerBootstrap();
+        return err;
+    };
+    ctx.endEagerBootstrap();
+    try std.testing.expect(!eager.boolean);
+    try std.testing.expectEqual(@as(f64, 0), F.calls(&ctx));
+    try std.testing.expectEqual(@as(f64, 1), (try ctx.requireByName(F.canonical)).number);
+    try std.testing.expectEqual(@as(f64, 1), F.calls(&ctx));
+}
+
+test "require false template exports execute live roots instead of cloning cached false" {
+    const F = RequireCacheControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source = try Context.initProgram(arena.allocator(), 1, 1);
+    defer source.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 1, 1);
+    defer ctx.deinit();
+    const roots = [_]FunctionFn{stabilize(F.returnFalse)};
+    source.module_root_entries = &roots;
+    ctx.module_root_entries = &roots;
+    source.configureModules(null, F.lookup, F.name);
+    ctx.configureModules(null, F.lookup, F.name);
+    try F.loaded(&source, 0);
+    try F.loaded(&ctx, 0);
+    try std.testing.expect(!(try source.loadModule(0, null)).boolean);
+    var eligible = [_]bool{true};
+    var rejected = [_]bool{false};
+    ctx.module_template_context = &source;
+    ctx.module_template_eligible = &eligible;
+    ctx.module_template_rejected = &rejected;
+    try std.testing.expect(!(try ctx.requireByName(F.canonical)).boolean);
+    try std.testing.expectEqual(@as(f64, 1), F.calls(&ctx));
+    try std.testing.expect(!(try ctx.requireByName(F.canonical)).boolean);
+    try std.testing.expectEqual(@as(f64, 2), F.calls(&ctx));
+    try std.testing.expectEqual(@as(f64, 1), F.calls(&source));
+}
+
+test "forked contexts inherit immutable module load diagnostics and lookup host" {
+    const Probe = struct {
+        const message = "error loading module 'Module:BrokenFork': UnexpectedToken";
+        fn lookup(_: ?*const anyopaque, _: []const u8) ?u32 { return 0; }
+        fn name(_: ?*const anyopaque, _: u32) ?[]const u8 { return "Module:BrokenFork"; }
+        fn diagnostic(raw: ?*const anyopaque, id: u32) ?[]const u8 {
+            const host: *const u8 = @ptrCast(@alignCast(raw.?));
+            std.debug.assert(host.* == 23);
+            return if (id == 0) message else null;
+        }
+    };
+    const host: u8 = 23;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var source = try Context.initProgram(arena.allocator(), 0, 1);
+    defer source.deinit();
+    source.configureModules(&host, Probe.lookup, Probe.name);
+    source.configureModuleLoadErrors(Probe.diagnostic);
+    var child = try source.forkProgram(arena.allocator());
+    defer child.deinit();
+    try std.testing.expect(child.module_lookup_ctx == source.module_lookup_ctx);
+    try std.testing.expectError(error.LuaRaised, child.checkModuleLoadError(0));
+    try std.testing.expectEqualStrings(Probe.message, child.last_error.string);
+    try std.testing.expect(child.moduleState(0) == null);
+    try std.testing.expect(!source.last_error_present);
+    child.clearLuaError();
+    try std.testing.expectError(error.LuaRaised, source.checkModuleLoadError(0));
+    try std.testing.expectEqualStrings(Probe.message, source.last_error.string);
+}
+
+
+test "package loaded nil roots preserve page effects while pure roots remain reusable" {
+    const Probe = struct {
+        var pure_runs: u32 = 0;
+        fn lookup(_: ?*const anyopaque, text: []const u8) ?u32 {
+            if (std.mem.eql(u8, text, "Module:NilCounter")) return 0;
+            if (std.mem.eql(u8, text, "Module:PureCounter")) return 1;
+            return null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return switch (id) { 0 => "Module:NilCounter", 1 => "Module:PureCounter", else => null };
+        }
+        fn nilRoot(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+            const loaded = ctx.package_loaded.?;
+            const key: Value = .{ .string = "__counter" };
+            const before: Value = loaded.rawGet(key) orelse .{ .number = 0 };
+            try loaded.rawSet(ctx.allocator, key, .{ .number = before.number + 1 });
+            return &.{};
+        }
+        fn pureRoot(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+            pure_runs += 1;
+            try ctx.observePackage();
+            const out = try std.heap.smp_allocator.alloc(Value, 1);
+            out[0] = .{ .string = "pure" };
+            return out;
+        }
+    };
+    const keys = [_]Value{ .{ .string = "Module:NilCounter" }, .{ .string = "Module:PureCounter" } };
+    const shapes = [_]Shape{.{ .keys = .{ .boxed = &keys }, .field_count = 2, .sorted_string_slots = &.{ 0, 1 }, .all_string_keys = true, .open = true }};
+    const roots = [_]FunctionFn{ stabilize(Probe.nilRoot), stabilize(Probe.pureRoot) };
+    for ([_]bool{ false, true }) |structural| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var source = try Context.initProgram(a, 0, 2);
+        defer source.deinit();
+        source.module_root_entries = &roots;
+        source.configureModules(null, Probe.lookup, Probe.name);
+        if (structural) {
+            source.program_shapes = &shapes;
+            source.program_shapes_validated = true;
+            source.package_loaded_shape_id = 0;
+            source.package_loaded_module_slots = &.{ 0, 1 };
+            source.package_loaded_slot_modules = &.{ 0, 1 };
+        }
+        var eligible = [_]bool{ false, false };
+        var rejected = [_]bool{ false, false };
+        source.module_template_eligible = &eligible;
+        source.module_template_rejected = &rejected;
+        Probe.pure_runs = 0;
+        for (0..3) |page_number| {
+            var page = try source.forkProgram(a);
+            defer page.deinit();
+            page.module_template_context = &source;
+            page.module_template_eligible = &eligible;
+            page.module_template_rejected = &rejected;
+            var marker = page_number;
+            page.setHost(&marker);
+            page.package_loaded = try page.newPackageLoadedTable();
+            try page.package_loaded.?.rawSet(a, .{ .string = "__counter" }, .{ .number = 0 });
+            try std.testing.expect((try page.requireByName("Module:NilCounter")).boolean);
+            try std.testing.expect((try page.requireByName("Module:NilCounter")).boolean);
+            try std.testing.expectEqual(@as(f64, 1), page.package_loaded.?.rawGet(.{ .string = "__counter" }).?.number);
+            // Test false reload only after all three cold/warm page checks;
+            // otherwise the shared rejection flag would mask the pre-fix bug.
+            if (page_number == 2) {
+                try page.package_loaded.?.rawSet(a, .{ .string = "Module:NilCounter" }, .{ .boolean = false });
+                try std.testing.expect((try page.requireByName("Module:NilCounter")).boolean);
+                try std.testing.expect((try page.requireByName("Module:NilCounter")).boolean);
+                try std.testing.expectEqual(@as(f64, 2), page.package_loaded.?.rawGet(.{ .string = "__counter" }).?.number);
+            }
+            try std.testing.expectEqualStrings("pure", (try page.requireByName("Module:PureCounter")).string);
+            try std.testing.expectEqualStrings("pure", (try page.requireByName("Module:PureCounter")).string);
+        }
+        try std.testing.expectEqual(@as(u32, 1), Probe.pure_runs);
+    }
+}
+
+test "package loaded explicit reads observe current page values including misses false and semantic access" {
+    const Probe = struct {
+        var mode: usize = 0;
+        fn lookup(_: ?*const anyopaque, text: []const u8) ?u32 {
+            if (std.mem.eql(u8, text, "Module:Reader")) return 0;
+            if (std.mem.eql(u8, text, "Module:Observed")) return 1;
+            return null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return switch (id) { 0 => "Module:Reader", 1 => "Module:Observed", else => null };
+        }
+        fn root(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+            const loaded = ctx.package_loaded.?;
+            const key: Value = .{ .string = if (mode == 3) "Module:Observed" else "__custom" };
+            const seen: Value = switch (mode) {
+                0, 3 => loaded.rawGet(key) orelse .nil,
+                1 => loaded.rawGetHashedString(key.string, stringValueHash(key.string)) orelse .nil,
+                2 => blk: {
+                    const first = try ctx.getFieldAtSite(.{ .table = loaded }, key.string, stringValueHash(key.string), 41);
+                    const second = try ctx.getFieldAtSite(.{ .table = loaded }, key.string, stringValueHash(key.string), 41);
+                    try std.testing.expect(rawEqual(first, second));
+                    break :blk second;
+                },
+                4 => loaded.rawGetNumber(1) orelse .nil,
+                5 => .{ .number = @floatFromInt(loaded.rawLen()) },
+                6 => blk: {
+                    var it = loaded.iterator();
+                    while (it.next()) |entry| if (rawEqual(entry.key_ptr.*, key)) break :blk entry.value_ptr.*;
+                    break :blk .nil;
+                },
+                7 => ctx.metamethod(.{ .table = loaded }, "__call") orelse .nil,
+                else => unreachable,
+            };
+            const result = try ctx.newTable();
+            try result.rawSet(ctx.allocator, .{ .string = "seen" }, seen);
+            const out = try std.heap.smp_allocator.alloc(Value, 1);
+            out[0] = .{ .table = result };
+            return out;
+        }
+    };
+    const keys = [_]Value{ .{ .string = "Module:Observed" }, .{ .string = "Module:Reader" } };
+    const shapes = [_]Shape{.{ .keys = .{ .boxed = &keys }, .field_count = 2, .sorted_string_slots = &.{ 0, 1 }, .all_string_keys = true, .open = true }};
+    const roots = [_]FunctionFn{ stabilize(Probe.root), stabilize(Probe.root) };
+    for ([_]bool{ false, true }) |structural| for (0..8) |mode| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var source = try Context.initProgram(a, 0, 2);
+        defer source.deinit();
+        source.module_root_entries = &roots;
+        source.configureModules(null, Probe.lookup, Probe.name);
+        if (structural) {
+            source.program_shapes = &shapes;
+            source.program_shapes_validated = true;
+            source.package_loaded_shape_id = 0;
+            source.package_loaded_module_slots = &.{ 1, 0 };
+            source.package_loaded_slot_modules = &.{ 1, 0 };
+        }
+        var eligible = [_]bool{ false, false };
+        var rejected = [_]bool{ false, false };
+        source.module_template_eligible = &eligible;
+        source.module_template_rejected = &rejected;
+        Probe.mode = mode;
+        for (0..3) |page_number| {
+            var page = try source.forkProgram(a);
+            defer page.deinit();
+            page.module_template_context = &source;
+            page.module_template_eligible = &eligible;
+            page.module_template_rejected = &rejected;
+            var marker = page_number;
+            page.setHost(&marker);
+            page.package_loaded = try page.newPackageLoadedTable();
+            const input: Value = switch (page_number) { 0 => .nil, 1 => .{ .boolean = false }, else => .{ .number = 17 } };
+            const key: Value = .{ .string = if (mode == 3) "Module:Observed" else "__custom" };
+            try page.package_loaded.?.rawSet(a, key, input);
+            try page.package_loaded.?.rawSet(a, .{ .number = 1 }, input);
+            if (page_number == 2) try page.package_loaded.?.rawSet(a, .{ .number = 2 }, .{ .boolean = true });
+            if (mode == 7 and page_number != 0) {
+                const mt = try page.newTable();
+                try mt.rawSet(a, .{ .string = "__call" }, input);
+                page.package_loaded.?.metatable = mt;
+            }
+            const result = try page.requireByName("Module:Reader");
+            const seen = result.table.rawGet(.{ .string = "seen" }) orelse .nil;
+            const expected: Value = if (mode == 5) .{ .number = @floatFromInt(page_number) } else input;
+            try std.testing.expect(rawEqual(expected, seen));
+        }
+    };
+}
+
+
+test "package loaded writes remain page effects despite export guards or probe allocation" {
+    const Probe = struct {
+        var allocate_inside: bool = false;
+        fn lookup(_: ?*const anyopaque, text: []const u8) ?u32 {
+            return if (std.mem.eql(u8, text, "Module:Writer")) 0 else null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return if (id == 0) "Module:Writer" else null;
+        }
+        fn root(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+            if (allocate_inside) ctx.package_loaded = try ctx.newPackageLoadedTable();
+            try ctx.package_loaded.?.rawSet(ctx.allocator, .{ .string = "__written" }, .{ .number = 17 });
+            const out = try std.heap.smp_allocator.alloc(Value, 1);
+            out[0] = .{ .string = "written" };
+            return out;
+        }
+    };
+    for ([_]bool{ false, true }) |allocate_inside| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var source = try Context.initProgram(a, 0, 1);
+        defer source.deinit();
+        const roots = [_]FunctionFn{stabilize(Probe.root)};
+        source.module_root_entries = &roots;
+        source.configureModules(null, Probe.lookup, Probe.name);
+        var eligible = [_]bool{false};
+        var rejected = [_]bool{false};
+        source.module_template_eligible = &eligible;
+        source.module_template_rejected = &rejected;
+        Probe.allocate_inside = allocate_inside;
+        for (0..3) |page_number| {
+            var page = try source.forkProgram(a);
+            defer page.deinit();
+            page.module_template_context = &source;
+            page.module_template_eligible = &eligible;
+            page.module_template_rejected = &rejected;
+            var marker = page_number;
+            page.setHost(&marker);
+            page.package_loaded = try page.newPackageLoadedTable();
+            page.package_loaded.?.prepareExportGuard();
+            try std.testing.expectEqualStrings("written", (try page.requireByName("Module:Writer")).string);
+            try std.testing.expectEqual(@as(f64, 17), page.package_loaded.?.rawGet(.{ .string = "__written" }).?.number);
+        }
+    }
 }
