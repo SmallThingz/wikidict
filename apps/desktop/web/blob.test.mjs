@@ -103,12 +103,12 @@ test('DPR3 refuses unknown versions incomplete strings UTF8 limits and trailing 
  for(const invalid of [valid.subarray(0,-1),Buffer.concat([valid,Buffer.from([0])]),explanationProtocolFixture('DPR3',{explanation:Buffer.from([0xff])}),explanationProtocolFixture('DPR3',{invalidLength:true})])assert.throws(()=>decode(invalid,{}));
  const tooMany=valid.slice();tooMany.writeUInt32LE(1000001,4);assert.throws(()=>decode(tooMany,{}));
 });
-test('genuine native abbreviation fixture matches normal CLI JSON for DPR5 annotated and plain records',async()=>{
+test('genuine native abbreviation fixture matches normal CLI JSON for DPR3 annotated and DPR2 plain records',async()=>{
  const root=process.env.WIKBLB_ABBREVIATION_ROOT||'../tests/fixtures/abbreviation-interop';
  // This test intentionally requires the real normal test-bundle output; no synthetic fallback or skip.
  const blob=new Uint8Array(await readFile(path.join(root,'languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb')));
  const source=new RawSource(new Blob([blob])),index=await buildIndex(source);
- const cases=[['Acupuncture abbreviation sample','annotated.export.json','DPR5'],['Legacy format abbreviation control','legacy.export.json','DPR5']];
+ const cases=[['Acupuncture abbreviation sample','annotated.export.json','DPR3'],['Legacy format abbreviation control','legacy.export.json','DPR2']];
  for(const [title,jsonName,magic] of cases){
   const row=index.rows.find(row=>row.title===title);assert.ok(row,title);
   const payload=await source.read(row.offset,row.length);assert.equal(new TextDecoder().decode(payload.subarray(0,4)),magic);
@@ -405,4 +405,94 @@ if(process.env.WIKBLB_REFERENCE_ITEMS_INTEROP==='1')test('genuine Writer DPR9 re
  assert.deepEqual(actual.media.map(m=>[m.file,m.caption]),[['Reference fragment.svg','Fragment media caption']]);
  const targets=actual.sections.flatMap(s=>s.blocks.flatMap(b=>b.spans)).filter(s=>s.kind==='link').map(s=>s.target);
  assert.ok(targets.includes('#reference-1')&&targets.includes('#reference-3'));assert.ok(!targets.includes('#reference-2'));
+});
+
+// DPRA wire controls are independent of the native producer interoperability gate.
+function fontScalePayload({scale=1.25,presence=1,rawScale=null,magic='DPRA',basis=0}={}){
+ const cat=Buffer.concat,zero=()=>testU32(0),string=testString;
+ const float=Buffer.alloc(4);float.writeFloatLE(scale);
+ const spans=(text='سبتمبر')=>cat([testU32(1),Buffer.from([1,0,3]),...[text,'Target','!','ar','AR','rtl','explanation'].map(string),Buffer.from([1]),string('#123456'),Buffer.from([1]),string('#ffeecc'),Buffer.from([presence]),...(presence===1?[rawScale??float,...(magic==='DPRB'?[Buffer.from([basis])]:[])]:[])]);
+ const table=(cells,caption='Caption')=>cat([Buffer.from([1,15]),Buffer.from([2,0,3,0,4,0,1]),testU32(75),spans(caption),testU32(1),testU32(cells.length),...cells]);
+ const cell=({child=null,items=null,text=null}={})=>cat([Buffer.from([1,2,0,1,0,1]),string('#ffeecc'),text===null?zero():spans(text),child??Buffer.from([0]),Buffer.from([items===null?0:1]),...(items===null?[]:[testU32(items.length),...items])]);
+ const block=(kind=0,grid=null,text='Body')=>cat([Buffer.from([kind,2,3]),text===null?zero():spans(text),Buffer.from([1]),...['feature','ar','data','none',''].map(string),string('1'),string('2'),grid??Buffer.from([0]),string('Heading'),string('Heading_fallback')]);
+ const inner=table([cell({text:'Nested cell'})],'Nested caption');
+ const grid=table([cell({text:'Cell'}),cell({child:inner}),cell({items:[block(9,null,'Ordered heading'),block(12,inner,null)]})]);
+ const section=cat([Buffer.from([2]),string('Section'),string('Section_anchor'),string('Section_fallback'),testU32(1),block(12,grid,null)]);
+ const fragment=cat([Buffer.from([1]),testU32(2),string('notes'),spans('Fragment')]);
+ const note=cat([Buffer.from([0]),testU32(1),testU32(1),string('named'),string('notes'),spans('Note')]);
+ return cat([Buffer.from(magic),spans('Display'),testU32(1),section,spans('Preamble'),zero(),zero(),testU32(2),fragment,note,testU32(1),string('Media.svg'),Buffer.from([0]),string('Media caption')]);
+}
+test('DPRA font scale survives all recursive containers and retains DPR9 reference fields',async()=>{
+ const payload=fontScalePayload(),entry=decode(payload,{title:'Scale'}),lists=presentationSpanLists(entry);
+ assert.ok(lists.length>=10);assert.ok(lists.flat().every(span=>span.font_scale===1.25&&span.bold&&span.italic&&span.target==='Target'&&span.trail==='!'&&span.foreground==='#123456'&&span.background==='#ffeecc'));
+ assert.equal(entry.presentation_version,'DPRA');assert.deepEqual(entry.references.map(({kind='note',number,group_number,name,group})=>({kind,number,group_number,name,group})),[{kind:'fragment',number:2,group_number:null,name:'',group:'notes'},{kind:'note',number:1,group_number:1,name:'named',group:'notes'}]);
+ const table=entry.sections[0].blocks[0].table;assert.deepEqual(table.geometry,{border:2,cell_spacing:3,cell_padding:4,width:{unit:'percent',value:75}});assert.equal(table.rows[0].cells[2].blocks[0].anchor,'Heading');assert.equal(table.rows[0].cells[2].blocks[1].table.rows[0].cells[0].spans[0].text,'Nested cell');
+ assert.deepEqual(decodeAlias(aliasPayload({compiled:payload}),'1\tCats').entry.references,entry.references);
+ const source=new RawSource(new Blob([dictionaryBlob(1,[['Scale',payload]])]));assert.equal((await buildIndex(source)).rows.length,1);
+ const absent=decode(fontScalePayload({presence:0}),{});assert.ok(presentationSpanLists(absent).flat().every(span=>!Object.hasOwn(span,'font_scale')));
+ const zero=decode(fontScalePayload({scale:0}),{});assert.ok(presentationSpanLists(zero).flat().every(span=>span.font_scale===0));
+ for(const scale of [NaN,Infinity,-Infinity,-1])assert.throws(()=>decode(fontScalePayload({scale}),{}));
+ for(const presence of [2,255])assert.throws(()=>decode(fontScalePayload({presence}),{}));
+ for(let end=0;end<payload.length;end++)assert.throws(()=>decode(payload.subarray(0,end),{}));
+ assert.throws(()=>decode(Buffer.concat([payload,Buffer.from([0])]),{}));
+});
+
+test('DPRB retains typed heading size basis and explicit normal body identity recursively',async()=>{
+ const payload=fontScalePayload({magic:'DPRB',basis:1,scale:1}),entry=decode(payload,{});
+ assert.equal(entry.presentation_version,'DPRB');assert.ok(presentationSpanLists(entry).flat().every(span=>span.font_scale===1&&span.font_scale_basis==='normal_body'));
+ assert.deepEqual(entry.references.map(({kind='note',number,group_number,name,group})=>({kind,number,group_number,name,group})),[{kind:'fragment',number:2,group_number:null,name:'',group:'notes'},{kind:'note',number:1,group_number:1,name:'named',group:'notes'}]);
+ const context=decode(fontScalePayload({magic:'DPRB',basis:0}),{}),legacy=decode(fontScalePayload(),{});
+ context.presentation_version='DPRA';assert.deepEqual(context,legacy);
+ const absent=decode(fontScalePayload({magic:'DPRB',presence:0}),{});assert.ok(presentationSpanLists(absent).flat().every(span=>!Object.hasOwn(span,'font_scale')&&!Object.hasOwn(span,'font_scale_basis')));
+ const zero=decode(fontScalePayload({magic:'DPRB',basis:1,scale:0}),{});assert.ok(presentationSpanLists(zero).flat().every(span=>span.font_scale===0&&span.font_scale_basis==='normal_body'));
+ assert.deepEqual(decodeAlias(aliasPayload({compiled:payload}),'1\tCats').entry.references,entry.references);
+ assert.equal((await buildIndex(new RawSource(new Blob([dictionaryBlob(1,[['Basis',payload]])])))).rows.length,1);
+ for(const basis of [2,255])assert.throws(()=>decode(fontScalePayload({magic:'DPRB',basis}),{}));
+ for(let end=0;end<payload.length;end++)assert.throws(()=>decode(payload.subarray(0,end),{}));
+ assert.throws(()=>decode(Buffer.concat([payload,Buffer.from([0])]),{}));
+ // An absent-scale DPRB span remains 34 bytes: the extra basis byte is present-only.
+ const empty=Buffer.concat([Buffer.from([0,0,0]),...Array.from({length:7},()=>testU32(0)),Buffer.from([0,0,0])]);assert.equal(empty.length,34);
+ const scale=Buffer.alloc(4);scale.writeFloatLE(1);const body=Buffer.concat([empty.subarray(0,33),Buffer.from([1]),scale,Buffer.from([1])]);
+ const dense=Buffer.concat([Buffer.from('DPRB'),testU32(1025),...Array.from({length:1024},()=>empty),body,...Array.from({length:6},()=>testU32(0))]);
+ const denseEntry=decode(dense,{});assert.equal(denseEntry.display_title.length,1025);assert.equal(denseEntry.display_title.at(-1).font_scale_basis,'normal_body');
+});
+
+// Optional real-product gate beside the default legacy and hand-framed controls.
+// Caller authenticates these retained Writer/Reader inputs; no fixture fallback.
+if(process.env.WIKBLB_FONT_BASIS_INTEROP==='1')test('genuine Native90 DPRB matches normal Reader modeled graph and source heading origins',async()=>{
+ for(const key of ['WIKBLB_FONT_BASIS_FIXTURE','WIKBLB_FONT_BASIS_EXPORT','WIKBLB_FONT_BASIS_DECODED'])assert.ok(process.env[key],key+' is required');
+ const exported=JSON.parse(await readFile(process.env.WIKBLB_FONT_BASIS_EXPORT,'utf8'));
+ assert.equal(exported.schema,'dict.results.v1');assert.equal(exported.entries.length,1);
+ const expected=exported.entries[0],producer=JSON.parse(await readFile(process.env.WIKBLB_FONT_BASIS_DECODED,'utf8'));
+ assert.equal(expected.title,'DPRB font scale basis');assert.equal(producer.title,expected.title);
+ const source=new RawSource(new Blob([await readFile(process.env.WIKBLB_FONT_BASIS_FIXTURE)])),index=await buildIndex(source);
+ assert.equal(index.metadata.kind,'language');assert.equal(index.metadata.language,'English');assert.equal(index.metadata.language_code,'en');assert.equal(index.rows.length,1);
+ const row=index.rows[0];assert.equal(row.title,expected.title);
+ const payload=await source.read(row.offset,row.length);assert.equal(new TextDecoder().decode(payload.subarray(0,4)),'DPRB');
+ const actual=decode(payload,{...index.metadata,title:row.title});
+ const spanKeys=['kind','role','text','target','trail','language','classes','direction','explanation','bold','italic','code','small','superscript','subscript','strike','underline'];
+ const spans=values=>values.map(span=>({...Object.fromEntries(spanKeys.map(key=>{
+  assert.ok(Object.hasOwn(span,key),'Missing span field '+key);return [key,span[key]];
+ })),foreground:span.foreground??null,background:span.background??null,font_scale:span.font_scale??null,font_scale_basis:span.font_scale_basis??'context'}));
+ const geometry=value=>value==null?null:{border:value.border??null,cell_spacing:value.cell_spacing??null,cell_padding:value.cell_padding??null,width:value.width??null};
+ const table=value=>value==null?null:{geometry:geometry(value.geometry),caption:spans(value.caption),rows:value.rows.map(row=>({cells:row.cells.map(cell=>({header:cell.header,colspan:cell.colspan,rowspan:cell.rowspan,background:cell.background??null,spans:spans(cell.spans),nested_table:table(cell.nested_table),blocks:cell.blocks==null?null:cell.blocks.map(block)}))}))};
+ const block=value=>({kind:value.kind,depth:value.depth,level:value.level,list_path:value.list_path??value.path,number:value.number,feature:value.feature??null,anchor:value.anchor,anchor_fallback:value.anchor_fallback,spans:spans(value.spans),table:table(value.table)});
+ const graph=value=>({title:value.title,kind:value.kind,language:value.language,language_code:value.language_code,
+  display_title:spans(value.display_title),preamble_spans:spans(value.preamble_spans),
+  sections:value.sections.map(section=>({level:section.level,title:section.title,anchor:section.anchor,anchor_fallback:section.anchor_fallback,blocks:section.blocks.map(block)})),
+  references:value.references.map(ref=>({kind:ref.kind??'note',number:ref.number,group_number:ref.group_number,name:ref.name,group:ref.group,spans:spans(ref.spans)})),media:value.media});
+ assert.deepEqual(graph(actual),graph(expected));assert.deepEqual(graph(actual),graph(producer));
+ assert.ok(actual.display_title.some(span=>span.text==='DPRB font scale basis'&&span.font_scale===1.25&&(span.font_scale_basis??'context')==='context'));
+ const headings=actual.sections.flatMap(section=>section.blocks).filter(block=>block.kind==='heading');
+ const heading=(prefix,scale,basis)=>{
+  const matches=headings.filter(block=>block.spans.map(span=>span.text+span.trail).join('').startsWith(prefix));assert.equal(matches.length,1,prefix);
+  const values=matches[0].spans;assert.ok(values.length>0);assert.ok(values.every(span=>span.font_scale===scale&&(span.font_scale_basis??'context')===basis),prefix);
+  return values;
+ };
+ heading('Normal body heading',1,'normal_body');heading('Context heading',1.25,'context');
+ const small=heading('Nested small heading',Math.fround(1.25/1.2),'normal_body');assert.ok(small.every(span=>span.small===false));
+ const bodySpans=actual.sections.flatMap(section=>section.blocks.flatMap(block=>block.spans));
+ assert.ok(bodySpans.some(span=>span.text.startsWith('Zero text')&&span.font_scale===0&&(span.font_scale_basis??'context')==='context'));
+ const actions=[...actual.display_title,...actual.preamble_spans,...bodySpans].filter(span=>span.kind==='link').map(span=>span.target);
+ assert.deepEqual(actions,['Target','Target','Target','Target','Target']);
 });
