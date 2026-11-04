@@ -8,6 +8,7 @@
 #include <QAction>
 #include <QComboBox>
 #include <QDialog>
+#include <QDialogButtonBox>
 #include <QDesktopServices>
 #include <QDir>
 #include <QDirIterator>
@@ -38,6 +39,9 @@
 #include <QSignalSpy>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QScreen>
+#include <QWindow>
+#include <QSpinBox>
 #include <QSet>
 #include <QSettings>
 #include <QSemaphore>
@@ -441,6 +445,100 @@ private slots:
         QCOMPARE(window.sections_, sections);
         QTRY_VERIFY(window.back_->geometry().top() <= window.sections_->geometry().bottom());
         QTRY_VERIFY(window.sections_->geometry().top() <= window.back_->geometry().bottom());
+    }
+
+    void learningDialogTracksNarrowAvailableGeometry() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.bookmark_->click();
+        const QByteArray entryBefore = window.currentJson_;
+        const auto keys = [](const QVector<SavedWord> &words) {
+            QStringList values; for (const SavedWord &word : words) values.append(word.key); return values;
+        };
+        const QStringList historyBefore = keys(window.learning_.history());
+        const QStringList bookmarksBefore = keys(window.learning_.bookmarks());
+        window.activateWindow(); window.search_->setFocus();
+        QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(window.search_));
+        bool exercised = false;
+        QTimer::singleShot(0, &window, [&] {
+            QPointer<QDialog> dialog = window.findChild<QDialog *>(QStringLiteral("learningDialog"));
+            if (!dialog) dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QPointer<QScreen> screen;
+            QRect original;
+            // Install rejection before any assertion that can end this callback.
+            auto cleanup = qScopeGuard([&] {
+                if (screen && original.isValid())
+                    QMetaObject::invokeMethod(screen.data(), "availableGeometryChanged", Qt::DirectConnection, Q_ARG(QRect, original));
+                if (dialog && dialog->isVisible()) dialog->reject();
+            });
+            QVERIFY(dialog && dialog->objectName() == QStringLiteral("learningDialog"));
+            QCOMPARE(QApplication::activeModalWidget(), static_cast<QWidget *>(dialog.data()));
+            screen = dialog->screen(); QVERIFY(screen);
+            original = screen->availableGeometry();
+            // Let the production post-show decoration/placement adjustment finish.
+            QCoreApplication::processEvents();
+            auto *tabs = dialog->findChild<QTabWidget *>(QStringLiteral("learningDialogTabs"));
+            auto *box = dialog->findChild<QDialogButtonBox *>(QStringLiteral("learningDialogButtons"));
+            QVERIFY(tabs && box);
+            auto *close = box->button(QDialogButtonBox::Close); QVERIFY(close);
+            const QRect narrow(original.topLeft(), QSize(480, 600));
+            const auto announce = [&](const QRect &available) {
+                return QMetaObject::invokeMethod(screen.data(), "availableGeometryChanged", Qt::DirectConnection, Q_ARG(QRect, available));
+            };
+            QVERIFY(announce(narrow));
+            QTRY_VERIFY(narrow.contains(dialog->frameGeometry()));
+            for (int page = 0; page < tabs->count(); ++page) {
+                tabs->setCurrentIndex(page); QCoreApplication::processEvents();
+                QVERIFY(narrow.contains(dialog->frameGeometry()));
+                QVERIFY(close->isVisible() && close->isEnabled());
+                QVERIFY(narrow.contains(QRect(close->mapToGlobal(QPoint()), close->size())));
+                auto *accessible = QAccessible::queryAccessibleInterface(close); QVERIFY(accessible);
+                QVERIFY(!accessible->state().invisible); QVERIFY(narrow.contains(accessible->rect()));
+            }
+            // The same open dialog must also follow a wide-to-narrow display change.
+            const QRect wide(original.topLeft(), QSize(760, 600));
+            QVERIFY(announce(wide)); dialog->resize(720, 550);
+            QVERIFY(dialog->width() > 480);
+            QVERIFY(announce(narrow)); QTRY_VERIFY(narrow.contains(dialog->frameGeometry()));
+            auto *handle = dialog->windowHandle(); QVERIFY(handle);
+            QScreen *reportedScreen = handle->screen();
+            QVERIFY(reportedScreen == screen.data());
+            // Controlled signal delivery tests rebinding; it does not change
+            // QWindow/QScreen state or stand in for a real monitor move.
+            QVERIFY(QMetaObject::invokeMethod(handle, "screenChanged", Qt::DirectConnection,
+                Q_ARG(QScreen *, reportedScreen)));
+            QCOMPARE(handle->screen(), reportedScreen);
+            const int frameWidth = qMax(0, dialog->frameGeometry().width() - dialog->width());
+            QCOMPARE(dialog->maximumWidth(), qMax(1, original.width() - frameWidth));
+            if (original.width() - frameWidth > 480) {
+                dialog->resize(qMin(720, original.width() - frameWidth), 550);
+                QVERIFY(dialog->width() > 480);
+            }
+            QVERIFY(announce(narrow)); QTRY_VERIFY(narrow.contains(dialog->frameGeometry()));
+            tabs->setCurrentIndex(3);
+            auto *settingsScroll = qobject_cast<QScrollArea *>(tabs->currentWidget()); QVERIFY(settingsScroll);
+            auto *limit = settingsScroll->findChild<QSpinBox *>(QStringLiteral("learningHistoryLimit")); QVERIFY(limit);
+            limit->setValue(47); QCOMPARE(window.learning_.settings().historyLimit, 47);
+            limit->setFocus(Qt::TabFocusReason);
+            QTRY_VERIFY(QApplication::focusWidget() == limit || limit->isAncestorOf(QApplication::focusWidget()));
+            for (int step = 0; step < 48 && QApplication::focusWidget() != close; ++step) {
+                QWidget *focused = QApplication::focusWidget(); QVERIFY(focused);
+                QTest::keyClick(focused, Qt::Key_Tab); QCoreApplication::processEvents();
+            }
+            QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(close));
+            QVERIFY(narrow.contains(QRect(close->mapToGlobal(QPoint()), close->size())));
+            QTest::keyClick(close, Qt::Key_Space);
+            QVERIFY(!dialog->isVisible());
+            exercised = true;
+        });
+        window.showLearningDialog(1);
+        QVERIFY(exercised);
+        QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(window.search_));
+        QCOMPARE(window.currentJson_, entryBefore);
+        QCOMPARE(keys(window.learning_.history()), historyBefore);
+        QCOMPARE(keys(window.learning_.bookmarks()), bookmarksBefore);
+        QCOMPARE(window.learning_.settings().historyLimit, 47);
     }
 
     void richLongTitleWrapsWithoutAddingKeyboardStop() {

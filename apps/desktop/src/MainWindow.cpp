@@ -38,9 +38,13 @@
 #include <QPalette>
 #include <QPushButton>
 #include <QProgressBar>
+#include <QPointer>
 #include <QRandomGenerator>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QScreen>
+#include <QScopeGuard>
+#include <QWindow>
 #include <QSettings>
 #include <QSet>
 #include <QShortcut>
@@ -2443,11 +2447,24 @@ void MainWindow::showRandomWord() {
 }
 void MainWindow::showLearningDialog(int tab) {
     QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("learningDialog"));
     dialog.setWindowTitle(QStringLiteral("Saved words & learning"));
     dialog.resize(760, 620);
     auto *layout = new QVBoxLayout(&dialog);
     auto *tabs = new QTabWidget(&dialog);
+    tabs->setObjectName(QStringLiteral("learningDialogTabs"));
     layout->addWidget(tabs, 1);
+    // Lists already own their scrolling. Keep the larger practice/settings
+    // pages contained so a hidden page cannot push Close off a small display.
+    const auto addScrollablePage = [tabs](QWidget *page, const QString &label, const QString &name) {
+        auto *scroll = new QScrollArea(tabs);
+        scroll->setObjectName(name);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setFocusPolicy(Qt::NoFocus);
+        scroll->setWidgetResizable(true);
+        scroll->setWidget(page);
+        tabs->addTab(scroll, label);
+    };
 
     auto makeWordList = [&](const QVector<SavedWord> &words, const QString &emptyText) {
         auto *list = new QListWidget(tabs);
@@ -2553,7 +2570,7 @@ void MainWindow::showLearningDialog(int tab) {
     learnLayout->addWidget(gamePicker);
     learnLayout->addWidget(poolStatus);
     learnLayout->addWidget(games, 1);
-    tabs->addTab(learnPage, QStringLiteral("Learn"));
+    addScrollablePage(learnPage, QStringLiteral("Learn"), QStringLiteral("learningPracticeScroll"));
 
     auto *quizPage = new QWidget(games);
     auto *quizLayout = new QVBoxLayout(quizPage);
@@ -2737,8 +2754,11 @@ void MainWindow::showLearningDialog(int tab) {
 
     auto *settingsPage = new QWidget(tabs);
     auto *form = new QFormLayout(settingsPage);
+    form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     auto *rememberHistory = new QCheckBox(settingsPage); rememberHistory->setChecked(learning_.settings().historyEnabled);
     auto *historyLimit = new QSpinBox(settingsPage); historyLimit->setRange(1, 500); historyLimit->setValue(learning_.settings().historyLimit);
+    historyLimit->setObjectName(QStringLiteral("learningHistoryLimit"));
     auto *quizLength = new QSpinBox(settingsPage); quizLength->setRange(3, 50); quizLength->setValue(learning_.settings().quizLength);
     auto *randomPool = new QComboBox(settingsPage);
     randomPool->addItem(QStringLiteral("All dictionary words"), QStringLiteral("all"));
@@ -2763,7 +2783,7 @@ void MainWindow::showLearningDialog(int tab) {
     form->addRow(QStringLiteral("Fold etymology by default"), collapseEtymology);
     form->addRow(mediaSettings);
     form->addRow(resetStudy);
-    tabs->addTab(settingsPage, QStringLiteral("Settings"));
+    addScrollablePage(settingsPage, QStringLiteral("Settings"), QStringLiteral("learningSettingsScroll"));
 
     connect(rememberHistory, &QCheckBox::toggled, &dialog, [this](bool value) { learning_.setHistoryEnabled(value); });
     connect(historyLimit, &QSpinBox::valueChanged, &dialog, [this](int value) { learning_.setHistoryLimit(value); });
@@ -2792,9 +2812,50 @@ void MainWindow::showLearningDialog(int tab) {
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    buttons->setObjectName(QStringLiteral("learningDialogButtons"));
     layout->addWidget(buttons);
     refreshPractice();
     tabs->setCurrentIndex(std::clamp(tab, 0, tabs->count() - 1));
+    const auto fitDialog = [&dialog](const QRect &available) {
+        if (!available.isValid()) return;
+        const QSize decoration = dialog.frameGeometry().size() - dialog.size();
+        const QSize clientBounds(qMax(1, available.width() - qMax(0, decoration.width())),
+                                 qMax(1, available.height() - qMax(0, decoration.height())));
+        dialog.setMaximumSize(clientBounds);
+        dialog.resize(dialog.size().boundedTo(clientBounds));
+        const QRect frame = dialog.frameGeometry();
+        const QPoint position(qBound(available.left(), frame.left(), qMax(available.left(), available.right() - frame.width() + 1)),
+                              qBound(available.top(), frame.top(), qMax(available.top(), available.bottom() - frame.height() + 1)));
+        dialog.move(dialog.pos() + position - frame.topLeft());
+    };
+    QMetaObject::Connection availableConnection, geometryConnection, screenConnection;
+    const auto followScreen = [&dialog, &availableConnection, &geometryConnection, fitDialog](QScreen *screen) {
+        QObject::disconnect(availableConnection);
+        QObject::disconnect(geometryConnection);
+        // A removed screen must not leave its old maximum in force.
+        dialog.setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+        if (!screen) return;
+        availableConnection = connect(screen, &QScreen::availableGeometryChanged, &dialog, fitDialog);
+        geometryConnection = connect(screen, &QScreen::geometryChanged, &dialog,
+            [current = QPointer<QScreen>(screen), fitDialog] {
+                if (current) fitDialog(current->availableGeometry());
+            });
+        fitDialog(screen->availableGeometry());
+    };
+    auto disconnectGeometry = qScopeGuard([&] {
+        QObject::disconnect(screenConnection);
+        QObject::disconnect(availableConnection);
+        QObject::disconnect(geometryConnection);
+    });
+    followScreen(dialog.screen());
+    // The actual dialog window is known after show. Follow it when the window
+    // moves to another monitor, releasing the old screen's geometry callbacks.
+    QTimer::singleShot(0, &dialog, [&dialog, &screenConnection, followScreen] {
+        if (auto *window = dialog.windowHandle()) {
+            screenConnection = connect(window, &QWindow::screenChanged, &dialog, followScreen);
+            followScreen(window->screen());
+        }
+    });
     dialog.exec();
 }
 
