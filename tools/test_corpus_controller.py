@@ -2460,6 +2460,88 @@ class ControllerAllReadyTests(unittest.TestCase):
         self.assertEqual(seen,['arwiktionary'])
 
 
+class ControllerProducerScopeTests(unittest.TestCase):
+    def fixture(self, root):
+        for name, data in {'build.zig': b'build', 'src/main.zig': b'core', 'tools/reviewed_language_aliases.json': b'{"records":[]}'}.items():
+            path = root/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(data); path.chmod(0o644)
+        names = ['build.zig', 'src/main.zig', 'tools/reviewed_language_aliases.json']
+        inventory = dict(head='qualified', domain='tracked non-app producer inputs',
+            files={name: controller.descriptor(root/name) for name in names}, modes={name: 0o644 for name in names})
+        write_json(root/'inventory.json', inventory); write_json(root/'manifest.json', {})
+        return dict(source=dict(head='qualified', fingerprint='fingerprint', inventory=controller.descriptor(root/'inventory.json')),
+                    manifest=controller.descriptor(root/'manifest.json')), names
+
+    def guard(self, root, cfg, names, *, head='qualified', untracked=()):
+        def git(argv, **kwargs):
+            if argv == ['git', 'rev-parse', 'HEAD']: return head
+            if argv == ['git', 'ls-files', '-z']: return ('\0'.join(names + ['apps/desktop/current.cpp'])+'\0').encode()
+            if argv == ['git', 'ls-files', '--others', '--exclude-standard', '-z']: return '\0'.join(untracked).encode()
+            self.fail('Producer-scoped guard must not impose whole-repository status: '+repr(argv))
+        with mock.patch.object(controller, 'ROOT', root), \
+             mock.patch.object(controller.subprocess, 'check_output', side_effect=git), \
+             mock.patch.dict('sys.modules', {'build_wiktionaries': mock.Mock(source_fingerprint=mock.Mock(return_value='fingerprint'))}):
+            return controller.source_guard(cfg)
+
+    def test_dirty_app_and_unrelated_app_commit_preserve_exact_producer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);cfg,names=self.fixture(root)
+            app=root/'apps/desktop/current.cpp';app.parent.mkdir(parents=True);app.write_bytes(b'independent dirty app')
+            self.assertEqual(self.guard(root,cfg,names)['current_head'], 'qualified')
+            result=self.guard(root,cfg,names,head='app-only-commit')
+            self.assertEqual(result['qualified_head'], 'qualified');self.assertEqual(result['current_head'], 'app-only-commit')
+            self.assertFalse(result['apps_acceptance']);self.assertEqual(cfg['source']['head'],'qualified')
+
+    def test_dirty_core_and_embedded_alias_bytes_are_rejected_even_with_same_fingerprint(self):
+        for name in ('src/main.zig', 'tools/reviewed_language_aliases.json'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);cfg,names=self.fixture(root);(root/name).write_bytes(b'changed')
+                with self.assertRaisesRegex(ValueError,'Producer input bytes changed'):self.guard(root,cfg,names)
+
+    def test_changed_mode_missing_inventory_entry_and_symlink_are_rejected(self):
+        for change in ('mode','added','removed','symlink'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);cfg,names=self.fixture(root)
+                if change=='mode':(root/'src/main.zig').chmod(0o755)
+                elif change=='added':names.append('tools/new.py')
+                elif change=='removed':names.remove('src/main.zig')
+                else:
+                    path=root/'src/main.zig';path.unlink();path.symlink_to(root/'build.zig')
+                with self.assertRaises(ValueError):self.guard(root,cfg,names)
+
+    def test_untracked_embedded_input_rejected_and_untracked_app_allowed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);cfg,names=self.fixture(root)
+            (root/'tools/new-embedded.json').write_text('{"new":true}')
+            with self.assertRaisesRegex(ValueError,'Untracked producer input'):
+                self.guard(root,cfg,names,untracked=['tools/new-embedded.json'])
+            self.assertFalse(self.guard(root,cfg,names,untracked=['apps/desktop/new.json'])['apps_acceptance'])
+
+    def test_execute_retains_current_head_without_restamping_qualification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);cfg=ControllerMemoryPolicyTests().cfg(root);folder=root/'attempt'
+            observation=dict(qualified_head='qualified',current_head='app-only-commit',producer_inventory={'sha256':'pinned'},apps_acceptance=False)
+            process=mock.Mock(pid=900123);process.poll.return_value=1;process.wait.return_value=1
+            def spawn(*args,**kwargs):
+                write_json(Path(kwargs['cwd'])/'.tmp/build-watchdog-report.json',dict(termination_reason='child_exit',
+                    child_exit_status=1,guardian_exit_status=0,memory_limit_bytes=controller.MEMORY_INITIAL))
+                return process
+            with mock.patch.object(controller,'ROOT',root), \
+                 mock.patch.object(controller.subprocess,'Popen',side_effect=spawn), \
+                 mock.patch.object(controller,'process_identity',return_value=dict(pid=900123,start_time_ticks=1)), \
+                 mock.patch.object(controller,'watchdog_closed',return_value=True), \
+                 mock.patch.object(controller,'source_guard',return_value=observation):
+                row,_=controller.execute(cfg,'arwiktionary',4,folder,1,'context',[])
+            self.assertEqual(row['source_observation'],observation)
+            self.assertEqual(controller.read_json(folder/'result.json')['source_observation'],observation)
+
+    def test_manifest_change_and_wrong_qualified_inventory_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);cfg,names=self.fixture(root);(root/'manifest.json').write_text('{"changed":true}')
+            with self.assertRaisesRegex(ValueError,'Input manifest changed'):self.guard(root,cfg,names)
+            cfg['source']['head']='different'
+            with self.assertRaisesRegex(ValueError,'another qualification'):self.guard(root,cfg,names)
+
+
 class ControllerCampaignSelectionTests(unittest.TestCase):
     def fixture(self, root):
         def store(name, value):

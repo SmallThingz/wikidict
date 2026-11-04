@@ -520,10 +520,37 @@ def source_guard(cfg):
         validate_pipeline_paths(cfg, ROOT)
     import build_wiktionaries as builder
     head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
-    dirty = subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=ROOT, text=True)
-    require(not dirty and head == cfg['source']['head'], 'Qualified source must be clean and unchanged')
+    inventory_ref = cfg['source'].get('inventory')
+    if inventory_ref is None:
+        dirty = subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=ROOT, text=True)
+        require(not dirty and head == cfg['source']['head'], 'Qualified source must be clean and unchanged')
+    else:
+        inventory = read_ref(inventory_ref)
+        require(inventory['head'] == cfg['source']['head'], 'Producer inventory belongs to another qualification')
+        files, modes = inventory['files'], inventory['modes']
+        require(isinstance(files, dict) and isinstance(modes, dict) and files and set(files) == set(modes),
+                'Producer inventory and modes differ')
+        tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
+        producer_paths = {name for name in tracked if name and not name.startswith('apps/')}
+        require(producer_paths == set(files), 'Tracked producer inventory changed')
+        untracked = subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard', '-z'], cwd=ROOT).decode().split('\0')
+        require(not any(name and not name.startswith('apps/') for name in untracked),
+                'Untracked producer input requires explicit source qualification')
+        for name, reference in files.items():
+            relative = Path(name)
+            require(not relative.is_absolute() and '..' not in relative.parts and relative.as_posix() == name,
+                    'Invalid producer inventory path')
+            path = ROOT / relative
+            require(not any(node.is_symlink() for node in (path, *path.parents)) and path.is_file(),
+                    'Producer input is not a regular non-symlink file')
+            require(reference['path'] == str(path) and descriptor(path) == reference,
+                    'Producer input bytes changed: ' + name)
+            require(type(modes[name]) is int and path.stat().st_mode & 0o7777 == modes[name],
+                    'Producer input mode changed: ' + name)
     require(builder.source_fingerprint() == cfg['source']['fingerprint'], 'Source fingerprint changed')
     require(descriptor(cfg['manifest']['path']) == cfg['manifest'], 'Input manifest changed')
+    return dict(qualified_head=cfg['source']['head'], current_head=head,
+                producer_inventory=inventory_ref, apps_acceptance=False)
 
 
 def gate(ref, cfg, outcomes):
@@ -1639,6 +1666,7 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
     error, process, rc = None, None, None
     interrupted = False
     source_verified = False
+    source_observation = None
     control_verified = False
     try:
         with (folder / 'build.log').open('xb') as log:
@@ -1682,7 +1710,8 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
     try:
         for lock in locks:
             lock.check()
-        source_guard(cfg)
+        observed_source = source_guard(cfg)
+        source_observation = observed_source if isinstance(observed_source, dict) else None
         source_verified = True
         if wd:
             require(type(wd.get('memory_limit_bytes')) is int and wd['memory_limit_bytes'] == memory_limit_bytes,
@@ -1698,6 +1727,7 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
     row = dict(attempt_id=folder.name, sequence=sequence, edition=edition, workers_requested=workers,
         memory_limit_bytes=memory_limit_bytes, outcome='passed' if accepted else 'failed', exit_code=rc, error=error, elapsed_seconds=elapsed,
         controller_interrupted=interrupted, cleanup_proven=cleanup_proven, source_guard=source_verified, control_proven=control_verified,
+        source_observation=source_observation,
         timing_authority='actual controller monotonic interval around joined tracked CLI', ended_utc=utc(),
         execution_mode=phase.get('execution_mode') if phase else None, edition_build=phase, phase_evidence_error=phase_error,
         watchdog=descriptor(wdpath) if wdpath.exists() else None, build_log=log_ref, accepted=accepted)
