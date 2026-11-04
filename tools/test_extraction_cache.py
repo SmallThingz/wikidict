@@ -778,5 +778,59 @@ class ExtractionCachePhaseTest(unittest.TestCase):
         self.assertEqual(3, code)
 
 
+
+
+class OptionalExtractionPhaseTimingTests(unittest.TestCase):
+    def exercise(self, enabled, *, failure=None, unavailable_cpu=False, broken_emit=False):
+        import contextlib
+        import io
+        fixture = ExtractionCacheTest('test_snapshot_main_cold_publish_warm_link_and_copy')
+        fixture.setUp(); self.addCleanup(fixture.doCleanups)
+        stderr, stdout = io.StringIO(), io.StringIO()
+        clock = mock.Mock(side_effect=OSError('no thread clock')) if unavailable_cpu else cache.time.thread_time
+        emit = mock.Mock(side_effect=OSError('diagnostic unavailable')) if broken_emit else cache._cache_phase_event
+        completion = mock.Mock(side_effect=failure) if failure else cache.validate_extraction_completion
+        result, caught = None, None
+        with mock.patch.dict(cache.os.environ, {cache.PHASE_TIMING_ENV: '1' if enabled else '0'}), \
+             mock.patch.object(cache.time, 'thread_time', clock), \
+             mock.patch.object(cache, '_cache_phase_event', emit), \
+             mock.patch.object(cache, 'validate_extraction_completion', completion), \
+             mock.patch.object(cache, 'walk_assets', wraps=cache.walk_assets) as walks, \
+             mock.patch.object(cache, 'sha256', wraps=cache.sha256) as hashes, \
+             contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(stdout):
+            try: result = cache.publish(fixture.root, fixture.expected, fixture.source)
+            except Exception as error: caught = error
+        records = [json.loads(line.split(' ', 1)[1]) for line in stderr.getvalue().splitlines()]
+        markers = list(fixture.root.glob('*/.complete.json')) if fixture.root.exists() else []
+        marker = markers[0].read_bytes() if markers else None
+        self.assertEqual((fixture.source/'modules/123.lua').read_text(), 'return 1')
+        return result, caught, records, marker, (walks.call_count, hashes.call_count)
+
+    def test_opt_in_preserves_bytes_returns_and_number_of_walks_and_hashes(self):
+        off = self.exercise(False); on = self.exercise(True)
+        self.assertEqual((off[0], on[0]), (0, 0)); self.assertIsNone(off[1]); self.assertIsNone(on[1])
+        self.assertEqual(off[3], on[3]); self.assertEqual(off[4], on[4]); self.assertEqual(off[2], [])
+        self.assertEqual({row['phase'] for row in on[2]}, {'setup', 'preflight', 'completion', 'destination_selection', 'link_copy', 'record_assets_hash', 'seal_cleanup', 'prune'})
+        hashed = next(row for row in on[2] if row['phase']=='record_assets_hash')
+        self.assertEqual(hashed['files'], len(cache.FILES)+1)
+        self.assertGreater(hashed['bytes'], 0); self.assertTrue(all(row['status']=='success' for row in on[2]))
+
+    def test_disabled_has_no_clock_and_logging_failure_never_replaces_original(self):
+        with mock.patch.object(cache.time, 'monotonic', side_effect=AssertionError('disabled clock')):
+            self.assertEqual(self.exercise(False)[0], 0)
+        failure = ValueError('original completion failure')
+        off = self.exercise(False, failure=failure); on = self.exercise(True, failure=failure, broken_emit=True)
+        self.assertIs(off[1], failure); self.assertIs(on[1], failure); self.assertEqual(off[4], on[4])
+        self.assertIsNone(off[3]); self.assertIsNone(on[3]); self.assertEqual(self.exercise(True, broken_emit=True)[0], 0)
+
+    def test_failed_phase_and_unavailable_thread_clock_are_explicit(self):
+        failure = ValueError('original completion failure')
+        row = self.exercise(True, failure=failure)
+        self.assertIs(row[1], failure); self.assertEqual(row[2][-1]['phase'], 'completion'); self.assertEqual(row[2][-1]['status'], 'failure')
+        result = self.exercise(True, unavailable_cpu=True)
+        self.assertEqual(result[0], 0)
+        self.assertTrue(all(x['thread_cpu_seconds'] is None and x['thread_cpu_available'] is False for x in result[2]))
+
+
 if __name__ == "__main__":
     unittest.main()

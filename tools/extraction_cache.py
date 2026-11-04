@@ -46,6 +46,69 @@ ABI_FILES = (
 )
 
 
+PHASE_TIMING_ENV = "WIKIDICT_PHASE_TIMING"
+
+
+def _phase_thread_cpu():
+    try:
+        return time.thread_time()
+    except (AttributeError, OSError, NotImplementedError):
+        return None
+
+
+class _PhaseTiming:
+    """In-process diagnostics only; counts describe known files, not physical I/O."""
+    def __init__(self, emit):
+        self.emit = emit
+        self.name = None
+
+    def switch(self, name):
+        self.finish("success")
+        try:
+            wall, cpu = time.monotonic(), _phase_thread_cpu()
+            self.wall, self.cpu, self.name = wall, cpu, name
+            self.counts = {"files": None, "bytes": None}
+        except Exception:
+            self.name = None
+
+    def count(self, **known):
+        try:
+            self.counts.update(known)
+        except Exception:
+            pass
+
+    def finish(self, status):
+        if self.name is None:
+            return
+        name, self.name = self.name, None
+        try:
+            wall, cpu = time.monotonic(), _phase_thread_cpu()
+            available = cpu is not None and self.cpu is not None
+            self.emit(name, status, dict(
+                seconds=round(wall - self.wall, 6),
+                thread_cpu_seconds=round(cpu - self.cpu, 6) if available else None,
+                thread_cpu_available=available, **self.counts))
+        except Exception:
+            # Clock/output failure cannot replace a producer result or error.
+            pass
+
+
+def optional_phase_timing(emit):
+    try:
+        if os.environ.get(PHASE_TIMING_ENV) == "1":
+            return _PhaseTiming(emit)
+    except Exception:
+        pass
+    return None
+
+
+def _cache_phase_event(name, status, fields):
+    print("EXTRACTION_CACHE_PHASE " + json.dumps(dict(
+        action="publish", phase=name, status=status,
+        scope="helper-subphase", **fields), sort_keys=True),
+        file=sys.stderr, flush=True)
+
+
 def sha256(path):
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -237,58 +300,79 @@ def probe(root, expected, output):
 
 
 def publish(root, expected, source):
-    key = hashlib.sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest()
-    destination = cache_path(root, key)
-    root.mkdir(parents=True, exist_ok=True)
-    prune_abandoned_partials(root)
-    # Refuse symlinks in the producer tree before copytree can follow one.
-    walk_assets(source)
-    validate_extraction_completion(source)
-    if destination.exists() or destination.is_symlink():
+    timing = optional_phase_timing(_cache_phase_event)
+    completed = False
+    try:
+        if timing is not None: timing.switch("setup")
+        key = hashlib.sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest()
+        destination = cache_path(root, key)
+        root.mkdir(parents=True, exist_ok=True)
+        prune_abandoned_partials(root)
+        # Refuse symlinks in the producer tree before copytree can follow one.
+        if timing is None:
+            walk_assets(source)
+        else:
+            timing.switch("preflight")
+            timing.count(files=len(walk_assets(source)))
+        if timing is not None: timing.switch("completion")
+        validate_extraction_completion(source)
+        if timing is not None: timing.switch("destination_selection")
+        if destination.exists() or destination.is_symlink():
+            try:
+                if not destination.is_symlink() and validate(destination, expected):
+                    if timing is not None: timing.switch("prune")
+                    prune_old_generations(root, destination)
+                    completed = True
+                    return 0
+            except (OSError, ValueError, json.JSONDecodeError, TypeError):
+                pass
+            # A corrupt directory remains unavailable until the new one is ready.
+            stale = root / (".stale-" + key)
+            if stale.exists() or stale.is_symlink():
+                if stale.is_dir() and not stale.is_symlink():
+                    shutil.rmtree(stale)
+                else:
+                    stale.unlink()
+            destination.rename(stale)
+        else:
+            stale = None
+        if timing is not None: timing.switch("link_copy")
+        temporary = Path(tempfile.mkdtemp(prefix=".part-", dir=root))
         try:
-            if not destination.is_symlink() and validate(destination, expected):
-                prune_old_generations(root, destination)
-                return 0
-        except (OSError, ValueError, json.JSONDecodeError, TypeError):
-            pass
-        # A corrupt directory remains unavailable until the new one is ready.
-        stale = root / (".stale-" + key)
-        if stale.exists() or stale.is_symlink():
+            for name in FILES:
+                original = source / name
+                regular(original)
+                link_or_copy(original, temporary / name)
+            module_source = source / TREE
+            if module_source.is_symlink() or not module_source.is_dir():
+                raise ValueError("Missing regular modules directory")
+            shutil.copytree(module_source, temporary / TREE, symlinks=False,
+                            copy_function=link_or_copy)
+            if timing is not None: timing.switch("record_assets_hash")
+            assets = record_assets(temporary)
+            if timing is not None:
+                timing.count(files=len(assets), bytes=sum(row[1] for row in assets))
+                timing.switch("seal_cleanup")
+            marker = {"identity": expected, "assets": assets}
+            (temporary / ".complete.json").write_text(
+                json.dumps(marker, sort_keys=True, separators=(",", ":")) + "\n")
+            temporary.rename(destination)
+        finally:
+            if temporary.exists():
+                shutil.rmtree(temporary)
+        if timing is not None: timing.switch("prune")
+        if stale is not None:
             if stale.is_dir() and not stale.is_symlink():
                 shutil.rmtree(stale)
             else:
                 stale.unlink()
-        destination.rename(stale)
-    else:
-        stale = None
-    temporary = Path(tempfile.mkdtemp(prefix=".part-", dir=root))
-    try:
-        for name in FILES:
-            original = source / name
-            regular(original)
-            link_or_copy(original, temporary / name)
-        module_source = source / TREE
-        if module_source.is_symlink() or not module_source.is_dir():
-            raise ValueError("Missing regular modules directory")
-        shutil.copytree(module_source, temporary / TREE, symlinks=False,
-                        copy_function=link_or_copy)
-        assets = record_assets(temporary)
-        marker = {"identity": expected, "assets": assets}
-        (temporary / ".complete.json").write_text(
-            json.dumps(marker, sort_keys=True, separators=(",", ":")) + "\n")
-        temporary.rename(destination)
+        # The corpus resource lock admits one build at a time.
+        prune_old_generations(root, destination)
+        print(f"Published verified extraction assets: {destination}", flush=True)
+        completed = True
+        return 0
     finally:
-        if temporary.exists():
-            shutil.rmtree(temporary)
-    if stale is not None:
-        if stale.is_dir() and not stale.is_symlink():
-            shutil.rmtree(stale)
-        else:
-            stale.unlink()
-    # The corpus resource lock admits one build at a time.
-    prune_old_generations(root, destination)
-    print(f"Published verified extraction assets: {destination}", flush=True)
-    return 0
+        if timing is not None: timing.finish("success" if completed else "failure")
 
 
 def clang_identity(command, flags=()):

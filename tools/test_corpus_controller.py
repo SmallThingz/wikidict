@@ -2718,5 +2718,69 @@ class ControllerExplicitSubsetTests(unittest.TestCase):
                 self.assertEqual(seen,['kaawiktionary'])
 
 
+
+
+class OptionalControllerSourceTimingTests(unittest.TestCase):
+    def exercise(self, root, enabled, *, tamper=False, broken_emit=False, fingerprint_error=None):
+        import sys
+        import types
+        import extraction_cache as timings
+        fixture = ControllerProducerScopeTests('test_dirty_app_and_unrelated_app_commit_preserve_exact_producer')
+        cfg, names = fixture.fixture(root)
+        if tamper: (root/'src/main.zig').write_bytes(b'changed')
+        records = []
+        def emit(edition, date, name, event, **fields):
+            if broken_emit: raise OSError('diagnostic unavailable')
+            records.append(dict(edition=edition, phase=name, event=event, **fields))
+        fingerprint = mock.Mock(side_effect=fingerprint_error) if fingerprint_error else mock.Mock(return_value='fingerprint')
+        builder = types.SimpleNamespace(source_fingerprint=fingerprint, phase_event=emit)
+        def git(argv, **kwargs):
+            if argv==['git', 'rev-parse', 'HEAD']: return 'qualified'
+            if argv==['git', 'ls-files', '-z']: return ('\0'.join(names)+'\0').encode()
+            if argv==['git', 'ls-files', '--others', '--exclude-standard', '-z']: return b''
+            self.fail('Unexpected git query: '+repr(argv))
+        result, caught = None, None
+        with mock.patch.dict(controller.os.environ, {timings.PHASE_TIMING_ENV: '1' if enabled else '0'}), \
+             mock.patch.dict(sys.modules, {'build_wiktionaries': builder}), \
+             mock.patch.object(controller, 'ROOT', root), \
+             mock.patch.object(controller.subprocess, 'check_output', side_effect=git), \
+             mock.patch.object(controller, 'digest', wraps=controller.digest) as hashes:
+            try: result = controller.source_guard(cfg)
+            except Exception as error: caught = error
+        return result, caught, records, hashes.call_count, fingerprint.call_count
+
+    def test_opt_in_does_not_add_hashes_or_change_source_observation(self):
+        with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+            off=self.exercise(Path(a), False); on=self.exercise(Path(b), True)
+            # Receipt paths differ between fixtures; observation identities do not.
+            self.assertEqual(off[0]['qualified_head'], on[0]['qualified_head'])
+            self.assertEqual(off[0]['current_head'], on[0]['current_head'])
+            self.assertIsNone(off[1]); self.assertIsNone(on[1]); self.assertEqual(off[2], [])
+            self.assertEqual(off[3:], on[3:]); self.assertEqual(on[4], 1)
+            phases={row['phase']:row for row in on[2]}
+            self.assertEqual(set(phases), {'source_guard_baseline', 'source_guard_inventory', 'source_guard_fingerprint', 'source_guard_manifest'})
+            self.assertEqual(phases['source_guard_inventory']['files'], 3)
+            self.assertEqual(phases['source_guard_manifest']['files'], 1)
+            self.assertTrue(all(row['edition']=='__controller__' and row['scope']=='controller-source-guard' for row in on[2]))
+
+    def test_disabled_uses_no_clock_and_tampering_still_fails(self):
+        import extraction_cache as timings
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(timings.time, 'monotonic', side_effect=AssertionError('disabled clock')):
+            self.assertIsNone(self.exercise(Path(folder), False)[1])
+        for enabled in (False, True):
+            with tempfile.TemporaryDirectory() as folder:
+                result=self.exercise(Path(folder), enabled, tamper=True)
+                self.assertIsInstance(result[1], ValueError); self.assertIn('Producer input bytes changed', str(result[1]))
+                if enabled:self.assertEqual(result[2][-1]['status'], 'failure')
+
+    def test_failed_logger_preserves_success_and_original_fingerprint_exception(self):
+        failure=ValueError('original source fingerprint failure')
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertIsNone(self.exercise(Path(folder), True, broken_emit=True)[1])
+        with tempfile.TemporaryDirectory() as folder:
+            result=self.exercise(Path(folder), True, broken_emit=True, fingerprint_error=failure)
+            self.assertIs(result[1], failure)
+
+
 if __name__ == '__main__':
     unittest.main()

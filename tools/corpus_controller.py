@@ -527,38 +527,63 @@ def source_guard(cfg):
     if cfg.get('artifact_root') is not None:
         validate_pipeline_paths(cfg, ROOT)
     import build_wiktionaries as builder
-    head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
-    inventory_ref = cfg['source'].get('inventory')
-    if inventory_ref is None:
-        dirty = subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=ROOT, text=True)
-        require(not dirty and head == cfg['source']['head'], 'Qualified source must be clean and unchanged')
-    else:
-        inventory = read_ref(inventory_ref)
-        require(inventory['head'] == cfg['source']['head'], 'Producer inventory belongs to another qualification')
-        files, modes = inventory['files'], inventory['modes']
-        require(isinstance(files, dict) and isinstance(modes, dict) and files and set(files) == set(modes),
-                'Producer inventory and modes differ')
-        tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
-        producer_paths = {name for name in tracked if name and not name.startswith('apps/')}
-        require(producer_paths == set(files), 'Tracked producer inventory changed')
-        untracked = subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard', '-z'], cwd=ROOT).decode().split('\0')
-        require(not any(name and not name.startswith('apps/') for name in untracked),
-                'Untracked producer input requires explicit source qualification')
-        for name, reference in files.items():
-            relative = Path(name)
-            require(not relative.is_absolute() and '..' not in relative.parts and relative.as_posix() == name,
-                    'Invalid producer inventory path')
-            path = ROOT / relative
-            require(not any(node.is_symlink() for node in (path, *path.parents)) and path.is_file(),
-                    'Producer input is not a regular non-symlink file')
-            require(reference['path'] == str(path) and descriptor(path) == reference,
-                    'Producer input bytes changed: ' + name)
-            require(type(modes[name]) is int and path.stat().st_mode & 0o7777 == modes[name],
-                    'Producer input mode changed: ' + name)
-    require(builder.source_fingerprint() == cfg['source']['fingerprint'], 'Source fingerprint changed')
-    require(descriptor(cfg['manifest']['path']) == cfg['manifest'], 'Input manifest changed')
-    return dict(qualified_head=cfg['source']['head'], current_head=head,
-                producer_inventory=inventory_ref, apps_acceptance=False)
+    timing = None
+    try:
+        if os.environ.get("WIKIDICT_PHASE_TIMING") == "1":
+            from extraction_cache import optional_phase_timing
+            timing = optional_phase_timing(lambda name, status, fields: builder.phase_event(
+                "__controller__", cfg.get("date"), name, "end",
+                scope="controller-source-guard", status=status, **fields))
+    except Exception:
+        pass
+    completed = False
+    try:
+        if timing is not None: timing.switch("source_guard_baseline")
+        head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+        inventory_ref = cfg['source'].get('inventory')
+        if inventory_ref is None:
+            dirty = subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=ROOT, text=True)
+            require(not dirty and head == cfg['source']['head'], 'Qualified source must be clean and unchanged')
+        else:
+            inventory = read_ref(inventory_ref)
+            require(inventory['head'] == cfg['source']['head'], 'Producer inventory belongs to another qualification')
+            files, modes = inventory['files'], inventory['modes']
+            require(isinstance(files, dict) and isinstance(modes, dict) and files and set(files) == set(modes),
+                    'Producer inventory and modes differ')
+            tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
+            producer_paths = {name for name in tracked if name and not name.startswith('apps/')}
+            require(producer_paths == set(files), 'Tracked producer inventory changed')
+            untracked = subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard', '-z'], cwd=ROOT).decode().split('\0')
+            require(not any(name and not name.startswith('apps/') for name in untracked),
+                    'Untracked producer input requires explicit source qualification')
+            if timing is not None: timing.switch("source_guard_inventory")
+            verified_files = verified_bytes = 0
+            for name, reference in files.items():
+                relative = Path(name)
+                require(not relative.is_absolute() and '..' not in relative.parts and relative.as_posix() == name,
+                        'Invalid producer inventory path')
+                path = ROOT / relative
+                require(not any(node.is_symlink() for node in (path, *path.parents)) and path.is_file(),
+                        'Producer input is not a regular non-symlink file')
+                require(reference['path'] == str(path) and descriptor(path) == reference,
+                        'Producer input bytes changed: ' + name)
+                require(type(modes[name]) is int and path.stat().st_mode & 0o7777 == modes[name],
+                        'Producer input mode changed: ' + name)
+                if timing is not None:
+                    verified_files += 1
+                    verified_bytes += reference['bytes']
+                    timing.count(files=verified_files, bytes=verified_bytes)
+        if timing is not None: timing.switch("source_guard_fingerprint")
+        require(builder.source_fingerprint() == cfg['source']['fingerprint'], 'Source fingerprint changed')
+        if timing is not None: timing.switch("source_guard_manifest")
+        require(descriptor(cfg['manifest']['path']) == cfg['manifest'], 'Input manifest changed')
+        if timing is not None: timing.count(files=1, bytes=cfg['manifest']['bytes'])
+        result = dict(qualified_head=cfg['source']['head'], current_head=head,
+                    producer_inventory=inventory_ref, apps_acceptance=False)
+        completed = True
+        return result
+    finally:
+        if timing is not None: timing.finish("success" if completed else "failure")
 
 
 def gate(ref, cfg, outcomes):
