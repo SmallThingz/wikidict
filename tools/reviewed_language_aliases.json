@@ -205,6 +205,26 @@
       "references": [
         "https://www.wikidata.org/wiki/Q33111"
       ]
+    },
+    {
+      "id": "gom-kok-captured-localized-name-v1",
+      "code": "kok",
+      "alias": "कोंकणी",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://gom.wiktionary.org/w/api.php?action=query&format=json&formatversion=2&licode=%2A&liprop=code%7Cname&maxlag=5&meta=siteinfo%7Clanguageinfo&siinlanguagecode=gom&siprop=general%7Clanguages&uselang=gom",
+      "observed_date": "2026-10-06",
+      "evidence": "Retained official HTTP200 query.languageinfo.kok is exactly {code: kok, name: कोंकणी} for uselang=gom. Response SHA256 ca4fee82f5e85c164eb936beec7bf2ed9375f4519cd09767ad79ccbf02886ecc. Selected language-names.tsv independently preserves N gom all kok कोंकणी and N gom single kok कोंकणी. Authenticated main-namespace निर्भय page3903 revision27277 begins ==[[कोंकणी]]==. Selected registry f88398179a991f6bb15a8946a54953e5e36b56fdd7354c3747fd2450dd2cc61f already registers kok, but lacks the exact localized alias.",
+      "rationale": "Explicit editorial reuse of captured localized-name authority for an existing ISO owner, not an autonym, new captured preferred row, edition default or gom assignment. Preserve preferred Konkani (macrolanguage), all existing records and provenance. This one observed page does not establish how many of2754 unresolved pages share the label; placeholder POS and other-language headings in its authored source remain separate quality limitations."
+    },
+    {
+      "id": "mr-marathi-bhasha-wikidata-title-v1",
+      "code": "mr",
+      "alias": "मराठी भाषा",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://www.wikidata.org/w/index.php?title=Q1571&oldid=2555413675",
+      "observed_date": "2026-11-04",
+      "evidence": "Official Wikidata Q1571 revision2555413675 has exact mrwiki sitelink title मराठी भाषा and ISO639-1 code mr. The permanent revision was inspected through the web retrieval tool on 2026-11-04. Independently, authenticated MR02 raw page अनिर्वचनिय page5191 revision27567 directly authors ==मराठी भाषा==; the full raw3605B SHA256 60e0554930c2cc224ac0f7e2335c6e4d81d516d904604b69dd85e5274f3964b1 and expanded4024B a04398bd62a0d8efbbe7d3868dc21ae0c2fadf18ae1ccb869a6e2075a6148c71 are retained. The selected registry0d1d98c7 already registers mr with preferred मराठी but lacks this exact longer heading.",
+      "rationale": "One exact editorial alias backed by an independent language-item title and ISO code, not a captured preferred-name replacement, generic भाषा suffix stripping, template-name guess, category translation or edition default. Preserve preferred मराठी, all existing records and original MR02 inputs. The separate table repair retains its Unclassified oracle until ordinary source/input integration and validation. This alias alone does not prove repaired full-page semantics or publication acceptance."
     }
   ]
 }
