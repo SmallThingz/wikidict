@@ -1,5 +1,6 @@
 package app.smallthingz.dict
 
+import android.text.format.Formatter
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -9,10 +10,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 
 @Composable
 fun LibraryScreen(library: LibraryStore, autoRefresh: Boolean = true, onImport: ()->Unit) {
+    val context = LocalContext.current
     var add by remember { mutableStateOf(false) }
     var address by remember { mutableStateOf("") }
     var message by remember { mutableStateOf<String?>(null) }
@@ -46,7 +49,7 @@ fun LibraryScreen(library: LibraryStore, autoRefresh: Boolean = true, onImport: 
         items(library.dictionaries,key={it.id}) { dictionary ->
             Column {
                 Row(verticalAlignment=Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) { Text(dictionary.language,style=MaterialTheme.typography.titleMedium);Text(sourceLabel(dictionary.edition),style=MaterialTheme.typography.bodySmall);Text("${dictionary.count} words · ${dictionary.bytes/1024/1024} MB",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant) }
+                    Column(Modifier.weight(1f)) { Text(dictionary.language,style=MaterialTheme.typography.titleMedium);Text(sourceLabel(dictionary.edition),style=MaterialTheme.typography.bodySmall);Text("${dictionary.count} ${if (dictionary.count == 1) "word" else "words"} · ${Formatter.formatShortFileSize(context, dictionary.bytes)}",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant) }
                     IconButton(onClick={remove=dictionary.id},enabled=library.busy==null) {Icon(Icons.Outlined.DeleteOutline,"Remove ${dictionary.language}")}
                 }
                 androidx.compose.animation.AnimatedVisibility(remove==dictionary.id) { Row(verticalAlignment=Alignment.CenterVertically) {
@@ -60,7 +63,7 @@ fun LibraryScreen(library: LibraryStore, autoRefresh: Boolean = true, onImport: 
             Text("No downloads listed. Add a catalogue or import a file.",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
         }
         items(library.catalog,key={it.url}) { item -> Row(verticalAlignment=Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) { Text(item.label,style=MaterialTheme.typography.titleMedium);item.bytes?.let {Text("${it/1024/1024} MB",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)} }
+            Column(Modifier.weight(1f)) { Text(item.label,style=MaterialTheme.typography.titleMedium);item.bytes?.let {Text(Formatter.formatShortFileSize(context, it),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)} }
             val edition = dictionaryEdition(java.net.URI(item.url).path.substringAfterLast('/'))
             val installed = library.dictionaries.any { it.id==if(edition.isEmpty())item.sha256 else "${item.sha256}-$edition" }
             IconButton(onClick={library.download(item)},enabled=!installed&&library.busy==null) {Icon(if(installed) Icons.Outlined.Check else Icons.Outlined.Download,if(installed)"Installed" else "Download ${item.label}")}

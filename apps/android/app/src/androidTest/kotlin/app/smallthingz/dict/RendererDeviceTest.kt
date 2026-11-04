@@ -236,6 +236,9 @@ class RendererDeviceTest {
         val settings = mutableStateOf(AppSettings(allowImages = false, mediaCacheMb = 0,
             collapseOtherSections = false, collapseDetails = false))
         var displayDensity = 1f
+        val inputModeManager = java.util.concurrent.atomic.AtomicReference<androidx.compose.ui.input.InputModeManager>()
+        val originalInputMode = java.util.concurrent.atomic.AtomicReference<androidx.compose.ui.input.InputMode>()
+        var primaryFailure: Throwable? = null
         val images = SemanticsMatcher("Typed inline image state") { node ->
             node.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Role) == androidx.compose.ui.semantics.Role.Image &&
                 node.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.StateDescription) != null
@@ -244,7 +247,12 @@ class RendererDeviceTest {
             compose.activityRule.scenario.onActivity { activity -> activity.setContent {
                 DictTheme("light") {
                     val density = LocalDensity.current
-                    SideEffect { displayDensity = density.density }
+                    val manager = androidx.compose.ui.platform.LocalInputModeManager.current
+                    SideEffect {
+                        displayDensity = density.density
+                        inputModeManager.set(manager)
+                        originalInputMode.compareAndSet(null, manager.inputMode)
+                    }
                     CompositionLocalProvider(LocalInlineImageCache provides cache,
                         androidx.compose.ui.platform.LocalUriHandler provides object : androidx.compose.ui.platform.UriHandler {
                             override fun openUri(uri: String) { opened += uri }
@@ -285,7 +293,17 @@ class RendererDeviceTest {
             compose.runOnIdle { assertEquals(opened[0], opened[1]); assertTrue(links.isEmpty()) }
             compose.onAllNodes(images, useUnmergedTree = true)[1].performClick()
             compose.runOnIdle { assertEquals(listOf("Target"), links) }
+            // This keyboard check requires keyboard input mode.
+            val manager = checkNotNull(inputModeManager.get())
+            compose.runOnIdle {
+                assertPhysicalActivity(compose.activity)
+                assertTrue(compose.activity.hasWindowFocus() && compose.activity.window.decorView.hasWindowFocus())
+                assertTrue("The platform must accept keyboard input mode", manager.requestInputMode(androidx.compose.ui.input.InputMode.Keyboard))
+            }
+            compose.waitUntil(10000) { manager.inputMode == androidx.compose.ui.input.InputMode.Keyboard }
+            compose.runOnIdle { assertEquals(androidx.compose.ui.input.InputMode.Keyboard, manager.inputMode) }
             compose.onAllNodes(images, useUnmergedTree = true)[1].performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus) { assertTrue(it()) }
+            compose.onAllNodes(images, useUnmergedTree = true)[1].assertIsFocused()
             compose.onAllNodes(images, useUnmergedTree = true)[1].performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Enter) }
             compose.runOnIdle { assertEquals(listOf("Target", "Target"), links); assertEquals(1, downloads.get()) }
             compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText("Distinct catalogue caption"))
@@ -293,9 +311,55 @@ class RendererDeviceTest {
             compose.onNodeWithTag("entry-scroll").performScrollToIndex(0)
             compose.waitForIdle()
             assertEquals(1, metadataCalls.get()); assertEquals(1, downloads.get())
+        } catch (problem: Throwable) {
+            primaryFailure = problem
+            throw problem
         } finally {
-            compose.activityRule.scenario.onActivity { it.setContent {} }
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { directory.deleteRecursively() }
+            try {
+                val manager = inputModeManager.get()
+                val previous = originalInputMode.get()
+                if (manager != null && previous != null) {
+                    compose.runOnIdle {
+                        assertPhysicalActivity(compose.activity)
+                        assertTrue(compose.activity.hasWindowFocus() && compose.activity.window.decorView.hasWindowFocus())
+                        manager.requestInputMode(previous)
+                    }
+                    // Touch is a platform state, not a writable Compose setting. If needed,
+                    // restore it with a real touchscreen event in the reader's 12.dp side padding.
+                    if (previous == androidx.compose.ui.input.InputMode.Touch && manager.inputMode != previous) {
+                        val point = java.util.concurrent.atomic.AtomicReference<IntArray>()
+                        val downTime = android.os.SystemClock.uptimeMillis()
+                        for (action in listOf(android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_UP)) {
+                            compose.runOnIdle {
+                                assertPhysicalActivity(compose.activity)
+                                val decor = compose.activity.window.decorView
+                                assertTrue(compose.activity.hasWindowFocus() && decor.hasWindowFocus())
+                                val content = checkNotNull(compose.activity.findViewById<android.view.View>(android.R.id.content))
+                                assertTrue(content.isShown && content.width > 2 && content.height > 2)
+                                val origin = IntArray(2).also { content.getLocationOnScreen(it) }
+                                val visible = android.graphics.Rect().also { decor.getWindowVisibleDisplayFrame(it) }
+                                assertTrue(visible.intersect(android.graphics.Rect(origin[0], origin[1], origin[0] + content.width, origin[1] + content.height)))
+                                assertTrue(visible.width() > 2 && visible.height() > 2)
+                                val current = intArrayOf(visible.left + 1, visible.top + 1)
+                                if (point.get() == null) point.set(current) else assertTrue(point.get().contentEquals(current))
+                            }
+                            val location = checkNotNull(point.get())
+                            val event = android.view.MotionEvent.obtain(downTime, android.os.SystemClock.uptimeMillis(), action,
+                                location[0].toFloat(), location[1].toFloat(), 0).apply { source = android.view.InputDevice.SOURCE_TOUCHSCREEN }
+                            try { InstrumentationRegistry.getInstrumentation().sendPointerSync(event) } finally { event.recycle() }
+                        }
+                    }
+                    compose.waitUntil(10000) { manager.inputMode == previous }
+                    compose.runOnIdle { assertEquals("Restore the owned view's original input mode", previous, manager.inputMode) }
+                }
+            } catch (cleanup: Throwable) {
+                if (primaryFailure != null) primaryFailure.addSuppressed(cleanup) else throw cleanup
+            } finally {
+                try { compose.activityRule.scenario.onActivity { it.setContent {} } }
+                finally {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable + kotlinx.coroutines.Dispatchers.IO) { directory.deleteRecursively() }
+                }
+            }
         }
     }
 
