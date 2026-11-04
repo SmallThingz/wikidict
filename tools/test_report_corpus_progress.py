@@ -32,11 +32,16 @@ class ReportingTests(unittest.TestCase):
             result = put(str(directory / 'result.json'), {'elapsed_seconds': elapsed})
             publication = put(edition + '-' + str(number) + '-complete.json', dict(edition=edition, date='20261001', input_pages=11, fallback_pages=2)) if passed else None
             outcome = 'passed-closed' if passed else 'failed-closed'
+            source_fingerprint = 'qualified-' + edition
+            configuration = put(edition + '-' + str(number) + '-driver.json', dict(
+                edition=edition, date='20261001', attempt_number=number,
+                attempt_directory=str(directory), source_fingerprint=source_fingerprint))
+            owner = put(edition + '-' + str(number) + '-owner.json', dict(driver_configuration=configuration))
             closure = put(edition + '-' + str(number) + '-closure.json', dict(outcome=outcome, source_guard=True, cleanup_proven=True,
-                production_started=True, production_elapsed_seconds=elapsed, result=result))
+                configuration=owner, production_started=True, production_elapsed_seconds=elapsed, result=result))
             return dict(edition=edition, date='20261001', attempt_number=number, attempt_directory=str(directory),
                 outcome=outcome, complete=publication, input_pages=11 if passed else None, elapsed_seconds=elapsed,
-                closure_ref=closure, result=result, publication_status='built' if passed else None)
+                closure_ref=closure, result=result, source_fingerprint=source_fingerprint, publication_status='built' if passed else None)
 
         def ledger(rows, excluded):
             known = sum(r['elapsed_seconds'] for r in rows)
@@ -86,6 +91,43 @@ class ReportingTests(unittest.TestCase):
 
     def derive(self):
         return report.derive(self.old,self.before,self.ledger,self.inventory,self.baseline,lambda ref:self.docs[ref['path']])
+
+
+    def test_authenticated_external_result_path_accepted(self):
+        row = self.ledger['attempts'][-1]
+        external = self.put('carrier-commands-result.json', dict(elapsed_seconds=row['elapsed_seconds']))
+        row['result'] = external
+        self.docs[row['closure_ref']['path']]['result'] = external
+        derived = self.derive()
+        self.assertEqual(derived['deduplication']['campaign_production_rows'], 5)
+        self.assertEqual(derived['combined_build_clock']['campaign_known_attempt_seconds'], 20.5)
+
+    def test_wrong_authenticated_attempt_identity_rejected(self):
+        row = self.ledger['attempts'][-1]
+        leaf = self.docs[row['closure_ref']['path']]
+        owner = self.docs[leaf['configuration']['path']]
+        cfg = self.docs[owner['driver_configuration']['path']]
+        for key, value in [('edition','different'),('date','20260901'),('attempt_number',2),
+                           ('attempt_directory',str(self.root/'wrong')),('source_fingerprint','different')]:
+            with self.subTest(key=key):
+                original = cfg[key]
+                cfg[key] = value
+                with self.assertRaisesRegex(ValueError, 'attempt/configuration'): self.derive()
+                cfg[key] = original
+
+    def test_external_result_without_configuration_rejected(self):
+        row = self.ledger['attempts'][-1]
+        leaf = self.docs[row['closure_ref']['path']]
+        external = self.put('unbound-result.json', dict(elapsed_seconds=row['elapsed_seconds']))
+        row['result'] = external
+        leaf['result'] = external
+        del leaf['configuration']
+        with self.assertRaises(KeyError): self.derive()
+
+    def test_external_result_swap_still_rejected(self):
+        row = self.ledger['attempts'][-1]
+        row['result'] = self.put('swapped-result.json', dict(elapsed_seconds=row['elapsed_seconds']))
+        with self.assertRaisesRegex(ValueError, 'attempt/result'): self.derive()
 
     def test_closed_delta_preserves_history_and_exclusions(self):
         new = self.derive()

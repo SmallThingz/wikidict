@@ -725,9 +725,29 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    phase_started = time.monotonic()
+    phase_status, phase_exit_code = "failure", None
     try:
-        sys.exit(main(sys.argv))
+        phase_exit_code = main(sys.argv)
+        phase_status = "returned"
+        sys.exit(phase_exit_code)
     except (OSError, ValueError, json.JSONDecodeError,
             subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        phase_exit_code = 1
         print(f"extraction cache: {error}", file=sys.stderr)
         sys.exit(1)
+    finally:
+        # CLI invocation scope includes identity/probes, validation and asset I/O;
+        # child compiler work and overlapping extraction are separate intervals.
+        try:
+            action = sys.argv[1] if len(sys.argv) > 1 else "unknown"
+            if action not in ("probe", "publish", "probe-objects", "publish-objects"):
+                action = "unknown"
+            print("EXTRACTION_CACHE_PHASE " + json.dumps(dict(
+                action=action, status=phase_status, exit_code=phase_exit_code,
+                seconds=round(time.monotonic() - phase_started, 3),
+                scope="joined-helper-invocation-wall"), sort_keys=True),
+                file=sys.stderr, flush=True)
+        except Exception:
+            # Diagnostic output must not replace the original exit or error.
+            pass

@@ -1204,7 +1204,7 @@ class ControllerMemoryPolicyTests(unittest.TestCase):
                 seen.append((edition, workers, memory_limit_bytes))
                 cap = len(seen) == 1
                 return ({'edition': edition, 'sequence': sequence,
-                         'controller_interrupted': False, 'cleanup_proven': True,
+                         'controller_interrupted': False, 'cleanup_proven': True, 'source_guard': True, 'control_proven': True,
                          'accepted': None if cap else {'tiny': True}},
                         {'termination_reason': 'sampled_pss_limit' if cap else 'child_exit',
                          'memory_limit_bytes': memory_limit_bytes})
@@ -1253,6 +1253,7 @@ class ControllerMemoryPolicyTests(unittest.TestCase):
             self.assertEqual(0,row['exit_code'])
             self.assertIsNone(row['accepted'])
             self.assertIn('watchdog memory budget differs',row['error'])
+            self.assertTrue(row['source_guard']); self.assertFalse(row['control_proven'])
             accept.assert_not_called()
 
 
@@ -2287,7 +2288,7 @@ class Source78PilotTimeHistoryTests(unittest.TestCase):
             def execute(current, edition, workers, folder, sequence, context, locks, memory):
                 seen.append((edition, sequence))
                 row = attempt('current-' + edition, sequence, edition=edition, seconds=2, pages=20)
-                row.update(controller_interrupted=False, cleanup_proven=True)
+                row.update(controller_interrupted=False, cleanup_proven=True, source_guard=True, control_proven=True)
                 return row, {}
             with mock.patch.object(controller, 'history', return_value=rows), \
                  mock.patch.object(controller, 'source_guard'), \
@@ -2406,7 +2407,7 @@ class ControllerAllReadyTests(unittest.TestCase):
         self.assertNotIn('enwiktionary',controller.selected_phase_editions(editions,'all',True,manifest))
         with self.assertRaises(ValueError):controller.selected_phase_editions(editions,'all')
 
-    def run_main(self,root,cleanup=True):
+    def run_main(self,root,cleanup=True,unsafe=None,plan=None,history_rows=None):
         manifest=self.manifest();cfg=dict(armed=True,source={'head':'a'*40,'fingerprint':'b'*64},
             compiler={'path':str(root/'zig'),'bytes':1,'sha256':'c'*64},
             manifest={'path':str(root/'downloads/manifest.json'),'bytes':1,'sha256':'d'*64},
@@ -2416,10 +2417,11 @@ class ControllerAllReadyTests(unittest.TestCase):
         def execute(cfg,edition,workers,folder,sequence,context,locks,memory_limit_bytes):
             seen.append(edition)
             return (dict(attempt_id='attempt-'+str(sequence),edition=edition,sequence=sequence,
-                controller_interrupted=False,cleanup_proven=cleanup,elapsed_seconds=0.125,
+                controller_interrupted=False,cleanup_proven=cleanup,source_guard=unsafe!='source',control_proven=unsafe!='control',elapsed_seconds=0.125,
                 execution_mode='pipeline_run_may_reuse_verified_inputs_or_shards',outcome='failed'if edition=='arwiktionary'else'passed',
                 accepted=None if edition=='arwiktionary'else dict(input_pages=10)),
-                dict(termination_reason='child_exit',memory_limit_bytes=memory_limit_bytes))
+                dict(termination_reason='monitor_error' if unsafe=='monitor' else ('sampled_pss_limit' if unsafe=='cap' else 'child_exit'),
+                     child_exit_status=-9 if unsafe=='signal' else 1,memory_limit_bytes=memory_limit_bytes))
         with mock.patch.object(controller,'read_json',return_value=cfg), \
              mock.patch.object(controller,'read_ref',return_value=manifest), \
              mock.patch.object(controller,'descriptor',return_value=cfg['compiler']), \
@@ -2427,7 +2429,8 @@ class ControllerAllReadyTests(unittest.TestCase):
              mock.patch.object(controller,'source_guard') as source_guard, \
              mock.patch.object(controller,'gate',side_effect=lambda value,*args:gates.append(value)or{}), \
              mock.patch.object(controller,'production_context',return_value='current-context'), \
-             mock.patch.object(controller,'history',return_value=[]), \
+             mock.patch.object(controller,'history',return_value=history_rows or []), \
+             mock.patch.object(controller,'campaign_selection',return_value=plan), \
              mock.patch.object(controller,'load_preparations',return_value=[]) as preparations, \
              mock.patch.object(controller,'Lock'), \
              mock.patch.object(controller.resource,'getrlimit',return_value=(controller.resource.RLIM_INFINITY,controller.resource.RLIM_INFINITY)), \
@@ -2435,12 +2438,12 @@ class ControllerAllReadyTests(unittest.TestCase):
              mock.patch.object(controller,'execute',side_effect=execute), \
              mock.patch.object(controller,'write_json',side_effect=lambda path,value,**kw:written.append(value)), \
              mock.patch('builtins.print'):
-            if not cleanup:
-                with self.assertRaisesRegex(ValueError,'Owned cleanup is unproven'):controller.main(['--config',str(root/'cfg.json'),'--phase','all'])
+            if not cleanup or unsafe:
+                with self.assertRaisesRegex(ValueError,'unproven|control validation|Non-ordinary'):controller.main(['--config',str(root/'cfg.json'),'--phase','all'])
                 return seen
             code=controller.main(['--config',str(root/'cfg.json'),'--phase','all'])
         self.assertEqual(len(gates),2) # qualification+diagnostic, never bypassed; no pilot prerequisite
-        self.assertGreaterEqual(source_guard.call_count,199);preparations.assert_called_once()
+        self.assertGreaterEqual(source_guard.call_count,199 if plan is None else 1);preparations.assert_called_once()
         return code,seen,written[-1]
 
     def test_real_main_continues_after_closed_pilot_failure_once_without_semantic_credit(self):
@@ -2455,6 +2458,325 @@ class ControllerAllReadyTests(unittest.TestCase):
     def test_real_main_still_halts_before_next_edition_when_cleanup_unknown(self):
         with tempfile.TemporaryDirectory() as tmp:seen=self.run_main(Path(tmp),False)
         self.assertEqual(seen,['arwiktionary'])
+
+
+class ControllerCampaignSelectionTests(unittest.TestCase):
+    def fixture(self, root):
+        def store(name, value):
+            path = root / name; write_json(path, value); return controller.descriptor(path)
+        editions = [f'toy{i:03d}wiktionary' for i in range(198)]
+        files = []
+        for index, wiki in enumerate(editions):
+            name = wiki + '-20261001-pages-meta-current.xml.bz2'
+            files.append(dict(wiki=wiki, date='20261001', name=name, size=100 + index,
+                sha1='a' * 40, url='https://dumps.wikimedia.org/' + wiki + '/20261001/' + name))
+        inventory = dict(edition_count=198, missing=[], rows=[dict(wiki=row['wiki'], compressed_xml_bytes=row['size'],
+            members=[{key: value for key, value in row.items() if key != 'wiki'}]) for row in files])
+        inv = store('inventory.json', inventory)
+        baseline = store('baseline.json', dict(history=dict(inventory=inv, attempted_editions=editions[:2], attempted_count=2)))
+        manifest = dict(requested_editions=editions[:5], files=files[:5], language_registries=[])
+        manifest_ref = store('downloads/manifest.json', manifest)
+        rows = []
+        for index, outcome in [(0, 'passed-closed'), (1, 'failed-closed')]:
+            wiki = editions[index]; source = 'a' * 64
+            driver = dict(edition=wiki, date='20261001', attempt_number=1,
+                attempt_directory=str(root / ('attempt-' + wiki)), source_fingerprint=source, manifest=manifest_ref)
+            dr = store(wiki + '/driver.json', driver)
+            owner = store(wiki + '/owner.json', dict(driver_configuration=dr))
+            complete = None
+            if outcome == 'passed-closed':
+                complete = store(wiki + '/publication/complete.json', dict(edition=wiki, date='20261001', input_pages=3,
+                    build_inputs=dict(files=[[wiki, '20261001', files[index]['name'], files[index]['size'], files[index]['sha1']]], source=source),
+                    publication_files={}))
+            result = store(wiki + '/result.json', dict(accepted=outcome == 'passed-closed', complete=complete,
+                input_pages=3 if complete else None, elapsed_seconds=2.5))
+            closure = store(wiki + '/closure.json', dict(cleanup_proven=True, source_guard=True, production_started=True,
+                production_elapsed_seconds=2.5, outcome=outcome, configuration=owner, result=result))
+            rows.append(dict(driver, closure_ref=closure, result=result, complete=complete, outcome=outcome,
+                input_pages=3 if complete else None, elapsed_seconds=2.5))
+        ledger = dict(attempts=rows, aggregate=dict(closed_production_attempts=2))
+        lr = store('ledger.json', ledger)
+        report = dict(sources=dict(campaign_ledger=lr), report_refresh_inputs=dict(inventory=inv, baseline=baseline),
+            deduplication=dict(identity_inventory=dict(campaign_logical_attempts=[{key: row[key] for key in
+                ('edition', 'attempt_number', 'attempt_directory')} for row in rows])),
+            inventory_disposition=dict(not_started_in_recorded_ledgers=196, mechanical_publications=1),
+            progress=dict(initial_mechanical_editions=0))
+        rr = store('report.json', report)
+        cfg = dict(date='20261001', source=dict(fingerprint='b' * 64), campaign=dict(report=rr, ledger=lr))
+        return cfg, manifest, ledger, report, store
+
+    def test_authenticated_completed_skip_unstarted_order_and_exact_failed_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, manifest, ledger, report, store = self.fixture(Path(tmp))
+            plan = controller.campaign_selection(cfg, manifest)
+            self.assertEqual(plan['ready'], ['toy002wiktionary', 'toy003wiktionary', 'toy004wiktionary'])
+            self.assertEqual([row['status'] for row in plan['dispositions']], ['skipped-published', 'held-prior-failure'])
+            self.assertFalse(plan['historical_timing_imported']); self.assertFalse(plan['semantic_acceptance'])
+            cfg['campaign']['retry_failed'] = {'toy001wiktionary': ledger['attempts'][1]['closure_ref']}
+            self.assertEqual(controller.campaign_selection(cfg, manifest)['ready'][0], 'toy001wiktionary')
+            cfg['source']['fingerprint'] = 'a' * 64
+            with self.assertRaisesRegex(ValueError, 'Identical failed'): controller.campaign_selection(cfg, manifest)
+
+    def test_stale_ledger_attempt_join_and_changed_xml_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, manifest, ledger, report, store = self.fixture(Path(tmp))
+            stale = copy.deepcopy(cfg); stale['campaign']['ledger'] = store('other-ledger.json', dict(ledger, extra=True))
+            with self.assertRaisesRegex(ValueError, 'Stale'): controller.campaign_selection(stale, manifest)
+            bad = copy.deepcopy(report); bad['deduplication']['identity_inventory']['campaign_logical_attempts'][0]['attempt_number'] = 2
+            wrong = copy.deepcopy(cfg); wrong['campaign']['report'] = store('wrong-report.json', bad)
+            with self.assertRaisesRegex(ValueError, 'attempt identity'): controller.campaign_selection(wrong, manifest)
+            bad_manifest = copy.deepcopy(manifest); bad_manifest['files'][2]['sha1'] = 'b' * 40
+            with self.assertRaisesRegex(ValueError, 'Selected XML'): controller.campaign_selection(cfg, bad_manifest)
+
+    def test_completed_path_result_and_source_identity_cannot_be_borrowed(self):
+        for mutation in ('result', 'source', 'missing'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                cfg, manifest, ledger, report, store = self.fixture(Path(tmp)); row = ledger['attempts'][0]
+                if mutation == 'missing':
+                    Path(row['complete']['path']).unlink()
+                elif mutation == 'source':
+                    row['source_fingerprint'] = 'c' * 64
+                else:
+                    row['result'] = ledger['attempts'][1]['result']
+                if mutation != 'missing':
+                    cfg['campaign']['ledger'] = store('changed-ledger.json', ledger)
+                    report['sources']['campaign_ledger'] = cfg['campaign']['ledger']
+                    cfg['campaign']['report'] = store('changed-report.json', report)
+                with self.assertRaises((ValueError, FileNotFoundError)): controller.campaign_selection(cfg, manifest)
+
+    def test_explicit_hold_does_not_invent_acceptance_or_duration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, manifest, ledger, report, store = self.fixture(Path(tmp))
+            cfg['campaign']['held'] = {'toy002wiktionary': 'Missing supported metadata role'}
+            plan = controller.campaign_selection(cfg, manifest)
+            self.assertNotIn('toy002wiktionary', plan['ready'])
+            held = next(row for row in plan['dispositions'] if row['edition'] == 'toy002wiktionary')
+            self.assertEqual(held['status'], 'held'); self.assertNotIn('elapsed_seconds', held)
+            cfg['campaign']['held']['toy002wiktionary'] = ''
+            with self.assertRaisesRegex(ValueError, 'explicit reasons'): controller.campaign_selection(cfg, manifest)
+
+    def test_existing_cli_options_are_pinned_and_cache_identity_checked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); snap = root / 'file-metadata.tsv'; snap.write_text('retained fixture')
+            cache = root / 'cache'; cache.mkdir(); st = cache.stat()
+            record = dict(path=str(cache), device=st.st_dev, inode=st.st_ino, uid=st.st_uid, mode=st.st_mode & 0o777)
+            cfg = dict(llvm_workers=2, edition_options={'toy': dict(extraction_cache_root=record,
+                auxiliary_snapshots={'file-metadata': controller.descriptor(snap)})})
+            argv = controller.edition_cli_options(cfg, 'toy')
+            self.assertEqual(argv, ['--llvm-workers', '2', '--file-metadata-snapshot', str(snap), '--extraction-cache-root', str(cache)])
+            record['inode'] += 1
+            with self.assertRaisesRegex(ValueError, 'cache identity'): controller.edition_cli_options(cfg, 'toy')
+            record['inode'] -= 1; snap.write_text('changed')
+            with self.assertRaisesRegex(ValueError, 'snapshot identity'): controller.edition_cli_options(cfg, 'toy')
+            self.assertEqual(controller.edition_cli_options({}, 'toy'), [])
+
+    def test_started_without_terminal_keeps_unknown_production_time_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / 'build.log'
+            log.write_text('BUILD_PHASE ' + json.dumps(dict(edition='toy', date='20261001', phase='edition_build', event='start')) + '\n')
+            evidence = controller.phase_evidence(log, 'toy', '20261001')
+            self.assertTrue(evidence['production_started']); self.assertIsNone(evidence['end'])
+            log.write_text('preflight refused\n')
+            self.assertEqual(controller.phase_evidence(log, 'toy', '20261001'), dict(production_started=False, end=None))
+
+    def test_campaign_restart_refuses_missing_recovered_or_unproved_lifecycle(self):
+        for failure in ('missing', 'recovered', 'cleanup_proven', 'source_guard', 'control_proven'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); folder = root / 'attempts/000001'; folder.mkdir(parents=True)
+                write_json(folder / 'start.json', dict(context='same-context'))
+                if failure != 'missing':
+                    row = dict(outcome='failed', cleanup_proven=True, source_guard=True, control_proven=True)
+                    if failure == 'recovered': row['recovered'] = True
+                    else: row[failure] = False
+                    write_json(folder / 'result.json', row)
+                with mock.patch.object(controller, 'load_history_transition', return_value=None):
+                    with self.assertRaisesRegex(ValueError, 'Unresolved campaign'):
+                        controller.history(root, 'same-context', dict(campaign={}))
+
+    def test_campaign_restart_rechecks_real_watchdog_descriptor_and_live_owner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); folder = root / 'attempts/000001'; folder.mkdir(parents=True)
+            write_json(folder / 'start.json', dict(context='same-context'))
+            wd = folder / 'watchdog.json'; write_json(wd, dict(termination_reason='child_exit', memory_limit_bytes=controller.MEMORY_INITIAL))
+            row = dict(outcome='failed', cleanup_proven=True, source_guard=True, control_proven=True,
+                       memory_limit_bytes=controller.MEMORY_INITIAL, watchdog=controller.descriptor(wd))
+            write_json(folder / 'result.json', row)
+            with mock.patch.object(controller, 'load_history_transition', return_value=None), \
+                 mock.patch.object(controller, 'validate_history_context'), \
+                 mock.patch.object(controller, 'watchdog_closed', return_value=False):
+                with self.assertRaisesRegex(ValueError, 'not safe to continue'):
+                    controller.history(root, 'same-context', dict(campaign={}))
+            wd.write_text('{}')
+            with mock.patch.object(controller, 'load_history_transition', return_value=None):
+                with self.assertRaisesRegex(ValueError, 'Receipt bytes changed'):
+                    controller.history(root, 'same-context', dict(campaign={}))
+
+    def test_signal_exit_cannot_become_safe_after_campaign_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); folder = root / 'attempts/000001'; folder.mkdir(parents=True)
+            write_json(folder / 'start.json', dict(context='same-context'))
+            wd = folder / 'watchdog.json'
+            for status in (1, -9):
+                write_json(wd, dict(termination_reason='child_exit', child_exit_status=status, memory_limit_bytes=controller.MEMORY_INITIAL))
+                row = dict(outcome='failed', exit_code=status, cleanup_proven=True, source_guard=True, control_proven=True,
+                           memory_limit_bytes=controller.MEMORY_INITIAL, watchdog=controller.descriptor(wd))
+                write_json(folder / 'result.json', row)
+                with mock.patch.object(controller, 'load_history_transition', return_value=None), \
+                     mock.patch.object(controller, 'validate_history_context'), \
+                     mock.patch.object(controller, 'watchdog_closed', return_value=True):
+                    if status < 0:
+                        with self.assertRaisesRegex(ValueError, 'not safe to continue'):
+                            controller.history(root, 'same-context', dict(campaign={}))
+                    else:
+                        self.assertEqual(controller.history(root, 'same-context', dict(campaign={})), [row])
+
+    def test_all_held_queue_has_failure_status_and_never_launches(self):
+        for status, expected in [('held', 1), ('not-ready', 1), ('skipped-published', 0)]:
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                plan = dict(ready=[], dispositions=[dict(edition='arwiktionary', status=status)])
+                code, seen, summary = ControllerAllReadyTests().run_main(Path(tmp), plan=plan)
+                self.assertEqual(code, expected); self.assertEqual(seen, [])
+                self.assertFalse(summary['final_cohort_complete'])
+
+    def test_main_halts_source_control_signal_monitor_and_exhausted_cap_failures(self):
+        for unsafe in ('source', 'control', 'signal', 'monitor', 'cap'):
+            with self.subTest(unsafe=unsafe), tempfile.TemporaryDirectory() as tmp:
+                seen = ControllerAllReadyTests().run_main(Path(tmp), unsafe=unsafe)
+                self.assertTrue(seen)
+                self.assertEqual(set(seen), {'arwiktionary'})
+
+    def test_campaign_execute_separates_existing_output_success_and_failed_verification(self):
+        for status in ('success', 'error'):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); cfg = ControllerMemoryPolicyTests().cfg(root); cfg['campaign'] = {}
+                folder = root / 'attempt'; code = 0 if status == 'success' else 1
+                process = mock.Mock(pid=900123); process.poll.return_value=code; process.wait.return_value=code
+                start = dict(edition='arwiktionary', date='20261001', phase='edition_build', event='start')
+                end = dict(start, event='end', status=status, seconds=3.25, execution_mode='existing_output')
+                def spawn(*args, **kwargs):
+                    write_json(Path(kwargs['cwd'])/'.tmp/build-watchdog-report.json', dict(termination_reason='child_exit',
+                        child_exit_status=code, guardian_exit_status=0, memory_limit_bytes=controller.MEMORY_INITIAL))
+                    kwargs['stdout'].write(('BUILD_PHASE '+json.dumps(start)+'\nBUILD_PHASE '+json.dumps(end)+'\n').encode())
+                    kwargs['stdout'].flush()
+                    return process
+                with mock.patch.object(controller, 'ROOT', root), \
+                     mock.patch.object(controller.subprocess, 'Popen', side_effect=spawn), \
+                     mock.patch.object(controller, 'process_identity', return_value=dict(pid=900123, start_time_ticks=1)), \
+                     mock.patch.object(controller, 'watchdog_closed', return_value=True), \
+                     mock.patch.object(controller, 'source_guard'), \
+                     mock.patch.object(controller, 'accept', return_value=dict(input_pages=10)):
+                    row, _ = controller.execute(cfg, 'arwiktionary', 4, folder, 1, 'context', [])
+                self.assertTrue(row['verification_only']); self.assertFalse(row['production_started'])
+                self.assertIsNone(row['production_elapsed_seconds']); self.assertEqual(row['verification_elapsed_seconds'], 3.25)
+                self.assertEqual(row['edition_build'], end); self.assertGreaterEqual(row['controller_elapsed_seconds'], 0)
+                summary = controller.summarize([row], ['arwiktionary'])
+                self.assertEqual(summary['editions'][0]['observed_build_seconds'], 0)
+                self.assertEqual(summary['editions'][0]['verification_seconds'], 3.25)
+                self.assertEqual(row['accepted'] is None, status == 'error')
+
+    def test_campaign_execute_start_only_is_unknown_and_true_no_start_is_not_production(self):
+        for started in (True, False):
+            with self.subTest(started=started), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); cfg = ControllerMemoryPolicyTests().cfg(root); cfg['campaign'] = {}; folder = root/'attempt'
+                process = mock.Mock(pid=900123); process.poll.return_value=1; process.wait.return_value=1
+                def spawn(*args, **kwargs):
+                    write_json(Path(kwargs['cwd'])/'.tmp/build-watchdog-report.json', dict(termination_reason='child_exit',
+                        child_exit_status=1, guardian_exit_status=0, memory_limit_bytes=controller.MEMORY_INITIAL))
+                    if started:
+                        kwargs['stdout'].write(('BUILD_PHASE '+json.dumps(dict(edition='arwiktionary', date='20261001', phase='edition_build', event='start'))+'\n').encode())
+                        kwargs['stdout'].flush()
+                    return process
+                with mock.patch.object(controller, 'ROOT', root), \
+                     mock.patch.object(controller.subprocess, 'Popen', side_effect=spawn), \
+                     mock.patch.object(controller, 'process_identity', return_value=dict(pid=900123, start_time_ticks=1)), \
+                     mock.patch.object(controller, 'watchdog_closed', return_value=True), \
+                     mock.patch.object(controller, 'source_guard'):
+                    row, _ = controller.execute(cfg, 'arwiktionary', 4, folder, 1, 'context', [])
+                self.assertEqual(row['production_started'], started)
+                self.assertEqual(row['elapsed_seconds'], None if started else 0.0)
+                self.assertIsNone(row['production_elapsed_seconds'])
+                self.assertEqual(row['not_ready_reason'] is None, started)
+                self.assertFalse(row['verification_only'])
+
+    def test_campaign_execute_records_malformed_terminal_and_finishes_source_cleanup_checks(self):
+        for source_fails in (False, True):
+            with self.subTest(source_fails=source_fails), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); cfg = ControllerMemoryPolicyTests().cfg(root); cfg['campaign'] = {}; folder = root/'attempt'
+                process = mock.Mock(pid=900123); process.poll.return_value=1; process.wait.return_value=1
+                start = dict(edition='arwiktionary', date='20261001', phase='edition_build', event='start')
+                def spawn(*args, **kwargs):
+                    write_json(Path(kwargs['cwd'])/'.tmp/build-watchdog-report.json', dict(termination_reason='child_exit',
+                        child_exit_status=1, guardian_exit_status=0, memory_limit_bytes=controller.MEMORY_INITIAL))
+                    kwargs['stdout'].write(('BUILD_PHASE '+json.dumps(start)+'\nBUILD_PHASE {"event":"end",').encode())
+                    kwargs['stdout'].flush()
+                    return process
+                lock = mock.Mock()
+                with mock.patch.object(controller, 'ROOT', root), \
+                     mock.patch.object(controller.subprocess, 'Popen', side_effect=spawn), \
+                     mock.patch.object(controller, 'process_identity', return_value=dict(pid=900123, start_time_ticks=1)), \
+                     mock.patch.object(controller, 'watchdog_closed', return_value=True) as cleanup, \
+                     mock.patch.object(controller, 'source_guard', side_effect=ValueError('source changed') if source_fails else None) as source, \
+                     mock.patch.object(controller, 'accept') as accept:
+                    row, _ = controller.execute(cfg, 'arwiktionary', 4, folder, 1, 'context', [lock])
+                self.assertEqual(controller.read_json(folder/'result.json'), row)
+                process.wait.assert_called_once(); source.assert_called_once_with(cfg)
+                cleanup.assert_called_once(); lock.check.assert_called(); accept.assert_not_called()
+                self.assertTrue(row['cleanup_proven']); self.assertEqual(row['source_guard'], not source_fails)
+                self.assertFalse(row['control_proven']); self.assertEqual(row['outcome'], 'failed')
+                self.assertIsNone(row['production_started']); self.assertIsNone(row['verification_only'])
+                self.assertIsNone(row['elapsed_seconds']); self.assertIsNone(row['production_elapsed_seconds'])
+                self.assertIsNone(row['verification_elapsed_seconds']); self.assertIsNone(row['edition_build'])
+                self.assertGreaterEqual(row['controller_elapsed_seconds'], 0)
+                self.assertIn('Invalid phase evidence', row['error']); self.assertTrue(row['phase_evidence_error'])
+                self.assertEqual('source changed' in row['error'], source_fails)
+                self.assertEqual(controller.descriptor(folder/'build.log'), row['build_log'])
+                summary = controller.summarize([row], ['arwiktionary'])
+                self.assertIsNone(summary['editions'][0]['observed_build_seconds'])
+
+    def test_failed_local_verification_cannot_be_hidden_by_older_campaign_publication(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); plan = dict(ready=[], dispositions=[dict(edition='arwiktionary', status='skipped-published')])
+            failed = attempt('verify-failed', 1, 'arwiktionary', seconds=3, accepted=False, mode='existing_output')
+            with self.assertRaisesRegex(ValueError, 'Failed publication verification'):
+                ControllerAllReadyTests().run_main(root, plan=copy.deepcopy(plan), history_rows=[failed])
+            failed_production = attempt('production-failed', 2, 'arwiktionary', seconds=5, accepted=False)
+            with self.assertRaisesRegex(ValueError, 'Failed publication verification'):
+                ControllerAllReadyTests().run_main(root, plan=copy.deepcopy(plan), history_rows=[failed, failed_production])
+            passed = attempt('verify-passed', 2, 'arwiktionary', seconds=4, accepted=True, mode='existing_output')
+            code, seen, summary = ControllerAllReadyTests().run_main(root, plan=copy.deepcopy(plan), history_rows=[failed, passed])
+            self.assertEqual(code, 0); self.assertEqual(seen, [])
+            row = next(row for row in summary['editions'] if row['edition'] == 'arwiktionary')
+            self.assertEqual(row['observed_build_seconds'], 0); self.assertEqual(row['verification_seconds'], 7)
+
+    def test_strict_phase_timeline_rejects_malformed_duplicate_and_reordered_records(self):
+        start = dict(edition='toy', date='20261001', phase='edition_build', event='start')
+        end = dict(start, event='end', seconds=1)
+        cases = [['broken'], [end], [start, start, end], [start, end, start], [start, dict(end, seconds=-1)], [start, dict(end, seconds=float('nan'))]]
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp)/'build.log'
+            for rows in cases:
+                log.write_text(''.join('BUILD_PHASE '+(row if isinstance(row, str) else json.dumps(row))+'\n' for row in rows))
+                with self.subTest(rows=rows), self.assertRaises(ValueError):
+                    controller.phase_evidence(log, 'toy', '20261001', strict=True)
+
+    def test_all44_unstarted_are_selected_from_complete_inventory_without_payload_reads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, manifest, ledger, report, store = self.fixture(Path(tmp))
+            inventory = controller.read_ref(report['report_refresh_inputs']['inventory'])
+            editions = [row['wiki'] for row in inventory['rows']]
+            baseline = dict(history=dict(inventory=report['report_refresh_inputs']['inventory'],
+                                         attempted_editions=editions[:154], attempted_count=154))
+            report['report_refresh_inputs']['baseline'] = store('baseline-154.json', baseline)
+            report['inventory_disposition']['not_started_in_recorded_ledgers'] = 44
+            cfg['campaign']['report'] = store('report-154.json', report)
+            selected = editions[154:]
+            manifest = dict(requested_editions=list(reversed(selected)), files=[dict(row['members'][0], wiki=row['wiki'])
+                for row in inventory['rows'] if row['wiki'] in selected])
+            plan = controller.campaign_selection(cfg, manifest)
+            self.assertEqual(plan['ready'], selected)
+            self.assertEqual(plan['unstarted_count'], 44)
+            self.assertEqual(plan['dispositions'], [])
+            self.assertFalse(plan['semantic_acceptance'])
 
 
 if __name__ == '__main__':

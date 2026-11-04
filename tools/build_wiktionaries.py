@@ -2295,13 +2295,14 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     for item in items:validate_item(item)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     phase_edition,phase_date=phase_identity(items)
-    auxiliary_snapshots=dict(auxiliary_snapshots or {})
-    registry=Path(auxiliary_snapshots.get('language-registry',downloads/phase_edition/phase_date/'language-registry.tsv'))
-    namespace=Path(auxiliary_snapshots.get('namespace-registry',downloads/phase_edition/phase_date/'namespace-registry.tsv'))
-    if not registry.is_file():raise ValueError('Missing pinned language registry')
-    if not namespace.is_file():raise ValueError('Missing namespace registry')
-    auxiliary_snapshots.update({'language-registry':registry,'namespace-registry':namespace})
-    auxiliary_hashes=verified_auxiliary_hashes(auxiliary_snapshots,phase_edition,phase_date)
+    with build_phase(phase_edition,phase_date,'auxiliary_validation'):
+        auxiliary_snapshots=dict(auxiliary_snapshots or {})
+        registry=Path(auxiliary_snapshots.get('language-registry',downloads/phase_edition/phase_date/'language-registry.tsv'))
+        namespace=Path(auxiliary_snapshots.get('namespace-registry',downloads/phase_edition/phase_date/'namespace-registry.tsv'))
+        if not registry.is_file():raise ValueError('Missing pinned language registry')
+        if not namespace.is_file():raise ValueError('Missing namespace registry')
+        auxiliary_snapshots.update({'language-registry':registry,'namespace-registry':namespace})
+        auxiliary_hashes=verified_auxiliary_hashes(auxiliary_snapshots,phase_edition,phase_date)
     with build_phase(phase_edition,phase_date,'verify_downloads',files=len(items)) as result:
         verified_bytes=0
         for item in items:
@@ -2315,16 +2316,17 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     if not xml:
         raise ValueError('No full-namespace current XML in snapshot')
     edition,date=items[0]['wiki'],items[0]['date']
-    if interwiki_snapshot is not None:
-        interwiki_snapshot=Path(interwiki_snapshot).resolve(strict=True)
-        if not interwiki_snapshot.is_file(): raise ValueError('Interwiki map snapshot is not a file')
-        interwiki_sha=sha256_file(interwiki_snapshot)
-        validate_interwiki_provenance(interwiki_snapshot,edition,interwiki_sha)
-    else:
-        interwiki_sha=None
-    auxiliary_hashes=verified_auxiliary_hashes(auxiliary_snapshots,edition,date)
-    reviewed = nonlexical.load_review(reviewed_nonlexical_review,items,namespace)
-    build_identity=build_input_identity(items,zig,auxiliary_hashes,interwiki_sha,expansion_timeout_ms,auxiliary_snapshots,downloads,reviewed)
+    with build_phase(phase_edition,phase_date,'input_identity'):
+        if interwiki_snapshot is not None:
+            interwiki_snapshot=Path(interwiki_snapshot).resolve(strict=True)
+            if not interwiki_snapshot.is_file(): raise ValueError('Interwiki map snapshot is not a file')
+            interwiki_sha=sha256_file(interwiki_snapshot)
+            validate_interwiki_provenance(interwiki_snapshot,edition,interwiki_sha)
+        else:
+            interwiki_sha=None
+        auxiliary_hashes=verified_auxiliary_hashes(auxiliary_snapshots,edition,date)
+        reviewed = nonlexical.load_review(reviewed_nonlexical_review,items,namespace)
+        build_identity=build_input_identity(items,zig,auxiliary_hashes,interwiki_sha,expansion_timeout_ms,auxiliary_snapshots,downloads,reviewed)
     target = output / edition / date
     if (target / 'complete.json').exists():
         try:
@@ -2401,19 +2403,21 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     workers = min(compression_workers or default_build_threads(),MAX_PIPELINE_WORKERS)
     llvm_explicit=llvm_workers is not None
     llvm_workers=workers if llvm_workers is None else llvm_workers
-    workspace=target.with_name(date+'.shards')
-    expected=shard_state(items,registry,interwiki_snapshot=interwiki_snapshot,auxiliary_snapshots=auxiliary_snapshots,reviewed_nonlexical=reviewed)
-    raw_shards_path=(Path(raw_shard_root).absolute()/edition/(date+'.raw-shards')) if raw_shard_root is not None else None
-    now_unix=prepare_shard_workspace(workspace,expected,now_unix,**({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}))
-    if reviewed is not None:nonlexical.pin_review(reviewed,workspace/'reviewed-nonlexical-source.json')
+    with build_phase(phase_edition,phase_date,'workspace_setup'):
+        workspace=target.with_name(date+'.shards')
+        expected=shard_state(items,registry,interwiki_snapshot=interwiki_snapshot,auxiliary_snapshots=auxiliary_snapshots,reviewed_nonlexical=reviewed)
+        raw_shards_path=(Path(raw_shard_root).absolute()/edition/(date+'.raw-shards')) if raw_shard_root is not None else None
+        now_unix=prepare_shard_workspace(workspace,expected,now_unix,**({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}))
+        if reviewed is not None:nonlexical.pin_review(reviewed,workspace/'reviewed-nonlexical-source.json')
     dump=cached_shard_dump(xml,downloads,workspace)
     source_metadata=read_small_json(workspace/'input/.complete.json')
     if not isinstance(source_metadata,dict) or type(source_metadata.get('source_pages')) is not int or source_metadata['source_pages']<0:
         raise ValueError('Staged dump lacks a verified source page count')
     source_pages=source_metadata['source_pages']
-    pinned=copy_verified_snapshot(interwiki_snapshot,workspace/'interwiki-map.tsv',interwiki_sha) if interwiki_snapshot else None
-    aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,workspace,
-        build_identity.get('auxiliary_capture_sha256',{}),build_identity.get('auxiliary_capture_artifact_sha256',{}))
+    with build_phase(phase_edition,phase_date,'snapshot_staging'):
+        pinned=copy_verified_snapshot(interwiki_snapshot,workspace/'interwiki-map.tsv',interwiki_sha) if interwiki_snapshot else None
+        aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,workspace,
+            build_identity.get('auxiliary_capture_sha256',{}),build_identity.get('auxiliary_capture_artifact_sha256',{}))
     from prepare_wikibase_page_links import prepare_from_dumps
     with build_phase(edition,date,'wikibase_page_links') as result:
         page_links_snapshot=prepare_from_dumps(items,downloads,namespace,workspace,aux_pinned.get('wikibase-page-links'))
@@ -2436,29 +2440,31 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
                      '--llvm-workers',str(llvm_workers),'--parse-workers',str(min(workers,64)),
                      '--page-workers',str(expansion_workers if expansion_workers is not None else min(workers,16)),'--now-unix',str(now_unix),*timeout_args,
                      *extraction_cache_args(extraction_cache_root,source_metadata)],edition,date,'dictionary_build')
-        coverage=validate_page_coverage(staging,source_pages=source_pages)
-        coverage['expected_input_pages']=source_pages
-        (staging/'page-coverage.json').write_text(json.dumps(coverage,sort_keys=True)+'\n')
+        with build_phase(edition,date,'page_coverage'):
+            coverage=validate_page_coverage(staging,source_pages=source_pages)
+            coverage['expected_input_pages']=source_pages
+            (staging/'page-coverage.json').write_text(json.dumps(coverage,sort_keys=True)+'\n')
         timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(staging)],
                   edition,date,'dictionary_verify')
-        if interwiki_sha is not None:
-            if sha256_file(pinned)!=interwiki_sha: raise ValueError('Interwiki map snapshot changed during build')
-            (staging/INTERWIKI_SHA_NAME).write_text(interwiki_sha+'\n')
-        if auxiliary_hashes:
-            if verified_auxiliary_hashes(aux_pinned)!=auxiliary_hashes:
-                raise ValueError('Auxiliary snapshot changed during build')
-            (staging/AUXILIARY_SHA_NAME).write_text(json.dumps(auxiliary_hashes,sort_keys=True)+'\n')
-        require_auxiliary_capture_identity(aux_pinned,build_identity)
-        if page_links_snapshot is not None and sha256_file(page_links_snapshot)!=page_links_sha:
-            raise ValueError('Derived page links changed during build')
-        if page_redirects_snapshot is not None and sha256_file(page_redirects_snapshot)!=page_redirects_sha:
-            raise ValueError('Derived page redirects changed during build')
-        (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
-        persist_build_identity(staging,build_identity)
-        seal_verified_publication_inventory(staging)
-        (staging / VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
-        # Verified staging can now resume publication without the input cache.
-        cleanup_shard_workspace(workspace)
+        with build_phase(edition,date,'publication_seal'):
+            if interwiki_sha is not None:
+                if sha256_file(pinned)!=interwiki_sha: raise ValueError('Interwiki map snapshot changed during build')
+                (staging/INTERWIKI_SHA_NAME).write_text(interwiki_sha+'\n')
+            if auxiliary_hashes:
+                if verified_auxiliary_hashes(aux_pinned)!=auxiliary_hashes:
+                    raise ValueError('Auxiliary snapshot changed during build')
+                (staging/AUXILIARY_SHA_NAME).write_text(json.dumps(auxiliary_hashes,sort_keys=True)+'\n')
+            require_auxiliary_capture_identity(aux_pinned,build_identity)
+            if page_links_snapshot is not None and sha256_file(page_links_snapshot)!=page_links_sha:
+                raise ValueError('Derived page links changed during build')
+            if page_redirects_snapshot is not None and sha256_file(page_redirects_snapshot)!=page_redirects_sha:
+                raise ValueError('Derived page redirects changed during build')
+            (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
+            persist_build_identity(staging,build_identity)
+            seal_verified_publication_inventory(staging)
+            (staging / VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
+            # Verified staging can now resume publication without the input cache.
+            cleanup_shard_workspace(workspace)
     (staging/NOW_UNIX_NAME).write_text(json.dumps(now_unix)+'\n')
     publish_verified_staging(staging, target, edition, date, compression_workers, interwiki_sha, auxiliary_hashes, build_identity=build_identity, namespace_snapshot=namespace, site_info_snapshot=auxiliary_snapshots.get('site-info'))
     cleanup_shard_workspace(workspace)

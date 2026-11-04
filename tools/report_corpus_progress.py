@@ -103,7 +103,12 @@ def derive(old, before, ledger, inventory, baseline, load):
         leaf = load(r['closure_ref'])
         check(leaf['source_guard'] is True and leaf['cleanup_proven'] is True and leaf['outcome'] == r['outcome'], 'unproved production closure')
         check(leaf['production_started'] is True and leaf['production_elapsed_seconds'] == r['elapsed_seconds'], 'production timing join mismatch')
-        check(leaf['result'] == r['result'] and str(Path(r['result']['path']).parent) == r['attempt_directory'], 'attempt/result join mismatch')
+        check(leaf['result'] == r['result'], 'attempt/result join mismatch')
+        owner = load(leaf['configuration'])
+        configuration = load(owner['driver_configuration'])
+        identity = ('edition', 'date', 'attempt_number', 'attempt_directory', 'source_fingerprint')
+        check(tuple(configuration[k] for k in identity) == tuple(r[k] for k in identity),
+              'attempt/configuration join mismatch')
         result = load(r['result'])
         check(result['elapsed_seconds'] == r['elapsed_seconds'], 'result timing join mismatch')
         if r['complete'] is not None:

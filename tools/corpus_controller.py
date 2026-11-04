@@ -120,21 +120,35 @@ def next_resources(workers, memory_limit_bytes, watchdog):
     return (reduced, MEMORY) if reduced is not None else None
 
 
-def phase_end(log_path, edition, date):
-    found = []
-    with Path(log_path).open(errors='replace') as f:
-        for line in f:
+def phase_evidence(log_path, edition, date, *, strict=False):
+    starts, ends = [], []
+    with Path(log_path).open(errors='replace') as stream:
+        for line in stream:
             if not line.startswith('BUILD_PHASE '):
                 continue
             try:
                 row = json.loads(line[len('BUILD_PHASE '):])
             except ValueError:
+                require(not strict, 'Malformed edition phase record')
                 continue
-            if (row.get('edition'), row.get('date'), row.get('phase'), row.get('event')) == (
-                    edition, date, 'edition_build', 'end'):
-                found.append(row)
-    require(len(found) <= 1, 'More than one edition completion in a serial attempt')
-    return found[0] if found else None
+            require(isinstance(row, dict), 'Malformed edition phase object')
+            if (row.get('edition'), row.get('date'), row.get('phase')) != (edition, date, 'edition_build'):
+                continue
+            if strict:
+                require(row.get('event') in ('start', 'end'), 'Unknown edition phase event')
+                require(not ends, 'Edition phase follows terminal')
+                if row['event'] == 'end':
+                    require(len(starts) == 1, 'Edition terminal has no preceding start')
+                    require(type(row.get('seconds')) in (int, float) and math.isfinite(row['seconds'])
+                            and row['seconds'] >= 0, 'Invalid edition phase duration')
+            if row.get('event') == 'start': starts.append(row)
+            if row.get('event') == 'end': ends.append(row)
+    require(len(starts) <= 1 and len(ends) <= 1, 'More than one edition completion in a serial attempt')
+    return dict(production_started=bool(starts or ends), end=ends[0] if ends else None)
+
+
+def phase_end(log_path, edition, date):
+    return phase_evidence(log_path, edition, date)['end']
 
 
 
@@ -1112,6 +1126,137 @@ def validate_content_review(value, source, rows, expected_editions, *, scope):
     return value
 
 
+def campaign_selection(cfg, manifest):
+    """Reconcile a selected normal manifest against pinned campaign history."""
+    request = cfg.get('campaign')
+    if request is None:
+        return None
+    require(isinstance(request, dict) and set(request) <= {'report', 'ledger', 'retry_failed', 'held'},
+            'Unknown campaign selection field')
+    report = read_ref(request['report']); ledger = read_ref(request['ledger'])
+    require(report['sources']['campaign_ledger'] == request['ledger'], 'Stale campaign report/ledger join')
+    inputs = report['report_refresh_inputs']
+    inventory = read_ref(inputs['inventory']); baseline = read_ref(inputs['baseline'])
+    require(baseline['history']['inventory'] == inputs['inventory'], 'Campaign inventory authority differs')
+    inventory_rows = {row['wiki']: row for row in inventory['rows']}
+    require(len(inventory_rows) == inventory['edition_count'] == 198 and not inventory['missing'],
+            'Campaign requires the original complete inventory')
+    attempts = ledger['attempts']
+    identities = [{key: row[key] for key in ('edition', 'attempt_number', 'attempt_directory')} for row in attempts]
+    require(report['deduplication']['identity_inventory']['campaign_logical_attempts'] == identities,
+            'Campaign attempt identity join differs')
+    require(len({row['attempt_directory'] for row in attempts}) == len(attempts), 'Duplicate campaign attempt')
+    historical = set(baseline['history']['attempted_editions'])
+    require(len(historical) == baseline['history']['attempted_count'] and historical <= set(inventory_rows),
+            'Historical campaign inventory differs')
+    attempted = historical | {row['edition'] for row in attempts}
+    latest = {}; published = {}
+    for row in attempts:
+        require(row['edition'] in inventory_rows and type(row['attempt_number']) is int,
+                'Invalid campaign edition/attempt')
+        key = row['edition']
+        if key not in latest or row['attempt_number'] > latest[key]['attempt_number']:
+            latest[key] = row
+        if row['outcome'] == 'passed-closed' and (key not in published or row['attempt_number'] > published[key]['attempt_number']):
+            published[key] = row
+    disposition = report['inventory_disposition']
+    require(disposition['not_started_in_recorded_ledgers'] == len(set(inventory_rows) - attempted)
+            and disposition['mechanical_publications'] == report['progress']['initial_mechanical_editions'] + len(published)
+            and ledger['aggregate']['closed_production_attempts'] == len(attempts), 'Campaign aggregate join differs')
+    selected = manifest['requested_editions']
+    require(len(selected) == len(set(selected)) and set(selected) <= set(inventory_rows),
+            'Selected editions are outside campaign inventory')
+    retries = request.get('retry_failed', {}); held = request.get('held', {})
+    require(isinstance(retries, dict) and isinstance(held, dict)
+            and set(retries) <= set(selected) and set(held) <= set(selected), 'Campaign selection outside selected inputs')
+    require(all(isinstance(reason, str) and reason.strip() for reason in held.values()), 'Held editions need explicit reasons')
+    ready = []; dispositions = []
+    for edition in selected_phase_editions(selected, 'all', manifest=manifest):
+        items = [row for row in manifest['files'] if row['wiki'] == edition]
+        xml = [{key: row[key] for key in ('name', 'size', 'sha1', 'url', 'date')} for row in items if '.xml' in row['name']]
+        require(sorted(xml, key=lambda row: row['name']) == sorted(inventory_rows[edition]['members'], key=lambda row: row['name']),
+                'Selected XML differs from original inventory')
+        if edition in held:
+            dispositions.append(dict(edition=edition, status='held', reason=held[edition])); continue
+        if edition in published:
+            row = published[edition]; closure = read_ref(row['closure_ref'])
+            require(closure['cleanup_proven'] is True and closure['source_guard'] is True
+                    and closure['outcome'] == 'passed-closed' and closure['production_started'] is True
+                    and closure['result'] == row['result'], 'Published campaign closure differs')
+            owner = read_ref(closure['configuration']); driver = read_ref(owner['driver_configuration'])
+            require(all(driver[key] == row[key] for key in ('edition', 'date', 'attempt_number', 'attempt_directory', 'source_fingerprint')),
+                    'Published campaign configuration differs')
+            result = read_ref(row['result']); complete = read_ref(row['complete'])
+            require(result['accepted'] is True and result['complete'] == row['complete']
+                    and result['elapsed_seconds'] == row['elapsed_seconds'] == closure['production_elapsed_seconds']
+                    and result['input_pages'] == row['input_pages'] == complete['input_pages']
+                    and (complete['edition'], complete['date']) == (edition, cfg['date']), 'Published campaign result differs')
+            expected = sorted([[v['wiki'], v['date'], v['name'], v['size'], v['sha1']] for v in items])
+            require(complete['build_inputs']['files'] == expected
+                    and complete['build_inputs']['source'] == row['source_fingerprint'], 'Published campaign input/source differs')
+            accepted = dict(root=str(Path(row['complete']['path']).parent), complete=row['complete'], complete_snapshot=row['complete'])
+            require(publication_present(accepted), 'Published campaign files are unavailable; explicit reconciliation required')
+            dispositions.append(dict(edition=edition, status='skipped-published', closure=row['closure_ref'],
+                                     complete=row['complete'], semantic_acceptance=False)); continue
+        if edition in latest:
+            row = latest[edition]
+            if retries.get(edition) != row['closure_ref']:
+                dispositions.append(dict(edition=edition, status='held-prior-failure', reason='No exact selected retry authority', closure=row['closure_ref'])); continue
+            closure = read_ref(row['closure_ref'])
+            require(closure['cleanup_proven'] is True and closure['source_guard'] is True and closure['production_started'] is True
+                    and closure['outcome'] == row['outcome'] and closure['result'] == row['result']
+                    and closure['production_elapsed_seconds'] == row['elapsed_seconds'],
+                    'Prior failed production has unresolved source, cleanup or identity')
+            failed_result = read_ref(row['result'])
+            require(failed_result['elapsed_seconds'] == row['elapsed_seconds'] and failed_result.get('accepted') is False,
+                    'Prior failed production result differs')
+            old_driver = read_ref(read_ref(closure['configuration'])['driver_configuration'])
+            require(all(old_driver[key] == row[key] for key in ('edition', 'date', 'attempt_number', 'attempt_directory', 'source_fingerprint')),
+                    'Retry attempt identity differs')
+            old_manifest = read_ref(old_driver['manifest'])
+            registry = lambda value: [v for v in value.get('language_registries', []) if v['wiki'] == edition and v['date'] == cfg['date']]
+            require(cfg['source']['fingerprint'] != row['source_fingerprint'] or registry(manifest) != registry(old_manifest),
+                    'Identical failed producer/input retry is not selected')
+        elif edition in attempted:
+            dispositions.append(dict(edition=edition, status='held-historical', reason='Historical attempt requires its exact existing reconciliation route')); continue
+        ready.append(edition)
+    return dict(report=request['report'], ledger=request['ledger'], ready=ready, dispositions=dispositions,
+                original_inventory_count=198, unstarted_count=len(set(inventory_rows) - attempted),
+                historical_timing_imported=False, semantic_acceptance=False)
+
+
+def edition_cli_options(cfg, edition):
+    """Forward existing canonical options, authenticating each selected input."""
+    from build_wiktionaries import AUXILIARY_SNAPSHOT_NAMES
+    options = cfg.get('edition_options', {}).get(edition, {})
+    require(isinstance(options, dict) and set(options) <= {'extraction_cache_root', 'auxiliary_snapshots', 'interwiki_snapshot'},
+            'Unknown edition option')
+    argv = []
+    if 'llvm_workers' in cfg:
+        value = cfg['llvm_workers']
+        require(type(value) is int and 1 <= value <= 4, 'LLVM workers must be 1 through 4')
+        argv += ['--llvm-workers', str(value)]
+    snapshots = options.get('auxiliary_snapshots', {})
+    require(isinstance(snapshots, dict) and set(snapshots) <= set(AUXILIARY_SNAPSHOT_NAMES), 'Unknown auxiliary snapshot')
+    for name, reference in sorted(snapshots.items()):
+        require(descriptor(reference['path']) == reference and not any(p.is_symlink() for p in Path(reference['path']).parents),
+                'Edition snapshot identity differs')
+        argv += ['--' + name + '-snapshot', reference['path']]
+    if 'interwiki_snapshot' in options:
+        reference = options['interwiki_snapshot']
+        require(descriptor(reference['path']) == reference and not any(p.is_symlink() for p in Path(reference['path']).parents),
+                'Interwiki snapshot identity differs')
+        argv += ['--interwiki-map-snapshot', reference['path']]
+    if 'extraction_cache_root' in options:
+        record = options['extraction_cache_root']; path = Path(record['path'])
+        require(path.is_absolute() and not any(p.is_symlink() for p in (path, *path.parents)) and path.is_dir(), 'Unsafe extraction cache')
+        st = path.stat()
+        require((st.st_dev, st.st_ino, st.st_uid, st.st_mode & 0o777) == tuple(record[k] for k in ('device', 'inode', 'uid', 'mode'))
+                and st.st_uid == os.geteuid() and st.st_mode & 0o200, 'Extraction cache identity or ownership differs')
+        argv += ['--extraction-cache-root', str(path)]
+    return argv
+
+
 def command(cfg, edition, workers, memory_limit_bytes=MEMORY_INITIAL):
     require(type(memory_limit_bytes) is int and memory_limit_bytes in (MEMORY_INITIAL, MEMORY),
             'Production memory budget must be 4 or 8 GiB')
@@ -1125,6 +1270,7 @@ def command(cfg, edition, workers, memory_limit_bytes=MEMORY_INITIAL):
         '--zig', cfg['compiler']['path'], '--wikis', edition]
     if cfg.get('artifact_root') is not None:
         argv += ['--artifact-root-spec', json.dumps(cfg['artifact_root'], sort_keys=True, separators=(',', ':'))]
+    argv += edition_cli_options(cfg, edition)
     return argv
 
 
@@ -1136,6 +1282,8 @@ def production_context(cfg):
     values = {key: cfg[key] for key in CONTEXT_KEYS}
     if cfg.get('artifact_root') is not None:
         values['artifact_root'] = cfg['artifact_root']
+    for key in ('campaign', 'edition_options', 'llvm_workers'):
+        if key in cfg: values[key] = cfg[key]
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
 
@@ -1406,6 +1554,7 @@ def history(state, context, cfg=None):
         require(not (transition and transition.get('time_only') and start['context'] == transition['context'])
                 or terminal.exists(), 'Closed historical pilot cannot synthesize a missing terminal')
         if not terminal.exists():
+            require(not cfg or cfg.get('campaign') is None, 'Unresolved campaign terminal requires explicit recovery; no automatic retry')
             launch = read_json(folder / 'launch.json') if (folder / 'launch.json').exists() else None
             require(process_identity(start['controller']['pid']) != start['controller'], 'Another controller still owns an unfinished attempt')
             if launch:
@@ -1422,6 +1571,18 @@ def history(state, context, cfg=None):
                 watchdog=descriptor(wdpath), watchdog_elapsed_seconds=wd.get('elapsed_seconds'),
                 accepted=None, timing_authority='parent terminal missing; elapsed unknown', recovered=True))
         row = read_json(terminal)
+        if cfg and cfg.get('campaign') is not None:
+            require(row.get('recovered') is not True and row.get('outcome') != 'interrupted'
+                    and row.get('cleanup_proven') is True and row.get('source_guard') is True
+                    and row.get('control_proven') is True,
+                    'Unresolved campaign lifecycle requires explicit reconciliation')
+            watchdog = read_ref(row['watchdog'])
+            require(watchdog_closed(watchdog) and watchdog.get('termination_reason') == 'child_exit'
+                    and watchdog.get('memory_limit_bytes') == row.get('memory_limit_bytes')
+                    and type(watchdog.get('child_exit_status')) is int
+                    and watchdog['child_exit_status'] == row.get('exit_code')
+                    and (watchdog['child_exit_status'] == 0 if row.get('accepted') else watchdog['child_exit_status'] > 0),
+                    'Campaign watchdog/source-control history is not safe to continue')
         validate_history_context(start, row, context, transition, cfg)
         if row.get('accepted'):
             read_ref(row['accepted']['complete_snapshot'])
@@ -1477,6 +1638,8 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
     started = time.monotonic()
     error, process, rc = None, None, None
     interrupted = False
+    source_verified = False
+    control_verified = False
     try:
         with (folder / 'build.log').open('xb') as log:
             process = subprocess.Popen(start['argv'], cwd=folder, stdin=subprocess.DEVNULL,
@@ -1506,29 +1669,51 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
     wdpath = folder / '.tmp/build-watchdog-report.json'
     wd = read_json(wdpath) if wdpath.exists() else {}
     log_ref = descriptor(folder / 'build.log') if (folder / 'build.log').exists() else None
-    phase = phase_end(folder / 'build.log', edition, cfg['date']) if log_ref else None
+    phase_error = None
+    try:
+        evidence = phase_evidence(folder / 'build.log', edition, cfg['date'], strict=cfg.get('campaign') is not None) if log_ref else dict(production_started=False, end=None)
+    except (OSError, ValueError) as exc:
+        phase_error = f'{type(exc).__name__}: {exc}'
+        error = '; '.join(part for part in (error, 'Invalid phase evidence: ' + phase_error) if part)
+        evidence = dict(production_started=None, end=None)
+    phase = evidence['end']
     accepted = None
     cleanup_proven = process is not None and process.poll() is not None and watchdog_closed(wd)
     try:
         for lock in locks:
             lock.check()
         source_guard(cfg)
+        source_verified = True
         if wd:
             require(type(wd.get('memory_limit_bytes')) is int and wd['memory_limit_bytes'] == memory_limit_bytes,
                     'Actual watchdog memory budget differs from the requested attempt')
+            control_verified = phase_error is None
         if error is None and rc == 0:
             require(cleanup_proven, 'Tracked watchdog cleanup is unproven')
             require(wd.get('child_exit_status') == wd.get('guardian_exit_status') == 0
                     and wd.get('termination_reason') == 'child_exit', 'Successful watchdog terminal missing')
             accepted = accept(cfg, edition, folder, phase, log_ref)
     except (OSError, ValueError) as exc:
-        error = f'{type(exc).__name__}: {exc}'
+        error = '; '.join(part for part in (error, f'{type(exc).__name__}: {exc}') if part)
     row = dict(attempt_id=folder.name, sequence=sequence, edition=edition, workers_requested=workers,
         memory_limit_bytes=memory_limit_bytes, outcome='passed' if accepted else 'failed', exit_code=rc, error=error, elapsed_seconds=elapsed,
-        controller_interrupted=interrupted, cleanup_proven=cleanup_proven,
+        controller_interrupted=interrupted, cleanup_proven=cleanup_proven, source_guard=source_verified, control_proven=control_verified,
         timing_authority='actual controller monotonic interval around joined tracked CLI', ended_utc=utc(),
-        execution_mode=phase.get('execution_mode') if phase else None, edition_build=phase,
+        execution_mode=phase.get('execution_mode') if phase else None, edition_build=phase, phase_evidence_error=phase_error,
         watchdog=descriptor(wdpath) if wdpath.exists() else None, build_log=log_ref, accepted=accepted)
+    if cfg.get('campaign') is not None:
+        verification_only = None if phase_error else phase is not None and phase.get('execution_mode') == 'existing_output'
+        row['controller_elapsed_seconds'] = elapsed
+        row['verification_only'] = verification_only
+        row['production_started'] = evidence['production_started'] and not verification_only
+        row['elapsed_seconds'] = phase.get('seconds') if phase else (None if evidence['production_started'] is not False else 0.0)
+        require(row['elapsed_seconds'] is None or (type(row['elapsed_seconds']) in (int, float)
+                and math.isfinite(row['elapsed_seconds']) and row['elapsed_seconds'] >= 0), 'Invalid edition build time')
+        row['production_elapsed_seconds'] = row['elapsed_seconds'] if row['production_started'] else None
+        row['verification_elapsed_seconds'] = row['elapsed_seconds'] if verification_only else None
+        row['timing_authority'] = 'actual edition_build terminal; existing_output is verification only; controller wall retained separately'
+        row['not_ready_reason'] = 'Invalid phase evidence; production status and timing are unknown' if phase_error else (
+            None if evidence['production_started'] else 'Normal builder stopped before edition_build; see exact build_log')
     write_json(folder / 'result.json', row)
     return row, wd
 
@@ -1551,7 +1736,12 @@ def main(argv=None):
     manifest = read_ref(cfg['manifest'])
     require(Path(cfg['manifest']['path']) == Path(cfg['downloads']) / 'manifest.json', 'Manifest selection differs')
     editions = manifest['requested_editions']
-    require(len(editions) == len(set(editions)) == 198 and set(PILOT) <= set(editions), 'Exactly the selected 198 editions required')
+    if cfg.get('campaign') is None:
+        require(len(editions) == len(set(editions)) == 198 and set(PILOT) <= set(editions), 'Exactly the selected 198 editions required')
+    else:
+        require(args.phase == 'all' and not args.retry_failed and not args.revalidate,
+                'Campaign selection uses all phase and exact per-edition retry authority')
+    campaign = campaign_selection(cfg, manifest)
     require({x['date'] for x in manifest['files']} == {cfg['date']} == {'20261001'}, 'Dump date selection changed')
     source_guard(cfg)
     gate(cfg['qualification'], cfg, ('passed-closed',))
@@ -1563,6 +1753,16 @@ def main(argv=None):
         locks = [stack.enter_context(Lock(ROOT / 'data/build-resources/corpus-controller.lock', True)),
                  stack.enter_context(Lock(ROOT / '.tmp/build-resources.lock', False))]
         rows = history(state, context, cfg)
+        if campaign is not None:
+            skipped = {row['edition'] for row in campaign['dispositions'] if row['status'] == 'skipped-published'}
+            failed_verification = set()
+            for row in sorted(rows, key=lambda row: row['sequence']):
+                if row.get('accepted'):
+                    failed_verification.discard(row['edition'])
+                elif row.get('execution_mode') == 'existing_output':
+                    failed_verification.add(row['edition'])
+            require(not (failed_verification & skipped),
+                    'Failed publication verification requires campaign reconciliation before skipping')
         preparations = load_preparations(cfg)
         current = summarize(rows, editions, preparations)
         if args.phase == 'remaining':
@@ -1570,6 +1770,9 @@ def main(argv=None):
             pilot_rows = [row for row in current['editions'] if row['edition'] in PILOT]
             validate_content_review(review, cfg['source'], pilot_rows, PILOT, scope='pilot')
         selected = selected_phase_editions(editions, args.phase, args.defer_english, manifest=manifest)
+        if campaign is not None:
+            selected = [edition for edition in selected if edition in campaign['ready']]
+            write_json(state / 'campaign-selection.json', campaign, replace=True)
         sequence = max((x['sequence'] for x in rows), default=0)
         for edition in selected:
             prior = [x for x in rows if x['edition'] == edition and not x.get('history_time_only')]
@@ -1579,6 +1782,13 @@ def main(argv=None):
                     continue
             if prior and not prior[-1].get('accepted') and prior[-1]['outcome'] != 'interrupted' and not args.retry_failed:
                 continue
+            if campaign is not None:
+                try:
+                    edition_cli_options(cfg, edition)
+                except (OSError, ValueError) as exc:
+                    campaign['dispositions'].append(dict(edition=edition, status='not-ready', reason=str(exc)))
+                    write_json(state / 'campaign-selection.json', campaign, replace=True)
+                    continue
             workers = next(x for x in WORKERS if x <= len(os.sched_getaffinity(0)))
             memory_limit_bytes = MEMORY_INITIAL
             while workers:
@@ -1593,16 +1803,28 @@ def main(argv=None):
                 if row['controller_interrupted']:
                     return 130
                 require(row['cleanup_proven'], 'Owned cleanup is unproven; no next edition admitted')
+                require(row.get('source_guard') is True, 'Production source is unproven; no next edition admitted')
+                require(row.get('control_proven') is True, 'Production control validation failed; no next edition admitted')
+                if campaign is not None and row.get('not_ready_reason'):
+                    campaign['dispositions'].append(dict(edition=edition, status='not-ready', reason=row['not_ready_reason'], build_log=row['build_log']))
+                    write_json(state / 'campaign-selection.json', campaign, replace=True)
                 if row['accepted']:
                     break
                 following = next_resources(workers, memory_limit_bytes, wd)
                 if following is None:
+                    require(wd.get('termination_reason') == 'child_exit'
+                            and type(wd.get('child_exit_status')) is int and wd['child_exit_status'] > 0,
+                            'Non-ordinary watchdog outcome halts independent continuation')
                     break
                 workers, memory_limit_bytes = following
         summary = summarize(rows, editions, preparations)
+        if campaign is not None:
+            summary['campaign_selection'] = campaign
         write_json(state / 'summary.json', summary, replace=True)
-        print(json.dumps(dict(summary=str(state / 'summary.json'), remaining=[x['edition'] for x in summary['editions'] if not x['accepted']], deferred=['enwiktionary'] if args.defer_english else [])))
-    return 0 if all(x['accepted'] for x in summary['editions'] if x['edition'] in selected) else 1
+        skipped = {row['edition'] for row in campaign['dispositions'] if row['status'] == 'skipped-published'} if campaign else set()
+        print(json.dumps(dict(summary=str(state / 'summary.json'), remaining=[x['edition'] for x in summary['editions'] if not x['accepted'] and x['edition'] not in skipped], deferred=['enwiktionary'] if args.defer_english else [])))
+    held = campaign is not None and any(row['status'] != 'skipped-published' for row in campaign['dispositions'])
+    return 0 if not held and all(x['accepted'] for x in summary['editions'] if x['edition'] in selected) else 1
 
 
 if __name__ == '__main__':

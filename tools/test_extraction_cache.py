@@ -729,5 +729,54 @@ class IdentityProbeDeadlineTest(unittest.TestCase):
         self.assertEqual(run.call_count, 3)
 
 
+
+
+class ExtractionCachePhaseTest(unittest.TestCase):
+    def invoke_entry(self, action, outcome, *, broken_log=False):
+        import ast
+        import io
+        import types
+        entry = next(node for node in ast.parse(Path(cache.__file__).read_text()).body
+                     if isinstance(node, ast.If) and ast.unparse(node.test) == "__name__ == '__main__'")
+        stderr = io.StringIO()
+        calls = []
+        def main(argv):
+            calls.append(list(argv))
+            if isinstance(outcome, BaseException): raise outcome
+            return outcome
+        fake_sys = types.SimpleNamespace(argv=['extraction_cache.py', action], stderr=stderr,
+                                        exit=lambda code: (_ for _ in ()).throw(SystemExit(code)))
+        namespace = dict(__name__='__main__', main=main, sys=fake_sys,
+                         time=types.SimpleNamespace(monotonic=mock.Mock(side_effect=[10.0, 12.125])),
+                         json=json, subprocess=cache.subprocess)
+        if broken_log:
+            def print_broken(*args, **kwargs): raise OSError('diagnostic unavailable')
+            namespace['print'] = print_broken
+        with self.assertRaises(SystemExit) as exited:
+            exec(compile(ast.Module(body=[entry], type_ignores=[]), cache.__file__, 'exec'), namespace)
+        self.assertEqual([['extraction_cache.py', action]], calls)
+        return exited.exception.code, stderr.getvalue()
+
+    def test_cache_cli_timing_preserves_success_and_cache_miss_codes(self):
+        for action, result in [('probe', 3), ('publish', 0), ('probe-objects', 0), ('publish-objects', 0)]:
+            code, output = self.invoke_entry(action, result)
+            self.assertEqual(result, code)
+            records = [json.loads(line[len('EXTRACTION_CACHE_PHASE '):]) for line in output.splitlines()]
+            self.assertEqual([dict(action=action, status='returned', exit_code=result,
+                                   seconds=2.125, scope='joined-helper-invocation-wall')], records)
+
+    def test_cache_cli_timing_retains_probe_failure_and_original_diagnostic(self):
+        failure = cache.subprocess.TimeoutExpired(['clang', '-###'], 15)
+        code, output = self.invoke_entry('probe-objects', failure)
+        self.assertEqual(1, code)
+        self.assertIn('extraction cache: ', output)
+        record = json.loads(output.split('EXTRACTION_CACHE_PHASE ', 1)[1])
+        self.assertEqual(('failure', 1, 2.125), (record['status'], record['exit_code'], record['seconds']))
+
+    def test_cache_cli_timing_output_failure_preserves_original_return(self):
+        code, _ = self.invoke_entry('probe', 3, broken_log=True)
+        self.assertEqual(3, code)
+
+
 if __name__ == "__main__":
     unittest.main()
