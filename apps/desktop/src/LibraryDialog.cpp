@@ -203,8 +203,8 @@ void LibraryDialog::reject() {
 }
 void LibraryDialog::setBusy(bool busy, const QString &label) {
     busy_ = busy;
-    chooseButton_->setEnabled(!busy);
-    importButton_->setEnabled(!busy);
+    chooseButton_->setEnabled(!busy || catalogRefresh_);
+    importButton_->setEnabled(!busy || catalogRefresh_);
     sources_->setEnabled(!busy);
     addSourceButton_->setEnabled(!busy);
     removeSourceButton_->setEnabled(!busy && sources_->count() > 0);
@@ -224,6 +224,7 @@ void LibraryDialog::setBusy(bool busy, const QString &label) {
     }
 }
 void LibraryDialog::finishOperation(const QString &message, bool error) {
+    catalogRefresh_ = false;
     setBusy(false);
     download_.reset();
     const bool nativeValidation = nativeValidationFailure_;
@@ -365,6 +366,7 @@ void LibraryDialog::noteRootChange(const QString &root) {
         originalRootChanged_ = true;
 }
 void LibraryDialog::chooseRoot() {
+    stopCatalogRefresh();
     const QString folder = QFileDialog::getExistingDirectory(this, QStringLiteral("Choose dictionary folder"), root_);
     // Accepting the current folder is an explicit reload after an external update.
     if (folder.isEmpty()) return;
@@ -376,11 +378,13 @@ void LibraryDialog::chooseRoot() {
     refreshInstalled();
 }
 void LibraryDialog::importFile() {
+    stopCatalogRefresh();
     const QString file = QFileDialog::getOpenFileName(this, QStringLiteral("Import dictionary"), QString(),
         QStringLiteral("Compiled dictionaries (*.wikblb *.wikblb.xz);;All files (*)"));
     if (!file.isEmpty()) startImport(file);
 }
 void LibraryDialog::startImport(const QString &file, const QByteArray &hash, qint64 bytes, const QString &sourceName) {
+    stopCatalogRefresh();
     setBusy(true, QStringLiteral("Preparing dictionary"));
     auto prepared = std::make_shared<std::shared_ptr<LibraryStorage::PreparedImport>>();
     const QString root = root_;
@@ -456,10 +460,27 @@ void LibraryDialog::refreshCatalogs() {
     catalogErrors_.clear();
     refreshCatalogView();
     if (pendingSources_.isEmpty()) { availableSummary_->setText(QStringLiteral("Add a source to browse available dictionaries.")); return; }
+    catalogRefresh_ = true;
     setBusy(true, QStringLiteral("Reading catalogues"));
     fetchNextCatalog();
 }
+void LibraryDialog::stopCatalogRefresh() {
+    if (!catalogRefresh_) return;
+    // Hand the existing serial operation slot to a local action immediately.
+    // Disconnect first: abort may synchronously emit finished, and a queued
+    // catalogue completion must never finish a new import or advance its list.
+    pendingSources_.clear();
+    if (reply_) {
+        auto *reply = reply_.data();
+        reply_ = nullptr;
+        reply->disconnect(this);
+        reply->abort();
+        reply->deleteLater();
+    }
+    finishOperation(QStringLiteral("Catalogue refresh stopped. Local dictionaries remain available."));
+}
 void LibraryDialog::fetchNextCatalog() {
+    if (!catalogRefresh_) return;
     if (cancelled_.load()) { finishOperation(QStringLiteral("Cancelled")); return; }
     if (pendingSources_.isEmpty()) {
         refreshCatalogView();
@@ -473,7 +494,8 @@ void LibraryDialog::fetchNextCatalog() {
     status_->setText(QStringLiteral("Reading %1").arg(url.host()));
     auto data = std::make_shared<QByteArray>();
     auto *reply = get(url);
-    connect(reply, &QNetworkReply::readyRead, this, [reply, data] {
+    connect(reply, &QNetworkReply::readyRead, this, [this, reply, data] {
+        if (!catalogRefresh_ || reply_ != reply) return;
         data->append(reply->readAll());
         if (data->size() > 2 * 1024 * 1024) {
             reply->setProperty("libraryFailure", QStringLiteral("The catalogue exceeds 2 MiB."));
@@ -481,6 +503,7 @@ void LibraryDialog::fetchNextCatalog() {
         }
     });
     connect(reply, &QNetworkReply::finished, this, [this, reply, data, url] {
+        if (!catalogRefresh_ || reply_ != reply) return;
         data->append(reply->readAll());
         QString error = reply->property("libraryFailure").toString();
         const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();

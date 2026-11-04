@@ -38,6 +38,7 @@ private:
     void importFile();
     void removeSelected();
     void refreshCatalogs();
+    void stopCatalogRefresh();
     void fetchNextCatalog();
     void downloadSelected();
     void addSource();
@@ -55,6 +56,7 @@ private:
     bool originalRootChanged_ = false;
     bool changed_ = false;
     bool busy_ = false;
+    bool catalogRefresh_ = false;
     bool nativeValidationFailure_ = false;
     bool closeWhenDone_ = false;
     std::atomic_bool cancelled_ = false;

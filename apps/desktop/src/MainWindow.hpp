@@ -39,6 +39,9 @@ public:
 
 private:
     friend class MainWindowTest;
+    void bindInlineImages();
+    quint64 inlineImageGeneration_ = 0;
+    quint64 readingComposition_ = 0;
     struct Visit {
         QString title;
         QString language;

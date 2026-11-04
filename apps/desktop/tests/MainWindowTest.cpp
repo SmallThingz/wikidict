@@ -2,10 +2,16 @@
 #include "LibraryStore.hpp"
 #include "LibraryDialog.hpp"
 #include "SemanticHtml.hpp"
+#include "MediaPanel.hpp"
 
 #include <QAbstractTextDocumentLayout>
 #include <QAccessible>
 #include <QApplication>
+#include <QMimeData>
+#include <QCheckBox>
+#include <QStandardPaths>
+#include <QCryptographicHash>
+#include <QBuffer>
 #include <QAction>
 #include <QComboBox>
 #include <QClipboard>
@@ -229,6 +235,409 @@ private:
     }
 
 private slots:
+    void typedInlineImagesUseRealBodyAndHeadingResourcesWithoutFilenameLabels() {
+        QSettings().setValue("media/allowImages", true);
+        QSettings().setValue("media/cacheMb", 10);
+        MainWindow window(fixture_, QStringLiteral("dog"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(900, 700); window.show();
+        const QString file = QStringLiteral("Inline fixture.svg");
+        const QString sourceHost = LibraryStorage::sourceHost(window.api_->root());
+        const QString cache = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + QStringLiteral("/media-v1");
+        QVERIFY(QDir().mkpath(cache));
+        const QString key = QString::fromLatin1(QCryptographicHash::hash((sourceHost + ":image:" + file).toUtf8(), QCryptographicHash::Sha256).toHex());
+        const QString payloadPath = cache + '/' + key + ".bin", metadataPath = cache + '/' + key + ".json";
+        const auto removeFixture = qScopeGuard([&] { QFile::remove(payloadPath); QFile::remove(metadataPath); });
+        // First-party synthetic SVG, never an invented copy of an HE asset.
+        const QByteArray svg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="40" viewBox="0 0 20 40"><rect width="20" height="40" fill="#d13a30"/></svg>)svg";
+        QFile payload(payloadPath); QVERIFY(payload.open(QIODevice::WriteOnly)); QCOMPARE(payload.write(svg), svg.size()); payload.close();
+        const QJsonObject assetMetadata{{"url", "https://upload.wikimedia.org/wikipedia/commons/a/inline-fixture.svg"},
+            {"source", "https://commons.wikimedia.org/wiki/File:Inline_fixture.svg"}, {"credit", "First-party test SVG"},
+            {"intrinsic_width", 20}, {"intrinsic_height", 40}, {"original_mime", "image/svg+xml"}};
+        QFile metadata(metadataPath); QVERIFY(metadata.open(QIODevice::WriteOnly));
+        const QByteArray metadataBytes = QJsonDocument(assetMetadata).toJson(QJsonDocument::Compact);
+        QCOMPARE(metadata.write(metadataBytes), metadataBytes.size()); metadata.close();
+        const auto text = [](const QString &value) { return QJsonObject{{"kind", "text"}, {"text", value}}; };
+        const auto occurrence = [&](QJsonObject image, const QString &kind, const QString &target) {
+            return QJsonObject{{"kind", kind}, {"text", ""}, {"trail", ""}, {"target", target}, {"font_scale", 0}, {"image", image}};
+        };
+        const QJsonObject absentImage{{"file", file}, {"width_px", 15}};
+        QJsonObject emptyImage = absentImage; emptyImage.insert("alt", ""); emptyImage.insert("tooltip", "");
+        QJsonObject describedImage = absentImage; describedImage.insert("width_px", 20);
+        describedImage.insert("alt", "Plain <alt> & data"); describedImage.insert("tooltip", "Tooltip <text> & data");
+        const QJsonObject absent = occurrence(absentImage, "link", "File:" + file);
+        const QJsonObject empty = occurrence(emptyImage, "text", "");
+        QJsonObject described = occurrence(describedImage, "external_link", "https://example.org/image-action");
+        described.insert("explanation", "Separate span explanation");
+        const QJsonArray spans{text("A"), absent, text("B"), empty, text("C"), described};
+        const QJsonObject tableCell{{"spans", QJsonArray{absent}}};
+        const QJsonObject tableRow{{"cells", QJsonArray{tableCell}}};
+        const QJsonObject table{{"rows", QJsonArray{tableRow}}};
+        const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", spans}};
+        const QJsonObject tableBlock{{"kind", "table"}, {"table", table}};
+        const QJsonObject section{{"level", 2}, {"title", "Inline section"}, {"blocks", QJsonArray{paragraph, tableBlock}}};
+        const QJsonObject referenceBody{{"kind", "paragraph"}, {"spans", QJsonArray{described}}};
+        const QJsonObject reference{{"kind", "note"}, {"number", 1}, {"group_number", 1}, {"spans", QJsonArray{}}, {"blocks", QJsonArray{referenceBody}}};
+        const QJsonObject media{{"kind", "image"}, {"file", file}, {"caption", "Distinct retained catalogue caption"}};
+        QJsonObject entry{{"title", "Inline consumer fixture"}, {"kind", "language"}, {"language", window.api_->language()},
+            {"sections", QJsonArray{section}}, {"references", QJsonArray{reference}}, {"media", QJsonArray{media}}};
+        const QJsonObject before = entry;
+        window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false);
+        const auto images = [](QTextDocument *document) {
+            QList<QTextImageFormat> result;
+            for (QTextBlock block = document->begin(); block.isValid(); block = block.next())
+                for (auto it = block.begin(); !it.atEnd(); ++it)
+                    if (it.fragment().charFormat().isImageFormat()) result.append(it.fragment().charFormat().toImageFormat());
+            return result;
+        };
+        const auto ready = [&](QTextDocument *document) {
+            const auto formats = images(document);
+            return !formats.isEmpty() && std::all_of(formats.begin(), formats.end(), [](const auto &format) { return format.intProperty(SemanticHtml::inlineImageStateProperty) == int(MediaPanel::InlineImageState::Ready); });
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(ready(window.reading_->document()), 10000);
+        const auto formats = images(window.reading_->document()); QCOMPARE(formats.size(), 5);
+        QCOMPARE(formats[0].width(), 15.0); QCOMPARE(formats[0].height(), 30.0);
+        QVERIFY(!formats[0].hasProperty(QTextFormat::ImageAltText)); QVERIFY(!formats[0].hasProperty(QTextFormat::ImageTitle));
+        QVERIFY(formats[1].hasProperty(QTextFormat::ImageAltText)); QCOMPARE(formats[1].stringProperty(QTextFormat::ImageAltText), QString());
+        QVERIFY(!formats[1].isAnchor());
+        QCOMPARE(formats[2].width(), 20.0); QCOMPARE(formats[2].height(), 40.0);
+        QCOMPARE(formats[2].stringProperty(QTextFormat::ImageAltText), QStringLiteral("Plain <alt> & data"));
+        QCOMPARE(formats[2].toolTip(), QStringLiteral("Tooltip <text> & data"));
+        QCOMPARE(formats[2].stringProperty(SemanticHtml::inlineImageExplanationProperty), QStringLiteral("Separate span explanation"));
+        QCOMPARE(formats[2].anchorHref(), QStringLiteral("https://example.org/image-action"));
+        QVERIFY(!window.reading_->toPlainText().contains("Plain <alt> & data"));
+        QCOMPARE(window.reading_->toPlainText().count("Distinct retained catalogue caption"), 1);
+        QCOMPARE(entry, before);
+        // Exercise the actual HeadingBrowser resource provider, not native
+        // DISPLAYTITLE admission (which remains a separate producer policy).
+        SemanticHtml::setHtml(window.title_, window.spansHtml(QJsonArray{text("Title "), absent}, 0, {}, {}, 30));
+        QTRY_VERIFY_WITH_TIMEOUT(ready(window.title_->document()), 10000);
+        QCOMPARE(images(window.title_->document()).first().width(), 15.0);
+        QCOMPARE(images(window.title_->document()).first().height(), 30.0);
+        QCOMPARE(window.title_->accessibleName(), QStringLiteral("Title "));
+        // Recomposition reuses the same ready catalog asset and per-document key.
+        window.refreshReading(); QTRY_VERIFY_WITH_TIMEOUT(ready(window.reading_->document()), 10000);
+        auto *permission = window.media_->findChild<QCheckBox *>("mediaAllowImages"); QVERIFY(permission);
+        permission->setChecked(false);
+        QTRY_COMPARE(images(window.reading_->document()).first().intProperty(SemanticHtml::inlineImageStateProperty), int(MediaPanel::InlineImageState::Disabled));
+        const auto unavailable = images(window.reading_->document());
+        const QFontMetricsF fallbackMetrics(window.reading_->document()->defaultFont());
+        QVERIFY(unavailable[2].width() >= fallbackMetrics.horizontalAdvance(QStringLiteral("Plain <alt> & data")));
+        QVERIFY(unavailable[2].height() >= fallbackMetrics.height());
+        const QImage fallback = window.reading_->document()->resource(QTextDocument::ImageResource, QUrl(unavailable[2].name())).value<QImage>();
+        QVERIFY(!fallback.isNull());
+        bool hasInk = false;
+        for (int y = 0; y < fallback.height(); ++y)
+            for (int x = 0; x < fallback.width(); ++x) hasInk |= qAlpha(fallback.pixel(x, y)) != 0;
+        QVERIFY(hasInk);
+        QCOMPARE(unavailable[2].stringProperty(QTextFormat::ImageAltText), QStringLiteral("Plain <alt> & data"));
+        QCOMPARE(unavailable[2].anchorHref(), formats[2].anchorHref());
+        QCOMPARE(unavailable[0].width(), 15.0); // Missing/empty alt never gains a filename label.
+        QCOMPARE(unavailable[1].width(), 15.0);
+        permission->setChecked(true); QTRY_VERIFY_WITH_TIMEOUT(ready(window.reading_->document()), 10000);
+        QCOMPARE(images(window.reading_->document())[2].width(), 20.0);
+        QCOMPARE(images(window.reading_->document())[2].height(), 40.0);
+        // The existing unsupported height-only SVG path produces a real
+        // consumer Error without network failure injection or a new loader.
+        QJsonObject errorImage{{"file", file}, {"height_px", 15}, {"alt", QString::fromUtf8("וי")}};
+        const QJsonObject errorParagraph{{"kind", "paragraph"}, {"spans", QJsonArray{occurrence(errorImage, "text", "")}}};
+        const QJsonObject errorSection{{"level", 2}, {"title", "Unavailable image"}, {"blocks", QJsonArray{errorParagraph}}};
+        QJsonObject errorEntry = entry;
+        errorEntry.insert("sections", QJsonArray{errorSection});
+        window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{errorEntry}}}).toJson(), false);
+        QTRY_COMPARE(images(window.reading_->document()).first().intProperty(SemanticHtml::inlineImageStateProperty), int(MediaPanel::InlineImageState::Error));
+        const auto errorFormat = images(window.reading_->document()).first();
+        QCOMPARE(errorFormat.stringProperty(QTextFormat::ImageAltText), QString::fromUtf8("וי"));
+        QVERIFY(errorFormat.width() >= fallbackMetrics.horizontalAdvance(QString::fromUtf8("וי")));
+        QVERIFY(errorFormat.height() >= fallbackMetrics.height());
+        window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false);
+        QTRY_VERIFY_WITH_TIMEOUT(ready(window.reading_->document()), 10000);
+        // Copy preserves the occurrence/action/optional fields without a filename
+        // text substitution. Portable external clipboard raster embedding is not claimed.
+        QTextCursor selected(window.reading_->document()); selected.setPosition(1); selected.setPosition(2, QTextCursor::KeepAnchor);
+        // Find the real first image offset, independent of section furniture.
+        for (QTextBlock block = window.reading_->document()->begin(); block.isValid(); block = block.next()) {
+            bool found = false;
+            for (auto it = block.begin(); !it.atEnd(); ++it) if (it.fragment().charFormat().isImageFormat()) {
+                selected.setPosition(it.fragment().position()); selected.setPosition(it.fragment().position() + 1, QTextCursor::KeepAnchor); found = true; break;
+            }
+            if (found) break;
+        }
+        window.reading_->setTextCursor(selected); window.reading_->copy();
+        QVERIFY(!QApplication::clipboard()->text().contains(file));
+        QTextDocument copied; SemanticHtml::setHtml(&copied, QApplication::clipboard()->mimeData()->html());
+        QCOMPARE(images(&copied).first().anchorHref(), formats[0].anchorHref());
+        QVERIFY(!images(&copied).first().hasProperty(QTextFormat::ImageAltText));
+        auto *accessible = QAccessible::queryAccessibleInterface(window.reading_); QVERIFY(accessible && accessible->textInterface());
+        int start = -1, end = -1; const QString attributes = accessible->textInterface()->attributes(selected.selectionStart(), &start, &end);
+        QVERIFY(attributes.contains("xml-roles:img;")); QVERIFY(!attributes.contains("image-alt:"));
+        // Unknown edition remains explicitly unresolved on the real click route.
+        window.media_->setEntry(entry, {});
+        const QJsonObject current = window.currentEntry_;
+        QVERIFY(clickAnchor(window.reading_, formats[0].anchorHref()));
+        QCOMPARE(window.currentEntry_, current);
+        QVERIFY(window.statusBar()->currentMessage().contains("does not identify the source"));
+        QJsonObject legacy = text("Legacy"); QJsonObject nullImage = legacy; nullImage.insert("image", QJsonValue::Null);
+        QCOMPARE(window.spansHtml(QJsonArray{legacy}), window.spansHtml(QJsonArray{nullImage}));
+        for (const QString &bad : {QStringLiteral("bad_file.svg"), QStringLiteral(" bad.svg"), QStringLiteral("bad#file.svg")}) {
+            QJsonObject image = absentImage; image.insert("file", bad);
+            QVERIFY_EXCEPTION_THROWN(window.spansHtml(QJsonArray{occurrence(image, "text", "")}), std::runtime_error);
+        }
+        QJsonObject ordinaryFile{{"kind", "link"}, {"text", "File link"}, {"target", "File:" + file}};
+        QVERIFY(window.spansHtml(QJsonArray{ordinaryFile}).contains("href='dict:"));
+        QVERIFY(!window.spansHtml(QJsonArray{ordinaryFile}).contains("media-source:"));
+        QTextImageFormat geometry;
+        SemanticHtml::imageDimensions(geometry, QJsonObject{{"file", file}, {"width_px", 15}, {"height_px", 20}}, window.reading_->document(), QSizeF(100, 300));
+        QCOMPARE(geometry.width(), 6.0); QCOMPARE(geometry.height(), 20.0);
+        SemanticHtml::imageDimensions(geometry, QJsonObject{{"file", file}, {"width_px", 15}}, window.reading_->document(), QSizeF(2, 1));
+        QCOMPARE(geometry.width(), 15.0); QCOMPARE(geometry.height(), 8.0);
+        SemanticHtml::imageDimensions(geometry, QJsonObject{{"file", file}, {"height_px", 100}}, window.reading_->document(), QSizeF(100, 50));
+        QCOMPARE(geometry.width(), 100.0); QCOMPARE(geometry.height(), 50.0);
+        // Source-proven ORIGINAL HE sizes, not downloaded960px raster ratios:
+        // those thumbnails differ by one pixel on the first two actual assets.
+        for (const auto &sample : {qMakePair(QSizeF(128, 214), qreal(25)),
+                qMakePair(QSizeF(525, 600), qreal(17)), qMakePair(QSizeF(600, 600), qreal(15))}) {
+            SemanticHtml::imageDimensions(geometry, QJsonObject{{"file", file}, {"width_px", 15}}, window.reading_->document(), sample.first);
+            QCOMPARE(geometry.width(), 15.0); QCOMPARE(geometry.height(), sample.second);
+        }
+        const QString unicodeEdge = QString(QChar(0x00a0)) + QStringLiteral("edge.svg") + QString(QChar(0x00a0));
+        QCOMPARE(SemanticHtml::checkedImage(QJsonObject{{"file", unicodeEdge}, {"width_px", 15}}).value("file").toString(), unicodeEdge);
+        QJsonObject huge = absentImage; huge.insert("width_px", 4294967295.0);
+        QCOMPARE(SemanticHtml::inlineImageData(SemanticHtml::inlineImageUrl(huge)).value("width_px").toDouble(), 4294967295.0);
+        QJsonObject zeroAxis = absentImage; zeroAxis.insert("width_px", 0);
+        QVERIFY_EXCEPTION_THROWN(SemanticHtml::inlineImageHtml(zeroAxis), std::runtime_error);
+        QVERIFY_EXCEPTION_THROWN(window.spansHtml(QJsonArray{occurrence(absentImage, "line_break", "")}), DictApiError);
+    }
+
+    void imageBearingDisclosureRetainsKeyboardActivationAfterRecomposition() {
+        QSettings().setValue("media/allowImages", false);
+        MainWindow window(fixture_, QStringLiteral("dog"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(640, 600); window.show(); window.activateWindow();
+        const QJsonObject image{{"kind", "text"}, {"text", ""}, {"image", QJsonObject{
+            {"file", "Keyboard image.svg"}, {"width_px", 15}, {"alt", QString::fromUtf8("איקס")}}}};
+        const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", QJsonArray{
+            QJsonObject{{"kind", "text"}, {"text", "BODY TO FOLD"}}, image}}};
+        const QJsonObject heading{{"kind", "heading"}, {"level", 2}, {"spans", QJsonArray{
+            QJsonObject{{"kind", "text"}, {"text", "Image section"}}, image}}};
+        const QJsonObject section{{"level", 2}, {"title", "Image section"}, {"blocks", QJsonArray{heading, paragraph}}};
+        const QJsonObject entry{{"title", "Keyboard image control"}, {"kind", "language"},
+            {"language", window.api_->language()}, {"sections", QJsonArray{section}}};
+        window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false);
+        window.reading_->setFocus(); QTRY_VERIFY(window.reading_->hasFocus());
+        const auto selectedAnchor = [&] {
+            QTextCursor cursor = window.reading_->textCursor();
+            if (!cursor.hasSelection()) return QString();
+            cursor.setPosition(cursor.selectionStart());
+            cursor.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+            return cursor.charFormat().anchorHref();
+        };
+        QTest::keyClick(window.reading_, Qt::Key_Home, Qt::ControlModifier);
+        QTest::keyClick(window.reading_, Qt::Key_Tab);
+        QCOMPARE(selectedAnchor(), QStringLiteral("section:0"));
+        // The second activation must work without moving the cursor or acquiring
+        // focus again, including after queued inline-resource format updates.
+        for (int cycle = 0; cycle < 2; ++cycle) {
+            QTest::keyClick(window.reading_, Qt::Key_Return);
+            QTRY_VERIFY(window.collapsedSections_.contains(0));
+            QVERIFY(!window.reading_->toPlainText().contains("BODY TO FOLD"));
+            QTRY_COMPARE(selectedAnchor(), QStringLiteral("section:0"));
+            QTest::keyClick(window.reading_, Qt::Key_Return);
+            QTRY_VERIFY(!window.collapsedSections_.contains(0));
+            QVERIFY(window.reading_->toPlainText().contains("BODY TO FOLD"));
+            QTRY_COMPARE(selectedAnchor(), QStringLiteral("section:0"));
+        }
+        QCOMPARE(window.currentEntry_, entry);
+    }
+
+    void typedTableStylesKeepFractionalMetricsStructureAndDeviceLimit() {
+        MainWindow window(fixture_);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.readingPointSize_ = 12;
+        const auto length = [](double value, const QString &unit = QStringLiteral("px")) {
+            return QJsonObject{{"unit", unit}, {"value", value}};
+        };
+        const auto edges = [](const QJsonObject &value) {
+            return QJsonObject{{"top", value}, {"right", value}, {"bottom", value}, {"left", value}};
+        };
+        const auto cell = [](const QString &label) {
+            return QJsonObject{{"spans", QJsonArray{QJsonObject{{"kind", "link"}, {"text", label}, {"target", "Style target"}, {"font_scale", 1.25}}}}};
+        };
+        const QJsonObject border{{"solid", QJsonObject{{"width", length(0.25)}, {"color", "#aaaaaa"}}}};
+        const QJsonObject style{{"background", "#f9f9f9"}, {"border", border}, {"collapse", "collapse"}, {"margins", edges(length(10.5))}};
+        QJsonObject header = cell("Styled header"); header.insert("header", true); header.insert("background", "#f2f2f2");
+        header.insert("style", QJsonObject{{"border", border}, {"padding", edges(length(0.2, "em"))}, {"text_align", "center"}});
+        QJsonObject table{{"style", style}, {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{header, cell("Sibling")}}}}}};
+        QJsonObject plainTable = table; plainTable.remove("style");
+        QJsonObject plainHeader = header; plainHeader.remove("style");
+        plainTable.insert("rows", QJsonArray{QJsonObject{{"cells", QJsonArray{plainHeader, cell("Sibling")}}}});
+        QJsonObject nullStyle = plainTable; nullStyle.insert("style", QJsonValue::Null);
+        QCOMPARE(window.tableHtml(plainTable, 0), window.tableHtml(nullStyle, 0));
+        QVERIFY(!window.tableHtml(plainTable, 0).contains(SemanticHtml::tableMarkerOpen));
+        const QByteArray modelBefore = QJsonDocument(table).toJson(QJsonDocument::Compact);
+        for (const int dpi : {96, 144}) {
+            QImage device(8, 8, QImage::Format_ARGB32_Premultiplied);
+            device.setDotsPerMeterX(qRound(dpi / 0.0254)); device.setDotsPerMeterY(qRound(dpi / 0.0254));
+            QTextDocument document; document.setDefaultFont(QFont("DejaVu Sans", 12));
+            document.documentLayout()->setPaintDevice(&device);
+            // An unstyled table precedes the styled one; ordinal matching may not
+            // guess the first frame or the first child span's enlarged font.
+            const QString html = window.tableHtml(plainTable, 0) + window.tableHtml(table, 0);
+            SemanticHtml::setHtml(&document, html);
+            QTextCursor styled = document.find("Styled header"); styled = document.find("Styled header", styled);
+            QVERIFY(!styled.isNull()); QTextTable *actual = styled.currentTable(); QVERIFY(actual);
+            QCOMPARE(actual->rows(), 1); QCOMPARE(actual->columns(), 2);
+            const qreal defaultDpi = QFontMetricsF(QFont()).fontDpi();
+            const qreal expectedPadding = 0.2 * 12 * defaultDpi / 72;
+            const auto format = actual->cellAt(0, 0).format().toTableCellFormat();
+            QVERIFY(qAbs(format.leftPadding() - expectedPadding) < 0.00001);
+            QCOMPARE(format.leftBorder(), 0.25);
+            QCOMPARE(actual->format().topMargin(), 10.5);
+            QVERIFY(actual->format().borderCollapse());
+            QCOMPARE(actual->format().background().color(), QColor("#f9f9f9"));
+            QCOMPARE(format.background().color(), QColor("#f2f2f2"));
+            QCOMPARE(styled.charFormat().anchorHref(), QStringLiteral("dict:Style%20target"));
+            QCOMPARE(styled.blockFormat().alignment(), Qt::Alignment(Qt::AlignHCenter));
+            QCOMPARE(document.toPlainText().count("Styled header"), 2);
+            QVERIFY(!document.toPlainText().contains("wikidict-table-style"));
+            const qreal deviceDpi = QFontMetricsF(document.defaultFont(), &device).fontDpi();
+            const qreal maximum = 10000 * defaultDpi / deviceDpi;
+            QCOMPARE(SemanticHtml::styleLengthUnits(length(0, "em"), &document, 12), 0.0);
+            QVERIFY(qAbs(SemanticHtml::styleLengthUnits(length(std::numeric_limits<float>::max(), "em"), &document, 12) - maximum) < 0.00001);
+            // Cap is applied through the real qreal table-cell formatter as well.
+            QJsonObject hugeHeader = header;
+            hugeHeader.insert("style", QJsonObject{{"padding", edges(length(std::numeric_limits<float>::max(), "em"))}});
+            QJsonObject huge = table; huge.insert("rows", QJsonArray{QJsonObject{{"cells", QJsonArray{hugeHeader}}}});
+            SemanticHtml::setHtml(&document, window.tableHtml(huge, 0));
+            QVERIFY(qAbs(document.find("Styled header").currentTable()->cellAt(0, 0).format().toTableCellFormat().leftPadding() - maximum) < 0.00001);
+        }
+        QCOMPARE(QJsonDocument(table).toJson(QJsonDocument::Compact), modelBefore);
+        // Native-valid ragged rows add only implicit empty filler cells in Qt.
+        QJsonObject ragged = table;
+        ragged.insert("rows", QJsonArray{QJsonObject{{"cells", QJsonArray{header, cell("Second")}}}, QJsonObject{{"cells", QJsonArray{cell("Ragged")}}}});
+        QTextDocument raggedDocument; SemanticHtml::setHtml(&raggedDocument, window.tableHtml(ragged, 0));
+        QCOMPARE(raggedDocument.find("Ragged").currentTable()->columns(), 2);
+        QJsonObject nestedCell{{"spans", QJsonArray{}}, {"blocks", QJsonArray{QJsonObject{{"kind", "table"}, {"table", table}}}}};
+        QJsonObject outer{{"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{nestedCell}}}}}};
+        QTextDocument nestedDocument;
+        SemanticHtml::setHtml(&nestedDocument, window.tableHtml(outer, 0));
+        const auto nestedFormat = nestedDocument.find("Styled header").currentTable()->cellAt(0, 0).format().toTableCellFormat();
+        QVERIFY(qAbs(nestedFormat.leftPadding() - 0.2 * 12 * QFontMetricsF(QFont()).fontDpi() / 72) < 0.00001);
+        QJsonObject reference{{"kind", "note"}, {"number", 4}, {"group_number", 1}, {"spans", QJsonArray{}},
+            {"blocks", QJsonArray{QJsonObject{{"kind", "table"}, {"table", table}}}}};
+        const QJsonObject entry{{"sections", QJsonArray{}}, {"references", QJsonArray{reference}}};
+        QTextDocument referenceDocument; SemanticHtml::setHtml(&referenceDocument, window.entryHtml(entry));
+        QCOMPARE(referenceDocument.find("Styled header").currentTable()->format().topMargin(), 10.5);
+        QJsonObject noneHeader = header;
+        noneHeader.insert("style", QJsonObject{{"border", QJsonObject{{"none", QJsonObject{}}}}, {"padding", edges(length(0))}});
+        QJsonObject zeroTable = table; zeroTable.insert("rows", QJsonArray{QJsonObject{{"cells", QJsonArray{noneHeader}}}});
+        SemanticHtml::setHtml(&referenceDocument, window.tableHtml(zeroTable, 0));
+        const auto zeroFormat = referenceDocument.find("Styled header").currentTable()->cellAt(0, 0).format().toTableCellFormat();
+        QCOMPARE(zeroFormat.leftBorder(), 0.0); QCOMPARE(zeroFormat.leftPadding(), 0.0);
+        QCOMPARE(zeroFormat.leftBorderStyle(), QTextFrameFormat::BorderStyle_None);
+        QJsonObject emptyTable{{"style", style}, {"rows", QJsonArray{}}, {"caption", QJsonArray{
+            QJsonObject{{"kind", "link"}, {"text", "Empty table caption"}, {"target", "Caption target"}}}}};
+        QTextDocument emptyDocument;
+        SemanticHtml::setHtml(&emptyDocument, window.tableHtml(emptyTable, 0) + window.tableHtml(table, 0));
+        QVERIFY(emptyDocument.toPlainText().contains("Empty table caption"));
+        QCOMPARE(emptyDocument.find("Empty table caption").charFormat().anchorHref(), QStringLiteral("dict:Caption%20target"));
+        QCOMPARE(emptyDocument.find("Styled header").currentTable()->format().topMargin(), 10.5);
+        emptyTable.insert("rows", QJsonArray{QJsonObject{{"cells", QJsonArray{}}}});
+        SemanticHtml::setHtml(&emptyDocument, window.tableHtml(emptyTable, 0) + window.tableHtml(table, 0));
+        QCOMPARE(emptyDocument.find("Styled header").currentTable()->format().topMargin(), 10.5);
+        // Style metadata cannot silently attach to an unrelated normalized shape.
+        const QString corrupt = window.tableHtml(table, 0).replace("colspan='1'", "colspan='2'");
+        QVERIFY_EXCEPTION_THROWN(SemanticHtml::setHtml(&raggedDocument, corrupt), std::runtime_error);
+    }
+
+    void structuredReferenceBlocksPreserveFurnitureTablesActionsAndLegacyMode() {
+        MainWindow window(fixture_);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const auto text = [](const QString &value) { return QJsonObject{{"kind", "text"}, {"text", value}}; };
+        const auto linked = [](const QString &value, const QString &target) {
+            return QJsonObject{{"kind", "link"}, {"text", value}, {"target", target}};
+        };
+        const QJsonObject legacy{{"number", 7}, {"group_number", 2}, {"name", "source-name"},
+            {"group", "alpha"}, {"kind", "note"}, {"spans", QJsonArray{text("Legacy reference")}}};
+        const auto entryWith = [](const QJsonObject &reference) {
+            return QJsonObject{{"title", "Reference test"}, {"kind", "language"}, {"language", "English"},
+                {"sections", QJsonArray{}}, {"references", QJsonArray{reference}}};
+        };
+        QJsonObject explicitNull = legacy; explicitNull.insert("blocks", QJsonValue::Null);
+        QCOMPARE(window.entryHtml(entryWith(legacy)), window.entryHtml(entryWith(explicitNull)));
+        QJsonObject reference = legacy;
+        reference.insert("spans", QJsonArray{}); reference.insert("blocks", QJsonArray{});
+        const QString emptyHtml = window.entryHtml(entryWith(reference));
+        QVERIFY(emptyHtml.contains("<div><a name='reference-7'></a>[alpha 2] </div>"));
+        QVERIFY(!emptyHtml.contains("Legacy reference"));
+        for (const QJsonValue malformed : {QJsonValue(true), QJsonValue(42), QJsonValue("bad")}) {
+            QJsonObject bad = reference; bad.insert("blocks", malformed);
+            QVERIFY_EXCEPTION_THROWN(window.entryHtml(entryWith(bad)), DictApiError);
+        }
+        QJsonObject mixed = legacy; mixed.insert("blocks", QJsonArray{});
+        QVERIFY_EXCEPTION_THROWN(window.entryHtml(entryWith(mixed)), DictApiError);
+        const QStringList headers{"Latinski", "Talijanski", "Njemački", "Hrvatski", "Madžarski"};
+        const QStringList forms{"Locuſta", "Locusta", "Heüſchreück", "Szkakavicza", "Saaská"};
+        QJsonArray headerCells, formCells;
+        for (int i = 0; i < headers.size(); ++i) {
+            headerCells.append(QJsonObject{{"header", true}, {"spans", QJsonArray{text(headers[i])}}});
+            formCells.append(QJsonObject{{"spans", QJsonArray{linked(forms[i], "Target " + QString::number(i))}}});
+        }
+        const QJsonObject table{{"rows", QJsonArray{QJsonObject{{"cells", headerCells}}, QJsonObject{{"cells", formCells}}}}};
+        const QJsonObject childHeading{{"kind", "heading"}, {"level", 3}, {"anchor", "Compiled_reference_anchor"},
+            {"spans", QJsonArray{text("Nested reference heading")}}};
+        const QJsonObject nestedCell{{"blocks", QJsonArray{childHeading,
+            QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{linked("Nested action", "Nested target")}}}}},
+            {"spans", QJsonArray{}}};
+        const QJsonObject nestedTable{{"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{nestedCell}}}}}};
+        QJsonObject mediaSpan = linked("Owned caption", "cat");
+        mediaSpan.insert("classes", "wikidict-media wikidict-media-file-546f6e652e6f6767");
+        QJsonObject scaled = text("Scaled reference prose"); scaled.insert("font_scale", 1.25);
+        reference.insert("blocks", QJsonArray{
+            QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{scaled, linked(" Bibliography", "Bibliography target")}}},
+            QJsonObject{{"kind", "table"}, {"table", table}},
+            QJsonObject{{"kind", "table"}, {"table", nestedTable}},
+            QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{mediaSpan}}}});
+        QJsonObject entry = entryWith(reference);
+        entry.insert("media", QJsonArray{QJsonObject{{"kind", "audio"}, {"file", "Tone.ogg"}, {"caption", "Owned caption"}}});
+        const QString html = window.entryHtml(entry);
+        QVERIFY(html.contains("<div><a name='reference-7'></a>[alpha 2] "));
+        QVERIFY(!html.contains("<p><table"));
+        QVERIFY(html.contains("reference-7-item-0-block-2-row-0-cell-0-block-0"));
+        QTextDocument document;
+        SemanticHtml::setHtml(&document, html);
+        QCOMPARE(document.toPlainText().count("Owned caption"), 1);
+        for (const QString &value : headers + forms) QVERIFY(document.toPlainText().contains(value));
+        const QTextCursor form = document.find(forms[0]); QVERIFY(!form.isNull());
+        QVERIFY(form.currentTable()); QCOMPARE(form.currentTable()->rows(), 2); QCOMPARE(form.currentTable()->columns(), 5);
+        QCOMPARE(form.charFormat().anchorHref(), QStringLiteral("dict:Target%200"));
+        QCOMPARE(document.find("Nested action").charFormat().anchorHref(), QStringLiteral("dict:Nested%20target"));
+        QVERIFY(window.clueFor(entry).contains("Scaled reference prose"));
+        QVERIFY(window.clueFor(entry).contains("Locuſta"));
+        window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false);
+        QVERIFY(window.reading_->toPlainText().contains("Nested reference heading"));
+        QAccessibleInterface *accessible = QAccessible::queryAccessibleInterface(window.reading_);
+        QVERIFY(accessible && accessible->textInterface());
+        QVERIFY(accessible->textInterface()->text(0, accessible->textInterface()->characterCount()).contains("Locuſta"));
+        const QJsonObject beforeJump = window.currentEntry_;
+        window.jumpToFragment("Compiled_reference_anchor");
+        QCOMPARE(window.currentEntry_, beforeJump);
+        const auto wrapTable = [](const QJsonObject &child) {
+            return QJsonObject{{"kind", "table"}, {"table", QJsonObject{{"rows", QJsonArray{
+                QJsonObject{{"cells", QJsonArray{QJsonObject{{"spans", QJsonArray{}}, {"blocks", QJsonArray{child}}}}}}}}}}};
+        };
+        QJsonObject deep = QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{text("Depth16 leaf")}}};
+        for (int level = 0; level < 16; ++level) deep = wrapTable(deep);
+        QJsonObject deepReference = reference; deepReference.insert("blocks", QJsonArray{deep});
+        QVERIFY(window.clueFor(entryWith(deepReference)).contains("Depth16 leaf"));
+        deepReference.insert("blocks", QJsonArray{wrapTable(deep)});
+        QVERIFY_EXCEPTION_THROWN(window.clueFor(entryWith(deepReference)), DictApiError);
+        QJsonObject fragment = reference; fragment.insert("kind", "fragment");
+        const QString fragmentHtml = window.entryHtml(entryWith(fragment));
+        QVERIFY(!fragmentHtml.contains("[alpha 2]"));
+        QVERIFY(!fragmentHtml.contains("<a name='reference-7'></a>"));
+    }
+
     void fontScaleRenderLimitUsesDevicePixelsWithoutChangingSemantics() {
         for (const int dpi : {96, 144}) {
             QImage device(8, 8, QImage::Format_ARGB32_Premultiplied);
@@ -880,6 +1289,38 @@ private slots:
         QTRY_COMPARE(title(window), QStringLiteral("cat"));
         QVERIFY(window.search_->isEnabled());
         QVERIFY(window.results_->isEnabled());
+    }
+
+    void compactEmptyReadingOpensLibraryByKeyboard() {
+        QTemporaryDir empty(QDir::currentPath() + QStringLiteral("/.tmp/empty-library-action-XXXXXX"));
+        QVERIFY(empty.isValid());
+        const QVariant oldSources = QSettings().value(QStringLiteral("library/catalogSources"));
+        const auto restore = qScopeGuard([&] { QSettings().setValue(QStringLiteral("library/catalogSources"), oldSources); });
+        QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{});
+        MainWindow window(empty.path());
+        window.resize(640, 600); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        window.showCompactPane(false);
+        QVERIFY(window.reading_->isVisible());
+        QVERIFY(!window.findChild<QPushButton *>(QStringLiteral("openDictionaries"))->isVisible());
+        const QTextCursor link = window.reading_->document()->find(QStringLiteral("Open Library"));
+        QVERIFY(!link.isNull()); QCOMPARE(link.charFormat().anchorHref(), QStringLiteral("library:"));
+        window.reading_->setFocus(); QTRY_VERIFY(window.reading_->hasFocus());
+        QTest::keyClick(window.reading_, Qt::Key_Home, Qt::ControlModifier);
+        QTest::keyClick(window.reading_, Qt::Key_Tab);
+        bool opened = false;
+        QTimer closeDialog;
+        connect(&closeDialog, &QTimer::timeout, &window, [&] {
+            if (auto *dialog = window.findChild<QDialog *>(QStringLiteral("libraryDialog"))) {
+                opened = dialog->isVisible();
+                dialog->reject();
+            }
+        });
+        closeDialog.start(20);
+        QTest::keyClick(window.reading_, Qt::Key_Return);
+        closeDialog.stop();
+        QVERIFY(opened);
+        QVERIFY(!window.api_);
     }
 
     void compactNavigationUsesFullWidthAndRetainsWideState() {

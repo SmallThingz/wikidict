@@ -45,6 +45,7 @@
 #include <QVBoxLayout>
 #include <algorithm>
 #include <functional>
+#include <cmath>
 
 namespace {
 constexpr qint64 MaxMediaBytes = 50 * 1024 * 1024;
@@ -170,10 +171,10 @@ private:
 
 class MediaCard final : public QGroupBox {
 public:
-    MediaCard(const QJsonObject &media, QWidget *parent) : QGroupBox(parent) {
+    MediaCard(const QJsonObject &media, QWidget *parent, bool canonicalIdentity) : QGroupBox(parent) {
         kind = media.value(QStringLiteral("kind")).toString();
         file = media.value(QStringLiteral("file")).toString();
-        file.remove(QRegularExpression(QStringLiteral("^(File|Image):"), QRegularExpression::CaseInsensitiveOption));
+        if (!canonicalIdentity) file.remove(QRegularExpression(QStringLiteral("^(File|Image):"), QRegularExpression::CaseInsensitiveOption));
         const QString caption = media.value(QStringLiteral("caption")).toString();
         display = caption.isEmpty() ? file : caption;
         auto *layout = new QVBoxLayout(this);
@@ -228,6 +229,10 @@ public:
     }
     QString kind, file, key, sourceHost, display;
     QByteArray data;
+    QImage decodedImage;
+    QSizeF intrinsicImage;
+    bool inlineRequested = false;
+    QString inlineFailure;
     QJsonObject metadata;
     ImagePreview *image;
     QLabel *status, *credit, *time;
@@ -256,6 +261,77 @@ struct MediaPanel::Impl {
     QPointer<MediaCard> playing;
     QPointer<QProcess> speech;
     QString title, language, cacheRoot, activeSpeechKey;
+    QString currentSourceHost;
+    struct InlineSubscriber { QPointer<QObject> owner; QString key; std::function<void(const MediaPanel::InlineImageAsset &)> changed; };
+    QHash<QString, QVector<InlineSubscriber>> inlineSubscribers;
+    QList<QPointer<MediaCard>> inlineQueue;
+    bool pumpingInline = false;
+    static QSizeF originalImageSize(const QJsonObject &metadata, const QString &widthKey, const QString &heightKey) {
+        const double width = metadata.value(widthKey).toDouble(-1), height = metadata.value(heightKey).toDouble(-1);
+        if (!std::isfinite(width) || !std::isfinite(height) || width <= 0 || height <= 0 || width > 4294967295.0 || height > 4294967295.0
+            || std::floor(width) != width || std::floor(height) != height) return {};
+        return QSizeF(width, height);
+    }
+    void pumpInline() {
+        if (pumpingInline) return;
+        pumpingInline = true;
+        while (!inlineQueue.isEmpty()) {
+            const int active = int(std::count_if(cards.begin(), cards.end(), [](const MediaCard *card) { return card->kind == QStringLiteral("image") && card->busy; }));
+            if (active >= 4) break;
+            QPointer<MediaCard> card = inlineQueue.takeFirst();
+            if (!card || !allowed(card) || card->busy || (!card->decodedImage.isNull() && card->intrinsicImage.isValid())) continue;
+            load(card);
+        }
+        pumpingInline = false;
+    }
+    void enqueueInline(MediaCard *card) {
+        if (card->busy || !allowed(card) || !card->inlineFailure.isEmpty() || (!card->decodedImage.isNull() && card->intrinsicImage.isValid())) return;
+        if (!inlineQueue.contains(card)) inlineQueue.append(card);
+        pumpInline();
+    }
+
+
+    MediaPanel::InlineImageAsset inlineAsset(const MediaCard *card) const {
+        using State = MediaPanel::InlineImageState;
+        if (!allowed(card)) return {State::Disabled, {}, QStringLiteral("Online images are disabled.")};
+        if (card->busy) return {State::Loading, {}, card->status->text()};
+        if (!card->inlineFailure.isEmpty()) return {State::Error, {}, card->inlineFailure};
+        if (!card->decodedImage.isNull() && card->intrinsicImage.isValid()) return {State::Ready, card->decodedImage, QString(), card->intrinsicImage, card->metadata.value(QStringLiteral("original_mime")).toString()};
+        return {State::Loading, {}, QStringLiteral("Loading image.")};
+    }
+    void notifyInline(MediaCard *card) {
+        if (card->kind != QStringLiteral("image")) return;
+        auto &subscribers = inlineSubscribers[card->file];
+        subscribers.removeIf([](const InlineSubscriber &item) { return item.owner.isNull(); });
+        const auto copy = subscribers;
+        const auto asset = inlineAsset(card);
+        for (const auto &item : copy) if (item.owner) item.changed(asset);
+    }
+    MediaPanel::InlineImageAsset inlineImage(const QString &file, QObject *owner, const QString &key,
+            std::function<void(const MediaPanel::InlineImageAsset &)> changed) {
+        using State = MediaPanel::InlineImageState;
+        for (MediaCard *card : cards) {
+            if (card->kind != QStringLiteral("image") || card->file != file) continue;
+            card->inlineRequested = true;
+            auto &subscribers = inlineSubscribers[file];
+            subscribers.removeIf([&](const InlineSubscriber &item) { return item.owner.isNull() || (item.owner == owner && item.key == key); });
+            subscribers.append({owner, key, std::move(changed)});
+            enqueueInline(card);
+            return inlineAsset(card);
+        }
+        return {State::Error, {}, QStringLiteral("This image is not in the dictionary's media catalogue.")};
+    }
+    QUrl inlineSourceUrl(const QString &target) const {
+        if (currentSourceHost.isEmpty() || !target.startsWith(QStringLiteral("File:")) || target.size() <= 5) return {};
+        const QString page = target.section(QChar('#'), 0, 0);
+        QUrl source(QStringLiteral("https://") + currentSourceHost + QStringLiteral("/wiki/") + QString::fromLatin1(QUrl::toPercentEncoding(page)));
+        if (target.contains(QChar('#'))) source.setFragment(target.section(QChar('#'), 1));
+        return allowedUrl(source, false, currentSourceHost) ? source : QUrl();
+    }
+    bool openInlineSource(const QString &target) {
+        const QUrl source = inlineSourceUrl(target);
+        return !source.isEmpty() && QDesktopServices::openUrl(source);
+    }
 
     explicit Impl(MediaPanel *parent, QNetworkAccessManager *manager) : q(parent) {
         network = manager ? manager : new QNetworkAccessManager(q);
@@ -395,7 +471,7 @@ struct MediaPanel::Impl {
     void updateButton(MediaCard *card) {
         card->button->setEnabled(!card->busy && allowed(card));
         if (card->busy) card->setAction(QStringLiteral("Loading..."));
-        else if (!card->data.isEmpty()) {
+        else if (!card->data.isEmpty() || (card->kind == QStringLiteral("image") && !card->decodedImage.isNull())) {
             if (card->kind == QStringLiteral("image")) card->setAction(QStringLiteral("Reload image"));
             else card->setAction(playing == card && player->playbackState() == QMediaPlayer::PlayingState
                 ? QStringLiteral("Pause") : QStringLiteral("Play"));
@@ -410,10 +486,14 @@ struct MediaPanel::Impl {
         }
         for (auto *card : cards) {
             if (card->kind != kind) continue;
-            card->image->setVisible(enabled && !card->data.isEmpty() && kind == QStringLiteral("image"));
+            card->image->setVisible(enabled && !card->decodedImage.isNull() && kind == QStringLiteral("image"));
             card->status->setText(enabled ? QStringLiteral("Ready when you are.")
                 : QStringLiteral("Enable online %1 above to load this media.").arg(kind == QStringLiteral("image") ? QStringLiteral("images") : QStringLiteral("audio")));
             updateButton(card);
+            if (kind == QStringLiteral("image")) {
+                notifyInline(card);
+                if (enabled && !inlineSubscribers.value(card->file).isEmpty()) { card->inlineFailure.clear(); enqueueInline(card); }
+            }
         }
     }
 
@@ -459,6 +539,8 @@ struct MediaPanel::Impl {
     }
 
     void setEntry(const QJsonObject &entry, const QString &sourceHost) {
+        inlineSubscribers.clear(); inlineQueue.clear();
+        currentSourceHost = QRegularExpression(QStringLiteral("^[a-z0-9-]+\\.wiktionary\\.org$")).match(sourceHost).hasMatch() ? sourceHost : QString();
         cancelRequests();
         stopSpeech();
         stopAudio();
@@ -475,12 +557,22 @@ struct MediaPanel::Impl {
         speechStatus->setText(title.isEmpty() ? QStringLiteral("Open a word to hear its pronunciation.")
                                               : QStringLiteral("Uses an installed offline voice for this word's language."));
         addPronunciations(entry);
+        QSet<QString> inlineFiles;
+        const auto imageFiles = [&](auto &&visit, const QJsonValue &value) -> void {
+            if (value.isObject()) {
+                const QJsonObject object = value.toObject();
+                if (object.value(QStringLiteral("image")).isObject())
+                    inlineFiles.insert(object.value(QStringLiteral("image")).toObject().value(QStringLiteral("file")).toString());
+                for (auto it = object.begin(); it != object.end(); ++it) if (it.value().isArray() || it.value().isObject()) visit(visit, it.value());
+            } else if (value.isArray()) for (const auto &child : value.toArray()) visit(visit, child);
+        };
+        imageFiles(imageFiles, entry);
         for (const QJsonValue &value : entry.value(QStringLiteral("media")).toArray()) {
             const QJsonObject media = value.toObject();
             const QString kind = media.value(QStringLiteral("kind")).toString();
             if ((kind != QStringLiteral("image") && kind != QStringLiteral("audio")) ||
                 media.value(QStringLiteral("file")).toString().trimmed().isEmpty()) continue;
-            auto *card = new MediaCard(media, cardsBody);
+            auto *card = new MediaCard(media, cardsBody, inlineFiles.contains(media.value(QStringLiteral("file")).toString()));
             if (QRegularExpression(QStringLiteral("^[a-z0-9-]+\\.wiktionary\\.org$")).match(sourceHost).hasMatch()) card->sourceHost = sourceHost;
             card->key = QString::fromLatin1(QCryptographicHash::hash((card->sourceHost + QChar(':') + kind + QChar(':') + card->file).toUtf8(), QCryptographicHash::Sha256).toHex());
             cards.append(card);
@@ -492,8 +584,9 @@ struct MediaPanel::Impl {
                 if (!allowed(card) || card->busy) return;
                 if (card->kind == QStringLiteral("audio") && !card->data.isEmpty()) play(card);
                 else {
-                    if (!card->data.isEmpty()) { removeCached(card); card->data.clear(); }
-                    load(card);
+                    if (!card->data.isEmpty() || !card->decodedImage.isNull()) { removeCached(card); card->data.clear(); card->decodedImage = {}; }
+                    if (card->kind == QStringLiteral("image") && card->inlineRequested) { card->inlineFailure.clear(); enqueueInline(card); }
+                    else load(card);
                 }
             });
             QObject::connect(card->position, &QSlider::valueChanged, q, [this, card](int position) {
@@ -597,6 +690,9 @@ struct MediaPanel::Impl {
         card->status->setText(message + QStringLiteral(" Try again."));
         updateButton(card);
         card->setAction(QStringLiteral("Retry"));
+        card->inlineFailure = message;
+        notifyInline(card);
+        pumpInline();
     }
 
     QString cachedPath(const MediaCard *card, const QString &extension) const {
@@ -642,6 +738,9 @@ struct MediaPanel::Impl {
             removeCached(card);
             return false;
         }
+        if (card->inlineRequested && !originalImageSize(info, QStringLiteral("intrinsic_width"), QStringLiteral("intrinsic_height")).isValid()) {
+            removeCached(card); return false; // Refresh old manual-cache metadata through the same resolver.
+        }
         if (!present(card, payload.readAll(), info)) {
             removeCached(card);
             return false;
@@ -649,6 +748,7 @@ struct MediaPanel::Impl {
         payload.setFileTime(QDateTime::currentDateTimeUtc(), QFileDevice::FileModificationTime);
         metadata.setFileTime(QDateTime::currentDateTimeUtc(), QFileDevice::FileModificationTime);
         card->status->setText(QStringLiteral("Loaded from this device."));
+        if (card->inlineRequested) card->data.clear();
         return true;
     }
 
@@ -687,9 +787,12 @@ struct MediaPanel::Impl {
                 fail(card, QStringLiteral("This image could not be opened."));
                 return false;
             }
+            card->decodedImage = image;
+            card->intrinsicImage = originalImageSize(metadata, QStringLiteral("intrinsic_width"), QStringLiteral("intrinsic_height"));
             card->image->setImage(image);
             card->image->show();
         }
+        card->inlineFailure.clear();
         card->data = bytes;
         card->metadata = metadata;
         card->busy = false;
@@ -699,6 +802,8 @@ struct MediaPanel::Impl {
         card->credit->setVisible(!card->credit->text().isEmpty());
         card->source->show();
         updateButton(card);
+        notifyInline(card);
+        pumpInline();
         return true;
     }
 
@@ -747,15 +852,18 @@ struct MediaPanel::Impl {
 
     void load(MediaCard *card) {
         if (!allowed(card)) return;
+        card->inlineFailure.clear();
         if (readCached(card)) {
             if (card->kind == QStringLiteral("audio")) play(card);
             return;
         }
+        if (card->inlineRequested) { card->data.clear(); card->decodedImage = {}; }
         card->busy = true;
         card->status->setText(QStringLiteral("Finding media..."));
         card->progress->setRange(0, 0);
         card->progress->show();
         updateButton(card);
+        notifyInline(card);
         resolve(card, 0);
     }
 
@@ -767,7 +875,7 @@ struct MediaPanel::Impl {
         query.addQueryItem(QStringLiteral("format"), QStringLiteral("json"));
         query.addQueryItem(QStringLiteral("formatversion"), QStringLiteral("2"));
         query.addQueryItem(QStringLiteral("prop"), QStringLiteral("imageinfo"));
-        query.addQueryItem(QStringLiteral("iiprop"), QStringLiteral("url|extmetadata"));
+        query.addQueryItem(QStringLiteral("iiprop"), QStringLiteral("url|size|mime|extmetadata"));
         query.addQueryItem(QStringLiteral("iiurlwidth"), QStringLiteral("960"));
         query.addQueryItem(QStringLiteral("titles"), QStringLiteral("File:") + card->file);
         url.setQuery(query);
@@ -799,11 +907,19 @@ struct MediaPanel::Impl {
             }
             QJsonObject metadata{{QStringLiteral("url"), mediaUrl.toString()}, {QStringLiteral("source"), source.toString()},
                                  {QStringLiteral("credit"), credit.join(QStringLiteral(" / "))}};
+            if (info.value(QStringLiteral("mime")).isString()) metadata.insert(QStringLiteral("original_mime"), info.value(QStringLiteral("mime")));
+            const QSizeF original = originalImageSize(info, QStringLiteral("width"), QStringLiteral("height"));
+            if (original.isValid()) { metadata.insert(QStringLiteral("intrinsic_width"), original.width()); metadata.insert(QStringLiteral("intrinsic_height"), original.height()); }
+            else if (card->inlineRequested) { fail(card, QStringLiteral("Original image dimensions are unavailable.")); return; }
             card->status->setText(QStringLiteral("Downloading media..."));
             request(card, mediaUrl, MaxMediaBytes, [this, card, metadata](const QByteArray &payload) {
                 if (payload.isEmpty()) { fail(card, QStringLiteral("The media file was empty.")); return; }
                 if (!present(card, payload, metadata)) return;
                 writeCached(card);
+                // Inline rendering retains shared decoded pixels and attribution,
+                // never up to50MiB of source bytes per visible occurrence. A
+                // disabled/failed disk cache does not invalidate decoded pixels.
+                if (card->inlineRequested) card->data.clear();
                 if (card->kind == QStringLiteral("audio")) play(card);
             });
         });
@@ -920,6 +1036,10 @@ struct MediaPanel::Impl {
 
 MediaPanel::MediaPanel(QWidget *parent, QNetworkAccessManager *network) : QWidget(parent), impl_(std::make_unique<Impl>(this, network)) {}
 MediaPanel::~MediaPanel() = default;
+MediaPanel::InlineImageAsset MediaPanel::requestInlineImage(const QString &file, QObject *owner, const QString &key,
+        std::function<void(const InlineImageAsset &)> changed) { return impl_->inlineImage(file, owner, key, std::move(changed)); }
+QUrl MediaPanel::inlineImageSource(const QString &compiledTarget) const { return impl_->inlineSourceUrl(compiledTarget); }
+bool MediaPanel::openInlineImageSource(const QString &compiledTarget) { return impl_->openInlineSource(compiledTarget); }
 void MediaPanel::setEntry(const QJsonObject &entry, const QString &sourceHost) { impl_->setEntry(entry, sourceHost); }
 void MediaPanel::sayWord(const QString &title, const QString &languageCode) { impl_->say(title, languageCode); }
 void MediaPanel::stopPlayback() { impl_->stopSpeech(); impl_->stopAudio(); }

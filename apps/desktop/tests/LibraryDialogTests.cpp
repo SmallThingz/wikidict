@@ -24,6 +24,7 @@
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QThread>
 #include <QTimer>
 #include <QTreeWidget>
 #include <cstdlib>
@@ -124,6 +125,36 @@ protected:
         return new CancelDownloadReply(operation, request, this, aborts, downloadFinishes, downloadBytesRead);
     }
 };
+// A catalogue that stays pending until a local action takes over. Abort emits
+// finished synchronously, exercising cancellation ordering instead of a mock flag.
+class PendingCatalogReply final : public QNetworkReply {
+public:
+    PendingCatalogReply(QNetworkAccessManager::Operation operation, const QNetworkRequest &request,
+                        QObject *parent, int &aborts) : QNetworkReply(parent), aborts_(aborts) {
+        setOperation(operation); setRequest(request); setUrl(request.url());
+        open(QIODevice::ReadOnly | QIODevice::Unbuffered);
+    }
+    void abort() override {
+        ++aborts_;
+        setError(OperationCanceledError, QStringLiteral("Cancelled catalogue"));
+        setFinished(true); emit finished();
+    }
+protected:
+    qint64 readData(char *, qint64) override { return -1; }
+private:
+    int &aborts_;
+};
+class PendingCatalogNetwork final : public QNetworkAccessManager {
+public:
+    int requests = 0, aborts = 0;
+    QPointer<QNetworkReply> pending;
+protected:
+    QNetworkReply *createRequest(Operation operation, const QNetworkRequest &request, QIODevice *) override {
+        ++requests;
+        pending = new PendingCatalogReply(operation, request, this, aborts);
+        return pending;
+    }
+};
 void checkDownloadCancellationFocus(const QString &source, const QString &root) {
     std::atomic_bool cancelled = false;
     auto prepared = LibraryStorage::prepareImport(root, source, {}, -1, cancelled,
@@ -197,6 +228,41 @@ void answerFile(const QString &path) {
             }
         }
     });
+}
+
+void checkLocalImportDuringPendingCatalog(const QString &source, const QString &root) {
+    const QVariant oldSources = QSettings().value(QStringLiteral("library/catalogSources"));
+    auto restore = qScopeGuard([&] { QSettings().setValue(QStringLiteral("library/catalogSources"), oldSources); });
+    QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{
+        QStringLiteral("https://catalogue.example/first"), QStringLiteral("https://catalogue.example/second")});
+    auto network = std::make_unique<PendingCatalogNetwork>();
+    auto *observed = network.get();
+    LibraryDialog dialog(nullptr, root, std::move(network));
+    dialog.resize(640, 600); dialog.show();
+    auto *importButton = control<QPushButton>(dialog, "importDictionary");
+    auto *choose = control<QPushButton>(dialog, "chooseDictionaryFolder");
+    auto *status = control<QLabel>(dialog, "libraryStatus");
+    auto *progress = control<QProgressBar>(dialog, "libraryProgress");
+    require(QTest::qWaitFor([&] { return observed->requests == 1 && progress->isVisible(); }, 5000), "catalogue is actually pending");
+    require(importButton->isEnabled() && choose->isEnabled(), "online catalogue does not disable local actions");
+    require(!control<QPushButton>(dialog, "downloadDictionary")->isEnabled(), "download remains serialized while catalogue loads");
+    // Queue callbacks before the local click. Disconnecting a connection cannot
+    // withdraw these already posted deliveries, which run inside the file picker.
+    auto *reply = observed->pending.data();
+    require(reply != nullptr, "pending catalogue reply exists");
+    auto *delivery = QThread::create([reply] { emit reply->readyRead(); emit reply->finished(); });
+    delivery->start(); require(delivery->wait(2000), "queued catalogue signals delivered"); delete delivery;
+    bool stoppedStatusRetained = false;
+    QTimer::singleShot(100, &dialog, [&] {
+        stoppedStatusRetained = status->text().startsWith(QStringLiteral("Catalogue refresh stopped."));
+    });
+    answerFile(source);
+    importButton->click(); // Deliver the local action before pumping the queued network callbacks.
+    require(QTest::qWaitFor([&] { return !progress->isVisible() && status->text().startsWith(QStringLiteral("Installed ")); }, 10000), "local import completes without a catalogue response");
+    require(observed->aborts == 1 && observed->requests == 1, "cancelled catalogue neither advances nor takes over import completion");
+    require(stoppedStatusRetained, "already queued catalogue callbacks cannot overwrite the local handoff");
+    require(LibraryStorage::installed(root).size() == 1, "normal local import committed one dictionary");
+    require(importButton->isEnabled() && choose->isEnabled(), "local controls restored after normal import");
 }
 
 // Exercise the real replacement prompt, independently of the direct storage tests.
@@ -366,6 +432,12 @@ int main(int argc, char **argv) {
             bytes.append(char(32)); bytes.append("DPR2", 4); bytes.append(QByteArray(28, '\0'));
             QFile file(source);
             require(file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size(), "write framed UI fixture");
+        }
+        if (argc > 2 && QString::fromLocal8Bit(argv[2]) == QStringLiteral("--pending-catalogue-import")) {
+            diagnosticStage = "local import during pending catalogue";
+            checkLocalImportDuringPendingCatalog(source, temp.filePath(QStringLiteral("pending-catalogue-import")));
+            std::cout << "Library UI: local import during pending catalogue and stale callback isolation passed\n";
+            return EXIT_SUCCESS;
         }
         diagnosticStage = "download cancellation keyboard focus";
         checkDownloadCancellationFocus(source, temp.filePath(QStringLiteral("cancel-download")));

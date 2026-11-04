@@ -142,7 +142,10 @@ if(BUILD_TESTING)
     add_test(NAME native-library-ux COMMAND dict-library-ui-tests
         "${CMAKE_SOURCE_DIR}/tests/fixtures/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb")
     set_tests_properties(native-library-ux PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}" ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-    foreach(native_test IN ITEMS native-reader-ux native-media-ux native-library-storage native-library-ux)
+    add_test(NAME native-library-catalogue-ux COMMAND dict-library-ui-tests
+        "${CMAKE_SOURCE_DIR}/tests/fixtures/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb" --pending-catalogue-import)
+    set_tests_properties(native-library-catalogue-ux PROPERTIES WORKING_DIRECTORY "${CMAKE_BINARY_DIR}" ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    foreach(native_test IN ITEMS native-reader-ux native-media-ux native-library-storage native-library-ux native-library-catalogue-ux)
         set_property(TEST ${native_test} APPEND PROPERTY ENVIRONMENT
             "XDG_CONFIG_HOME=${CMAKE_BINARY_DIR}/.tmp/ctest/${native_test}/config"
             "XDG_CACHE_HOME=${CMAKE_BINARY_DIR}/.tmp/ctest/${native_test}/cache"

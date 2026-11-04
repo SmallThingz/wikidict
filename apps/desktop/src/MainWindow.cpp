@@ -38,6 +38,8 @@
 #include <QMouseEvent>
 #include <QMenu>
 #include <QPalette>
+#include <QPainter>
+#include <QFontMetricsF>
 #include <QPushButton>
 #include <QProgressBar>
 #include <QPointer>
@@ -84,7 +86,7 @@ public:
         setFrameShape(QFrame::NoFrame);
         setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        setTextInteractionFlags(Qt::TextSelectableByMouse);
+        setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::LinksAccessibleByMouse);
         setFocusPolicy(Qt::ClickFocus);
         setOpenLinks(false);
         setOpenExternalLinks(false);
@@ -92,7 +94,7 @@ public:
         setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
         setStyleSheet(QStringLiteral("background: transparent; border: 0; padding: 0;"));
         connect(document(), &QTextDocument::contentsChanged, this, [this] {
-            setAccessibleName(toPlainText());
+            setAccessibleName(QString(toPlainText()).remove(QChar::ObjectReplacementCharacter));
             fitHeight();
         });
         connect(document()->documentLayout(), &QAbstractTextDocumentLayout::documentSizeChanged,
@@ -307,6 +309,13 @@ public:
         QString result = QStringLiteral("font-family:%1;font-size:%2pt;font-weight:%3;font-style:%4;")
             .arg(family).arg(font.pointSizeF()).arg(int(font.weight()))
             .arg(font.italic() ? QStringLiteral("italic") : QStringLiteral("normal"));
+        if (format.isImageFormat()) {
+            const auto escaped = [](QString value) { value.replace(QChar('\\'), QStringLiteral("\\\\")); value.replace(QChar(';'), QStringLiteral("\\;")); value.replace(QChar(':'), QStringLiteral("\\:")); return value; };
+            result += QStringLiteral("xml-roles:img;");
+            if (format.hasProperty(QTextFormat::ImageAltText)) result += QStringLiteral("image-alt:%1;").arg(escaped(format.stringProperty(QTextFormat::ImageAltText)));
+            if (format.hasProperty(QTextFormat::ImageTitle)) result += QStringLiteral("image-tooltip:%1;").arg(escaped(format.stringProperty(QTextFormat::ImageTitle)));
+            result += QStringLiteral("image-state:%1;").arg(format.intProperty(SemanticHtml::inlineImageStateProperty));
+        }
         if (font.underline()) result += QStringLiteral("text-underline-type:single;");
         if (font.strikeOut()) result += QStringLiteral("text-line-through-type:single;");
         if (format.verticalAlignment() == QTextCharFormat::AlignSuperScript) result += QStringLiteral("text-position:super;");
@@ -404,13 +413,17 @@ QStringList poemClassTokens(const QJsonObject &span);
 QJsonArray sectionHeadingSpans(const QJsonObject &section) {
     const QString title = section.value(QStringLiteral("title")).toString();
     const QJsonArray blocks = section.value(QStringLiteral("blocks")).toArray();
-    if (title.isEmpty() || blocks.isEmpty()) return {};
+    if (blocks.isEmpty()) return {};
     const QJsonObject first = blocks.first().toObject();
     if (first.value(QStringLiteral("kind")).toString() != QStringLiteral("heading") ||
         first.value(QStringLiteral("level")).toInt() != section.value(QStringLiteral("level")).toInt()) return {};
     const QJsonArray spans = first.value(QStringLiteral("spans")).toArray();
+    const bool visual = std::any_of(spans.begin(), spans.end(), [](const QJsonValue &value) {
+        return SemanticHtml::present(value.toObject().value(QStringLiteral("image")));
+    });
+    if (title.isEmpty() && !visual) return {};
     QString label;
-    bool rich = false;
+    bool rich = visual;
     for (const QJsonValue &value : spans) {
         const QJsonObject span = value.toObject();
         const QString kind = span.value(QStringLiteral("kind")).toString();
@@ -466,57 +479,80 @@ struct HeadingDestination {
     bool cellLocal = false;
 };
 
+QJsonValue referenceBlocks(const QJsonObject &reference) {
+    const QJsonValue blocks = reference.value(QStringLiteral("blocks"));
+    if (!blocks.isUndefined() && !blocks.isNull() &&
+        (!blocks.isArray() || !reference.value(QStringLiteral("spans")).isArray() ||
+         !reference.value(QStringLiteral("spans")).toArray().isEmpty()))
+        throw DictApiError("invalid structured reference");
+    return blocks;
+}
+
+QString referenceBlockLocation(const QJsonObject &reference, qsizetype index, qsizetype block) {
+    return QStringLiteral("reference-%1-item-%2-block-%3")
+        .arg(reference.value(QStringLiteral("number")).toInteger()).arg(index).arg(block);
+}
+
 QVector<HeadingDestination> headingDestinations(const QJsonObject &entry) {
     QVector<HeadingDestination> result;
+    const auto visitBlock = [&](auto &&visit, const QJsonObject &block, const QString &location, int rootBlock, bool cellLocal, int tableDepth, int sectionIndex) -> void {
+        if (block.value(QStringLiteral("kind")).toString() == QStringLiteral("heading")) {
+            QString label;
+            for (const QJsonValue &value : block.value(QStringLiteral("spans")).toArray()) {
+                const QJsonObject span = value.toObject();
+                label += span.value(QStringLiteral("kind")).toString() == QStringLiteral("line_break") ? QStringLiteral("\n")
+                    : span.value(QStringLiteral("text")).toString() + span.value(QStringLiteral("trail")).toString();
+            }
+            const QString anchor = block.value(QStringLiteral("anchor")).toString();
+            const QString fallback = block.value(QStringLiteral("anchor_fallback")).toString();
+            if (!label.isEmpty() || !anchor.isEmpty() || !fallback.isEmpty())
+                result.append({label, anchor, fallback, sectionIndex, rootBlock, location, cellLocal});
+        }
+        const auto visitTable = [&](auto &&tables, const QJsonObject &table, const QString &tableLocation, int depth) -> void {
+            if (depth > 16) throw DictApiError("nested table depth exceeds presentation limit");
+            const QJsonArray rows = table.value(QStringLiteral("rows")).toArray();
+            for (qsizetype r = 0; r < rows.size(); ++r) {
+                const QJsonArray cells = rows[r].toObject().value(QStringLiteral("cells")).toArray();
+                for (qsizetype c = 0; c < cells.size(); ++c) {
+                    const QJsonObject cell = cells[c].toObject();
+                    const QString cellLocation = tableLocation + QStringLiteral("-row-%1-cell-%2").arg(r).arg(c);
+                    const QJsonValue contents = cell.value(QStringLiteral("blocks"));
+                    if (!contents.isUndefined() && !contents.isNull()) {
+                        if (!contents.isArray() || !cell.value(QStringLiteral("spans")).toArray().isEmpty() ||
+                            (!cell.value(QStringLiteral("nested_table")).isUndefined() && !cell.value(QStringLiteral("nested_table")).isNull()))
+                            throw DictApiError("invalid ordered table cell");
+                        const QJsonArray blocks = contents.toArray();
+                        for (qsizetype n = 0; n < blocks.size(); ++n)
+                            visit(visit, blocks[n].toObject(), cellLocation + QStringLiteral("-block-%1").arg(n), rootBlock, true, depth + 1, sectionIndex);
+                    } else if (cell.value(QStringLiteral("nested_table")).isObject()) {
+                        tables(tables, cell.value(QStringLiteral("nested_table")).toObject(), cellLocation + QStringLiteral("-table"), depth + 1);
+                    }
+                }
+            }
+        };
+        if (block.value(QStringLiteral("table")).isObject())
+            visitTable(visitTable, block.value(QStringLiteral("table")).toObject(), location, tableDepth);
+    };
     const QJsonArray sections = entry.value(QStringLiteral("sections")).toArray();
     for (qsizetype i = 0; i < sections.size(); ++i) {
         const QJsonObject section = sections[i].toObject();
         const QString title = section.value(QStringLiteral("title")).toString();
-        if (!title.isEmpty()) result.append({title, section.value(QStringLiteral("anchor")).toString(), section.value(QStringLiteral("anchor_fallback")).toString(), int(i)});
+        if (!title.isEmpty() || !section.value(QStringLiteral("anchor")).toString().isEmpty() || !section.value(QStringLiteral("anchor_fallback")).toString().isEmpty()) result.append({title, section.value(QStringLiteral("anchor")).toString(), section.value(QStringLiteral("anchor_fallback")).toString(), int(i)});
         const bool companion = !sectionHeadingSpans(section).isEmpty();
-        const auto visitBlock = [&](auto &&visit, const QJsonObject &block, const QString &location, int rootBlock, bool cellLocal, int tableDepth) -> void {
-            if (block.value(QStringLiteral("kind")).toString() == QStringLiteral("heading")) {
-                QString label;
-                for (const QJsonValue &value : block.value(QStringLiteral("spans")).toArray()) {
-                    const QJsonObject span = value.toObject();
-                    label += span.value(QStringLiteral("kind")).toString() == QStringLiteral("line_break") ? QStringLiteral("\n")
-                        : span.value(QStringLiteral("text")).toString() + span.value(QStringLiteral("trail")).toString();
-                }
-                const QString anchor = block.value(QStringLiteral("anchor")).toString();
-                const QString fallback = block.value(QStringLiteral("anchor_fallback")).toString();
-                if (!label.isEmpty() || !anchor.isEmpty() || !fallback.isEmpty())
-                    result.append({label, anchor, fallback, int(i), rootBlock, location, cellLocal});
-            }
-            const auto visitTable = [&](auto &&tables, const QJsonObject &table, const QString &tableLocation, int depth) -> void {
-                if (depth > 16) throw DictApiError("nested table depth exceeds presentation limit");
-                const QJsonArray rows = table.value(QStringLiteral("rows")).toArray();
-                for (qsizetype r = 0; r < rows.size(); ++r) {
-                    const QJsonArray cells = rows[r].toObject().value(QStringLiteral("cells")).toArray();
-                    for (qsizetype c = 0; c < cells.size(); ++c) {
-                        const QJsonObject cell = cells[c].toObject();
-                        const QString cellLocation = tableLocation + QStringLiteral("-row-%1-cell-%2").arg(r).arg(c);
-                        const QJsonValue contents = cell.value(QStringLiteral("blocks"));
-                        if (!contents.isUndefined() && !contents.isNull()) {
-                            if (!contents.isArray() || !cell.value(QStringLiteral("spans")).toArray().isEmpty() ||
-                                (!cell.value(QStringLiteral("nested_table")).isUndefined() && !cell.value(QStringLiteral("nested_table")).isNull()))
-                                throw DictApiError("invalid ordered table cell");
-                            const QJsonArray blocks = contents.toArray();
-                            for (qsizetype n = 0; n < blocks.size(); ++n)
-                                visit(visit, blocks[n].toObject(), cellLocation + QStringLiteral("-block-%1").arg(n), rootBlock, true, depth + 1);
-                        } else if (cell.value(QStringLiteral("nested_table")).isObject()) {
-                            tables(tables, cell.value(QStringLiteral("nested_table")).toObject(), cellLocation + QStringLiteral("-table"), depth + 1);
-                        }
-                    }
-                }
-            };
-            if (block.value(QStringLiteral("table")).isObject())
-                visitTable(visitTable, block.value(QStringLiteral("table")).toObject(), location, tableDepth);
-        };
         const QJsonArray blocks = section.value(QStringLiteral("blocks")).toArray();
         for (qsizetype j = 0; j < blocks.size(); ++j) {
             if (j == 0 && companion) continue;
-            visitBlock(visitBlock, blocks[j].toObject(), QStringLiteral("block-%1-%2").arg(i).arg(j), int(j), false, 1);
+            visitBlock(visitBlock, blocks[j].toObject(), QStringLiteral("block-%1-%2").arg(i).arg(j), int(j), false, 1, int(i));
         }
+    }
+    const QJsonArray references = entry.value(QStringLiteral("references")).toArray();
+    for (qsizetype i = 0; i < references.size(); ++i) {
+        const QJsonObject reference = references[i].toObject();
+        const QJsonValue contents = referenceBlocks(reference);
+        if (contents.isUndefined() || contents.isNull()) continue;
+        const QJsonArray blocks = contents.toArray();
+        for (qsizetype j = 0; j < blocks.size(); ++j)
+            visitBlock(visitBlock, blocks[j].toObject(), referenceBlockLocation(reference, i, j), int(j), true, 1, -1);
     }
     return result;
 }
@@ -526,6 +562,7 @@ QVector<HeadingDestination> headingDestinations(const QJsonObject &entry) {
 // ordinary depth-zero paragraph it must not manufacture another empty block.
 // Explicit code/Poem/NBSP/bidi/media metadata never takes this display path.
 bool ordinaryLayoutWhitespaceSpan(const QJsonObject &span, bool allowBreak) {
+    if (SemanticHtml::present(span.value(QStringLiteral("image")))) return false;
     const QString kind = span.value(QStringLiteral("kind")).toString();
     if (kind != QStringLiteral("text") && !(allowBreak && kind == QStringLiteral("line_break"))) return false;
     for (const QString &key : {QStringLiteral("target"), QStringLiteral("trail"), QStringLiteral("language"),
@@ -795,9 +832,10 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                     bookmark_->setEnabled(false);
                     title_->setHtml(QStringLiteral("Open your dictionaries"));
                     meta_->setText(QStringLiteral("Your words stay on this computer."));
+                    ++readingComposition_;
                     reading_->setHtml(loaded->emptyLibrary
-                        ? QStringLiteral("<p>No dictionaries are installed yet.</p><p>Open <b>Library</b> to import a dictionary, download one, or choose an existing folder.</p>")
-                        : QStringLiteral("<p>Could not open this dictionary.</p><p>Open <b>Library</b> to import a dictionary, download one, or choose an existing folder.</p>"));
+                        ? QStringLiteral("<p>No dictionaries are installed yet.</p><p><a href='library:'>Open Library</a> to import a dictionary, download one, or choose an existing folder.</p>")
+                        : QStringLiteral("<p>Could not open this dictionary.</p><p><a href='library:'>Open Library</a> to import a dictionary, download one, or choose an existing folder.</p>"));
                     resultStatus_->setText(QStringLiteral("No dictionary open"));
                 }
                 return;
@@ -828,6 +866,7 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
             sections_->setEnabled(false);
             title_->setHtml(QStringLiteral("Find the word."));
             meta_->setText(QStringLiteral("%1 · %2").arg(api_->kind() == QStringLiteral("language") ? api_->language() : QStringLiteral("All languages"), kindLabel(api_->kind())));
+            ++readingComposition_;
             reading_->setHtml(QStringLiteral("<p>Type a word to search. Press Enter to open it, or use the arrow keys to choose a suggestion.</p><p>Ctrl+L focuses search. Alt+Left and Alt+Right revisit words.</p>"));
             json_->clear();
             QSettings().setValue(QStringLiteral("reader/root"), QDir(root).absolutePath());
@@ -1162,6 +1201,7 @@ void MainWindow::setupUi() {
     json_->setLineWrapMode(QTextEdit::NoWrap);
     entryTabs_->addTab(reading_, QStringLiteral("Reading"));
     media_ = new MediaPanel(entryTabs_);
+    bindInlineImages();
     entryTabs_->addTab(media_, QStringLiteral("Media && speech"));
     entryTabs_->addTab(json_, QStringLiteral("Entry data"));
     right->addWidget(entryTabs_, 1);
@@ -1240,7 +1280,8 @@ void MainWindow::setupUi() {
             bookmark_->setEnabled(false);
             title_->setHtml(QStringLiteral("Open your dictionaries"));
             meta_->setText(QStringLiteral("Your words stay on this computer."));
-            reading_->setHtml(QStringLiteral("<p>Opening cancelled.</p><p>Open <b>Library</b> to import a dictionary or choose another folder.</p>"));
+            ++readingComposition_;
+            reading_->setHtml(QStringLiteral("<p>Opening cancelled.</p><p><a href='library:'>Open Library</a> to import a dictionary or choose another folder.</p>"));
         }
         resultStatus_->setText(QStringLiteral("Opening cancelled. Choose a folder to try again."));
     });
@@ -1292,6 +1333,11 @@ void MainWindow::setupUi() {
                 if (!openWord(word, section, !explicitOwner && !url.hasQuery() && !url.hasFragment())) return;
             } else if (section) jumpToFragment(*section);
         }
+        else if (url == QUrl(QStringLiteral("library:"))) chooseRoot();
+        else if (url.scheme() == QStringLiteral("media-source") && !url.hasQuery() && !url.hasFragment()) {
+            if (!media_->openInlineImageSource(url.path(QUrl::FullyDecoded)))
+                statusBar()->showMessage(QStringLiteral("This dictionary does not identify the source for this file link."));
+        }
         else if (url.scheme() == QStringLiteral("section")) {
             const int index = url.path().toInt();
             if (collapsedSections_.contains(index)) collapsedSections_.remove(index);
@@ -1300,12 +1346,12 @@ void MainWindow::setupUi() {
             const bool keyboard = browser->keyboardActivation;
             refreshReading();
             if (keyboard) {
-                const int revision = reading_->document()->revision();
+                const quint64 composition = readingComposition_;
                 const int scroll = reading_->verticalScrollBar()->value();
                 const quint64 interaction = browser->interaction;
-                QTimer::singleShot(0, browser, [browser, url, revision, scroll, interaction] {
+                QTimer::singleShot(0, browser, [this, browser, url, composition, scroll, interaction] {
                     if (!browser->hasFocus() || browser->interaction != interaction ||
-                        browser->document()->revision() != revision) return;
+                        readingComposition_ != composition) return;
                     browser->restoreAnchor(url);
                     browser->verticalScrollBar()->setValue(scroll);
                 });
@@ -1313,6 +1359,7 @@ void MainWindow::setupUi() {
         }
         else if (url.scheme() == QStringLiteral("http") || url.scheme() == QStringLiteral("https")) QDesktopServices::openUrl(url);
     });
+    connect(title_, &QTextBrowser::anchorClicked, reading_, &QTextBrowser::anchorClicked);
     connect(back_, &QPushButton::clicked, this, [this] { navigate(-1); });
     connect(forward_, &QPushButton::clicked, this, [this] { navigate(1); });
     connect(sections_, &QComboBox::activated, this, [this](int index) {
@@ -1638,7 +1685,80 @@ bool MainWindow::openWord(const QString &word, const std::optional<QString> &fra
         return false;
     }
 }
+void MainWindow::bindInlineImages() {
+    for (QTextBrowser *browser : {title_, reading_}) {
+        QPointer<QTextBrowser> widget(browser);
+        QPointer<QTextDocument> document(browser->document());
+        document->setResourceProvider([this, widget, document](const QUrl &url) -> QVariant {
+            if (url.scheme() != SemanticHtml::inlineImageScheme || !widget || !document) return {};
+            const QJsonObject image = SemanticHtml::inlineImageData(url);
+            const quint64 generation = inlineImageGeneration_;
+            QTimer::singleShot(0, document, [this, widget, document, url, image, generation] {
+                if (!widget || !document || generation != inlineImageGeneration_) return;
+                const auto apply = [this, widget, document, url, image, generation](const MediaPanel::InlineImageAsset &asset) {
+                    if (!widget || !document || generation != inlineImageGeneration_) return;
+                    const bool heightOnlySvg = !SemanticHtml::present(image.value(QStringLiteral("width_px"))) && SemanticHtml::present(image.value(QStringLiteral("height_px")))
+                        && (asset.originalMime.isEmpty() || asset.originalMime == QStringLiteral("image/svg+xml"));
+                    const bool ready = asset.state == MediaPanel::InlineImageState::Ready && !heightOnlySvg;
+                    const auto state = asset.state == MediaPanel::InlineImageState::Ready && heightOnlySvg ? MediaPanel::InlineImageState::Error : asset.state;
+                    const QString message = heightOnlySvg && asset.state == MediaPanel::InlineImageState::Ready ? QStringLiteral("This image size cannot be displayed yet.") : asset.message;
+                    QImage pixels = asset.image;
+                    QSize fallbackSize;
+                    if (!ready) {
+                        // No filename fallback: only an explicitly authored alt
+                        // may paint while the passive asset is unavailable.
+                        QTextImageFormat placeholder;
+                        SemanticHtml::imageDimensions(placeholder, image, document);
+                        pixels = QImage(qBound(1, qCeil(placeholder.width()), 256), qBound(1, qCeil(placeholder.height()), 64), QImage::Format_ARGB32_Premultiplied);
+                        pixels.fill(Qt::transparent);
+                        const QString alt = image.value(QStringLiteral("alt")).toString();
+                        if (!alt.isEmpty()) {
+                            // An unavailable image's authored dimensions do not
+                            // bound its semantic text alternative. Keep the full
+                            // alt accessible, with explicit elision only for text
+                            // wider than the current reading viewport.
+                            const QFontMetricsF metrics(document->defaultFont());
+                            const QString visibleAlt = metrics.elidedText(alt, Qt::ElideRight, qMax(32, widget->viewport()->width() - 8));
+                            fallbackSize = QSize(qMax(1, qCeil(metrics.horizontalAdvance(visibleAlt)) + 4), qMax(1, qCeil(metrics.height()) + 4));
+                            pixels = QImage(fallbackSize, QImage::Format_ARGB32_Premultiplied);
+                            pixels.fill(Qt::transparent);
+                            QPainter painter(&pixels); painter.setFont(document->defaultFont()); painter.setPen(widget->palette().color(QPalette::Text));
+                            painter.drawText(pixels.rect(), Qt::AlignCenter | Qt::TextSingleLine, visibleAlt);
+                        }
+                    }
+                    document->addResource(QTextDocument::ImageResource, url, pixels);
+                    struct Edit { int position; QTextImageFormat format; }; QVector<Edit> edits;
+                    for (QTextBlock block = document->begin(); block.isValid(); block = block.next())
+                        for (auto it = block.begin(); !it.atEnd(); ++it) {
+                            const QTextFragment fragment = it.fragment(); if (!fragment.isValid() || !fragment.charFormat().isImageFormat()) continue;
+                            QTextImageFormat format = fragment.charFormat().toImageFormat(); if (QUrl(format.name()) != url) continue;
+                            SemanticHtml::imageDimensions(format, image, document, ready ? asset.intrinsic : QSizeF());
+                            if (fallbackSize.isValid()) { format.setWidth(fallbackSize.width()); format.setHeight(fallbackSize.height()); }
+                            format.setProperty(SemanticHtml::inlineImageStateProperty, int(state));
+                            format.setProperty(SemanticHtml::inlineImageStatusProperty, message);
+                            edits.append({fragment.position(), format});
+                        }
+                    for (const auto &edit : edits) { QTextCursor cursor(document); cursor.setPosition(edit.position); cursor.setPosition(edit.position + 1, QTextCursor::KeepAnchor); cursor.setCharFormat(edit.format); }
+                    QStringList descriptions;
+                    for (QTextBlock block = document->begin(); block.isValid(); block = block.next())
+                        for (auto it = block.begin(); !it.atEnd(); ++it) {
+                            const auto format = it.fragment().charFormat(); if (!format.isImageFormat()) continue;
+                            const QString alt = format.stringProperty(QTextFormat::ImageAltText); if (!alt.isEmpty()) descriptions.append(alt);
+                            const QString status = format.stringProperty(SemanticHtml::inlineImageStatusProperty); if (!status.isEmpty()) descriptions.append(status);
+                        }
+                    descriptions.removeDuplicates(); widget->setAccessibleDescription(descriptions.join(QStringLiteral(" · ")));
+                    document->markContentsDirty(0, document->characterCount()); widget->viewport()->update();
+                };
+                const auto asset = media_->requestInlineImage(image.value(QStringLiteral("file")).toString(), document, url.toString(), apply);
+                apply(asset);
+            });
+            QImage pending(1, 1, QImage::Format_ARGB32_Premultiplied); pending.fill(Qt::transparent); return pending;
+        });
+    }
+}
+
 void MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const std::optional<QString> &fragment) {
+    ++inlineImageGeneration_;
     QJsonParseError parseError{};
     const QJsonDocument document = QJsonDocument::fromJson(bytes, &parseError);
     if (parseError.error != QJsonParseError::NoError || !document.isObject())
@@ -1661,7 +1781,7 @@ void MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const st
     sections_->addItem(QStringLiteral("Jump to section"), -1);
     bool ownerLanguageListed = false;
     for (const auto &heading : headingDestinations(currentEntry_)) {
-        if (heading.cellLocal || heading.title.isEmpty()) continue;
+        if (heading.cellLocal || heading.section < 0 || heading.title.isEmpty()) continue;
         const QJsonObject section = sections[heading.section].toObject();
         const bool ownerLanguage = heading.block < 0 && kind == QStringLiteral("language") &&
             section.value(QStringLiteral("level")).toInt() == 2 && heading.title == language;
@@ -1709,7 +1829,8 @@ QVector<QPair<QString, QString>> MainWindow::readingExplanations() const {
             for (auto it = block.begin(); !it.atEnd(); ++it) {
                 const QTextFragment fragment = it.fragment();
                 if (!fragment.isValid()) continue;
-                const QString explanation = fragment.charFormat().toolTip();
+                const auto format = fragment.charFormat();
+                const QString explanation = format.isImageFormat() ? format.stringProperty(SemanticHtml::inlineImageExplanationProperty) : format.toolTip();
                 if (explanation.isEmpty()) { previousEnd = -1; continue; }
                 if (!result.isEmpty() && previousEnd == fragment.position() && result.last().second == explanation)
                     result.last().first += fragment.text();
@@ -1765,6 +1886,7 @@ void MainWindow::showAbbreviations() {
 void MainWindow::refreshReading() {
     if (currentEntry_.isEmpty()) return;
     const int scroll = reading_->verticalScrollBar()->value();
+    ++readingComposition_;
     SemanticHtml::setHtml(reading_, entryHtml(currentEntry_));
     reading_->verticalScrollBar()->setValue(scroll);
 }
@@ -1844,7 +1966,7 @@ void MainWindow::jumpToFragment(const QString &fragment) {
         }
     }
     if (!destination) return;
-    jumpToSection(destination->section);
+    if (destination->section >= 0) jumpToSection(destination->section);
     if (destination->block >= 0)
         reading_->scrollToAnchor(destination->destination.isEmpty()
             ? QStringLiteral("block-%1-%2").arg(destination->section).arg(destination->block) : destination->destination);
@@ -1980,17 +2102,22 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             if (normalBody && (!numericScale.isDouble() || !std::isfinite(numericScale.toDouble()) || numericScale.toDouble() < 0))
                 throw DictApiError("normal-body font-scale basis requires a numeric scale");
             const QString kind = span.value(QStringLiteral("kind")).toString();
+            const QJsonValue image = span.value(QStringLiteral("image"));
+            const bool inlineImage = SemanticHtml::present(image);
+            if (inlineImage && (kind == QStringLiteral("line_break") || !span.value(QStringLiteral("text")).toString().isEmpty() || !span.value(QStringLiteral("trail")).toString().isEmpty()))
+                throw DictApiError("invalid inline image occurrence");
             if (kind == QStringLiteral("line_break")) {
                 out += QStringLiteral("<br>");
                 if (span.value(QStringLiteral("trail")).toString().isEmpty()) continue;
             }
-            const bool zeroScale = span.value(QStringLiteral("font_scale")).isDouble()
+            const bool zeroScale = !inlineImage && span.value(QStringLiteral("font_scale")).isDouble()
                 && span.value(QStringLiteral("font_scale")).toDouble() == 0;
             const QString classes = span.value(QStringLiteral("classes")).toString();
             QString text = ((kind == QStringLiteral("line_break") ? QString() : span.value(QStringLiteral("text")).toString())
                 + span.value(QStringLiteral("trail")).toString()).toHtmlEscaped();
+            if (inlineImage) text = SemanticHtml::inlineImageHtml(image);
             const QString explanation = span.value(QStringLiteral("explanation")).toString();
-            if (numericScale.isDouble() && numericScale.toDouble() >= 0 && (numericScale.toDouble() != 1 || normalBody))
+            if (!inlineImage && numericScale.isDouble() && numericScale.toDouble() >= 0 && (numericScale.toDouble() != 1 || normalBody))
                 text = SemanticHtml::scaledText(text, numericScale.toDouble(), explanation,
                     normalBody ? SemanticHtml::Basis::NormalBody : SemanticHtml::Basis::Context, readingPointSize_,
                     span.value(QStringLiteral("small")).toBool(), span.value(QStringLiteral("superscript")).toBool(),
@@ -2035,8 +2162,10 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             if (kind == QStringLiteral("template"))
                 throw DictApiError("compiled dictionary contains an uncompiled template span");
             if (kind == QStringLiteral("link")) {
-                const QByteArray encoded = QUrl::toPercentEncoding(span.value(QStringLiteral("target")).toString());
-                text = QStringLiteral("<a href='dict:%1'%2>%3</a>").arg(QString::fromLatin1(encoded),
+                const QString target = span.value(QStringLiteral("target")).toString();
+                const QByteArray encoded = QUrl::toPercentEncoding(target);
+                const QString scheme = inlineImage && target.startsWith(QStringLiteral("File:")) ? QStringLiteral("media-source") : QStringLiteral("dict");
+                text = QStringLiteral("<a href='%1:%2'%3>%4</a>").arg(scheme, QString::fromLatin1(encoded),
                     zeroScale ? QStringLiteral(" style='text-decoration:none'") : QString(), text);
             } else if (kind == QStringLiteral("external_link")) {
                 const QString target = span.value(QStringLiteral("target")).toString();
@@ -2065,7 +2194,7 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                     throw DictApiError("invalid semantic font scale");
                 // Qt ignores percentage/em sizes. Keep explicit points outside
                 // small/sup/sub so their inherited reductions are applied once.
-                if (scale > 0 && (scale != 1 || normalBody))
+                if (!inlineImage && scale > 0 && (scale != 1 || normalBody))
                     text = QStringLiteral("<span style=\"font-size:%1pt\">%2</span>")
                         .arg(SemanticHtml::boundedFontPoints(scaledBase, scale, SemanticHtml::maximumFontPoints()), 0, 'g', 17).arg(text);
             }
@@ -2224,8 +2353,11 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             .arg((!geometry.value(QStringLiteral("cell_spacing")).isUndefined() && !geometry.value(QStringLiteral("cell_spacing")).isNull()) ? QStringLiteral("separate") : QStringLiteral("collapse"))
             .arg(tableDepth > 1 ? 0 : 8).arg(indent);
     }
+    const QJsonObject tableStyle = SemanticHtml::typedStyle(table.value(QStringLiteral("style")), {"background", "border", "collapse", "margins"});
+    const QString tableBackground = SemanticHtml::present(tableStyle.value(QStringLiteral("background")))
+        ? SemanticHtml::styleColor(tableStyle.value(QStringLiteral("background"))).name() : inheritedBackground;
     const QJsonArray caption = table.value(QStringLiteral("caption")).toArray();
-    if (!caption.isEmpty()) out += QStringLiteral("<caption>%1</caption>").arg(spansHtml(caption, 0, {}, inheritedBackground));
+    if (!caption.isEmpty()) out += QStringLiteral("<caption>%1</caption>").arg(spansHtml(caption, 0, {}, tableBackground));
     qsizetype rowIndex = 0;
     for (const QJsonValue &rowValue : table.value(QStringLiteral("rows")).toArray()) {
         out += QStringLiteral("<tr>");
@@ -2242,10 +2374,18 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             for (const QChar digit : background.mid(1))
                 canonicalBackground = canonicalBackground && ((digit >= QChar('0') && digit <= QChar('9'))
                     || (digit >= QChar('a') && digit <= QChar('f')));
-            const QString effectiveBackground = canonicalBackground ? background : inheritedBackground;
+            const QString effectiveBackground = canonicalBackground ? background : tableBackground;
             if (!effectiveBackground.isEmpty())
                 style += QStringLiteral(";background-color:") + effectiveBackground
                     + QStringLiteral(";color:") + backgroundInk(effectiveBackground);
+            const QJsonObject cellStyle = SemanticHtml::typedStyle(cell.value(QStringLiteral("style")), {"border", "padding", "text_align"});
+            if (SemanticHtml::present(cellStyle.value(QStringLiteral("text_align")))) {
+                const QString alignment = cellStyle.value(QStringLiteral("text_align")).toString();
+                if (alignment != QStringLiteral("left") && alignment != QStringLiteral("center") && alignment != QStringLiteral("right"))
+                    throw DictApiError("invalid cell alignment");
+                // Safe inherited enum; exact qreal metrics are applied after import.
+                style += QStringLiteral(";text-align:") + alignment;
+            }
             const QJsonArray cellSpans = cell.value(QStringLiteral("spans")).toArray();
             const QString cellLocation = location.isEmpty() ? QString() : location + QStringLiteral("-row-%1-cell-%2").arg(rowIndex).arg(cellIndex);
             const QJsonValue child = cell.value(QStringLiteral("nested_table"));
@@ -2273,7 +2413,7 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
         ++rowIndex;
     }
     out += QStringLiteral("</table>");
-    return out;
+    return SemanticHtml::tableStyleMarker(table, readingPointSize_, indent) + out;
 }
 
 QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location) const {
@@ -2479,6 +2619,25 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
             metadataReferencesSection = int(i);
         }
     }
+    const auto collectTableMedia = [&](auto &&visit, const QJsonObject &nested, int tableDepth) -> void {
+        if (tableDepth > 16) throw DictApiError("nested table depth exceeds presentation limit");
+        collectEmbeddedMedia(nested.value(QStringLiteral("caption")).toArray());
+        for (const QJsonValue &row : nested.value(QStringLiteral("rows")).toArray())
+            for (const QJsonValue &value : row.toObject().value(QStringLiteral("cells")).toArray()) {
+                const QJsonObject cell = value.toObject();
+                const QJsonValue contents = cell.value(QStringLiteral("blocks"));
+                if (!contents.isUndefined() && !contents.isNull()) {
+                    for (const QJsonValue &value : contents.toArray()) {
+                        const QJsonObject block = value.toObject();
+                        if (block.value(QStringLiteral("table")).isObject()) visit(visit, block.value(QStringLiteral("table")).toObject(), tableDepth + 1);
+                        else collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
+                    }
+                } else {
+                    collectEmbeddedMedia(cell.value(QStringLiteral("spans")).toArray());
+                    if (cell.value(QStringLiteral("nested_table")).isObject()) visit(visit, cell.value(QStringLiteral("nested_table")).toObject(), tableDepth + 1);
+                }
+            }
+    };
     int index = -1;
     for (const QJsonValue &sectionValue : sections) {
         ++index;
@@ -2517,25 +2676,6 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
                 const QJsonValue table = block.value(QStringLiteral("table"));
                 if (table.isObject()) {
                     const QJsonObject object = table.toObject();
-                    const auto collectTableMedia = [&](auto &&visit, const QJsonObject &nested, int tableDepth) -> void {
-                        if (tableDepth > 16) throw DictApiError("nested table depth exceeds presentation limit");
-                        collectEmbeddedMedia(nested.value(QStringLiteral("caption")).toArray());
-                        for (const QJsonValue &row : nested.value(QStringLiteral("rows")).toArray())
-                            for (const QJsonValue &value : row.toObject().value(QStringLiteral("cells")).toArray()) {
-                                const QJsonObject cell = value.toObject();
-                                const QJsonValue contents = cell.value(QStringLiteral("blocks"));
-                                if (!contents.isUndefined() && !contents.isNull()) {
-                                    for (const QJsonValue &value : contents.toArray()) {
-                                        const QJsonObject block = value.toObject();
-                                        if (block.value(QStringLiteral("table")).isObject()) visit(visit, block.value(QStringLiteral("table")).toObject(), tableDepth + 1);
-                                        else collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
-                                    }
-                                } else {
-                                    collectEmbeddedMedia(cell.value(QStringLiteral("spans")).toArray());
-                                    if (cell.value(QStringLiteral("nested_table")).isObject()) visit(visit, cell.value(QStringLiteral("nested_table")).toObject(), tableDepth + 1);
-                                }
-                            }
-                    };
                     collectTableMedia(collectTableMedia, object, 1);
                 } else collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
             }
@@ -2546,9 +2686,11 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
         if (metadataReferencesSection >= 0)
             out += QStringLiteral("<a name='section-%1'></a>").arg(metadataReferencesSection);
         out += QStringLiteral("<h2>References</h2>");
-        for (const QJsonValue &reference : references) {
-            const QJsonObject ref = reference.toObject();
-            collectEmbeddedMedia(ref.value(QStringLiteral("spans")).toArray());
+        for (qsizetype referenceIndex = 0; referenceIndex < references.size(); ++referenceIndex) {
+            const QJsonObject ref = references[referenceIndex].toObject();
+            const QJsonValue contents = referenceBlocks(ref);
+            if (contents.isUndefined() || contents.isNull())
+                collectEmbeddedMedia(ref.value(QStringLiteral("spans")).toArray());
             const QString referenceKind = ref.value(QStringLiteral("kind")).toString(QStringLiteral("note"));
             QString prefix;
             if (referenceKind == QStringLiteral("note")) {
@@ -2560,6 +2702,22 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
                     .arg(ref.value(QStringLiteral("number")).toInteger()).arg(label.toHtmlEscaped());
             } else if (referenceKind != QStringLiteral("fragment")) {
                 throw DictApiError("invalid compiled reference kind");
+            }
+            if (!contents.isUndefined() && !contents.isNull()) {
+                // Blocks own their boundaries. Never put a table inside a paragraph.
+                out += QStringLiteral("<div>%1").arg(prefix);
+                const QJsonArray blocks = contents.toArray();
+                for (qsizetype blockIndex = 0; blockIndex < blocks.size(); ++blockIndex) {
+                    const QJsonObject block = blocks[blockIndex].toObject();
+                    if (block.value(QStringLiteral("table")).isObject())
+                        collectTableMedia(collectTableMedia, block.value(QStringLiteral("table")).toObject(), 1);
+                    else if (block.value(QStringLiteral("kind")).toString() != QStringLiteral("blank") &&
+                             block.value(QStringLiteral("kind")).toString() != QStringLiteral("rule"))
+                        collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
+                    out += blockHtml(block, {}, 1, referenceBlockLocation(ref, referenceIndex, blockIndex));
+                }
+                out += QStringLiteral("</div>");
+                continue;
             }
             const QJsonArray spans = ref.value(QStringLiteral("spans")).toArray();
             if (hasPoemSpans(spans))
@@ -2642,6 +2800,46 @@ QString MainWindow::clueFor(const QJsonObject &entry) const {
             if (end == 0) return fallback;
             fallback += separator + text.left(end);
             if (end < text.size()) return fallback;
+        }
+    }
+    if (fallback.isEmpty()) {
+        const auto blockText = [&](auto &&visit, const QJsonObject &block, int depth) -> QString {
+            QStringList pieces;
+            const auto append = [&](const QString &text) { if (!text.isEmpty()) pieces.append(text); };
+            if (block.value(QStringLiteral("table")).isObject()) {
+                if (depth > 16) throw DictApiError("nested table depth exceeds presentation limit");
+                const auto tableText = [&](auto &&tables, const QJsonObject &table, int tableDepth) -> void {
+                    if (tableDepth > 16) throw DictApiError("nested table depth exceeds presentation limit");
+                    append(textFor(table.value(QStringLiteral("caption")).toArray()));
+                    for (const QJsonValue &row : table.value(QStringLiteral("rows")).toArray())
+                        for (const QJsonValue &cellValue : row.toObject().value(QStringLiteral("cells")).toArray()) {
+                            const QJsonObject cell = cellValue.toObject();
+                            const QJsonValue children = cell.value(QStringLiteral("blocks"));
+                            if (!children.isUndefined() && !children.isNull()) {
+                                for (const QJsonValue &child : children.toArray()) append(visit(visit, child.toObject(), tableDepth + 1));
+                            } else {
+                                append(textFor(cell.value(QStringLiteral("spans")).toArray()));
+                                if (cell.value(QStringLiteral("nested_table")).isObject()) tables(tables, cell.value(QStringLiteral("nested_table")).toObject(), tableDepth + 1);
+                            }
+                        }
+                };
+                tableText(tableText, block.value(QStringLiteral("table")).toObject(), depth);
+            } else append(textFor(block.value(QStringLiteral("spans")).toArray()));
+            return pieces.join(QStringLiteral(" · "));
+        };
+        for (const QJsonValue &reference : entry.value(QStringLiteral("references")).toArray()) {
+            const QJsonValue contents = referenceBlocks(reference.toObject());
+            if (contents.isUndefined() || contents.isNull()) continue;
+            for (const QJsonValue &block : contents.toArray()) {
+                const QString text = blockText(blockText, block.toObject(), 1);
+                if (text.isEmpty()) continue;
+                const QString separator = fallback.isEmpty() ? QString() : QStringLiteral(" · ");
+                const qsizetype available = 420 - fallback.size() - separator.size();
+                if (available <= 0) break;
+                qsizetype end = std::min(text.size(), available);
+                if (end < text.size() && end > 0 && text[end - 1].isHighSurrogate() && text[end].isLowSurrogate()) --end;
+                fallback += separator + text.left(end);
+            }
         }
     }
     return fallback.isEmpty() ? QStringLiteral("Definition unavailable in this entry.") : fallback;

@@ -32,6 +32,7 @@
 #include <QTest>
 #include <QThread>
 #include <QTimer>
+#include <QUrlQuery>
 #include <algorithm>
 #include <cstring>
 
@@ -112,6 +113,7 @@ QByteArray metadata(const QString &url = QStringLiteral("https://upload.wikimedi
     };
     QJsonObject info{{QStringLiteral("url"), url},
         {QStringLiteral("descriptionurl"), QStringLiteral("https://commons.wikimedia.org/wiki/File:Cat.jpg")},
+        {QStringLiteral("width"), 480}, {QStringLiteral("height"), 320}, {QStringLiteral("mime"), "image/png"},
         {QStringLiteral("extmetadata"), credit}};
     if (!thumbnail.isEmpty()) info.insert(QStringLiteral("thumburl"), thumbnail);
     const QJsonObject page{{QStringLiteral("imageinfo"), QJsonArray{info}}};
@@ -164,6 +166,93 @@ private slots:
     void init() {
         QSettings().clear();
         QDir(cacheRoot()).removeRecursively();
+    }
+
+    void inlineImagesReusePassiveCachePermissionsAndFailureLifecycle() {
+        using State = MediaPanel::InlineImageState;
+        Network network; network.responses = {{metadata()}, {picture()}};
+        MediaPanel panel(nullptr, &network); panel.setEntry(entry()); panel.show();
+        QObject owner; State last = State::Loading; QImage decoded; int calls = 0;
+        const auto changed = [&](const MediaPanel::InlineImageAsset &asset) { last = asset.state; decoded = asset.image; ++calls; };
+        QCOMPARE(panel.requestInlineImage("Cat.jpg", &owner, "document-image", changed).state, State::Disabled);
+        QCOMPARE(network.urls.size(), 0);
+        enableImages(panel);
+        QTRY_COMPARE(last, State::Ready);
+        QVERIFY(!decoded.isNull()); QVERIFY(qAbs(qreal(decoded.width()) / decoded.height() - 1.5) < 0.001);
+        QCOMPARE(network.urls.size(), 2);
+        QCOMPARE(panel.requestInlineImage("Cat.jpg", &owner, "second-occurrence", changed).state, State::Ready);
+        QCOMPARE(network.urls.size(), 2);
+        const auto buttons = panel.findChildren<QPushButton *>();
+        QVERIFY(std::any_of(buttons.begin(), buttons.end(), [](const QPushButton *button) { return button->text() == QStringLiteral("Source and licence") && !button->isHidden(); }));
+        enableImages(panel); // Disable: inline consumers get the same permission boundary.
+        QCOMPARE(last, State::Disabled); QVERIFY(decoded.isNull());
+        enableImages(panel); QCOMPARE(last, State::Ready); QCOMPARE(network.urls.size(), 2);
+        QVERIFY(calls > 0);
+        const int before = calls;
+        panel.setEntry({}); QTest::qWait(5); QCOMPARE(calls, before);
+        QCOMPARE(panel.requestInlineImage("Missing.svg", &owner, "missing", changed).state, State::Error);
+        QCOMPARE(network.urls.size(), 2);
+        panel.findChild<QPushButton *>("mediaClearCache")->click();
+        panel.setEntry(entry("missing")); network.responses = {{"{}"}};
+        panel.requestInlineImage("Cat.jpg", &owner, "failed-resource", changed);
+        QTRY_COMPARE(last, State::Error); QVERIFY(decoded.isNull());
+        QVERIFY(!status(panel)->text().isEmpty());
+    }
+
+    void typedInlineCanonicalColonFileIsNotLegacyPrefixStripped() {
+        using State = MediaPanel::InlineImageState;
+        Network network; network.responses = {{metadata()}, {picture()}};
+        MediaPanel panel(nullptr, &network);
+        QJsonObject value = entry();
+        value.insert("media", QJsonArray{QJsonObject{{"kind", "image"}, {"file", "File:Opaque.svg"}}});
+        value.insert("preamble_spans", QJsonArray{QJsonObject{{"kind", "link"}, {"text", ""}, {"target", "File:File:Opaque.svg"},
+            {"image", QJsonObject{{"file", "File:Opaque.svg"}, {"width_px", 15}}}}});
+        panel.setEntry(value, QStringLiteral("he.wiktionary.org")); panel.show();
+        const QUrl expected("https://he.wiktionary.org/wiki/File%3AFile%3AOpaque.svg");
+        QCOMPARE(panel.inlineImageSource("File:File:Opaque.svg"), expected);
+        enableImages(panel);
+        QObject owner; State last = State::Loading;
+        panel.requestInlineImage("File:Opaque.svg", &owner, "opaque", [&](const MediaPanel::InlineImageAsset &asset) { last = asset.state; });
+        QTRY_COMPARE(last, State::Ready);
+        QCOMPARE(QUrlQuery(network.urls.first()).queryItemValue("titles"), QStringLiteral("File:File:Opaque.svg"));
+        QCOMPARE(panel.inlineImageSource("File:File:Opaque.svg"), expected);
+        panel.setEntry(value, {}); QVERIFY(panel.inlineImageSource("File:File:Opaque.svg").isEmpty());
+        QCOMPARE(panel.requestInlineImage("Opaque.svg", &owner, "wrong-alias", [](const auto &) {}).state, State::Error);
+    }
+
+    void inlineImageQueueBoundsAndAdvancesAcrossCancelAndFailure() {
+        using State = MediaPanel::InlineImageState;
+        Network network;
+        for (int i = 0; i < 4; ++i) network.responses.append({"{}", -1, 1000});
+        MediaPanel panel(nullptr, &network); panel.show();
+        const auto many = [](const QString &prefix) {
+            QJsonArray media, spans;
+            for (int i = 0; i < 5; ++i) {
+                const QString file = prefix + QString::number(i) + ".png";
+                media.append(QJsonObject{{"kind", "image"}, {"file", file}});
+                spans.append(QJsonObject{{"kind", "text"}, {"text", ""}, {"image", QJsonObject{{"file", file}, {"width_px", 15}}}});
+            }
+            return QJsonObject{{"title", prefix}, {"media", media}, {"preamble_spans", spans}};
+        };
+        panel.setEntry(many("Cancel")); enableImages(panel);
+        QObject owner; int oldCalls = 0;
+        for (int i = 0; i < 5; ++i) panel.requestInlineImage("Cancel" + QString::number(i) + ".png", &owner, QString::number(i), [&](const auto &) { ++oldCalls; });
+        QCOMPARE(network.urls.size(), 4); // Fifth is queued, not another reply/payload.
+        const int before = oldCalls;
+        panel.setEntry(entry("replacement")); QCOMPARE(network.cancelled, 4);
+        network.responses = {{metadata()}, {picture()}};
+        State last = State::Loading;
+        panel.requestInlineImage("Cat.jpg", &owner, "replacement", [&](const auto &asset) { last = asset.state; });
+        QTRY_COMPARE(last, State::Ready); QCOMPARE(network.urls.size(), 6);
+        QCOMPARE(oldCalls, before);
+        QCOMPARE(loadButton(panel)->text(), QStringLiteral("Reload image"));
+        panel.setEntry(many("Fail")); network.responses.clear();
+        for (int i = 0; i < 5; ++i) network.responses.append({"{}", -1, 1});
+        QVector<State> states(5, State::Loading); const int previousRequests = network.urls.size();
+        for (int i = 0; i < 5; ++i) panel.requestInlineImage("Fail" + QString::number(i) + ".png", &owner, QString::number(i), [&, i](const auto &asset) { states[i] = asset.state; });
+        QCOMPARE(network.urls.size() - previousRequests, 4);
+        QTRY_VERIFY(std::all_of(states.begin(), states.end(), [](State state) { return state == State::Error; }));
+        QCOMPARE(network.urls.size() - previousRequests, 5);
     }
 
     void initialEmptyMediaRemainsReachableInShortPane() {

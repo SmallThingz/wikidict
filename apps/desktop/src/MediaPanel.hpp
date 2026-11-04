@@ -1,6 +1,9 @@
 #pragma once
 
 #include <QJsonObject>
+#include <QImage>
+#include <QUrl>
+#include <functional>
 #include <QWidget>
 #include <memory>
 
@@ -15,6 +18,14 @@ public:
     void setEntry(const QJsonObject &entry, const QString &sourceHost = {});
     void sayWord(const QString &title, const QString &languageCode);
     void stopPlayback();
+
+    enum class InlineImageState { Disabled, Loading, Ready, Error };
+    struct InlineImageAsset { InlineImageState state; QImage image; QString message; QSizeF intrinsic; QString originalMime; };
+    InlineImageAsset requestInlineImage(const QString &file, QObject *owner, const QString &key,
+        std::function<void(const InlineImageAsset &)> changed);
+    QUrl inlineImageSource(const QString &compiledTarget) const;
+    bool openInlineImageSource(const QString &compiledTarget);
+
 
 private:
     struct Impl;
