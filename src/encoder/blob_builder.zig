@@ -1337,15 +1337,29 @@ fn imageLanguageLabel(codes: LanguageCodes, section: language_source.Section) ?[
     const namespaces = codes.namespace_catalog orelse return null;
     const file = namespaces.ofTitle(target);
     if (file.id != 6 or @import("presentation_media.zig").referencedKind(file.text) != .image) return null;
-    // Only the normal width option is needed for this proof. A caption, link,
-    // alt text, frame or arbitrary parameter cannot supply ownership evidence.
+    // Width, border and middle vertical alignment only decorate the file.
+    // Captions, alt/link overrides, horizontal placement and arbitrary
+    // parameters cannot supply language evidence.
     if (pipe < body.len) {
-        const option = std.mem.trim(u8, body[pipe + 1 ..], " \t");
-        if (std.mem.indexOfScalar(u8, option, '|') != null) return null;
-        const options = @import("namespace_registry").image_options;
-        const matched = if (codes.image_options) |registry| registry.match(option, .image) else options.matchEnglish(option, .image);
-        const width = matched orelse return null;
-        if (!std.mem.eql(u8, width.id, "img_width")) return null;
+        var width = false;
+        var border = false;
+        var middle = false;
+        var parts = std.mem.splitScalar(u8, body[pipe + 1 ..], '|');
+        while (parts.next()) |part| {
+            const option = std.mem.trim(u8, part, " \t");
+            const options = @import("namespace_registry").image_options;
+            const matched = (if (codes.image_options) |registry| registry.match(option, .image) else options.matchEnglish(option, .image)) orelse return null;
+            if (std.mem.eql(u8, matched.id, "img_width")) {
+                if (width) return null;
+                width = true;
+            } else if (std.mem.eql(u8, matched.id, "img_border")) {
+                if (border) return null;
+                border = true;
+            } else if (std.mem.eql(u8, matched.id, "img_middle")) {
+                if (middle) return null;
+                middle = true;
+            } else return null;
+        }
     }
     if (pair.end >= heading.len or (heading[pair.end] != ' ' and heading[pair.end] != '\t')) return null;
     const label = std.mem.trim(u8, heading[pair.end..], " \t");
@@ -12233,4 +12247,84 @@ test "retained TL abaka image headings preserve seven independently proved bodie
         }
     }
     try std.testing.expectEqual(ImageHeadingAbakaExpanded.len, consumed);
+}
+
+test "retained Danish POS labels remain support vocabulary rather than unknown language peer evidence" {
+    // The existing unknown-peer recovery veto consumes the same POS authority.
+    // These labels cannot create an owner merely by appearing beside one.
+    for ([_][]const u8{ "Substantiv", "Verbum", "Interjektion", "Mængdetal" }) |title|
+        try std.testing.expect(knownOuterSupportOrPos(title));
+    for ([_][]const u8{ "Substantiv note", "Verbum note", "Interjektioner", "Mængdetal note" }) |title|
+        try std.testing.expect(!knownOuterSupportOrPos(title));
+}
+
+test "neutral image border and width preserve exact trusted language proof and option snapshot authority" {
+    const ns = @import("namespace_registry");
+    var namespaces = try ns.Registry.init(std.testing.allocator, ns.english_test_fixture); defer namespaces.deinit();
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = ImageHeadingTestLanguages.get, .resolve_fn = ImageHeadingTestLanguages.weak, .trusted_fn = ImageHeadingTestLanguages.resolve, .strong_fn = ImageHeadingTestLanguages.strong };
+    inline for (.{ "border|60px", "60px|border", "border" }) |options| {
+        const source = "==[[Image:Flag.svg|" ++ options ++ "]] Tagalog==\n# body\n";
+        const section = ImageHeadingTestLanguages.section(source);
+        try std.testing.expectEqualStrings("Tagalog", imageLanguageLabel(codes, section).?);
+        try std.testing.expectEqualStrings("tl", resolveSection(codes, section).?.code);
+        try std.testing.expectEqualStrings("tl", boundaryLanguage(codes, section).?.code);
+        try std.testing.expectEqualStrings(source, section.source);
+    }
+    const snapshot = "# wikidict-image-options-v1\n# wiki\ttestwiktionary\n# dump-date\t20261001\n# content-language\ttest\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n# behavior-switches-sha256\t0000000000000000000000000000000000000000000000000000000000000000\nimg_width\t1\t\"$1lapad\"\nimg_border\t0\t\"hangganan\"\n";
+    var options = try ns.image_options.Registry.init(std.testing.allocator, snapshot, "testwiktionary", "20261001", "test", @splat(0), @splat(0)); defer options.deinit();
+    var localized = codes; localized.image_options = &options;
+    try std.testing.expect(resolveSection(localized, ImageHeadingTestLanguages.section("==[[Image:Flag.svg|hangganan|25lapad]] Tagalog==\n# body\n")) != null);
+    try std.testing.expect(imageLanguageLabel(localized, ImageHeadingTestLanguages.section("==[[Image:Flag.svg|border|25lapad]] Tagalog==\n# body\n")) == null);
+    try std.testing.expect(imageLanguageLabel(localized, ImageHeadingTestLanguages.section("==[[Image:Flag.svg|hangganan|25px]] Tagalog==\n# body\n")) == null);
+}
+
+test "border decoration cannot promote captions conflicting options unknown support or protected nested headings" {
+    const ns = @import("namespace_registry");
+    var namespaces = try ns.Registry.init(std.testing.allocator, ns.english_test_fixture); defer namespaces.deinit();
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = ImageHeadingTestLanguages.get, .resolve_fn = ImageHeadingTestLanguages.weak, .trusted_fn = ImageHeadingTestLanguages.resolve, .strong_fn = ImageHeadingTestLanguages.strong };
+    inline for (.{ "border|border", "60px|30px|border", "border|", "border|caption", "border|alt=Tagalog", "border|link=Tagalog", "border|left", "border|thumb", "border|unknown" }) |options| {
+        try std.testing.expect(imageLanguageLabel(codes, ImageHeadingTestLanguages.section("==[[File:Flag.svg|" ++ options ++ "]] Tagalog==\n# body\n")) == null);
+    }
+    inline for (.{ "==[[:File:Flag.svg|border|60px]] Tagalog==\n# body\n", "==[[Other:Flag.svg|border|60px]] Tagalog==\n# body\n", "==<nowiki>[[File:Flag.svg|border|60px]]</nowiki> Tagalog==\n# body\n", "===[[File:Flag.svg|border|60px]] Tagalog===\n# body\n" }) |source| {
+        try std.testing.expect(imageLanguageLabel(codes, ImageHeadingTestLanguages.section(source)) == null);
+    }
+    inline for (.{ "Regional vocabulary", "Unknown", "Weak alias" }) |label| {
+        const section = ImageHeadingTestLanguages.section("==[[File:Flag.svg|border|60px]] " ++ label ++ "==\n# body\n");
+        try std.testing.expect(!hasExplicitLanguageDeclaration(codes, section));
+        try std.testing.expect(resolveSection(codes, section) == null);
+        try std.testing.expect(boundaryLanguage(codes, section) == null);
+    }
+    const context: LanguageMarkers = .{ .codes = &codes };
+    const source = "==[[File:Flag.svg|border|60px]] Tagalog==\n# first\n===[[File:Flag.svg|border|60px]] Kapampangan===\n# nested\n<nowiki>\n==[[File:Flag.svg|border|60px]] Leton==\n</nowiki>\n{{hidden|\n==[[File:Flag.svg|border|60px]] Litwano==\n}}\n==[[Image:Flag.svg|60px|border]] Kapampangan==\n# last\n";
+    var iterator = languageSections(source, &context);
+    const first = iterator.next().?; const second = iterator.next().?;
+    try std.testing.expectEqualStrings("tl", resolveSection(codes, first).?.code);
+    try std.testing.expect(std.mem.indexOf(u8, first.source, "nested") != null);
+    try std.testing.expectEqualStrings("pam", resolveSection(codes, second).?.code);
+    try std.testing.expect(iterator.next() == null);
+}
+
+test "registered middle alignment is neutral only once and cannot authorize horizontal placement or labels" {
+    const ns = @import("namespace_registry");
+    var namespaces = try ns.Registry.init(std.testing.allocator, ns.english_test_fixture); defer namespaces.deinit();
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = ImageHeadingTestLanguages.get, .resolve_fn = ImageHeadingTestLanguages.weak, .trusted_fn = ImageHeadingTestLanguages.resolve, .strong_fn = ImageHeadingTestLanguages.strong };
+    inline for (.{ "border|75px|middle", "middle|75px|border", "middle" }) |options| {
+        const section = ImageHeadingTestLanguages.section("==[[Image:Flag.svg|" ++ options ++ "]] Tagalog==\n# body\n");
+        try std.testing.expectEqualStrings("tl", resolveSection(codes, section).?.code);
+        try std.testing.expectEqualStrings("tl", boundaryLanguage(codes, section).?.code);
+    }
+    inline for (.{ "middle|middle", "middle|border|border", "middle|75px|60px", "middle|left", "middle|right", "middle|center", "middle|none", "middle|alt=Tagalog", "middle|link=Tagalog", "middle|caption", "middle|unknown", "middle|" }) |options| {
+        try std.testing.expect(imageLanguageLabel(codes, ImageHeadingTestLanguages.section("==[[Image:Flag.svg|" ++ options ++ "]] Tagalog==\n# body\n")) == null);
+    }
+    const unknown = ImageHeadingTestLanguages.section("==[[Image:Flag.svg|border|75px|middle]] Regional vocabulary==\n# body\n");
+    try std.testing.expect(!hasExplicitLanguageDeclaration(codes, unknown));
+    try std.testing.expect(resolveSection(codes, unknown) == null);
+    try std.testing.expect(boundaryLanguage(codes, unknown) == null);
+    try std.testing.expect(imageLanguageLabel(codes, ImageHeadingTestLanguages.section("===[[Image:Flag.svg|border|75px|middle]] Tagalog===\n# body\n")) == null);
+    try std.testing.expect(imageLanguageLabel(codes, ImageHeadingTestLanguages.section("==<nowiki>[[Image:Flag.svg|border|75px|middle]]</nowiki> Tagalog==\n# body\n")) == null);
+    const snapshot = "# wikidict-image-options-v1\n# wiki\ttestwiktionary\n# dump-date\t20261001\n# content-language\ttest\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n# behavior-switches-sha256\t0000000000000000000000000000000000000000000000000000000000000000\nimg_middle\t1\t\"vertical-middle\"\n";
+    var options = try ns.image_options.Registry.init(std.testing.allocator, snapshot, "testwiktionary", "20261001", "test", @splat(0), @splat(0)); defer options.deinit();
+    var localized = codes; localized.image_options = &options;
+    try std.testing.expect(resolveSection(localized, ImageHeadingTestLanguages.section("==[[File:Flag.svg|vertical-middle]] Tagalog==\n# body\n")) != null);
+    try std.testing.expect(imageLanguageLabel(localized, ImageHeadingTestLanguages.section("==[[File:Flag.svg|middle]] Tagalog==\n# body\n")) == null);
 }

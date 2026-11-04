@@ -7686,3 +7686,251 @@ test "complete retained MR cross wrapper table preserves body grid styles action
     const target = [_]compiler.Span{.{ .kind = .link, .text = "label", .target = "{{unresolved}}", .provenance = .protected_literal }};
     try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &target, null));
 }
+
+test "Danish localized POS organization keeps representative fire bodies identical to canonical POS codec controls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Case = struct { owner: []const u8, code: []const u8, source: []const u8, kinds: []const []const u8, counts: []const usize };
+    // Selected retained body witnesses and literal template-emitted headings;
+    // these are organization/codec controls, not whole-page expansion or replay.
+    const cases = [_]Case{
+        .{ .owner = "dansk", .code = "da", .source = "==dansk==\n===Mængdetal===\n'''fire'''\n#''(mængdetal)'': [[4]]\n#*ordenstal: [[fjerde]]\nEksempler: En [[hund]] har fire ben.\n{| class=wikitable\n! Halve !! Dobbelte\n|-\n| 2 || 8\n|}\n====Oversættelser====\n* [[four]]\n===Verbum===\n'''fire'''\n# At [[sænke]] noget eller nogen ned;\n====Oversættelser====\n* [[mollir]]\n===Kilder===\nBibliography body.\n", .kinds = &.{ "Numeral", "Verb" }, .counts = &.{ 1, 1 } },
+        .{ .owner = "engelsk", .code = "en", .source = "==engelsk==\n===Substantiv===\n'''fire'''\n# <span lang=da>[[ild#Dansk|ild]], [[bål#Dansk|bål]]</span>\n# <span lang=da>[[brand#Dansk|brand]]</span>\n# <span lang=da>[[flamme#Dansk|flamme]]</span>\n# <span lang=da>[[ild#Dansk|ild]], [[beskydning#Dansk|beskydning]]</span>\n# <span lang=da>[[ovn#Dansk|ovn]], [[ildsted#Dansk|ildsted]]</span>\n====Synonymer====\n* [[blaze]]\n* [[hold one's fire]]\n===Verbum===\n[malformed template]}\n# <span lang=da>[[skyde#Dansk|skyde]]</span>\n# <span lang=da>[[affyre#Dansk|affyre]]</span>\n# <span lang=da>[[fyre#Dansk|fyre]]</span>\n====Afledte termer====\n* [[fire away]]\n* [[fire at will]]\n* [[on fire]]\n* [[ready, aim, fire]]\n===Interjektion===\n'''fire'''\n# Dette ord mangler en definition. Hjælp gerne med at tilføje en definition.\n===Kilder===\nBibliography body.\n", .kinds = &.{ "Noun", "Verb", "Interjection" }, .counts = &.{ 5, 3, 1 } },
+        .{ .owner = "norsk", .code = "no", .source = "==norsk==\n===Udtale===\n/ˇfiːrə/\n===Mængdetal===\n'''fire'''\n#''(mængdetal)'': [[#Dansk|fire]]\n#*ordenstal: [[fjerde]]\n===Kilder===\nBibliography body.\n", .kinds = &.{"Numeral"}, .counts = &.{1} },
+    };
+    for (cases) |case| {
+        var reference = case.source;
+        inline for (.{ .{ "===Mængdetal===", "===Numeral===" }, .{ "===Substantiv===", "===Noun===" }, .{ "===Verbum===", "===Verb===" }, .{ "===Interjektion===", "===Interjection===" } }) |mapping|
+            reference = try std.mem.replaceOwned(u8, a, reference, mapping[0], mapping[1]);
+        const bytes = try compileAlloc(a, "fire", .language, case.owner, case.code, case.source, null);
+        const expected_bytes = try compileAlloc(a, "fire", .language, case.owner, case.code, reference, null);
+        const stored = try codec.decodeAlloc(a, bytes, "fire", .language, .{ .heading = case.owner, .code = case.code });
+        const expected = try codec.decodeAlloc(a, expected_bytes, "fire", .language, .{ .heading = case.owner, .code = case.code });
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+        try std.testing.expectEqualDeep(expected.entry.organization, stored.entry.organization);
+        try std.testing.expectEqual(case.kinds.len, stored.entry.organization.lexemes.len);
+        for (stored.entry.organization.lexemes, case.kinds, case.counts) |lexeme, kind, count| {
+            try std.testing.expectEqualStrings(kind, lexeme.kind);
+            try std.testing.expectEqualStrings(case.owner, lexeme.language);
+            try std.testing.expectEqual(count, lexeme.definitions.len);
+            for (lexeme.definitions) |sense| {
+                try std.testing.expect(sense.parent == null and sense.form == null);
+                try std.testing.expect(stored.entry.sections[lexeme.section].blocks[sense.block].kind == .definition);
+            }
+        }
+        try std.testing.expectEqual(expected.entry.sections.len, stored.entry.sections.len);
+        for (stored.entry.sections, expected.entry.sections) |actual_section, expected_section| {
+            try std.testing.expectEqual(actual_section.level, expected_section.level);
+            try std.testing.expectEqualDeep(expected_section.blocks, actual_section.blocks);
+        }
+        try std.testing.expectEqualDeep(expected.entry.references, stored.entry.references);
+        try std.testing.expectEqualDeep(expected.entry.media, stored.entry.media);
+        try std.testing.expectEqualStrings(case.owner, stored.entry.language.?);
+        try std.testing.expectEqualStrings(case.code, stored.entry.language_code);
+    }
+}
+
+test "complete retained SL piacy gains owned verb sense without changing body report or codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "==[[File:Flag of Belarus (1918, 1991–1995).svg|50px|link=]] Beloruščina==\n\n\n<div class=\"NavFrame\" style=\"width:48em\">\n<div class=\"NavHead\" style=\"background:#d9ebff\" >&nbsp; &nbsp; Spregatev besede '''пячы'''</small></div>\n<div class=\"NavContent\">\n\n{| class=\"inflection-table\" style=\"border-collapse:collapse; background:#F9F9F9; text-align:center; width:48em\"\n! style=\"background:eff7ff\" | \n! colspan=\"1\" style=\"background:#eff7ff\" | sedanji čas\n! colspan=\"1\" style=\"background:#eff7ff\" | velelnik\n! colspan=\"1\" style=\"background:#eff7ff\" | pretekli čas\n|-\n! style=\"eff7ff\" | prva oseba (ednina)\n| пяку\n|\n|-\n! style=\"eff7ff\" | druga oseba (ednina)\n| пячэш\n| пячы\n|-\n! style=\"eff7ff\" | tretja oseba (ednina)\n| пячэ\n|\n|-\n! style=\"eff7ff\" | prva oseba (množina)\n| пячом\n|\n|-\n! style=\"eff7ff\" | druga oseba (množina)\n| печаце\n| пячыце\n|-\n! style=\"eff7ff\" | tretja oseba (množina)\n| пякуць\n|\n|-\n! style=\"eff7ff\" | moški rod\n|\n|\n| пёк\n|-\n! style=\"eff7ff\" | ženski rod\n|\n|\n| пякла\n|-\n! style=\"eff7ff\" | srednji rod\n|\n|\n| пякло\n|-\n! style=\"eff7ff\" | množina\n|\n|\n| пяклі\n|\n|}</div></div>\n\n''пячы, [[glagol]]''[[Kategorija:Beloruski glagoli]],&#32;[[nedovršen]][[Kategorija:Belorusk nedovršni glagoli]]\n\n<p style=\"margin-bottom: -0.3em;\">'''Transkripcija:'''\n\n*pjačy\n\n<p style=\"margin-bottom: -0.3em; margin-top: 0.7em\">'''Pomeni:'''\n\n#[[peči]]\n\n<p style=\"margin-bottom: -0.3em;\">'''Izgovarjava:'''\n\n*[[:en:Appendix:Slovene_pronunciation|IPA]]: [<span class=\"IPA\">[pʲaˈt͡ʂɨ</span>]\n\n<p style=\"margin-bottom: -0.3em;\">'''Protipomenke:'''\n\n:[[сьпячы]]\n\n<p style=\"margin-bottom: -0.3em;\">'''Besedne zveze:'''\n\n:[[пекар]], [[пячэнне]], [[адпячы]], [[дапячы]], [[напячы]], [[падпячы]], [[папячы]], [[перапячы]], [[прапячы]], [[расьпячы]], [[упячы]]\n\n<p style=\"margin-bottom: -0.3em;\">'''Zunanje povezave:'''</p>\n*Энцыкляпэдыя электронная „[http://www.slounik.org/search?dict=&search=пячы пячы]“<br />";
+    const namespace_source = "# wikidict-namespace-registry-v1\n# wiki\tslwiktionary\n# dump-date\t20261001\n# content-language\tsl\n-2\tDatoteka\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n-1\tPosebno\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\tPogovor\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n2\tUporabnik\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n3\tUporabniški pogovor\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n4\tWikislovar\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\tWiktionary\n5\tPogovor o Wikislovarju\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWiktionary talk\n6\tSlika\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\n7\tPogovor o sliki\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tImage talk\n8\tMediaWiki\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n9\tPogovor o MediaWiki\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n10\tPredloga\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n11\tPogovor o predlogi\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n12\tPomoč\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n13\tPogovor o pomoči\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n14\tKategorija\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n15\tPogovor o kategoriji\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\tModul\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\tPogovor o modulu\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\tEvent\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\tEvent talk\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
+    try std.testing.expectEqual(@as(usize, 2085), source.len);
+    var namespaces = try NamespaceRegistry.init(a, namespace_source);
+    defer namespaces.deinit();
+    var baseline_report: Fallbacks = .{};
+    var actual_report: Fallbacks = .{};
+    const baseline = try compileReportedWithLinkTrailAlloc(a, "пячы", .language, "Beloruščina", "be", source, null, .{}, &namespaces, &baseline_report);
+    const bytes = try compileClassifiedWithHeadingAnchorsAlloc(a, "пячы", .language, "Beloruščina", "be", MissingText.untracked(source), null, .{}, &namespaces, null, null, .{}, &actual_report, null, &.{}, null, &.{}, .{ .heading = "Beloruščina", .code = "be" });
+    try std.testing.expectEqualDeep(baseline_report, actual_report);
+    const before = try codec.decodeAlloc(a, baseline, "пячы", .language, .{ .heading = "Beloruščina", .code = "be" });
+    const actual = try codec.decodeAlloc(a, bytes, "пячы", .language, .{ .heading = "Beloruščina", .code = "be" });
+    try std.testing.expectEqual(@as(usize, 0), before.entry.organization.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 1), actual.entry.organization.lexemes.len);
+    const verb = actual.entry.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Verb", verb.kind);
+    try std.testing.expectEqualStrings("Beloruščina", verb.language);
+    try std.testing.expectEqual(@as(usize, 1), verb.definitions.len);
+    const definition = actual.entry.sections[verb.section].blocks[verb.definitions[0].block];
+    try std.testing.expectEqual(types.BlockKind.definition, definition.kind);
+    try std.testing.expectEqualStrings("#", definition.list_path);
+    try std.testing.expectEqualStrings("1", definition.number);
+    try std.testing.expectEqual(@as(usize, 1), definition.spans.len);
+    try std.testing.expectEqualStrings("peči", definition.spans[0].text);
+    try std.testing.expectEqualStrings("peči", definition.spans[0].target);
+    try std.testing.expectEqual(types.InlineKind.link, definition.spans[0].kind);
+    try std.testing.expectEqualStrings(bytes, try codec.encodeAlloc(a, actual));
+    var normalized = actual;
+    normalized.entry.organization = before.entry.organization;
+    try std.testing.expectEqualDeep(before, normalized);
+    try std.testing.expectEqualStrings(baseline, try codec.encodeAlloc(a, normalized));
+    // Generic metadata and an incompatible record kind cannot manufacture
+    // the normal producer's classified-language authority.
+    try std.testing.expectError(error.InvalidClassifiedLanguage, compileClassifiedWithHeadingAnchorsAlloc(a, "пячы", .citations, "Beloruščina", "be", MissingText.untracked(source), null, .{}, &namespaces, null, null, .{}, null, null, &.{}, null, &.{}, .{ .heading = "Beloruščina", .code = "be" }));
+    try std.testing.expectError(error.InvalidClassifiedLanguage, compileClassifiedWithHeadingAnchorsAlloc(a, "пячы", .language, "Beloruščina", "be", MissingText.untracked(source), null, .{}, &namespaces, null, null, .{}, null, null, &.{}, null, &.{}, .{ .heading = "Slovenščina", .code = "sl" }));
+}
+
+test "complete retained KA globus noun heading retains body examples actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "== ქართული==\n=== გლობუსი ===\n[[ფაილი:Moscow SHM asv2019-06 img17.jpg|მინი]]\n[[ფაილი:20110726 Celestial globe Museo Milan 6151.jpg|მინი]]\n==== ეტიმოლოგია ====\nნასესხებია [[ლათინური]] სიტყვიდან ''[[globus]]''[[კატეგორია:ლათინური ეტიმოლოგიის სიტყვები (ქართული)]] „[[ბურთი]]“.   \n\n==== წაკითხვა ====\n* <span style=\"text-decoration: none; font-size: 80%;\">[[w:IPA ნიშნების სია|ფონეტიკური ტრანსლიტერაცია (IPA)]]:</span> [ɡlɔbusi]\n* <span style=\"text-decoration: none; font-size: 80%;\">[[დახმარება:აუდიო მაგალითები|აუდიო მაგალითი]]:</span> <span class=\"audiolink\">[[:Media:ka-გლობუსი.ogg|გლობუსი]]</span> <sup>[[:ფაილი:ka-გლობუსი.ogg|?]]</sup>\n* დამარცვლა: გლო<span style=\"color:FireBrick;\">'''·'''</span>ბუ<span style=\"color:FireBrick;\">'''·'''</span>სი, მრ. რ. გლო<span style=\"color:FireBrick;\">'''·'''</span>ბუ<span style=\"color:FireBrick;\">'''·'''</span>სე<span style=\"color:FireBrick;\">'''·'''</span>ბი, გლო<span style=\"color:FireBrick;\">'''·'''</span>ბუს<span style=\"color:FireBrick;\">'''·'''</span>ნი \n* <span style=\"text-decoration: none; font-size: 80%;\">პარონიმები:</span> [[გლობული]]\n\n==== მნიშვნელობა ====\n===== [[დახმარება:ლექსიკური ერთეულის კატეგორიები|არსებითი სახელი]][[კატეგორია:ქართული ენა]][[კატეგორია:არსებითი სახელი (ქართული)]] =====\n{| role=\"presentation\" class=\"mw-collapsible mw-collapsed\" data-expandtext=\"▼ ბრუნება სრულად\" data-collapsetext=\"▲ ნაკლების ჩვენება\"\n|-\n| <span style=\"color:#009999\">➤ '''გლობუს'''-ი, '''''გლობუს'''-ის(ა)'', <span style=\"text-decoration: none; font-size: 80%;\">[[:w:მრავლობითი რიცხვი|მრავლობითი:]]</span> '''''გლობუს'''-ებ-ი, '''გლობუს'''-ნ-ი''</span> &nbsp;&nbsp;&nbsp;\n|-\n|\n{| style=\"float:right; clear:right; margin-left:0,5em; margin-bottom0,5em; border: 2px solid #ffffff; border-collapse:collapse;\" cellpadding=\"4\" rules=\"all\" \n|-\n! bgcolor=\"#d0e5f5\"  | [[ბრუნვა]]\n! bgcolor=\"#d0e5f5\"  | [[მხოლობითი]]\n! bgcolor=\"#d0e5f5\" colspan=\"2\" | [[მრავლობითი]]\n|-\n| bgcolor=\"#d0e5f5\" | <p style=\"text-align:right;\"><small>[[სახელობითი]]</small></p>\n| bgcolor=\"#f1f5fc\" |  [[გლობუსი]] \n| bgcolor=\"#f1f5fc\" | [[გლობუსები]] \n| bgcolor=\"#f1f5fc\" | [[გლობუსნი]] \n|-\n| bgcolor=\"#d0e5f5\" | <p style=\"text-align:right;\"><small>[[მოთხრობითი]]</small></p>\n| bgcolor=\"#f1f5fc\" |  [[გლობუსმა]] \n| bgcolor=\"#f1f5fc\" | [[გლობუსებმა]]\n| bgcolor=\"#f1f5fc\" | [[გლობუსთ]] / [[გლობუსთა]] \n|-\n| bgcolor=\"#d0e5f5\" | <p style=\"text-align:right;\"><small>[[მიცემითი]]</small></p>\n| bgcolor=\"#f1f5fc\" |  [[გლობუსს]] / [[გლობუსსა]] \n| bgcolor=\"#f1f5fc\" | [[გლობუსებს]] / [[გლობუსებსა]] \n| bgcolor=\"#f1f5fc\" | [[გლობუსთ]] / [[გლობუსთა]] \n|-\n| bgcolor=\"#d0e5f5\" | <p style=\"text-align:right;\"><small>[[ნათესაობითი]]</small></p>\n| bgcolor=\"#f1f5fc\" |  [[გლობუსის]] / [[გლობუსისა]] \n| bgcolor=\"#f1f5fc\" | [[გლობუსების]] / [[გლობუსებისა]] \n| bgcolor=\"#f1f5fc\" | [[გლობუსთ]] / [[გლობუსთა]] \n|-\n| bgcolor=\"#d0e5f5\" | <p style=\"text-align:right;\"><small>[[მოქმედებითი]]</small></p>\n| bgcolor=\"#f1f5fc\" |  [[გლობუსით]] / [[გლობუსითა]] \n| bgcolor=\"#f1f5fc\" | [[გლობუსებით]] / [[გლობუსებითა]] \n|-\n| bgcolor=\"#d0e5f5\" | <p style=\"text-align:right;\"><small>[[ვითარებითი]]</small></p>\n| bgcolor=\"#f1f5fc\" |  [[გლობუსად]] / [[გლობუსადა]] \n| bgcolor=\"#f1f5fc\" | [[გლობუსებად]] / [[გლობუსებადა]] \n|-\n| bgcolor=\"#d0e5f5\" | <p style=\"text-align:right;\"><small>[[წოდებითი]]</small></p>\n| bgcolor=\"#f1f5fc\" |  [[გლობუსო]]\n| bgcolor=\"#f1f5fc\" | [[გლობუსებო]] \n| bgcolor=\"#f1f5fc\" | [[გლობუსნო]] \n|-\n| bgcolor=\"#d0e5f5\" colspan=\"4\" | ''ყველა სხვა ფორმა იხილეთ '''[[ფორმაწარმოება:გლობუსი|ფორმაწარმოების გვერდზე]]'''''\n|}\n|}[[კატეგორია:ქართული ენა]][[კატეგორია:არსებითი სახელი (ქართული)]]\n# [[დედამიწა|დედამიწის]] [[მოდელი]] [[მცირე]] [[მასშტაბი|მასშტაბისა]] (ჩვეულებისამებრ, [[ღერძი|ღერძზე]] [[მბრუნავი]]). \n#: \n#:<span style=\"font-size: 80%;\"><div class=\"mw-collapsible mw-collapsed\" data-expandtext=\"➤ ციტატების გაშლა\" data-collapsetext=\"▼ ციტატების დახურვა\">\n#:*    [[კატეგორია:ციტატები აკლია (ქართული)]]''ამ მნიშვნელობისათვის [[:კატეგორია:ციტატები აკლია (ქართული)|ციტატები არ გვაქვს.]] დაგვეხმარეთ მოძიებაში.''\n#::\n#:</div></span>\n#:  \n#:  \n#:  \n#:  \n#:  \n#:  \n\n==== წარმოებული ლექსიკა ====\n: \n:\n:\n:\n\n==== თარგმანები ====\n<div class=\"NavFrame\" >\n<div class=\"NavHead\" style=\"text-align:left; \"> \n&nbsp;</div>\n<div class=\"NavContent\">\n{| class=\"translations\" role=\"presentation\" style=\"width:100%;\"\n|-\n| class=\"translations-cell\" style=\"background-color:#ffffe0; vertical-align:top; width:48%; text-align:left; \" |\n<div style=\"column-count: 2;\">\n\n* [[ბერძნული]]: <span class=\"Grek\" lang=\"el\">[[υδρόγειος σφαίρα#Greek|υδρόγειος σφαίρα]]</span><span class=\"tpos\">&nbsp;[[:el:υδρόγειος σφαίρα|(el)]]</span>&nbsp;<span class=\"gender\"><small><i><abbr title=\"მდედრობითი სქესი\">მდედრ.</abbr></i></small></small> <span class=\"mention-gloss-paren annotation-paren\">(</span><span lang=\"el-Latn\" class=\"tr Latn\">ydrógeios sfaíra</span><span class=\"mention-gloss-paren annotation-paren\">)</span>\n* [[გერმანული]]: <span class=\"Latn\" lang=\"de\">[[Globus#German|Globus]]</span><span class=\"tpos\">&nbsp;[[:de:Globus|(de)]]</span>&nbsp;<span class=\"gender\"><small><i><abbr title=\"მამრობითი სქესი\">მამრ.</abbr></i></small></small>\n* [[ესპანური]]: <span class=\"Latn\" lang=\"es\">[[globo#Spanish|globo]]</span><span class=\"tpos\">&nbsp;[[:es:globo|(es)]]</span>    <span class=\"Latn\" lang=\"es\">[[globo terráqueo#Spanish|globo terráqueo]]</span><span class=\"tpos\">&nbsp;[[:es:globo terráqueo|(es)]]</span>\n* [[თურქული]]: <span class=\"Latn\" lang=\"tr\">[[küre#თურქული|küre]]</span><span class=\"tpos\">&nbsp;[[:tr:küre|(tr)]]</span>,  <span class=\"Latn\" lang=\"tr\">[[yerküre#თურქული|yerküre]]</span><span class=\"tpos\">&nbsp;[[:tr:yerküre|(tr)]]</span>\n* [[ინგლისური]]: <span class=\"Latn\" lang=\"en\">[[globe#English|globe]]</span><span class=\"tpos\">&nbsp;[[:en:globe|(en)]]</span>\n* [[იტალიური]]: <span class=\"Latn\" lang=\"it\">[[globo#Italian|globo]]</span><span class=\"tpos\">&nbsp;[[:it:globo|(it)]]</span>\n* [[პოლონური]]: <span class=\"Latn\" lang=\"pl\">[[globus#Polish|globus]]</span><span class=\"tpos\">&nbsp;[[:pl:globus|(pl)]]</span>\n* [[პორტუგალიური]]: <span class=\"Latn\" lang=\"pt\">[[globo#Portuguese|globo]]</span><span class=\"tpos\">&nbsp;[[:pt:globo|(pt)]]</span>\n* [[რუსული]]: <span class=\"Cyrl\" lang=\"ru\">[[глобус#რუსული|гло́бус]]</span><span class=\"tpos\">&nbsp;[[:ru:глобус|(ru)]]</span>&nbsp;<span class=\"gender\"><small><i><abbr title=\"მამრობითი სქესი\">მამრ.</abbr></i></small></small> <span class=\"mention-gloss-paren annotation-paren\">(</span><span lang=\"ru-Latn\" class=\"tr Latn\">glóbus</span><span class=\"mention-gloss-paren annotation-paren\">)</span>\n* [[ფრანგული]]: <span class=\"Latn\" lang=\"fr\">[[globe#French|globe]]</span><span class=\"tpos\">&nbsp;[[:fr:globe|(fr)]]</span>\n* [[შვედური]]: <span class=\"Latn\" lang=\"sv\">[[glob#Swedish|glob]]</span><span class=\"tpos\">&nbsp;[[:sv:glob|(sv)]]</span>&nbsp;<span class=\"gender\"><small><i><abbr title=\"საერთო სქესი\">საერთ.</abbr></i></small></small>    <span class=\"Latn\" lang=\"sv\">[[jordglob#Swedish|jordglob]]</span><span class=\"tpos\">&nbsp;[[:sv:jordglob|(sv)]]</span>&nbsp;<span class=\"gender\"><small><i><abbr title=\"საერთო სქესი\">საერთ.</abbr></i></small></small>\n</div>\n|}\n</div></div>\n\n==== წყაროები და რესურსები ====\n* [[ფაილი:Searchtool.svg|15px]] [[w:ქართული ენის განმარტებითი ლექსიკონი|ქართული ენის განმარტებითი ლექსიკონი]], ტომი 2, გვერდი 1561, <span title=\"საქართველოს სსრ მეცნიერებათა აკადემიის გამომცემლობა\" style=\"border-bottom: 1px dotted; cursor: help; white-space: nowrap\">თბილისი</span>, 2010 [[წელი]].\n* [[ფაილი:Wikipedia-logo.png|15px]] იხილეთ '''[[ქართული]]''' '''[[w:ka:|ვიკიპედიის]]''' სტატია „'''[[Wikipedia:ka:გლობუსი|გლობუსი]]'''“\n* [http://www.ena.ge/explanatory-online?ls=YToyOntzOjEyOiJ3b3JkX21ldGF1cmkiO3M6MTk6IuGDkuGDmuGDneGDkeGDo+GDoSAiO3M6MTE6IndvcmRfc3RhdGlhIjtzOjA6IiI7fQ== „გლობუსი“ ქართული ენის განმარტებით ონლაინ-ლექსიკონში]\n*[[ფაილი:Searchtool.svg|15px]] ქართული ენის ორთოგრაფიული ლექსიკონი, [[w:ვარლამ თოფურია|ვარლამ თოფურია]],    [[w:ივანე გიგინეიშვილი|ივანე გიგინეიშვილი]], თბილისი „განათლება“, 1998, გვ. 190\n\n*{{საჯარო მოხელის ორთოგრაფიულ-სტილისტიკური ლექსიკონი |2022|}235}\n*[[ფაილი:Searchtool.svg|15px]] [[w:მიხეილ ჭაბაშვილი|''ჭაბაშვილი მ.'']], უცხო სიტყვათა ლექსიკონი, თბილისი, 1989, გვ. 107.\n";
+    const namespace_source = "# wikidict-namespace-registry-v1\n# wiki\tkawiktionary\n# dump-date\t20261001\n# content-language\tka\n-2\tმედია\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n-1\tსპეციალური\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\tგანხილვა\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n2\tმომხმარებელი\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\tმონაწილე\n3\tმომხმარებლის განხილვა\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tმომხმარებელი განხილვა\tმონაწილის განხილვა\n4\tვიქსიკონი\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\tWiktionary\n5\tვიქსიკონი განხილვა\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWiktionary talk\n6\tფაილი\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\tსურათი\n7\tფაილის განხილვა\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tImage talk\tსურათი განხილვა\n8\tმედიავიკი\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n9\tმედიავიკის განხილვა\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tმედიავიკი განხილვა\n10\tთარგი\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n11\tთარგის განხილვა\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tთარგი განხილვა\n12\tდახმარება\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n13\tდახმარების განხილვა\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tდახმარება განხილვა\n14\tკატეგორია\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n15\tკატეგორიის განხილვა\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tკატეგორია განხილვა\n100\tფორმაწარმოება\tფორმაწარმოება\tcase-sensitive\t1\t0\t0\t\tsupplemental\tunclassified_subject_retained\n101\tფორმაწარმოების განხილვა\tფორმაწარმოების განხილვა\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\tმოდული\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\tმოდულის განხილვა\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\tEvent\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\tEvent talk\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
+    try std.testing.expectEqual(@as(usize, 11975), source.len);
+    var namespaces = try NamespaceRegistry.init(a, namespace_source);
+    defer namespaces.deinit();
+    const malformed = "{{საჯარო მოხელის ორთოგრაფიულ-სტილისტიკური ლექსიკონი |2022|}";
+    const reference = try std.mem.replaceOwned(u8, a, source, malformed, "<nowiki>" ++ malformed ++ "</nowiki>");
+    var actual_report: Fallbacks = .{};
+    var reference_report: Fallbacks = .{};
+    const actual_bytes = try compileReportedWithLinkTrailAlloc(a, "გლობუსი", .language, "ქართული", "ka", source, null, .{}, &namespaces, &actual_report);
+    const reference_bytes = try compileReportedWithLinkTrailAlloc(a, "გლობუსი", .language, "ქართული", "ka", reference, null, .{}, &namespaces, &reference_report);
+    try std.testing.expectEqualStrings(reference_bytes, actual_bytes);
+    try std.testing.expect(actual_report.literal_markup);
+    const actual = try codec.decodeAlloc(a, actual_bytes, "გლობუსი", .language, .{ .heading = "ქართული", .code = "ka" });
+    try std.testing.expectEqualStrings(actual_bytes, try codec.encodeAlloc(a, actual));
+    try std.testing.expectEqual(@as(usize, 1), actual.entry.organization.lexemes.len);
+    const noun = actual.entry.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqualStrings("ქართული", noun.language);
+    const section = actual.entry.sections[noun.section];
+    try std.testing.expectEqual(@as(u8, 5), section.level);
+    try std.testing.expectEqualStrings("არსებითი სახელი", section.title);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+    const sense = noun.definitions[0];
+    try std.testing.expect(sense.parent == null and sense.form == null);
+    const definition = section.blocks[sense.block];
+    try std.testing.expectEqual(types.BlockKind.definition, definition.kind);
+    try std.testing.expectEqualStrings("#", definition.list_path);
+    try std.testing.expectEqualStrings("1", definition.number);
+    var text: std.ArrayList(u8) = .empty;
+    var actions: usize = 0;
+    for (definition.spans) |span| {
+        try text.appendSlice(a, span.text);
+        if (span.kind == .link) actions += 1;
+    }
+    try std.testing.expectEqualStrings("დედამიწის მოდელი მცირე მასშტაბისა (ჩვეულებისამებრ, ღერძზე მბრუნავი).", text.items);
+    try std.testing.expectEqual(@as(usize, 6), actions);
+    // All existing example blocks remain attached by their original addresses;
+    // this POS change does not repair the separate literal nested-list problem.
+    var expected_examples: std.ArrayList(usize) = .empty;
+    for (section.blocks, 0..) |block, i| if (block.kind == .example) try expected_examples.append(a, i);
+    try std.testing.expectEqualSlices(usize, expected_examples.items, sense.examples);
+    try std.testing.expectEqual(@as(usize, 0), noun.related_sections.len);
+    for (actual.entry.sections, 0..) |_, i| {
+        if (i != noun.section) try std.testing.expect(std.mem.indexOfScalar(usize, actual.entry.organization.other_sections, i) != null);
+    }
+}
+
+test "TL observed aba POS shape retains six senses examples audio and complete body through codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Synthetic source with the observed eight-section shape and exact raw
+    // definitions/examples/audio names. Template expansion is not reconstructed
+    // or claimed: the actual complete expanded aba page is not retained.
+    const source =
+        \\==Tagalog==
+        \\===Etimolohiya 1===
+        \\====Pagbigkas====
+        \\[[File:LL-Q34057 (tgl)-Geoffjop0908-aba.wav]]
+        \\====Pang-uri====
+        \\'''abâ''' (pagbaybay na Baybayin [[ᜀᜊ]])
+        \\# Kaawa-awa o kahabag-habag.
+        \\#: Ang '''abang''' kalagayan ng mga manggagawa.
+        \\# Hamak
+        \\#: Ako ay '''abang''' magsasaka lamang.
+        \\# Karukhaan o kamaralitaan
+        \\#: Isang '''abang''' maggagawa.
+        \\# Mapagkumbaba, mapagpakumbaba, mababa
+        \\#: Ang '''abang''' lingkod mo.
+        \\# Api
+        \\=====Katawagang hinango=====
+        \\* [[abain]]
+        \\* [[abang-aba]]
+        \\* [[kaaba-aba]]
+        \\* [[kaabaan]]
+        \\* [[magpakaaba]]
+        \\* [[pagkaaba]]
+        \\* [[pagpapakaaba]]
+        \\* [[sa aba]]
+        \\* [[sa aba ko]]
+        \\* [[sa aba mo]]
+        \\===Etimolohiya 2===
+        \\*aba, *abá.
+        \\====Pagbigkas====
+        \\[[File:Tl-PH-aba.ogg]]
+        \\====Pandamdam====
+        \\'''abá''' (pagbaybay na Baybayin [[ᜀᜊ]])
+        \\# Bigkas na nagbabadya o pahiwatig ng pagkagulat, pagtataka o pagkilala at paggalang.
+        \\#: '''Aba''', Ginoong Maria, napupuno ka ng grasya, ang Panginoong Diyos ay sumasaiyo.
+        \\#: '''Aba''', narito pala si Juan!
+        \\
+    ;
+    const renamed = try std.mem.replaceOwned(u8, a, source, "====Pang-uri====", "====Adjective====");
+    const reference_source = try std.mem.replaceOwned(u8, a, renamed, "====Pandamdam====", "====Interjection====");
+    const namespaces = try @import("namespace_registry").englishTestRegistry();
+    var actual_report: Fallbacks = .{};
+    var reference_report: Fallbacks = .{};
+    const actual_bytes = try compileReportedWithLinkTrailAlloc(a, "aba", .language, "Tagalog", "tl", source, null, .{}, namespaces, &actual_report);
+    const reference_bytes = try compileReportedWithLinkTrailAlloc(a, "aba", .language, "Tagalog", "tl", reference_source, null, .{}, namespaces, &reference_report);
+    const actual = try codec.decodeAlloc(a, actual_bytes, "aba", .language, .{ .heading = "Tagalog", .code = "tl" });
+    const reference = try codec.decodeAlloc(a, reference_bytes, "aba", .language, .{ .heading = "Tagalog", .code = "tl" });
+    try std.testing.expectEqualStrings(actual_bytes, try codec.encodeAlloc(a, actual));
+    try std.testing.expectEqualStrings(reference_bytes, try codec.encodeAlloc(a, reference));
+    try std.testing.expectEqualDeep(reference_report, actual_report);
+    try std.testing.expectEqualDeep(reference.entry.organization, actual.entry.organization);
+    try std.testing.expectEqualDeep(reference.entry.references, actual.entry.references);
+    try std.testing.expectEqualDeep(reference.entry.media, actual.entry.media);
+    try std.testing.expectEqualDeep(reference.entry.display_title, actual.entry.display_title);
+    try std.testing.expectEqualDeep(reference.entry.preamble_spans, actual.entry.preamble_spans);
+    try std.testing.expectEqual(@as(usize, 8), actual.entry.sections.len);
+    for (actual.entry.sections, reference.entry.sections, 0..) |section, expected, i| {
+        try std.testing.expectEqual(expected.level, section.level);
+        try std.testing.expectEqualDeep(expected.blocks, section.blocks);
+        if (i != 3 and i != 7) {
+            try std.testing.expectEqualStrings(expected.title, section.title);
+            try std.testing.expectEqualStrings(expected.anchor, section.anchor);
+        }
+    }
+    try std.testing.expectEqualStrings("Pang-uri", actual.entry.sections[3].title);
+    try std.testing.expectEqualStrings("Pandamdam", actual.entry.sections[7].title);
+    try std.testing.expectEqual(@as(usize, 2), actual.entry.organization.lexemes.len);
+    const adjective = actual.entry.organization.lexemes[0];
+    const interjection = actual.entry.organization.lexemes[1];
+    try std.testing.expectEqualStrings("Adjective", adjective.kind);
+    try std.testing.expectEqualStrings("Interjection", interjection.kind);
+    try std.testing.expectEqual(@as(usize, 3), adjective.section);
+    try std.testing.expectEqual(@as(usize, 7), interjection.section);
+    try std.testing.expectEqual(@as(usize, 5), adjective.definitions.len);
+    try std.testing.expectEqual(@as(usize, 1), interjection.definitions.len);
+    for (actual.entry.organization.lexemes) |lexeme| {
+        try std.testing.expectEqualStrings("Tagalog", lexeme.language);
+        try std.testing.expectEqualSlices(usize, &.{0}, lexeme.introduction);
+        for (lexeme.definitions) |sense| {
+            try std.testing.expect(sense.parent == null and sense.form == null);
+            try std.testing.expectEqual(@as(usize, 0), sense.quotations.len);
+            try std.testing.expectEqual(@as(usize, 0), sense.notes.len);
+        }
+    }
+    for (adjective.definitions, 0..) |sense, i| {
+        try std.testing.expectEqual(1 + 2 * i, sense.block);
+        if (i < 4) {
+            try std.testing.expectEqual(@as(usize, 1), sense.examples.len);
+            try std.testing.expectEqual(2 + 2 * i, sense.examples[0]);
+        } else try std.testing.expectEqual(@as(usize, 0), sense.examples.len);
+    }
+    try std.testing.expectEqual(@as(usize, 1), interjection.definitions[0].block);
+    try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, interjection.definitions[0].examples);
+    try std.testing.expectEqual(@as(usize, 2), actual.entry.media.len);
+    for ([_][]const u8{ "LL-Q34057 (tgl)-Geoffjop0908-aba.wav", "Tl-PH-aba.ogg" }) |file| {
+        var count: usize = 0;
+        for (actual.entry.media) |media| if (std.mem.eql(u8, media.file, file)) {
+            try std.testing.expectEqual(types.MediaKind.audio, media.kind);
+            count += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 1), count);
+    }
+}

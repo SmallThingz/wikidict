@@ -287,6 +287,16 @@
       "observed_date": "2026-11-04",
       "evidence": "The directly read English Wiktionary entry hornjoserbšćina identifies the exact lowercase word as the Upper Sorbian language and links the language code hsb; its footer supplies revision 92963766. The separate permanent-revision fetch failed, so this is a live-page observation with a displayed revision, not a dump-authenticated document. Independently, the selected HSB normal canonical module maps Upper Sorbian to hsb, and its data/3/h module has m[\"hsb\"][1] = \"Hornjoserbšćina\". Authenticated stary raw source uses the exact lowercase value in its first H2 rěč invocation; authenticated rěč simply emits its unchanged argument as a link and category.",
       "rationale": "Install only this independently attested exact label for an already installed hsb code through existing reviewed-alias conflict checks. Preserve the preferred display, all other labels and authored headings. No generic lowercasing, script/edition inference, parenthesis stripping, template-name authority, or collision override. This is editorial build data, not a captured upstream registry row. The existing heading template-argument resolver can consume the exact alias; no new source-banner equivalence is granted. Actual full-page repaired ownership remains unearned until the ordinary current route is run."
+    },
+    {
+      "id": "eu-kaxubiera-exact-euwiki10723575-v1",
+      "code": "csb",
+      "alias": "Kaxubiera",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://eu.wikipedia.org/w/index.php?title=Kaxubiera&oldid=10723575",
+      "observed_date": "2026-11-04",
+      "evidence": "The directly retrieved Basque Wikipedia page Kaxubiera identifies ISO 639-2 and ISO 639-3 as csb and exposes permanent revision 10723575. Independently the directly retrieved Wikidata Q33690 page exposes revision 2556431925, Wikimedia language code csb and euwiki sitelink Kaxubiera. These are public-page observations with displayed revisions, not authenticated historical dump/API captures. The separately authenticated EU Template:-csb- p6501/r409504 emits exactly Kaxubiera; neither its title nor its flag alone supplies code authority. The selected dd3a2be0 language-names snapshot lacks this label.",
+      "rationale": "Install only this exact independently attested label for already installed csb through existing reviewed-alias conflict checks. Keep preferred Kashubian display unchanged. No case folding, flag/edition/template-name inference, collision override or fabricated upstream API row. This is reviewed editorial build data; it grants no new source-banner equivalence. The physical decorated heading also needs the separately reviewed neutral-border parser correction."
     }
   ]
 }

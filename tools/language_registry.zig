@@ -43,6 +43,11 @@ pub const LinkTrailRange = struct {
 
 const default_link_trail_ranges = [_]LinkTrailRange{.{ .first = 'a', .last = 'z' }};
 
+const CapturedPreferredCapitalization = struct {
+    preferred: []const u8,
+    code: []const u8,
+};
+
 const DerivedPreferredName = struct {
     original_name: []const u8,
     code: []const u8,
@@ -64,6 +69,7 @@ pub const Registry = struct {
     trusted_names: std.StringHashMapUnmanaged(void) = .empty,
     autonym_headings: std.StringHashMapUnmanaged(?[]const u8) = .empty,
     preferred_capitalizations: std.StringHashMapUnmanaged([]const u8) = .empty,
+    captured_preferred_capitalizations: std.StringHashMapUnmanaged(?CapturedPreferredCapitalization) = .empty,
     strong_names: std.StringHashMapUnmanaged(void) = .empty,
     canonical_names: std.StringHashMapUnmanaged([]const u8) = .empty,
     headings: std.StringHashMapUnmanaged([]const u8) = .empty,
@@ -91,6 +97,7 @@ pub const Registry = struct {
         self.trusted_names.deinit(self.arena.allocator());
         self.autonym_headings.deinit(self.arena.allocator());
         self.preferred_capitalizations.deinit(self.arena.allocator());
+        self.captured_preferred_capitalizations.deinit(self.arena.allocator());
         self.strong_names.deinit(self.arena.allocator());
         self.canonical_names.deinit(self.arena.allocator());
         self.arabic_articleless_names.deinit(self.arena.allocator());
@@ -129,7 +136,9 @@ pub const Registry = struct {
         // preferred labels. Admit that exact existing alias for the same owner;
         // other ordinary aliases, code aliases, and conflicts retain their trust.
         if (self.names.get(value)) |owner| {
-            if (!self.trusted_names.contains(value) and !self.isTrustedReviewed(value, owner) and !self.isTrustedAutonym(value, owner)) {
+            if (!self.trusted_names.contains(value) and !self.isTrustedReviewed(value, owner) and !self.isTrustedAutonym(value, owner) and
+                !self.isCapturedPreferredCapitalization(value, owner))
+            {
                 const preferred = self.headings.get(owner) orelse return null;
                 const preferred_owner = self.names.get(preferred) orelse return null;
                 if (!self.trusted_names.contains(preferred) or
@@ -164,14 +173,28 @@ pub const Registry = struct {
         return std.mem.eql(u8, expected, value);
     }
 
+    fn isCapturedPreferredCapitalization(self: *const Registry, value: []const u8, owner: []const u8) bool {
+        const captured = (self.captured_preferred_capitalizations.get(value) orelse return false) orelse return false;
+        if (!std.mem.eql(u8, captured.code, owner) or !self.trusted_names.contains(captured.preferred)) return false;
+        const preferred_owner = self.names.get(captured.preferred) orelse return false;
+        return std.mem.eql(u8, preferred_owner, owner);
+    }
+
     fn recordPreferredCapitalization(self: *Registry, mapper: *?PreferredUpper, preferred: []const u8) !void {
         // Invalid UTF-8 does not acquire new trust or change existing TSV parsing.
-        if (preferred.len == 0 or preferred[0] < 0x80 or
+        if (preferred.len == 0 or
             self.preferred_capitalizations.contains(preferred) or
             !std.unicode.utf8ValidateSlice(preferred)) return;
-        if (mapper.* == null) mapper.* = try PreferredUpper.init();
         const owned = self.arena.allocator();
-        const mapped = try mapper.*.?.firstAlloc(owned, preferred);
+        const mapped = if (preferred[0] < 0x80) blk: {
+            if (!std.ascii.isLower(preferred[0])) return;
+            const copy = try owned.dupe(u8, preferred);
+            copy[0] = std.ascii.toUpper(copy[0]);
+            break :blk copy;
+        } else blk: {
+            if (mapper.* == null) mapper.* = try PreferredUpper.init();
+            break :blk try mapper.*.?.firstAlloc(owned, preferred);
+        };
         errdefer owned.free(mapped);
         // Cache only the expected spelling, not an alias or a trust grant.
         // A later TSV/Lua load may install the alias. resolveTrusted always
@@ -183,6 +206,17 @@ pub const Registry = struct {
         const key = try owned.dupe(u8, preferred);
         errdefer owned.free(key);
         try self.preferred_capitalizations.put(owned, key, mapped);
+        // Only an actual captured MediaWiki preferred row supplies this origin.
+        // Strong dump names may later replace the display heading; they must not
+        // erase that row's exact capitalization authority. Installed alias and
+        // original preferred ownership/trust are rechecked at every resolution.
+        const code_value = self.names.get(preferred) orelse return;
+        if (!self.trusted_names.contains(preferred)) return;
+        if (self.captured_preferred_capitalizations.getPtr(mapped)) |slot| {
+            if (slot.*) |previous| {
+                if (!std.mem.eql(u8, previous.preferred, preferred) or !std.mem.eql(u8, previous.code, code_value)) slot.* = null;
+            }
+        } else try self.captured_preferred_capitalizations.put(owned, mapped, .{ .preferred = key, .code = code_value });
     }
 
     fn fallbackCode(self: *const Registry, value: []const u8) ?[]const u8 {
@@ -3491,4 +3525,72 @@ test "reviewed exact Upper Sorbian heading preserves preferred owner and rejects
     try std.testing.expectEqualStrings("dsb", conflict.resolveTrusted("hornjoserbšćina").?.code);
     try registry.addLocalAlias("hornjoserbšćina", "dsb");
     try std.testing.expect(registry.resolveTrusted("hornjoserbšćina") == null);
+}
+
+
+test "captured preferred capitalization survives strong display name replacement" {
+    var r = Registry.empty(std.testing.allocator); defer r.deinit();
+    try r.addTsv("# content-language\tsq\n# mediawiki\nsq\tshqip\tShqip\tsq\tAlbanian\tOrdinary alias\nen\tEnglish\n");
+    try r.addLua("return { [\"Albanian\"]=\"sq\" }");
+    try std.testing.expectEqualStrings("Albanian", r.resolve("sq").?.heading);
+    try std.testing.expectEqualStrings("sq", r.resolveTrusted("Shqip").?.code);
+    try std.testing.expectEqualStrings("Albanian", r.resolveTrusted("Shqip").?.heading);
+    try std.testing.expectEqualStrings("sq", r.resolveSourceTrusted("Shqip").?.code);
+    try std.testing.expect(r.resolveStrong("Shqip") == null);
+    try std.testing.expect(r.resolveTrusted("Ordinary alias") == null);
+    try std.testing.expect(r.resolveTrusted("SHQIP") == null);
+    // A captured preferred spelling alone cannot manufacture its absent alias.
+    var missing = Registry.empty(std.testing.allocator); defer missing.deinit();
+    try missing.addTsv("# mediawiki\nsq\tshqip\n");
+    try missing.addLua("return { [\"Albanian\"]=\"sq\" }");
+    try std.testing.expect(missing.resolveTrusted("Shqip") == null);
+    // ISO and ordinary alias rows cannot acquire the captured-preferred grant.
+    var ordinary = Registry.empty(std.testing.allocator); defer ordinary.deinit();
+    try ordinary.addTsv("# mediawiki\nsq\tAlbanian\tshqip\tShqip\n# iso-639-3\nfr\tfrançais\tFrançais\n");
+    try std.testing.expect(ordinary.resolveTrusted("Shqip") == null);
+    try std.testing.expect(ordinary.resolveTrusted("Français") == null);
+}
+
+test "captured preferred capitalization rechecks original and installed alias owners" {
+    for ([_][]const u8{"Shqip", "shqip"}) |conflict| {
+        var r = Registry.empty(std.testing.allocator); defer r.deinit();
+        try r.addTsv("# mediawiki\nsq\tshqip\tShqip\nen\tEnglish\n");
+        try r.addLua("return { [\"Albanian\"]=\"sq\" }");
+        try r.addTsv(try std.fmt.allocPrint(r.arena.allocator(), "# mediawiki\nfr\tFrench\t{s}\n", .{conflict}));
+        try std.testing.expect(r.resolveTrusted("Shqip") == null);
+        try std.testing.expect(r.resolveSourceTrusted("Shqip") == null);
+    }
+    var unicode = Registry.empty(std.testing.allocator); defer unicode.deinit();
+    try unicode.addTsv("# mediawiki\nky\tкыргызча\tКыргызча\nen\tEnglish\n");
+    try unicode.addLua("return { [\"Kyrgyz\"]=\"ky\" }");
+    try std.testing.expectEqualStrings("ky", unicode.resolveTrusted("Кыргызча").?.code);
+    try std.testing.expect(unicode.resolveStrong("Кыргызча") == null);
+    try std.testing.expect(unicode.resolveTrusted("КЫРГЫЗЧА") == null);
+}
+
+test "reviewed exact Basque Kashubian heading preserves preferred owner and live conflicts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(@embedFile("reviewed_language_aliases.json"), &hash, .{});
+    const marker = try std.fmt.allocPrint(a, "# reviewed-alias\tcsb\tKaxubiera\teu-kaxubiera-exact-euwiki10723575-v1\t{s}\n", .{std.fmt.bytesToHex(hash, .lower)});
+    var registry = Registry.empty(a); defer registry.deinit();
+    try registry.addTsv("# mediawiki\ncsb\tKashubian\npl\tpoloniera\n");
+    try std.testing.expect(registry.resolve("Kaxubiera") == null);
+    try registry.addTsv(marker);
+    const actual = registry.resolveTrusted("Kaxubiera") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("csb", actual.code);
+    try std.testing.expectEqualStrings("Kashubian", actual.heading);
+    try std.testing.expect(registry.resolveSourceTrusted("Kaxubiera") == null);
+    try std.testing.expect(registry.resolve("Kaxubiera extra") == null);
+    try std.testing.expect(registry.resolve("KAXUBIERA") == null);
+    var absent = Registry.empty(a); defer absent.deinit();
+    try absent.addTsv("pl\tpoloniera\n");
+    try std.testing.expectError(error.InvalidLanguageRegistry, absent.addTsv(marker));
+    var conflict = Registry.empty(a); defer conflict.deinit();
+    try conflict.addTsv("# mediawiki\ncsb\tKashubian\npl\tKaxubiera\n");
+    try conflict.addTsv(marker);
+    try std.testing.expectEqualStrings("pl", conflict.resolveTrusted("Kaxubiera").?.code);
+    try registry.addLocalAlias("Kaxubiera", "pl");
+    try std.testing.expect(registry.resolveTrusted("Kaxubiera") == null);
 }

@@ -30,6 +30,17 @@ const speech = [_][]const u8{
     "Romanization", "Logogram",       "Determinative",
 };
 pub fn partOfSpeech(title: []const u8) ?[]const u8 {
+    // Retained თარგი:-noun- p3473/r7298 emits this exact noun heading.
+    // Linked H5 category headings keep the same semantic label; no owner inference.
+    if (std.mem.eql(u8, title, "არსებითი სახელი")) return "Noun";
+    // Retained DA -noun- p6490/r294633, -verb- p6498/r76325,
+    // -interj- p6493/r294632 and -car-num- p7090/r29046 emit these
+    // exact H3 labels and POS categories. Their language argument changes only
+    // the category suffix; the caller retains its independently supplied owner.
+    if (std.mem.eql(u8, title, "Substantiv")) return "Noun";
+    if (std.mem.eql(u8, title, "Verbum")) return "Verb";
+    if (std.mem.eql(u8, title, "Interjektion")) return "Interjection";
+    if (std.mem.eql(u8, title, "Mængdetal")) return "Numeral";
     // UG سۆز p4182/r21944 selects ئىسىملار p4204/r21121's default label.
     // ئىسىم (grammar noun): en.wiktionary.org/w/index.php?title=ئىسىم&oldid=86381152.
     // Section kind only; preserve the independently established record owner.
@@ -58,6 +69,11 @@ pub fn partOfSpeech(title: []const u8) ?[]const u8 {
     // https://tl.wiktionary.org/w/index.php?title=pangngalan&oldid=150530
     // This classifies a section only; the caller still supplies any language owner.
     if (std.mem.eql(u8, title, "Pangngalan")) return "Noun";
+    // Retained TL tl-adj/phi-headword select pang-uri/adjective; aba's
+    // Pandamdam section invokes tl-head with the literal interjection argument.
+    // This assigns POS only, never language ownership.
+    if (std.mem.eql(u8, title, "Pang-uri")) return "Adjective";
+    if (std.mem.eql(u8, title, "Pandamdam")) return "Interjection";
     // Retained ocwiki Modèl:-vèrb- p1133/r309551 and -flex-verb- p2910/r50049.
     // A form heading is not evidence for a particular lemma or inflection relation.
     if (std.mem.eql(u8, title, "Vèrb")) return "Verb";
@@ -141,6 +157,161 @@ pub fn buildUnclassified(a: A, sections: anytype) !Layout {
 pub fn buildOwned(a: A, sections: anytype, owner: []const u8) !Layout {
     return buildInContext(a, sections, false, owner);
 }
+// This source convention supplies a POS, never a language. The ordinary
+// classifier must have supplied an owner before sibling metadata is joined.
+// Atlıq = noun: kaa.wikipedia.org/w/index.php?oldid=206763&title=Atlıq.
+fn morphologySiblingPart(sections: anytype, index: usize, owner: ?[]const u8) ?[]const u8 {
+    const language = owner orelse return null;
+    if (language.len == 0 or std.mem.eql(u8, language, "Unclassified") or index == 0) return null;
+    const meaning = sections[index];
+    const morphology = sections[index - 1];
+    if (meaning.level != 3 or morphology.level != 3 or
+        !std.mem.eql(u8, meaning.title, "Leksikalıq mánileri") or
+        !std.mem.eql(u8, morphology.title, "Morfologiyalıq hám sintaksislik qásiyetleri")) return null;
+    if (morphology.blocks.len != 1 or morphology.blocks[0].kind != .paragraph) return null;
+    const spans = morphology.blocks[0].spans;
+    if (spans.len != 2) return null;
+    const marker = spans[0];
+    const syllables = spans[1];
+    for (spans) |span| {
+        if (span.provenance != .parsed or span.generated_diagnostic or span.self_link or
+            span.kind != .text or span.target.len != 0 or span.role != .normal or span.flags.code) return null;
+    }
+    if (!marker.flags.italic or !std.mem.eql(u8, marker.text, "atlıq") or
+        syllables.flags.italic or !std.mem.startsWith(u8, syllables.text, ", ")) return null;
+    // Keep this exact observed marker-plus-syllabification convention separate
+    // from arbitrary prose mentioning a POS or a second grammatical marker.
+    const tail = syllables.text[2..];
+    if (tail.len == 0 or tail[0] == '-' or tail[tail.len - 1] == '-') return null;
+    var hyphens: usize = 0;
+    var previous_hyphen = false;
+    for (tail) |byte| {
+        if (byte == '-') {
+            if (previous_hyphen) return null;
+            hyphens += 1;
+        } else if (byte < 0x80 and !std.ascii.isAlphabetic(byte)) return null;
+        previous_hyphen = byte == '-';
+    }
+    if (hyphens == 0) return null;
+    return "Noun";
+}
+
+const MarkedParagraphPart = struct { kind: []const u8, first: usize, end: usize };
+fn slovenePosLink(span: wiki.Span) ?[]const u8 {
+    if (span.provenance != .parsed or span.generated_diagnostic or span.self_link or
+        span.kind != .link or span.flags.code or span.role != .normal or
+        !std.mem.eql(u8, span.text, span.target)) return null;
+    if (span.flags.italic and std.mem.eql(u8, span.target, "glagol")) return "Verb";
+    if (!span.flags.italic and std.mem.eql(u8, span.target, "samostalnik")) return "Noun";
+    return null;
+}
+// Exact retained Predloga:glagol p20278/r170191 and Predloga:samostalnik
+// p17834/r170902 headword/comma/POS-link convention. It classifies POS only.
+fn sloveneHeadwordPart(block: wiki.Block) ?[]const u8 {
+    if (block.kind != .paragraph or block.spans.len < 2) return null;
+    var word = false;
+    var comma = false;
+    var result: ?[]const u8 = null;
+    for (block.spans) |span| {
+        if (span.generated_diagnostic or span.self_link or
+            span.flags.code or span.role != .normal) return null;
+        if (span.provenance != .parsed) {
+            // The captured SL headword emits &#32; after its parsed POS link.
+            // This spacing supplies no headword, POS, action or owner authority.
+            if (result != null and span.provenance == .entity_literal and
+                span.kind == .text and span.target.len == 0 and span.text.len != 0 and
+                std.mem.trim(u8, span.text, " \t").len == 0) continue;
+            return null;
+        }
+        if (result != null) {
+            if (slovenePosLink(span) != null) return null;
+            continue;
+        }
+        if (span.kind == .link) {
+            if (!word or !comma) return null;
+            result = slovenePosLink(span) orelse return null;
+            continue;
+        }
+        if (span.kind != .text or span.target.len != 0) return null;
+        for (span.text) |byte| {
+            if (comma) {
+                if (byte != ' ' and byte != '\t') return null;
+            } else if (byte == ',') {
+                if (!word) return null;
+                comma = true;
+            } else {
+                if (!span.flags.italic or span.flags.bold or byte == '\r' or byte == '\n') return null;
+                if (byte != ' ' and byte != '\t') word = true;
+            }
+        }
+    }
+    return result;
+}
+fn sloveneMeaningsLabel(block: wiki.Block) bool {
+    if (block.kind != .paragraph or block.spans.len != 1) return false;
+    const span = block.spans[0];
+    return span.provenance == .parsed and !span.generated_diagnostic and !span.self_link and
+        span.kind == .text and span.target.len == 0 and span.role == .normal and
+        span.flags.bold and !span.flags.italic and !span.flags.code and
+        std.mem.eql(u8, span.text, "Pomeni:");
+}
+fn markedParagraphPart(blocks: []const wiki.Block, owner: ?[]const u8, level: u8) ?MarkedParagraphPart {
+    const language = owner orelse return null;
+    if (language.len == 0 or std.mem.eql(u8, language, "Unclassified") or level != 2) return null;
+    var marker: ?usize = null;
+    var meaning: ?usize = null;
+    var kind: ?[]const u8 = null;
+    for (blocks, 0..) |block, index| {
+        if (sloveneHeadwordPart(block)) |name| {
+            if (marker != null) return null;
+            marker = index;
+            kind = name;
+        }
+        if (sloveneMeaningsLabel(block)) {
+            if (meaning != null) return null;
+            meaning = index;
+        }
+    }
+    const marker_index = marker orelse return null;
+    const meaning_index = meaning orelse return null;
+    if (marker_index >= meaning_index) return null;
+    var first = meaning_index + 1;
+    while (first < blocks.len and blocks[first].kind == .blank) : (first += 1) {}
+    if (first == blocks.len or blocks[first].kind != .definition or !std.mem.eql(u8, blocks[first].list_path, "#")) return null;
+    var end = first + 1;
+    while (end < blocks.len) : (end += 1) {
+        if (blocks[end].kind == .blank) continue;
+        if (!std.mem.startsWith(u8, blocks[end].list_path, "#")) break;
+    }
+    return .{ .kind = kind.?, .first = first, .end = end };
+}
+fn offsetBlockIndices(a: A, indices: []const usize, offset: usize) ![]const usize {
+    const result = try a.dupe(usize, indices);
+    for (result) |*index| index.* += offset;
+    return result;
+}
+fn analyzeMarkedParagraph(a: A, marker: MarkedParagraphPart, index: usize, etymology: ?usize, blocks: []const wiki.Block) !Lexeme {
+    var lexical = try analyze(a, marker.kind, index, etymology, blocks[marker.first..marker.end]);
+    const senses = try a.dupe(Sense, lexical.definitions);
+    for (senses) |*sense| {
+        sense.block += marker.first;
+        sense.examples = try offsetBlockIndices(a, sense.examples, marker.first);
+        sense.quotations = try offsetBlockIndices(a, sense.quotations, marker.first);
+        sense.notes = try offsetBlockIndices(a, sense.notes, marker.first);
+        // parent is a sense index, not a block index, and must not be shifted.
+    }
+    lexical.definitions = senses;
+    const intro = try a.alloc(usize, marker.first + lexical.introduction.len);
+    for (intro[0..marker.first], 0..) |*item, n| item.* = n;
+    for (lexical.introduction, intro[marker.first..]) |item, *out| out.* = item + marker.first;
+    lexical.introduction = intro;
+    const other = try a.alloc(usize, lexical.other_blocks.len + blocks.len - marker.end);
+    for (lexical.other_blocks, other[0..lexical.other_blocks.len]) |item, *out| out.* = item + marker.first;
+    for (other[lexical.other_blocks.len..], marker.end..) |*item, n| item.* = n;
+    lexical.other_blocks = other;
+    return lexical;
+}
+
 fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u8) !Layout {
     var lexemes: std.ArrayList(Lexeme) = .empty;
     var other: std.ArrayList(usize) = .empty;
@@ -149,7 +320,9 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
     var active: ?usize = null;
     var related: std.ArrayList(usize) = .empty;
     for (sections, 0..) |section, i| {
-        const kind = if (unclassified and section.level == 2) null else partOfSpeech(section.title);
+        const named_kind: ?[]const u8 = if (unclassified and section.level == 2) null else partOfSpeech(section.title) orelse if (unclassified) null else morphologySiblingPart(sections, i, owner);
+        const paragraph_part = if (named_kind == null and !unclassified) markedParagraphPart(section.blocks, owner, section.level) else null;
+        const kind: ?[]const u8 = named_kind orelse if (paragraph_part) |marker| marker.kind else null;
         // Modèl:-etim- p1091/r219080 emits this exact localized heading.
         // Exact MY source heading for inherited/derived material in retained
         // p2617/r939601 and origin statements in p122417/r905431,p124492/r907881.
@@ -160,7 +333,7 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
         // POS belongs to the preceding etymology, but a new region cannot inherit it.
         if (owner != null and section.level == 1) origin = null;
         if (section.level == 2) {
-            if (owner == null or kind == null) origin = null;
+            if (owner == null or kind == null or paragraph_part != null) origin = null;
             if (owner == null and !unclassified and kind == null and !etymology) current_language = section.title;
         }
         if (active) |previous| {
@@ -175,7 +348,10 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
         if (etymology) origin = i;
         if (kind) |name| {
             active = lexemes.items.len;
-            var lexical = try analyze(a, name, i, origin, section.blocks);
+            var lexical = if (paragraph_part) |marker|
+                try analyzeMarkedParagraph(a, marker, i, origin, section.blocks)
+            else
+                try analyze(a, name, i, origin, section.blocks);
             lexical.language = current_language;
             try lexemes.append(a, lexical);
         } else try other.append(a, i);
@@ -1223,4 +1399,620 @@ test "FO noun label exactness never establishes language ownership" {
     try std.testing.expectEqual(@as(usize, 0), actual.lexemes[0].definitions.len);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, actual.other_sections);
     try std.testing.expectEqualStrings("Noun", partOfSpeech("Noun").?);
+}
+
+test "Danish template POS labels retain three independent fire owners and source sense associations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "fire" } };
+    // Representative semantic controls use the exact retained Reader headings,
+    // levels, definition text/targets and block schedule. They are not a replay
+    // or a new full-page expansion of the malformed authored templates.
+    const cardinal = try renderer.renderBody("'''fire'''\n#''(mængdetal)'': [[4]]\n#*ordenstal: [[fjerde]]\nEksempler: En [[hund]] har fire ben.\n{| class=wikitable\n! Halve !! Dobbelte\n|-\n| 2 || 8\n|}\n");
+    const danish_verb = try renderer.renderBody("'''fire'''\n# At [[sænke]] noget eller nogen ned;\n");
+    const english_noun = try renderer.renderBody("'''fire'''\n# <span lang=da>[[ild#Dansk|ild]], [[bål#Dansk|bål]]</span>\n# <span lang=da>[[brand#Dansk|brand]]</span>\n# <span lang=da>[[flamme#Dansk|flamme]]</span>\n# <span lang=da>[[ild#Dansk|ild]], [[beskydning#Dansk|beskydning]]</span>\n# <span lang=da>[[ovn#Dansk|ovn]], [[ildsted#Dansk|ildsted]]</span>\n");
+    const english_verb = try renderer.renderBody("[malformed template]}\n# <span lang=da>[[skyde#Dansk|skyde]]</span>\n# <span lang=da>[[affyre#Dansk|affyre]]</span>\n# <span lang=da>[[fyre#Dansk|fyre]]</span>\n");
+    const interjection = try renderer.renderBody("'''fire'''\n# Dette ord mangler en definition. Hjælp gerne med at tilføje en definition.\n");
+    const norwegian_cardinal = try renderer.renderBody("'''fire'''\n#''(mængdetal)'': [[#Dansk|fire]]\n#*ordenstal: [[fjerde]]\n");
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const da = [_]Section{
+        .{ .title = "dansk", .level = 2 }, .{ .title = "Dansk", .level = 2 },
+        .{ .title = "Mængdetal", .level = 3, .blocks = cardinal }, .{ .title = "Oversættelser", .level = 4 },
+        .{ .title = "Verbum", .level = 3, .blocks = danish_verb }, .{ .title = "Oversættelser", .level = 4 },
+        .{ .title = "Kilder", .level = 3 },
+    };
+    const en = [_]Section{
+        .{ .title = "engelsk", .level = 2 }, .{ .title = "Engelsk", .level = 2 }, .{ .title = "Udtale", .level = 3 },
+        .{ .title = "Substantiv", .level = 3, .blocks = english_noun }, .{ .title = "Synonymer", .level = 4 },
+        .{ .title = "Verbum", .level = 3, .blocks = english_verb }, .{ .title = "Afledte termer", .level = 4 },
+        .{ .title = "Interjektion", .level = 3, .blocks = interjection }, .{ .title = "Kilder", .level = 3 },
+    };
+    const no = [_]Section{
+        .{ .title = "norsk", .level = 2 }, .{ .title = "Norsk", .level = 2 }, .{ .title = "Udtale", .level = 3 },
+        .{ .title = "Mængdetal", .level = 3, .blocks = norwegian_cardinal }, .{ .title = "Kilder", .level = 3 },
+    };
+    const da_layout = try buildOwned(a, &da, "dansk");
+    const en_layout = try buildOwned(a, &en, "engelsk");
+    const no_layout = try buildOwned(a, &no, "norsk");
+    try std.testing.expectEqual(@as(usize, 2), da_layout.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 3), en_layout.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 1), no_layout.lexemes.len);
+    const number = da_layout.lexemes[0];
+    try std.testing.expectEqualStrings("Numeral", number.kind);
+    try std.testing.expectEqualStrings("dansk", number.language);
+    try std.testing.expectEqual(@as(usize, 2), number.section);
+    try std.testing.expectEqualSlices(usize, &.{0}, number.introduction);
+    try std.testing.expectEqual(@as(usize, 1), number.definitions.len);
+    try std.testing.expectEqual(@as(usize, 1), number.definitions[0].block);
+    try std.testing.expectEqualSlices(usize, &.{2}, number.definitions[0].quotations);
+    // The source's free paragraph is supporting body, not an invented example.
+    try std.testing.expectEqual(@as(usize, 0), number.definitions[0].examples.len);
+    try std.testing.expectEqualSlices(usize, &.{ 3, 4 }, number.other_blocks);
+    try std.testing.expectEqualSlices(usize, &.{3}, number.related_sections);
+    try std.testing.expectEqualStrings("Verb", da_layout.lexemes[1].kind);
+    try std.testing.expectEqual(@as(usize, 4), da_layout.lexemes[1].section);
+    try std.testing.expectEqualSlices(usize, &.{5}, da_layout.lexemes[1].related_sections);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 6 }, da_layout.other_sections);
+    for (en_layout.lexemes, [_][]const u8{ "Noun", "Verb", "Interjection" }, [_]usize{ 3, 5, 7 }, [_]usize{ 5, 3, 1 }) |lexeme, kind, section, senses| {
+        try std.testing.expectEqualStrings(kind, lexeme.kind);
+        try std.testing.expectEqualStrings("engelsk", lexeme.language);
+        try std.testing.expectEqual(section, lexeme.section);
+        try std.testing.expectEqual(senses, lexeme.definitions.len);
+        try std.testing.expect(lexeme.etymology == null);
+        for (lexeme.definitions, 1..) |sense, block| {
+            try std.testing.expectEqual(block, sense.block);
+            try std.testing.expect(sense.parent == null and sense.form == null);
+        }
+    }
+    try std.testing.expectEqualSlices(usize, &.{4}, en_layout.lexemes[0].related_sections);
+    try std.testing.expectEqualSlices(usize, &.{6}, en_layout.lexemes[1].related_sections);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 8 }, en_layout.other_sections);
+    try std.testing.expectEqualStrings("Numeral", no_layout.lexemes[0].kind);
+    try std.testing.expectEqualStrings("norsk", no_layout.lexemes[0].language);
+    try std.testing.expectEqual(@as(usize, 3), no_layout.lexemes[0].section);
+    try std.testing.expectEqualSlices(usize, &.{2}, no_layout.lexemes[0].definitions[0].quotations);
+    try std.testing.expect(no_layout.lexemes[0].definitions[0].form == null);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 4 }, no_layout.other_sections);
+    // Definition targets keep their explicit Danish scope while the lexical
+    // record owner remains English; number headings never supply an owner.
+    var danish_target = false;
+    for (english_noun[1].spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "ild#Dansk")) {
+        try std.testing.expectEqualStrings("da", span.language);
+        danish_target = true;
+    };
+    try std.testing.expect(danish_target);
+    var local_anchor = false;
+    for (norwegian_cardinal[1].spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "#Dansk")) {
+        try std.testing.expectEqualStrings("", span.language);
+        local_anchor = true;
+    };
+    try std.testing.expect(local_anchor);
+    const table = cardinal[4].table.?;
+    try std.testing.expectEqual(@as(usize, 2), table.rows.len);
+    try std.testing.expectEqual(@as(usize, 2), table.rows[0].cells.len);
+    try std.testing.expect(table.rows[0].cells[0].header and table.rows[0].cells[1].header);
+    var diagnostic: std.ArrayList(u8) = .empty;
+    for (english_verb[0].spans) |span| try diagnostic.appendSlice(a, span.text);
+    try std.testing.expectEqualStrings("[malformed template]}", diagnostic.items);
+    const different = try buildOwned(a, &en, "A different independently declared owner");
+    for (different.lexemes, en_layout.lexemes) |actual, expected| {
+        try std.testing.expectEqualStrings("A different independently declared owner", actual.language);
+        var copied = expected;
+        copied.language = "A different independently declared owner";
+        try std.testing.expectEqualDeep(copied, actual);
+    }
+}
+
+test "Danish exact POS labels reject lookalikes and do not infer language or literal headings" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    inline for (.{ .{ "Substantiv", "Noun" }, .{ "Verbum", "Verb" }, .{ "Interjektion", "Interjection" }, .{ "Mængdetal", "Numeral" } }) |row|
+        try std.testing.expectEqualStrings(row[1], partOfSpeech(row[0]).?);
+    for ([_][]const u8{ "substantiv", "SUBSTANTIV", "Substantiv 2", "Substantiver", "Verbum note", "Interjektioner", "Mængdetal 2", "Mængdetal note", "Mængde", "mængdetal", "Udtale", "Oversættelser", "Kilder", "dansk", "engelsk", "norsk" }) |title|
+        try std.testing.expect(partOfSpeech(title) == null);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "Unclassified", .level = 2 },
+        .{ .title = "Mængdetal", .level = 2, .blocks = &.{.{ .kind = .definition, .list_path = "#" }} },
+        .{ .title = "Unknown boundary", .level = 2 },
+        .{ .title = "Substantiv", .level = 3, .blocks = &.{.{ .kind = .definition, .list_path = "#" }} },
+    };
+    const unresolved = try buildUnclassified(a, &sections);
+    try std.testing.expectEqual(@as(usize, 1), unresolved.lexemes.len);
+    try std.testing.expectEqualStrings("", unresolved.lexemes[0].language);
+    try std.testing.expectEqualStrings("Noun", unresolved.lexemes[0].kind);
+    try std.testing.expectEqual(@as(usize, 3), unresolved.lexemes[0].section);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "control" } };
+    const protected_body = try renderer.renderBody("<nowiki>===Substantiv===</nowiki>\n<pre>===Verbum===</pre>\nMængdetal and Interjektion in ordinary body text.\n");
+    const protected = [_]Section{.{ .title = "Notes", .level = 3, .blocks = protected_body }};
+    try std.testing.expectEqual(@as(usize, 0), (try buildOwned(a, &protected, "Declared owner")).lexemes.len);
+}
+
+test "explicit morphology noun marker joins only its adjacent meanings and preserves supplied owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "abaq" } };
+    const morphology = try renderer.renderBody("''atlıq'', a-baq\n");
+    const body = try renderer.renderBody("Jılımnıń etegi, sheti, jiyegi.\n");
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "Morfologiyalıq hám sintaksislik qásiyetleri", .level = 3, .blocks = morphology },
+        .{ .title = "Leksikalıq mánileri", .level = 3, .blocks = body },
+    };
+    const result = try buildOwned(a, &sections, "Independently classified owner");
+    try std.testing.expectEqual(@as(usize, 1), result.lexemes.len);
+    const noun = result.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqualStrings("Independently classified owner", noun.language);
+    try std.testing.expectEqual(@as(usize, 1), noun.section);
+    try std.testing.expectEqual(@as(usize, 0), noun.definitions.len);
+    try std.testing.expectEqualSlices(usize, &.{0}, noun.introduction);
+    try std.testing.expectEqualSlices(usize, &.{0}, result.other_sections);
+    try std.testing.expectEqualDeep(morphology, sections[0].blocks);
+    try std.testing.expectEqualDeep(body, sections[1].blocks);
+    // Existing definition analysis remains authoritative when definitions really
+    // are present; the production join does not manufacture paragraph senses.
+    var numbered = sections;
+    numbered[1].blocks = try renderer.renderBody("# first [[Target]]\n## second\n#: example\n");
+    const with_senses = try buildOwned(a, &numbered, "Independently classified owner");
+    var ordinary = numbered;
+    ordinary[1].title = "Noun";
+    try std.testing.expectEqualDeep(try buildOwned(a, &ordinary, "Independently classified owner"), with_senses);
+}
+
+test "morphology sibling join rejects unresolved owners protected markers prose and crossed domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "control" } };
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const valid = [_]Section{
+        .{ .title = "Morfologiyalıq hám sintaksislik qásiyetleri", .level = 3, .blocks = try renderer.renderBody("''atlıq'', o-ra-za\n") },
+        .{ .title = "Leksikalıq mánileri", .level = 3, .blocks = try renderer.renderBody("1. first<br>2. second\n") },
+    };
+    for ([_]?[]const u8{ null, "", "Unclassified" }) |owner|
+        try std.testing.expect(morphologySiblingPart(&valid, 1, owner) == null);
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &valid)).lexemes.len);
+    for ([_][]const u8{
+        "atlıq, o-ra-za", "''atlıq'' prose", "''atlıq, verb'', o-ra-za",
+        "''[[atlıq]]'', o-ra-za", "''<nowiki>atlıq</nowiki>'', o-ra-za",
+        "<code>atlıq</code>, o-ra-za", " ''atlıq'', o-ra-za",
+        "''Atlıq'', o-ra-za", "''atlıq'', o-ra-za, verb", "''atlıq'', o--ra-za",
+    }) |source| {
+        errdefer std.debug.print("morphology marker wrongly accepted: {s}\n", .{source});
+        var changed = valid;
+        changed[0].blocks = try renderer.renderBody(source);
+        try std.testing.expect(morphologySiblingPart(&changed, 1, "Qaraqalpaqsha") == null);
+    }
+    var changed = valid;
+    changed[0].level = 2;
+    try std.testing.expect(morphologySiblingPart(&changed, 1, "Qaraqalpaqsha") == null);
+    changed = valid;
+    changed[1].level = 4;
+    try std.testing.expect(morphologySiblingPart(&changed, 1, "Qaraqalpaqsha") == null);
+    changed = valid;
+    changed[1].title = "Leksikalıq mánileri extra";
+    try std.testing.expect(morphologySiblingPart(&changed, 1, "Qaraqalpaqsha") == null);
+    const separated = [_]Section{ valid[0], .{ .title = "Other language", .level = 2 }, valid[1] };
+    try std.testing.expect(morphologySiblingPart(&separated, 2, "Qaraqalpaqsha") == null);
+    const support = [_]Section{ valid[0], .{ .title = "Aytılıwı", .level = 3 }, valid[1] };
+    try std.testing.expect(morphologySiblingPart(&support, 2, "Qaraqalpaqsha") == null);
+}
+
+// These are complete observed Reader entries, not reconstructed expanded pages.
+// The test projection below supplies build-only structs solely to exercise layout;
+// it makes no claim to recover erased source provenance or execute the Writer.
+test "KAA observed abaq and oraza retain complete body actions paint media and codec with noun metadata only" {
+    const types = @import("blob_encoder").presentation_types;
+    const codec = @import("blob_encoder").presentation_codec;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block };
+    const observed_json = [_][]const u8{
+        \\{"organization":{"lexemes":[],"other_sections":[0,1,2,3,4,5]},"title":"abaq","display_title":[],"kind":"language","language":"Qaraqalpaqsha","language_code":"kaa","sections":[{"level":2,"title":"Qaraqalpaqsha","anchor":"","anchor_fallback":"","blocks":[{"kind":"paragraph","depth":0,"spans":[{"kind":"link","text":"Úlgi:Underlinked","target":"Úlgi:Underlinked","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"Úlgi:Orphan","target":"Úlgi:Orphan","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null}]},{"level":2,"title":"Qaraqalpaqsha (kaa)","anchor":"Qaraqalpaqsha_(kaa)","anchor_fallback":"Qaraqalpaqsha_.28kaa.29","blocks":[{"kind":"heading","depth":0,"spans":[{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"toccolours","direction":"","explanation":"","foreground":null,"font_scale":1.2000000476837158,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Qaraqalpaqsha","target":"","trail":"","language":"","classes":"toccolours","direction":"","explanation":"","foreground":null,"font_scale":1.2000000476837158,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" (kaa)","target":"","trail":"","language":"","classes":"toccolours","direction":"","explanation":"","foreground":null,"font_scale":0.8333333134651184,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":2,"anchor":"Qaraqalpaqsha_(kaa)","anchor_fallback":"Qaraqalpaqsha_.28kaa.29","table":null}]},{"level":3,"title":"Morfologiyalıq hám sintaksislik qásiyetleri","anchor":"Morfologiyalıq_hám_sintaksislik_qásiyetleri","anchor_fallback":"Morfologiyal.C4.B1q_h.C3.A1m_sintaksislik_q.C3.A1siyetleri","blocks":[{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"atlıq","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", a-baq","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null}]},{"level":3,"title":"Leksikalıq mánileri","anchor":"Leksikalıq_mánileri","anchor_fallback":"Leksikal.C4.B1q_m.C3.A1nileri","blocks":[{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"Jılımnıń etegi, sheti, jiyegi. ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"•","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Ara-tura salǵan jılım, ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":"#006400","bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"abaǵım","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":"#006400","background":"#edf0ff","bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", Maylaǵanda úyip keler qabaǵın ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":"#006400","bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"(S. Nurımbetov)","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":"#006400","bold":true,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":".","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":"#006400","bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":"#006400","bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":"#006400","bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":"#006400","bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null}]},{"level":3,"title":"Aytılıwı","anchor":"Aytılıwı","anchor_fallback":"Ayt.C4.B1l.C4.B1w.C4.B1","blocks":[{"kind":"paragraph","depth":0,"spans":[{"kind":"link","text":"LL-Q33541 (kaa)-Inosham-Abaq.wav","target":"File:LL-Q33541 (kaa)-Inosham-Abaq.wav","trail":"","language":"","classes":"wikidict-media wikidict-media-file-4c4c2d51333335343120286b6161292d496e6f7368616d2d416261712e776176","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null}]},{"level":3,"title":"Derekler","anchor":"Derekler","anchor_fallback":"","blocks":[{"kind":"definition","depth":1,"spans":[{"kind":"text","text":"QARAQALPAQ TILINIŃ TÚSINDIRME SÓZLIGI.","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Jeti tomlıq. I tom. Nókis, «Qaraqalpaqstan» baspası, 2023-jıl.","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"#","number":"1","level":0,"anchor":"","anchor_fallback":"","table":null}]}],"preamble_spans":[],"references":[],"media":[{"file":"LL-Q33541 (kaa)-Inosham-Abaq.wav","kind":"audio","caption":"LL-Q33541 (kaa)-Inosham-Abaq.wav"}],"redirect":null,"alias":null}
+        ,
+        \\{"organization":{"lexemes":[],"other_sections":[0,1,2,3]},"title":"oraza","display_title":[],"kind":"language","language":"Qaraqalpaqsha","language_code":"kaa","sections":[{"level":2,"title":"Qaraqalpaqsha (kaa)","anchor":"Qaraqalpaqsha_(kaa)","anchor_fallback":"Qaraqalpaqsha_.28kaa.29","blocks":[{"kind":"heading","depth":0,"spans":[{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"toccolours","direction":"","explanation":"","foreground":null,"font_scale":1.2000000476837158,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Qaraqalpaqsha","target":"","trail":"","language":"","classes":"toccolours","direction":"","explanation":"","foreground":null,"font_scale":1.2000000476837158,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" (kaa)","target":"","trail":"","language":"","classes":"toccolours","direction":"","explanation":"","foreground":null,"font_scale":0.8333333134651184,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":2,"anchor":"Qaraqalpaqsha_(kaa)","anchor_fallback":"Qaraqalpaqsha_.28kaa.29","table":null}]},{"level":3,"title":"Morfologiyalıq hám sintaksislik qásiyetleri","anchor":"Morfologiyalıq_hám_sintaksislik_qásiyetleri","anchor_fallback":"Morfologiyal.C4.B1q_h.C3.A1m_sintaksislik_q.C3.A1siyetleri","blocks":[{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"atlıq","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", o-ra-za","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null}]},{"level":3,"title":"Leksikalıq mánileri","anchor":"Leksikalıq_mánileri","anchor_fallback":"Leksikal.C4.B1q_m.C3.A1nileri","blocks":[{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"<nowiki>","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"1. din. s. Jıl dawamında kúndiz awqat jemey júretuǵın arnawlı bir ay. ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"•","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Namaz ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":"#006400","bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"oraza","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":"#006400","background":"#edf0ff","bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" parızım bar, Bir alladan meniń, qızım, Atańnıń aytar arzı bar, qulaǵıń sal, janım qızım ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":"#006400","bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"(Berdaq)","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":"#006400","bold":true,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":".","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":"#006400","bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":"#006400","bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":"#006400","bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":"#006400","bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"2. din. s. Ómirlik oraza, ómir boyı tutıq bolıw, oraza tutıw.","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null}]},{"level":3,"title":"Derekler","anchor":"Derekler","anchor_fallback":"","blocks":[{"kind":"definition","depth":1,"spans":[{"kind":"text","text":"QARAQALPAQ TILINIŃ TÚSINDIRME SÓZLIGI.","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Jeti tomlıq, ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"Nókis","target":"Nókis","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", «Qaraqalpaqstan» baspası, 2023-jıl.","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"#","number":"1","level":0,"anchor":"","anchor_fallback":"","table":null}]}],"preamble_spans":[],"references":[],"media":[],"redirect":null,"alias":null}
+        ,
+    };
+    for (observed_json, 0..) |json, fixture| {
+        const parsed = try std.json.parseFromSlice(types.Entry, a, json, .{});
+        const before = parsed.value;
+        errdefer std.debug.print("complete observed KAA record: {s}\n", .{before.title});
+        try std.testing.expectEqualStrings("kaa", before.language_code);
+        try std.testing.expectEqualStrings("Qaraqalpaqsha", before.language.?);
+        try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+        const sections = try a.alloc(Section, before.sections.len);
+        for (before.sections, sections) |source_section, *section| {
+            const blocks = try a.alloc(wiki.Block, source_section.blocks.len);
+            for (source_section.blocks, blocks) |source_block, *block| {
+                try std.testing.expect(source_block.table == null and source_block.feature == null);
+                const spans = try a.alloc(wiki.Span, source_block.spans.len);
+                for (source_block.spans, spans) |source_span, *span| {
+                    try std.testing.expectEqualStrings("", source_span.trail);
+                    span.* = .{
+                        .kind = std.meta.stringToEnum(@TypeOf(span.kind), @tagName(source_span.kind)).?,
+                        .text = source_span.text,
+                        .target = source_span.target,
+                        .language = source_span.language,
+                        .classes = source_span.classes,
+                        .direction = source_span.direction,
+                        .explanation = source_span.explanation,
+                        .foreground = source_span.foreground,
+                        .background = source_span.background,
+                        .font_scale = source_span.font_scale,
+                        .font_scale_basis = source_span.font_scale_basis,
+                        .role = std.meta.stringToEnum(@TypeOf(span.role), @tagName(source_span.role)).?,
+                        .flags = .{
+                            .bold = source_span.bold, .italic = source_span.italic,
+                            .code = source_span.code, .small = source_span.small,
+                            .superscript = source_span.superscript, .subscript = source_span.subscript,
+                            .strike = source_span.strike, .underline = source_span.underline,
+                        },
+                    };
+                }
+                block.* = .{
+                    .kind = std.meta.stringToEnum(wiki.Kind, @tagName(source_block.kind)).?,
+                    .depth = source_block.depth, .spans = spans,
+                    .list_path = source_block.list_path, .number = source_block.number,
+                    .level = source_block.level, .anchor = source_block.anchor,
+                    .anchor_fallback = source_block.anchor_fallback,
+                };
+            }
+            section.* = .{ .title = source_section.title, .level = source_section.level, .blocks = blocks };
+        }
+        const organization = try buildOwned(a, sections, before.language.?);
+        try std.testing.expectEqual(@as(usize, 1), organization.lexemes.len);
+        const noun = organization.lexemes[0];
+        const meaning_index: usize = if (fixture == 0) 3 else 2;
+        try std.testing.expectEqual(meaning_index, noun.section);
+        try std.testing.expectEqualStrings("Noun", noun.kind);
+        try std.testing.expectEqualStrings(before.language.?, noun.language);
+        try std.testing.expectEqual(@as(usize, 0), noun.definitions.len);
+        try std.testing.expectEqualSlices(usize, &.{0}, noun.introduction);
+        try std.testing.expectEqualStrings("Leksikalıq mánileri", before.sections[noun.section].title);
+        // Source citations use definition blocks too. They stay independent;
+        // none of these supporting rows becomes a lexical sense.
+        try std.testing.expectEqual(@as(usize, 0), noun.related_sections.len);
+        const bytes = try codec.encodeBuildAlloc(a, before.display_title, before.sections, organization, before.references, before.media);
+        const stored = try codec.decodeAlloc(a, bytes, before.title, before.kind, .{ .heading = before.language.?, .code = before.language_code });
+        try std.testing.expectEqualStrings(bytes, try codec.encodeAlloc(a, stored));
+        try std.testing.expectEqualDeep(before.sections, stored.entry.sections);
+        try std.testing.expectEqualDeep(before.display_title, stored.entry.display_title);
+        try std.testing.expectEqualDeep(before.references, stored.entry.references);
+        try std.testing.expectEqualDeep(before.media, stored.entry.media);
+        var normalized = stored;
+        normalized.entry.organization = before.organization;
+        const baseline = try codec.encodeAlloc(a, .{ .entry = before });
+        try std.testing.expectEqualStrings(baseline, try codec.encodeAlloc(a, normalized));
+        // No owner was invented in the metadata projection either.
+        try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, sections)).lexemes.len);
+    }
+}
+
+test "SL headword and meanings profile reuses definition parents examples and block addresses" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "word" } };
+    const source = "''word, [[glagol]]'', [[nedovršen]]\n\n'''Transkripcija:'''\n\n*word\n\n'''Pomeni:'''\n\n# first [[Target]]\n## second\n#: example\n##* quotation\n# third\n\n'''Sources:'''\n\n# bibliography\n";
+    const blocks = try renderer.renderBody(source);
+    const marker = markedParagraphPart(blocks, "Independent owner", 2).?;
+    try std.testing.expectEqualStrings("Verb", marker.kind);
+    const actual = try analyzeMarkedParagraph(a, marker, 0, null, blocks);
+    try std.testing.expectEqual(@as(usize, 3), actual.definitions.len);
+    try std.testing.expectEqual(@as(?usize, 0), actual.definitions[1].parent);
+    try std.testing.expect(actual.definitions[0].parent == null and actual.definitions[2].parent == null);
+    try std.testing.expectEqualStrings("first ", blocks[actual.definitions[0].block].spans[0].text);
+    try std.testing.expectEqualStrings("second", blocks[actual.definitions[1].block].spans[0].text);
+    try std.testing.expectEqualStrings("third", blocks[actual.definitions[2].block].spans[0].text);
+    try std.testing.expectEqual(@as(usize, 1), actual.definitions[0].examples.len);
+    try std.testing.expectEqualStrings("example", blocks[actual.definitions[0].examples[0]].spans[0].text);
+    try std.testing.expectEqual(@as(usize, 1), actual.definitions[1].quotations.len);
+    try std.testing.expectEqualStrings("quotation", blocks[actual.definitions[1].quotations[0]].spans[0].text);
+    for (actual.introduction, 0..) |block_index, i| try std.testing.expectEqual(i, block_index);
+    try std.testing.expectEqualStrings("bibliography", blocks[actual.other_blocks[actual.other_blocks.len - 1]].spans[0].text);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block };
+    const sections = [_]Section{.{ .title = "Source language", .level = 2, .blocks = blocks }};
+    const result = try buildOwned(a, &sections, "Independent owner");
+    var expected = actual;
+    expected.language = "Independent owner";
+    try std.testing.expectEqual(@as(usize, 1), result.lexemes.len);
+    try std.testing.expectEqualDeep(expected, result.lexemes[0]);
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &sections)).lexemes.len);
+    const regions = [_]Section{
+        .{ .title = "Etymology", .level = 2, .blocks = &.{} },
+        sections[0],
+    };
+    const region_result = try buildOwned(a, &regions, "Independent owner");
+    try std.testing.expectEqual(@as(usize, 1), region_result.lexemes.len);
+    try std.testing.expect(region_result.lexemes[0].etymology == null);
+    var direct_pos = regions;
+    direct_pos[1].title = "Verb";
+    const direct_result = try buildOwned(a, &direct_pos, "Independent owner");
+    try std.testing.expectEqual(@as(?usize, 0), direct_result.lexemes[0].etymology);
+    const noun = try renderer.renderBody("''oko'', [[samostalnik]] [[srednji|srednjega]] [[spol]]a, '''oko''' dv '''očesi'''\n\n'''Pomeni:'''\n\n# organ\n");
+    try std.testing.expectEqualStrings("Noun", markedParagraphPart(noun, "slovenščina", 2).?.kind);
+}
+
+test "SL paragraph POS requires parsed headword local grammar link meanings and resolved owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "word" } };
+    for ([_][]const u8{
+        "word, [[glagol]]", "''word'' [[glagol]]", "''word'', glagol",
+        "''word'', [[glagol]]", "''word, [[samostalnik]]''",
+        "''word, [[Appendix:glagol|glagol]]''", "''word, [https://example.invalid/glagol glagol]''",
+        "''word, [[glagol|verb]]''", "''word'', [[samostalnik]], ''[[glagol]]''",
+        "''<nowiki>word</nowiki>, [[glagol]]''", "<code>word, [[glagol]]</code>",
+        " ''word, [[glagol]]''", "''word, [[w:glagol|glagol]]''",
+    }) |prefix| {
+        errdefer std.debug.print("unexpected SL profile acceptance: {s}\n", .{prefix});
+        const source = try std.fmt.allocPrint(a, "{s}\n\n'''Pomeni:'''\n\n# definition\n", .{prefix});
+        try std.testing.expect(markedParagraphPart(try renderer.renderBody(source), "owner", 2) == null);
+    }
+    for ([_][]const u8{
+        "Pomeni:\n\n# definition", "'''<nowiki>Pomeni:</nowiki>'''\n\n# definition",
+        "'''Pomeni:'''\n\nplain meaning", "'''Pomeni:'''\n\n* meaning",
+        "'''Pomeni:'''\n\n# first\n\n'''Pomeni:'''\n\n# second",
+        "'''Pomeni:'''\n\n# first\n\n''other'', [[samostalnik]]",
+    }) |tail| {
+        errdefer std.debug.print("unexpected SL meaning profile acceptance: {s}\n", .{tail});
+        const source = try std.fmt.allocPrint(a, "''word, [[glagol]]''\n\n{s}\n", .{tail});
+        try std.testing.expect(markedParagraphPart(try renderer.renderBody(source), "owner", 2) == null);
+    }
+    const valid = try renderer.renderBody("''word, [[glagol]]''\n\n'''Pomeni:'''\n\n# definition\n");
+    for ([_]?[]const u8{ null, "", "Unclassified" }) |owner|
+        try std.testing.expect(markedParagraphPart(valid, owner, 2) == null);
+    for ([_]u8{ 1, 3, 4, 5, 6 }) |level|
+        try std.testing.expect(markedParagraphPart(valid, "owner", level) == null);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block };
+    const separated = [_]Section{
+        .{ .title = "First owner", .level = 2, .blocks = try renderer.renderBody("''word, [[glagol]]''") },
+        .{ .title = "Second owner", .level = 2, .blocks = try renderer.renderBody("'''Pomeni:'''\n\n# definition") },
+    };
+    try std.testing.expectEqual(@as(usize, 0), (try buildOwned(a, &separated, "owner")).lexemes.len);
+}
+
+// These are complete observed Reader entries, not reconstructed expanded pages.
+// The test projection below supplies build-only structs solely to exercise layout;
+// it makes no claim to recover erased source provenance or execute the Writer.
+test "SL observed piacy and oko retain complete body tables actions and codec with actual sense addresses" {
+    const types = @import("blob_encoder").presentation_types;
+    const codec = @import("blob_encoder").presentation_codec;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block };
+    const observed_json = [_][]const u8{
+        \\{"organization":{"lexemes":[],"other_sections":[0]},"title":"пячы","display_title":[],"kind":"language","language":"beloruščina","language_code":"be","sections":[{"level":2,"title":"Beloruščina","anchor":"Beloruščina","anchor_fallback":"Beloru.C5.A1.C4.8Dina","blocks":[{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" Spregatev besede ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"пячы","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"table","depth":0,"spans":[],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":{"caption":[],"rows":[{"cells":[{"spans":[],"header":true,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[{"kind":"text","text":"sedanji čas","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":true,"colspan":1,"rowspan":1,"background":"#eff7ff"},{"spans":[{"kind":"text","text":"velelnik","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":true,"colspan":1,"rowspan":1,"background":"#eff7ff"},{"spans":[{"kind":"text","text":"pretekli čas","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":true,"colspan":1,"rowspan":1,"background":"#eff7ff"}]},{"cells":[{"spans":[{"kind":"text","text":"prva oseba (ednina)","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":true,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[{"kind":"text","text":"пяку","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"}]},{"cells":[{"spans":[{"kind":"text","text":"druga oseba (ednina)","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":true,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[{"kind":"text","text":"пячэш","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[{"kind":"text","text":"пячы","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"}]},{"cells":[{"spans":[{"kind":"text","text":"tretja oseba (ednina)","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":true,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[{"kind":"text","text":"пячэ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"}]},{"cells":[{"spans":[{"kind":"text","text":"prva oseba (množina)","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":true,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[{"kind":"text","text":"пячом","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"}]},{"cells":[{"spans":[{"kind":"text","text":"druga oseba (množina)","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":true,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[{"kind":"text","text":"печаце","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[{"kind":"text","text":"пячыце","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"}]},{"cells":[{"spans":[{"kind":"text","text":"tretja oseba (množina)","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":true,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[{"kind":"text","text":"пякуць","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"}]},{"cells":[{"spans":[{"kind":"text","text":"moški rod","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":true,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[{"kind":"text","text":"пёк","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"}]},{"cells":[{"spans":[{"kind":"text","text":"ženski rod","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":true,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[{"kind":"text","text":"пякла","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"}]},{"cells":[{"spans":[{"kind":"text","text":"srednji rod","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":true,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[{"kind":"text","text":"пякло","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"}]},{"cells":[{"spans":[{"kind":"text","text":"množina","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":true,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[{"kind":"text","text":"пяклі","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"}]}]}},{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"пячы, ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"glagol","target":"glagol","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":",","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"nedovršen","target":"nedovršen","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"Transkripcija:","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"list_item","depth":1,"spans":[{"kind":"text","text":"pjačy","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"*","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"Pomeni:","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"definition","depth":1,"spans":[{"kind":"link","text":"peči","target":"peči","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"#","number":"1","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"Izgovarjava:","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"list_item","depth":1,"spans":[{"kind":"external_link","text":"IPA","target":"https://en.wiktionary.org/wiki/Appendix:Slovene_pronunciation","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":": ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"[","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"[pʲaˈt͡ʂɨ","target":"","trail":"","language":"","classes":"IPA","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"pronunciation"},{"kind":"text","text":"]","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"*","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"Protipomenke:","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"indent","depth":1,"spans":[{"kind":"link","text":"сьпячы","target":"сьпячы","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":":","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"Besedne zveze:","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"indent","depth":1,"spans":[{"kind":"link","text":"пекар","target":"пекар","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"пячэнне","target":"пячэнне","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"адпячы","target":"адпячы","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"дапячы","target":"дапячы","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"напячы","target":"напячы","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"падпячы","target":"падпячы","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"папячы","target":"папячы","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"перапячы","target":"перапячы","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"прапячы","target":"прапячы","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"расьпячы","target":"расьпячы","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"упячы","target":"упячы","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":":","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"Zunanje povezave:","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"list_item","depth":1,"spans":[{"kind":"text","text":"Энцыкляпэдыя электронная „","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"пячы","target":"http://www.slounik.org/search?dict=&search=пячы","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"“","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"*","number":"","level":0,"anchor":"","anchor_fallback":"","table":null}]}],"preamble_spans":[],"references":[],"media":[],"redirect":null,"alias":null}
+        ,
+        \\{"organization":{"lexemes":[],"other_sections":[0,1]},"title":"oko","display_title":[],"kind":"language","language":"slovenščina","language_code":"sl","sections":[{"level":2,"title":"Slovenščina","anchor":"Slovenščina","anchor_fallback":"Sloven.C5.A1.C4.8Dina","blocks":[{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"oko","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":",","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"samostalnik","target":"samostalnik","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"srednjega","target":"srednji","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"spol","target":"spol","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"a","target":"spol","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"oko","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" dv ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"očesi","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" mn ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"očesa","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" posebna mn ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"oči","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"Pomeni:","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"definition","depth":1,"spans":[{"kind":"link","text":"človeški","target":"človek","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ali ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"žival","target":"žival","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"ski","target":"žival","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"organ","target":"organ","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ki omogoča ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"vid","target":"vid","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":".","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"#","number":"1","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"Besedne zveze:","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"indent","depth":1,"spans":[{"kind":"link","text":"mačje oko","target":"mačje oko","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"tigrovo oko","target":"tigrovo oko","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"tretje oko","target":"tretje oko","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":":","number":"","level":0,"anchor":"","anchor_fallback":"","table":null}]},{"level":4,"title":"Prevodi","anchor":"Prevodi","anchor_fallback":"","blocks":[{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"anatomija","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"table","depth":0,"spans":[],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":{"caption":[],"rows":[{"cells":[{"spans":[{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Angleško: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"eye","target":"eye","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(en)","target":"https://en.wiktionary.org/wiki/eye","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Baskovsko: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"begi","target":"begi","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(eu)","target":"https://eu.wiktionary.org/wiki/begi","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Francosko: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"œil","target":"œil","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"m","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(fr)","target":"https://fr.wiktionary.org/wiki/%C5%93il","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Galicijsko: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"ollo","target":"ollo","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"m","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(gl)","target":"https://gl.wiktionary.org/wiki/ollo","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Italijansko: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"occhio","target":"occhio","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"m","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(it)","target":"https://it.wiktionary.org/wiki/occhio","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#ffffe0"},{"spans":[],"header":false,"colspan":1,"rowspan":1,"background":null},{"spans":[{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Katalonsko: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"ull","target":"ull","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"m","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(ca)","target":"https://ca.wiktionary.org/wiki/ull","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Latinsko: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"oculus","target":"oculus","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", i, ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"m","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(la)","target":"https://la.wiktionary.org/wiki/oculus","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Nemško: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"Auge","target":"Auge","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(de)","target":"https://de.wiktionary.org/wiki/Auge","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Portugalsko: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"olho","target":"olho","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"m","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(pt)","target":"https://pt.wiktionary.org/wiki/olho","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Špansko: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"ojo","target":"ojo","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"m","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(es)","target":"https://es.wiktionary.org/wiki/ojo","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"|}","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#ffffe0"}]}],"geometry":{"border":0,"cell_spacing":null,"cell_padding":null,"width":{"unit":"percent","value":100}}}},{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"[malformed table]","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"Rime:","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"indent","depth":1,"spans":[{"kind":"link","text":"meso","target":"meso","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"pero","target":"pero","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":":","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"Zunanje povezave:","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"table","depth":0,"spans":[],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":{"caption":[],"rows":[{"cells":[{"spans":[{"kind":"link","text":"Commons","target":"File:Wikipedia-logo.png","trail":"","language":"","classes":"wikidict-media wikidict-media-file-57696b6970656469612d6c6f676f2e706e67","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":null},{"spans":[{"kind":"external_link","text":"oko","target":"https://sl.wikipedia.org/wiki/oko","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" – članek v Wikipediji","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":null}]}],"geometry":{"border":0,"cell_spacing":1,"cell_padding":null,"width":null}}}]}],"preamble_spans":[],"references":[],"media":[{"file":"Wikipedia-logo.png","kind":"image","caption":"Commons"}],"redirect":null,"alias":null}
+        ,
+    };
+    for (observed_json, 0..) |json, fixture| {
+        const parsed = try std.json.parseFromSlice(types.Entry, a, json, .{});
+        const before = parsed.value;
+        errdefer std.debug.print("complete observed SL record: {s}\n", .{before.title});
+        try std.testing.expectEqualStrings(if (fixture == 0) "be" else "sl", before.language_code);
+        try std.testing.expectEqualStrings(if (fixture == 0) "beloruščina" else "slovenščina", before.language.?);
+        try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+        const sections = try a.alloc(Section, before.sections.len);
+        for (before.sections, sections) |source_section, *section| {
+            const blocks = try a.alloc(wiki.Block, source_section.blocks.len);
+            for (source_section.blocks, blocks) |source_block, *block| {
+                // Layout consumes block kind/path and inline markers only. Complete table
+                // and feature graphs below are encoded directly from the original entry.
+                const spans = try a.alloc(wiki.Span, source_block.spans.len);
+                for (source_block.spans, spans) |source_span, *span| {
+                    try std.testing.expectEqualStrings("", source_span.trail);
+                    span.* = .{
+                        .kind = std.meta.stringToEnum(@TypeOf(span.kind), @tagName(source_span.kind)).?,
+                        .text = source_span.text,
+                        .target = source_span.target,
+                        .language = source_span.language,
+                        .classes = source_span.classes,
+                        .direction = source_span.direction,
+                        .explanation = source_span.explanation,
+                        .foreground = source_span.foreground,
+                        .background = source_span.background,
+                        .font_scale = source_span.font_scale,
+                        .font_scale_basis = source_span.font_scale_basis,
+                        .role = std.meta.stringToEnum(@TypeOf(span.role), @tagName(source_span.role)).?,
+                        .flags = .{
+                            .bold = source_span.bold, .italic = source_span.italic,
+                            .code = source_span.code, .small = source_span.small,
+                            .superscript = source_span.superscript, .subscript = source_span.subscript,
+                            .strike = source_span.strike, .underline = source_span.underline,
+                        },
+                    };
+                }
+                block.* = .{
+                    .kind = std.meta.stringToEnum(wiki.Kind, @tagName(source_block.kind)).?,
+                    .depth = source_block.depth, .spans = spans,
+                    .list_path = source_block.list_path, .number = source_block.number,
+                    .level = source_block.level, .anchor = source_block.anchor,
+                    .anchor_fallback = source_block.anchor_fallback,
+                };
+            }
+            section.* = .{ .title = source_section.title, .level = source_section.level, .blocks = blocks };
+        }
+        const organization = try buildOwned(a, sections, before.language.?);
+        try std.testing.expectEqual(@as(usize, 1), organization.lexemes.len);
+        const lexeme = organization.lexemes[0];
+        const definition_index: usize = if (fixture == 0) 6 else 2;
+        try std.testing.expectEqual(@as(usize, 0), lexeme.section);
+        try std.testing.expectEqualStrings(if (fixture == 0) "Verb" else "Noun", lexeme.kind);
+        try std.testing.expectEqualStrings(before.language.?, lexeme.language);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+        const sense = lexeme.definitions[0];
+        try std.testing.expectEqual(definition_index, sense.block);
+        try std.testing.expect(sense.parent == null and sense.form == null);
+        try std.testing.expectEqual(@as(usize, 0), sense.examples.len);
+        try std.testing.expectEqual(@as(usize, 0), sense.quotations.len);
+        try std.testing.expectEqual(@as(usize, 0), sense.notes.len);
+        const definition = before.sections[0].blocks[sense.block];
+        try std.testing.expectEqual(types.BlockKind.definition, definition.kind);
+        try std.testing.expectEqualStrings("#", definition.list_path);
+        try std.testing.expectEqualStrings("1", definition.number);
+        var definition_text: std.ArrayList(u8) = .empty;
+        for (definition.spans) |span| try definition_text.appendSlice(a, span.text);
+        try std.testing.expectEqualStrings(if (fixture == 0) "peči" else "človeški ali živalski organ, ki omogoča vid.", definition_text.items);
+        try std.testing.expectEqual(definition_index, lexeme.introduction.len);
+        for (lexeme.introduction, 0..) |index, n| try std.testing.expectEqual(n, index);
+        try std.testing.expectEqual(before.sections[0].blocks.len - definition_index - 1, lexeme.other_blocks.len);
+        for (lexeme.other_blocks, definition_index + 1..) |index, n| try std.testing.expectEqual(n, index);
+        if (fixture == 0) try std.testing.expectEqual(@as(usize, 0), lexeme.related_sections.len)
+        else try std.testing.expectEqualSlices(usize, &.{1}, lexeme.related_sections);
+        const bytes = try codec.encodeBuildAlloc(a, before.display_title, before.sections, organization, before.references, before.media);
+        const stored = try codec.decodeAlloc(a, bytes, before.title, before.kind, .{ .heading = before.language.?, .code = before.language_code });
+        try std.testing.expectEqualStrings(bytes, try codec.encodeAlloc(a, stored));
+        try std.testing.expectEqualDeep(before.sections, stored.entry.sections);
+        try std.testing.expectEqualDeep(before.display_title, stored.entry.display_title);
+        try std.testing.expectEqualDeep(before.references, stored.entry.references);
+        try std.testing.expectEqualDeep(before.media, stored.entry.media);
+        var normalized = stored;
+        normalized.entry.organization = before.organization;
+        const baseline = try codec.encodeAlloc(a, .{ .entry = before });
+        try std.testing.expectEqualStrings(baseline, try codec.encodeAlloc(a, normalized));
+        // No owner was invented in the metadata projection either.
+        try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, sections)).lexemes.len);
+    }
+}
+
+test "KA exact noun heading preserves classified owner and original sense addresses" {
+    try std.testing.expectEqualStrings("Noun", partOfSpeech("არსებითი სახელი").?);
+    for ([_][]const u8{ "არსებითი", "არსებითი  სახელი", "არსებითი სახელი ", " არსებითი სახელი", "არსებითი სახელი 2", "არსებითი სახელები", "დახმარება:არსებითი სახელი" }) |label|
+        try std.testing.expect(partOfSpeech(label) == null);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "გლობუსი" } };
+    const blocks = try renderer.renderBody("# [[დედამიწა|დედამიწის]] [[მოდელი]] [[მცირე]] [[მასშტაბი|მასშტაბისა]] (ჩვეულებისამებრ, [[ღერძი|ღერძზე]] [[მბრუნავი]]).\n#: ''source example''\n");
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "ქართული", .level = 2 },
+        .{ .title = "მნიშვნელობა", .level = 4 },
+        .{ .title = "არსებითი სახელი", .level = 5, .blocks = blocks },
+        .{ .title = "თარგმანები", .level = 4 },
+    };
+    const actual = try buildOwned(a, &sections, "Independent supplied owner");
+    var ordinary = sections;
+    ordinary[2].title = "Noun";
+    try std.testing.expectEqualDeep(try buildOwned(a, &ordinary, "Independent supplied owner"), actual);
+    try std.testing.expectEqual(@as(usize, 1), actual.lexemes.len);
+    const noun = actual.lexemes[0];
+    try std.testing.expectEqualStrings("Independent supplied owner", noun.language);
+    try std.testing.expectEqual(@as(usize, 2), noun.section);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+    const sense = noun.definitions[0];
+    try std.testing.expectEqual(@as(usize, 0), sense.block);
+    try std.testing.expectEqualSlices(usize, &.{1}, sense.examples);
+    try std.testing.expect(sense.parent == null and sense.form == null);
+    try std.testing.expectEqualDeep(blocks, sections[2].blocks);
+    const unresolved = [_]Section{
+        .{ .title = "არსებითი სახელი", .level = 2, .blocks = blocks },
+        .{ .title = "Unknown region", .level = 2 },
+        .{ .title = "არსებითი სახელი", .level = 5, .blocks = blocks },
+    };
+    const unknown = try buildUnclassified(a, &unresolved);
+    try std.testing.expectEqual(@as(usize, 1), unknown.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 2), unknown.lexemes[0].section);
+    try std.testing.expectEqualStrings("", unknown.lexemes[0].language);
+}
+
+test "TL exact adjective and interjection labels preserve supplied owners and reject lookalikes" {
+    try std.testing.expectEqualStrings("Adjective", partOfSpeech("Pang-uri").?);
+    try std.testing.expectEqualStrings("Interjection", partOfSpeech("Pandamdam").?);
+    for ([_][]const u8{ "pang-uri", "PANG-URI", "Pang-uri 2", "Pang-uri ", "Pandamdam 2", "pandamdam", "Pandamdam ", "Unknown Pandamdam" }) |label|
+        try std.testing.expect(partOfSpeech(label) == null);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "aba" } };
+    const body = try renderer.renderBody("# [[Target|meaning]]\n#: ''example''\n");
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "Independent owner", .level = 2 },
+        .{ .title = "Pang-uri", .level = 4, .blocks = body },
+        .{ .title = "Pandamdam", .level = 4, .blocks = body },
+    };
+    const actual = try buildOwned(a, &sections, "Independent owner");
+    var reference = sections;
+    reference[1].title = "Adjective";
+    reference[2].title = "Interjection";
+    try std.testing.expectEqualDeep(try buildOwned(a, &reference, "Independent owner"), actual);
+    try std.testing.expectEqual(@as(usize, 2), actual.lexemes.len);
+    for (actual.lexemes, 1..) |lexeme, index| {
+        try std.testing.expectEqualStrings("Independent owner", lexeme.language);
+        try std.testing.expectEqual(index, lexeme.section);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+        try std.testing.expectEqual(@as(usize, 0), lexeme.definitions[0].block);
+        try std.testing.expectEqualSlices(usize, &.{1}, lexeme.definitions[0].examples);
+        try std.testing.expect(lexeme.definitions[0].parent == null and lexeme.definitions[0].form == null);
+    }
+    const unknown = [_]Section{
+        .{ .title = "Pang-uri", .level = 2, .blocks = body },
+        .{ .title = "Unknown region", .level = 2 },
+        .{ .title = "Pandamdam", .level = 4, .blocks = body },
+    };
+    const unresolved = try buildUnclassified(a, &unknown);
+    try std.testing.expectEqual(@as(usize, 1), unresolved.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 2), unresolved.lexemes[0].section);
+    try std.testing.expectEqualStrings("", unresolved.lexemes[0].language);
+}
+
+test "SL parsed POS admits only trailing entity whitespace without lending literal authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "word" } };
+    const tail = "\n\n'''Pomeni:'''\n\n# [[Meaning]]\n";
+    const blocks = try renderer.renderBody("''word, [[glagol]]'',&#32;[[nedovršen]]" ++ tail);
+    var entity_spaces: usize = 0;
+    for (blocks[0].spans) |span| {
+        if (span.provenance == .entity_literal) {
+            try std.testing.expectEqualStrings(" ", span.text);
+            try std.testing.expectEqual(@as(@TypeOf(span.kind), .text), span.kind);
+            try std.testing.expectEqualStrings("", span.target);
+            entity_spaces += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), entity_spaces);
+    const marker = markedParagraphPart(blocks, "Independent owner", 2) orelse return error.MissingParsedSlovenePos;
+    try std.testing.expectEqualStrings("Verb", marker.kind);
+    const actual = try analyzeMarkedParagraph(a, marker, 0, null, blocks);
+    try std.testing.expectEqual(@as(usize, 1), actual.definitions.len);
+    const definition = blocks[actual.definitions[0].block];
+    try std.testing.expectEqualStrings("#", definition.list_path);
+    try std.testing.expectEqualStrings("Meaning", definition.spans[0].text);
+    try std.testing.expectEqualStrings("Meaning", definition.spans[0].target);
+    for ([_][]const u8{
+        "''word,&#32;[[glagol]]''",
+        "''word, [[glagol]]'',&#120;[[nedovršen]]",
+        "''word, [[glagol]]'',<nowiki> </nowiki>[[nedovršen]]",
+        "''word, [[glagol]]'',<code>&#32;</code>[[nedovršen]]",
+        "''word, [[glagol|&#103;lagol]]''",
+    }) |prefix| {
+        errdefer std.debug.print("SL entity authority boundary: {s}\n", .{prefix});
+        const source = try std.fmt.allocPrint(a, "{s}{s}", .{ prefix, tail });
+        try std.testing.expect(markedParagraphPart(try renderer.renderBody(source), "Independent owner", 2) == null);
+    }
+    const spans = try a.dupe(wiki.Span, blocks[0].spans);
+    const copied = try a.dupe(wiki.Block, blocks);
+    copied[0].spans = spans;
+    for (spans) |*span| {
+        if (span.provenance == .entity_literal) {
+            span.kind = .link;
+            span.target = "glagol";
+        }
+    }
+    try std.testing.expect(markedParagraphPart(copied, "Independent owner", 2) == null);
+    for ([_]?[]const u8{ null, "", "Unclassified" }) |owner|
+        try std.testing.expect(markedParagraphPart(blocks, owner, 2) == null);
+    try std.testing.expect(markedParagraphPart(blocks, "Independent owner", 3) == null);
 }

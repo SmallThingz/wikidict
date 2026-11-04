@@ -8731,3 +8731,275 @@ test "normal Writer exact reviewed Upper Sorbian template argument separates phy
         try std.testing.expectEqualDeep(old_record, new_record);
     }
 }
+
+
+const SqCapturedPreferredTest = struct {
+    const rows = "# content-language\tsq\n# mediawiki\nsq\tshqip\tShqip\tsq\tAlbanian\nen\tanglisht\tAnglisht\tEnglish\n";
+    const canonical = "return { [\"Albanian\"]=\"sq\", [\"English\"]=\"en\" }";
+    const raw = "{{wikipedia}}\n==Shqip==\n===Emër===\n'''kardinalitet''' m.\n# Në [[matematikë]], kardinaliteti i një bashkësie është matja e numrit të elementëve të bashkësisë. P.sh nëse bashkësia A = ( a , b , c , d , e )   {\\displaystyle A=(a,b,c,d,e)}  {\\displaystyle A=(a,b,c,d,e)} përmban 5 elemente, themi që bashkësia A   {\\displaystyle A}  {\\displaystyle A} ka një kardinalitet të barabartë me 5. Kardinaliteti shënohet me |  A |    {\\displaystyle |A|}  {\\displaystyle |A|}, dy vija vertikale në anet e emrit të bashkësisë. Ka të njëjtin simbol matematikor me vlerën absolute, por kuptimi varet nga konteksi i përdorimit. \n\n[[Kategoria:Matematikë shqip]]";
+    const expanded = "<div class=\"sister-wikipedia\"><div class=\"sister-project\"><div class=\"noprint\" style=\"clear: right; border: solid #aaa 1px; margin: 0 0 1em 1em; font-size: 90%; width: 250px; padding: 4px; text-align: left; float: right;\"> \n<div style=\"float: left;\"><div style=\"position: relative; width: 50px; height: 50px; overflow: hidden\">\n<div style=\"position: absolute; top: 0px; left: 0px; font-size: 100px; overflow: hidden; line-height: 100px; z-index: 3\">[[w:sq:Faqja Kryesore|&nbsp;&nbsp;&nbsp;]]</div>\n<div style=\"position: absolute; top: 0px; left: 0px; z-index: 2\">[[Image:Wikipedia-logo-en.png|50px|w:sq:Faqja Kryesore]]</div>\n</div></div>\n<div style=\"margin-left: 60px;\">[[w:sq:Wikipedia|Wikipedia]] ka një artikull për fjalën: <div style=\"margin-left: 10px;\">'''''[[w:Kardinalitet|Kardinalitet]]'''''</div>\n</div>\n</div>\n</div></div></span>\n==Shqip==\n===Emër===\n'''kardinalitet''' m.\n# Në [[matematikë]], kardinaliteti i një bashkësie është matja e numrit të elementëve të bashkësisë. P.sh nëse bashkësia A = ( a , b , c , d , e )   {\\displaystyle A=(a,b,c,d,e)}  {\\displaystyle A=(a,b,c,d,e)} përmban 5 elemente, themi që bashkësia A   {\\displaystyle A}  {\\displaystyle A} ka një kardinalitet të barabartë me 5. Kardinaliteti shënohet me |  A |    {\\displaystyle |A|}  {\\displaystyle |A|}, dy vija vertikale në anet e emrit të bashkësisë. Ka të njëjtin simbol matematikor me vlerën absolute, por kuptimi varet nga konteksi i përdorimit. \n\n[[Kategoria:Matematikë shqip]]";
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tsqwiktionary\n# dump-date\t20261001\n# content-language\tsq\n-2\tMedia\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n-1\tSpeciale\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\tDiskutim\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n2\tPërdoruesi\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\tPerdoruesi\tPërdoruesja\n3\tPërdoruesi diskutim\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tPerdoruesi diskutim\tPërdoruesja diskutim\n4\tWiktionary\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\n5\tWiktionary diskutim\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWiktionary talk\n6\tSkeda\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tFigura\tImage\n7\tSkeda diskutim\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tFigura diskutim\tImage talk\n8\tMediaWiki\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n9\tMediaWiki diskutim\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n10\tStampa\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n11\tStampa diskutim\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n12\tNdihmë\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tNdihme\n13\tNdihmë diskutim\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tNdihme diskutim\n14\tKategoria\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tKategori\n15\tKategoria diskutim\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tKategori Diskutim\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\tModuli\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\tModuli diskutim\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\tEvent\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\tEvent talk\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
+    const interwiki = "# interwiki-magic\t1\nsq\t1\t1\t0\t0\thttps://sq.wiktionary.org/wiki/$1\t1\nw\t1\t0\t0\t0\thttps://sq.wikipedia.org/wiki/$1\t0\n";
+    fn read(a: std.mem.Allocator, root: []const u8, owner: []const u8) !encoder.presentation_types.Stored {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{root, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(owner, &filename)});
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, a, .limited(16 * 1024 * 1024));
+        const blob = try encoder.blob_format.inspect(bytes);
+        const metadata = try blob.languageMetadata();
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find("kardinalitet")) orelse return error.TestUnexpectedResult;
+        const stored = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, stored));
+        return stored;
+    }
+};
+
+test "normal Writer captured SQ preferred capitalization keeps full kardinalitet body after canonical name import" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var namespaces = try namespace_registry.Registry.init(a, SqCapturedPreferredTest.namespaces); defer namespaces.deinit();
+    try namespaces.attachInterwikiMap(SqCapturedPreferredTest.interwiki);
+    var actual_registry = language_registry.Registry.empty(a); defer actual_registry.deinit();
+    try actual_registry.addTsv(SqCapturedPreferredTest.rows);
+    try actual_registry.addLua(SqCapturedPreferredTest.canonical);
+    var reference_registry = language_registry.Registry.empty(a); defer reference_registry.deinit();
+    // The control trusts the exact captured capital spelling directly.
+    try reference_registry.addTsv("# content-language\tsq\n# mediawiki\nsq\tShqip\tshqip\tsq\tAlbanian\nen\tanglisht\tAnglisht\tEnglish\n");
+    try reference_registry.addLua(SqCapturedPreferredTest.canonical);
+    const base = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const actual_root = try std.fs.path.join(a, &.{base, "actual"});
+    const reference_root = try std.fs.path.join(a, &.{base, "reference"});
+    const actual_codes = languageCodes(&actual_registry, &namespaces);
+    const reference_codes = languageCodes(&reference_registry, &namespaces);
+    var writer = try encoder.blob_builder.Writer.init(io, a, actual_root); defer writer.deinit(); writer.language_codes = actual_codes;
+    var reference = try encoder.blob_builder.Writer.init(io, a, reference_root); defer reference.deinit(); reference.language_codes = reference_codes;
+    try writer.addExpandedPage(a, .{.id=0,.kind=.language}, "kardinalitet", SqCapturedPreferredTest.expanded, SqCapturedPreferredTest.raw, null);
+    try reference.addExpandedPage(a, .{.id=0,.kind=.language}, "kardinalitet", SqCapturedPreferredTest.expanded, SqCapturedPreferredTest.raw, null);
+    const actual_stats = try writer.finish(actual_codes);
+    const reference_stats = try reference.finish(reference_codes);
+    // One proved owner retains ordinary page-prefix context in that same record.
+    try std.testing.expectEqual(@as(usize, 1), actual_stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), actual_stats.language_blobs);
+    try std.testing.expectEqual(@as(usize, 1), reference_stats.language_blobs);
+    try std.testing.expectEqual(reference_stats.language_records, actual_stats.language_records);
+    const actual = try SqCapturedPreferredTest.read(a, actual_root, "Albanian");
+    const expected = try SqCapturedPreferredTest.read(a, reference_root, "Albanian");
+    try std.testing.expectEqualStrings("sq", actual.entry.language_code);
+    try std.testing.expectEqualStrings("Albanian", actual.entry.language.?);
+    try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, expected), try encoder.presentation_codec.encodeAlloc(a, actual));
+    // Do not invent a separate Unclassified record for the now-proved sole owner.
+    // Compare the entire encoded record above, and independently witness that its
+    // authored Wikipedia context and image survived without assuming span cuts.
+    var context_text: std.ArrayList(u8) = .empty;
+    var context_targets: std.ArrayList(u8) = .empty;
+    for (actual.entry.preamble_spans) |span| {
+        try context_text.appendSlice(a, span.text);
+        try context_text.appendSlice(a, span.trail);
+        try context_targets.appendSlice(a, span.target);
+        try context_targets.append(a, '\n');
+    }
+    for (actual.entry.sections) |section| for (section.blocks) |block| {
+        for (block.spans) |span| {
+            try context_text.appendSlice(a, span.text);
+            try context_text.appendSlice(a, span.trail);
+            try context_targets.appendSlice(a, span.target);
+            try context_targets.append(a, '\n');
+        }
+    };
+    try std.testing.expect(std.mem.indexOf(u8, context_text.items, "Wikipedia") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context_text.items, "ka një artikull për fjalën:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context_text.items, "Kardinalitet") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context_targets.items, "Wikipedia") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context_targets.items, "Kardinalitet") != null);
+    var wikipedia_image = false;
+    for (actual.entry.media) |media| {
+        if (media.kind == .image and std.mem.eql(u8, media.file, "Wikipedia-logo-en.png")) wikipedia_image = true;
+    }
+    try std.testing.expect(wikipedia_image);
+    var definitions: usize = 0; var math_links: usize = 0;
+    for (actual.entry.sections) |section| for (section.blocks) |block| {
+        if (block.kind == .definition) {
+            definitions += 1;
+            var visible: std.ArrayList(u8) = .empty;
+            for (block.spans) |span| {
+                try visible.appendSlice(a, span.text);
+                if (span.kind == .link and std.mem.eql(u8, span.target, "matematikë")) math_links += 1;
+            }
+            try std.testing.expect(std.mem.indexOf(u8, visible.items, "{\\displaystyle |A|}") != null);
+            try std.testing.expect(std.mem.indexOf(u8, visible.items, "kuptimi varet nga konteksi i përdorimit.") != null);
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), definitions);
+    try std.testing.expectEqual(@as(usize, 1), math_links);
+    try std.testing.expectEqual(@as(usize, 0), actual.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 0), actual.entry.organization.lexemes.len);
+}
+
+const EuBorderHeadingTest = struct {
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\tfr\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tFile\tFile\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\tImage\tIrudi\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tinput\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\tKategoria\n";
+    const rows = "# mediawiki\nht\tHaitiko kreolera\ncsb\tKashubian\npl\tpoloniera\neu\teuskara\ngn\tguaraniera\tGuaraniera\nfr\tFrench\n";
+    // Synthetic complete bodies with authenticated exact EU banner projections.
+    // These are not captured Worker replies for the two real pages.
+    const ht_body = "===Noun===\n# [[eskubide|right]] '''bold'''\n#: ''Haitian example''\n<ref name=\"ht-note\">Haitian note</ref>\n<references/>\n";
+    const csb_body = "===Adjective===\n# [[bi|two]] ''italic''\n#: Kashubian example\n";
+    const pl_body = "===Numeral===\n# [[pl-target|Polish two]]\n* [[navigation]]\n";
+    const eu_body = "===Noun===\n# [[eu-first|Basque first]]\n#: Basque example\n# [[eu-second|Basque second]]\n";
+    const gn_body = "===Noun===\n# [[euri|rain]] '''Guarani'''\n";
+    const ht = "==[[Irudi:Flag of Haiti.svg|border|60px]] Haitiko kreolera==\n" ++ ht_body;
+    const csb = "==[[Irudi:POL Kaszuby flag.svg|border|60px]] Kaxubiera==\n" ++ csb_body;
+    const pl = "==poloniera==\n" ++ pl_body;
+    const eu = "==euskara==\n" ++ eu_body;
+    const gn = "== [[Irudi:Guarani flag.svg|border|60px]] Guaraniera==\n" ++ gn_body;
+    const expanded = [_][]const u8{ ht ++ csb ++ pl, eu ++ gn };
+    const raw = [_][]const u8{
+        "{{-ht-}}\n" ++ ht_body ++ "{{-csb-}}\n" ++ csb_body ++ "{{-pl-}}\n" ++ pl_body,
+        "{{-eu-}}\n" ++ eu_body ++ "{{-gn-}}\n" ++ gn_body,
+    };
+    fn read(a: std.mem.Allocator, root: []const u8, title: []const u8, owner: []const u8, code: []const u8) !encoder.presentation_types.Stored {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{ root, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(owner, &filename) });
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, a, .limited(16 * 1024 * 1024));
+        const blob = try encoder.blob_format.inspect(bytes); const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(code, metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find(title)) orelse return error.TestUnexpectedResult;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(code, decoded.entry.language_code);
+        try std.testing.expectEqualStrings(owner, decoded.entry.language orelse return error.TestUnexpectedResult);
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+        return decoded;
+    }
+};
+
+test "normal Writer neutral flag borders and reviewed Kashubian alias keep five complete language regions separate" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var namespaces = try namespace_registry.Registry.init(a, EuBorderHeadingTest.namespaces); defer namespaces.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(EuBorderHeadingTest.rows);
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(@embedFile("reviewed_language_aliases.json"), &digest, .{});
+    const marker = try std.fmt.allocPrint(a, "# reviewed-alias\tcsb\tKaxubiera\teu-kaxubiera-exact-euwiki10723575-v1\t{s}\n", .{std.fmt.bytesToHex(digest, .lower)});
+    try registry.addTsv(marker);
+    // The publication-pinned EU row contains this alias; casing proof alone
+    // deliberately does not install it. Preserve the original preferred owner.
+    const guarani = registry.resolveTrusted("Guaraniera") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("gn", guarani.code);
+    try std.testing.expectEqualStrings("guaraniera", guarani.heading);
+    const codes = languageCodes(&registry, &namespaces);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/eu-regions", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(io, a, root); defer writer.deinit(); writer.language_codes = codes;
+    const titles = [_][]const u8{ "dwa-control", "ama-control" };
+    for (titles, EuBorderHeadingTest.expanded, EuBorderHeadingTest.raw) |title, expanded, raw| {
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, title, expanded, raw, null);
+    }
+    try std.testing.expectEqual(@as(usize, 5), (try writer.finish(codes)).language_records);
+    const owners = [_][]const u8{ "Haitiko kreolera", "Kashubian", "poloniera", "euskara", "guaraniera" };
+    const ids = [_][]const u8{ "ht", "csb", "pl", "eu", "gn" };
+    const sources = [_][]const u8{ EuBorderHeadingTest.ht, EuBorderHeadingTest.csb, EuBorderHeadingTest.pl, EuBorderHeadingTest.eu, EuBorderHeadingTest.gn };
+    const definitions = [_]usize{ 1, 1, 1, 2, 1 };
+    const targets = [_][]const u8{ "eskubide", "bi", "pl-target", "eu-first", "euri" };
+    for (owners, ids, sources, definitions, targets, 0..) |owner, code, source, definition_count, target, i| {
+        const title = titles[@intFromBool(i >= 3)];
+        const stored = try EuBorderHeadingTest.read(a, root, title, owner, code);
+        var actual_definitions: usize = 0; var own_action: usize = 0;
+        for (stored.entry.sections) |section| for (section.blocks) |block| {
+            if (block.kind == .definition) actual_definitions += 1;
+            for (block.spans) |span| {
+                if (span.kind == .link and std.mem.eql(u8, span.target, target)) own_action += 1;
+                for (targets, 0..) |other_target, other_i| if (other_i != i) {
+                    try std.testing.expect(!std.mem.eql(u8, span.target, other_target));
+                };
+            }
+        };
+        try std.testing.expectEqual(definition_count, actual_definitions);
+        try std.testing.expectEqual(@as(usize, 1), own_action);
+        // Compile the entire selected region directly with its original page
+        // heading coordinates, including the second Noun anchor in ama.
+        const document = encoder.presentation_document;
+        const page = EuBorderHeadingTest.expanded[@intFromBool(i >= 3)];
+        const start = std.mem.indexOf(u8, page, source) orelse return error.TestUnexpectedResult;
+        const observation = try document.observeHeadingAnchorsAlloc(a, title, document.MissingText.untracked(page), .{}, &namespaces, null, null, .{}, null);
+        const projection = [_]document.HeadingSourceRange{.{ .owner_start = 0, .page_start = start, .len = source.len }};
+        var fallbacks: document.Fallbacks = .{};
+        const payload = try document.compileClassifiedWithHeadingAnchorsAlloc(a, title, .language, owner, code,
+            document.MissingText.untracked(source), null, .{}, &namespaces, null, null, .{}, &fallbacks, null, &.{}, &observation, &projection, .{ .heading = owner, .code = code });
+        const expected = try encoder.presentation_codec.decodeAlloc(a, payload, title, .language, .{ .heading = owner, .code = code });
+        try std.testing.expectEqualDeep(expected, stored);
+    }
+}
+
+test "normal Writer registered middle flag decoration preserves Gaelic before English and standalone Gaelic" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const namespace_rows = "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\tfr\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tFaidhle\tFile\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\tImage\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tinput\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\n";
+    var namespaces = try namespace_registry.Registry.init(a, namespace_rows); defer namespaces.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv("# mediawiki\ngd\tGàidhlig\nen\tBeurla\nfr\tFrench\n");
+    // The three actual GD spellings/IDs from selected profile 23bba157 are
+    // projected into this foreign-content-language test profile, not forged
+    // as a captured GD snapshot or a full Worker expansion.
+    const option_rows = "# wikidict-image-options-v1\n# wiki\ttestwiktionary\n# dump-date\t20261001\n# content-language\ttest\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n# behavior-switches-sha256\t0000000000000000000000000000000000000000000000000000000000000000\nimg_middle\t1\t\"middle\"\nimg_border\t1\t\"border\"\nimg_width\t1\t\"$1px\"\n";
+    var options = try namespace_registry.image_options.Registry.init(a, option_rows, "testwiktionary", "20261001", "test", @splat(0), @splat(0)); defer options.deinit();
+    var codes = languageCodes(&registry, &namespaces); codes.image_options = &options;
+    const gd_body = "===Noun===\n# [[gd-target|Gaelic species]] '''bold'''\n#: ''Gaelic example''\n* [[species-link|species]]\n";
+    const en_body = "===Noun===\n# [[en-target|English body]]\n#: English example\n";
+    const gd = "== [[Faidhle:Flag of Scotland.svg|border|75px|middle]] Gàidhlig ==\n" ++ gd_body;
+    const en = "==Beurla==\n" ++ en_body;
+    const single = "== [[Faidhle:Flag of Scotland.svg|middle|75px|border]] Gàidhlig ==\n===Noun===\n# [[dog-target|standalone Gaelic]]\n";
+    const page = gd ++ en;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/gd-regions", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(io, a, root); defer writer.deinit(); writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "cat-control", page, "{{=gd=}}\n" ++ gd_body ++ "{{=en=}}\n" ++ en_body, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "cù-control", single, "{{=gd=}}\n===Noun===\n# [[dog-target|standalone Gaelic]]\n", null);
+    try std.testing.expectEqual(@as(usize, 3), (try writer.finish(codes)).language_records);
+    // The aligned equals declarations independently prove the owner. Exercise
+    // the new physical-heading proof without that alternate source authority,
+    // then require identical complete records from both ordinary Writer routes.
+    const physical_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/gd-physical", .{tmp.sub_path});
+    var physical = try encoder.blob_builder.Writer.init(io, a, physical_root); defer physical.deinit(); physical.language_codes = codes;
+    try physical.addExpandedPage(a, .{ .id = 0, .kind = .language }, "cat-control", page, page, null);
+    try physical.addExpandedPage(a, .{ .id = 0, .kind = .language }, "cù-control", single, single, null);
+    try std.testing.expectEqual(@as(usize, 3), (try physical.finish(codes)).language_records);
+    const owners = [_][]const u8{ "Gàidhlig", "Beurla", "Gàidhlig" };
+    const ids = [_][]const u8{ "gd", "en", "gd" };
+    const titles = [_][]const u8{ "cat-control", "cat-control", "cù-control" };
+    const sources = [_][]const u8{ gd, en, single };
+    const pages = [_][]const u8{ page, page, single };
+    const targets = [_][]const u8{ "gd-target", "en-target", "dog-target" };
+    for (owners, ids, titles, sources, pages, targets, 0..) |owner, code, title, source, whole, target, i| {
+        const stored = try EuBorderHeadingTest.read(a, root, title, owner, code);
+        const physical_stored = try EuBorderHeadingTest.read(a, physical_root, title, owner, code);
+        try std.testing.expectEqualDeep(stored, physical_stored);
+        var definitions: usize = 0; var own_action: usize = 0;
+        for (stored.entry.sections) |section| for (section.blocks) |block| {
+            if (block.kind == .definition) definitions += 1;
+            for (block.spans) |span| {
+                if (span.kind == .link and std.mem.eql(u8, span.target, target)) own_action += 1;
+                for (targets, 0..) |other, j| if (i != j) try std.testing.expect(!std.mem.eql(u8, span.target, other));
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), definitions);
+        try std.testing.expectEqual(@as(usize, 1), own_action);
+        const document = encoder.presentation_document;
+        const start = std.mem.indexOf(u8, whole, source) orelse return error.TestUnexpectedResult;
+        const observation = try document.observeHeadingAnchorsAlloc(a, title, document.MissingText.untracked(whole), .{}, &namespaces, null, &options, .{}, null);
+        const projection = [_]document.HeadingSourceRange{.{ .owner_start = 0, .page_start = start, .len = source.len }};
+        var fallbacks: document.Fallbacks = .{};
+        const payload = try document.compileClassifiedWithHeadingAnchorsAlloc(a, title, .language, owner, code,
+            document.MissingText.untracked(source), null, .{}, &namespaces, null, &options, .{}, &fallbacks, null, &.{}, &observation, &projection, .{ .heading = owner, .code = code });
+        const expected = try encoder.presentation_codec.decodeAlloc(a, payload, title, .language, .{ .heading = owner, .code = code });
+        try std.testing.expectEqualDeep(expected, stored);
+    }
+}
