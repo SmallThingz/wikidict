@@ -13,6 +13,18 @@ pub const Registry = struct {
         self.used.deinit(a);
     }
 
+    /// Reserve an already observed emitted ID without renaming or deriving a
+    /// second fallback. Reference blocks share the page's observed namespace.
+    pub fn reserveExisting(self: *Registry, a: A, id: []const u8) !void {
+        if (id.len == 0) return;
+        if (!std.unicode.utf8ValidateSlice(id)) return error.InvalidPresentation;
+        const key = try a.dupe(u8, id);
+        errdefer a.free(key);
+        for (key) |*byte| byte.* = std.ascii.toLower(byte.*);
+        const result = try self.used.getOrPut(a, key);
+        if (result.found_existing) a.free(key);
+    }
+
     fn reserve(self: *Registry, a: A, base: []const u8) ![]const u8 {
         var suffix: usize = 1;
         while (true) : (suffix += 1) {
@@ -189,4 +201,18 @@ test "legacy fallback IDs retain independent suffixes in the shared namespace" {
     const later = try ids.headingIds(a, "\xc3\xa4");
     try std.testing.expectEqualStrings("\xc3\xa4_2", later.anchor);
     try std.testing.expectEqualStrings(".C3.A4_3", later.anchor_fallback);
+}
+
+test "already observed primary and fallback IDs reserve exact collision keys" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry: Registry = .{};
+    defer registry.deinit(a);
+    try registry.reserveExisting(a, "Repeated");
+    try registry.reserveExisting(a, "REPEATED");
+    try registry.reserveExisting(a, ".C4.8D");
+    try std.testing.expectEqualStrings("repeated_2", try registry.heading(a, "repeated"));
+    try std.testing.expectEqualStrings(".C4.8D_2", try registry.authored(a, ".C4.8D"));
+    try std.testing.expectError(error.InvalidPresentation, registry.reserveExisting(a, "\xff"));
 }

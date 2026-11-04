@@ -757,21 +757,59 @@ pub fn build(b: *std.Build) void {
     b.step("test-storage", "Exercise after-compression indexes and selective real XZ block decoding").dependOn(&storage_run.step);
     if (target.result.os.tag == b.graph.host.result.os.tag and target.result.cpu.arch == b.graph.host.result.cpu.arch) test_step.dependOn(&storage_run.step);
 
-    // Separate Compile steps share the exact test options but have no full-suite
-    // execution dependencies. The normal test chain above remains serialized.
-    const prepared_tests = [_]struct { name: []const u8, artifact: *std.Build.Step.Compile }{
-        .{ .name = "encoder", .artifact = b.addTest(encoder_test_options) },
-        .{ .name = "lua", .artifact = b.addTest(lua_test_options) },
-        .{ .name = "lua_core", .artifact = lua_core_tests_standalone },
-        .{ .name = "lua_abi", .artifact = lua_abi_tests_standalone },
-        .{ .name = "lua_stdlib", .artifact = b.addTest(lua_stdlib_test_options) },
-        .{ .name = "lua_wikitext", .artifact = b.addTest(lua_wikitext_test_options) },
-        .{ .name = "tools", .artifact = b.addTest(blob_build_test_options) },
+    // Only prepared artifacts use these filters. The public full test graph
+    // above remains unfiltered, including when these options are supplied.
+    const prepare_group = b.option(PreparedTestGroup, "prepare-test-group", "Compile only this prepare-tests group");
+    const requested_filters = b.option([]const []const u8, "prepare-test-filter", "Repeat to compile named tests in the selected prepare-tests group") orelse &.{};
+    const prepare_filters = preparedTestFilters(b.allocator, prepare_group, requested_filters) catch |err| {
+        std.log.err("invalid prepare-tests selection: {s}", .{@errorName(err)});
+        b.invalid_user_input = true;
+        return;
     };
-    const prepare_tests = b.step("prepare-tests", "Compile full test executables for runtime-filtered qualification");
+    const prepared_tests = [_]struct { group: PreparedTestGroup, artifact: *std.Build.Step.Compile }{
+        .{ .group = .encoder, .artifact = encoder_tests },
+        .{ .group = .lua, .artifact = lua_tests },
+        .{ .group = .lua_core, .artifact = lua_core_tests },
+        .{ .group = .lua_abi, .artifact = lua_abi_tests },
+        .{ .group = .lua_stdlib, .artifact = lua_stdlib_tests },
+        .{ .group = .lua_wikitext, .artifact = lua_wikitext_tests },
+        .{ .group = .tools, .artifact = blob_build_tests },
+        .{ .group = .closure, .artifact = closure_tests },
+        .{ .group = .provider, .artifact = provider_tests },
+        .{ .group = .storage_unit, .artifact = storage_unit },
+        .{ .group = .namespace_registry, .artifact = namespace_registry_tests },
+        .{ .group = .blob_encoder, .artifact = blob_encoder_tests },
+        .{ .group = .blob_decoder, .artifact = blob_decoder_tests },
+        .{ .group = .blob_query, .artifact = blob_query_tests },
+        .{ .group = .wikimedia_dump, .artifact = wikimedia_dump_tests },
+        .{ .group = .global_index, .artifact = global_index_tests },
+        .{ .group = .program_shapes, .artifact = program_shapes_tests },
+        .{ .group = .lua_ustring, .artifact = lua_ustring_tests },
+        .{ .group = .lua_scribunto, .artifact = lua_scribunto_tests },
+        .{ .group = .bundle_protocol, .artifact = bundle_protocol_tests },
+        .{ .group = .bundle_pipeline, .artifact = bundle_pipeline_tests },
+        .{ .group = .blob_file_tools, .artifact = blob_file_tools_tests },
+        .{ .group = .missing_dependency, .artifact = missing_dependency_tests },
+    };
+    const prepare_tests = b.step("prepare-tests", "Compile test executables for runtime-filtered qualification");
+    // The normal pipeline group also requires the reader's freestanding smoke
+    // compilation. Clone only that object, not its serial protocol-test run.
+    if (prepare_group == .bundle_pipeline) {
+        const smoke = b.addObject(.{
+            .name = blob_wasm_smoke.name,
+            .root_module = blob_wasm_smoke.root_module,
+            .max_rss = blob_wasm_smoke.step.max_rss,
+            .use_llvm = blob_wasm_smoke.use_llvm,
+            .use_lld = blob_wasm_smoke.use_lld,
+            .zig_lib_dir = blob_wasm_smoke.zig_lib_dir,
+        });
+        prepare_tests.dependOn(&smoke.step);
+    }
     for (prepared_tests) |prepared| {
-        const install = b.addInstallArtifact(prepared.artifact, .{
-            .dest_sub_path = b.fmt("wikidict-tests/{s}", .{prepared.name}),
+        if (!preparedTestGroupIncluded(prepare_group, prepared.group)) continue;
+        const options = preparedTestOptions(prepared.artifact, prepare_filters);
+        const install = b.addInstallArtifact(b.addTest(options), .{
+            .dest_sub_path = b.fmt("wikidict-tests/{s}", .{@tagName(prepared.group)}),
         });
         prepare_tests.dependOn(&install.step);
     }
@@ -924,4 +962,131 @@ fn addPublicRunStep(
 fn namespaceRegistryModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize) *std.Build.Module {
     const unicode = b.createModule(.{ .root_source_file = b.path("src/frontend/unicode_lower.zig"), .target = target, .optimize = optimize });
     return b.createModule(.{ .root_source_file = b.path("src/shared/namespace_registry_module.zig"), .target = target, .optimize = optimize, .link_libc = true, .imports = &.{.{ .name = "unicode_lower", .module = unicode }} });
+}
+
+const PreparedTestGroup = enum {
+    encoder, lua, lua_core, lua_abi, lua_stdlib, lua_wikitext, tools, closure, provider, storage_unit, namespace_registry, blob_encoder, blob_decoder, blob_query, wikimedia_dump, global_index, program_shapes, lua_ustring, lua_scribunto, bundle_protocol, bundle_pipeline, blob_file_tools, missing_dependency
+};
+
+fn preparedTestGroupIncluded(selected: ?PreparedTestGroup, group: PreparedTestGroup) bool {
+    if (selected) |wanted| return wanted == group;
+    // Keep the established seven-artifact default. Other normal roots are
+    // opt-in for source-bound continuations, never implicit suite completion.
+    return switch (group) {
+        .encoder, .lua, .lua_core, .lua_abi, .lua_stdlib, .lua_wikitext, .tools => true,
+        else => false,
+    };
+}
+
+// Reuse the normal root's modules and backend choices, without copying its
+// serial run dependencies. Each selected root is a fresh compile-only step.
+fn preparedTestOptions(original: *std.Build.Step.Compile, filters: []const []const u8) std.Build.TestOptions {
+    std.debug.assert(original.kind == .@"test");
+    return .{
+        .name = original.name,
+        .root_module = original.root_module,
+        .max_rss = original.step.max_rss,
+        .filters = if (filters.len == 0) original.filters else filters,
+        .test_runner = original.test_runner,
+        .use_llvm = original.use_llvm,
+        .use_lld = original.use_lld,
+        .zig_lib_dir = original.zig_lib_dir,
+    };
+}
+
+fn preparedTestFilters(a: std.mem.Allocator, group: ?PreparedTestGroup, requested: []const []const u8) ![]const []const u8 {
+    if (requested.len == 0) return &.{};
+    const selected = group orelse return error.PrepareTestGroupRequired;
+    for (requested) |filter| if (filter.len == 0) return error.EmptyTestFilter;
+    var filters: std.ArrayList([]const u8) = .empty;
+    errdefer filters.deinit(a);
+    try filters.appendSlice(a, requested);
+    // Filtering out these import-only tests also hides tests in their imported
+    // source files. Keep discovery compiled; the caller still runs exact names.
+    const discovery: ?[]const u8 = switch (selected) {
+        .encoder => "encoder root imports bundle-time presentation modules",
+        .lua => "tests.test_0",
+        else => null,
+    };
+    if (discovery) |name| {
+        var present = false;
+        for (requested) |filter| {
+            if (std.mem.eql(u8, filter, name)) {
+                present = true;
+                break;
+            }
+        }
+        if (!present) try filters.append(a, name);
+    }
+    return filters.toOwnedSlice(a);
+}
+
+test "prepared test default retains all seven groups and unfiltered artifacts" {
+    var count: usize = 0;
+    for (std.meta.tags(PreparedTestGroup)) |group| {
+        if (preparedTestGroupIncluded(null, group)) count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 7), count);
+    for ([_]PreparedTestGroup{ .encoder, .lua, .lua_core, .lua_abi, .lua_stdlib, .lua_wikitext, .tools }) |group| {
+        try std.testing.expect(preparedTestGroupIncluded(null, group));
+    }
+    try std.testing.expect(!preparedTestGroupIncluded(null, .blob_encoder));
+    try std.testing.expect(!preparedTestGroupIncluded(null, .blob_file_tools));
+    try std.testing.expectEqual(@as(usize, 0), (try preparedTestFilters(std.testing.allocator, null, &.{})).len);
+}
+
+test "prepared test selection excludes unrelated groups" {
+    for (std.meta.tags(PreparedTestGroup)) |group| {
+        try std.testing.expectEqual(group == .encoder, preparedTestGroupIncluded(.encoder, group));
+    }
+    for (std.meta.tags(PreparedTestGroup)) |group| {
+        try std.testing.expectEqual(group == .blob_encoder, preparedTestGroupIncluded(.blob_encoder, group));
+    }
+    try std.testing.expectError(error.PrepareTestGroupRequired, preparedTestFilters(std.testing.allocator, null, &.{"one"}));
+    try std.testing.expectError(error.EmptyTestFilter, preparedTestFilters(std.testing.allocator, .encoder, &.{""}));
+}
+
+test "prepared test filters retain encoder and Lua import discovery" {
+    const encoder = try preparedTestFilters(std.testing.allocator, .encoder, &.{"one", "two"});
+    defer std.testing.allocator.free(encoder);
+    try std.testing.expectEqual(@as(usize, 3), encoder.len);
+    try std.testing.expectEqualStrings("one", encoder[0]);
+    try std.testing.expectEqualStrings("two", encoder[1]);
+    try std.testing.expectEqualStrings("encoder root imports bundle-time presentation modules", encoder[2]);
+    const lua = try preparedTestFilters(std.testing.allocator, .lua, &.{"one"});
+    defer std.testing.allocator.free(lua);
+    try std.testing.expectEqualStrings("tests.test_0", lua[1]);
+}
+
+test "prepared test direct roots keep only requested filters" {
+    const core = try preparedTestFilters(std.testing.allocator, .lua_core, &.{"one"});
+    defer std.testing.allocator.free(core);
+    try std.testing.expectEqual(@as(usize, 1), core.len);
+    const encoder = try preparedTestFilters(std.testing.allocator, .encoder, &.{"encoder root imports bundle-time presentation modules"});
+    defer std.testing.allocator.free(encoder);
+    try std.testing.expectEqual(@as(usize, 1), encoder.len);
+}
+
+test "prepared test options preserve normal modules backend runner and limits" {
+    var module: std.Build.Module = undefined;
+    var original: std.Build.Step.Compile = undefined;
+    original.kind = .@"test";
+    original.name = "test";
+    original.root_module = &module;
+    original.step.max_rss = 321;
+    original.filters = &.{};
+    original.test_runner = .{ .path = .{ .cwd_relative = "tools/test_runner.zig" }, .mode = .simple };
+    original.use_llvm = true;
+    original.use_lld = true;
+    original.zig_lib_dir = .{ .cwd_relative = "zig-lib" };
+    const options = preparedTestOptions(&original, &.{"one"});
+    try std.testing.expect(options.root_module == &module);
+    try std.testing.expectEqualStrings("test", options.name);
+    try std.testing.expectEqual(@as(u64, 321), options.max_rss);
+    try std.testing.expectEqual(@as(?bool, true), options.use_llvm);
+    try std.testing.expectEqual(@as(?bool, true), options.use_lld);
+    try std.testing.expectEqualStrings("tools/test_runner.zig", options.test_runner.?.path.cwd_relative);
+    try std.testing.expect(options.test_runner.?.mode == .simple);
+    try std.testing.expectEqualStrings("zig-lib", options.zig_lib_dir.?.cwd_relative);
+    try std.testing.expectEqualStrings("one", options.filters[0]);
 }

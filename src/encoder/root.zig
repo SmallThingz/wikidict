@@ -12,6 +12,7 @@ pub const page_redirects = @import("namespace_registry").page_redirects;
 pub const namespace_coverage = blobs.namespace_coverage;
 pub const presentation_types = blobs.presentation_types;
 pub const presentation_codec = blobs.presentation_codec;
+pub const table_style_profile = @import("table_style_profile.zig");
 pub const blob_files = @import("blob_files");
 pub const blob_builder = @import("blob_builder.zig");
 pub const presentation_compile = @import("presentation_compile.zig");
@@ -29,6 +30,7 @@ test "encoder root imports bundle-time presentation modules" {
     _ = page_redirects;
     _ = presentation_types;
     _ = presentation_codec;
+    _ = table_style_profile;
     _ = blob_files;
     _ = blob_builder;
     _ = presentation_compile;

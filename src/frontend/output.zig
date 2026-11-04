@@ -142,6 +142,10 @@ const SpanCursor = struct {
             }
             const span = self.spans[self.index];
             if (self.phase == 0 and self.offset == 0 and !self.raw_continuation) self.info = PoemInfo.parse(span.classes);
+            if (self.phase == 0 and span.image != null and span.text.len == 0) {
+                self.phase = 1;
+                return .{ .span = span, .bytes = "[image]", .ends_line = false, .initial = true, .info = self.info };
+            }
             if (self.phase == 0 and span.kind == .line_break) {
                 self.phase = 1;
                 self.raw_continuation = true;
@@ -270,7 +274,15 @@ fn spanPieceText(w: *std.Io.Writer, piece: SpanPiece, color: bool, whitespace: ?
             try w.writeAll("\x1b[36m");
     }
     try scripts.prefix(w, span, piece.initial);
-    if (whitespace) |state| try state.write(w, piece.bytes, span.code or piece.info.marked or span.background != null) else try terminalText(w, piece.bytes);
+    if (piece.initial and span.image != null) {
+        try w.writeAll("[image");
+        if (span.image.?.alt) |alt| if (alt.len != 0) {
+            try w.writeAll(": ");
+            try terminalText(w, alt);
+        };
+        try w.writeByte(']');
+        if (whitespace) |state| state.space = false;
+    } else if (whitespace) |state| try state.write(w, piece.bytes, span.code or piece.info.marked or span.background != null) else try terminalText(w, piece.bytes);
     if (color) try w.writeAll("\x1b[0m");
 }
 
@@ -353,6 +365,15 @@ fn tableCellRows(a: std.mem.Allocator, text: []const u8, columns: usize) ![]term
 // Cell fill owns its two padding spaces but never the neutral frame/borders.
 // Span resets restore the cell base without inheriting the previous span font.
 fn tableWrappedLine(w: *std.Io.Writer, line: terminal.RenderRow, width: usize, color: bool, background: ?[3]u8, padding: usize) !void {
+    return tableWrappedAlignedLine(w, line, width, color, background, padding, 0);
+}
+fn cellLineLeading(cell: @import("blob_encoder").presentation_types.Cell, line: terminal.RenderRow, width: usize) usize {
+    const style = cell.style orelse return 0;
+    const alignment = style.text_align orelse return 0;
+    const spare = width -| terminal.cellWidth(line.bytes);
+    return switch (alignment) { .right => spare, .center => spare / 2, else => 0 };
+}
+fn tableWrappedAlignedLine(w: *std.Io.Writer, line: terminal.RenderRow, width: usize, color: bool, background: ?[3]u8, padding: usize, leading: usize) !void {
     var base_buffer: [80]u8 = undefined;
     const base: []const u8 = if (color) if (background) |rgb| base: {
         const ink = contrastForeground(rgb);
@@ -360,11 +381,12 @@ fn tableWrappedLine(w: *std.Io.Writer, line: terminal.RenderRow, width: usize, c
     } else "" else "";
     try w.writeAll(base);
     try w.splatByteAll(' ', padding);
+    try w.splatByteAll(' ', leading);
     if (color) try line.carry.write(w);
     if (base.len != 0) try terminal.writeStyled(w, line.bytes, base) else try w.writeAll(line.bytes);
     if (color) try w.writeAll("\x1b[0m");
     try w.writeAll(base);
-    try w.splatByteAll(' ', width -| terminal.cellWidth(line.bytes));
+    try w.splatByteAll(' ', (width -| terminal.cellWidth(line.bytes)) -| leading);
     try w.splatByteAll(' ', padding);
     if (base.len != 0) try w.writeAll("\x1b[0m");
 }
@@ -433,6 +455,11 @@ fn tableTextWidthInContext(w: *std.Io.Writer, table: model.Table, color: bool, p
     defer arena.deinit();
     const a = arena.allocator();
     terminal.initLocale();
+    // A typed table surface is visible behind transparent cells. Cell paint
+    // remains authoritative; graphical lengths are not terminal geometry.
+    const surface: ?CellDisplayStyle = if (table.style) |style| if (canonicalRgb(style.background)) |background|
+        .{ .background = background, .header = if (inherited) |value| value.header else false }
+    else inherited else inherited;
     const padding: usize = if (table.geometry) |g| if (g.cell_padding) |v| tablePixels(v) else 1 else 1;
     const spacing: usize = if (table.geometry) |g| if (g.cell_spacing) |v| tablePixels(v) else 0 else 0;
     const border = if (table.geometry) |g| if (g.border) |v| v != 0 else true else true;
@@ -473,7 +500,7 @@ fn tableTextWidthInContext(w: *std.Io.Writer, table: model.Table, color: bool, p
             var text: std.Io.Writer.Allocating = .init(a);
             defer text.deinit();
             has_nested = has_nested or cellHasTable(cell);
-            try tableCellText(&text.writer, cell, color, null, table_depth, inherited);
+            try tableCellText(&text.writer, cell, color, null, table_depth, surface);
             const owned = try a.dupe(u8, text.written());
             var lines: std.ArrayList([]const u8) = .empty;
             var split = std.mem.splitScalar(u8, owned, '\n');
@@ -485,12 +512,12 @@ fn tableTextWidthInContext(w: *std.Io.Writer, table: model.Table, color: bool, p
             var available: usize = overhead * (colspan - 1);
             for (widths.items[column..][0..colspan]) |width| available += width;
             if (needed > available) widths.items[column + colspan - 1] += needed - available;
-            try cells.append(a, .{ .source = cell, .row = r, .column = column, .colspan = colspan, .rowspan = rowspan, .text = owned, .lines = lines.items, .background = canonicalRgb(cell.background) orelse if (inherited) |value| value.background else null });
+            try cells.append(a, .{ .source = cell, .row = r, .column = column, .colspan = colspan, .rowspan = rowspan, .text = owned, .lines = lines.items, .background = canonicalRgb(cell.background) orelse if (surface) |value| value.background else null });
             column += colspan;
         }
     }
     if (table.caption.len != 0) {
-        try spansTextDisplayOnBackground(w, table.caption, color, projection, false, if (inherited) |value| value.background else null, if (inherited) |value| value.header else false);
+        try spansTextDisplayOnBackground(w, table.caption, color, projection, false, if (surface) |value| value.background else null, if (surface) |value| value.header else false);
         try w.writeByte('\n');
     }
     if (table.geometry) |g| if (g.width != null and columns_limit != null and widths.items.len != 0) {
@@ -516,11 +543,11 @@ fn tableTextWidthInContext(w: *std.Io.Writer, table: model.Table, color: bool, p
                     try w.writeByte('\n');
                     var nested_text: std.Io.Writer.Allocating = .init(a);
                     defer nested_text.deinit();
-                    try tableCellText(&nested_text.writer, cell.source, color, width, table_depth, inherited);
+                    try tableCellText(&nested_text.writer, cell.source, color, width, table_depth, surface);
                     const wrapped = try tableCellRows(a, nested_text.written(), width);
                     for (wrapped) |line| {
                         try w.writeAll("  │");
-                        try tableWrappedLine(w, line, width, color, cell.background, 1);
+                        try tableWrappedAlignedLine(w, line, width, color, cell.background, 1, cellLineLeading(cell.source, line, width));
                         try w.writeAll("│\n");
                     }
                 }
@@ -554,7 +581,7 @@ fn tableTextWidthInContext(w: *std.Io.Writer, table: model.Table, color: bool, p
         for (widths.items[cell.column..][0..cell.colspan]) |part| width += part;
         var nested_text: std.Io.Writer.Allocating = .init(a);
         defer nested_text.deinit();
-        try tableCellText(&nested_text.writer, cell.source, color, width, table_depth, inherited);
+        try tableCellText(&nested_text.writer, cell.source, color, width, table_depth, surface);
         cell.wrapped = try tableCellRows(a, nested_text.written(), width);
     };
     const active = try a.alloc(?usize, widths.items.len);
@@ -578,8 +605,10 @@ fn tableTextWidthInContext(w: *std.Io.Writer, table: model.Table, color: bool, p
                 var line: []const u8 = "";
                 var wrapped_line: ?terminal.RenderRow = null;
                 var background: ?[3]u8 = null;
+                var source: ?@import("blob_encoder").presentation_types.Cell = null;
                 if (active[column]) |index| {
                     const cell = cells.items[index];
+                    source = cell.source;
                     span = cell.colspan;
                     background = cell.background;
                     if (cell.row == r) {
@@ -590,7 +619,8 @@ fn tableTextWidthInContext(w: *std.Io.Writer, table: model.Table, color: bool, p
                 }
                 var width: usize = overhead * (span - 1);
                 for (widths.items[column..][0..span]) |part| width += part;
-                try tableWrappedLine(w, wrapped_line orelse .{ .bytes = line, .carry = .{} }, width, color, background, padding);
+                const rendered_line = wrapped_line orelse terminal.RenderRow{ .bytes = line, .carry = .{} };
+                try tableWrappedAlignedLine(w, rendered_line, width, color, background, padding, if (source) |cell| cellLineLeading(cell, rendered_line, width) else 0);
                 column += span;
                 if (border) try w.writeAll("│");
                 if (column == widths.items.len) try w.writeByte('\n') else try w.splatByteAll(' ', spacing);
@@ -723,7 +753,9 @@ fn sectionHeadingCompanion(section: model.Section) ?[]const model.Span {
     var explained = false;
     var styled_self = false;
     var styled = false;
+    var image = false;
     for (first.spans) |span| {
+        image = image or span.image != null;
         explained = explained or span.explanation.len != 0;
         styled_self = styled_self or selfLinkHeadingSpan(span);
         styled = styled or (span.kind == .text and span.text.len != 0 and span.target.len == 0 and
@@ -734,7 +766,7 @@ fn sectionHeadingCompanion(section: model.Section) ?[]const model.Span {
         if ((span.kind == .link or span.kind == .external_link) and
             span.target.len != 0 and (span.text.len != 0 or span.trail.len != 0)) navigable = true;
     }
-    if (!navigable and !explained and !styled_self and !styled and first.depth == 0) return null;
+    if (!navigable and !explained and !styled_self and !styled and !image and first.depth == 0) return null;
     var cursor: HeadingBytes = .{ .spans = first.spans };
     var offset: usize = 0;
     var begin: ?usize = null;
@@ -788,6 +820,7 @@ const VisibleMediaCaptions = struct {
     a: std.mem.Allocator,
     media: []const model.Media,
     seen: []bool,
+    inline_seen: []bool,
     owners: std.StringHashMap(usize),
     run: std.ArrayList(u8) = .empty,
     enabled: bool,
@@ -799,10 +832,12 @@ const VisibleMediaCaptions = struct {
             .a = a,
             .media = media,
             .seen = try a.alloc(bool, if (observe) media.len else 0),
+            .inline_seen = try a.alloc(bool, if (observe) media.len else 0),
             .owners = std.StringHashMap(usize).init(a),
             .enabled = observe,
         };
         @memset(result.seen, false);
+        @memset(result.inline_seen, false);
         if (observe) for (media, 0..) |item, index| {
             // Larger keys cannot occur in the codec's bounded classes string.
             if (item.file.len == 0 or item.file.len > (32 * 1024 * 1024 - prefix.len) / 2) continue;
@@ -885,6 +920,19 @@ const VisibleMediaCaptions = struct {
         if (!self.enabled) return;
         var current: ?usize = null;
         for (spans) |span| {
+            if (span.image) |image| {
+                self.finish(current);
+                current = null;
+                for (self.media, 0..) |item, index| {
+                    if (item.kind == .image and std.mem.eql(u8, item.file, image.file)) {
+                        self.inline_seen[index] = true;
+                        if (image.alt) |alt| {
+                            if (alt.len != 0 and sameCaption(alt, item.caption)) self.seen[index] = true;
+                        }
+                    }
+                }
+                continue;
+            }
             const next = self.owner(span);
             // Equal Media.file records share ownership, not their caption text.
             const same = if (current != null and next != null)
@@ -1128,7 +1176,12 @@ fn visitEntrySpanLists(entry: model.Entry, visitor: anytype) !bool {
     if (try visitor.spans(entry.display_title)) return true;
     if (try visitor.spans(entry.preamble_spans)) return true;
     for (entry.sections) |section| if (try visitBlockSpanLists(section.blocks, visitor, 0)) return true;
-    for (entry.references) |reference| if (try visitor.spans(reference.spans)) return true;
+    for (entry.references) |reference| {
+        if (reference.blocks) |blocks| {
+            if (reference.spans.len != 0) return error.InvalidPresentation;
+            if (try visitBlockSpanLists(blocks, visitor, 0)) return true;
+        } else if (try visitor.spans(reference.spans)) return true;
+    }
     return false;
 }
 
@@ -1218,7 +1271,12 @@ fn entryHasAbbreviations(entry: model.Entry) bool {
 
 fn entryMetadataProjected(w: *std.Io.Writer, entry: model.Entry, color: bool, projection: ?*PoemProjection, captions: *VisibleMediaCaptions) !void {
     // These references are emitted by this same details route below.
-    for (entry.references) |ref| try captions.observeSpans(ref.spans);
+    for (entry.references) |ref| {
+        if (ref.blocks) |blocks| {
+            if (ref.spans.len != 0) return error.InvalidPresentation;
+            try captions.observeBlocks(blocks);
+        } else try captions.observeSpans(ref.spans);
+    }
     if (entry.media.len != 0) {
         try w.writeAll("\nMedia\n");
         for (entry.media, 0..) |media, media_index| {
@@ -1241,9 +1299,17 @@ fn entryMetadataProjected(w: *std.Io.Writer, entry: model.Entry, color: bool, pr
                     try terminalText(w, ref.group);
                     try w.print(" {d}] ", .{ordinal});
                 }
+                if (ref.blocks) |blocks| {
+                    if (blocks.len != 0 and blocks[0].table != null) try w.writeByte('\n');
+                }
             }
-            try spansTextDisplayProjected(w, ref.spans, color, projection, true);
-            try w.writeByte('\n');
+            if (ref.blocks) |blocks| {
+                if (ref.spans.len != 0) return error.InvalidPresentation;
+                if (blocks.len == 0) try w.writeByte('\n') else try blocksTextProjected(w, blocks, color, projection);
+            } else {
+                try spansTextDisplayProjected(w, ref.spans, color, projection, true);
+                try w.writeByte('\n');
+            }
         }
     }
     var abbreviations = try Abbreviations.init(std.heap.smp_allocator, entry);
@@ -3461,4 +3527,328 @@ test "numeric reduced text preserves legacy dim cue plain bytes and terminal esc
         try std.testing.expectEqualStrings(text, spans[0].text);
         try std.testing.expectEqual(case.scale, spans[0].font_scale);
     }
+}
+
+
+test "reference blocks preserve HR table order rich visitors and note identity" {
+    const T = @import("blob_encoder").presentation_types;
+    const a = std.testing.allocator;
+    const headers = [_][]const u8{ "Latinski", "Talijanski", "Njemački", "Hrvatski", "Madžarski" };
+    const values = [_][]const u8{ "Locuſta", "Locusta", "Heüſchreück", "Szkakavicza", "Saaská" };
+    var header_cells: [5]T.Cell = undefined;
+    var body_cells: [5]T.Cell = undefined;
+    var header_spans: [5][1]model.Span = undefined;
+    var body_spans: [5][1]model.Span = undefined;
+    for (headers, values, 0..) |header, value, i| {
+        header_spans[i] = .{.{ .text = header }};
+        body_spans[i] = .{.{ .kind = .link, .text = value, .target = value, .font_scale = 0.8, .font_scale_basis = .normal_body, .explanation = "HR lexical form" }};
+        header_cells[i] = .{ .header = true, .spans = &header_spans[i] };
+        body_cells[i] = .{ .spans = &body_spans[i] };
+    }
+    const body = [_]model.Block{
+        .{ .kind = .paragraph, .spans = &.{.{ .text = "CITATION_PROSE" }} },
+        .{ .kind = .table, .table = .{ .rows = &.{ .{ .cells = &header_cells }, .{ .cells = &body_cells } } } },
+        .{ .kind = .paragraph, .spans = &.{.{ .text = "owned caption", .classes = "wikidict-media wikidict-media-file-736f756e642e6f6767" }} },
+    };
+    const refs = [_]model.Reference{
+        .{ .number = 91, .group_number = 2, .group = "notes", .blocks = &body },
+        .{ .kind = .fragment, .number = 92, .group_number = null, .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "FOOTER_FRAGMENT" }} }} },
+    };
+    const entry: model.Entry = .{ .title = "HR", .kind = .citations, .references = &refs, .media = &.{.{ .file = "sound.ogg", .kind = .audio, .caption = "owned caption" }} };
+    var out: std.Io.Writer.Allocating = .init(a);
+    defer out.deinit();
+    try entryText(&out.writer, entry, false);
+    const text = out.written();
+    const prose = std.mem.indexOf(u8, text, "[notes 2] CITATION_PROSE").?;
+    for (headers, values) |header, value| {
+        try std.testing.expect(std.mem.indexOf(u8, text, header).? > prose);
+        try std.testing.expect(std.mem.indexOf(u8, text, value).? > std.mem.indexOf(u8, text, header).?);
+    }
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, "owned caption"));
+    try std.testing.expect(std.mem.indexOf(u8, text, "[92]") == null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "FOOTER_FRAGMENT") != null);
+    var styled: std.Io.Writer.Allocating = .init(a);
+    defer styled.deinit();
+    try entryText(&styled.writer, entry, true);
+    const plain = try NarrowTableTest.plain(a, styled.written());
+    defer a.free(plain);
+    try std.testing.expectEqualStrings(text, plain);
+    for (headers) |header| try std.testing.expect(OrderedCellOutputTest.boldAt(styled.written(), std.mem.indexOf(u8, styled.written(), header).?));
+    try std.testing.expect(std.mem.indexOf(u8, styled.written(), "\x1b[2m") != null);
+    const Links = struct {
+        count: usize = 0,
+        fn spans(self: *@This(), span_items: []const model.Span) !bool {
+            for (span_items) |span| if (span.kind == .link) {
+                try std.testing.expectEqualStrings(span.text, span.target);
+                try std.testing.expectEqual(@as(?f32, 0.8), span.font_scale);
+                try std.testing.expectEqual(@import("blob_encoder").presentation_types.FontScaleBasis.normal_body, span.font_scale_basis);
+                self.count += 1;
+            };
+            return false;
+        }
+    };
+    var links: Links = .{};
+    _ = try visitEntrySpanLists(entry, &links);
+    try std.testing.expectEqual(@as(usize, 5), links.count);
+    var abbreviations = try Abbreviations.init(a, entry);
+    defer abbreviations.deinit();
+    try std.testing.expectEqual(@as(usize, 5), abbreviations.items.items.len);
+    try std.testing.expectEqual(@as(usize, 91), entry.references[0].number);
+}
+
+test "reference block empty authority legacy null and mixed payload rejection" {
+    const a = std.testing.allocator;
+    var out: std.Io.Writer.Allocating = .init(a);
+    defer out.deinit();
+    const entry: model.Entry = .{ .title = "control", .kind = .citations, .references = &.{
+        .{ .number = 1, .group_number = 1, .spans = &.{.{ .text = "LEGACY" }} },
+        .{ .number = 2, .group_number = 2, .blocks = &.{} },
+        .{ .kind = .fragment, .number = 3, .group_number = null, .blocks = &.{} },
+    } };
+    try entryText(&out.writer, entry, false);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "\nReferences\n[1] LEGACY\n[2] \n\n") != null);
+    var invalid = entry;
+    invalid.references = &.{.{ .number = 1, .group_number = 1, .blocks = &.{}, .spans = &.{.{ .text = "MIXED" }} }};
+    out.clearRetainingCapacity();
+    try std.testing.expectError(error.InvalidPresentation, entryText(&out.writer, invalid, false));
+    const Visitor = struct {
+        fn spans(_: *@This(), _: []const model.Span) error{}!bool { return false; }
+    };
+    var visitor: Visitor = .{};
+    try std.testing.expectError(error.InvalidPresentation, visitEntrySpanLists(invalid, &visitor));
+}
+
+
+test "reference blocks pass poem metadata to the owning frame projection" {
+    const a = std.testing.allocator;
+    const entry: model.Entry = .{ .title = "poem", .kind = .citations, .references = &.{.{
+        .kind = .fragment, .number = 1, .group_number = null,
+        .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "VERSE", .classes = "wikidict-poem wikidict-poem-indent-2" }} }},
+    }} };
+    var out: std.Io.Writer.Allocating = .init(a);
+    defer out.deinit();
+    var lines: std.ArrayList(terminal.PoemLine) = .empty;
+    defer lines.deinit(a);
+    var projection: PoemProjection = .{ .frame = &out, .allocator = a, .lines = &lines };
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var captions = try VisibleMediaCaptions.init(arena.allocator(), entry.media, true);
+    try entryMetadataProjected(&out.writer, entry, false, &projection, &captions);
+    try std.testing.expectEqual(@as(usize, 1), lines.items.len);
+    try std.testing.expectEqual(@as(usize, 2), lines.items[0].left);
+    try std.testing.expect(std.mem.startsWith(u8, out.written()[lines.items[0].offset..], "VERSE"));
+}
+
+
+test "table first reference note labels leave every grid row aligned" {
+    const a = std.testing.allocator;
+    const body = [_]model.Block{.{ .kind = .table, .table = .{ .rows = &.{
+        .{ .cells = &.{.{ .header = true, .spans = &.{.{ .text = "HEADER" }} }} },
+        .{ .cells = &.{.{ .spans = &.{.{ .text = "value" }} }} },
+    } } }};
+    const entry: model.Entry = .{ .title = "grid", .kind = .citations, .references = &.{.{ .number = 77, .group_number = 3, .group = "notes", .blocks = &body }} };
+    var plain: std.Io.Writer.Allocating = .init(a);
+    defer plain.deinit();
+    var ansi: std.Io.Writer.Allocating = .init(a);
+    defer ansi.deinit();
+    try entryText(&plain.writer, entry, false);
+    try entryText(&ansi.writer, entry, true);
+    const visible = try NarrowTableTest.plain(a, ansi.written());
+    defer a.free(visible);
+    try std.testing.expectEqualStrings(plain.written(), visible);
+    const label = std.mem.indexOf(u8, visible, "[notes 3] \n").?;
+    const grid = visible[label + "[notes 3] \n".len..];
+    var lines = std.mem.splitScalar(u8, grid, '\n');
+    const first = lines.next().?;
+    try std.testing.expect(std.mem.startsWith(u8, first, "  │"));
+    const width = terminal.cellWidth(first);
+    var rows: usize = 1;
+    while (lines.next()) |line| {
+        if (line.len == 0) break;
+        try std.testing.expectEqual(width, terminal.cellWidth(line));
+        try std.testing.expect(std.mem.startsWith(u8, line, "  │"));
+        rows += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), rows);
+}
+
+
+test "typed table surface reaches reference cells without changing terminal geometry" {
+    const a = std.testing.allocator;
+    const spans = [_]model.Span{.{ .kind = .link, .text = "SURFACE", .target = "Destination" }};
+    const table: model.Table = .{ .style = .{ .background = "#010924" }, .rows = &.{.{ .cells = &.{
+        .{ .spans = &spans },
+        .{ .background = "#ffffe0", .header = true, .spans = &.{.{ .text = "OVERRIDE" }} },
+    } }} };
+    var plain: std.Io.Writer.Allocating = .init(a);
+    defer plain.deinit();
+    var styled: std.Io.Writer.Allocating = .init(a);
+    defer styled.deinit();
+    try tableText(&plain.writer, table, false, null);
+    try tableText(&styled.writer, table, true, null);
+    const visible = try NarrowTableTest.plain(a, styled.written());
+    defer a.free(visible);
+    try std.testing.expectEqualStrings(plain.written(), visible);
+    const link = std.mem.indexOf(u8, styled.written(), "SURFACE").?;
+    try std.testing.expectEqual([3]u8{ 1, 9, 36 }, TypedColorOutputTest.at(styled.written(), link).background.?);
+    try std.testing.expectEqual([3]u8{ 255, 255, 255 }, TypedColorOutputTest.at(styled.written(), link).foreground.?);
+    const cell = std.mem.indexOf(u8, styled.written(), "OVERRIDE").?;
+    try std.testing.expectEqual([3]u8{ 255, 255, 224 }, TypedColorOutputTest.at(styled.written(), cell).background.?);
+    try std.testing.expect(OrderedCellOutputTest.boldAt(styled.written(), cell));
+    var legacy = table;
+    legacy.style = null;
+    var unpainted: std.Io.Writer.Allocating = .init(a);
+    defer unpainted.deinit();
+    try tableText(&unpainted.writer, legacy, false, null);
+    try std.testing.expectEqualStrings(unpainted.written(), plain.written());
+    try std.testing.expectEqualStrings("Destination", spans[0].target);
+}
+
+test "typed graphical lengths remain data rather than terminal column guesses" {
+    const a = std.testing.allocator;
+    var table: model.Table = .{ .rows = &.{.{ .cells = &.{.{
+        .spans = &.{.{ .text = "DATA" }},
+        .style = .{ .text_align = .center, .padding = .{
+            .top = .{ .unit = .em, .value = 0 }, .right = .{ .unit = .px, .value = 10 },
+            .bottom = .{ .unit = .em, .value = 1.5 }, .left = .{ .unit = .px, .value = 0 },
+        } },
+    }} }} };
+    table.style = .{ .collapse = .collapse, .border = .{ .solid = .{ .width = .{ .unit = .em, .value = 0 }, .color = "#123456" } }, .margins = .{
+        .top = .{ .unit = .px, .value = 0 }, .right = .{ .unit = .em, .value = 1 },
+        .bottom = .{ .unit = .px, .value = 10 }, .left = .{ .unit = .em, .value = 0 },
+    } };
+    var projected: std.Io.Writer.Allocating = .init(a);
+    defer projected.deinit();
+    try tableText(&projected.writer, table, false, null);
+    var legacy = table;
+    legacy.style = null;
+    legacy.rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .text = "DATA" }} }} }};
+    var expected: std.Io.Writer.Allocating = .init(a);
+    defer expected.deinit();
+    try tableText(&expected.writer, legacy, false, null);
+    try std.testing.expectEqualStrings(expected.written(), projected.written());
+    var encoded: std.Io.Writer.Allocating = .init(a);
+    defer encoded.deinit();
+    try std.json.Stringify.value(table, .{}, &encoded.writer);
+    for ([_][]const u8{ "\"margins\"", "\"padding\"", "\"text_align\":\"center\"", "\"unit\":\"em\"", "\"value\":0", "#123456" }) |field|
+        try std.testing.expect(std.mem.indexOf(u8, encoded.written(), field) != null);
+}
+
+
+test "typed cell alignment uses visible terminal width including Unicode and ANSI" {
+    terminal.initLocale();
+    const line: terminal.RenderRow = .{ .bytes = "\x1b[1m猫\x1b[0m", .carry = .{} };
+    const right: @import("blob_encoder").presentation_types.Cell = .{ .style = .{ .text_align = .right } };
+    const center: @import("blob_encoder").presentation_types.Cell = .{ .style = .{ .text_align = .center } };
+    try std.testing.expectEqual(@as(usize, 4), cellLineLeading(right, line, 6));
+    try std.testing.expectEqual(@as(usize, 2), cellLineLeading(center, line, 6));
+    try std.testing.expectEqual(@as(usize, 0), cellLineLeading(.{}, line, 6));
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try tableWrappedAlignedLine(&out.writer, line, 6, true, null, 1, cellLineLeading(right, line, 6));
+    const plain = try NarrowTableTest.plain(std.testing.allocator, out.written());
+    defer std.testing.allocator.free(plain);
+    try std.testing.expectEqualStrings("     猫 ", plain);
+}
+
+
+test "inline images keep occurrence order and heading text authority separate" {
+    const a = std.testing.allocator;
+    const spans = [_]model.Span{
+        .{ .text = "Heading " },
+        .{ .kind = .link, .target = "File:Vraagteken-2.svg", .font_scale = 0, .image = .{ .file = "Vraagteken-2.svg", .width_px = 15 } },
+        .{ .text = " AFTER " },
+        .{ .kind = .external_link, .target = "https://example.test/image", .image = .{ .file = "X mark.svg", .width_px = 15, .alt = "איקס", .tooltip = "TOOLTIP_ONLY" } },
+        .{ .image = .{ .file = "Yes check.svg", .height_px = 15, .alt = "", .tooltip = "" } },
+    };
+    var plain: std.Io.Writer.Allocating = .init(a);
+    defer plain.deinit();
+    var styled: std.Io.Writer.Allocating = .init(a);
+    defer styled.deinit();
+    try spansText(&plain.writer, &spans, false);
+    try spansText(&styled.writer, &spans, true);
+    try std.testing.expectEqualStrings("Heading [image] AFTER [image: איקס][image]", plain.written());
+    const visible = try NarrowTableTest.plain(a, styled.written());
+    defer a.free(visible);
+    try std.testing.expectEqualStrings(plain.written(), visible);
+    try std.testing.expect(std.mem.indexOf(u8, plain.written(), "Vraagteken") == null);
+    try std.testing.expect(std.mem.indexOf(u8, plain.written(), "TOOLTIP_ONLY") == null);
+    const section: model.Section = .{ .level = 3, .title = "Heading  AFTER", .anchor = "unchanged", .blocks = &.{.{ .kind = .heading, .level = 3, .spans = &spans }} };
+    try std.testing.expect(sectionHeadingCompanion(section) != null);
+    var heading: std.Io.Writer.Allocating = .init(a);
+    defer heading.deinit();
+    var cursor: HeadingBytes = .{ .spans = &spans };
+    while (cursor.next()) |byte| try heading.writer.writeByte(byte);
+    try std.testing.expectEqualStrings("Heading  AFTER ", heading.written());
+    try std.testing.expectEqualStrings("unchanged", section.anchor);
+    try std.testing.expectEqualStrings("", spans[1].text);
+    try std.testing.expectEqualStrings("File:Vraagteken-2.svg", spans[1].target);
+    try std.testing.expectEqual(@as(?u32, 15), spans[1].image.?.width_px);
+}
+
+test "inline media ownership preserves unmatched captions and counts repeated occurrences" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const media = [_]model.Media{
+        .{ .file = "same.svg", .kind = .image, .caption = "authored distinct caption" },
+        .{ .file = "match.svg", .kind = .image, .caption = "וי" },
+    };
+    const occurrences = [_]model.Span{
+        .{ .kind = .link, .target = "File:same.svg", .image = .{ .file = "same.svg", .width_px = 15, .alt = "איקס" } },
+        .{ .image = .{ .file = "same.svg", .width_px = 30, .alt = "" } },
+        .{ .image = .{ .file = "match.svg", .alt = "וי", .tooltip = "וי" } },
+    };
+    var captions = try VisibleMediaCaptions.init(a, &media, true);
+    try captions.observeSpans(&occurrences);
+    try std.testing.expect(captions.inline_seen[0] and captions.inline_seen[1]);
+    try std.testing.expect(!captions.seen[0] and captions.seen[1]);
+    const entry: model.Entry = .{ .title = "media", .kind = .citations, .media = &media, .references = &.{.{ .kind = .fragment, .number = 1, .group_number = null, .blocks = &.{.{ .kind = .paragraph, .spans = &occurrences }} }} };
+    var out: std.Io.Writer.Allocating = .init(a);
+    try entryText(&out.writer, entry, false);
+    try std.testing.expect(std.mem.endsWith(u8, out.written(), "\nReferences\n[image: איקס][image][image: וי]\n\n"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "[image] same.svg — authored distinct caption\n"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "[image] match.svg\n"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "authored distinct caption"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "וי"));
+    try std.testing.expectEqual(@as(usize, 2), entry.media.len);
+}
+
+test "inline image visitors retain empty action spans across recursive sinks and JSON" {
+    const a = std.testing.allocator;
+    const image = [_]model.Span{.{ .kind = .link, .target = "Target", .image = .{ .file = "asset.svg", .width_px = 15, .alt = "", .tooltip = "" } }};
+    const child: model.Table = .{ .caption = &image, .rows = &.{.{ .cells = &.{.{ .blocks = &.{.{ .kind = .paragraph, .spans = &image }} }} }} };
+    const entry: model.Entry = .{ .title = "recursive", .kind = .citations, .preamble_spans = &image,
+        .sections = &.{.{ .level = 3, .title = "Section", .blocks = &.{.{ .kind = .table, .table = child }} }},
+        .references = &.{
+            .{ .number = 1, .group_number = 1, .spans = &image },
+            .{ .kind = .fragment, .number = 2, .group_number = null, .blocks = &.{.{ .kind = .table, .table = child }} },
+        },
+        .media = &.{.{ .file = "asset.svg", .kind = .image, .caption = "" }},
+    };
+    const Images = struct {
+        count: usize = 0,
+        fn spans(self: *@This(), values: []const model.Span) !bool {
+            for (values) |span| if (span.image) |item| {
+                try std.testing.expectEqualStrings("", span.text);
+                try std.testing.expectEqualStrings("Target", span.target);
+                try std.testing.expectEqualStrings("asset.svg", item.file);
+                self.count += 1;
+            };
+            return false;
+        }
+    };
+    var images: Images = .{};
+    _ = try visitEntrySpanLists(entry, &images);
+    try std.testing.expectEqual(@as(usize, 6), images.count);
+    var out: std.Io.Writer.Allocating = .init(a);
+    defer out.deinit();
+    try std.json.Stringify.value(image[0], .{}, &out.writer);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "\"image\":{") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "\"alt\":\"\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "\"tooltip\":\"\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "height_px") == null);
+    out.clearRetainingCapacity();
+    try std.json.Stringify.value(model.Span{ .text = "legacy" }, .{}, &out.writer);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "\"image\"") == null);
 }

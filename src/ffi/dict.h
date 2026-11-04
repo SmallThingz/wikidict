@@ -24,7 +24,8 @@ typedef enum dict_status {
 } dict_status;
 
 // ABI6 requires font_scale_basis support, including normal-body identity.
-#define DICT_ABI_VERSION 6u
+// ABI7 additionally requires authoritative typed reference blocks (DPRC).
+#define DICT_ABI_VERSION 7u
 
 uint32_t dict_abi_version(void);
 

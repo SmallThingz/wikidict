@@ -7,6 +7,7 @@ const dump_source = @import("wikimedia_dump");
 const language_registry = @import("language_registry.zig");
 const source_language_banner = @import("source_language_banner.zig");
 const source_category_language = @import("source_category_language.zig");
+const source_table_styles = @import("source_table_styles.zig");
 const bundle_expander = @import("bundle_expander.zig");
 const expansion_deadline = @import("expansion_deadline.zig");
 const reviewed_nonlexical = @import("reviewed_nonlexical.zig");
@@ -102,6 +103,7 @@ const FirstFailureCaptureContext = struct {
     failure_evidence_root: ?[]const u8 = null,
     attempted: bool = false,
     continuous_output_active: bool = false,
+    table_styles: ?*const source_table_styles.Authority = null,
 
     fn fromCli(io: std.Io, a: std.mem.Allocator, args: []const []const u8, options: Options) FirstFailureCaptureContext {
         const evidence_root: ?[]const u8 = if (options.failure_receipt) |path| blk: {
@@ -219,6 +221,12 @@ fn writeFirstPresentationFailure(err: anyerror, context: FirstFailureCaptureCont
         .invocation_args_sha256 = try invocationArgumentsHash(a, context.invocation_args),
         .invocation_args_hash_framing = "each argv item: u64 little-endian byte length then exact bytes",
         .provenance_scope = "borrowed job inputs and CLI context; outer source/input qualification remains separate; no input-file scan",
+        .table_styles = if (context.table_styles) |authority| .{
+            .authority = authority.provenance,
+            .admitted_rule_numbers = authority.profile.admitted_rule_numbers[0..@min(authority.profile.admitted_rule_numbers.len, 256)],
+            .admitted_rule_numbers_total = authority.profile.admitted_rule_numbers.len,
+            .admitted_rule_numbers_truncated = authority.profile.admitted_rule_numbers.len > 256,
+        } else null,
         .payload_limit_bytes = payload_limit,
         .raw_source = try captureDiagnosticPayload(context.io, a, root, 1, "raw.wikitext", job.source, 256 * 1024, payload_limit, &payload_bytes),
         .expanded = try captureDiagnosticPayload(context.io, a, root, 1, "expanded.wikitext", expanded.source, 2 * 1024 * 1024, payload_limit, &payload_bytes),
@@ -2204,6 +2212,21 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
         if (dump_source.isMultistream(page_index_kind)) stream_index_path else null,
     );
     defer dump.deinit();
+
+    // Resolve the exact indexed Common.css once. Writers borrow only its
+    // immutable build-time rules; readers receive compiled presentation values.
+    var table_styles = try source_table_styles.load(a, &namespaces, &dump, page_index.bytes, title_index);
+    defer if (table_styles) |*authority| authority.deinit();
+    codes.table_styles = if (table_styles) |*authority| &authority.profile else null;
+    if (first_failure_capture_context) |*capture| capture.table_styles = if (table_styles) |*authority| authority else null;
+    defer {
+        if (first_failure_capture_context) |*capture| capture.table_styles = null;
+    }
+    if (table_styles) |*authority| diagnostics.printLine(
+        "table style authority: title={s} page_id={d} revision_id={d} css_sha256={s} admitted_rules={d} unsupported_rules={}\n",
+        .{ authority.provenance.title, authority.provenance.page_id, authority.provenance.revision_id,
+            authority.provenance.decoded_source_sha256, authority.profile.admitted_rule_numbers.len, authority.profile.has_unsupported_rules },
+    );
 
     // Lazy proof reads borrow the same authenticated normal input/index and
     // remain alive through Writer/worker completion. No corpus-wide preload.
@@ -6800,7 +6823,10 @@ fn teCategoryOwnerCase(value: TeCategoryCase) !void {
                 },
                 .optional => |info| if (item) |child| { try self.visit(alloc, info.child, child); },
                 .array => |info| for (item) |child| try self.visit(alloc, info.child, child),
-                .@"enum", .int, .bool => {},
+                .@"union" => switch (item) {
+                    inline else => |payload| try self.visit(alloc, @TypeOf(payload), payload),
+                },
+                .@"enum", .int, .float, .bool, .void => {},
                 else => @compileError("Unhandled TE category witness type: " ++ @typeName(T)),
             }
         }

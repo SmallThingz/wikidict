@@ -14,6 +14,7 @@ pub const Report = struct {
     expansion_error: bool = false,
     rendered_lua_error: bool = false,
     rendered_extension_error: bool = false,
+    unresolved_table_style: bool = false,
 
     pub fn merge(self: *Report, other: Report) void {
         inline for (@typeInfo(Report).@"struct".field_names) |field|

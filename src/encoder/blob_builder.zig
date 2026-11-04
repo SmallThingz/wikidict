@@ -37,6 +37,7 @@ fn noLanguageCode(_: ?*const anyopaque, _: []const u8) ?[]const u8 {
 }
 
 pub const LanguageCodes = struct {
+    table_styles: ?*const @import("table_style_profile.zig").Profile = null,
     behavior_switches: ?*const @import("namespace_registry").behavior_switches.Registry = null,
     image_options: ?*const @import("namespace_registry").image_options.Registry = null,
     namespace_catalog: ?*const @import("namespace_registry").Registry = null,
@@ -2910,7 +2911,7 @@ fn processMain(
 
     if (fallbacks.expansion_error and source.len == 0) {
         const language = codes.content() orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" };
-        const payload = try presentation_document.compileReportedWithOptionsAndPhasesAlloc(
+        const payload = try presentation_document.compileReportedWithOptionsAndPhasesAndTableStylesAlloc(
             page_allocator,
             title,
             .language,
@@ -2924,6 +2925,7 @@ fn processMain(
             codes.image_options,
             fallbacks,
             poem_phase,
+            codes.table_styles,
         );
         try spools.appendLanguage(page_allocator, language.heading, title, payload);
         stats.language_records += 1;
@@ -3049,7 +3051,7 @@ fn processMain(
         // expansion changed the boundaries, retain the whole page without
         // guessing which rendered bytes belong to the unknown language.
         fallbacks.unresolved_language_heading = true;
-        const payload = try presentation_document.compileReportedWithOptionsAndPhasesAlloc(
+        const payload = try presentation_document.compileReportedWithOptionsAndPhasesAndTableStylesAlloc(
             page_allocator,
             title,
             .language,
@@ -3063,6 +3065,7 @@ fn processMain(
             codes.image_options,
             fallbacks,
             poem_phase,
+            codes.table_styles,
         );
         try spools.appendLanguage(page_allocator, "Unclassified", title, payload);
         stats.language_records += 1;
@@ -3269,7 +3272,7 @@ fn processMain(
             break :native language;
         };
         const language = explicit orelse native_default orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" };
-        const payload = try presentation_document.compileReportedWithOptionsAndPhasesAlloc(
+        const payload = try presentation_document.compileReportedWithOptionsAndPhasesAndTableStylesAlloc(
             page_allocator,
             title,
             .language,
@@ -3283,6 +3286,7 @@ fn processMain(
             codes.image_options,
             fallbacks,
             poem_phase,
+            codes.table_styles,
         );
         try spools.appendLanguage(page_allocator, language.heading, title, payload);
         stats.language_records += 1;
@@ -3385,7 +3389,7 @@ fn processMain(
             }
             if (fragments.len != 0) page_allocator.free(fragments);
         }
-        const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAlloc(
+        const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(
             page_allocator,
             title,
             .language,
@@ -3406,6 +3410,7 @@ fn processMain(
             // This token follows source ownership resolution and grouping. An
             // unresolved group cannot turn arbitrary L2 labels into owners.
             if (group.language.code.len != 0) .{ .heading = group.language.heading, .code = group.language.code } else null,
+            codes.table_styles,
         );
         try spools.appendLanguage(page_allocator, group.language.heading, title, payload);
         stats.language_records += 1;
@@ -3419,6 +3424,7 @@ fn processNamespace(
     namespace_catalog: ?*const @import("namespace_registry").Registry,
     behavior_switches: ?*const @import("namespace_registry").behavior_switches.Registry,
     image_options: ?*const @import("namespace_registry").image_options.Registry,
+    table_styles: ?*const @import("table_style_profile.zig").Profile,
     ns: PageNamespace,
     title: []const u8,
     source: []const u8,
@@ -3442,7 +3448,7 @@ fn processNamespace(
     });
     var reference_context = try presentation_document.referenceDefinitionsWithMissingAlloc(page_allocator, numbered.missing);
     reference_context.citations = numbered.citations;
-    const payload = try presentation_document.compileReportedWithReferencesAndPhasesFragmentsAlloc(
+    const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(
         page_allocator,
         local_title,
         kind,
@@ -3458,6 +3464,10 @@ fn processNamespace(
         fallbacks,
         numbered.poem_phase,
         &.{},
+        null,
+        &.{},
+        null,
+        table_styles,
     );
     switch (kind) {
         .thesaurus => {
@@ -3583,7 +3593,7 @@ pub const Writer = struct {
         const link: blobs.presentation_types.Span = .{ .kind = .link, .text = destination, .target = destination };
         var entry: blobs.presentation_types.Entry = .{ .title = record.source_title, .kind = .alias, .preamble_spans = &.{link} };
         if (tail.len != 0 or display_title != null) {
-            const tail_payload = try presentation_document.compileReportedWithOptionsAndPhasesAlloc(a, record.source_title, .alias, null, "", if (missing_phase) |phase| phase.output() else MissingText.untracked(tail), if (display_title) |value| .{ .source = value, .page_title = record.source_title, .missing = if (missing_phase) |phase| phase.displayTitle() else null } else null, self.language_codes.link_trail, self.language_codes.namespace_catalog, self.language_codes.behavior_switches, self.language_codes.image_options, &fallbacks, poem_phase);
+            const tail_payload = try presentation_document.compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, record.source_title, .alias, null, "", if (missing_phase) |phase| phase.output() else MissingText.untracked(tail), if (display_title) |value| .{ .source = value, .page_title = record.source_title, .missing = if (missing_phase) |phase| phase.displayTitle() else null } else null, self.language_codes.link_trail, self.language_codes.namespace_catalog, self.language_codes.behavior_switches, self.language_codes.image_options, &fallbacks, poem_phase, self.language_codes.table_styles);
             entry = (try blobs.presentation_codec.decodeAlloc(a, tail_payload, record.source_title, .alias, null)).entry;
             const prefix_len: usize = if (tail.len == 0) 1 else 2;
             const preamble = try a.alloc(blobs.presentation_types.Span, entry.preamble_spans.len + prefix_len);
@@ -3677,7 +3687,7 @@ pub const Writer = struct {
         if (ns.kind == .language) {
             try processMain(page_allocator, &self.spools, self.language_codes, title, source, raw_source, display_title, &self.stats, &fallbacks, poem_phase, missing_phase);
         } else {
-            try processNamespace(page_allocator, &self.spools, self.language_codes.link_trail, self.language_codes.namespace_catalog, self.language_codes.behavior_switches, self.language_codes.image_options, ns, title, source, display_title, &self.stats, &fallbacks, poem_phase, missing_phase);
+            try processNamespace(page_allocator, &self.spools, self.language_codes.link_trail, self.language_codes.namespace_catalog, self.language_codes.behavior_switches, self.language_codes.image_options, self.language_codes.table_styles, ns, title, source, display_title, &self.stats, &fallbacks, poem_phase, missing_phase);
         }
         try self.reportFallback(page_allocator, ns, title, fallbacks, extra_reasons);
     }
@@ -5448,21 +5458,37 @@ test "image only page prefixes preserve per language captions and reference owne
         }
         try std.testing.expectEqual(@as(usize, 1), own);
         try std.testing.expectEqual(@as(usize, 1), caption_refs);
-        // Existing mediaLabel flattens caption links into the outer File link.
+        // Unframed descriptions remain catalog/tooltip data, never duplicate visible labels.
         try std.testing.expectEqualStrings("Shared label[1]", page.entry.media[0].caption);
-        var caption_labels: usize = 0;
-        for (page.entry.sections) |section| for (section.blocks) |block| {
-            var visible: std.ArrayList(u8) = .empty;
-            var media_target = false;
-            for (block.spans) |span| {
-                if (std.mem.eql(u8, span.target, "File:Shared.svg")) media_target = true;
-                if (span.kind == .line_break) try visible.append(a, '\n');
-                try visible.appendSlice(a, span.text);
-                try visible.appendSlice(a, span.trail);
+        var caption_images: usize = 0;
+        var body_images: usize = 0;
+        var visible_body: std.ArrayList(u8) = .empty;
+        for (page.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try visible_body.appendSlice(a, span.text);
+            try visible_body.appendSlice(a, span.trail);
+            const occurrence = span.image orelse continue;
+            try std.testing.expectEqualStrings("Shared.svg", occurrence.file);
+            try std.testing.expectEqualStrings("", span.text);
+            try std.testing.expectEqualStrings("", span.trail);
+            try std.testing.expect(span.kind == .link);
+            try std.testing.expectEqualStrings("File:Shared.svg", span.target);
+            try std.testing.expect(occurrence.height_px == null);
+            const alt = occurrence.alt orelse return error.TestUnexpectedResult;
+            if (std.mem.eql(u8, alt, "Alt")) {
+                caption_images += 1;
+                try std.testing.expectEqual(@as(?u32, 240), occurrence.width_px);
+                try std.testing.expectEqualStrings("Shared label[1]", occurrence.tooltip.?);
+            } else {
+                body_images += 1;
+                try std.testing.expectEqualStrings("en", row[1]);
+                try std.testing.expectEqualStrings("body caption", alt);
+                try std.testing.expectEqualStrings("body caption", occurrence.tooltip.?);
+                try std.testing.expect(occurrence.width_px == null);
             }
-            if (media_target and std.mem.eql(u8, std.mem.trim(u8, visible.items, " \t\r\n"), "Shared label[1]")) caption_labels += 1;
         };
-        try std.testing.expectEqual(@as(usize, 1), caption_labels);
+        try std.testing.expect(std.mem.indexOf(u8, visible_body.items, "Shared label") == null);
+        try std.testing.expectEqual(@as(usize, 1), caption_images);
+        try std.testing.expectEqual(@as(usize, if (std.mem.eql(u8, row[1], "en")) 1 else 0), body_images);
         const rejected_rec = (try index.find("prose-prefix")).?;
         const rejected_page = try blobs.presentation_codec.decodeAlloc(a, rejected_rec.payload, rejected_rec.title, .language, metadata);
         try std.testing.expectEqual(@as(usize, if (std.mem.eql(u8, row[1], "en")) 1 else 0), rejected_page.entry.media.len);
