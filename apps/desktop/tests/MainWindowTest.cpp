@@ -534,6 +534,13 @@ private slots:
         });
         window.showLearningDialog(1);
         QVERIFY(exercised);
+        // Keep the remembered-child oracle before any fixture activation. The
+        // offscreen plugin has no window manager to reactivate a parent when
+        // its modal child hides; do not repair the child focus to make it pass.
+        QCOMPARE(window.focusWidget(), static_cast<QWidget *>(window.search_));
+        if (QGuiApplication::platformName() == QStringLiteral("offscreen") && !window.isActiveWindow())
+            window.activateWindow();
+        QTRY_VERIFY(window.isActiveWindow());
         QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(window.search_));
         QCOMPARE(window.currentJson_, entryBefore);
         QCOMPARE(keys(window.learning_.history()), historyBefore);
