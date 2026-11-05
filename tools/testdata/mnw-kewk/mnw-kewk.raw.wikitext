@@ -1,0 +1,30 @@
+{{reconstructed}}
+==အိန်ဒဝ်-ယူရဝ်ပဳယာန်-အခိုက်ကၞာ==
+
+===တံရိုဟ်===
+{{ine-root|head=*kewk-}}<ref name="EDPG">{{R:gem:EDPG|*hauha-|215}}</ref>
+
+# သကဵုသမၠုၚ်ပ္တိန်။
+# သၠုၚ်။
+
+===မဒုင်လွဳစ===
+{{PIE root see}}
+* {{l|ine-pro||*kewk-éh₁-ti|eh₁-stative}}
+** Balto-Slavic:
+*** {{desc|sla-pro|*čučati}}<ref>{{R:sla:ESSJa|*čučati|126|4}}</ref>
+* {{l|ine-pro||*kewk-éh₂}}
+** {{desc|ine-bsl-pro|*kjaukāˀ}}
+*** {{desc|sla-pro|*čuka}}<ref>{{R:sla:ESSJa|*čuka|131|4}}</ref>
+** {{desc|sq|çukë}}
+* {{l|ine-pro||*kówk-o-s}}
+** {{desc|gem-pro|*hauhaz}}
+* {{l|ine-pro||*kowk-ó-s}}
+** {{desc|gem-pro|*haugaz}}
+* Unsorted formations:
+** {{desc|ine-bsl-pro|*kauk-}}
+*** {{desc|lt|kaũkas}}<ref>{{R:bat:EDBIL|head=kaukas|page=232}}</ref> <!-- masc. o-stem -->
+*** {{desc|sla-pro|*kuka}}<ref>{{R:sla:EDSIL|head=kùka|page=256}}</ref> <!-- fem. ā-stem -->
+** {{desc|sa|कुच}}
+
+==={{References}}===
+<references/>

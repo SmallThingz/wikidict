@@ -9202,3 +9202,545 @@ test "Writer declines absent reviewed variety proof and raw rendered variety dis
         if (std.mem.eql(u8, case.title, "protected")) try std.testing.expectEqual(@as(usize, 0), actual.organization.lexemes.len);
     }
 }
+
+const NativeWriterFixtureCheck = struct {
+    fn expect(ok: bool, comptime location: std.lang.SourceLocation) !void {
+        if (!ok) std.debug.print("Writer oracle {s}:{d} ({s})\n", .{ location.file, location.line, location.fn_name });
+        try std.testing.expect(ok);
+    }
+
+    fn missing(comptime location: std.lang.SourceLocation) error{TestUnexpectedResult} {
+        std.debug.print("Writer required value absent {s}:{d} ({s})\n", .{ location.file, location.line, location.fn_name });
+        return error.TestUnexpectedResult;
+    }
+};
+
+const MnwDefaultlessUrlSavedTest = struct {
+    const title = "ဗီုပြၚ်သိုၚ်တၟိ:အိန်ဒဝ်-ယူရဝ်ပဳယာန်-အခိုက်ကၞာ/kewk-";
+    const raw = @embedFile("testdata/mnw-kewk/mnw-kewk.raw.wikitext");
+    const expanded = @embedFile("testdata/mnw-kewk/mnw-kewk.expanded.wikitext");
+    const display_title = @embedFile("testdata/mnw-kewk/mnw-kewk.display-title.wikitext");
+    const raw_url = "https://archive.org/details/etymological-dictionary-of-the-slavic-inherited-lexicon/page/{{{1}}}/mode/2up?view=theater";
+    const encoded_url = "https://archive.org/details/etymological-dictionary-of-the-slavic-inherited-lexicon/page/%7B%7B%7B1%7D%7D%7D/mode/2up?view=theater";
+    const archive_targets = [_][]const u8{
+        "https://archive.org/details/etymological-dictionary-of-proto-germanic/page/215?view=theater",
+        "https://archive.org/details/ESSJa/ESSJa_4/page/n125/mode/1up?view=theater",
+        "https://archive.org/details/ESSJa/ESSJa_4/page/n130/mode/1up?view=theater",
+        "https://archive.org/details/etymological-dictionary-of-the-baltic-inherited-lexicon/page/232?view=theater",
+        encoded_url,
+    };
+    const archive_labels = [_][]const u8{ "page 215", "*čučati", "*čuka", "page 232", "[1]" };
+    const Report = struct { namespace: u32, title: []const u8, reasons: []const []const u8 };
+
+    fn payload(a: std.mem.Allocator, root: []const u8) ![]const u8 {
+        const path = try std.fs.path.join(a, &.{ root, encoder.blob_catalog.featureBlobFilename(.supplemental).? });
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, a, .limited(4 * 1024 * 1024));
+        const blob = try encoder.blob_format.inspect(bytes);
+        try NativeWriterFixtureCheck.expect(blob.kind == .supplemental, @src());
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(title)) orelse return NativeWriterFixtureCheck.missing(@src());
+        try std.testing.expectEqualStrings(title, record.title);
+        return a.dupe(u8, record.payload);
+    }
+
+    fn report(a: std.mem.Allocator, root: []const u8) !std.json.Parsed(Report) {
+        const path = try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" });
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, a, .limited(64 * 1024));
+        return std.json.parseFromSlice(Report, a, bytes, .{});
+    }
+
+    fn hasReason(report_value: Report, expected: []const u8) bool {
+        for (report_value.reasons) |reason| if (std.mem.eql(u8, reason, expected)) return true;
+        return false;
+    }
+
+    const Scan = struct {
+        visible: std.ArrayList(u8) = .empty,
+        archive_labels: [5]std.ArrayList(u8) = @splat(.empty),
+        definitions: usize = 0,
+        tables: usize = 0,
+        headword_bold: bool = false,
+        citation_italic: bool = false,
+        parameter_action_spans: usize = 0,
+
+        fn headwordSpan(span: encoder.presentation_types.Span) bool {
+            return span.kind == .text and span.image == null and span.bold and
+                std.mem.eql(u8, span.language, "ine-pro") and (span.text.len != 0 or span.trail.len != 0);
+        }
+
+        fn hasHeadwordRun(values: []const encoder.presentation_types.Span) bool {
+            const expected = "*kewk-";
+            for (values, 0..) |first, start| {
+                if (first.text.len == 0 or first.text[0] != expected[0] or
+                    (start != 0 and headwordSpan(values[start - 1]))) continue;
+                var matched: usize = 0;
+                candidate: for (values[start..], start..) |span, index| {
+                    if (!headwordSpan(span)) break :candidate;
+                    // Preserve every character and style across the entity split;
+                    // neither skip an interruption nor join separate spans arrays.
+                    for ([_][]const u8{ span.text, span.trail }) |part| {
+                        if (part.len > expected.len - matched or
+                            !std.mem.eql(u8, part, expected[matched .. matched + part.len])) break :candidate;
+                        matched += part.len;
+                    }
+                    if (matched == expected.len) {
+                        if (index + 1 == values.len or !headwordSpan(values[index + 1])) return true;
+                        break :candidate;
+                    }
+                }
+            }
+            return false;
+        }
+
+        fn spans(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Span) !void {
+            self.headword_bold = self.headword_bold or hasHeadwordRun(values);
+            for (values) |span| {
+                try self.visible.appendSlice(a, span.text);
+                try self.visible.appendSlice(a, span.trail);
+                if (std.mem.eql(u8, span.text, "Etymological Dictionary of the Slavic Inherited Lexicon") and span.italic) self.citation_italic = true;
+                if (span.kind == .link or span.kind == .external_link) {
+                    try NativeWriterFixtureCheck.expect(std.mem.indexOf(u8, span.target, "{{") == null, @src());
+                    try NativeWriterFixtureCheck.expect(std.mem.indexOf(u8, span.target, "}}") == null, @src());
+                    try NativeWriterFixtureCheck.expect(!std.mem.eql(u8, span.target, "https://archive.org/details/etymological-dictionary-of-the-slavic-inherited-lexicon/page/256/mode/2up?view=theater"), @src());
+                }
+                if (span.kind != .external_link) continue;
+                for (MnwDefaultlessUrlSavedTest.archive_targets, 0..) |target, i| if (std.mem.eql(u8, target, span.target)) {
+                    try self.archive_labels[i].appendSlice(a, span.text);
+                    if (i == 4) {
+                        try NativeWriterFixtureCheck.expect(span.superscript, @src());
+                        self.parameter_action_spans += 1;
+                    }
+                };
+            }
+        }
+
+        fn table(self: *@This(), a: std.mem.Allocator, value: encoder.presentation_types.Table) anyerror!void {
+            self.tables += 1;
+            try self.spans(a, value.caption);
+            for (value.rows) |row| for (row.cells) |cell| {
+                if (cell.blocks) |cell_blocks| {
+                    try self.blocks(a, cell_blocks);
+                } else {
+                    try self.spans(a, cell.spans);
+                    if (cell.nested_table) |nested| try self.table(a, nested);
+                }
+            };
+        }
+
+        fn blocks(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Block) anyerror!void {
+            const meanings = [_][]const u8{ "သကဵုသမၠုၚ်ပ္တိန်။", "သၠုၚ်။" };
+            for (values) |block| {
+                if (block.kind == .definition) {
+                    try NativeWriterFixtureCheck.expect(self.definitions < meanings.len, @src());
+                    var text: std.ArrayList(u8) = .empty;
+                    for (block.spans) |span| {
+                        try text.appendSlice(a, span.text);
+                        try text.appendSlice(a, span.trail);
+                    }
+                    try std.testing.expectEqualStrings(meanings[self.definitions], text.items);
+                    try std.testing.expectEqualStrings("#", block.list_path);
+                    try std.testing.expectEqualStrings(if (self.definitions == 0) "1" else "2", block.number);
+                    self.definitions += 1;
+                }
+                try self.spans(a, block.spans);
+                if (block.table) |value| try self.table(a, value);
+            }
+        }
+    };
+};
+
+test "normal Writer retained Mon supplemental page preserves complete body and numbered literal parameter URL" {
+    const F = MnwDefaultlessUrlSavedTest;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    try std.testing.expectEqual(@as(usize, 1042), F.raw.len);
+    try std.testing.expectEqual(@as(usize, 8340), F.expanded.len);
+    try std.testing.expectEqual(@as(usize, 176), F.display_title.len);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.expanded, F.raw_url));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.expanded, "{{{1}}}"));
+    const control = try std.mem.replaceOwned(u8, a, F.expanded, F.raw_url, F.encoded_url);
+
+    var namespaces = try namespace_registry.Registry.init(a, @embedFile("testdata/mnw-kewk/mnw-namespace-registry.tsv"));
+    defer namespaces.deinit();
+    try namespaces.attachInterwikiMap(@embedFile("testdata/mnw-kewk/mnw-interwiki-map.tsv"));
+    try std.testing.expectEqualStrings("mnwwiktionary", namespaces.wiki);
+    try std.testing.expectEqualStrings("20261001", namespaces.dump_date);
+    try std.testing.expectEqualStrings("mnw", namespaces.content_language);
+    const namespace = namespaces.byId(118) orelse return NativeWriterFixtureCheck.missing(@src());
+    try NativeWriterFixtureCheck.expect(namespace.role == .supplemental, @src());
+    try std.testing.expectEqualStrings("ဗီုပြၚ်သိုၚ်တၟိ", namespace.name);
+    const behavior_source = @embedFile("testdata/mnw-kewk/mnw-behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, namespaces.wiki, namespaces.dump_date, namespaces.content_language, namespaces.source_sha256);
+    defer behavior.deinit();
+    var behavior_sha: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_sha, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/mnw-kewk/mnw-image-options.tsv"), namespaces.wiki, namespaces.dump_date, namespaces.content_language, namespaces.source_sha256, behavior_sha);
+    defer images.deinit();
+    var styles = try encoder.table_style_profile.parseAlloc(a, @embedFile("testdata/mnw-kewk/mnw-common.css"));
+    defer styles.deinit();
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    // processNamespace consumes only link-trail metadata, never language aliases.
+    // This exact captured line uses the normal parser and normal callback below.
+    try registry.addTsv(@embedFile("testdata/mnw-kewk/mnw-link-trail.tsv"));
+    var codes = languageCodes(&registry, &namespaces);
+    codes.behavior_switches = &behavior;
+    codes.image_options = &images;
+    codes.table_styles = &styles;
+
+    var payloads: [2][]const u8 = undefined;
+    var reports: [2]std.json.Parsed(F.Report) = undefined;
+    for ([_][]const u8{ F.expanded, control }, 0..) |source, i| {
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/mnw-kewk-{d}", .{ tmp.sub_path, i });
+        var writer = try encoder.blob_builder.Writer.init(io, a, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 118, .kind = .supplemental }, F.title, source, F.raw, F.display_title);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.supplemental_records);
+        try std.testing.expectEqual(@as(usize, 0), stats.language_records);
+        try std.testing.expectEqual(@as(usize, 0), stats.language_blobs);
+        try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
+        payloads[i] = try F.payload(a, root);
+        reports[i] = try F.report(a, root);
+    }
+    defer reports[0].deinit();
+    defer reports[1].deinit();
+    errdefer for (reports, 0..) |parsed, index| {
+        std.debug.print("Writer report {d} reasons:", .{index});
+        for (parsed.value.reasons) |reason| std.debug.print(" {s}", .{reason});
+        std.debug.print("\n", .{});
+    };
+    // The control changes only the one authored URL's brace spelling. Every
+    // section, list, reference, action, style and media field must remain exact.
+    try std.testing.expectEqualSlices(u8, payloads[1], payloads[0]);
+    const stored = try encoder.presentation_codec.decodeAlloc(a, payloads[0], F.title, .supplemental, null);
+    try std.testing.expectEqualSlices(u8, payloads[0], try encoder.presentation_codec.encodeAlloc(a, stored));
+    try std.testing.expectEqualStrings(F.title, stored.entry.title);
+    try NativeWriterFixtureCheck.expect(stored.entry.kind == .supplemental, @src());
+    try NativeWriterFixtureCheck.expect(stored.entry.language == null and stored.entry.language_code.len == 0, @src());
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.organization.lexemes.len);
+    try NativeWriterFixtureCheck.expect(stored.entry.display_title.len != 0, @src());
+
+    var scan: F.Scan = .{};
+    errdefer std.debug.print("MNW scan headword_bold={any} citation_italic={any} parameter_actions={d} definitions={d} tables={d}\nvisible={s}\n", .{ scan.headword_bold, scan.citation_italic, scan.parameter_action_spans, scan.definitions, scan.tables, scan.visible.items });
+    try scan.spans(a, stored.entry.preamble_spans);
+    for (stored.entry.sections) |section| try scan.blocks(a, section.blocks);
+    try std.testing.expectEqual(@as(usize, 2), scan.definitions);
+    try std.testing.expectEqual(@as(usize, 1), scan.tables);
+    var note_count: usize = 0;
+    var named_edpg = false;
+    for (stored.entry.references) |reference| {
+        if (reference.kind == .note) note_count += 1;
+        if (std.mem.eql(u8, reference.name, "EDPG")) named_edpg = true;
+        if (reference.blocks) |blocks| {
+            try scan.blocks(a, blocks);
+        } else try scan.spans(a, reference.spans);
+    }
+    try std.testing.expectEqual(@as(usize, 5), note_count);
+    try NativeWriterFixtureCheck.expect(named_edpg, @src());
+    try std.testing.expectEqual(@as(usize, 2), scan.definitions);
+    for (F.archive_labels, 0..) |label, i| {
+        errdefer std.debug.print("MNW archive action {d}: {s}\n", .{ i, F.archive_targets[i] });
+        try std.testing.expectEqualStrings(label, scan.archive_labels[i].items);
+    }
+    try NativeWriterFixtureCheck.expect(scan.parameter_action_spans != 0, @src());
+    try NativeWriterFixtureCheck.expect(scan.headword_bold and scan.citation_italic, @src());
+    try NativeWriterFixtureCheck.expect(std.mem.indexOf(u8, scan.visible.items, "Lua error in မဝ်ဂျူ:compound/templates: Parameter 1 is required.") != null, @src());
+    try NativeWriterFixtureCheck.expect(std.mem.indexOf(u8, scan.visible.items, "Unsorted formations:") != null, @src());
+    try NativeWriterFixtureCheck.expect(std.mem.indexOf(u8, scan.visible.items, "eh₁-stative") != null, @src());
+    try NativeWriterFixtureCheck.expect(std.mem.indexOf(u8, scan.visible.items, "{{{1}}}") == null, @src());
+    var asterisk = false;
+    var book = false;
+    for (stored.entry.media) |media| {
+        if (media.kind != .image) continue;
+        if (std.mem.eql(u8, media.file, "Asterisk.svg")) asterisk = true;
+        if (std.mem.eql(u8, media.file, "Open book icon.png")) book = true;
+    }
+    try NativeWriterFixtureCheck.expect(asterisk and book, @src());
+    for (reports) |parsed| {
+        try std.testing.expectEqual(@as(u32, 118), parsed.value.namespace);
+        try std.testing.expectEqualStrings(F.title, parsed.value.title);
+        try NativeWriterFixtureCheck.expect(F.hasReason(parsed.value, "rendered_lua_error"), @src());
+        try NativeWriterFixtureCheck.expect(!F.hasReason(parsed.value, "rejected_external_target"), @src());
+    }
+    try NativeWriterFixtureCheck.expect(F.hasReason(reports[0].value, "missing_template"), @src());
+    try NativeWriterFixtureCheck.expect(!F.hasReason(reports[1].value, "missing_template"), @src());
+    for (reports[0].value.reasons) |reason| {
+        if (std.mem.eql(u8, reason, "missing_template")) continue;
+        try NativeWriterFixtureCheck.expect(F.hasReason(reports[1].value, reason), @src());
+    }
+    for (reports[1].value.reasons) |reason| try NativeWriterFixtureCheck.expect(F.hasReason(reports[0].value, reason), @src());
+}
+
+const HrIntrigantanSavedTest = struct {
+    const title = "intrigantan";
+    const raw = @embedFile("testdata/hr-intrigantan/intrigantan.raw.wikitext");
+    const expanded = @embedFile("testdata/hr-intrigantan/intrigantan.expanded.wikitext");
+    const literal_source = "<prez. intrìgīram, ''pril. sad.'' intrigírajūći, gl. im. intrigírānje>";
+    const literal_control = "&lt;prez. intrìgīram, ''pril. sad.'' intrigírajūći, gl. im. intrigírānje>";
+    const literal_visible = "<prez. intrìgīram, pril. sad. intrigírajūći, gl. im. intrigírānje>";
+    const Report = struct { namespace: u32, title: []const u8, reasons: []const []const u8 };
+    const Saved = struct { payload: []const u8, metadata: encoder.blob_format.LanguageMetadata };
+
+    fn saved(a: std.mem.Allocator, root: []const u8, owner: []const u8) !Saved {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{ root, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(owner, &filename) });
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, a, .limited(4 * 1024 * 1024));
+        const blob = try encoder.blob_format.inspect(bytes);
+        try NativeWriterFixtureCheck.expect(blob.kind == .language, @src());
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings("hr", metadata.code);
+        try std.testing.expectEqualStrings(owner, metadata.heading);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        try std.testing.expectEqual(@as(usize, 1), index.recordCount());
+        const record = (try index.find(title)) orelse return NativeWriterFixtureCheck.missing(@src());
+        try std.testing.expectEqualStrings(title, record.title);
+        return .{ .payload = record.payload, .metadata = metadata };
+    }
+
+    fn report(a: std.mem.Allocator, root: []const u8) !std.json.Parsed(Report) {
+        const path = try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" });
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, a, .limited(64 * 1024));
+        return std.json.parseFromSlice(Report, a, bytes, .{});
+    }
+
+    fn hasReason(value: Report, reason: []const u8) bool {
+        for (value.reasons) |actual| if (std.mem.eql(u8, actual, reason)) return true;
+        return false;
+    }
+
+    const Scan = struct {
+        visible: std.ArrayList(u8) = .empty,
+        italic: std.ArrayList(u8) = .empty,
+        bold: std.ArrayList(u8) = .empty,
+        local_label: std.ArrayList(u8) = .empty,
+        english_label: std.ArrayList(u8) = .empty,
+        table_count: usize = 0,
+        table_cells: usize = 0,
+        table_headers: usize = 0,
+        first_cell_spans_three: bool = false,
+        terminal_parameter_cell: bool = false,
+        superscript_english: bool = false,
+        has_colored_cell: bool = false,
+
+        fn spans(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Span) !void {
+            for (values) |span| {
+                try self.visible.appendSlice(a, span.text);
+                try self.visible.appendSlice(a, span.trail);
+                if (span.italic) try self.italic.appendSlice(a, span.text);
+                if (span.bold) try self.bold.appendSlice(a, span.text);
+                if (span.kind == .link or span.kind == .external_link) {
+                    try NativeWriterFixtureCheck.expect(std.mem.indexOf(u8, span.target, "{{") == null, @src());
+                    try NativeWriterFixtureCheck.expect(std.mem.indexOf(u8, span.target, "}}") == null, @src());
+                }
+                if (span.kind == .link) {
+                    if (std.mem.eql(u8, span.target, "intrigant#intrigant (engleski jezik)")) {
+                        try self.local_label.appendSlice(a, span.text);
+                    } else if (std.mem.eql(u8, span.text, "intrigant")) {
+                        std.debug.print("HR unexpected intrigant action target: {s}\n", .{span.target});
+                    }
+                }
+                if (span.kind == .external_link and std.mem.eql(u8, span.target, "https://en.wiktionary.org/wiki/intrigant")) {
+                    try self.english_label.appendSlice(a, span.text);
+                    if (span.superscript) self.superscript_english = true;
+                }
+            }
+        }
+
+        fn table(self: *@This(), a: std.mem.Allocator, value: encoder.presentation_types.Table) anyerror!void {
+            const ordinal = self.table_count;
+            self.table_count += 1;
+            try NativeWriterFixtureCheck.expect(ordinal < 2, @src());
+            try std.testing.expectEqual(@as(usize, if (ordinal == 0) 3 else 1), value.rows.len);
+            try self.spans(a, value.caption);
+            for (value.rows, 0..) |row, row_index| {
+                try std.testing.expectEqual(@as(usize, if (ordinal == 0 and row_index == 0) 1 else 3), row.cells.len);
+                for (row.cells, 0..) |cell, cell_index| {
+                    self.table_cells += 1;
+                    if (cell.header) self.table_headers += 1;
+                    if (cell.background) |background| if (std.ascii.eqlIgnoreCase(background, "#F0F8FF")) {
+                        self.has_colored_cell = true;
+                    };
+                    if (ordinal == 0 and row_index == 0) {
+                        try std.testing.expectEqual(@as(u16, 3), cell.colspan);
+                        self.first_cell_spans_three = true;
+                    }
+                    const cell_start = self.visible.items.len;
+                    if (cell.blocks) |cell_blocks| {
+                        try self.blocks(a, cell_blocks);
+                    } else {
+                        try self.spans(a, cell.spans);
+                        if (cell.nested_table) |nested| try self.table(a, nested);
+                    }
+                    if (ordinal == 0 and row_index == 2 and cell_index == 2) {
+                        try std.testing.expectEqualStrings("{{{3}}}", std.mem.trim(u8, self.visible.items[cell_start..], " \t\r\n"));
+                        self.terminal_parameter_cell = true;
+                    }
+                    try self.visible.append(a, '\n');
+                }
+            }
+        }
+
+        fn blocks(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Block) anyerror!void {
+            for (values) |block| {
+                try self.spans(a, block.spans);
+                if (block.table) |value| try self.table(a, value);
+                try self.visible.append(a, '\n');
+            }
+        }
+    };
+};
+
+test "normal Writer retained Croatian intrigantan preserves literal inflection prose and complete saved body" {
+    const F = HrIntrigantanSavedTest;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    try std.testing.expectEqual(@as(usize, 1171), F.raw.len);
+    try std.testing.expectEqual(@as(usize, 1981), F.expanded.len);
+    // The raw capture keeps underscores; the typed action normalizes them to spaces.
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.expanded, "[[intrigant#intrigant_(engleski_jezik)|intrigant]]"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.expanded, F.literal_source));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.expanded, "{{{3}}}"));
+    // Escape only the opening punctuation byte, not the italic markup or closing
+    // angle. The ordinary entity parser supplies an independent literal control.
+    const control = try std.mem.replaceOwned(u8, a, F.expanded, F.literal_source, F.literal_control);
+    try std.testing.expectEqual(F.expanded.len + 3, control.len);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, control, "{{{3}}}"));
+
+    var namespaces = try namespace_registry.Registry.init(a, @embedFile("testdata/hr-intrigantan/hr-namespace-registry.tsv"));
+    defer namespaces.deinit();
+    try namespaces.attachInterwikiMap(@embedFile("testdata/hr-intrigantan/hr-interwiki-map.tsv"));
+    try std.testing.expectEqualStrings("hrwiktionary", namespaces.wiki);
+    try std.testing.expectEqualStrings("20261001", namespaces.dump_date);
+    try std.testing.expectEqualStrings("hr", namespaces.content_language);
+    const main_namespace = namespaces.byId(0) orelse return NativeWriterFixtureCheck.missing(@src());
+    try NativeWriterFixtureCheck.expect(main_namespace.role == .main, @src());
+    const behavior_source = @embedFile("testdata/hr-intrigantan/hr-behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, namespaces.wiki, namespaces.dump_date, namespaces.content_language, namespaces.source_sha256);
+    defer behavior.deinit();
+    var behavior_sha: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_sha, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/hr-intrigantan/hr-image-options.tsv"), namespaces.wiki, namespaces.dump_date, namespaces.content_language, namespaces.source_sha256, behavior_sha);
+    defer images.deinit();
+    var styles = try encoder.table_style_profile.parseAlloc(a, @embedFile("testdata/hr-intrigantan/hr-common.css"));
+    defer styles.deinit();
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/hr-intrigantan/hr-language-registry.tsv"));
+    try registry.trustAutonymSnapshot(@embedFile("testdata/hr-intrigantan/hr-language-names.tsv"), namespaces.wiki, namespaces.dump_date, namespaces.content_language);
+    // Site preferred/autonym evidence is trusted; no dump-local strong heading
+    // was installed by this exact captured metadata route.
+    try NativeWriterFixtureCheck.expect(registry.resolveStrong("hrvatski") == null, @src());
+    const owner = registry.resolveTrusted("hrvatski") orelse return NativeWriterFixtureCheck.missing(@src());
+    try std.testing.expectEqualStrings("hr", owner.code);
+    try std.testing.expectEqualStrings("hrvatski", owner.heading);
+    var codes = languageCodes(&registry, &namespaces);
+    codes.behavior_switches = &behavior;
+    codes.image_options = &images;
+    codes.table_styles = &styles;
+
+    var saved: [2]F.Saved = undefined;
+    var reports: [2]std.json.Parsed(F.Report) = undefined;
+    for ([_][]const u8{ F.expanded, control }, 0..) |source, i| {
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/hr-intrigantan-{d}", .{ tmp.sub_path, i });
+        var writer = try encoder.blob_builder.Writer.init(io, a, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, F.title, source, F.raw, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+        try std.testing.expectEqual(@as(usize, 0), stats.supplemental_records);
+        try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
+        saved[i] = try F.saved(a, root, owner.heading);
+        reports[i] = try F.report(a, root);
+    }
+    defer reports[0].deinit();
+    defer reports[1].deinit();
+    errdefer for (reports, 0..) |parsed, index| {
+        std.debug.print("Writer report {d} reasons:", .{index});
+        for (parsed.value.reasons) |reason| std.debug.print(" {s}", .{reason});
+        std.debug.print("\n", .{});
+    };
+    // Whole payload equality protects every section, list, table cell, action,
+    // style, media record, reference and lexeme field, not just a text excerpt.
+    try std.testing.expectEqualSlices(u8, saved[1].payload, saved[0].payload);
+    const stored = try encoder.presentation_codec.decodeAlloc(a, saved[0].payload, F.title, .language, saved[0].metadata);
+    try std.testing.expectEqualSlices(u8, saved[0].payload, try encoder.presentation_codec.encodeAlloc(a, stored));
+    try std.testing.expectEqualStrings(F.title, stored.entry.title);
+    try NativeWriterFixtureCheck.expect(stored.entry.kind == .language, @src());
+    try std.testing.expectEqualStrings("hrvatski", stored.entry.language orelse return NativeWriterFixtureCheck.missing(@src()));
+    try std.testing.expectEqualStrings("hr", stored.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.media.len);
+
+    var scan: F.Scan = .{};
+    errdefer std.debug.print("HR scan tables={d} cells={d} headers={d} colspan={any} color={any} superscript={any} terminal_parameter={any}\nvisible={s}\nitalic={s}\nbold={s}\n", .{ scan.table_count, scan.table_cells, scan.table_headers, scan.first_cell_spans_three, scan.has_colored_cell, scan.superscript_english, scan.terminal_parameter_cell, scan.visible.items, scan.italic.items, scan.bold.items });
+    try scan.spans(a, stored.entry.preamble_spans);
+    var translations = false;
+    var source_heading = false;
+    for (stored.entry.sections) |section| {
+        if (std.mem.eql(u8, section.title, "prijevodi:")) {
+            try std.testing.expectEqual(@as(u8, 3), section.level);
+            translations = true;
+        }
+        if (std.mem.eql(u8, section.title, "Izvor")) {
+            try std.testing.expectEqual(@as(u8, 2), section.level);
+            source_heading = true;
+        }
+        try scan.blocks(a, section.blocks);
+    }
+    try NativeWriterFixtureCheck.expect(translations and source_heading, @src());
+    try std.testing.expectEqual(@as(usize, 2), scan.table_count);
+    try std.testing.expectEqual(@as(usize, 10), scan.table_cells);
+    try std.testing.expectEqual(@as(usize, 3), scan.table_headers);
+    try NativeWriterFixtureCheck.expect(scan.first_cell_spans_three and scan.has_colored_cell, @src());
+    try std.testing.expectEqualStrings("intrigant", scan.local_label.items);
+    try std.testing.expectEqualStrings("(en)", scan.english_label.items);
+    try NativeWriterFixtureCheck.expect(scan.superscript_english, @src());
+    for ([_][]const u8{
+        "intrigàntan prid. <odr. intrigàntnī> koji pobuđuje na razmišljanje, koji izaziva asocijacije, takav da se može problematizirati",
+        "fenomen plasmana Hrvatske na Biennalu nije samo odabir umjetnika",
+        "intríga ž [fr.] <dat. jd intrígi>",
+        "spletka, smutnja, zavjera",
+        "zaplet radnje u književnom, kazališnom ili filmskom djelu",
+        "intrígant m <gen. mn intríganātā> spletkar, smutljivac",
+        "koji pripada, koji se odnosi na intrigante",
+        "(-ski) pril. kao intrigant, na način intriganta",
+        F.literal_visible,
+        "(Ø) praviti spletke, smutnje, spletkariti",
+        "(koga) pobuđivati čije zanimanje, buditi interes",
+        "Rječnik hrvatskoga jezika, Vladimir Anić, Novi liber",
+        "pozitiv", "komparativ", "superlativ", "(1.1)",
+    }) |witness| {
+        errdefer std.debug.print("HR intrigantan missing visible witness: {s}\n", .{witness});
+        try NativeWriterFixtureCheck.expect(std.mem.indexOf(u8, scan.visible.items, witness) != null, @src());
+    }
+    for ([_][]const u8{ "prid.", "svrš.", "nesvrš.", "pril. sad." }) |witness|
+        try NativeWriterFixtureCheck.expect(std.mem.indexOf(u8, scan.italic.items, witness) != null, @src());
+    for ([_][]const u8{ "definicija:", "izgovor:", "srodne riječi:", "napomene:" }) |witness|
+        try NativeWriterFixtureCheck.expect(std.mem.indexOf(u8, scan.bold.items, witness) != null, @src());
+    try NativeWriterFixtureCheck.expect(scan.terminal_parameter_cell, @src());
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, scan.visible.items, "{{{3}}}"));
+    for (reports) |parsed| {
+        try std.testing.expectEqual(@as(u32, 0), parsed.value.namespace);
+        try std.testing.expectEqualStrings(F.title, parsed.value.title);
+        try NativeWriterFixtureCheck.expect(F.hasReason(parsed.value, "missing_template"), @src());
+        try NativeWriterFixtureCheck.expect(!F.hasReason(parsed.value, "rejected_external_target"), @src());
+        try NativeWriterFixtureCheck.expect(!F.hasReason(parsed.value, "missing_language_heading"), @src());
+    }
+    try std.testing.expectEqual(reports[1].value.reasons.len, reports[0].value.reasons.len);
+    for (reports[0].value.reasons) |reason| try NativeWriterFixtureCheck.expect(F.hasReason(reports[1].value, reason), @src());
+    for (reports[1].value.reasons) |reason| try NativeWriterFixtureCheck.expect(F.hasReason(reports[0].value, reason), @src());
+}

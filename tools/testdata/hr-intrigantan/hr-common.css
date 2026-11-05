@@ -1,0 +1,269 @@
+/* See also [[Special:Mypage/monobook.css]], [[MediaWiki:Monobook.css]] */
+
+/* <pre> */
+
+/* Class for links with loudspeaker icon next to them */
+
+.audiolink a {
+    background: url("//upload.wikimedia.org/wikipedia/commons/thumb/8/8a/Loudspeaker.svg/16px-Loudspeaker.svg.png") center left no-repeat !important;
+    padding-left: 20px !important;
+    padding-right: 0 !important;
+}
+
+
+/* Support for script templates. The inherit declaration resets the font for all browsers except MSIE6.  The empty comment must remain. */
+.IPA {
+        font-family: DejaVu Sans, Segoe UI, Lucida Grande, Lucida Sans Unicode, Charis SIL, Doulos SIL, Code2000, Gentium, Gentium Alternative, TITUS Cyberbit Basic, Arial Unicode MS;
+        font-family /**/:inherit;
+}
+.Unicode {
+        font-family: TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Thryomanes, Gentium, GentiumAlt, Visual Geez Unicode, Lucida Grande, Tahoma, Arial Unicode MS, Microsoft Sans Serif, Lucida Sans Unicode;
+        font-family /**/:inherit;
+}
+/* Arabic */
+.AR {
+        font-family: Tahoma, Arial Unicode MS, Code2000, Traditional Arabic; 
+        font-family /**/:inherit;
+        font-size: 125%;
+}
+/* Bengali */
+.BN {
+        font-family: UniBangla, Arial Unicode MS, Code2000, Likhan, UT Bengali Dhaka, Vrinda; 
+        font-family /**/:inherit;
+        font-size: 130%;
+}
+/* Persian */
+.FA {
+        font-family: Tahoma; 
+        font-family /**/:inherit;
+        font-size: 125%;
+}
+/* Kashmiri */
+.KS {
+        font-family: Tahoma; 
+        font-family /**/:inherit;
+        font-size: 125%;
+}
+/* Kurdish */
+.KU {
+        font-family: Tahoma; 
+        font-family /**/:inherit;
+        font-size: 125%;
+}
+/* Latin Extended-B */
+.latinx {
+        font-family: TITUS Cyberbit Basic, Code2000, Microsoft Sans Serif;
+        font-family /**/:inherit;
+}
+/* Polytonic Greek */
+.polytonic {
+        font-family: Athena, Gentium, Palatino Linotype, Arial Unicode MS, Lucida Sans Unicode, Lucida Grande, Code2000; 
+        font-family /**/:inherit;
+}
+/* Russian and other Cyrillic */
+.RU {
+        font-family: Arial Unicode MS, Gentium, Code2000, Lucida Sans Unicode; 
+        font-family /**/:inherit;
+}
+/* Sindhi */
+.SD {
+        font-family: MB Sindhi, MBSarang Sattar, MB Bhitai Sattar, MB Lateefi, Ayaz Gul, Tahoma; 
+        font-family /**/:inherit;
+        font-size: 125%;
+}
+/* Thai */
+.TH {
+        font-family: Arial Unicode MS, Code2000; 
+        font-family /**/:inherit;
+        font-size: 125%;
+}
+/* Urdu */
+.UR {
+        font-family: Tahoma; 
+        font-family /**/:inherit;
+        font-size: 125%;
+}
+
+
+
+/* wikitable/prettytable class for skinning normal tables */
+
+table.wikitable,
+table.prettytable {
+  margin: 1em 1em 1em 0;
+  background: #f9f9f9;
+  border: 1px #aaaaaa solid;
+  border-collapse: collapse;
+}
+
+table.wikitable th, table.wikitable td,
+table.prettytable th, table.prettytable td {
+  border: 1px #aaaaaa solid;
+  padding: 0.2em;
+}
+
+table.wikitable th,
+table.prettytable th {
+  background: #f2f2f2;
+  text-align: center;
+}
+
+table.wikitable caption,
+table.prettytable caption {
+  margin-left: inherit;
+  margin-right: inherit;
+}
+
+/* main page-style boxes */
+table.bluebox {
+   background:#f9f9ff;
+   border:1px solid #aaaaaa;
+   margin-bottom:0.5em;
+   width:100%;
+}
+table.bluebox td {
+   padding:0.5em;
+}
+table.bluebox th {
+   background-color:#006699;
+   color:#ffffff;
+   padding:0.5em;
+}
+
+
+
+
+
+/* default setting for {{temp|italbrac}} and {{temp|italbrac-colon}} */
+.ib-brac, .ib-comma, .ib-colon { font-style: normal }
+.ib-content { font-style: italic }
+
+/* default setting for [[:Category:Inflection templates]] */
+.infl-inline { display: inline }
+.infl-table { display: none }
+
+/* default setting for Template:seeCites */
+.see-cites { font-style: italic }
+
+/* default style for indented "see also" */
+.disambig-see-also, .disambig-see-also-2 { text-indent: 2em }
+
+/* temporary default style for mentions outside of "form of" definitions */
+.mention { font-style: italic; }
+.mention-Latn { font-style: italic; }
+.en-mention { font-weight: bold; }
+.en-mention-double-quote { display: none; }
+.en-mention-single-quote { display: none; }
+.mention-gloss-double-quote { display: inline; }
+.mention-gloss-single-quote { display: none; }
+
+/* default style for "form of" definitions */
+.use-with-mention .mention { font-style: normal; font-weight: bold; }
+
+
+
+  /************************/
+  /* CommonsTicker styles */
+  /************************/
+ 
+  /* links */
+  .tickerDiffLink { } /* diff links in ticker */
+  .tickerMiscLink { } /* misc links in ticker */
+ 
+  /* remove list bullets */
+  .tickerList ul,    .tickerList ul li    { list-style: none; text-indent:-2em; margin-left:2em;   text-align:left; }
+  .tickerList ul ul, .tickerList ul ul li { list-style: none; text-indent:0;    margin-left:1.5em; text-align:left; }
+
+  /* per-type styles */
+  .tickerEntry_deleted     { }  /* entry for image deletion */
+  .tickerEntry_replaced    { }  /* entry for image replacement */
+  .tickerEntry_tagged      { }  /* entry for adding/removing problem tags */
+  .tickerEntry_redir       { }  /* entry for critical redirection (fot tag redirects) */
+  .tickerEntry_recat       { }  /* entry for critical re-categorization (for tag categories) */
+  .tickerEntry_notify      { }  /* entry for global notifications */
+  .tickerEntry_changed     { }  /* entry for generic change */
+
+  /* per-action styles */
+  .tickerAction_deleted:before     { content:" GONE "; color: #FF0000; font-family:monospace; font-weight:bold; font-size:100%; }  
+  .tickerAction_replaced:before    { content:" REPL "; color: #CC88FF; font-family:monospace; font-weight:bold; font-size:100%; }  
+  .tickerAction_addedBad:before    { content:" +VfD "; color: #FF8800; font-family:monospace; font-weight:bold; font-size:100%; }  
+  .tickerAction_removedBad:before  { content:" -VfD "; color: #00BB00; font-family:monospace; font-weight:bold; font-size:100%; }  
+  .tickerAction_addedGood:before   { content:" +OK  "; color: #00BB00; font-family:monospace; font-weight:bold; font-size:100%; }  
+  .tickerAction_removedGood:before { content:" -OK  "; color: #FF8800; font-family:monospace; font-weight:bold; font-size:100%; }
+
+  /* ticker usage list */
+  .tickerUsage  { font-size:80%; }  
+
+  /* entry applies to a template used by multiple images */
+  .tickerTemplateEntry    { font-weight: bold; } 
+
+  /* entry applies to sub-entries, i.e. images that use a specific template */
+  .tickerSubEntry         { }                       
+
+  /* minor entry styles */ 
+  .tickerMinorEntry  { color:#666; }     /* minor entry */
+  .tickerMinorEntry a,
+  .tickerMinorEntry a:link,
+  .tickerMinorEntry a:visited { color:#669; }
+  #bodyContent .tickerMinorEntry a.extiw,
+  #bodyContent .tickerMinorEntry a.extiw:link,
+  #bodyContent .tickerMinorEntry a.extiw:visited { color:#669; }
+
+/*InterProject */
+
+.interProject {
+   display:none; 
+   clear: both; 
+   border-top: 2px dotted #AAAAAA; 
+   margin-top: 2em;
+}
+/* temp - testing */
+body.page-User_Dvortygirl_Articles_needing_photos { background: url(//upload.wikimedia.org/wiktionary/en/6/6b/Bounce_7.0_annoy_level_99.gif) top left repeat; }
+
+/* CSS moved from various templates */
+
+.rfc-trans { background-color: #f0fff0 }
+.ttbc { background-color: #f0fff0 }
+.trreq { background-color: #f0fff0 }
+
+/* t- template */
+
+#bodyContent a.extiw .new ,
+#bodyContent a.extiw:active .new {
+       /* color: #BA3333; */       /* based on the colour in the monobook skin    */
+       color: #CC5038;             /* based on the colour hard-coded in mediawiki */
+}
+
+ 
+/** live ajax link checking support **/
+ 
+/* #002bb8 for (unvisited) blue, #ba0000 for red; so #5d155c for unknown */
+a.dunno, #p-personal a.dunno {
+        color: #5d155c;
+}
+ 
+/* #5a3696 for (visited) blue, #a55858 for red; so #744777 for unknown */
+a.dunno:visited, #p-personal a.dunno:visited {
+        color: #744777;
+}
+ 
+/* for pages which exist but lack the section we're looking for */
+a.partlynew, #p-personal a.partlynew {
+        color: #B88D00;
+}
+ 
+/* for pages which exist but lack the section we're looking for */
+a.partlynew:visited, #p-personal a.partlynew:visited {
+        color: #826F34;
+}
+
+
+/* </pre> */
+
+/*
+<pre>
+*/
+
+#p-logo a { background: url(//upload.wikimedia.org/wiktionary/hr/b/bc/Wiki.png) 35% 50% no-repeat !important; }
+
+/* Standard Navigationsleisten, aka box hiding thingy from .de. */

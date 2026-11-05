@@ -1,0 +1,35 @@
+
+{| class="messagebox" style="margin-bottom: 0.5em; background: AntiqueWhite; border:solid Tan 1px;"
+|-
+| [[Image:Asterisk.svg|none|45px| ]]
+| စရၚ်'''(အိန်ဒဝ်-ယူရဝ်ပဳယာန်-အခိုက်ကၞာ/kewk-)'''ဏအ်ဂှ်မနွံ'''[[:en:Wiktionary:Reconstructed terms|ဝေါဟာကဵုမအရေဝ်မဆက်ဆေန်]]'''နကဵုတမၠာဒၞာဲကလေၚ်သိုၚ်ပတိုန်လဝ်တၟိ။ ဟိုတ်ဖဵုပရေၚ်ဏအ်ကီု၊ [[:en:w:attested language|မအရေဝ်]]နကဵုစရၚ်ပ္ဍဲဏအ်ဂှ်ဟိုတ်နူဟွံဂွံလဝ်သက်သဳသာဓကတပ်တပ်၊ ဆ္ဂးစွံလဝ်နကဵုစိုတ်ပဋိသန္ဓိဟိုတ်နူမနွံမံၚ်ဍာံနူသက်သဳသာဓက[[:en:w:Comparative method|ပတုပ်ရံၚ်]]မအရေဝ်ဝေါဟာ။
+|}
+==အိန်ဒဝ်-ယူရဝ်ပဳယာန်-အခိုက်ကၞာ==
+
+===တံရိုဟ်===
+<span class="headword-line"><strong class="Latn headword" lang="ine-pro">&#42;kewk-</strong></span>[[Category:ဝေါဟာအဓိကအိန်ဒဝ်-ယူရဝ်ပဳယာန်-အခိုက်ကၞာဂမၠိုၚ်|KEWK-]][[Category:တံရိုဟ်အိန်ဒဝ်-ယူရဝ်ပဳယာန်-အခိုက်ကၞာဂမၠိုၚ်|KEWK-]]<ref name="EDPG"><span class="citation-whole"><span class="cited-source">Kroonen, Guus (<span class="None" lang="und">2013</span>), “*hauha-”, in <cite>Etymological Dictionary of Proto-Germanic</cite> (Leiden Indo-European Etymological Dictionary Series&#59; <span class="None" lang="und">11</span>), Leiden, Boston&#58; [[:w&#58;en&#58;Brill Publishers|Brill]], <small>[[Special:BookSources/978 90 04 18340 7|→ISBN]]</small>, [https://archive.org/details/etymological-dictionary-of-proto-germanic/page/215?view=theater page <span class="None" lang="und">215</span>]</span></span></ref>
+
+# သကဵုသမၠုၚ်ပ္တိန်။
+# သၠုၚ်။
+
+===မဒုင်လွဳစ===
+<strong class="error"><span class="scribunto-error">Lua error in မဝ်ဂျူ:compound/templates: Parameter 1 is required.</span></strong>
+* <span class="Latn" lang="ine-pro">&#42;kewk-éh₁-ti</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss">eh₁-stative</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>
+** Balto-Slavic:
+*** သလာဗေတ်-အခိုက်ကၞာ: <span class="Latn" lang="sla-pro">[[:ဗီုပြၚ်သိုၚ်တၟိ&#58;သလာဗေတ်-အခိုက်ကၞာ&#47;čučati|&#42;čučati]]</span><templatestyles src="Module:etymology/style.css"/><ref><span class="citation-whole"><span class="cited-source">[[:w&#58;en&#58;Oleg Trubachyov|Trubachyov, Oleg]], editor (<span class="None" lang="und">1977</span>), “[https://archive.org/details/ESSJa/ESSJa_4/page/n125/mode/1up?view=theater *čučati]”, in <cite><span class="Cyrl" lang="und">Этимологический словарь славянских языков</span></cite> &#91;<cite><span class="e-translation">Etymological dictionary of Slavic languages</span></cite>&#93; (in ရုဿျှာ), numbers 4 (<small><nowiki>*</nowiki>čaběniti – *děľa</small>), Moscow&#58; Nauka, page <span class="None" lang="und">126</span></span></span></ref>
+* <span class="Latn" lang="ine-pro">&#42;kewk-éh₂</span>
+** ဗဴတဝ်-သလာဗေတ်-အခိုက်ကၞာ: <span class="Latn" lang="ine-bsl-pro">[[:ဗီုပြၚ်သိုၚ်တၟိ&#58;ဗဴတဝ်-သလာဗေတ်-အခိုက်ကၞာ&#47;kjaukāˀ|&#42;kjaukāˀ]]</span><templatestyles src="Module:etymology/style.css"/>
+*** သလာဗေတ်-အခိုက်ကၞာ: <span class="Latn" lang="sla-pro">[[:ဗီုပြၚ်သိုၚ်တၟိ&#58;သလာဗေတ်-အခိုက်ကၞာ&#47;čuka|&#42;čuka]]</span><templatestyles src="Module:etymology/style.css"/><ref><span class="citation-whole"><span class="cited-source">[[:w&#58;en&#58;Oleg Trubachyov|Trubachyov, Oleg]], editor (<span class="None" lang="und">1977</span>), “[https://archive.org/details/ESSJa/ESSJa_4/page/n130/mode/1up?view=theater *čuka]”, in <cite><span class="Cyrl" lang="und">Этимологический словарь славянских языков</span></cite> &#91;<cite><span class="e-translation">Etymological dictionary of Slavic languages</span></cite>&#93; (in ရုဿျှာ), numbers 4 (<small><nowiki>*</nowiki>čaběniti – *děľa</small>), Moscow&#58; Nauka, page <span class="None" lang="und">131</span></span></span></ref>
+** အလ်ဗနဳယာန်: <span class="Latn" lang="sq">[[:çukë#အလ်ဗနဳယာန်|çukë]]</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="Latn" lang="ine-pro">&#42;kówk-o-s</span>
+** ဂျာမာန်-အခိုက်ကၞာ: <span class="Latn" lang="gem-pro">[[:ဗီုပြၚ်သိုၚ်တၟိ&#58;ဂျာမာန်-အခိုက်ကၞာ&#47;hauhaz|&#42;hauhaz]]</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="Latn" lang="ine-pro">&#42;kowk-ó-s</span>
+** ဂျာမာန်-အခိုက်ကၞာ: <span class="Latn" lang="gem-pro">[[:ဗီုပြၚ်သိုၚ်တၟိ&#58;ဂျာမာန်-အခိုက်ကၞာ&#47;haugaz|&#42;haugaz]]</span><templatestyles src="Module:etymology/style.css"/>
+* Unsorted formations:
+** ဗဴတဝ်-သလာဗေတ်-အခိုက်ကၞာ: <span class="Latn" lang="ine-bsl-pro">[[:ဗီုပြၚ်သိုၚ်တၟိ&#58;ဗဴတဝ်-သလာဗေတ်-အခိုက်ကၞာ&#47;kauk-|&#42;kauk-]]</span><templatestyles src="Module:etymology/style.css"/>
+*** လေတ်တူယဵုနဳယျာ: <span class="Latn" lang="lt">[[:kaukas#လေတ်တူယဵုနဳယျာ|kaũkas]]</span><templatestyles src="Module:etymology/style.css"/><ref><span class="citation-whole"><span class="cited-source">[[w:Rick Derksen|Derksen, Rick]] (<span class="None" lang="und">2015</span>), “kaukas”, in <cite>Etymological Dictionary of the Baltic Inherited Lexicon</cite> (Leiden Indo-European Etymological Dictionary Series&#59; <span class="None" lang="und">13</span>), Leiden, Boston&#58; [[:w&#58;en&#58;Brill Publishers|Brill]], <small>[[Special:BookSources/978 90 04 27898 1|→ISBN]]</small>, [https://archive.org/details/etymological-dictionary-of-the-baltic-inherited-lexicon/page/232?view=theater page <span class="None" lang="und">232</span>]</span></span></ref> 
+*** သလာဗေတ်-အခိုက်ကၞာ: <span class="Latn" lang="sla-pro">[[:ဗီုပြၚ်သိုၚ်တၟိ&#58;သလာဗေတ်-အခိုက်ကၞာ&#47;kuka|&#42;kuka]]</span><templatestyles src="Module:etymology/style.css"/><ref><span class="citation-whole"><span class="cited-source">[[w:Rick Derksen|Derksen, Rick]] (<span class="None" lang="und">2008</span>), “kùka”, in <cite>Etymological Dictionary of the Slavic Inherited Lexicon</cite> (Leiden Indo-European Etymological Dictionary Series&#59; 4)&lrm;<sup>[https://archive.org/details/etymological-dictionary-of-the-slavic-inherited-lexicon/page/{{{1}}}/mode/2up?view=theater]</sup>, Leiden, Boston&#58; [[:w&#58;Brill Publishers|Brill]], <small>[[Special:BookSources/978-90-04-15504-6|→ISBN]]</small>, page <span class="None" lang="und">256</span></span></span></ref> 
+** သံသကြိုတ်: <span class="Deva" lang="sa">[[:कुच#သံသကြိုတ်|कुच]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="sa-Latn" class="tr Latn">kuca</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+
+===<span class="relatedwords">[[File:Open book icon.png|30px|alt=|link=]] <span title="References">နိဿဲ</span></span>===
+<references/>

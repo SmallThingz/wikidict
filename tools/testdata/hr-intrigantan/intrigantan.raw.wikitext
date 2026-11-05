@@ -1,0 +1,39 @@
+==  intrigantan ({{hrvatski jezik}}) ==
+{{Pridjev-hr|intrigantan|(1.1)}}
+{{izgovor}}
+{{definicija}}
+{{pridjev|jezik=hr}}
+*intrigàntan ''prid.'' <odr. intrigàntnī> koji pobuđuje na razmišljanje, koji izaziva asocijacije, takav da se može problematizirati [~ fenomen plasmana Hrvatske na Biennalu nije samo odabir umjetnika]
+:(1.1) 
+{{sinonimi}}
+{{antonimi}}
+{{primjeri}}
+{{srodne riječi}}
+
+*intríga ''ž'' [fr.] <dat. jd intrígi>
+:1. spletka, smutnja, zavjera
+:2. zaplet radnje u književnom, kazališnom ili filmskom djelu
+*intrígant ''m'' <gen. mn intríganātā> spletkar, smutljivac
+*intrigàntski
+:1 ''prid.'' koji pripada, koji se odnosi na intrigante
+:2 (-ski) pril. kao intrigant, na način intriganta
+*intrigírati ''svrš.'' i ''nesvrš.'' <prez. intrìgīram, ''pril. sad.'' intrigírajūći, gl. im. intrigírānje>
+:1 (Ø) praviti spletke, smutnje, spletkariti
+:2 (koga) pobuđivati čije zanimanje, buditi interes
+
+{{sintagma}} 
+{{frazeologija}} 
+{{etimologija}}
+{{napomene}}
+
+=== prijevodi: ===
+{{pr-vrh}}
+*{{en}}: {{pr|en|intrigant}}
+{{pr-sredina}}
+{{pr-dno}}
+
+==Izvor==
+
+* Rječnik hrvatskoga jezika, Vladimir Anić, Novi liber
+
+[[en:intrigant]]

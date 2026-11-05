@@ -3852,3 +3852,36 @@ test "inline image visitors retain empty action spans across recursive sinks and
     try std.json.Stringify.value(model.Span{ .text = "legacy" }, .{}, &out.writer);
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "\"image\"") == null);
 }
+
+
+test "default text exposes Slovak child meanings through their local noun sense addresses" {
+    const cases = .{
+        .{ "biola", "slovenčina", "sk", "slangový výraz pre biológiu." },
+        .{ "houslista", "čeština", "cs", "huslista" },
+    };
+    inline for (cases) |case| {
+        const gender = [_]model.Span{.{ .text = "parent gender support" }};
+        const meaning = [_]model.Span{.{ .text = case[3] }};
+        const parent_blocks = [_]model.Block{.{ .kind = .list_item, .list_path = "*", .depth = 1, .spans = &gender }};
+        const child_blocks = [_]model.Block{.{ .kind = .definition, .list_path = "#", .number = "1", .depth = 1, .spans = &meaning }};
+        const sections = [_]model.Section{
+            .{ .level = 3, .title = "Podstatné meno", .blocks = &parent_blocks },
+            .{ .level = 4, .title = "Význam", .blocks = &child_blocks },
+        };
+        const senses = [_]model.Sense{.{ .block = 0 }};
+        const lexemes = [_]model.Lexeme{.{ .language = case[1], .kind = "Noun", .section = 1, .definitions = &senses }};
+        const entry: model.Entry = .{
+            .title = case[0], .kind = .language, .language = case[1], .language_code = case[2], .sections = &sections,
+            .organization = .{ .lexemes = &lexemes, .other_sections = &.{0} },
+        };
+        var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer out.deinit();
+        for ([_]bool{ false, true }) |color| {
+            out.clearRetainingCapacity();
+            try entryTextWithDetails(&out.writer, entry, color, false);
+            try std.testing.expect(std.mem.indexOf(u8, out.written(), "Noun") != null);
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), case[3]));
+            try std.testing.expect(std.mem.indexOf(u8, out.written(), "parent gender support") == null);
+        }
+    }
+}

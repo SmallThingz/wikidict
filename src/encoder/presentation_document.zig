@@ -8483,3 +8483,57 @@ test "CSS ancestor observation survives heading fragments without changing owner
     try std.testing.expectError(error.InvalidPreContext, renderer.renderBodyWithFragmentPre(source[0..cut], .{ .trailing = &wrong }));
     try std.testing.expectEqualStrings("", renderer.table_css_ancestor_classes);
 }
+
+test "quoted terminal dot lexical document preserves style actions codec and raw source rejection" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const lexical = "<prez. intrìgīram, ''pril. sad.'' intrigírajūći, gl. im. intrigírānje>";
+    const source = "==Forms==\n* before " ++ lexical ++ " after [[Child|kept]]\n===Meaning===\n# untouched sense\n";
+    const reference = "==Forms==\n* before &lt;prez. intrìgīram, ''pril. sad.'' intrigírajūći, gl. im. intrigírānje> after [[Child|kept]]\n===Meaning===\n# untouched sense\n";
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "quoted lexical form", .supplemental, null, "", source, null, &report);
+    const expected = try compileAlloc(a, "quoted lexical form", .supplemental, null, "", reference, null);
+    try std.testing.expectEqualSlices(u8, expected, bytes);
+    const stored = try codec.decodeAlloc(a, bytes, "quoted lexical form", .supplemental, null);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    try std.testing.expect(report.literal_markup and !report.missing_template);
+    var forms = false;
+    var meaning = false;
+    var action = false;
+    var sense = false;
+    var visible: std.ArrayList(u8) = .empty;
+    var italic: std.ArrayList(u8) = .empty;
+    for (stored.entry.sections) |section| {
+        if (std.mem.eql(u8, section.title, "Forms")) forms = true;
+        if (std.mem.eql(u8, section.title, "Meaning")) meaning = true;
+        for (section.blocks) |block| for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            if (span.italic) try italic.appendSlice(a, span.text);
+            if (span.kind == .link) {
+                try std.testing.expectEqualStrings("Child", span.target);
+                try std.testing.expectEqualStrings("kept", span.text);
+                action = true;
+            }
+            if (block.kind == .definition and std.mem.eql(u8, span.text, "untouched sense")) sense = true;
+        };
+    }
+    try std.testing.expect(forms and meaning and action and sense);
+    try std.testing.expectEqualStrings("pril. sad.", italic.items);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "<prez. intrìgīram, pril. sad. intrigírajūći, gl. im. intrigírānje>") != null);
+    const forged = [_]compiler.Span{
+        .{ .text = "<prez. intrìgīram, " },
+        .{ .text = "pril. sad.", .flags = .{ .italic = true } },
+        .{ .text = " intrigírajūći>" },
+    };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &forged, null));
+    for ([_][]const u8{
+        "<cf. 'word'>", "<cf. \"word\">", "<cf. title=x>", "<cf. <b>word</b>>",
+        "[[Target|" ++ lexical ++ "]]", "[https://example.test " ++ lexical ++ "]",
+    }) |negative| {
+        errdefer std.debug.print("HR document rejected source={s}\n", .{negative});
+        try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "guard", .supplemental, null, "", negative, null));
+    }
+    const unresolved_target = [_]compiler.Span{.{ .kind = .link, .target = "{{missing}}", .text = "<", .provenance = .entity_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &unresolved_target, null));
+}

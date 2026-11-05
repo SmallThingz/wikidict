@@ -857,7 +857,7 @@ const PreparedQuoteSource = struct {
 
 fn prepareQuoteSource(a: A, source: MissingText) Error!PreparedQuoteSource {
     var renderer: Renderer = .{ .a = a, .context = .{} };
-    return renderer.prepareQuoteSource(source);
+    return renderer.prepareQuoteSource(source, false);
 }
 
 const QuoteTransition = struct { prefix: []const u8, suffix: []const u8 = "", state: QuoteState };
@@ -4467,7 +4467,51 @@ pub const Renderer = struct {
         }
         try self.text(input[start..], style);
     }
-    fn externalUrlTarget(self: *Renderer, value: []const u8) Error![]const u8 {
+    // A complete defaultless bare parameter is terminal literal text in
+    // MediaWiki. Reuse the body proof, but admit it only inside an HTTPS path;
+    // authority, query, fragments and every other brace form stay unresolved.
+    fn literalDefaultlessExternalPath(value: []const u8) ?usize {
+        if (value.len <= 8 or !std.ascii.eqlIgnoreCase(value[0..8], "https://") or !safeUrl(value)) return null;
+        // Entity decoding can turn an apparent path prefix into '?' or '#'.
+        // This narrow proof requires unchanged component delimiters.
+        if (std.mem.indexOfAny(u8, value, "\\&") != null) return null;
+        const authority_end = std.mem.indexOfAny(u8, value[8..], "/?#") orelse return null;
+        const path_start = 8 + authority_end;
+        if (path_start == 8 or value[path_start] != '/') return null;
+        const path_end = if (std.mem.indexOfAny(u8, value[path_start..], "?#")) |offset| path_start + offset else value.len;
+        if (std.mem.indexOfAny(u8, value[0..path_start], "{}") != null or
+            std.mem.indexOfAny(u8, value[path_end..], "{}") != null) return null;
+        var cursor = path_start;
+        var count: usize = 0;
+        while (cursor < path_end) {
+            if (value[cursor] == '{') {
+                if (!starts(value[cursor..path_end], "{{{")) return null;
+                const close = std.mem.indexOfPos(u8, value, cursor + 3, "}}}") orelse return null;
+                if (close + 3 > path_end or !literalBareParameterName(value[cursor + 3 .. close])) return null;
+                count += 1;
+                cursor = close + 3;
+            } else {
+                if (value[cursor] == '}') return null;
+                cursor += 1;
+            }
+        }
+        return if (count != 0) count else null;
+    }
+    fn externalUrlTarget(self: *Renderer, raw: []const u8) Error![]const u8 {
+        var value = raw;
+        if (literalDefaultlessExternalPath(raw)) |count| {
+            // Browser navigation escapes braces in a URL path. This proof runs
+            // on authored tokens, before entities can manufacture delimiters.
+            var escaped: std.ArrayList(u8) = .empty;
+            for (raw) |ch| switch (ch) {
+                '{' => try escaped.appendSlice(self.a, "%7B"),
+                '}' => try escaped.appendSlice(self.a, "%7D"),
+                else => try escaped.append(self.a, ch),
+            };
+            value = try escaped.toOwnedSlice(self.a);
+            self.unresolved_templates += count;
+            self.fallbacks.missing_template = true;
+        }
         if (std.mem.indexOfScalar(u8, value, '&') == null) return value;
         var out: std.ArrayList(u8) = .empty;
         var start: usize = 0;
@@ -4505,6 +4549,19 @@ pub const Renderer = struct {
         return out.toOwnedSlice(self.a);
     }
     fn externalUrlLabel(self: *Renderer, value: []const u8, style: Style) Error!void {
+        if (literalDefaultlessExternalPath(value) != null) {
+            // Preserve the authored bare-URL label; only navigation uses the
+            // escaped spelling. The shared proof covers every brace below.
+            var start: usize = 0;
+            while (std.mem.indexOfPos(u8, value, start, "{{{")) |at| {
+                const end = (std.mem.indexOfPos(u8, value, at + 3, "}}}") orelse unreachable) + 3;
+                try self.text(value[start..at], style);
+                try self.protectedLiteral(value[at..end], style);
+                start = end;
+            }
+            try self.text(value[start..], style);
+            return;
+        }
         // Only the proven closing-brace runs are literal. Keep all surrounding
         // visible text parsed, with the same validated action and style.
         var start: usize = 0;
@@ -7402,12 +7459,12 @@ pub const Renderer = struct {
     // Normalize escaped angles in the complete tracked inline stream.
     // Keep link/quote context continuous across the visible tag boundary.
     fn literalHtmlAnglesSourceWithMissing(self: *Renderer, tracked: MissingText) Error!MissingText {
-        return self.literalHtmlAnglesSourceMapped(tracked, null);
+        return self.literalHtmlAnglesSourceMapped(tracked, null, false);
     }
-    fn prepareQuoteSource(self: *Renderer, tracked: MissingText) Error!PreparedQuoteSource {
+    fn prepareQuoteSource(self: *Renderer, tracked: MissingText, allow_quoted_terminal_dot: bool) Error!PreparedQuoteSource {
         var angles: std.ArrayList(usize) = .empty;
         errdefer angles.deinit(self.a);
-        const source = try self.literalHtmlAnglesSourceMapped(tracked, &angles);
+        const source = try self.literalHtmlAnglesSourceMapped(tracked, &angles, allow_quoted_terminal_dot);
         errdefer {
             if (source.bytes.ptr != tracked.bytes.ptr) self.a.free(source.bytes);
             if (source.ranges.ptr != tracked.ranges.ptr) self.a.free(source.ranges);
@@ -7417,13 +7474,13 @@ pub const Renderer = struct {
     }
     fn normalizeBodyWikiQuotes(self: *Renderer, input: []const u8, seed: ?QuoteSeed) Error![]const u8 {
         const raw = MissingText.untracked(input);
-        const prepared = try self.prepareQuoteSource(raw);
+        const prepared = try self.prepareQuoteSource(raw, false);
         errdefer prepared.release(self.a, raw, raw);
         const output = try normalizeWikiQuotesPreparedWithContext(self.a, prepared.source.bytes, 0, false, self.context, if (seed) |value| prepared.forwardSeed(value) else null);
         prepared.release(self.a, raw, MissingText.untracked(output));
         return output;
     }
-    fn literalHtmlAnglesSourceMapped(self: *Renderer, tracked: MissingText, angles: ?*std.ArrayList(usize)) Error!MissingText {
+    fn literalHtmlAnglesSourceMapped(self: *Renderer, tracked: MissingText, angles: ?*std.ArrayList(usize), allow_quoted_terminal_dot: bool) Error!MissingText {
         const input = tracked.bytes;
         var out: missing_dependency.Builder = .{};
         errdefer out.deinit(self.a);
@@ -7437,7 +7494,19 @@ pub const Renderer = struct {
         var template_end: usize = 0;
         // Lookahead must not publish opaque misses into the earlier angle scan.
         var template_opaque_scan: syntax.OpaqueScan = .{};
-        while (std.mem.indexOfAnyPos(u8, input, scan, "{<")) |at| {
+        var quoted_bracket_depth: usize = 0;
+        var quoted_html_end: usize = 0;
+        const scan_bytes = if (allow_quoted_terminal_dot) "{<[]" else "{<";
+        while (std.mem.indexOfAnyPos(u8, input, scan, scan_bytes)) |at| {
+            if (input[at] == '[' or input[at] == ']') {
+                // A new lexical proof never borrows a raw action/label domain.
+                // Ambiguous unmatched brackets conservatively retain that hold.
+                if (at >= template_end and at >= quoted_html_end) {
+                    if (input[at] == '[') quoted_bracket_depth += 1 else if (quoted_bracket_depth != 0) quoted_bracket_depth -= 1;
+                }
+                scan = at + 1;
+                continue;
+            }
             if (input[at] == '{') {
                 scan = at + 1;
                 if (at >= template_end and starts(input[at..], "{{") and boundaries.canClose(input, at)) {
@@ -7485,6 +7554,13 @@ pub const Renderer = struct {
             };
             var literal_end: ?usize = null;
             if (opaque_scan.tagAt(input, at, null)) |tag| {
+                if (allow_quoted_terminal_dot and at >= quoted_html_end and !tag.closing and !tag.self_closing and
+                    !oneOf(tag.name, &.{ "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr" }))
+                {
+                    // Authored HTML children, especially actions/code, retain
+                    // their existing proof domains. Match each disjoint scope once.
+                    quoted_html_end = if (syntax.matchingTag(input, tag)) |pair| pair.end else input.len;
+                }
                 if (tag.is("includeonly") and !tag.closing and !tag.self_closing) {
                     scan = if (syntax.matchingTag(input, tag)) |pair| pair.end else input.len;
                     continue;
@@ -7508,6 +7584,18 @@ pub const Renderer = struct {
                 scan = tag.end;
             } else {
                 scan = at + 1;
+                if (allow_quoted_terminal_dot and at >= template_end and at >= quoted_html_end and quoted_bracket_depth == 0 and
+                    terminalDotLexicalEnd(input, at, true) != null)
+                {
+                    // Prove raw wiki quotes before they become formatting HTML.
+                    // Only the opening is literal; the ordinary quote pass owns italics.
+                    if (angles) |positions| try positions.append(self.a, at);
+                    try out.appendSlice(self.a, tracked, emitted, at);
+                    try out.append(self.a, missingEdit(tracked, at, at + 1, "&lt;"));
+                    self.fallbacks.literal_markup = true;
+                    emitted = at + 1;
+                    continue;
+                }
                 if (at >= template_end) if (completeUnknownHtmlTokenEnd(input, at)) |end| {
                     literal_end = end;
                     self.fallbacks.literal_markup = true;
@@ -7760,6 +7848,9 @@ pub const Renderer = struct {
     // optional plain lexical text, is not an HTML tag. Use only in ordinary
     // parsed nonaction text after tagAt declined; keep syntax/attribute domains.
     fn terminalDotUnregisteredHtmlNameEnd(input: []const u8, at: usize) ?usize {
+        return terminalDotLexicalEnd(input, at, false);
+    }
+    fn terminalDotLexicalEnd(input: []const u8, at: usize, quoted: bool) ?usize {
         if (at >= input.len or input[at] != '<') return null;
         var cursor = at + 1;
         const name_start = cursor;
@@ -7768,11 +7859,26 @@ pub const Renderer = struct {
         const name = input[name_start..cursor];
         if (recognizedInlineHtmlName(name) or oneOf(name, &.{ "a", "img" }) or ir.hasExternalProtocolScheme(name)) return null;
         cursor += 1;
+        var italic = false;
+        var italic_lexical = false;
+        var pairs: usize = 0;
         if (input[cursor] != '>') {
             if (input[cursor] != ' ' and input[cursor] != '\t') return null;
             var lexical = false;
             while (cursor < input.len and input[cursor] != '>') {
                 const ch = input[cursor];
+                if (quoted and ch == '\'') {
+                    var end = cursor;
+                    while (end < input.len and input[end] == '\'') : (end += 1) {}
+                    if (end - cursor != 2) return null;
+                    if (italic) {
+                        if (!italic_lexical) return null;
+                        pairs += 1;
+                    } else italic_lexical = false;
+                    italic = !italic;
+                    cursor = end;
+                    continue;
+                }
                 // No nested HTML, wiki/action/entity syntax, or attribute syntax.
                 if (std.mem.indexOfScalar(u8, "<[]{}&'\"=/:\\", ch) != null) return null;
                 const width = std.unicode.utf8ByteSequenceLength(ch) catch return null;
@@ -7781,11 +7887,15 @@ pub const Renderer = struct {
                 if ((cp < 0x20 and cp != '\t') or (cp >= 0x7f and cp <= 0x00a0) or cp == 0x1680 or
                     (cp >= 0x2000 and cp <= 0x200f) or (cp >= 0x2028 and cp <= 0x202f) or
                     (cp >= 0x205f and cp <= 0x206f) or cp == 0x3000 or cp == 0xfeff or cp == 0xfffd) return null;
-                if (cp != ' ' and cp != '\t') lexical = true;
+                if (cp != ' ' and cp != '\t') {
+                    lexical = true;
+                    if (italic) italic_lexical = true;
+                }
                 cursor += width;
             }
             if (!lexical or cursor == input.len) return null;
         }
+        if (quoted and (italic or pairs == 0)) return null;
         var preceding = at;
         while (preceding != 0) {
             preceding -= 1;
@@ -9587,7 +9697,10 @@ pub const Renderer = struct {
         }
         const unmatched = try self.prepareUnmatchedOpaqueWithMissing(numbered_missing);
         const quoted = quoted: {
-            const prepared = try self.prepareQuoteSource(unmatched);
+            const ordinary = inherited.provenance == .parsed and inherited.kind == .text and
+                inherited.target.len == 0 and inherited.self_link_target == null and !inherited.missing_nonaction and
+                !inherited.code and !inherited.preserve_whitespace;
+            const prepared = try self.prepareQuoteSource(unmatched, ordinary);
             errdefer prepared.release(self.a, unmatched, unmatched);
             const output = try normalizeWikiQuotesPreparedWithMissing(self.a, prepared.source, 0, false, self.context, if (quote_seed) |seed| prepared.forwardSeed(seed) else null);
             prepared.release(self.a, unmatched, output);
@@ -37498,7 +37611,7 @@ test "interrupted literal atomic names permit a following complete unknown token
     }
     const raw_chain = "gen<gène<genes: born of, produced by) >";
     var phases: Renderer = .{ .a = a, .context = .{} };
-    const prepared = try phases.prepareQuoteSource(MissingText.untracked(raw_chain));
+    const prepared = try phases.prepareQuoteSource(MissingText.untracked(raw_chain), false);
     try std.testing.expectEqualStrings("gen&lt;gène&lt;genes: born of, produced by) &gt;", prepared.source.bytes);
     const raw_angles = [_]usize{ 3, 9, raw_chain.len - 1 };
     try std.testing.expectEqualSlices(usize, &raw_angles, prepared.angles);
@@ -38220,4 +38333,200 @@ test "table qualified CSS never borrows a DIV class through generic ancestor pro
     try std.testing.expectEqual(@as(usize, 1), probe.unaffected);
     try std.testing.expectEqual(@as(usize, 0), probe.affected);
     try std.testing.expectEqualStrings("", renderer.table_css_ancestor_classes);
+}
+
+test "defaultless HTTPS path parameters preserve numbered actions literal bare labels and diagnostics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const raw = "https://example.test/page/{{{1}}}/mode/2up?view=theater";
+    const target = "https://example.test/page/%7B%7B%7B1%7D%7D%7D/mode/2up?view=theater";
+    var numbered: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try numbered.renderBody("[" ++ raw ++ "] [https://example.test/next]");
+    try ExternalNumberingFixture.roundtrip(a, &numbered, blocks, &.{
+        .{ .target = target, .label = "[1]" },
+        .{ .target = "https://example.test/next", .label = "[2]" },
+    });
+    try std.testing.expectEqual(@as(usize, 1), numbered.unresolved_templates);
+    try std.testing.expect(numbered.fallbacks.missing_template and !numbered.fallbacks.rejected_external_target);
+    var bare: Renderer = .{ .a = a, .context = .{} };
+    const bare_blocks = try bare.renderBody(raw);
+    const Bare = struct {
+        fn check(allocator: A, values: anytype, expected_target: []const u8, expected_label: []const u8) !void {
+            var label: std.ArrayList(u8) = .empty;
+            defer label.deinit(allocator);
+            for (values) |block| for (block.spans) |span| {
+                try std.testing.expect(span.kind == .external_link);
+                try std.testing.expectEqualStrings(expected_target, span.target);
+                try label.appendSlice(allocator, span.text);
+            };
+            try std.testing.expectEqualStrings(expected_label, label.items);
+        }
+    };
+    try Bare.check(a, bare_blocks, target, raw);
+    const bare_stored = try FormattingScopeTest.encode(a, &bare, bare_blocks);
+    try Bare.check(a, bare_stored.entry.sections[0].blocks, target, raw);
+    try std.testing.expectEqual(@as(usize, 1), bare.unresolved_templates);
+    var proof_seen = false;
+    for (bare_blocks) |block| for (block.spans) |span| {
+        if (std.mem.eql(u8, span.text, "{{{1}}}")) {
+            try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+            try std.testing.expectEqualStrings(target, span.target);
+            proof_seen = true;
+        }
+    };
+    try std.testing.expect(proof_seen);
+    var multiple: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings("https://example.test/%7B%7B%7Bstem_1%7D%7D%7D/%7B%7B%7B名%7D%7D%7D", try multiple.externalUrlTarget("https://example.test/{{{stem_1}}}/{{{名}}}"));
+    try std.testing.expectEqual(@as(usize, 2), multiple.unresolved_templates);
+    // A forged raw destination still fails the unchanged shared action guard.
+    try std.testing.expect(unresolvedExternalActionTarget(raw));
+    try std.testing.expect(!unresolvedExternalActionTarget(target));
+    var clean: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings(target, try clean.externalUrlTarget(target));
+    try std.testing.expectEqual(@as(usize, 0), clean.unresolved_templates);
+}
+
+test "defaultless external path proof rejects executable ambiguous and nonpath parameters" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const rejected = [_][]const u8{
+        "https://example.test/{{missing}}",
+        "https://example.test/{{{1|default}}}",
+        "https://example.test/{{{1|}}}",
+        "https://example.test/{{{}}}",
+        "https://example.test/{{{bad name}}}",
+        "https://example.test/{{{x\xff}}}",
+        "https://example.test/{{{1}}",
+        "https://example.test/{{{1}}}}",
+        "https://example.test/{{{{1}}}}",
+        "https://example.test/{{prefix_{{{1}}}}}",
+        "https://example.test/{{{1}}}/{{missing}}",
+        "https://example.test/{literal}/{{{1}}}",
+        "https://{{{host}}}/path",
+        "https://example.test/?page={{{1}}}",
+        "https://example.test/#{{{1}}}",
+        "https://example.test/{{{1}}}?q={{missing}}",
+        "https://example.test\\other/{{{1}}}",
+        "http://example.test/{{{1}}}",
+        "ftp://example.test/{{{1}}}",
+        "//example.test/{{{1}}}",
+        "https:///{{{1}}}",
+    };
+    for (rejected) |source| {
+        errdefer std.debug.print("defaultless URL rejected source={s}\n", .{source});
+        try std.testing.expect(Renderer.literalDefaultlessExternalPath(source) == null);
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expectEqualStrings(source, try renderer.externalUrlTarget(source));
+        try std.testing.expectError(error.UncompiledTemplate, renderer.link(source, source, .{}, 0, true));
+    }
+    // Entities must neither create a token nor move it out of the path after
+    // the proof. The existing target decoder and rejection guard still apply.
+    for ([_][]const u8{
+        "https://example.test/&#123;&#123;&#123;1&#125;&#125;&#125;",
+        "https://example.test/&num;{{{1}}}",
+        "https://example.test/&quest;{{{1}}}",
+        "https://example.test/&#35;{{{1}}}",
+        "https://example.test/&#63;{{{1}}}",
+        "https://example.test/{{{1}}}?a=1&amp;b=2",
+    }) |source| {
+        errdefer std.debug.print("defaultless URL rejected entity source={s}\n", .{source});
+        var entity_renderer: Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expect(Renderer.literalDefaultlessExternalPath(source) == null);
+        try std.testing.expectError(error.UncompiledTemplate, entity_renderer.link(source, source, .{}, 0, true));
+        try std.testing.expectEqual(@as(usize, 1), entity_renderer.unresolved_templates);
+    }
+}
+
+test "quoted terminal dot lexical source preserves ordinary wiki italics and literal opening" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<prez. intrìgīram, ''pril. sad.'' intrigírajūći, gl. im. intrigírānje>";
+    const visible = "<prez. intrìgīram, pril. sad. intrigírajūći, gl. im. intrigírānje>";
+    try std.testing.expect(Renderer.terminalDotUnregisteredHtmlNameEnd(source, 0) == null);
+    try std.testing.expectEqual(@as(?usize, source.len), Renderer.terminalDotLexicalEnd(source, 0, true));
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans(source, .{});
+    try std.testing.expectEqualStrings(visible, try flattened(a, spans));
+    var openings: usize = 0;
+    var italic: std.ArrayList(u8) = .empty;
+    for (spans) |span| {
+        try std.testing.expect(span.kind == .text and span.target.len == 0);
+        if (span.flags.italic) try italic.appendSlice(a, span.text);
+        if (std.mem.indexOfScalar(u8, span.text, '<') != null) {
+            try std.testing.expectEqualStrings("<", span.text);
+            try std.testing.expectEqual(Provenance.entity_literal, span.provenance);
+            openings += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), openings);
+    try std.testing.expectEqualStrings("pril. sad.", italic.items);
+    try std.testing.expect(renderer.fallbacks.literal_markup);
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(visible));
+
+    const blob = @import("blob_encoder");
+    for ([_]struct { authored: []const u8, reference: []const u8 }{
+        .{ .authored = source, .reference = "&lt;prez. intrìgīram, ''pril. sad.'' intrigírajūći, gl. im. intrigírānje>" },
+        .{ .authored = "''prefix " ++ source ++ " suffix'' [[Child|kept]]", .reference = "''prefix &lt;prez. intrìgīram, ''pril. sad.'' intrigírajūći, gl. im. intrigírānje> suffix'' [[Child|kept]]" },
+        .{ .authored = "''first line\n* " ++ source ++ " after''\nplain", .reference = "''first line\n* &lt;prez. intrìgīram, ''pril. sad.'' intrigírajūći, gl. im. intrigírānje> after''\nplain" },
+        .{ .authored = "<cf. ''first'' and ''second''>", .reference = "&lt;cf. ''first'' and ''second''>" },
+    }) |case| {
+        errdefer std.debug.print("HR quoted terminal-dot source={s}\n", .{case.authored});
+        var actual: Renderer = .{ .a = a, .context = .{} };
+        var expected: Renderer = .{ .a = a, .context = .{} };
+        const actual_stored = try FormattingScopeTest.encode(a, &actual, try actual.renderBody(case.authored));
+        const expected_stored = try FormattingScopeTest.encode(a, &expected, try expected.renderBody(case.reference));
+        try std.testing.expectEqualSlices(u8, try blob.presentation_codec.encodeAlloc(a, expected_stored), try blob.presentation_codec.encodeAlloc(a, actual_stored));
+    }
+}
+
+test "quoted terminal dot proof retains malformed action attribute and opaque exclusions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "<cf. plain>", "<cf. 'word'>", "<cf. '''word'''>", "<cf. ''''word''''>",
+        "<cf. ''word>", "<cf. word''>", "<cf. '' ''>", "<cf. ''word' ''>",
+        "<cf. ''word'' title=x>", "<cf. ''word'' \"x\">", "<cf. ''word''/>",
+        "<cf. ''[[Child]]''>", "<cf. ''[https://example.test label]''>",
+        "<cf. ''{{x}}''>", "<cf. ''{{{x}}}''>", "<cf. ''&amp;''>",
+        "<cf. ''<b>word</b>''>", "<cf. ''word\nword''>", "<cf. ''word\rword''>",
+        "<cf. ''\xff''>", "<cf. ''\u{200b}word''>", "<b. ''word''>",
+        "<a. ''word''>", "<ref. ''word''>", "<http. ''word''>",
+    }) |source| {
+        errdefer std.debug.print("HR rejected terminal-dot source={s}\n", .{source});
+        try std.testing.expect(Renderer.terminalDotLexicalEnd(source, 0, true) == null);
+    }
+    const lexical = "<prez. ''word''>";
+    for ([_][]const u8{
+        "[[Target|" ++ lexical ++ "]]", "[https://example.test " ++ lexical ++ "]",
+        "[[unclosed " ++ lexical, "[ambiguous " ++ lexical,
+        "{{template|" ++ lexical ++ "}}", "<nowiki>" ++ lexical ++ "</nowiki>",
+        "<code>" ++ lexical ++ "</code>", "<pre>" ++ lexical ++ "</pre>",
+        "<a href='https://example.test'>" ++ lexical ++ "</a>",
+        "<span title=\"" ++ lexical ++ "\">kept</span>",
+        "<b>" ++ lexical ++ "</b>", "<code>" ++ lexical,
+    }) |source| {
+        errdefer std.debug.print("HR excluded source domain={s}\n", .{source});
+        var legacy: Renderer = .{ .a = a, .context = .{} };
+        var candidate: Renderer = .{ .a = a, .context = .{} };
+        const before = try legacy.prepareQuoteSource(MissingText.untracked(source), false);
+        const after = try candidate.prepareQuoteSource(MissingText.untracked(source), true);
+        try std.testing.expectEqualStrings(before.source.bytes, after.source.bytes);
+        try std.testing.expectEqualSlices(usize, before.angles, after.angles);
+    }
+    for ([_]Style{
+        .{ .kind = .link, .target = "Target" },
+        .{ .kind = .external_link, .target = "https://example.test" },
+        .{ .self_link_target = "Target" }, .{ .missing_nonaction = true },
+        .{ .code = true }, .{ .preserve_whitespace = true },
+    }) |style| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(lexical, style);
+        for (spans) |span| if (std.mem.indexOfScalar(u8, span.text, '<') != null)
+            try std.testing.expectEqual(Provenance.parsed, span.provenance);
+        try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(try flattened(a, spans)));
+    }
 }

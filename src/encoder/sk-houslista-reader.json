@@ -1,0 +1,1666 @@
+{
+  "schema": "dict.results.v1",
+  "operation": "lookup",
+  "query": "houslista",
+  "kind": "language",
+  "language": "čeština",
+  "match_mode": "exact-utf8",
+  "record_count": 7523,
+  "total_matches": 1,
+  "offset": 0,
+  "has_more": false,
+  "matches": [],
+  "entries": [
+    {
+      "organization": {
+        "lexemes": [],
+        "other_sections": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8
+        ]
+      },
+      "title": "houslista",
+      "display_title": [],
+      "kind": "language",
+      "language": "čeština",
+      "language_code": "cs",
+      "sections": [
+        {
+          "level": 2,
+          "title": "Čeština",
+          "anchor": "Čeština",
+          "anchor_fallback": ".C4.8Ce.C5.A1tina",
+          "blocks": []
+        },
+        {
+          "level": 3,
+          "title": "Výslovnosť",
+          "anchor": "Výslovnosť",
+          "anchor_fallback": "V.C3.BDslovnos.C5.A5",
+          "blocks": [
+            {
+              "kind": "list_item",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "external_link",
+                  "text": "IPA",
+                  "target": "https://sk.wikipedia.org/wiki/sk:Medzin%C3%A1rodn%C3%A1_fonetick%C3%A1_abeceda",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ": ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "[ɦɔʊ̯slɪsta]",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "IPA",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "pronunciation"
+                }
+              ],
+              "feature": null,
+              "list_path": "*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "Delenie",
+          "anchor": "Delenie",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "list_item",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "hou-s-li-s-ta",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "Podstatné meno",
+          "anchor": "Podstatné_meno",
+          "anchor_fallback": "Podstatn.C3.A9_meno",
+          "blocks": [
+            {
+              "kind": "list_item",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "rod mužský životný",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 4,
+          "title": "Skloňovanie",
+          "anchor": "Skloňovanie",
+          "anchor_fallback": "Sklo.C5.88ovanie",
+          "blocks": [
+            {
+              "kind": "table",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": {
+                "caption": [],
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "▼ Pád ╲ Číslo ►",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "Singulár",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "Plurál",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "Nominatív",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "houslista",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "[[",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "houslisté / houslisti",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "[1]",
+                            "target": "#reference-1",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": true,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "reference"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "#Čeština|houslisté / houslisti",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "[2]",
+                            "target": "#reference-2",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": true,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "reference"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "]]",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "Genitív",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "houslisty",
+                            "target": "houslisty#Čeština",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "houslistů",
+                            "target": "houslistů#Čeština",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "Datív",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "houslistovi",
+                            "target": "houslistovi#Čeština",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "houslistům",
+                            "target": "houslistům#Čeština",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "Akuzatív",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "houslistu",
+                            "target": "houslistu#Čeština",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "houslisty",
+                            "target": "houslisty#Čeština",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "Vokatív",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "houslisto",
+                            "target": "houslisto#Čeština",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "houslisté",
+                            "target": "houslisté#Čeština",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "Lokál",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "houslistovi",
+                            "target": "houslistovi#Čeština",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "houslistech",
+                            "target": "houslistech#Čeština",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "Inštrumentál",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "houslistou",
+                            "target": "houslistou#Čeština",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "houslisty",
+                            "target": "houslisty#Čeština",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "level": 4,
+          "title": "Význam",
+          "anchor": "Význam",
+          "anchor_fallback": "V.C3.BDznam",
+          "blocks": [
+            {
+              "kind": "definition",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "huslista",
+                  "target": "huslista",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "#",
+              "number": "1",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 4,
+          "title": "Príbuzné slová",
+          "anchor": "Príbuzné_slová",
+          "anchor_fallback": "Pr.C3.ADbuzn.C3.A9_slov.C3.A1",
+          "blocks": [
+            {
+              "kind": "list_item",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "housle",
+                  "target": "housle",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "list_item",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "houslistka",
+                  "target": "houslistka",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "list_item",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "houslový",
+                  "target": "houslový",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "list_item",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "houslař",
+                  "target": "houslař",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "list_item",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "housličky",
+                  "target": "housličky",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "list_item",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "hudec",
+                  "target": "hudec",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "list_item",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "housti",
+                  "target": "housti",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 2,
+          "title": "Poznámky",
+          "anchor": "Poznámky",
+          "anchor_fallback": "Pozn.C3.A1mky",
+          "blocks": []
+        },
+        {
+          "level": 2,
+          "title": "Externé odkazy",
+          "anchor": "Externé_odkazy",
+          "anchor_fallback": "Extern.C3.A9_odkazy",
+          "blocks": [
+            {
+              "kind": "list_item",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "Internetová jazyková příručka",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "[",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "online",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "]",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ".    Ústav pro jazyk český Akademie věd České republiky, [cit.  2018-09-30].  Heslo ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "external_link",
+                  "text": "houslista",
+                  "target": "https://prirucka.ujc.cas.cz/?id=houslista",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ".      ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        }
+      ],
+      "preamble_spans": [],
+      "references": [
+        {
+          "number": 1,
+          "group_number": 1,
+          "name": "",
+          "group": "",
+          "spans": [
+            {
+              "kind": "text",
+              "text": "Varianta ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "foreground": null,
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": "houslisti",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "foreground": null,
+              "bold": false,
+              "italic": true,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " je hovorová.",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "foreground": null,
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ]
+        },
+        {
+          "number": 2,
+          "group_number": 2,
+          "name": "",
+          "group": "",
+          "spans": [
+            {
+              "kind": "text",
+              "text": "Varianta ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "foreground": null,
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": "houslisti",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "foreground": null,
+              "bold": false,
+              "italic": true,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " je hovorová.",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "foreground": null,
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ]
+        }
+      ],
+      "media": [],
+      "redirect": null,
+      "alias": null
+    }
+  ]
+}

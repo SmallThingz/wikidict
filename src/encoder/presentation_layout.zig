@@ -109,6 +109,9 @@ pub fn partOfSpeech(title: []const u8) ?[]const u8 {
     // FO -navnorð- p1586/r24229 emits this label; -noun- p2673/r7800
     // redirects to that template. Classify POS without supplying an owner.
     if (std.mem.eql(u8, title, "Navnorð")) return "Noun";
+    // Exact noun heading in retained SK biola and Czech houslista source.
+    // Classify the section only; keep its independently established owner.
+    if (std.mem.eql(u8, title, "Podstatné meno")) return "Noun";
     for (speech) |name| if (part.named(title, name)) return name;
     return null;
 }
@@ -339,6 +342,34 @@ fn analyzeMarkedParagraph(a: A, marker: MarkedParagraphPart, index: usize, etymo
     return lexical;
 }
 
+// These retained SK pages put senses in an immediate Význam child of the
+// Podstatné meno section. Keep that child's block addresses and the supplied
+// owner; same-level support sections cannot become senses themselves.
+fn slovakMeaningParent(sections: anytype, index: usize) ?usize {
+    const section = sections[index];
+    if (section.level != 4 or !std.mem.eql(u8, section.title, "Význam")) return null;
+    const has_senses = for (section.blocks) |block| {
+        if (block.kind == .definition) break true;
+    } else false;
+    if (!has_senses) return null;
+    var previous = index;
+    while (previous > 0) {
+        previous -= 1;
+        const parent = sections[previous];
+        if (parent.level >= section.level) continue;
+        return if (parent.level == 3 and std.mem.eql(u8, parent.title, "Podstatné meno")) previous else null;
+    }
+    return null;
+}
+fn hasSlovakMeaningChild(sections: anytype, index: usize) bool {
+    if (sections[index].level != 3 or !std.mem.eql(u8, sections[index].title, "Podstatné meno")) return false;
+    var child = index + 1;
+    while (child < sections.len and sections[child].level > sections[index].level) : (child += 1) {
+        if (slovakMeaningParent(sections, child)) |parent| if (parent == index) return true;
+    }
+    return false;
+}
+
 fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u8) !Layout {
     var lexemes: std.ArrayList(Lexeme) = .empty;
     var other: std.ArrayList(usize) = .empty;
@@ -354,7 +385,8 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
         const paragraph_part = if (named_kind == null and !unclassified) markedParagraphPart(section.blocks, owner, section.level) else null;
         const own_kind: ?[]const u8 = named_kind orelse if (paragraph_part) |marker| marker.kind else null;
         const lemma = std.mem.eql(u8, section.title, "Lemma") or std.mem.eql(u8, section.title, "Neet-lemma");
-        const nested_kind: ?[]const u8 = if (own_kind == null) nested: {
+        const meaning_parent = if (own_kind == null) slovakMeaningParent(sections, i) else null;
+        const nested_kind: ?[]const u8 = if (meaning_parent != null) "Noun" else if (own_kind == null) nested: {
             const parent = lemma_parent orelse break :nested null;
             break :nested if (lemma and section.level > parent.level and section.level - parent.level == 1) parent.kind else null;
         } else null;
@@ -389,7 +421,7 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
         if (etymology) origin = i;
         if (kind) |name| {
             // Preserve parent body addresses without duplicating an empty POS
-            // lexeme whose first immediate lemma contains the actual senses.
+            // lexeme whose explicit child contains the actual senses.
             const next_is_lemma = if (i + 1 < sections.len) child: {
                 const following = sections[i + 1];
                 if (!(following.level > section.level and following.level - section.level == 1 and
@@ -404,7 +436,8 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
             const has_senses = for (section.blocks) |block| {
                 if (lexicalDefinition(block, declared_kind != null)) break true;
             } else false;
-            if (declared_kind != null and next_is_lemma and !has_senses) {
+            const meaningful_child = hasSlovakMeaningChild(sections, i);
+            if (declared_kind != null and (next_is_lemma or meaningful_child) and !has_senses) {
                 try other.append(a, i);
                 continue;
             }
@@ -2850,6 +2883,150 @@ test "retained Gaelic six records preserve nested senses support errors and full
         try std.testing.expectEqualDeep(before.preamble_spans, decoded.entry.preamble_spans);
         try std.testing.expectEqualDeep(before.references, decoded.entry.references);
         try std.testing.expectEqualDeep(before.media, decoded.entry.media);
+        try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    }
+}
+
+
+test "Slovak meaning children retain local senses independent owners and closed boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqualStrings("Noun", partOfSpeech("Podstatné meno").?);
+    for ([_][]const u8{ "podstatné meno", "PODSTATNÉ MENO", "Podstatné mená", "Podstatné meno 2", "Podstatné meno extra", "Podstatné", "meno" }) |label|
+        try std.testing.expect(partOfSpeech(label) == null);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const gender = [_]wiki.Block{.{ .kind = .list_item, .list_path = "*" }};
+    const senses = [_]wiki.Block{.{ .kind = .definition, .list_path = "#" }};
+    const sections = [_]Section{
+        .{ .title = "Existing owner", .level = 2 },
+        .{ .title = "Podstatné meno", .level = 3, .blocks = &gender },
+        .{ .title = "Význam", .level = 4, .blocks = &senses },
+        .{ .title = "Unknown", .level = 3, .blocks = &senses },
+    };
+    for ([_][]const u8{ "slovenčina", "čeština", "Independent other owner" }) |owner| {
+        const layout = try buildOwned(a, &sections, owner);
+        try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+        const noun = layout.lexemes[0];
+        try std.testing.expectEqualStrings(owner, noun.language);
+        try std.testing.expectEqualStrings("Noun", noun.kind);
+        try std.testing.expectEqual(@as(usize, 2), noun.section);
+        try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+        try std.testing.expectEqual(@as(usize, 0), noun.definitions[0].block);
+        try std.testing.expectEqual(@as(usize, 0), noun.introduction.len);
+        try std.testing.expectEqual(@as(usize, 0), noun.related_sections.len);
+        try std.testing.expectEqualSlices(usize, &.{ 0, 1, 3 }, layout.other_sections);
+    }
+    // Explicit nested POS structure is useful even when language ownership is
+    // unknown. It must not acquire the surrounding unresolved label as owner.
+    const unclassified = try buildUnclassified(a, &sections);
+    try std.testing.expectEqual(@as(usize, 1), unclassified.lexemes.len);
+    try std.testing.expectEqualStrings("", unclassified.lexemes[0].language);
+    try std.testing.expectEqualStrings("Noun", unclassified.lexemes[0].kind);
+    try std.testing.expectEqual(@as(usize, 2), unclassified.lexemes[0].section);
+    try std.testing.expectEqual(@as(usize, 1), unclassified.lexemes[0].definitions.len);
+    try std.testing.expectEqual(@as(usize, 0), unclassified.lexemes[0].definitions[0].block);
+    const ownerless = try build(a, sections[1..]);
+    try std.testing.expectEqual(@as(usize, 1), ownerless.lexemes.len);
+    try std.testing.expectEqualStrings("", ownerless.lexemes[0].language);
+    try std.testing.expectEqual(@as(usize, 1), ownerless.lexemes[0].section);
+    try std.testing.expectEqual(@as(usize, 1), ownerless.lexemes[0].definitions.len);
+    try std.testing.expectEqual(@as(usize, 0), ownerless.lexemes[0].definitions[0].block);
+    const separated = [_]Section{
+        .{ .title = "Podstatné meno", .level = 3, .blocks = &gender },
+        .{ .title = "Different boundary", .level = 3 },
+        .{ .title = "Význam", .level = 4, .blocks = &senses },
+    };
+    try std.testing.expect(slovakMeaningParent(&separated, 2) == null);
+    const deeper = [_]Section{
+        .{ .title = "Podstatné meno", .level = 3 },
+        .{ .title = "Význam", .level = 5, .blocks = &senses },
+    };
+    try std.testing.expect(slovakMeaningParent(&deeper, 1) == null);
+    const no_definition = [_]Section{
+        .{ .title = "Podstatné meno", .level = 3 },
+        .{ .title = "Význam", .level = 4, .blocks = &gender },
+    };
+    try std.testing.expect(slovakMeaningParent(&no_definition, 1) == null);
+    const foreign_parent = [_]Section{
+        .{ .title = "Verb", .level = 3 },
+        .{ .title = "Význam", .level = 4, .blocks = &senses },
+    };
+    try std.testing.expect(slovakMeaningParent(&foreign_parent, 1) == null);
+    const ambiguous = [_]Section{.{ .title = "Podstatné meno", .level = 2, .blocks = &senses }};
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &ambiguous)).lexemes.len);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "control" } };
+    const literal = try renderer.renderBody("<nowiki>===Podstatné meno===\n# literal</nowiki>");
+    const protected = [_]Section{.{ .title = "Unknown", .level = 2, .blocks = literal }};
+    try std.testing.expectEqual(@as(usize, 0), (try buildOwned(a, &protected, "Independent owner")).lexemes.len);
+}
+
+test "retained Slovak biola and Czech houslista Reader bodies change only noun organization" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const types = encoder.presentation_types;
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const Page = struct { entries: []const struct { sections: []const Section } };
+    const TypedPage = struct { entries: []const types.Entry };
+    const cases = .{
+        .{ @embedFile("sk-biola-reader.json"), "biola", "slovenčina", "sk", @as(usize, 2), @as(usize, 3) },
+        .{ @embedFile("sk-houslista-reader.json"), "houslista", "čeština", "cs", @as(usize, 3), @as(usize, 5) },
+    };
+    inline for (cases) |case| {
+        const projected = try std.json.parseFromSlice(Page, a, case[0], .{ .ignore_unknown_fields = true });
+        const typed = try std.json.parseFromSlice(TypedPage, a, case[0], .{ .ignore_unknown_fields = true });
+        const before = typed.value.entries[0];
+        try std.testing.expectEqualStrings(case[1], before.title);
+        try std.testing.expectEqualStrings(case[2], before.language.?);
+        try std.testing.expectEqualStrings(case[3], before.language_code);
+        try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+        const sections = projected.value.entries[0].sections;
+        const layout = try buildOwned(a, sections, before.language.?);
+        try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+        const noun = layout.lexemes[0];
+        try std.testing.expectEqualStrings(case[2], noun.language);
+        try std.testing.expectEqualStrings("Noun", noun.kind);
+        try std.testing.expectEqual(case[5], noun.section);
+        try std.testing.expectEqualStrings("Podstatné meno", sections[case[4]].title);
+        try std.testing.expect(noun.etymology == null);
+        // Meaning blocks remain local to the authored child section. The
+        // default Reader can now render these actual senses without details.
+        try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+        try std.testing.expectEqual(@as(usize, 0), noun.definitions[0].block);
+        try std.testing.expect(noun.definitions[0].parent == null and noun.definitions[0].form == null);
+        try std.testing.expectEqual(@as(usize, 0), noun.definitions[0].examples.len);
+        try std.testing.expectEqual(@as(usize, 0), noun.definitions[0].quotations.len);
+        try std.testing.expectEqual(@as(usize, 0), noun.definitions[0].notes.len);
+        try std.testing.expectEqual(@as(usize, 0), noun.introduction.len);
+        try std.testing.expectEqual(@as(usize, 0), noun.other_blocks.len);
+        try std.testing.expectEqualStrings("Význam", sections[case[5]].title);
+        try std.testing.expectEqual(@as(usize, 1), sections[case[5]].blocks.len);
+        try std.testing.expectEqual(wiki.Kind.definition, sections[case[5]].blocks[0].kind);
+        const slovak = std.mem.eql(u8, case[3], "sk");
+        if (slovak) {
+            try std.testing.expectEqual(@as(usize, 0), noun.related_sections.len);
+            try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, layout.other_sections);
+            try std.testing.expectEqual(@as(usize, 0), before.references.len);
+        } else {
+            try std.testing.expectEqualSlices(usize, &.{6}, noun.related_sections);
+            try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 3, 4, 7, 8 }, layout.other_sections);
+            try std.testing.expectEqual(@as(usize, 2), before.references.len);
+            const table = before.sections[4].blocks[0].table.?;
+            try std.testing.expectEqual(@as(usize, 8), table.rows.len);
+            for (table.rows) |row| try std.testing.expectEqual(@as(usize, 3), row.cells.len);
+        }
+        const organization_json = try std.json.Stringify.valueAlloc(a, layout, .{});
+        const organization = try std.json.parseFromSlice(types.Layout, a, organization_json, .{});
+        var expected: types.Stored = .{ .entry = before };
+        expected.entry.organization = organization.value;
+        const encoded = try encoder.presentation_codec.encodeAlloc(a, expected);
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, encoded, before.title, before.kind, .{ .code = case[3], .heading = case[2] });
+        try std.testing.expectEqualDeep(expected, decoded);
+        var body_only = decoded;
+        body_only.entry.organization = before.organization;
+        try std.testing.expectEqualDeep(types.Stored{ .entry = before }, body_only);
         try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, decoded));
     }
 }
