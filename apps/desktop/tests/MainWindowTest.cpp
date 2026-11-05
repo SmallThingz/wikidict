@@ -2289,26 +2289,38 @@ private slots:
             QJsonObject{{"text", " "}},
             QJsonObject{{"text", "f"}, {"explanation", "masculine meaning in another context"}},
             QJsonObject{{"text", " "}},
-            QJsonObject{{"text", "?"}, {"explanation", "uncertain"}}
+            QJsonObject{{"text", "?"}, {"explanation", "uncertain"}},
+            QJsonObject{{"text", " "}},
+            QJsonObject{{"kind", "link"}, {"text", "En-us-girl.ogg"}, {"target", "File:En-us-girl.ogg"},
+                {"classes", "wikidict-media wikidict-media-file-456e2d75732d6769726c2e6f6767"},
+                {"explanation", "Audio (US)"}}
         };
         window.reading_->setHtml(window.spansHtml(spans));
         QCoreApplication::processEvents();
         QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
         QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-abbreviations-reader.png")));
-        QCOMPARE(window.reading_->toPlainText(), QStringLiteral("f abbr f ?"));
+        QCOMPARE(window.reading_->toPlainText(), QStringLiteral("f abbr f ? En-us-girl.ogg"));
         QTextDocument *document = window.reading_->document();
         const QTextCursor first = document->find(QStringLiteral("f"));
         QCOMPARE(first.charFormat().toolTip(), feminine); // Actual Qt HTML import, no fallback parser.
         QCOMPARE(first.charFormat().anchorHref(), QStringLiteral("dict:cat"));
         const auto explanations = window.readingExplanations();
-        QCOMPARE(explanations.size(), 4);
+        QCOMPARE(explanations.size(), 5);
         QCOMPARE(explanations.at(0), qMakePair(QStringLiteral("f"), feminine));
         QCOMPARE(explanations.at(1), qMakePair(QStringLiteral("abbr"), styled));
         QCOMPARE(explanations.at(2).first, QStringLiteral("f"));
         QVERIFY(explanations.at(2).second != feminine);
         QCOMPARE(explanations.at(3), qMakePair(QStringLiteral("?"), QStringLiteral("uncertain")));
+        QCOMPARE(explanations.at(4), qMakePair(QStringLiteral("En-us-girl.ogg"), QStringLiteral("Audio (US)")));
+        const QTextCursor audio = document->find(QStringLiteral("En-us-girl.ogg"));
+        QVERIFY(!audio.isNull());
+        QCOMPARE(audio.charFormat().toolTip(), QStringLiteral("Audio (US)"));
+        QCOMPARE(QUrl::fromPercentEncoding(audio.charFormat().anchorHref().mid(5).toUtf8()),
+                 QStringLiteral("File:En-us-girl.ogg"));
+        QVERIFY(audio.charFormat().anchorHref().startsWith(QStringLiteral("dict:")));
+        QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("Audio (US)")));
         window.reading_->selectAll();
-        QCOMPARE(window.reading_->textCursor().selection().toPlainText(), QStringLiteral("f abbr f ?"));
+        QCOMPARE(window.reading_->textCursor().selection().toPlainText(), QStringLiteral("f abbr f ? En-us-girl.ogg"));
         window.activateWindow();
         window.reading_->setFocus();
         auto focusContext = [&] {
@@ -2336,6 +2348,7 @@ private slots:
             QVERIFY(menu);
             auto *action = menu->findChild<QAction *>(QStringLiteral("entryAbbreviations"));
             QVERIFY(action);
+            QCOMPARE(action->text(), QStringLiteral("Text details…"));
             QTimer::singleShot(0, &window, [&] {
                 auto *dialog = window.findChild<QDialog *>(QStringLiteral("abbreviationsDialog"));
                 QVERIFY(dialog);
@@ -2343,10 +2356,13 @@ private slots:
                 QVERIFY(details);
                 QCoreApplication::processEvents();
                 QVERIFY(dialog->grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-abbreviations-dialog.png")));
-                QCOMPARE(details->accessibleName(), QStringLiteral("Abbreviation explanations"));
+                QCOMPARE(dialog->windowTitle(), QStringLiteral("Text details"));
+                QCOMPARE(details->accessibleName(), QStringLiteral("Text details"));
                 QVERIFY(details->toPlainText().contains(styled));
                 QVERIFY(details->toPlainText().contains(QStringLiteral("f: feminine gender")));
                 QVERIFY(details->toPlainText().contains(QStringLiteral("?: uncertain")));
+                QVERIFY(details->toPlainText().contains(QStringLiteral("En-us-girl.ogg: Audio (US)")));
+                QVERIFY(details->textInteractionFlags().testFlag(Qt::TextSelectableByKeyboard));
                 inspected = true;
                 dialog->reject();
             });
@@ -2358,8 +2374,9 @@ private slots:
         QVERIFY(!timedOut);
         QVERIFY(inspected);
         QTRY_VERIFY2(window.reading_->hasFocus(), qPrintable(focusContext()));
-        QCOMPARE(window.reading_->toPlainText(), QStringLiteral("f abbr f ?"));
+        QCOMPARE(window.reading_->toPlainText(), QStringLiteral("f abbr f ? En-us-girl.ogg"));
         QCOMPARE(document->find(QStringLiteral("f")).charFormat().anchorHref(), QStringLiteral("dict:cat"));
+        QCOMPARE(document->find(QStringLiteral("En-us-girl.ogg")).charFormat().anchorHref(), audio.charFormat().anchorHref());
         window.reading_->setHtml(window.spansHtml(QJsonArray{QJsonObject{{"text", "ordinary"}}}));
         QVERIFY(window.readingExplanations().isEmpty());
         // Explained-only heading companions are rich even without a navigation target.

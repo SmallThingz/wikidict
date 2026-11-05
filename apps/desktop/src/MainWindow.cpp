@@ -1850,7 +1850,7 @@ void MainWindow::showReaderContextMenu(const QPoint &position) {
     QAction *explain = nullptr;
     if (!readingExplanations().isEmpty()) {
         menu->addSeparator();
-        explain = menu->addAction(QStringLiteral("Abbreviations…"));
+        explain = menu->addAction(QStringLiteral("Text details…"));
         explain->setObjectName(QStringLiteral("entryAbbreviations"));
     }
     QAction *chosen = menu->exec(reading_->viewport()->mapToGlobal(position));
@@ -1863,11 +1863,11 @@ void MainWindow::showAbbreviations() {
     if (explanations.isEmpty()) return;
     auto dialog = std::make_unique<QDialog>(this);
     dialog->setObjectName(QStringLiteral("abbreviationsDialog"));
-    dialog->setWindowTitle(QStringLiteral("Abbreviations"));
+    dialog->setWindowTitle(QStringLiteral("Text details"));
     auto *layout = new QVBoxLayout(dialog.get());
     auto *details = new QTextBrowser(dialog.get());
     details->setObjectName(QStringLiteral("abbreviationExplanations"));
-    details->setAccessibleName(QStringLiteral("Abbreviation explanations"));
+    details->setAccessibleName(QStringLiteral("Text details"));
     details->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
     QStringList lines;
     for (const auto &item : explanations) lines.append(item.first + QStringLiteral(": ") + item.second);
