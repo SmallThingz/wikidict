@@ -41,12 +41,20 @@ try{
  const actions=await page.evaluate(()=>{
   const host=document.createElement('div');host.id='action-controls';const image={file:'Vraagteken-2.svg',width_px:15};
   const values=[{kind:'text',target:'',text:'',image},{kind:'link',target:'File:Override.svg#עברית section',text:'',image},{kind:'link',target:'Target',text:'',image},{kind:'external_link',target:'https://example.org/override',text:'',image}];
-  host.append(Renderer.spans(values,t=>window.followed.push(t),false,{imageActionURL:t=>Media.inlineImageActionURL(t,'hewiktionary')}));document.body.append(host);
-  const unknown=document.createElement('div');unknown.append(Renderer.spans([values[1]],t=>window.followed.push(t),false,{imageActionURL:t=>Media.inlineImageActionURL(t,null)}));document.body.append(unknown);
+  host.append(Renderer.spans(values,t=>window.followed.push(t),false,{inlineImage:(el,image)=>Media.loadInlineImage(el,image,{allowImages:true,mediaCacheMb:0},'hewiktionary'),imageActionURL:t=>Media.inlineImageActionURL(t,'hewiktionary')}));document.body.append(host);
+  const unknown=document.createElement('div');unknown.id='unknown-action-controls';unknown.append(Renderer.spans([values[1]],t=>window.followed.push(t),false,{imageActionURL:t=>Media.inlineImageActionURL(t,null)}));document.body.append(unknown);
   return {links:[...host.querySelectorAll('a')].map(e=>e.getAttribute('href')),inert:host.firstElementChild.tagName,unknown:unknown.querySelector('[aria-disabled="true"]')?.dataset.actionTarget};
  });
  assert.deepEqual(actions.links,['https://he.wiktionary.org/wiki/File%3AOverride.svg#%D7%A2%D7%91%D7%A8%D7%99%D7%AA%20section','#Target','https://example.org/override']);assert.equal(actions.inert,'SPAN');assert.equal(actions.unknown,'File:Override.svg#עברית section');
- await page.locator('#action-controls a').nth(1).click();assert.deepEqual(await page.evaluate(()=>window.followed),['Target']);
+ await page.waitForFunction(()=>{const images=[...document.querySelectorAll('#action-controls img')];return images.length===4&&images.every(el=>{const box=el.getBoundingClientRect();return el.dataset.mediaState==='loaded'&&box.width>0&&box.height>0;});});
+ await page.locator('#action-controls a').nth(1).click();
+ assert.deepEqual(await page.evaluate(()=>window.followed),['Target']);
+ const actionOwner=await page.evaluate(()=>{
+  const images=[...document.querySelectorAll('#action-controls img')],sources=[...new Set(images.map(el=>el.src))],originals=images.map(el=>[el.naturalWidth,el.naturalHeight]);
+  document.getElementById('action-controls').remove();document.getElementById('unknown-action-controls').remove();return {sources,originals};
+ });
+ assert.equal(actionOwner.sources.length,1);assert.deepEqual(actionOwner.originals,Array.from({length:4},()=>[1,1]));
+ await page.waitForFunction(source=>window.revoked.includes(source),actionOwner.sources[0]);
  await page.evaluate(()=>{
   window.requestedTitles=[];window.fetch=async url=>{window.requestedTitles.push(new URL(url).searchParams.get('titles'));throw Error('endpoint control');};
   const el=document.createElement('img');document.body.append(el);Media.loadInlineImage(el,{file:'File:foo.svg'},{allowImages:true,mediaCacheMb:0},'hewiktionary');
@@ -81,7 +89,7 @@ try{
   const host=document.createElement('div');const image={file:'pending.svg',width_px:4294967295,height_px:2147483647},before=JSON.stringify(image);host.append(Renderer.spans([{kind:'text',target:'',text:'',image}]));document.body.append(host);const el=host.querySelector('img');return {width:parseFloat(el.style.width),height:parseFloat(el.style.height),unchanged:before===JSON.stringify(image),maxWidth:el.style.maxWidth,maxHeight:el.style.maxHeight};
  });
  assert.equal(pending.width,10000);assert.ok(Math.abs(pending.height-5000)<.1);assert.equal(pending.unchanged,true);assert.equal(pending.maxWidth,'10000px');assert.equal(pending.maxHeight,'10000px');
- assert.ok((await page.evaluate(()=>window.sizeQueries)).every(v=>v==='url|size|extmetadata'));
+ assert.ok((await page.evaluate(()=>window.sizeQueries)).every(v=>v==='url|size|mime|extmetadata'));
  await page.evaluate(()=>{
   window.mediaControl={running:0,peak:0,calls:0,pending:[]};window.fetch=()=>new Promise((resolve,reject)=>{const c=window.mediaControl;c.calls++;c.running++;c.peak=Math.max(c.peak,c.running);c.pending.push(()=>{c.running--;reject(Error('finite queue control'));});});
   const host=document.createElement('div');host.id='queue-controls';
@@ -104,4 +112,51 @@ try{
  await page.waitForFunction(()=>document.querySelectorAll('#joined-catalog img').length===2);
  assert.deepEqual(await page.evaluate(()=>window.joinedCalls),{titles:['File:File:foo.svg'],blobs:1,canonical:[true]});
  assert.equal(new Set(await page.locator('#joined-catalog img').evaluateAll(v=>v.map(e=>e.src))).size,1);
+ // Match the actual site's global sizing rule: border is outside the authored content box.
+ await page.addStyleTag({content:'*{box-sizing:border-box}'});
+ await page.evaluate(async()=>{
+  const canvas=document.createElement('canvas');canvas.width=4;canvas.height=2;canvas.getContext('2d').fillRect(0,0,4,2);
+  const raster=new Uint8Array(await (await new Promise(resolve=>canvas.toBlob(resolve,'image/png'))).arrayBuffer());
+  const svg='<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"><path fill="red" d="M0 0h400v200H0z"/></svg>';
+  window.fetch=async url=>{
+   if(url.includes('/w/api.php')){const file=new URL(url).searchParams.get('titles'),vector=file.endsWith('.svg');return new Response(JSON.stringify({query:{pages:[{imageinfo:[{url:'https://upload.wikimedia.org/'+(vector?'border-flag.svg':'border-book.png'),width:vector?400:4,height:vector?200:2}]}]}}));}
+   return url.endsWith('.svg')?new Response(svg,{headers:{'Content-Type':'image/svg+xml'}}):new Response(raster,{headers:{'Content-Type':'image/png'}});
+  };
+  const host=document.createElement('div');host.id='border-controls';window.borderFollowed=[];
+  window.borderValues=['svg','png'].flatMap((extension,i)=>[undefined,false,true].map((border,j)=>({kind:'link',target:i?'Target':'File:Border flag.svg',text:'',font_scale:0,image:{file:i?'Border book.png':'Border flag.svg',width_px:i?30:40,alt:(i?'Book ':'Flag ')+['absent','false','true'][j],tooltip:'unchanged tooltip',...(border===undefined?{}:{border})}})));
+  window.borderBefore=JSON.stringify(window.borderValues);
+  host.append(Renderer.spans(window.borderValues,target=>window.borderFollowed.push(target),false,{inlineImage:(el,image)=>Media.loadInlineImage(el,image,{allowImages:true,mediaCacheMb:0},'itwiktionary'),imageActionURL:target=>Media.inlineImageActionURL(target,'itwiktionary')}));document.body.append(host);
+ });
+ await page.waitForFunction(()=>[...document.querySelectorAll('#border-controls img')].length===6&&[...document.querySelectorAll('#border-controls img')].every(el=>el.dataset.mediaState==='loaded'));
+ const bordered=await page.locator('#border-controls img').evaluateAll(images=>images.map(el=>{
+  const style=getComputedStyle(el),box=el.getBoundingClientRect();return {width:box.width,height:box.height,contentWidth:parseFloat(style.width),contentHeight:parseFloat(style.height),border:[style.borderTopWidth,style.borderRightWidth,style.borderBottomWidth,style.borderLeftWidth],color:style.borderTopColor,line:style.borderTopStyle,padding:[style.paddingTop,style.paddingRight,style.paddingBottom,style.paddingLeft],boxSizing:style.boxSizing,alt:el.getAttribute('alt'),tooltip:el.getAttribute('title'),target:el.closest('a').getAttribute('href')};
+ }));
+ assert.deepEqual(bordered.map(({width,height})=>[width,height]),[[40,20],[40,20],[42,22],[30,15],[30,15],[32,17]]);
+ assert.deepEqual(bordered.map(({contentWidth,contentHeight})=>[contentWidth,contentHeight]),[[40,20],[40,20],[40,20],[30,15],[30,15],[30,15]]);
+ for(let i=0;i<bordered.length;i++){
+  const value=bordered[i],enabled=i%3===2;assert.deepEqual(value.border,Array(4).fill(enabled?'1px':'0px'));assert.deepEqual(value.padding,Array(4).fill('0px'));assert.equal(value.tooltip,'unchanged tooltip');
+  if(enabled){assert.equal(value.color,'rgb(234, 236, 240)');assert.equal(value.line,'solid');assert.equal(value.boxSizing,'content-box');}
+ }
+ assert.deepEqual(bordered.map(value=>value.alt),['Flag absent','Flag false','Flag true','Book absent','Book false','Book true']);
+ assert.ok(bordered.slice(0,3).every(value=>value.target==='https://it.wiktionary.org/wiki/File%3ABorder%20flag.svg'));
+ assert.ok(bordered.slice(3).every(value=>value.target==='#Target'));
+ assert.equal(await page.getByRole('img',{name:'Flag true',exact:true}).count(),1);assert.equal(await page.getByRole('img',{name:'Book true',exact:true}).count(),1);
+ await page.locator('#border-controls a').last().focus();await page.keyboard.press('Enter');assert.deepEqual(await page.evaluate(()=>window.borderFollowed),['Target']);
+ assert.equal(await page.evaluate(()=>JSON.stringify(window.borderValues)===window.borderBefore),true);
+ const badBorders=await page.evaluate(()=>[null,1,'true',{}].map(border=>{try{Renderer.spans([{kind:'text',target:'',text:'',image:{file:'Border flag.svg',border}}]);return false;}catch(error){return error.message==='Invalid inline image border';}}));
+ assert.deepEqual(badBorders,[true,true,true,true]);
+ await page.locator('#border-controls').screenshot({path:new URL('../artifacts/web/inline-image-border-controls.png',import.meta.url).pathname});
+  const heightCases=await page.evaluate(async()=>{
+   const canvas=document.createElement('canvas');canvas.width=100;canvas.height=50;canvas.getContext('2d').fillRect(0,0,100,50);const png=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+   const cases=[{name:'raster-limited',mime:'image/png',height:25,expected:[52,27]},{name:'raster-native-bound',mime:'image/png',height:100,expected:[102,52]},{name:'svg-png-thumbnail',mime:'image/svg+xml',height:25,expected:null},{name:'unknown-original',mime:null,height:25,expected:null}];
+   window.heightRequests=[];window.fetch=async url=>{if(url.includes('/w/api.php')){heightRequests.push(url);const title=new URL(url).searchParams.get('titles'),test=cases.find(row=>title==='File:'+row.name+'.png');return new Response(JSON.stringify({query:{pages:[{imageinfo:[{url:'https://upload.wikimedia.org/'+test.name+'.png',width:100,height:50,...(test.mime?{mime:test.mime}:{})}]}]}}));}return new Response(png,{headers:{'Content-Type':'image/png'}});};
+   const root=document.createElement('div');root.id='height-controls';document.body.append(root);window.heightModels=cases.map(test=>({file:test.name+'.png',height_px:test.height,alt:test.name,tooltip:'Height test '+test.name,border:true}));window.heightBefore=JSON.stringify(heightModels);
+   for(const image of heightModels){const link=document.createElement('a');link.href='https://example.test/';const el=document.createElement('img');el.alt=image.alt;el.title=image.tooltip;el.style.cssText='display:inline-block;margin:0;max-width:none;max-height:none;border:1px solid #eaecf0;box-sizing:content-box;padding:0';link.append(el);root.append(link);Media.loadInlineImage(el,image,{allowImages:true,mediaCacheMb:0},null);}
+   return cases;
+  });
+  await page.waitForFunction(()=>[...document.querySelectorAll('#height-controls img')].every(el=>['loaded','geometry-unresolved'].includes(el.dataset.mediaState)));
+  const heightObserved=await page.locator('#height-controls img').evaluateAll(images=>images.map(el=>{const box=el.getBoundingClientRect();return {state:el.dataset.mediaState,width:box.width,height:box.height,alt:el.alt,tooltip:el.title,target:el.closest('a').getAttribute('href')};}));
+  for(let i=0;i<heightCases.length;i++){const test=heightCases[i],observed=heightObserved[i];assert.equal(observed.state,test.expected?'loaded':'geometry-unresolved');if(test.expected)assert.deepEqual([observed.width,observed.height],test.expected);assert.equal(observed.alt,test.name);assert.equal(observed.tooltip,'Height test '+test.name);assert.equal(observed.target,'https://example.test/');}
+  assert.equal(await page.evaluate(()=>heightRequests.length===4&&heightRequests.every(url=>new URL(url).searchParams.get('iiprop').split('|').includes('mime'))&&JSON.stringify(heightModels)===heightBefore),true);
+  await page.screenshot({path:new URL('../artifacts/web/height-only-original-mime-360.png',import.meta.url).pathname,fullPage:true});assert.equal(heightObserved.length,4);
 }finally{await browser.close();}

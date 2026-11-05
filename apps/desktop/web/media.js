@@ -39,7 +39,7 @@ async function fetchMediaResource(media,settings,sourceEdition,canonicalIdentity
    const hosts=['commons.wikimedia.org'];if(edition)hosts.push(edition+'.wiktionary.org');
    let info,sourceHost;
    for(const host of hosts){
-    const url=`https://${host}/w/api.php?action=query&format=json&formatversion=2&origin=*&prop=imageinfo&iiprop=url%7Csize%7Cextmetadata&iiurlwidth=960&titles=${encodeURIComponent('File:'+title)}`;
+    const url=`https://${host}/w/api.php?action=query&format=json&formatversion=2&origin=*&prop=imageinfo&iiprop=url%7Csize%7Cmime%7Cextmetadata&iiurlwidth=960&titles=${encodeURIComponent('File:'+title)}`;
     const response=await fetch(url);if(!response.ok)throw Error('Media server unavailable');const data=await response.json();info=data.query?.pages?.[0]?.imageinfo?.[0];if(info){sourceHost=host;break;}
    }
    if(!info)throw Error('Media unavailable');const url=info.thumburl||info.url;
@@ -81,7 +81,7 @@ export function loadInlineImage(el,image,settings,sourceEdition){
  el.hidden=true;el.style.display='none';
  if(!settings.allowImages){el.dataset.mediaState='disabled';queueMicrotask(()=>showStatus('disabled','Images are disabled.'));return;}
  queueMicrotask(()=>showStatus('loading','Image is loading.'));
- const resource=acquireInlineResource(image,settings,sourceEdition);let released=false,sourceSize=null;
+ const resource=acquireInlineResource(image,settings,sourceEdition);let released=false,sourceSize=null,sourceMime=null;
  const observer=new MutationObserver(()=>{if(!el.isConnected){status?.remove();release();}});observer.observe(document.body,{childList:true,subtree:true});
  const release=()=>{if(released)return;released=true;resource.release();observer.disconnect();};
  queueMicrotask(()=>{if(!el.isConnected)release();});
@@ -90,14 +90,17 @@ export function loadInlineImage(el,image,settings,sourceEdition){
   if(sourceSize===null){showStatus('intrinsic-unresolved','Image size is unavailable.');return;}
   const {width,height}=sourceSize;
   if(!(width>0&&height>0)){showStatus('intrinsic-unresolved','Image size is unavailable.');return;}
-  // Height-only SVG layout also depends on source-site SVGMaxSize, which is not encoded.
-  if(image.width_px==null&&image.height_px!=null){showStatus('geometry-unresolved','Image layout is unavailable.');return;}
+  // A height-only vector starts with source-site SVGMaxSize, not intrinsic width.
+  // Classify the ORIGINAL file: a downloaded PNG may itself be an SVG thumbnail.
+  const rasterMime=['image/png','image/jpeg','image/gif','image/webp','image/bmp','image/avif','image/tiff'].includes(sourceMime);
+  if(image.width_px==null&&image.height_px!=null&&!rasterMime){showStatus('geometry-unresolved','Image layout is unavailable.');return;}
   let fittedWidth,fittedHeight;
-  if(image.width_px!=null&&image.height_px!=null){
-   if(image.width_px*height>image.height_px*width){
+  if(image.height_px!=null){
+   const requestedWidth=image.width_px??width;
+   if(requestedWidth*height>image.height_px*width){
     const ideal=width*image.height_px/height,up=Math.ceil(ideal);
     fittedWidth=Math.max(1,Math.round(up*height/width)>image.height_px?Math.floor(ideal):up);fittedHeight=image.height_px;
-   }else {fittedWidth=image.width_px;fittedHeight=Math.max(1,Math.round(height*fittedWidth/width));}
+   }else {fittedWidth=requestedWidth;fittedHeight=Math.max(1,Math.round(height*fittedWidth/width));}
   }else if(image.width_px!=null){fittedWidth=image.width_px;fittedHeight=Math.max(1,Math.round(height*fittedWidth/width));}
   else {fittedWidth=width;fittedHeight=height;}
   const renderScale=Math.min(1,10000/fittedWidth,10000/fittedHeight);
@@ -105,6 +108,7 @@ export function loadInlineImage(el,image,settings,sourceEdition){
  },{once:true});
  resource.promise.then(result=>{
   if(released||!el.isConnected||!result){release();return;}const {object,info}=result;
+  sourceMime=typeof info.mime==='string'?info.mime.toLowerCase():null;
   if(Number.isSafeInteger(info.width)&&info.width>0&&Number.isSafeInteger(info.height)&&info.height>0)sourceSize={width:info.width,height:info.height};
   el.src=object;
  }).catch(()=>{showStatus('error','Image could not be loaded.');release();});

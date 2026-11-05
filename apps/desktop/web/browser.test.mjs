@@ -247,6 +247,12 @@ try{
  const rendererBundle=await buildRendererTestBundle({entryPoints:[fileURLToPath(new URL('./renderer.js',import.meta.url))],bundle:true,format:'iife',globalName:'WikidictRendererQA',write:false});
  const rendererPage=await browser.newPage();rendererPage.on('pageerror',e=>errors.push(e.message));
  await rendererPage.setContent('<main id="compiled-renderer-fixture"></main>');
+ const rendererStyle=await readFile(new URL('./style.css',import.meta.url)),rendererFont=await readFile(new URL('./reader.ttf',import.meta.url));
+ const rendererStyleOrigin=`http://127.0.0.1:${server.address().port}`;
+ await rendererPage.route(rendererStyleOrigin+'/style.css',route=>route.fulfill({contentType:'text/css',body:rendererStyle}));
+ await rendererPage.route(rendererStyleOrigin+'/reader.ttf',route=>route.fulfill({contentType:'font/ttf',headers:{'access-control-allow-origin':'*'},body:rendererFont}));
+ await rendererPage.addStyleTag({url:rendererStyleOrigin+'/style.css'});
+ assert.ok(await rendererPage.evaluate(async()=>(await document.fonts.load('16px Reader')).length)>0,'Production Reader font loaded');
  await rendererPage.addScriptTag({content:rendererBundle.outputFiles[0].text});
  const listBlock=(kind,text,number,path,depth)=>({kind,number,path,depth,spans:[{kind:'text',text,trail:''}]});
  const renderedLists=await rendererPage.evaluate(entry=>{
@@ -424,7 +430,7 @@ try{
   const reference=host.querySelector('#reference-2');
   return {initiallyClosed:!reference.closest('details').open,text:reference.textContent};
  });
- await rendererPage.addStyleTag({content:'#compiled-renderer-fixture{padding-bottom:180px}.reference{min-height:80px}#compiled-renderer-fixture .block.paragraph{min-height:1000px}#renderer-fixed-nav{position:fixed;bottom:0;left:0;right:0;height:80px;background:white;z-index:9}'});
+ const referenceScrollStyle=await rendererPage.addStyleTag({content:'#compiled-renderer-fixture{padding-bottom:180px}.reference{min-height:80px}#compiled-renderer-fixture .block.paragraph{min-height:1000px}#renderer-fixed-nav{position:fixed;bottom:0;left:0;right:0;height:80px;background:white;z-index:9}'});
  await rendererPage.evaluate(()=>{const nav=document.createElement('nav');nav.id='renderer-fixed-nav';nav.textContent='Reader navigation';document.body.append(nav);});
  assert.equal(referenceFixture.initiallyClosed,true);
  assert.equal(referenceFixture.text,'[note <one> 1]{{Example}} [[Link]] __NOEDITSECTION__');
@@ -442,6 +448,7 @@ try{
  await ordinaryLink.click();
  await rendererPage.getByRole('link',{name:'Unmatched fragment',exact:true}).click();
  assert.deepEqual(await rendererPage.evaluate(()=>window.referenceNavigations),['a title #reference-2 & 猫','#reference-404']);
+ await referenceScrollStyle.evaluate(el=>el.remove());await rendererPage.locator('#renderer-fixed-nav').evaluate(el=>el.remove());assert.equal(await rendererPage.locator('#renderer-fixed-nav').count(),0);
 
 
  // Explanation disclosure is independent of compact labels and their existing link action.
@@ -465,10 +472,52 @@ try{
  assert.deepEqual(explained.labels,['Display','Preamble','der.','split label','Caption','Cell','Reference']);assert.equal(explained.noMarkup,0);
  assert.deepEqual(explained.annotatedContainers,[true,true,true,true]);assert.equal(explained.annotatedPreamble,true);
  const annotations=rendererPage.locator('details.abbreviation-explanations');
+ assert.equal(await annotations.locator('summary').textContent(),'Text details');
  await annotations.locator('summary').focus();await rendererPage.keyboard.press('Enter');assert.equal(await annotations.evaluate(el=>el.open),true);
  assert.equal(await annotations.getByText('plain <meaning> & text',{exact:true}).first().isVisible(),true);
  const annotatedLink=rendererPage.getByRole('link',{name:'der.',exact:true});await annotatedLink.focus();await rendererPage.keyboard.press('Enter');
  assert.deepEqual(await rendererPage.evaluate(()=>window.explanationLinks),['Appendix:Glossary#derived terms']);
+ // An authored timed-media tooltip describes its filename action; it is not an abbreviation.
+ const mediaExplanation=await rendererPage.evaluate(()=>{
+  const host=document.getElementById('compiled-renderer-fixture');window.mediaExplanationLinks=[];
+  const file='En-us-girl.ogg',owner='wikidict-media-file-456e2d75732d6769726c2e6f6767';
+  const span={kind:'link',text:file,target:'File:'+file,trail:'',classes:'wikidict-media '+owner,explanation:'Audio (US)'};
+  const controls=[
+   {...span,text:'abbr.',explanation:'ordinary abbreviation'},
+   {...span,classes:''},
+   {...span,classes:'wikidict-media'},
+   {...span,classes:'not-wikidict-media '+owner},
+   {...span,classes:'wikidict-media '+owner+' '+owner},
+   {...span,classes:'wikidict-media wikidict-media-file-546f6e652e6f6767'},
+   {...span,target:'File:Other.ogg'},
+   {...span,classes:'wikidict-media wikidict-media-file-456E2D75732D6769726C2E6F6767'}
+  ];
+  const entry={title:'Media details',kind:'language',language:'English',sections:[{title:'Pronunciation',blocks:[
+   {kind:'paragraph',spans:[span]},...controls.map(control=>({kind:'paragraph',spans:[control]})),
+   {kind:'paragraph',spans:[{...span,trail:'!'}]}
+  ]}],media:[{kind:'audio',file,caption:file}]};
+  const before=JSON.stringify(entry);
+  host.replaceChildren(WikidictRendererQA.renderEntry(entry,target=>window.mediaExplanationLinks.push(target),{collapsePronunciation:false}));
+  const bodies=[...host.querySelectorAll('.block.paragraph .body')],link=bodies[0].querySelector('a'),annotation=link.querySelector('[title]');
+  const id=link.getAttribute('aria-describedby'),trail=bodies.at(-1).lastChild;
+  return {body:bodies[0].textContent,href:link.getAttribute('href'),tag:annotation.tagName,title:annotation.title,
+   abbreviations:bodies[0].querySelectorAll('abbr').length,described:annotation.getAttribute('aria-describedby')===id,
+   description:document.getElementById(id).textContent,controlTags:bodies.slice(1,-1).map(body=>body.querySelector('a > [title]').tagName),
+   trail:{tag:trail.tagName,text:trail.textContent,title:trail.title},unchanged:JSON.stringify(entry)===before};
+ });
+ assert.deepEqual(mediaExplanation,{body:'En-us-girl.ogg',href:'#'+encodeURIComponent('File:En-us-girl.ogg'),tag:'SPAN',title:'Audio (US)',
+  abbreviations:0,described:true,description:'Audio (US)',controlTags:Array(8).fill('ABBR'),trail:{tag:'SPAN',text:'!',title:'Audio (US)'},unchanged:true});
+ const mediaDetails=rendererPage.locator('details.abbreviation-explanations');
+ assert.equal(await mediaDetails.locator('summary').textContent(),'Text details');
+ await mediaDetails.locator('summary').focus();await rendererPage.keyboard.press('Space');
+ assert.equal(await mediaDetails.evaluate(el=>el.open),true);
+ assert.equal(await mediaDetails.locator('dd').filter({hasText:'Audio (US)'}).first().isVisible(),true);
+ const mediaAction=rendererPage.locator('.block.paragraph .body').first().getByRole('link',{name:'En-us-girl.ogg',exact:true});
+ await mediaAction.focus();await rendererPage.keyboard.press('Enter');
+ assert.deepEqual(await rendererPage.evaluate(()=>window.mediaExplanationLinks),['File:En-us-girl.ogg']);
+ const mediaViewport=rendererPage.viewportSize();await rendererPage.setViewportSize({width:360,height:640});
+ await rendererPage.screenshot({path:path.join(report,'media-text-details-360.png'),fullPage:true});
+ await rendererPage.setViewportSize(mediaViewport);
  await rendererPage.evaluate(()=>{const host=document.getElementById('compiled-renderer-fixture');host.replaceChildren(WikidictRendererQA.renderEntry({title:'Plain',kind:'language',sections:[{title:'Meaning',blocks:[{kind:'definition',spans:[{kind:'text',text:'No annotation'}]}]}]},()=>{}));});
  assert.equal(await rendererPage.locator('.abbreviation-explanations,abbr[title]').count(),0);
 
@@ -567,18 +616,38 @@ try{
   assert.equal(await indentedSection.evaluate(el=>el.open),false);
   await indentedSection.locator('summary').focus();await rendererPage.keyboard.press('Enter');
   assert.equal(await indentedSection.evaluate(el=>el.open),true);
+  const disclosureChecks=[];
+  const disclosureGeometry=async(name,section)=>{
+   const observed=await section.evaluate(el=>{const clientWidth=el.clientWidth,scrollWidth=el.scrollWidth,style=getComputedStyle(el.querySelector('summary'),'::after');return {fits:scrollWidth<=clientWidth,direction:getComputedStyle(el).direction,open:el.open,clientWidth,scrollWidth,supportsLh:CSS.supports('width','1lh')&&CSS.supports('height','1lh'),arrow:{width:parseFloat(style.width),height:parseFloat(style.height),lineHeight:style.lineHeight,font:style.font,direction:style.direction,transform:style.transform,transition:style.transition},animations:el.getAnimations({subtree:true}).map(value=>({playState:value.playState,currentTime:value.currentTime,startTime:value.startTime,pseudoElement:value.effect?.pseudoElement,timing:value.effect?.getComputedTiming()}))};});
+   assert.equal(observed.supportsLh,true);assert.equal(observed.fits,true);assert.equal(observed.animations.length,0);assert.equal(observed.arrow.direction,observed.direction);if(observed.open){const parts=observed.arrow.transform.match(/^matrix\(([^)]+)\)$/);assert.ok(parts);const values=parts[1].split(',').map(Number),matrix={a:values[0],b:values[1],c:values[2],d:values[3]};assert.ok(Math.abs(matrix.a)<.00001&&Math.abs(matrix.d)<.00001);assert.equal(matrix.b,observed.direction==='rtl'?-1:1);assert.equal(matrix.c,observed.direction==='rtl'?1:-1);}else assert.equal(observed.arrow.transform,'none');assert.ok(observed.arrow.width>0&&Math.abs(observed.arrow.width-observed.arrow.height)<.01);disclosureChecks.push({name,...observed});
+  };
   await rendererPage.setViewportSize({width:360,height:640});
   await rendererPage.addStyleTag({content:'#compiled-renderer-fixture{padding-bottom:0!important;max-width:100%}'});
-  assert.equal(await indentedSection.evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+  await disclosureGeometry('ltr-open',indentedSection);
+  await indentedSection.locator('summary').focus();await rendererPage.keyboard.press('Enter');assert.equal(await indentedSection.evaluate(el=>el.open),false);
+  await disclosureGeometry('ltr-closed',indentedSection);
+  await rendererPage.keyboard.press('Enter');assert.equal(await indentedSection.evaluate(el=>el.open),true);await disclosureGeometry('ltr-reopened',indentedSection);
   await rendererPage.screenshot({path:path.join(report,'heading-companion-ltr-360.png'),fullPage:true});
   await rendererPage.evaluate(()=>{
    const label='عنوان عربي طويل لاختبار التفاف النص واتجاه القراءة';
+   window.rtlLinks=[];
    document.getElementById('compiled-renderer-fixture').replaceChildren(WikidictRendererQA.renderEntry({title:'RTL renderer control',kind:'language',sections:[
     {title:label,level:4,blocks:[{kind:'heading',level:4,depth:1,list_path:':',spans:[{kind:'link',text:label,target:'RTL control target',direction:'rtl',bold:true,italic:true}]}]}
-   ]},()=>{}, {collapseOtherSections:false}));
+   ]},target=>window.rtlLinks.push(target), {collapseOtherSections:false}));
    document.querySelector('#compiled-renderer-fixture details').dir='rtl';
   });
-  assert.equal(await rendererPage.locator('#compiled-renderer-fixture details').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+  const rtlFits=await rendererPage.locator('#compiled-renderer-fixture details').evaluate(el=>el.scrollWidth<=el.clientWidth);
+  assert.equal(rtlFits,true);
+  const rtlSection=rendererPage.locator('#compiled-renderer-fixture details'),rtlSummary=rtlSection.locator('summary');
+  const checked=await rtlSection.evaluate(el=>{const style=getComputedStyle(el.querySelector('summary'),'::after');return {clientWidth:el.clientWidth,scrollWidth:el.scrollWidth,arrow:{width:parseFloat(style.width),height:parseFloat(style.height),lineHeight:style.lineHeight,content:style.content,visibility:style.visibility},text:el.querySelector('.heading-label').textContent};});
+  assert.ok(checked.arrow.width>0&&Math.abs(checked.arrow.width-checked.arrow.height)<.01);assert.equal(checked.arrow.visibility,'visible');assert.ok(checked.arrow.content.includes('›'));
+  assert.equal(checked.text,'عنوان عربي طويل لاختبار التفاف النص واتجاه القراءة');await disclosureGeometry('rtl-open',rtlSection);
+  const rtlLink=rtlSection.getByRole('link',{name:checked.text,exact:true});await rtlLink.focus();await rendererPage.keyboard.press('Enter');
+  assert.deepEqual(await rendererPage.evaluate(()=>window.rtlLinks),['RTL control target']);assert.equal(await rtlSection.evaluate(el=>el.open),true);
+  await rtlSummary.focus();await rendererPage.keyboard.press('Enter');assert.equal(await rtlSection.evaluate(el=>el.open),false);
+  await disclosureGeometry('rtl-closed',rtlSection);
+  await rendererPage.keyboard.press('Enter');assert.equal(await rtlSection.evaluate(el=>el.open),true);await disclosureGeometry('rtl-reopened',rtlSection);
+  await writeFile(path.join(report,'heading-companion-rtl-360.checked.json'),JSON.stringify({checked,disclosureChecks},null,2)+'\n');
   await rendererPage.screenshot({path:path.join(report,'heading-companion-rtl-360.png'),fullPage:true});
 
  await rendererPage.close();

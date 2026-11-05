@@ -1,7 +1,8 @@
 // Source-only hand-framed controls for the selected final C image suffix.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {decode} from './blob.js';
+import {decode,decodeAlias,buildIndex,RawSource} from './blob.js';
+import {dictionaryBlob,aliasPayload} from './alias-fixtures.mjs';
 import {loadInlineImage} from './media.js';
 const cat=(...v)=>Buffer.concat(v.map(x=>Array.isArray(x)?Buffer.from(x):x));
 const u=n=>{const b=Buffer.alloc(4);b.writeUInt32LE(n);return b;};
@@ -10,13 +11,13 @@ const image=(flags=13,width=15)=>cat([1],s('Vraagteken-2.svg'),[flags],flags&1?u
 const span=(tail=image(),kind=1,legacy=false,text='',trail='')=>cat([kind,0,0],s(text),s(kind===1?'File:Vraagteken-2.svg':''),s(trail),...Array.from({length:4},()=>s('')),[0,0,0],legacy?Buffer.alloc(0):tail);
 const spans=(tail=image(),kind=1,text='',trail='')=>cat(u(1),span(tail,kind,false,text,trail));
 const block=values=>cat([0,0,0],values,[0],s(''),s(''),[0],s(''),s(''));
-const table=()=>cat([1,0],spans(),u(1),u(2),cat([0,1,0,1,0,0],spans(),[0,0,0]),cat([0,1,0,1,0,0],u(0),[0,1],u(1),block(spans()),[0]),[0]);
-function wire({tail=image(),kind=1,mediaKind=0,missing=false,duplicate=false,mixedDuplicate=false,text='',trail='',file=null}={}){
- const section=cat([2],s('S'),s('S'),s(''),u(2),block(spans(tail,kind,text,trail)),cat([12,0,0],u(0),[0],s(''),s(''),table(),s(''),s('')));
- const ref=cat([0],u(1),u(1),s(''),s(''),u(0),[1],u(1),block(spans()));
+const table=(tail=image())=>cat([1,0],spans(tail),u(1),u(2),cat([0,1,0,1,0,0],spans(tail),[0,0,0]),cat([0,1,0,1,0,0],u(0),[0,1],u(1),block(spans(tail)),[0]),[0]);
+function wire({magic='DPRC',defaultImage=image(),tail=defaultImage,kind=1,mediaKind=0,missing=false,duplicate=false,mixedDuplicate=false,text='',trail='',file=null}={}){
+ const section=cat([2],s('S'),s('S'),s(''),u(2),block(spans(tail,kind,text,trail)),cat([12,0,0],u(0),[0],s(''),s(''),table(defaultImage),s(''),s('')));
+ const ref=cat([0],u(1),u(1),s(''),s(''),u(0),[1],u(1),block(spans(defaultImage)));
  const media=cat(s('Vraagteken-2.svg'),[mediaKind],s(''));
- const legacyRef=cat([0],u(2),u(2),s(''),s(''),spans(),[0]);
- let bytes=cat(Buffer.from('DPRC'),spans(),u(1),section,spans(),u(0),u(0),u(2),ref,legacyRef,u(missing?0:duplicate||mixedDuplicate?2:1),missing?Buffer.alloc(0):duplicate?cat(media,media):mixedDuplicate?cat(media,s('Vraagteken-2.svg'),[1],s('')):media);
+ const legacyRef=cat([0],u(2),u(2),s(''),s(''),spans(defaultImage),[0]);
+ let bytes=cat(Buffer.from(magic),spans(defaultImage),u(1),section,spans(defaultImage),u(0),u(0),u(2),ref,legacyRef,u(missing?0:duplicate||mixedDuplicate?2:1),missing?Buffer.alloc(0):duplicate?cat(media,media):mixedDuplicate?cat(media,s('Vraagteken-2.svg'),[1],s('')):media);
  if(file!==null){const from=s('Vraagteken-2.svg'),to=s(file),parts=[];let at=0,next;while((next=bytes.indexOf(from,at))>=0){parts.push(bytes.subarray(at,next),to);at=next+from.length;}parts.push(bytes.subarray(at));bytes=Buffer.concat(parts);}
  return bytes;
 }
@@ -65,4 +66,34 @@ test('unavailable inline images retain distinct authored alt through consent, lo
   loaded.listeners.load();assert.equal(loaded.siblings.length,0);assert.equal(loaded.hidden,false);assert.equal(loaded.style.display,'inline');assert.equal(loaded.dataset.mediaState,'loaded');assert.equal(loaded.style.width,'15px');assert.equal(loaded.style.height,'25px');
   loaded.isConnected=false;observers.forEach(callback=>callback());assert.equal(JSON.stringify(images),before);
  }finally{Object.assign(globalThis,saved);}
+});
+
+// DPRD changes one existing image flag only; old C payloads remain authoritative.
+test('DPRD border survives all image sinks while C and unbordered D remain unchanged',()=>{
+ const values=e=>{const t=e.sections[0].blocks[1].table;return [e.display_title[0],e.preamble_spans[0],e.sections[0].blocks[0].spans[0],t.caption[0],t.rows[0].cells[0].spans[0],t.rows[0].cells[1].blocks[0].spans[0],e.references[0].blocks[0].spans[0],e.references[1].spans[0]];};
+ const bordered=decode(wire({magic:'DPRD',defaultImage:image(29)}),{});
+ assert.equal(bordered.presentation_version,'DPRD');
+ for(const span of values(bordered)){
+  assert.deepEqual(span.image,{file:'Vraagteken-2.svg',width_px:15,alt:'',tooltip:'תיאור',border:true});
+  assert.equal(span.target,'File:Vraagteken-2.svg');assert.equal(span.text,'');assert.equal(span.trail,'');
+ }
+ const old=decode(wire(),{}),plain=decode(wire({magic:'DPRD'}),{});
+ assert.ok(values(old).every(span=>!Object.hasOwn(span.image,'border')));
+ assert.ok(values(plain).every(span=>!Object.hasOwn(span.image,'border')));
+ delete old.presentation_version;delete plain.presentation_version;assert.deepEqual(plain,old);
+ for(const flags of [16,29,31])assert.throws(()=>decode(wire({tail:image(flags)}),{}));
+ for(const flags of [32,64,128,255])assert.throws(()=>decode(wire({magic:'DPRD',tail:image(flags)}),{}));
+ assert.throws(()=>decode(wire({magic:'DPRD',tail:image(17,0)}),{}));
+ const truncated=wire({magic:'DPRD',defaultImage:image(29)});assert.throws(()=>decode(truncated.subarray(0,truncated.length-1),{}));
+});
+test('DPRD capability reaches normal raw import and DAL1 compiled fallback without downgrading',async()=>{
+ const payload=wire({magic:'DPRD',defaultImage:image(29)}),raw=dictionaryBlob(1,[['Border',payload]]);
+ const source=new RawSource(new Blob([raw])),index=await buildIndex(source);
+ assert.equal(index.metadata.language,'English');assert.equal(index.rows.length,1);
+ const row=index.rows[0],entry=decode(await source.read(row.offset,row.length),{title:row.title});
+ assert.equal(entry.presentation_version,'DPRD');assert.equal(entry.display_title[0].image.border,true);
+ const envelope=aliasPayload({source:'Border alias',target:'Border',compiled:payload});
+ const aliasSource=new RawSource(new Blob([dictionaryBlob(8,[['1\tBorder alias',envelope]])])),aliases=await buildIndex(aliasSource);
+ const aliasRow=aliases.rows[0],alias=decodeAlias(await aliasSource.read(aliasRow.offset,aliasRow.length),aliasRow.raw_key);
+ assert.equal(alias.entry.presentation_version,'DPRD');assert.equal(alias.entry.references[0].blocks[0].spans[0].image.border,true);
 });

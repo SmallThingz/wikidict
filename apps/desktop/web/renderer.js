@@ -85,7 +85,10 @@ function semanticFontSize(span) {
 }
 function inlineImageElement(image,load){
   if(!image||typeof image.file!=='string'||!image.file||new TextEncoder().encode(image.file).length>32*1024*1024||image.file.startsWith(' ')||image.file.endsWith(' ')||/[_\[\]{}<>|#\x00-\x1f\x7f-\x9f]/u.test(image.file))throw Error('Invalid inline image');
-  const el=node('img');el.className='compiled-inline-image';el.style.display='inline';el.style.verticalAlign='middle';el.style.border='0';el.style.maxWidth='10000px';el.style.maxHeight='10000px';el.style.margin='0';el.style.borderRadius='0';el.style.objectFit='fill';
+  if(image.border!==undefined&&typeof image.border!=='boolean')throw Error('Invalid inline image border');
+  const el=node('img');el.className='compiled-inline-image';el.style.display='inline';el.style.verticalAlign='middle';el.style.border=image.border?'1px solid #eaecf0':'0';el.style.maxWidth='10000px';el.style.maxHeight='10000px';el.style.margin='0';el.style.borderRadius='0';el.style.objectFit='fill';
+  // The authored border surrounds the content box; site-wide border-box must not shrink it.
+  if(image.border){el.style.boxSizing='content-box';el.style.padding='0';}
   for(const [key,axis] of [['width_px','width'],['height_px','height']])if(image[key]!=null){if(!Number.isInteger(image[key])||image[key]<=0||image[key]>4294967295)throw Error('Invalid image dimension');el.style[axis]=image[key]+'px';}
   const pendingScale=Math.min(1,image.width_px==null?1:10000/image.width_px,image.height_px==null?1:10000/image.height_px);
   if(image.width_px!=null)el.style.width=image.width_px*pendingScale+'px';if(image.height_px!=null)el.style.height=image.height_px*pendingScale+'px';
@@ -123,10 +126,11 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
   }
   const inkFor=span=>canonicalRGB(span.foreground)?span.foreground:
     canonicalRGB(span.background)?contrastInk(span.background):canonicalRGB(cellBackground)?contrastInk(cellBackground):null;
+  const explanationTag=span=>explanations?.isMediaExplanation?.(span)?'span':'abbr';
   const trailNode=(span,i)=>{
     if(!span.explanation&&!inkFor(span)&&!canonicalRGB(span.background))return document.createTextNode(span.trail||'');
     if(!span.trail)return document.createTextNode('');
-    const trail=node(span.explanation?'abbr':'span',span.trail);
+    const trail=node(span.explanation?explanationTag(span):'span',span.trail);
     if(span.explanation){trail.title=span.explanation;if(described.has(i))trail.setAttribute('aria-describedby',described.get(i));}
     if(inkFor(span))trail.style.color=inkFor(span);
     if(canonicalRGB(span.background)){trail.style.backgroundColor=span.background;trail.style.whiteSpace='pre-wrap';}
@@ -152,9 +156,9 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
       if (span[flag]) { const wrapper = node(tag); wrapper.append(el); el = wrapper; }
     }
     if (span.explanation) {
-      const abbreviation=node('abbr');abbreviation.title=span.explanation;
-      if(described.has(i))abbreviation.setAttribute('aria-describedby',described.get(i));
-      abbreviation.append(el);el=abbreviation;
+      const annotation=node(explanationTag(span));annotation.title=span.explanation;
+      if(described.has(i))annotation.setAttribute('aria-describedby',described.get(i));
+      annotation.append(el);el=annotation;
     }
     const imageURL=span.image&&span.kind==='link'?safeURL(explanations?.imageActionURL?.(span.target)):null;
     if(imageURL){
@@ -204,7 +208,7 @@ function destination(el, value, legacy = '') {
 }
 function legacyDestinations(entry) {
   const candidates = [], counts = new Map();
-  if (['DPR5','DPR6','DPR7','DPR8','DPR9','DPRA','DPRB','DPRC'].includes(entry.presentation_version)) return new Map();
+  if (['DPR5','DPR6','DPR7','DPR8','DPR9','DPRA','DPRB','DPRC','DPRD'].includes(entry.presentation_version)) return new Map();
   const add = (value, label) => {
     if (value.anchor || value.anchor_fallback) return;
     const id = label.replaceAll(' ','_');
@@ -358,7 +362,18 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     }
   }
   const explanationRows=[], explanationKeys=new Map();
-  const explanations={inlineImage,imageActionURL,add(label,explanation){
+  const mediaOwnerPrefix='wikidict-media-file-',mediaOwners=new Map();
+  for(const media of entry.media||[])if(media.kind==='audio'&&media.file){
+    const hex=[...new TextEncoder().encode(media.file)].map(byte=>byte.toString(16).padStart(2,'0')).join('');
+    mediaOwners.set(mediaOwnerPrefix+hex,media.file);
+  }
+  const explanations={inlineImage,imageActionURL,isMediaExplanation(span){
+    if(span.kind!=='link'||span.image)return false;
+    const tokens=poemTokens(span),owners=tokens.filter(token=>token.startsWith(mediaOwnerPrefix));
+    // Match the compiled media catalog, not an ordinary File link or a legacy abbreviation.
+    const file=owners.length===1?mediaOwners.get(owners[0]):null;
+    return !!file&&tokens.includes('wikidict-media')&&span.text===file&&span.target==='File:'+file;
+  },add(label,explanation){
     const key=JSON.stringify([label,explanation]);
     if(explanationKeys.has(key))return explanationKeys.get(key);
     let id;do{id='abbreviation-explanation-'+(++explanationSequence);}while(headingDestinations.has(id));
@@ -431,7 +446,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
   imageSpans(entry.display_title);imageSpans(entry.preamble_spans);for(const section of entry.sections||[])imageBlocks(section.blocks);for(const ref of entry.references||[]){imageSpans(ref.spans);imageBlocks(ref.blocks);}
   if (entry.media?.length) { const section=fold('Images & sound',!settings.collapseOtherSections);for(const media of entry.media){const view=mediaView(media,canonicalImageFiles.has(media.file));if(view)section.append(view);}root.append(section); }
   if(explanationRows.length){
-    const details=fold('Abbreviations',false),list=node('dl');details.className='abbreviation-explanations';
+    const details=fold('Text details',false),list=node('dl');details.className='abbreviation-explanations';
     for(const row of explanationRows){
       const label=node('dt',row.label),description=node('dd',row.explanation);description.id=row.id;
       list.append(label,description);
