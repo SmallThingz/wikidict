@@ -4205,6 +4205,251 @@ class FileMetadataV2ReplayReuseTest(unittest.TestCase):
 
 
 
+    def resolver_fixture(self):
+        # Real file-metadata collector/replay and namespace projector; all source
+        # bytes are small synthetic fixtures, with no payload validation mocked.
+        import namespace_registry_snapshot as namespace_projection
+        project=self.fixture.root.resolve();wiki,date=self.manifest['wiki'],self.manifest['date']
+        item=dict(wiki=wiki,date=date,name=wiki+'-'+date+'-pages-meta-current.xml.bz2',
+                  url='https://dumps.wikimedia.org/synthetic-local-fixture',size=1,sha1='0'*40)
+        namespaces={str(i):dict(id=i,name=name,canonical=canonical,case='case-sensitive',
+                    content=i==0,subpages=i==10,defaultcontentmodel='wikitext')
+                    for i,name,canonical in ((-2,'ميديا','Media'),(0,'',''),(6,'ملف','File'),
+                                             (10,'قالب','Template'),(14,'تصنيف','Category'))}
+        inventory=[dict(id=row['id'],name=row['name'],case=row['case']) for row in namespaces.values()]
+        query=dict(general=dict(wikiid=wiki,lang='ar',server='//ar.wiktionary.org'),
+                   namespaces=namespaces,namespacealiases=[])
+        namespace_raw,_=namespace_projection.render(wiki,date,query,inventory)
+        self.fixture.namespace.write_bytes(namespace_raw)
+        self.fixture.args.output=self.fixture.root/'resolver-capture'
+        self.manifest=self.fixture.capture();self.path=self.fixture.args.output/'file-metadata.tsv'
+        root=self.path.parent.resolve();namespace=root/'namespace-registry.tsv'
+        raw_siteinfo=json.dumps(dict(query=query)).encode()
+        xml=('<mediawiki><siteinfo><dbname>'+wiki+'</dbname><namespaces>'+''.join(
+             '<namespace key="'+str(row['id'])+'" case="'+row['case']+'">'+row['name']+'</namespace>'
+             for row in inventory)+'</namespaces></siteinfo></mediawiki>').encode()
+        for name,raw in [('dump-siteinfo.xml',xml),('namespace-siteinfo.raw.json',raw_siteinfo),
+                         ('pagetable-dumpstatus.raw.json',b'{}')]:
+            (root/name).write_bytes(raw)
+        artifacts={name:b.sha256_file(root/name) for name in
+                   ('dump-siteinfo.xml','namespace-siteinfo.raw.json','pagetable-dumpstatus.raw.json')}
+        capture=dict(wiki=wiki,date=date,source_xml=item,namespace_mismatches=[],artifacts=artifacts,
+                     dump_namespace_inventory=inventory,retrieved_utc='2026-10-18T00:00:00Z',
+                     siteinfo_source_url='https://ar.wiktionary.org/w/api.php',
+                     siteinfo_temporal_scope='synthetic-local-fixture')
+        (root/'capture.complete.json').write_text(json.dumps(capture))
+        namespace_projection.build(root)
+        self.assertEqual(namespace.read_bytes(),namespace_raw)
+        # Match the normal resolver's mandatory LST projection using the same
+        # real derivation chain as LoopMessageSelectionTests, not an override.
+        import prepare_magic_words_int as int_magic
+        import prepare_magic_words_language as language_magic
+        import prepare_magic_words_lst as lst_magic
+        original=write_magic_fixture(project/'resolver-magic-capture',wiki,date,
+            parser_functions=True,content_language='ar',complete_magic_projection=True)
+        int_root=original.parent.parent/int_magic.DERIVED_DIRECTORY
+        int_magic.derive_snapshot(original,int_root)
+        language_root=original.parent.parent/language_magic.DERIVED_DIRECTORY
+        language_magic.derive_snapshot(int_root,language_root)
+        lst_magic.derive_snapshot(language_root,root/lst_magic.DERIVED_DIRECTORY)
+        magic=root/lst_magic.DERIVED_DIRECTORY/'magic-words.tsv'
+        for row in (b'int\t0\tINT:\n',b'language\t0\t#language\n',b'lst\t0\t#section\n'):
+            self.assertIn(row,magic.read_bytes())
+        downloads=project/'dumps';language=downloads/wiki/date/'language-registry.tsv'
+        language.parent.mkdir(parents=True);language.write_bytes(b'# content-language\tar\nar\tArabic\n')
+        manifest={'auxiliary_capture_roots':{wiki:str(root.relative_to(project))},
+                  'language_registries':[dict(wiki=wiki,date=date,name=language.name,
+                      size=language.stat().st_size,sha256=b.sha256_file(language))]}
+        return SimpleNamespace(root=root,project=project,wiki=wiki,date=date,item=item,capture=capture,
+            namespace=namespace,downloads=downloads,language=language,magic=magic,manifest=manifest,groups={(wiki,date):[item]})
+
+    def resolve_fixture(self, fixture):
+        with patch.object(b,'PROJECT',fixture.project):
+            return b.resolve_edition_snapshot_options(fixture.manifest,fixture.groups,fixture.downloads)[
+                (fixture.wiki,fixture.date)]['auxiliary_snapshots']
+
+    def first_response(self):
+        index=self.helper.decode(self.path.with_name(self.helper.EVIDENCE).read_bytes())
+        receipt=self.helper.decode(self.path.with_name(index['batches'][0]['accepted_receipt']).read_bytes())
+        return self.path.with_name(receipt['response'])
+
+    def mutate_same_size_and_mtime(self, path):
+        raw=path.read_bytes();before=path.stat()
+        path.write_bytes(bytes([raw[0]^1])+raw[1:])
+        os.utime(path,ns=(before.st_atime_ns,before.st_mtime_ns))
+        return raw,before
+
+    def test_resolver_combines_adjacent_validation_with_exact_selection_and_hash_parity(self):
+        fixture=self.resolver_fixture()
+        snapshots={'file-metadata':self.path.resolve(),'namespace-registry':fixture.namespace,
+                   'language-registry':fixture.language,'site-info':fixture.root/'namespace-siteinfo.raw.json',
+                   'magic-words':fixture.magic}
+        with patch.object(self.helper,'payload',wraps=self.helper.payload) as traversals:
+            b.validate_captured_snapshot('file-metadata',self.path,fixture.capture,[fixture.item],fixture.root)
+            expected=b.verified_auxiliary_hashes(snapshots,fixture.wiki,fixture.date)
+            self.assertEqual(traversals.call_count,3)  # Cold pre/post plus adjacent warm recheck.
+        b._FILE_METADATA_V2_REPLAYS.clear()
+        before=self.path.read_bytes()
+        with patch.object(self.helper,'payload',wraps=self.helper.payload) as traversals:
+            selected=self.resolve_fixture(fixture)
+            self.assertEqual(traversals.call_count,2)  # Cold pre/post remain; no adjacent duplicate.
+        self.assertEqual(selected,snapshots)
+        self.assertEqual(b.verified_auxiliary_hashes(selected,fixture.wiki,fixture.date),expected)
+        self.assertEqual(self.path.read_bytes(),before)
+
+    def test_resolver_preserves_post_replay_inventory_check(self):
+        fixture=self.resolver_fixture();response=self.first_response();changed=[]
+        original=self.helper.classify_response
+        def classify(*args,**kwargs):
+            result=original(*args,**kwargs)
+            if not changed:changed.append(self.mutate_same_size_and_mtime(response))
+            return result
+        with patch.object(self.helper,'classify_response',side_effect=classify), \
+             patch.object(self.helper,'payload',wraps=self.helper.payload) as traversals:
+            with self.assertRaisesRegex(ValueError,'artifact inventory changed'):
+                self.resolve_fixture(fixture)
+            self.assertEqual(traversals.call_count,2)
+        self.assertEqual(len(changed),1)
+        self.assertEqual(b._FILE_METADATA_V2_REPLAYS,{})
+
+    def test_resolver_does_not_reuse_changed_evidence_across_calls_or_later_guards(self):
+        fixture=self.resolver_fixture();selected=self.resolve_fixture(fixture)
+        manifests,artifacts=b.auxiliary_capture_identities(selected,fixture.wiki,fixture.date)
+        identity={'auxiliary_capture_sha256':manifests,'auxiliary_capture_artifact_sha256':artifacts}
+        self.mutate_same_size_and_mtime(self.first_response())
+        for operation in (lambda:self.resolve_fixture(fixture),
+                          lambda:b.verified_auxiliary_hashes(selected,fixture.wiki,fixture.date),
+                          lambda:b.require_auxiliary_capture_identity(selected,identity)):
+            with self.subTest(operation=operation),self.assertRaisesRegex(ValueError,'artifact inventory changed'):
+                operation()
+
+    def test_resolver_retains_outer_namespace_binding_on_fresh_shared_result(self):
+        fixture=self.resolver_fixture()
+        self.mutate_same_size_and_mtime(fixture.namespace)
+        with self.assertRaisesRegex(ValueError,'namespace source differs'):
+            self.resolve_fixture(fixture)
+
+    def test_resolver_rehashed_wrong_semantics_still_replays_and_rejects(self):
+        fixture=self.resolver_fixture();self.resolve_fixture(fixture)
+        raw=self.path.read_bytes().replace(b'\tAUDIO\t',b'\tVIDEO\t')
+        self.assertNotEqual(raw,self.path.read_bytes());self.path.write_bytes(raw)
+        index=self.helper.decode(self.path.with_name(self.helper.EVIDENCE).read_bytes())
+        self.manifest.update(output_bytes=len(raw),output_sha256=self.helper.digest(raw))
+        self.fixture.rewrite_index_and_manifest(self.manifest,index)
+        with self.assertRaisesRegex(ValueError,'TSV differs'):
+            self.resolve_fixture(fixture)
+
+    def test_resolver_retains_selected_dump_and_capture_edition_binding(self):
+        fixture=self.resolver_fixture()
+        fixture.groups[(fixture.wiki,fixture.date)]=[{**fixture.item,'size':2}]
+        with self.assertRaisesRegex(ValueError,'Captured source differs'):
+            self.resolve_fixture(fixture)
+        fixture.groups[(fixture.wiki,fixture.date)]=[fixture.item]
+        (fixture.root/'capture.complete.json').write_text(json.dumps({**fixture.capture,'wiki':'bnwiktionary'}))
+        with self.assertRaisesRegex(ValueError,'Auxiliary capture edition/date mismatch'):
+            self.resolve_fixture(fixture)
+
+
+    def test_stage_input_identity_projects_fresh_capture_once_with_exact_identity_parity(self):
+        fixture=self.resolver_fixture();snapshots=self.resolve_fixture(fixture)
+        tool=fixture.project/'zig-fixture';tool.write_bytes(b'unchanged toolchain fixture')
+        reviewed={'sha256':'f'*64}
+        with patch.object(b.shutil,'which',return_value=str(tool)), \
+             patch.object(b,'source_fingerprint',return_value='audit-source'):
+            with patch.object(self.helper,'payload',wraps=self.helper.payload) as traversals:
+                hashes=b.verified_auxiliary_hashes(snapshots,fixture.wiki,fixture.date)
+                expected=b.build_input_identity([fixture.item],'zig',hashes,'interwiki',60000,
+                    snapshots,fixture.downloads,reviewed)
+                self.assertEqual(traversals.call_count,2)
+            with patch.object(self.helper,'payload',wraps=self.helper.payload) as traversals:
+                actual=b.build_input_identity([fixture.item],'zig',None,'interwiki',60000,
+                    snapshots,fixture.downloads,reviewed,validate_auxiliary=True)
+                self.assertEqual(traversals.call_count,1)
+            self.assertEqual(actual,expected)
+            self.assertEqual(actual['source'],'audit-source')
+            self.assertEqual(actual['zig_sha256'],b.sha256_file(tool))
+            self.assertEqual(actual['reviewed_nonlexical_source_review_sha256'],reviewed['sha256'])
+            with self.assertRaisesRegex(ValueError,'does not accept supplied hashes'):
+                b.build_input_identity([fixture.item],'zig',hashes,None,None,snapshots,
+                    fixture.downloads,validate_auxiliary=True)
+
+    def test_stage_input_identity_detects_changes_during_source_and_toolchain_hashing(self):
+        fixture=self.resolver_fixture();snapshots=self.resolve_fixture(fixture)
+        tool=fixture.project/'zig-fixture';tool.write_bytes(b'unchanged toolchain fixture')
+        response=self.first_response();original=response.read_bytes();before=response.stat()
+        original_hash=b.sha256_file
+        for phase in ('source','toolchain'):
+            mutated=[]
+            def mutate():
+                if not mutated:mutated.append(self.mutate_same_size_and_mtime(response))
+            def source_hash():
+                if phase=='source':mutate()
+                return 'audit-source'
+            def file_hash(path):
+                result=original_hash(path)
+                if phase=='toolchain' and Path(path)==tool:mutate()
+                return result
+            try:
+                with self.subTest(phase=phase),patch.object(b.shutil,'which',return_value=str(tool)), \
+                     patch.object(b,'source_fingerprint',side_effect=source_hash), \
+                     patch.object(b,'sha256_file',side_effect=file_hash):
+                    with self.assertRaisesRegex(ValueError,'artifact inventory changed'):
+                        b.build_input_identity([fixture.item],'zig',None,None,None,snapshots,
+                            fixture.downloads,validate_auxiliary=True)
+                    self.assertEqual(len(mutated),1)
+            finally:
+                response.write_bytes(original);os.utime(response,ns=(before.st_atime_ns,before.st_mtime_ns))
+
+    def test_stage_workspace_projects_once_and_keeps_later_boundary_revalidation(self):
+        fixture=self.resolver_fixture();snapshots=self.resolve_fixture(fixture)
+        with patch.object(self.helper,'payload',wraps=self.helper.payload) as traversals:
+            expected_hashes=b.verified_auxiliary_hashes(snapshots,fixture.wiki,fixture.date)
+            expected_manifests,expected_artifacts=b.auxiliary_capture_identities(snapshots,fixture.wiki,fixture.date)
+            self.assertEqual(traversals.call_count,2)
+        with patch.object(b,'_source_fingerprints',return_value=('audit-source','producer-source')):
+            with patch.object(self.helper,'payload',wraps=self.helper.payload) as traversals:
+                state=b.shard_state([fixture.item],fixture.language,123,auxiliary_snapshots=snapshots)
+                self.assertEqual(traversals.call_count,1)
+            self.assertEqual(state['auxiliary_snapshot_sha256'],expected_hashes)
+            self.assertEqual(state['auxiliary_capture_sha256'],expected_manifests)
+            self.assertEqual(state['auxiliary_capture_artifact_sha256'],expected_artifacts)
+            self.assertEqual((state['source'],state['production_source'],state['now_unix']),
+                             ('audit-source','producer-source',123))
+            self.mutate_same_size_and_mtime(self.first_response())
+            with self.assertRaisesRegex(ValueError,'artifact inventory changed'):
+                b.shard_state([fixture.item],fixture.language,123,auxiliary_snapshots=snapshots)
+            with self.assertRaisesRegex(ValueError,'artifact inventory changed'):
+                b.require_auxiliary_capture_identity(snapshots,state)
+
+    def test_stage_identity_projection_keeps_cross_capture_namespace_consistency(self):
+        fixture=self.resolver_fixture();tool=fixture.project/'zig-fixture';tool.write_bytes(b'toolchain fixture')
+        import namespace_registry_snapshot as namespace_projection
+        import site_info_snapshot as site_info
+        alternate=fixture.project/'alternate-namespace';alternate.mkdir()
+        for name in fixture.capture['artifacts']:
+            (alternate/name).write_bytes((fixture.root/name).read_bytes())
+        raw_siteinfo=json.loads((alternate/'namespace-siteinfo.raw.json').read_text())
+        raw_siteinfo['query']['namespacealiases'].append({'id':6,'alias':'Image'})
+        (alternate/'namespace-siteinfo.raw.json').write_text(json.dumps(raw_siteinfo))
+        alternate_capture={**fixture.capture,'artifacts':{name:b.sha256_file(alternate/name)
+            for name in fixture.capture['artifacts']}}
+        (alternate/'capture.complete.json').write_text(json.dumps(alternate_capture))
+        namespace_projection.build(alternate)
+        # This is independently valid projected evidence, not a stale output hash.
+        site_info.validate_snapshot(alternate/'namespace-siteinfo.raw.json',fixture.wiki,fixture.date)
+        selected_namespace=alternate/'namespace-registry.tsv'
+        standalone=b.verified_auxiliary_hashes({'namespace-registry':selected_namespace},fixture.wiki,fixture.date)
+        self.assertEqual(standalone,{'namespace-registry':b.sha256_file(selected_namespace)})
+        self.assertNotEqual(b.sha256_file(selected_namespace),b.sha256_file(fixture.namespace))
+        snapshots={'file-metadata':self.path,'namespace-registry':selected_namespace,
+                   'language-registry':fixture.language}
+        with patch.object(b.shutil,'which',return_value=str(tool)), \
+             patch.object(b,'source_fingerprint',return_value='audit-source'):
+            with self.assertRaisesRegex(ValueError,'different namespace registry'):
+                b.build_input_identity([fixture.item],'zig',None,None,None,snapshots,
+                    fixture.downloads,validate_auxiliary=True)
+
+
 class LoopMessageSelectionTests(unittest.TestCase):
     """Real capture/replay and resolver; all outer source bytes are synthetic."""
     def setUp(self):

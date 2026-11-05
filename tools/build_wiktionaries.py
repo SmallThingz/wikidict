@@ -529,16 +529,25 @@ def require_auxiliary_capture_identity(snapshots, identity):
         raise ValueError('Auxiliary capture changed during build')
 
 
-def verified_auxiliary_hashes(snapshots, edition=None, date=None):
+def verified_auxiliary_hashes(snapshots, edition=None, date=None, *, captured_selection=None):
+    return _validated_auxiliary_state(snapshots,edition,date,captured_selection=captured_selection)[0]
+
+
+def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_selection=None):
     hashes={};namespace_inputs={};captures={}
     for name, source in sorted((snapshots or {}).items()):
         if name not in AUXILIARY_SNAPSHOT_NAMES:
             raise ValueError(f'Unknown auxiliary snapshot: {name}')
         path=Path(source)
         capture=validated_auxiliary_capture(name,path,edition,date)
+        if captured_selection is not None and name!='language-registry':
+            selected_capture,selected_sources,capture_root=captured_selection
+            # Share only this freshly validated result with the adjacent source
+            # binding check. Nothing escapes this call or skips later rechecks.
+            _validate_captured_snapshot_context(name,path,selected_capture,
+                selected_sources,capture_root,capture)
         if capture is not None and name in ('language-fallbacks','interface-messages','commons-data','language-names','date-numbering','site-info','site-statistics-format','category-statistics-format','wikibase-page-links','file-metadata','behavior-switches','image-options'):
             namespace_inputs[name]=capture[0]['namespace_registry_sha256']
-        if capture is not None: captures[name]=capture
         path=path.resolve(strict=True)
         if not path.is_file(): raise ValueError(f'Auxiliary snapshot is not a file: {path}')
         sha=sha256_file(path)
@@ -551,6 +560,7 @@ def verified_auxiliary_hashes(snapshots, edition=None, date=None):
                     (edition is not None and record.get('wiki')!=edition) or
                     (date is not None and record.get('date')!=date)):
                 raise ValueError(f'Auxiliary snapshot differs from provenance: {path}')
+        if capture is not None:captures[name]=(capture[0],capture[1],manifest.name)
         if name=='namespace-registry':
             with path.open(encoding='utf-8') as stream:header=[stream.readline().rstrip('\n') for _ in range(3)]
             if header[0]!='# wikidict-namespace-registry-v1' or (edition is not None and header[1]!='# wiki\t'+edition) or (date is not None and header[2]!='# dump-date\t'+date):
@@ -575,7 +585,17 @@ def verified_auxiliary_hashes(snapshots, edition=None, date=None):
         for name,digest in namespace_inputs.items():
             if digest!=hashes['namespace-registry']:
                 raise ValueError('Auxiliary capture uses a different namespace registry: '+name)
-    return hashes
+    return hashes,captures
+
+
+def _project_auxiliary_capture_identities(captures):
+    # Only project the inventories returned by the fresh validation immediately
+    # above. No filesystem lookup, persistent cache, or caller-supplied authority.
+    manifests={};artifacts={}
+    for name,(_,inventory,manifest_name) in sorted(captures.items()):
+        manifests[name]=inventory[manifest_name]
+        artifacts[name]=auxiliary_artifact_digest(inventory)
+    return manifests,artifacts
 
 
 
@@ -600,8 +620,17 @@ def validate_capture_artifacts(root, record, required=()):
 
 
 def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
+    # Standalone validation always obtains fresh evidence; callers cannot supply
+    # a cached proof. The resolver shares its result only inside its hash loop.
+    needs_capture=(name in ('behavior-switches','image-options','wikibase-page-links','site-info') or
+        (capture_root is not None and name in ('wikibase-entities','wikibase-entity-terms',
+            'language-fallbacks','interface-messages','commons-data','language-names','date-numbering','file-metadata')))
+    bound=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date')) if needs_capture else None
+    return _validate_captured_snapshot_context(name,path,capture,selected,capture_root,bound)
+
+
+def _validate_captured_snapshot_context(name,path,capture,selected,capture_root,bound):
     if name in ('behavior-switches','image-options'):
-        bound=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date'))
         if capture_root is not None:
             if bound[0]['namespace_registry_sha256']!=sha256_file(capture_root/'namespace-registry.tsv'):
                 raise ValueError(name+' uses a different selected namespace registry')
@@ -610,13 +639,12 @@ def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
                     raise ValueError(name+' uses a different namespace capture')
         return
     if name=='wikibase-page-links':
-        record=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date'))[0]
+        record=bound[0]
         for source in record['source_dump_files']:selected_source(source,selected)
         if capture_root is not None and record['namespace_registry_sha256']!=sha256_file(capture_root/'namespace-registry.tsv'):
             raise ValueError('Page-link supplement namespace differs from selected capture')
         return
     if name=='site-info':
-        bound=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date'))
         if bound[0].get('schema')=='wikidict.site-info-capture.v2':
             if capture_root is not None and bound[0]['namespace_registry_sha256']!=sha256_file(capture_root/'namespace-registry.tsv'):
                 raise ValueError('Site-info uses a different namespace capture')
@@ -624,7 +652,6 @@ def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
         if capture_root is not None and bound[1]['capture.complete.json']!=sha256_file(capture_root/'capture.complete.json'):
             raise ValueError('Siteinfo belongs to a different namespace capture')
     if capture_root is not None and name in ('wikibase-entities','wikibase-entity-terms','language-fallbacks','interface-messages','commons-data','language-names','date-numbering','file-metadata'):
-        bound=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date'))
         if bound is not None:
             _,inventory=bound
             inputs=(('wikibase-namespace-siteinfo.raw.json','namespace-siteinfo.raw.json'),
@@ -788,10 +815,8 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
         language_record=languages.get((edition,date))
         language=Path(snapshots['language-registry'])
         if not language_record or language_record.get('name')!='language-registry.tsv' or language.stat().st_size!=language_record.get('size') or sha256_file(language)!=language_record.get('sha256'):raise ValueError('Language registry differs from pinned inventory')
-        if captured is not None:
-            for name,path in snapshots.items():
-                if name!='language-registry':validate_captured_snapshot(name,Path(path),capture,selected,root)
-        verified_auxiliary_hashes(snapshots,edition,date)
+        verified_auxiliary_hashes(snapshots,edition,date,
+            captured_selection=(capture,selected,root) if captured is not None else None)
         result[(edition,date)]={'auxiliary_snapshots':snapshots}
         if captured is not None:
             triple=[root/name for name in ('interwiki-map.tsv','interwiki-map.raw.json','interwiki-map.provenance.json')]
@@ -900,7 +925,9 @@ def source_fingerprint():
     return _source_fingerprints()[0]
 
 
-def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_timeout_ms, auxiliary_snapshots=None, downloads=None, reviewed_nonlexical=None):
+def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_timeout_ms, auxiliary_snapshots=None, downloads=None, reviewed_nonlexical=None, *, validate_auxiliary=False):
+    if validate_auxiliary and auxiliary_hashes is not None:
+        raise ValueError('Fresh auxiliary validation does not accept supplied hashes')
     executable=shutil.which(zig)
     if executable is None:raise ValueError('Zig compiler executable is unavailable')
     identity=dict(version=1, source=source_fingerprint(),
@@ -908,8 +935,16 @@ def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_
                 zig_sha256=sha256_file(Path(executable)),
                 auxiliary_snapshot_sha256=auxiliary_hashes or {},
                 interwiki_map_sha256=interwiki_sha, expansion_timeout_ms=expansion_timeout_ms)
-    manifests,artifacts=auxiliary_capture_identities(auxiliary_snapshots,
-        items[0]['wiki'] if items else None,items[0]['date'] if items else None)
+    if validate_auxiliary:
+        # Source/toolchain hashing above may take time. Validate current auxiliary
+        # bytes afterwards, then derive both identities within this same boundary.
+        hashes,captures=_validated_auxiliary_state(auxiliary_snapshots,
+            items[0]['wiki'] if items else None,items[0]['date'] if items else None)
+        identity['auxiliary_snapshot_sha256']=hashes
+        manifests,artifacts=_project_auxiliary_capture_identities(captures)
+    else:
+        manifests,artifacts=auxiliary_capture_identities(auxiliary_snapshots,
+            items[0]['wiki'] if items else None,items[0]['date'] if items else None)
     if manifests:
         identity['auxiliary_capture_sha256']=manifests
         identity['auxiliary_capture_artifact_sha256']=artifacts
@@ -1360,8 +1395,9 @@ def shard_state(items, registry, now_unix=None, interwiki_snapshot=None, auxilia
     if interwiki_snapshot is not None:
         state['interwiki_map_sha256']=sha256_file(interwiki_snapshot)
     if auxiliary_snapshots:
-        state['auxiliary_snapshot_sha256']=verified_auxiliary_hashes(auxiliary_snapshots,items[0]['wiki'],items[0]['date'])
-        manifests,artifacts=auxiliary_capture_identities(auxiliary_snapshots,items[0]['wiki'],items[0]['date'])
+        hashes,captures=_validated_auxiliary_state(auxiliary_snapshots,items[0]['wiki'],items[0]['date'])
+        state['auxiliary_snapshot_sha256']=hashes
+        manifests,artifacts=_project_auxiliary_capture_identities(captures)
         if manifests:
             state['auxiliary_capture_sha256']=manifests
             state['auxiliary_capture_artifact_sha256']=artifacts
@@ -2548,9 +2584,9 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
             validate_interwiki_provenance(interwiki_snapshot,edition,interwiki_sha)
         else:
             interwiki_sha=None
-        auxiliary_hashes=verified_auxiliary_hashes(auxiliary_snapshots,edition,date)
         reviewed = nonlexical.load_review(reviewed_nonlexical_review,items,namespace)
-        build_identity=build_input_identity(items,zig,auxiliary_hashes,interwiki_sha,expansion_timeout_ms,auxiliary_snapshots,downloads,reviewed)
+        build_identity=build_input_identity(items,zig,None,interwiki_sha,expansion_timeout_ms,auxiliary_snapshots,downloads,reviewed,validate_auxiliary=True)
+        auxiliary_hashes=build_identity['auxiliary_snapshot_sha256']
     target = output / edition / date
     if (target / 'complete.json').exists():
         try:
