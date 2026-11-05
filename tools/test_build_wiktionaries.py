@@ -21,6 +21,205 @@ import build_wiktionaries as b
 import build_resource_limits as limits
 
 
+class ShardSourceIdentityTests(unittest.TestCase):
+    def fixture(self, root):
+        sources={
+            'build.zig':b'build graph', 'build.zig.zon':b'package dependencies',
+            'src/producer.zig':b'ordinary producer', 'src/lua/runtime/abi.h':b'ABI layout',
+            'tools/extraction_cache.py':b'production cache helper',
+            'tools/corpus_controller.py':b'controller timing',
+            'tools/test_corpus_controller.py':b'controller timing tests',
+            'tools/nested/corpus_controller.py':b'unreviewed same basename remains included',
+            'tools/test_other.py':b'unreviewed test dependency remains included',
+        }
+        for name,data in sources.items():
+            path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(data)
+        registry=root/'languages.tsv';registry.write_bytes(b'en\tEnglish\n')
+        items=[dict(wiki='testwiktionary',date='20261001',name='dump.bz2',size=1,sha1='a'*40)]
+        return sources,registry,items
+
+    def seed(self, workspace, state):
+        self.assertEqual(b.prepare_shard_workspace(workspace,state,123),123)
+        retained={
+            'input/verified-dump':b'unchanged staged input',
+            'expander/compiled':b'compiled producer',
+            'shards/00000000/blob':b'completed shard',
+            'shards/00000000/.verified':b'verified\n',
+        }
+        for name,data in retained.items():
+            path=workspace/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(data)
+        return retained
+
+    def test_controller_only_edits_reuse_state_and_preserve_original_audit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);sources,registry,items=self.fixture(root)
+            with patch.object(b,'PROJECT',root):
+                initial=b.shard_state(items,registry);workspace=root/'work'
+                retained=self.seed(workspace,initial)
+                marker=(workspace/'state.json').read_bytes();inode=(workspace/'state.json').stat().st_ino
+                for name in ('tools/corpus_controller.py','tools/test_corpus_controller.py'):
+                    with self.subTest(name=name):
+                        (root/name).write_bytes(sources[name]+b' changed reporting')
+                        current=b.shard_state(items,registry)
+                        self.assertNotEqual(initial['source'],current['source'])
+                        self.assertEqual(initial['production_source'],current['production_source'])
+                        with patch.object(b.time,'time',return_value=456):
+                            self.assertEqual(b.prepare_shard_workspace(workspace,current),123)
+                        self.assertEqual((workspace/'state.json').read_bytes(),marker)
+                        self.assertEqual((workspace/'state.json').stat().st_ino,inode)
+                        for relative,data in retained.items():self.assertEqual((workspace/relative).read_bytes(),data)
+
+    def test_normal_failed_merge_resume_reuses_expander_and_shards_after_controller_edit(self):
+        # Exercise the ordinary Python producer/verification/publication route.
+        # Only native child execution is replaced, as in the existing merge
+        # recovery fixture; this test earns no native dictionary acceptance.
+        for compressed in (False,True):
+            with self.subTest(compressed=compressed),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);self.fixture(root)
+                folder=root/'testwiktionary/20260901';write_namespace_fixture(folder)
+                name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+                data=bz2.compress(b'<mediawiki><page>word</page><page>second</page></mediawiki>')
+                (folder/name).write_bytes(data)
+                item=dict(wiki='testwiktionary',date='20260901',name=name,
+                    url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,
+                    size=len(data),sha1=hashlib.sha1(data).hexdigest())
+                tool=root/'zig';tool.write_bytes(b'unchanged compiler executable')
+                workspace=root/'output/testwiktionary/20260901.shards'
+                calls=[];merges=[];retained={}
+                def run(command):
+                    calls.append(list(command))
+                    if 'build-dictionary' in command:
+                        dest=Path(command[command.index('--')+2]);exp=dest/'.bundle-expander';exp.mkdir(parents=True)
+                        (dest/'.incomplete').write_text('expander ready')
+                        (exp/'page-index.tsv').write_text('0\n1\n')
+                        (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
+                    elif 'build-blobs' in command:
+                        dest=Path(command[command.index('--')+2]);dest.mkdir(parents=True,exist_ok=True)
+                        write_coverage(dest,command)
+                    elif 'merge-blobs' in command:
+                        merges.append(list(command))
+                        if len(merges)==1:raise subprocess.CalledProcessError(1,command)
+                        for relative,(contents,inode) in retained.items():
+                            path=workspace/relative
+                            self.assertEqual(path.read_bytes(),contents)
+                            self.assertEqual(path.stat().st_ino,inode)
+                        args=command[command.index('--')+1:]
+                        if args[0]=='--compress-output':args=args[1:]
+                        dest=Path(args[0]);dest.mkdir()
+                        write_namespace_coverage(dest,sum(json.loads((Path(p)/'page-coverage.json').read_text())['pages_seen'] for p in args[1:]))
+                with patch.object(b,'PROJECT',root),patch.object(b,'SHARD_PAGES',1), \
+                     patch.object(b.shutil,'which',return_value=str(tool)), \
+                     patch.object(b.time,'time',return_value=123),patch.object(b,'run_checked',side_effect=run):
+                    audit_before=b.source_fingerprint()
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        b.build([item],root,root/'output','zig',1,compress_shards=compressed)
+                    state=json.loads((workspace/'state.json').read_text())
+                    self.assertEqual(state['source'],audit_before)
+                    for relative in ('state.json','input/.complete.json','expander/.incomplete',
+                                     'expander/.bundle-expander/page-index.tsv','expander/.bundle-expander/dict-bundle-expander',
+                                     'shards/00000000/page-coverage.json','shards/00000000/.verified',
+                                     'shards/00000001/page-coverage.json','shards/00000001/.verified'):
+                        path=workspace/relative;retained[relative]=(path.read_bytes(),path.stat().st_ino)
+                    first_builds=[c for c in calls if 'build-dictionary' in c or 'build-blobs' in c]
+                    boundary=len(calls)
+                    (root/'tools/corpus_controller.py').write_bytes(b'changed reporting only')
+                    audit_after=b.source_fingerprint();self.assertNotEqual(audit_before,audit_after)
+                    b.build([item],root,root/'output','zig',1,compress_shards=compressed)
+                    self.assertEqual([c for c in calls if 'build-dictionary' in c or 'build-blobs' in c],first_builds)
+                    verified={Path(c[c.index('--')+1]) for c in calls[boundary:] if 'verify-blobs' in c}
+                    self.assertTrue({workspace/'shards/00000000',workspace/'shards/00000001'}<=verified)
+                    self.assertEqual(len(merges),2)
+                    self.assertFalse(workspace.exists())
+                    complete=json.loads((root/'output/testwiktionary/20260901/complete.json').read_text())
+                    self.assertEqual(complete['input_pages'],2)
+                    self.assertEqual(complete['build_inputs']['source'],audit_after)
+                    self.assertEqual(complete['build_inputs']['zig_sha256'],hashlib.sha256(tool.read_bytes()).hexdigest())
+
+    def test_producer_abi_other_tests_and_input_changes_invalidate_native_state(self):
+        changes=('src/producer.zig','src/lua/runtime/abi.h','tools/extraction_cache.py',
+                 'tools/test_other.py','tools/nested/corpus_controller.py','registry','dump')
+        for changed in changes:
+            with self.subTest(changed=changed),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);sources,registry,items=self.fixture(root)
+                with patch.object(b,'PROJECT',root):
+                    initial=b.shard_state(items,registry);workspace=root/'work'
+                    retained=self.seed(workspace,initial)
+                    if changed=='registry':registry.write_bytes(b'fr\tFrench\n')
+                    elif changed=='dump':items=[dict(items[0],sha1='b'*40)]
+                    else:(root/changed).write_bytes(sources[changed]+b' changed production')
+                    current=b.shard_state(items,registry)
+                    if changed in sources:self.assertNotEqual(initial['production_source'],current['production_source'])
+                    else:self.assertEqual(initial['production_source'],current['production_source'])
+                    with patch.object(b.time,'time',return_value=456):
+                        self.assertEqual(b.prepare_shard_workspace(workspace,current),456)
+                    self.assertFalse((workspace/'expander').exists())
+                    self.assertFalse((workspace/'shards').exists())
+                    self.assertEqual((workspace/'input/verified-dump').read_bytes(),retained['input/verified-dump'])
+
+    def test_full_audit_framing_and_publication_guard_still_include_controller(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);sources,registry,items=self.fixture(root)
+            legacy=hashlib.sha256()
+            for name,data in sorted(sources.items()):legacy.update(name.encode()+b'\0'+data+b'\0')
+            tool=root/'zig';tool.write_bytes(b'compiler executable')
+            staging=root/'staging';staging.mkdir();target=root/'published'
+            with patch.object(b,'PROJECT',root),patch.object(b.shutil,'which',return_value=str(tool)):
+                self.assertEqual(b.source_fingerprint(),legacy.hexdigest())
+                before=b.shard_state(items,registry)
+                identity=b.build_input_identity(items,'zig',{},None,100)
+                b.persist_build_identity(staging,identity)
+                original=(staging/b.BUILD_IDENTITY_NAME).read_bytes()
+                (staging/b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
+                (root/'tools/corpus_controller.py').write_bytes(b'changed controller reporting')
+                after=b.shard_state(items,registry)
+                self.assertEqual(before['production_source'],after['production_source'])
+                self.assertNotEqual(identity['source'],b.source_fingerprint())
+                with self.assertRaisesRegex(ValueError,'Compiler source changed'):
+                    b.persist_build_identity(staging,identity)
+                with self.assertRaisesRegex(ValueError,'Compiler source changed'):
+                    b._publish_verified_staging(staging,target,'testwiktionary','20261001',build_identity=identity)
+                self.assertEqual((staging/b.BUILD_IDENTITY_NAME).read_bytes(),original)
+                self.assertFalse(target.exists())
+
+    def test_historical_state_is_not_upgraded_or_given_production_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);_,registry,items=self.fixture(root)
+            with patch.object(b,'PROJECT',root):
+                current=b.shard_state(items,registry)
+                legacy={k:v for k,v in current.items() if k!='production_source'};legacy['version']=2
+                workspace=root/'work';retained=self.seed(workspace,legacy)
+                marker=(workspace/'state.json').read_bytes()
+                self.assertEqual(b.prepare_shard_workspace(workspace,legacy),123)
+                with self.assertRaisesRegex(ValueError,'Legacy shard source identity'):
+                    b.prepare_shard_workspace(workspace,current)
+                self.assertEqual((workspace/'state.json').read_bytes(),marker)
+                for relative,data in retained.items():self.assertEqual((workspace/relative).read_bytes(),data)
+
+    def test_legacy_comparison_never_ignores_changed_audit_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace=Path(tmp)/'work';legacy=dict(version=2,source='old-audit',production_source='a'*64)
+            self.seed(workspace,legacy)
+            with patch.object(b.time,'time',return_value=456):
+                self.assertEqual(b.prepare_shard_workspace(workspace,dict(legacy,source='changed-audit')),456)
+            self.assertFalse((workspace/'expander').exists())
+            self.assertFalse((workspace/'shards').exists())
+
+    def test_incomplete_new_identity_is_rejected_without_mutating_workspace(self):
+        for field in ('source','production_source'):
+            for value in (None,'','g'*64,'a'*63,'missing'):
+                with self.subTest(field=field,value=value),tempfile.TemporaryDirectory() as tmp:
+                    root=Path(tmp);_,registry,items=self.fixture(root)
+                    with patch.object(b,'PROJECT',root):
+                        state=b.shard_state(items,registry);workspace=root/'work';self.seed(workspace,state)
+                        malformed=dict(state,now_unix=123);malformed[field]=value
+                        if value=='missing':del malformed[field]
+                        marker=json.dumps(malformed,sort_keys=True).encode();(workspace/'state.json').write_bytes(marker)
+                        with self.assertRaisesRegex(ValueError,'Invalid shard source identity'):
+                            b.prepare_shard_workspace(workspace,state)
+                        self.assertEqual((workspace/'state.json').read_bytes(),marker)
+                        self.assertEqual((workspace/'shards/00000000/blob').read_bytes(),b'completed shard')
+
+
 class PresentationRetryPolicyTests(unittest.TestCase):
     def exercise(self, mode):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2011,7 +2210,7 @@ class BuildTest(unittest.TestCase):
             items=[dict(wiki='testwiktionary',date='20260901',name=name,
                         size=len(data),sha1=hashlib.sha1(data).hexdigest())]
             workspace=root/'output/20260901.shards'
-            initial=dict(version=b.SHARD_STATE_VERSION,source='compiler-a',registry_sha256='registry-a')
+            initial=dict(version=b.SHARD_STATE_VERSION,source='a'*64,production_source='a'*64,registry_sha256='registry-a')
             with patch.object(b.time,'time',return_value=111):
                 self.assertEqual(b.prepare_shard_workspace(workspace,initial),111)
             with patch.object(b,'stage_seekable_dump',wraps=b.stage_seekable_dump) as stage:
@@ -2021,7 +2220,7 @@ class BuildTest(unittest.TestCase):
                 (workspace/'expander').mkdir()
                 (workspace/'shards').mkdir()
                 (workspace/'shards/old').write_text('stale')
-                changed=dict(initial,source='compiler-b',registry_sha256='registry-b')
+                changed=dict(initial,source='b'*64,production_source='b'*64,registry_sha256='registry-b')
                 with patch.object(b.time,'time',return_value=222):
                     self.assertEqual(b.prepare_shard_workspace(workspace,changed),222)
                 self.assertFalse((workspace/'expander').exists())
@@ -2088,7 +2287,7 @@ class BuildTest(unittest.TestCase):
             items=[dict(wiki='testwiktionary',date='20260901',name=name,
                         size=len(data),sha1=hashlib.sha1(data).hexdigest())]
             workspace=root/'output/20260901.shards'
-            expected=dict(version=b.SHARD_STATE_VERSION,source='source-a',files=[name])
+            expected=dict(version=b.SHARD_STATE_VERSION,source='a'*64,production_source='a'*64,files=[name])
             b.prepare_shard_workspace(workspace,expected)
             real_stage=b.stage_seekable_dump
             with patch.object(b,'stage_seekable_dump',wraps=real_stage) as stage:
@@ -2121,7 +2320,7 @@ class BuildTest(unittest.TestCase):
                 marker.write_text(json.dumps(old_record)+'\n')
                 b.cached_shard_dump(items,root,workspace)
                 self.assertEqual(stage.call_count,6)
-                changed=dict(expected,source='source-b')
+                changed=dict(expected,source='b'*64,production_source='b'*64)
                 b.prepare_shard_workspace(workspace,changed)
                 self.assertTrue((workspace/'input').is_dir())
                 b.cached_shard_dump(items,root,workspace)
@@ -2142,7 +2341,7 @@ class BuildTest(unittest.TestCase):
             items=[dict(wiki='testwiktionary',date='20260901',name=name,
                         size=len(data),sha1=hashlib.sha1(data).hexdigest())]
             workspace=root/'output/20260901.shards'
-            expected={'version':b.SHARD_STATE_VERSION,'source':'source-a'}
+            expected={'version':b.SHARD_STATE_VERSION,'source':'a'*64,'production_source':'a'*64}
             b.prepare_shard_workspace(workspace,expected)
             def fail_stage(_items,_downloads,cache,_metadata):
                 (cache/'pages.xml.zst').write_bytes(b'partial')

@@ -32,7 +32,7 @@ import reviewed_nonlexical as nonlexical
 PROJECT = Path(__file__).resolve().parent.parent
 SHARD_PAGES = 100_000
 SHARD_RETRIES = 3
-SHARD_STATE_VERSION = 2
+SHARD_STATE_VERSION = 3
 AUXILIARY_SNAPSHOT_NAMES = (
     'site-info', 'site-statistics-format', 'category-statistics-format', 'commons-data', 'category-stats', 'interface-messages', 'category-tree',
     'wikibase-sitelinks', 'wikibase-entity-text', 'wikibase-entities',
@@ -863,9 +863,15 @@ def auxiliary_snapshot_args(snapshots):
             for piece in ('--'+name+'-snapshot',str(path))]
 
 
-def source_fingerprint():
-    """Hash build-relevant source so resumed shards never cross code revisions."""
+# These two files schedule/report the ordinary builder; neither is imported or
+# executed by its production dependency graph. Keep every other source file,
+# including tests, in the conservative production cache identity.
+SHARD_SOURCE_EXCLUSIONS = frozenset(('tools/corpus_controller.py', 'tools/test_corpus_controller.py'))
+
+
+def _source_fingerprints(include_production=False):
     checksum=hashlib.sha256()
+    production=hashlib.sha256(b'wikidict.shard-production-source.v1\0') if include_production else None
     files=[]
     for name in ('build.zig','build.zig.zon'):
         path=PROJECT/name
@@ -875,12 +881,23 @@ def source_fingerprint():
         if not root.is_dir(): continue
         files.extend(path for path in root.rglob('*') if path.is_file() and path.suffix in ('.zig','.py','.c','.h','.zon'))
     for path in sorted(files,key=lambda x:x.relative_to(PROJECT).as_posix()):
-        checksum.update(path.relative_to(PROJECT).as_posix().encode())
-        checksum.update(b'\0')
+        name=path.relative_to(PROJECT).as_posix()
+        prefix=name.encode()+b'\0'
+        checksum.update(prefix)
+        included=production is not None and name not in SHARD_SOURCE_EXCLUSIONS
+        if included:production.update(prefix)
         with path.open('rb') as source:
-            while chunk:=source.read(1024*1024): checksum.update(chunk)
+            while chunk:=source.read(1024*1024):
+                checksum.update(chunk)
+                if included:production.update(chunk)
         checksum.update(b'\0')
-    return checksum.hexdigest()
+        if included:production.update(b'\0')
+    return checksum.hexdigest(),production.hexdigest() if production is not None else None
+
+
+def source_fingerprint():
+    """Full audit identity: unchanged path/content framing and source inventory."""
+    return _source_fingerprints()[0]
 
 
 def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_timeout_ms, auxiliary_snapshots=None, downloads=None, reviewed_nonlexical=None):
@@ -1327,13 +1344,15 @@ def cleanup_dead_private_shards(shards_root):
 
 
 def shard_state(items, registry, now_unix=None, interwiki_snapshot=None, auxiliary_snapshots=None, reviewed_nonlexical=None):
+    source,production_source=_source_fingerprints(include_production=True)
     state={
         'version':SHARD_STATE_VERSION,
         'edition':items[0]['wiki'],
         'date':items[0]['date'],
         'files':[[item['name'],item['size'],item['sha1']] for item in sorted(items,key=lambda x:x['name'])],
         'registry_sha256':sha256_file(registry),
-        'source':source_fingerprint(),
+        'source':source,
+        'production_source':production_source,
         'shard_pages':SHARD_PAGES,
     }
     if now_unix is not None: state['now_unix']=now_unix
@@ -1416,6 +1435,18 @@ def cleanup_shard_workspace(workspace):
     remove_artifact_tree(workspace)
 
 
+def shard_cache_identity(state):
+    """Compare v3 production inputs while retaining its original audit source."""
+    comparable={k:v for k,v in state.items() if k!='now_unix'}
+    if state.get('version')==SHARD_STATE_VERSION:
+        for name in ('source','production_source'):
+            value=state.get(name)
+            if not isinstance(value,str) or re.fullmatch(r'[0-9a-f]{64}',value) is None:
+                raise ValueError('Invalid shard source identity: '+name)
+        comparable.pop('source')
+    return comparable
+
+
 def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=None):
     expected=dict(expected)
     if 'raw_shards_path' in expected: raise ValueError('Raw shard path must be supplied explicitly')
@@ -1426,19 +1457,22 @@ def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=
     if now_unix is None: now_unix=embedded
     elif embedded is not None and embedded!=now_unix: raise ValueError('Conflicting build timestamps')
     validate_now_unix(now_unix)
+    expected_comparable=shard_cache_identity(expected)
     if workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
     state_path=workspace/'state.json'
     if state_path.is_symlink(): raise ValueError(f'Unsafe shard state: {state_path}')
     if state_path.is_file():
         try: existing=json.loads(state_path.read_text())
         except (OSError,json.JSONDecodeError): existing=None
-        comparable={k:v for k,v in existing.items() if k!='now_unix'} if isinstance(existing,dict) else None
+        if isinstance(existing,dict) and existing.get('version')==2 and expected.get('version')==SHARD_STATE_VERSION:
+            raise ValueError('Legacy shard source identity requires a new workspace; existing output preserved')
+        comparable=shard_cache_identity(existing) if isinstance(existing,dict) else None
         if isinstance(existing,dict) and existing.get('raw_shards_path')!=selected:
             previous=existing.get('raw_shards_path')
-            unchanged={k:v for k,v in comparable.items() if k!='raw_shards_path'}=={k:v for k,v in expected.items() if k!='raw_shards_path'}
+            unchanged={k:v for k,v in comparable.items() if k!='raw_shards_path'}=={k:v for k,v in expected_comparable.items() if k!='raw_shards_path'}
             if previous is not None or unchanged:
                 raise ValueError('Raw shard location differs from resumable workspace; preserve it or choose a new workspace')
-        if comparable==expected and type(existing.get('now_unix')) is int and 0<existing['now_unix']<=(1<<63)-1 and (now_unix is None or existing['now_unix']==now_unix):
+        if comparable==expected_comparable and type(existing.get('now_unix')) is int and 0<existing['now_unix']<=(1<<63)-1 and (now_unix is None or existing['now_unix']==now_unix):
             if selected is not None: external_raw_shards(workspace,selected,create=True)
             return existing['now_unix']
     if workspace.exists():
