@@ -8570,3 +8570,57 @@ test "invoke cleanup preserves the captured Orto byte API defect as valid render
     try std.testing.expect(std.mem.indexOf(u8, text, "[[antiquité#") == null);
     try std.testing.expectEqualStrings("é", try expander.expandFragment("NFC boundary control", "{{#invoke:Ortografeyes|nfd}}", 1_670_803_200));
 }
+
+
+test "time parser keeps source citation comparison numeric and relative dates clock bound" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 24);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
+    const source = "{{#time:YmdHis|- 30 days}}|{{#ifexpr:{{#time:YmdHis|- 30 days}}<=20150910192507|fabd23|c00}}|{{#time:j. n. Y H:i:s|20150910192507 +2 hours}}";
+    try std.testing.expectEqualStrings("20260911151240|c00|10. 9. 2015 21:25:07", try expander.expandFragment("biola", source, 1_791_731_560));
+    const young = "{{#ifexpr:{{#time:YmdHis|- 30 days}}<=20261010192507|fabd23|c00}}";
+    try std.testing.expectEqualStrings("fabd23", try expander.expandFragment("biola", young, 1_791_731_560));
+    try std.testing.expectEqualStrings("ERR|ERR", try expander.expandFragment("biola", "{{#iferror:{{#time:Y|bad +2 hours}}|ERR|BAD}}|{{#iferror:{{#expr:1+}}|ERR|BAD}}", 1_791_731_560));
+    const args = try runtime.newTable();
+    try args.rawSet(arena.allocator(), .{ .number = 1 }, .{ .string = "Y-m-d H:i:s" });
+    try args.rawSet(arena.allocator(), .{ .number = 2 }, .{ .string = "20150910192507 +1 hours" });
+    try std.testing.expectEqualStrings("2015-09-10 20:25:07", try Expander.hostFrameParserFunction(&expander, arena.allocator(), "#time", args));
+}
+
+test "retained Slovak citation attribute slice expands without fabricated error markup" {
+    // Exact first sup slice of captured template p12661/r121670. The offset
+    // provider selects each possible DateTime.getUtcOffset result; this test
+    // does not claim to execute that Lua module or re-expand the whole page.
+    const Source = struct {
+        offset: []const u8,
+        const citation = "&lrm;<sup dir=\"ltr\" class=\"Šablóna__Doplňte_zdroj\" style=\"border: 2px solid #{{#ifexpr:{{#time:YmdHis|- 30 days}}<={{{1<noinclude>|{{#time:YmdHis}}</noinclude>}}}|fabd23|c00}};\"><span title=\"Je potrebné doložiť zdroj predchádzajúceho tvrdenia alebo citácie. Označené {{#time:j. n. Y H:i:s|{{{1|}}} +{{CURRENTUTCOFFSET}} hours}} SE(L)Č.\">zdroj?</span></sup>";
+        fn get(raw: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            if (std.mem.eql(u8, title, "Template:CitationShape")) return citation;
+            if (std.mem.eql(u8, title, "Template:CURRENTUTCOFFSET")) return self.offset;
+            return null;
+        }
+        fn exists(_: ?*anyopaque, title: []const u8) !bool {
+            return std.mem.eql(u8, title, "Template:CitationShape") or std.mem.eql(u8, title, "Template:CURRENTUTCOFFSET");
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 24);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var source: Source = .{ .offset = "2" };
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = &source, .get = Source.get, .exists = Source.exists } };
+    const expected_two = "&lrm;<sup dir=\"ltr\" class=\"Šablóna__Doplňte_zdroj\" style=\"border: 2px solid #c00;\"><span title=\"Je potrebné doložiť zdroj predchádzajúceho tvrdenia alebo citácie. Označené 10. 9. 2015 21:25:07 SE(L)Č.\">zdroj?</span></sup>";
+    try std.testing.expectEqualStrings(expected_two, try expander.expandFragment("biola", "{{CitationShape|20150910192507}}", 1_791_731_560));
+    source.offset = "1";
+    const expected_one = "&lrm;<sup dir=\"ltr\" class=\"Šablóna__Doplňte_zdroj\" style=\"border: 2px solid #c00;\"><span title=\"Je potrebné doložiť zdroj predchádzajúceho tvrdenia alebo citácie. Označené 10. 9. 2015 20:25:07 SE(L)Č.\">zdroj?</span></sup>";
+    try std.testing.expectEqualStrings(expected_one, try expander.expandFragment("biola", "{{CitationShape|20150910192507}}", 1_791_731_560));
+}

@@ -1,0 +1,133 @@
+'''tako'''
+[[Категорија:Српски индекс]]__NOEDITSECTION__
+<templatestyles src="Модул:minitoc/styles.css"></templatestyles><div class="NavFrame" data-toggle-category="table of contents" style="max-width:40em;margin:0.5em 0" data-minitoc-length="3"><div class="NavHead" style="background:#eee;padding: 0.25em 0.5em">Језици (3)</div><div class="NavContent" style="text-align:center;padding:0.5em"><span style="white-space:nowrap;">[[#tako ([[Викиречник:Српски|српски]], [[Викиречник:Ћирилица|ћир.]] [[тако]])|tako ([[Викиречник:Српски|српски]], [[Викиречник:Ћирилица|ћир.]] [[тако]])]]</span> • <span style="white-space:nowrap;">[[#Референце|Референце]]</span> • <span style="white-space:nowrap;">[[#Напомене|Напомене]]</span><hr>[[#catlinks|Страна категорија]]</div></div><div data-toc-length="3">__TOC__</div>
+==<div id="toc" class="toccolours" ><big><big>[[File:Flag_of_Serbia.svg|border|32px]] Српски</big></big></div>==
+
+== tako ([[Викиречник:Српски|српски]], [[Викиречник:Ћирилица|ћир.]] [[тако]]) ==
+
+=== Прилог ===
+=== Прилог ===
+'''tako''', ''[[Викиречник:Прилог|прил.]]''[[Категорија:Српски прилози]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Раздвајање речи на слогове">'''Слогови:''' ta-ko</p>
+
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+# на такав начин<ref name="П. Ћосић и сарадници, Речник синонима"><span class="citation-whole"><span class="cited-source"><span class="Cyrl" lang="und">[[:w&#x3A;Павле Ћосић|Ћосић Павле]]</span> (<span class="None" lang="und">2008</span>) chapter IX, in <cite><span class="Cyrl" lang="und">[[:w&#x3A;Речник Синонима|Речник Синонима]]</span></cite> (in Српски), <span class="Cyrl" lang="und">Београд, Србија</span>&#58; <span class="Cyrl" lang="und">[[:w&#x3A;Корнет|Корнет]]</span>, <small>[[Special:BookSources/978-86-86673-09-1|→ISBN]]</small>, page <span class="None" lang="und">714</span>&#59; republished <span class="Cyrl" lang="und">Нови Сад,</span>&#58; <span class="Cyrl" lang="und">Прометеј</span>, <span class="None" lang="und">2018</span>, <small>[[Special:BookSources/978-86-515-1346-9|→ISBN]]</small>, [https://slavovs.files.wordpress.com/2015/07/pavle-c487osic487-rec48dnik-sinonima-2008.pdf page <span class="None" lang="und">1356</span>]</span></span>
+<strong class="error"><span class="scribunto-error">Lua error in Модул:quote: Please specify a language or etymology language code in the parameter "1"; the value "&lt;!--
+--&gt;" is not valid (see [[Wiktionary:List of languages]]).</span></strong> <span class="plainlinks">[https://plus.cobiss.net/cobiss/sr/sr/bib/15558153 (<small>COBISS</small>)]</span></ref>
+[[Категорија:sr:Речник синонима]]
+# <p>''([[значење]] [[изведено]] [[преко]] [[синонима]])''  [[vidljivo]], [[grdno]], [[znatno]], [[osetno]], [[dobrano]], [[značajno]], [[dozlaboga]], ''[[Викиречник:Архаичне речи|арх.]]''  [[dobesa]] [[арх.]], [[natprosečno]], [[jako]], [[izuzetno]], [[veoma]], [[prilično]], ''[[Викиречник:Фигуративне речи|фиг.]]''  [[dobro]] [[фиг.]], [[temeljito]], ''[[Викиречник:Фамилијарне речи|фам.]]''  [[gadno]] [[фам.]], [[vrlo]], [[tako]], [[puno]], [[izraženo]], [[vesma]] [[арх.]], [[propisno]] [[фам.]], [[naročito]], [[u velikoj meri]], [[itekoliko]], [[podosta]], [[itekako]], [[silno]], [[posebno]], [[osobito]], [[debelo]] [[фиг.]], [[vraški]], [[iznimno]], [[toli]] [[арх.]], [[primetno]], [[toliko]], [[dosta]], [[ljuto]] [[фиг.]] <ref name="П. Ћосић и сарадници, Речник синонима"><span class="citation-whole"><span class="cited-source"><span class="Cyrl" lang="und">[[:w&#x3A;Павле Ћосић|Ћосић Павле]]</span> (<span class="None" lang="und">2008</span>) chapter IX, in <cite><span class="Cyrl" lang="und">[[:w&#x3A;Речник Синонима|Речник Синонима]]</span></cite> (in Српски), <span class="Cyrl" lang="und">Београд, Србија</span>&#58; <span class="Cyrl" lang="und">[[:w&#x3A;Корнет|Корнет]]</span>, <small>[[Special:BookSources/978-86-86673-09-1|→ISBN]]</small>, page <span class="None" lang="und">714</span>&#59; republished <span class="Cyrl" lang="und">Нови Сад,</span>&#58; <span class="Cyrl" lang="und">Прометеј</span>, <span class="None" lang="und">2018</span>, <small>[[Special:BookSources/978-86-515-1346-9|→ISBN]]</small>, [https://slavovs.files.wordpress.com/2015/07/pavle-c487osic487-rec48dnik-sinonima-2008.pdf page <span class="None" lang="und">1356</span>]</span></span>
+<strong class="error"><span class="scribunto-error">Lua error in Модул:quote: Please specify a language or etymology language code in the parameter "1"; the value "&lt;!--
+--&gt;" is not valid (see [[Wiktionary:List of languages]]).</span></strong> <span class="plainlinks">[https://plus.cobiss.net/cobiss/sr/sr/bib/15558153 (<small>COBISS</small>)]</span></ref>
+[[Категорија:sr:Речник синонима]]<ref name="н" group="н">Ово значење је изведено преко [[синонима]]. Молимо вас да замените овај шаблон одговарајућим описом значења.</ref></p>
+</p>
+
+<div class="toccolours mw-collapsible mw-collapsed">
+<p style="margin-bottom: -0.5em; cursor: help;" title="Речи које се у одређеном контексту равноправно користе или могу користити.">'''Синоними:''' 
+# [[ovako]]  <ref name="П. Ћосић и сарадници, Речник синонима" />
+# [[vidljivo]], [[grdno]], [[znatno]], [[osetno]], [[dobrano]], [[značajno]], [[dozlaboga]], ''[[Викиречник:Архаичне речи|арх.]]''  [[dobesa]] [[арх.]], [[natprosečno]], [[jako]], [[izuzetno]], [[veoma]], [[prilično]], ''[[Викиречник:Фигуративне речи|фиг.]]''  [[dobro]] [[фиг.]], [[temeljito]], ''[[Викиречник:Фамилијарне речи|фам.]]''  [[gadno]] [[фам.]], [[vrlo]], [[tako]], [[puno]], [[izraženo]], [[vesma]] [[арх.]], [[propisno]] [[фам.]], [[naročito]], [[u velikoj meri]], [[itekoliko]], [[podosta]], [[itekako]], [[silno]], [[posebno]], [[osobito]], [[debelo]] [[фиг.]], [[vraški]], [[iznimno]], [[toli]] [[арх.]], [[primetno]], [[toliko]], [[dosta]], [[ljuto]] [[фиг.]]  <ref name="П. Ћосић и сарадници, Речник синонима" /></p>
+<div class="mw-collapsible-content">
+
+
+</div>
+</div>
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Примери свакодневне употребе"></p>'''Примери:''' 
+<blockquote class="templatequote" style="margin-top: 0; margin-bottom: -0.5em;" >[[Датотека:Wikiquote-logo.svg|20п|Викицитати]] „''{Prva knjiga Mojsijeva}
+{koja se zove Postanje}
+{Glava 1}
+[[Категорија:sr:1 Moj. 1]]
+[[Категорија:sr:Prva knjiga Mojsijeva]]''”<div class="templatequotecite">—
+:7. [[I]] [[stvori]] [[Bog]] [[svod]], [[i]] [[rastavi]] [[vodu]] [[pod]] [[svodom]] [[od]] [[vode]] [[nad]] [[svodom]]; [[i]] [[bi]] [[tako]][[:Шаблон:ПОСТАЊЕ]].
+<p style="text-align:right">[[11|Псал. 148:4]]</p>
+{[[|6]] [[{{{4}}}|8]]}
+[[Категорија:sr:Prva knjiga Mojsijeva]]</div>
+</blockquote>
+
+<div class="toccolours mw-collapsible mw-collapsed">
+<p style="margin-bottom: -0.5em; cursor: help;" title="1189">'''Библијске све речи:''' tako</p>
+<div class="mw-collapsible-content">
+:34{<small>661 660 659 658 657 656 655 654 653 652 651 650 649 648 647 646 645 644 643 642 641 640 639 638 637 636 635 634 633 632 631 630 629 628</small>}
+:33{<small> 662 754 753 752 751 750 749 748 747 746 745 744 743 742 741 740 739 738 737 736 735 734 733 732 731 730 729 728 727 726 725 724 627</small>}
+:32{<small>663 755 838 837 836 835 834 833 832 831 830 829 828 827 826 825 824 823 822 821 820 819 818 817 816 815 814 813 812 811 723 626</small>}
+:31{<small>664 756 839 913 912 911 910 909 908 907 906 905 904 903 902 901 900 899 898 897 896 895 894 893 892 891 890 889 810 722 625</small>}
+:30{ <small>665 757 840 914 979 978 977 976 975 974 973 972 971 970 969 968 967 966 965 964 963 962 961 960 959 958 888 809 721 624</small> }
+:29{ <small>666 758 841 915 980 1036 1035 1034 1033 1032 1031 1030 1029 1028 1027 1026 1025 1024 1023 1022 1021 1020 1019 1018 957 887 808 720 623</small> }
+:28{ <small>667 759 842 916 981 1037 1084 1083 1082 1081 1080 1079 1078 1077 1076 1075 1074 1073 1072 1071 1070 1069 1017 956 886 807 719 622</small> }
+:27{ <small>668 760 843 917 982 1038 1085 1123 1122 1121 1120 1119 1118 1117 1116 1115 1114 1113 1112 1111 1068 1016 955 885 806 718 621</small> }
+:26{ <small>669 761 844 918 983 1039 1086 1124 1153 1152 1151 1150 1149 1148 1147 1146 1145 1144 1110 1067 1015 954 884 805 717 620</small> }
+:25{ <small>670 762 845 919 984 1040 1087 1125 1154 1174 1173 1172 1171 1170 1169 1168 1143 1109 1066 1014 953 883 804 716 619</small> }
+:24{ <small>671 763 846 920 985 1041 1088 1126 1155 1175 1186 1185 1184 1183 1167 1142 1108 1065 1013 952 882 803 715 618</small> }
+:23{ <small>672 764 847 921 986 1042 1089 1127 1156 1176 1187 1189 1182 1166 1141 1107 1064 1012 951 881 802 714 617</small> }
+:22{ <small>673 765 848 922 987 1043 1090 1128 1157 1177 1188 1181 1165 1140 1106 1063 1011 950 880 801 713 616</small> }
+:21{ <small>674 766 849 923 988 1044 1091 1129 1158 1178 1180 1164 1139 1105 1062 1010 949 879 800 712 615</small> }
+:20{ <small>675 767 850 924 989 1045 1092 1130 1159 1179 1163 1138 1104 1061 1009 948 878 799 711 614</small> }
+:19{ 676 768 851 925 990 1046 1093 1131 1160 1162 1137 1103 1060 1008 947 877 798 710 613 }
+:18{ 677 769 852 926 991 1047 1094 1132 1161 1136 1102 1059 1007 946 876 797 709 612 }
+:17{ 678 770 853 927 992 1048 1095 1133 1135 1101 1058 1006 945 875 796 708 611 }
+:16{ 679 771 854 928 993 1049 1096 1134 1100 1057 1005 944 874 795 707 610 }
+:15{ 680 772 855 929 994 1050 1097 1099 1056 1004 943 873 794 706 609 }
+:14{ 681 773 856 930 995 1051 1098 1055 1003 942 872 793 705 608 }
+:13{ 682 774 857 931 996 1052 1054 1002 941 871 792 704 607 }
+:12{ 683 775 858 932 997 1053 1001 940 870 791 703 606 }
+:11{ 684 776 859 933 998 1000 939 869 790 702 605 }
+:10{ 685 777 860 934 999 938 868 789 701 604 }
+:9{ 686 778 861 935 937 867 788 700 603 }
+:8{ 687 779 862 936 866 787 699 602 }
+:7{ 688 780 863 865 786 698 601 }
+:6{ 689 781 864 785 697 600}
+:5{ 690 782 784 696 599}
+:4{ 691 783 695 598}
+:3{ 692 694 [[趁|597]]}
+:2{ 693 596}
+:1{ [[hope|595]]}
+:2{ 594  497}
+:3{ 593 496 498}
+:4{ 592 495 407 499}
+:5{ 591 494 406 408 500}
+:6{ 590 493 405 326 409 501}
+:7{ 589 492 404 325 327 410 502}
+:8{ 588 491 403 324 254 328 411 503}
+:9{ 587 490 402 323 253 255 329 412 504}
+:10{ 586 489 401 322 252 191 256 330 413 505}
+:11{ 585 488 400 321 251 190 192 257 331 414 506}
+:12{ 584 487 399 320 250 189 137 193 258 332 415 507 }
+:13{ 583 486 398 319 249 188 136 138 194 259 333 416 508 }
+:14{ 582 485 397 318 248 187 135 092 139 195 260 334 417 509 }
+:15{ 581 484 396 317 247 186 134 091 093 140 196 261 335 418 510 }
+:16{ 580 483 395 316 246 185 133 090 056 094 141 197 262 336 419 511 }
+:17{ 579 482 394 315 245 184 132 089 055 057 095 142 198 263 337 420 512}
+:18{ 578 481 393 314 244 183 131 088 054 029 058 096 143 199 264 338 421 513}
+:19{ 577 480 392 313 243 182 130 087 053 028 030 059 097 144 200 265 339 422 514 }
+:20{ 576 479 391 312 242 181 129 086 052 027 011 031 060 098 145 201 266 340 423 515}
+:21{ 575 478 390 311 241 180 128 085 051 026 010 012 032 061 099 146 202 267 341 424 516}
+:22{ 574 477 389 310 240 179 127 084 050 025 009 002 013 033 062 100 147 203 268 342 425 517}
+:23{ 573 476 388 309 239 178 126 083 049 024 008 [[tako|001]] 003 014 034 063 101 148 204 269 343 426 518}
+:24{ 572 475 387 308 238 177 125 082 048 023 007 006 005 004 015 035 064 102 149 205 270 344 427 519}
+:25{ 571 474 386 307 237 176 124 081 047 022 021 020 019 018 017 016 036 065 103 150 206 271 345 428 520}
+:26{ <small>570 473 385 306 236 175 123 080 046 045 044 043 042 041 040 039 038 037 066 104 151 207 272 346 429 521</small>}
+:27{ <small>569 472 384 305 235 174 122 079 078 077 076 075 074 073 072 071 070 069 068 067 105 152 208 273 347 430 522</small>}
+:28{ <small>568 471 383 304 234 173 121 120 119 118 117 116 115 114 113 112 111 110 109 108 107 106 153 209 274 348 431 523</small> }
+:29{ <small>567 470 382 303 233 172 171 170 169 168 167 166 165 164 163 162 161 160 159 158 157 156 155 154 210 275 349 432 524</small>}
+:30{ <small>566 469 381 302 232 231 230 229 228 227 226 225 224 223 222 221 220 219 218 217 216 215 214 213 212 211 276 350 433 525</small>}
+:[[31]]{ <small>565 468 380 301 300 299 298 297 296 295 294 293 292 291 290 289 288 287 286 285 284 283 282 281 280 279 278 277 351 434 526</small>}
+:[[32]]{ <small>564 467 379 378 377 376 375 374 373 372 371 370 369 368 367 366 365 364 363 362 361 360 359 358 357 356 355 354 353 352 435 527</small>}
+:[[33]]{ <small>563 466 465 464 463 462 461 460 459 458 457 456 455 454 453 452 451 450 449 448 447 446 445 444 443 442 441 440 439 438 437 436 528</small>}
+:[[34]]{ <small>562 561 560 559 558 557 556 555 554 553 552 551 550 549 548 547 546 545 544 543 542 541 540 539 538 537 536 535 534 533 532 531 530 529</small>}
+
+</div>
+</div>
+[[Категорија:Библија]]
+[[Категорија:sr:119:007]]
+[[Категорија:א]]
+__БЕЗ_ИНДЕКСА__
+__САКРИВЕНАКАТ__
+※
+
+<span class="Thai" lang="th">[[ดังนั้น#Тајски|ดังนั้น]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="th-Latn" class="tr Latn">dang-nán</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Појмови са Тајским преводима|TAKO]]
+== Референце ==
+[[:Шаблон:reflist]]
+
+== Напомене ==
+[[:Шаблон:reflist]]

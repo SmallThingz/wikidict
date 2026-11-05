@@ -245,47 +245,47 @@ pub fn run(io: std.Io, persistent: A) !void {
         const bytes = try page_a.alloc(u8, length);
         try input.interface.readSliceAll(bytes);
         const request = protocol.decodeRequest(bytes) catch |err| {
-            try protocol.writeError(&output.interface, "request", @errorName(err), "");
+            try protocol.writeTimedReplyWithClock(&output.interface, processCpuNow, .{ .failure = .{ .stage = "request", .error_name = @errorName(err), .detail = "" } });
             continue;
         };
         if (engine == null) {
             engine = Engine.init(io, persistent, request.root, request.dump, request.now_unix, profile_enabled) catch |err| {
                 if (err == error.OutOfMemory) logOutOfMemory(io, request, "assets");
-                try protocol.writeError(&output.interface, "assets", @errorName(err), "");
+                try protocol.writeTimedReplyWithClock(&output.interface, processCpuNow, .{ .failure = .{ .stage = "assets", .error_name = @errorName(err), .detail = "" } });
                 if (err == error.OutOfMemory) return err;
                 continue;
             };
             // Inherit address-space policy from the supervisor. The corpus
             // watchdog limits aggregate resident memory; mapped or swapped
             // memory must not acquire a separate per-worker virtual limit.
-            try protocol.writeReady(&output.interface);
+            try protocol.writeTimedReplyWithClock(&output.interface, processCpuNow, .ready);
         }
         var stage: []const u8 = "request";
         var detail: ?[]const u8 = null;
         const expanded = engine.?.expand(page_a, request, &stage, &detail) catch |err| {
             if (lua_program.moduleTemplateAllocationFailed()) {
                 logOutOfMemory(io, request, "module-template-promotion");
-                try protocol.writeError(&output.interface, "module-template-promotion", "OutOfMemory", "");
+                try protocol.writeTimedReplyWithClock(&output.interface, processCpuNow, .{ .failure = .{ .stage = "module-template-promotion", .error_name = "OutOfMemory", .detail = "" } });
                 return error.OutOfMemory;
             }
             if (err == error.OutOfMemory) logOutOfMemory(io, request, stage);
-            try protocol.writeError(&output.interface, stage, @errorName(err), detail orelse "");
+            try protocol.writeTimedReplyWithClock(&output.interface, processCpuNow, .{ .failure = .{ .stage = stage, .error_name = @errorName(err), .detail = detail orelse "" } });
             if (err == error.OutOfMemory) return err;
             continue;
         };
         if (lua_program.moduleTemplateAllocationFailed()) {
             logOutOfMemory(io, request, "module-template-promotion");
-            try protocol.writeError(&output.interface, "module-template-promotion", "OutOfMemory", "");
+            try protocol.writeTimedReplyWithClock(&output.interface, processCpuNow, .{ .failure = .{ .stage = "module-template-promotion", .error_name = "OutOfMemory", .detail = "" } });
             return error.OutOfMemory;
         }
         if (expanded) |value| {
             if (value.output.len > protocol.max_source_bytes or value.display_title.len > protocol.max_display_title_bytes) {
-                try protocol.writeError(&output.interface, stage, "ExpandedSourceTooLarge", "");
+                try protocol.writeTimedReplyWithClock(&output.interface, processCpuNow, .{ .failure = .{ .stage = stage, .error_name = "ExpandedSourceTooLarge", .detail = "" } });
                 continue;
             }
-            try protocol.writeSuccessWithMetadata(&output.interface, value.output, value.display_title, value.unsupported_parser_function, value.poem_metadata, value.missing_dependency_metadata);
+            try protocol.writeTimedReplyWithClock(&output.interface, processCpuNow, .{ .output = .{ .output = value.output, .display_title = value.display_title, .unsupported_parser_function = value.unsupported_parser_function, .poem_metadata = value.poem_metadata, .missing_dependency_metadata = value.missing_dependency_metadata } });
         } else {
-            try protocol.writeSkip(&output.interface);
+            try protocol.writeTimedReplyWithClock(&output.interface, processCpuNow, .skip);
         }
     }
 }
@@ -297,4 +297,11 @@ pub export fn dict_bundle_expander_main() callconv(.c) u8 {
     defer persistent.deinit();
     run(threaded.io(), persistent.allocator()) catch return 1;
     return 0;
+}
+
+fn processCpuNow() !u64 {
+    var ts: L.timespec = undefined;
+    if (L.errno(L.clock_gettime(.PROCESS_CPUTIME_ID, &ts)) != .SUCCESS) return error.WorkerCpuClockUnavailable;
+    if (ts.sec < 0 or ts.nsec < 0 or ts.nsec >= std.time.ns_per_s) return error.WorkerCpuClockUnavailable;
+    return std.math.cast(u64, @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) orelse error.WorkerCpuClockUnavailable;
 }

@@ -1,0 +1,30 @@
+# wikidict-namespace-registry-v1
+# wiki	iawiktionary
+# dump-date	20261001
+# content-language	ia
+-2	Multimedia	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Special	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Discussion	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	Usator	User	first-letter	1	0	0		compile_only	standard_build_input
+3	Discussion Usator	User talk	first-letter	1	0	0		compile_only	discussion_namespace
+4	Wiktionario	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	Discussion Wiktionario	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	File	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	Imagine
+7	Discussion File	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discussion Imagine	Image talk
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	Discussion MediaWiki	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	Patrono	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Discussion Patrono	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	Adjuta	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Discussion Adjuta	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	Categoria	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Discussion Categoria	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+102	Appendice	Appendice	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+103	Discussion Appendice	Discussion Appendice	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Modulo	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Discussion Modulo	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Evento	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Discussion Evento	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

@@ -4,6 +4,65 @@ const A = std.mem.Allocator;
 const L = std.os.linux;
 const protocol = @import("bundle_protocol");
 const expansion_deadline = @import("expansion_deadline.zig");
+extern "c" fn clock_getcpuclockid(pid: std.posix.pid_t, clock_id: *L.clockid_t) c_int;
+
+// One page owns one CPU allowance across worker generations. Startup is not
+// page work; completed replies carry a stamp so exited workers remain auditable.
+const PageCpuBudget = struct {
+    remaining_ns: u64,
+    last_cpu_ns: ?u64 = null,
+    live_cpu_highwater: ?u64 = null,
+
+    fn begin(self: *PageCpuBudget, stamp: u64) !void {
+        if (self.remaining_ns == 0) return error.Timeout;
+        if (self.last_cpu_ns != null) return error.InvalidResponse;
+        self.last_cpu_ns = stamp;
+        self.live_cpu_highwater = stamp;
+    }
+
+    fn observe(self: *PageCpuBudget, stamp: u64) !void {
+        const previous = self.last_cpu_ns orelse return error.InvalidResponse;
+        if (stamp < previous) return error.InvalidResponse;
+        const used = stamp - previous;
+        self.last_cpu_ns = stamp;
+        if (used >= self.remaining_ns) {
+            self.remaining_ns = 0;
+            return error.Timeout;
+        }
+        self.remaining_ns -= used;
+    }
+
+    fn check(self: *PageCpuBudget, stamp: u64) !void {
+        const baseline = self.last_cpu_ns orelse return error.InvalidResponse;
+        if (stamp < baseline or stamp < (self.live_cpu_highwater orelse baseline)) return error.InvalidResponse;
+        self.live_cpu_highwater = stamp;
+        if (stamp - baseline >= self.remaining_ns) return error.Timeout;
+    }
+
+    fn newGeneration(self: *PageCpuBudget) void {
+        self.last_cpu_ns = null;
+        self.live_cpu_highwater = null;
+    }
+};
+
+// Available pipe bytes take priority over a process clock: an exited worker
+// can leave a complete stamped reply queued. On an idle poll, unavailable CPU
+// accounting is a fatal operational error, never an unlimited allowance.
+fn checkPollCpu(budget: *PageCpuBudget, readable: bool, source: anytype) !void {
+    if (!readable and budget.last_cpu_ns != null) try budget.check(try source.processCpuNow());
+}
+
+// A worker can queue its final frame and exit between an idle poll and the
+// clock lookup. One zero-time repoll preserves that frame without permitting
+// an unbounded wait. Proven quota expiry, regression and unavailable clocks
+// remain fatal even if bytes subsequently become readable.
+fn afterIdlePoll(budget: *PageCpuBudget, source: anytype, pipe: anytype) !bool {
+    checkPollCpu(budget, false, source) catch |err| {
+        if (err == error.WorkerClosed and try pipe.readyNow()) return true;
+        return err;
+    };
+    return false;
+}
 
 pub const Expansion = struct {
     source: []const u8,
@@ -149,14 +208,59 @@ pub const Worker = struct {
         return &self.child.?;
     }
 
-    fn readExact(self: *Worker, file: std.Io.File, out: []u8, deadline: i128) !void {
+    fn processCpuNow(self: *Worker) !u64 {
+        const child = if (self.child) |*value| value else return error.WorkerClosed;
+        const pid = child.id orelse return error.WorkerClosed;
+        var clock_id: L.clockid_t = undefined;
+        const rc = clock_getcpuclockid(pid, &clock_id);
+        if (rc != 0) return if (rc == @intFromEnum(L.E.SRCH)) error.WorkerClosed else error.WorkerCpuClockUnavailable;
+        var ts: L.timespec = undefined;
+        switch (L.errno(L.clock_gettime(clock_id, &ts))) {
+            .SUCCESS => {},
+            .SRCH => return error.WorkerClosed,
+            .INVAL => {
+                // A valid process clock can disappear between clock lookup
+                // and sampling. Only confirmed owned-child exit permits the
+                // queued-reply recovery; unsupported clocks remain fatal.
+                const raw_fd = L.pidfd_open(pid, 0);
+                if (L.errno(raw_fd) == .SUCCESS) {
+                    const fd: std.posix.fd_t = @intCast(raw_fd);
+                    defer _ = L.close(fd);
+                    var fds = [_]std.posix.pollfd{.{ .fd = fd, .events = std.posix.POLL.IN, .revents = 0 }};
+                    const ready = std.posix.poll(&fds, 0) catch return error.WorkerCpuClockUnavailable;
+                    if (ready != 0 and (fds[0].revents & std.posix.POLL.IN) != 0) return error.WorkerClosed;
+                }
+                return error.WorkerCpuClockUnavailable;
+            },
+            else => return error.WorkerCpuClockUnavailable,
+        }
+        if (ts.sec < 0 or ts.nsec < 0 or ts.nsec >= std.time.ns_per_s) return error.WorkerCpuClockUnavailable;
+        return std.math.cast(u64, @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) orelse error.WorkerCpuClockUnavailable;
+    }
+
+    fn readExact(self: *Worker, file: std.Io.File, out: []u8, startup_deadline: i128, budget: *PageCpuBudget) !void {
         var pos: usize = 0;
         while (pos < out.len) {
-            const remaining = deadline - std.Io.Clock.awake.now(self.io).toNanoseconds();
+            const remaining = if (budget.last_cpu_ns == null)
+                startup_deadline - std.Io.Clock.awake.now(self.io).toNanoseconds()
+            else
+                100 * std.time.ns_per_ms;
             if (remaining <= 0) return error.Timeout;
             var fds = [_]std.posix.pollfd{.{ .fd = file.handle, .events = std.posix.POLL.IN, .revents = 0 }};
             const wait_ms: i32 = @intCast(@min(@divTrunc(remaining, std.time.ns_per_ms) + 1, 100));
-            if (try std.posix.poll(&fds, wait_ms) == 0) continue;
+            if (try std.posix.poll(&fds, wait_ms) == 0) {
+                const ReadyPipe = struct {
+                    fds: *[1]std.posix.pollfd,
+                    fn readyNow(pipe: @This()) !bool {
+                        pipe.fds[0].revents = 0;
+                        return try std.posix.poll(pipe.fds, 0) != 0;
+                    }
+                };
+                if (!try afterIdlePoll(budget, self, ReadyPipe{ .fds = &fds })) continue;
+            }
+            try checkPollCpu(budget, true, self);
+            // Drain readable bytes before querying a possibly exited child.
+            // A complete queued OOM reply provides its own final CPU stamp.
             const rc = L.read(file.handle, out.ptr + pos, out.len - pos);
             switch (L.errno(rc)) {
                 .SUCCESS => {
@@ -189,9 +293,9 @@ pub const Worker = struct {
         // Both attempts share the page budget; each new generation has a
         // separately bounded startup response. Blocking request transmission
         // still requires the outer watchdog for a stuck/non-reading child.
-        var remaining_page_ns = @as(i128, self.timeout_ms) * std.time.ns_per_ms;
+        var budget: PageCpuBudget = .{ .remaining_ns = @as(u64, self.timeout_ms) * std.time.ns_per_ms };
         var remote_oom = false;
-        return self.expandOnce(a, page_ordinal, identity, title, source, &remaining_page_ns, &remote_oom) catch |err| {
+        return self.expandOnce(a, page_ordinal, identity, title, source, &budget, &remote_oom) catch |err| {
             if (!remote_oom) return err;
             // Only a fully decoded remote OOM reaches here. Local allocator,
             // transport, semantic and deadline failures never authorize replay.
@@ -202,7 +306,7 @@ pub const Worker = struct {
             });
             self.last_failure = null;
             remote_oom = false;
-            const recovered = self.expandOnce(a, page_ordinal, identity, title, source, &remaining_page_ns, &remote_oom) catch |cold_err| {
+            const recovered = self.expandOnce(a, page_ordinal, identity, title, source, &budget, &remote_oom) catch |cold_err| {
                 self.reset();
                 self.oom_retry_failed +|= 1;
                 diagnostics.printLine("bundle OOM recovery failed ordinal={d} generation={d} error={s}\n", .{ page_ordinal, self.generation, @errorName(cold_err) });
@@ -226,15 +330,18 @@ pub const Worker = struct {
         };
     }
 
-    fn expandOnce(self: *Worker, a: A, page_ordinal: u64, identity: PageIdentity, title: []const u8, source: []const u8, remaining_page_ns: *i128, remote_oom: *bool) !?Expansion {
-        if (remaining_page_ns.* <= 0) return error.Timeout;
+    fn expandOnce(self: *Worker, a: A, page_ordinal: u64, identity: PageIdentity, title: []const u8, source: []const u8, budget: *PageCpuBudget, remote_oom: *bool) !?Expansion {
+        if (budget.remaining_ns == 0) return error.Timeout;
         const start = std.Io.Clock.awake.now(self.io).toNanoseconds();
-        var page_started: ?i128 = if (self.child != null and self.ready_received) start else null;
-        defer if (page_started) |began| {
-            const elapsed = std.Io.Clock.awake.now(self.io).toNanoseconds() - began;
-            remaining_page_ns.* = @max(0, remaining_page_ns.* - elapsed);
-        };
-        var deadline = start + if (page_started != null) remaining_page_ns.* else @as(i128, self.startup_timeout_ms) * std.time.ns_per_ms;
+        budget.newGeneration();
+        if (self.child != null and self.ready_received) {
+            const baseline = self.processCpuNow() catch |err| {
+                self.reset();
+                return err;
+            };
+            try budget.begin(baseline);
+        }
+        const startup_deadline = start + @as(i128, self.startup_timeout_ms) * std.time.ns_per_ms;
         const child = try self.ensure();
         self.writeRequest(child, page_ordinal, identity, title, source) catch |err| {
             self.reset();
@@ -242,7 +349,7 @@ pub const Worker = struct {
         };
         while (true) {
             var raw_length: [4]u8 = undefined;
-            self.readExact(child.stdout.?, &raw_length, deadline) catch |err| {
+            self.readExact(child.stdout.?, &raw_length, startup_deadline, budget) catch |err| {
                 if (err == error.WorkerClosed) self.reportClosed(page_ordinal, title);
                 if (err == error.Timeout) diagnostics.printLine(
                     "bundle {s} timed out title={s} ordinal={d} source_bytes={d} timeout_ms={d}\n",
@@ -257,12 +364,12 @@ pub const Worker = struct {
                 self.reset();
                 return error.InvalidResponse;
             }
-            var ready_storage: [1]u8 = undefined;
-            const response: []u8 = if (!self.ready_received and response_len == 1) &ready_storage else a.alloc(u8, response_len) catch |err| {
+            var ready_storage: [10]u8 = undefined;
+            const response: []u8 = if (!self.ready_received and response_len == ready_storage.len) &ready_storage else a.alloc(u8, response_len) catch |err| {
                 self.reset();
                 return err;
             };
-            self.readExact(child.stdout.?, response, deadline) catch |err| {
+            self.readExact(child.stdout.?, response, startup_deadline, budget) catch |err| {
                 if (err == error.WorkerClosed) self.reportClosed(page_ordinal, title);
                 if (err == error.Timeout) diagnostics.printLine(
                     "bundle {s} response timed out title={s} ordinal={d} source_bytes={d} response_bytes={d} timeout_ms={d}\n",
@@ -272,20 +379,27 @@ pub const Worker = struct {
                 self.reset();
                 return if (startup_timeout) error.StartupTimeout else err;
             };
-            const reply = protocol.decodeReply(response) catch {
+            const timed = protocol.decodeTimedReply(response) catch {
                 self.reset();
                 return error.InvalidResponse;
             };
+            const reply = timed.reply;
             validateReplyPhase(reply, !self.ready_received) catch |err| {
+                self.reset();
+                return err;
+            };
+            if (self.ready_received) budget.observe(timed.cpu_ns) catch |err| {
                 self.reset();
                 return err;
             };
             switch (reply) {
                 .ready => {
+                    budget.begin(timed.cpu_ns) catch |err| {
+                        self.reset();
+                        return err;
+                    };
                     self.ready_received = true;
-                    page_started = std.Io.Clock.awake.now(self.io).toNanoseconds();
-                    deadline = page_started.? + remaining_page_ns.*;
-                    diagnostics.printLine("bundle worker ready generation={d} startup_ms={d} page_budget_ms={d}\n", .{ self.generation, @divTrunc(page_started.? - start, std.time.ns_per_ms), @divTrunc(remaining_page_ns.*, std.time.ns_per_ms) });
+                    diagnostics.printLine("bundle worker ready generation={d} startup_ms={d} page_cpu_budget_ms={d}\n", .{ self.generation, @divTrunc(std.Io.Clock.awake.now(self.io).toNanoseconds() - start, std.time.ns_per_ms), @divTrunc(budget.remaining_ns, std.time.ns_per_ms) });
                     continue;
                 },
                 .output => |success| return .{
@@ -356,4 +470,163 @@ test "page identity failures are operational rather than fallback" {
     inline for (&.{ "InvalidPageIndex", "NamespaceTitleCollision", "NamespaceTitleMismatch", "InvalidNamespace", "UnsupportedStoredInterwikiNamespace", "UnsupportedStoredLocalInterwiki", "InvalidStoredRedirectTarget" }) |name|
         try std.testing.expectEqual(error.BundleInfrastructureFailed, operationalFailure(.{ .stage = "expand", .error_name = name, .detail = "" }).?);
     try std.testing.expect(operationalFailure(.{ .stage = "expand", .error_name = "LuaRaised", .detail = "UnsupportedStoredInterwikiNamespace" }) == null);
+}
+
+test "page CPU accounting excludes idle wall and charges delayed ready consumption" {
+    var budget: PageCpuBudget = .{ .remaining_ns = 60_000 };
+    // Worker stamp predates parent consumption; all intervening worker CPU is
+    // charged even when the parent did not run until after expansion completed.
+    try budget.begin(900_000);
+    try budget.observe(912_000);
+    try std.testing.expectEqual(@as(u64, 48_000), budget.remaining_ns);
+    for (0..100) |_| try budget.observe(912_000); // Arbitrarily long idle/wall wait.
+    try std.testing.expectEqual(@as(u64, 48_000), budget.remaining_ns);
+    try std.testing.expectError(error.Timeout, budget.observe(960_000));
+    try std.testing.expectEqual(@as(u64, 0), budget.remaining_ns);
+}
+
+test "queued complete OOM debits CPU before exited generation is replaced" {
+    var budget: PageCpuBudget = .{ .remaining_ns = 60_000 };
+    try budget.begin(100_000);
+    var bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer bytes.deinit();
+    try protocol.writeTimedReply(&bytes.writer, 140_000, .{ .failure = .{ .stage = "expand", .error_name = "OutOfMemory", .detail = "" } });
+    // No live-child clock read is needed to consume a complete queued reply.
+    const queued = try protocol.decodeTimedReply(bytes.written()[4..]);
+    try budget.observe(queued.cpu_ns);
+    try std.testing.expectEqual(error.OutOfMemory, operationalFailure(queued.reply.failure).?);
+    budget.newGeneration();
+    try budget.begin(2_000_000); // Cold startup CPU is independently excluded.
+    try budget.observe(2_019_999);
+    try std.testing.expectEqual(@as(u64, 1), budget.remaining_ns);
+    try std.testing.expectError(error.Timeout, budget.observe(2_020_000));
+}
+
+test "CPU accounting rejects regressing samples and duplicate baselines" {
+    var budget: PageCpuBudget = .{ .remaining_ns = 60 };
+    try budget.begin(100);
+    try std.testing.expectError(error.InvalidResponse, budget.begin(101));
+    try std.testing.expectError(error.InvalidResponse, budget.observe(99));
+    try std.testing.expectEqual(@as(u64, 60), budget.remaining_ns);
+    budget.newGeneration();
+    try std.testing.expectError(error.InvalidResponse, budget.observe(1));
+}
+
+test "idle polling uses fake process CPU and fails closed without charging elapsed wait" {
+    const FakeClock = struct {
+        stamp: u64 = 100,
+        failure: ?anyerror = null,
+        calls: usize = 0,
+        fn processCpuNow(clock: *@This()) !u64 {
+            clock.calls += 1;
+            if (clock.failure) |err| return err;
+            return clock.stamp;
+        }
+    };
+    var budget: PageCpuBudget = .{ .remaining_ns = 60 };
+    try budget.begin(100);
+    var clock: FakeClock = .{};
+    for (0..100) |_| try checkPollCpu(&budget, false, &clock);
+    try std.testing.expectEqual(@as(u64, 60), budget.remaining_ns);
+    clock.stamp = 159;
+    try checkPollCpu(&budget, false, &clock);
+    clock.stamp = 158;
+    try std.testing.expectError(error.InvalidResponse, checkPollCpu(&budget, false, &clock));
+    clock.stamp = 160;
+    try std.testing.expectError(error.Timeout, checkPollCpu(&budget, false, &clock));
+    clock.failure = error.WorkerCpuClockUnavailable;
+    try std.testing.expectError(error.WorkerCpuClockUnavailable, checkPollCpu(&budget, false, &clock));
+    const calls = clock.calls;
+    try checkPollCpu(&budget, true, &clock);
+    try std.testing.expectEqual(calls, clock.calls);
+    clock.failure = error.WorkerClosed;
+    try std.testing.expectError(error.WorkerClosed, checkPollCpu(&budget, false, &clock));
+}
+
+test "complete queued reply survives exited child while EOF and partial replies remain WorkerClosed" {
+    var encoded: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer encoded.deinit();
+    try protocol.writeTimedReply(&encoded.writer, 140, .{ .failure = .{ .stage = "expand", .error_name = "OutOfMemory", .detail = "" } });
+    for ([_]usize{ encoded.written().len, encoded.written().len - 1, 0 }) |length| {
+        var fds: [2]std.posix.fd_t = undefined;
+        if (L.errno(L.pipe2(&fds, .{})) != .SUCCESS) return error.PipeFailed;
+        defer _ = L.close(fds[0]);
+        if (length != 0) {
+            const written = L.write(fds[1], encoded.written().ptr, length);
+            if (L.errno(written) != .SUCCESS or written != length) {
+                _ = L.close(fds[1]);
+                return error.WriteFailed;
+            }
+        }
+        _ = L.close(fds[1]); // No live child or CPU clock remains.
+        var worker = Worker.init(std.testing.io, "root", "unused", "dump");
+        var budget: PageCpuBudget = .{ .remaining_ns = 60 };
+        try budget.begin(100);
+        const file: std.Io.File = .{ .handle = fds[0], .flags = .{ .nonblocking = false } };
+        const out = try std.testing.allocator.alloc(u8, encoded.written().len);
+        defer std.testing.allocator.free(out);
+        if (length == out.len) {
+            try worker.readExact(file, out, 0, &budget);
+            const reply = try protocol.decodeTimedReply(out[4..]);
+            try budget.observe(reply.cpu_ns);
+            try std.testing.expectEqual(@as(u64, 20), budget.remaining_ns);
+            try std.testing.expectEqual(error.OutOfMemory, operationalFailure(reply.reply.failure).?);
+        } else {
+            try std.testing.expectError(error.WorkerClosed, worker.readExact(file, out, 0, &budget));
+        }
+    }
+}
+
+test "idle poll clock race preserves newly queued reply with one bounded repoll" {
+    const Clock = struct {
+        fn processCpuNow(_: @This()) !u64 {
+            return error.WorkerClosed; // Exit after the original poll timed out.
+        }
+    };
+    const Pipe = struct {
+        readable: bool,
+        checks: *usize,
+        fn readyNow(pipe: @This()) !bool {
+            pipe.checks.* += 1;
+            return pipe.readable;
+        }
+    };
+    var budget: PageCpuBudget = .{ .remaining_ns = 60 };
+    try budget.begin(100);
+    var checks: usize = 0;
+    try std.testing.expect(try afterIdlePoll(&budget, Clock{}, Pipe{ .readable = true, .checks = &checks }));
+    try std.testing.expectEqual(@as(usize, 1), checks);
+    // The complete queued reply is authenticated/debited, without consulting
+    // the vanished process. EOF/partial draining is covered by the pipe test.
+    var bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer bytes.deinit();
+    try protocol.writeTimedReply(&bytes.writer, 140, .{ .failure = .{ .stage = "expand", .error_name = "OutOfMemory", .detail = "" } });
+    const reply = try protocol.decodeTimedReply(bytes.written()[4..]);
+    try budget.observe(reply.cpu_ns);
+    try std.testing.expectEqual(@as(u64, 20), budget.remaining_ns);
+    try std.testing.expectError(error.WorkerClosed, afterIdlePoll(&budget, Clock{}, Pipe{ .readable = false, .checks = &checks }));
+    try std.testing.expectEqual(@as(usize, 2), checks);
+    const ErrorClock = struct {
+        failure: anyerror,
+        fn processCpuNow(clock: @This()) !u64 {
+            return clock.failure;
+        }
+    };
+    for ([_]anyerror{error.WorkerCpuClockUnavailable}) |err| {
+        checks = 0;
+        try std.testing.expectError(err, afterIdlePoll(&budget, ErrorClock{ .failure = err }, Pipe{ .readable = true, .checks = &checks }));
+        try std.testing.expectEqual(@as(usize, 0), checks);
+    }
+    const SampleClock = struct {
+        stamp: u64,
+        fn processCpuNow(clock: @This()) !u64 {
+            return clock.stamp;
+        }
+    };
+    const Case = struct { stamp: u64, failure: anyerror };
+    for ([_]Case{ .{ .stamp = 139, .failure = error.InvalidResponse }, .{ .stamp = 160, .failure = error.Timeout } }) |case| {
+        checks = 0;
+        try std.testing.expectError(case.failure, afterIdlePoll(&budget, SampleClock{ .stamp = case.stamp }, Pipe{ .readable = true, .checks = &checks }));
+        try std.testing.expectEqual(@as(usize, 0), checks);
+    }
 }

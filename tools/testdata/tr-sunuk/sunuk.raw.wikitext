@@ -1,0 +1,10 @@
+==Türkçe==
+===Ad===
+{{tr-ad}}
+
+# {{t|dil=tr|anatomi}} [[kemik]]
+::''Vücudun iskeletini oluşturan beyazımsı, sert madde.''
+
+===Köken===
+# {{k|dil=tr|otk}}
+:Kelimenin bir ihtimal süngü (<ET. süñüg), süngüleş- (<ET. süñüş-) kelimeleriyle anlam ilgisi olabilir. Bu organ adı, sü (ordu) ve sın- (kırmak) köklerinin karışmasından, sün-üg-ük > süngük/süñük/süyek/söök biçiminde türetilmiş olabilir.

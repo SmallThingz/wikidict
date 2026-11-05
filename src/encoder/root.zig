@@ -37,4 +37,5 @@ test "encoder root imports bundle-time presentation modules" {
     _ = presentation_citations;
     _ = presentation_layout;
     _ = presentation_document;
+    _ = @import("presentation_heading_anchors.zig");
 }

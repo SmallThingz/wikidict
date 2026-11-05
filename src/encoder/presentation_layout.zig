@@ -225,7 +225,7 @@ fn morphologySiblingPart(sections: anytype, index: usize, owner: ?[]const u8) ?[
     return "Noun";
 }
 
-const MarkedParagraphPart = struct { kind: []const u8, first: usize, end: usize };
+const MarkedParagraphPart = struct { kind: []const u8, first: usize, end: usize, croatian: bool = false };
 fn slovenePosLink(span: wiki.Span) ?[]const u8 {
     if (span.provenance != .parsed or span.generated_diagnostic or span.self_link or
         span.kind != .link or span.flags.code or span.role != .normal or
@@ -285,7 +285,7 @@ fn sloveneMeaningsLabel(block: wiki.Block) bool {
         span.flags.bold and !span.flags.italic and !span.flags.code and
         std.mem.eql(u8, span.text, "Pomeni:");
 }
-fn markedParagraphPart(blocks: []const wiki.Block, owner: ?[]const u8, level: u8) ?MarkedParagraphPart {
+fn sloveneParagraphPart(blocks: []const wiki.Block, owner: ?[]const u8, level: u8) ?MarkedParagraphPart {
     const language = owner orelse return null;
     if (language.len == 0 or std.mem.eql(u8, language, "Unclassified") or level != 2) return null;
     var marker: ?usize = null;
@@ -315,12 +315,134 @@ fn markedParagraphPart(blocks: []const wiki.Block, owner: ?[]const u8, level: u8
     }
     return .{ .kind = kind.?, .first = first, .end = end };
 }
+// Retained HR pages mark definitions with bold definicija:, then a line break
+// and italic imenica/pridjev. This supplies POS only; the record owner remains
+// independently classified. The first bold sinonimi: closes this sense region.
+fn croatianMarkerSpan(span: wiki.Span) bool {
+    return span.provenance == .parsed and !span.generated_diagnostic and !span.self_link and
+        !span.flags.code and span.role == .normal;
+}
+fn croatianSpace(span: wiki.Span) bool {
+    return croatianMarkerSpan(span) and span.kind == .text and span.target.len == 0 and
+        !span.flags.bold and !span.flags.italic and std.mem.trim(u8, span.text, " \t\r\n").len == 0;
+}
+fn croatianParagraphKind(block: wiki.Block) ?[]const u8 {
+    if (block.kind != .paragraph) return null;
+    var label: ?usize = null;
+    for (block.spans, 0..) |span, index| {
+        if (!croatianMarkerSpan(span)) return null;
+        if (span.kind == .text and span.target.len == 0 and span.flags.bold and !span.flags.italic and
+            std.mem.eql(u8, span.text, "definicija:"))
+        {
+            if (label != null) return null;
+            label = index;
+        }
+    }
+    var cursor = (label orelse return null) + 1;
+    if (cursor == block.spans.len or block.spans[cursor].kind != .line_break) return null;
+    cursor += 1;
+    while (cursor < block.spans.len and croatianSpace(block.spans[cursor])) : (cursor += 1) {}
+    if (cursor == block.spans.len) return null;
+    const part_span = block.spans[cursor];
+    if (part_span.kind != .text or part_span.target.len != 0 or !part_span.flags.italic or part_span.flags.bold) return null;
+    const kind: []const u8 = if (std.mem.eql(u8, part_span.text, "imenica")) "Noun" else if
+        (std.mem.eql(u8, part_span.text, "pridjev")) "Adjective" else return null;
+    cursor += 1;
+    // The captured noun includes this separate gender label; it is not a sense.
+    if (cursor + 1 < block.spans.len and std.mem.eql(u8, kind, "Noun")) {
+        const comma = block.spans[cursor];
+        const gender = block.spans[cursor + 1];
+        if (comma.kind == .text and comma.target.len == 0 and !comma.flags.bold and !comma.flags.italic and
+            std.mem.eql(u8, comma.text, ", ") and gender.kind == .text and gender.target.len == 0 and
+            gender.flags.italic and !gender.flags.bold and std.mem.eql(u8, gender.text, "ženski rod")) cursor += 2;
+    }
+    while (cursor < block.spans.len and croatianSpace(block.spans[cursor])) : (cursor += 1) {}
+    return if (cursor == block.spans.len) kind else null;
+}
+fn croatianSynonymBoundary(block: wiki.Block) bool {
+    if (block.kind != .paragraph) return false;
+    for (block.spans) |span| {
+        if (croatianSpace(span)) continue;
+        return croatianMarkerSpan(span) and span.kind == .text and span.target.len == 0 and
+            span.flags.bold and !span.flags.italic and std.mem.eql(u8, span.text, "sinonimi:");
+    }
+    return false;
+}
+// Return the end of an authored (major.minor) label. The label alone is an
+// empty source placeholder, not a definition that the Reader should invent.
+fn croatianSenseLabel(text: []const u8) ?usize {
+    if (text.len < 5 or text[0] != '(') return null;
+    var cursor: usize = 1;
+    const major = cursor;
+    while (cursor < text.len and std.ascii.isDigit(text[cursor])) : (cursor += 1) {}
+    if (cursor == major or cursor == text.len or text[cursor] != '.') return null;
+    cursor += 1;
+    const minor = cursor;
+    while (cursor < text.len and std.ascii.isDigit(text[cursor])) : (cursor += 1) {}
+    if (cursor == minor or cursor == text.len or text[cursor] != ')') return null;
+    return cursor + 1;
+}
+fn croatianSense(block: wiki.Block) ?bool {
+    if (block.spans.len == 0) return null;
+    const bullet = block.kind == .list_item and std.mem.eql(u8, block.list_path, "*");
+    if (!bullet and (block.kind != .indent or !std.mem.eql(u8, block.list_path, ":"))) return null;
+    const first = block.spans[0];
+    const label = if (croatianMarkerSpan(first) and first.kind == .text and first.target.len == 0)
+        croatianSenseLabel(first.text) else null;
+    if (!bullet and label == null) return null;
+    for (block.spans, 0..) |span, index| {
+        // An empty label with only a generated diagnostic, image or citation
+        // marker is not a lexical definition. Retain it among support blocks.
+        if (span.generated_diagnostic or span.image != null or span.role == .reference or
+            std.mem.startsWith(u8, span.target, "#reference-")) continue;
+        const visible = if (index == 0 and label != null) span.text[label.?..] else span.text;
+        if (std.mem.trim(u8, visible, " \t\r\n").len != 0) return true;
+    }
+    return false;
+}
+fn croatianParagraphPart(blocks: []const wiki.Block, owner: ?[]const u8, level: u8) ?MarkedParagraphPart {
+    const language = owner orelse return null;
+    if (language.len == 0 or std.mem.eql(u8, language, "Unclassified") or level != 2) return null;
+    var marker: ?usize = null;
+    var kind: ?[]const u8 = null;
+    for (blocks, 0..) |block, index| if (croatianParagraphKind(block)) |name| {
+        if (marker != null) return null;
+        marker = index;
+        kind = name;
+    };
+    var first = (marker orelse return null) + 1;
+    while (first < blocks.len and blocks[first].kind == .blank) : (first += 1) {}
+    if (first == blocks.len or !(croatianSense(blocks[first]) orelse false)) return null;
+    var end = first;
+    while (end < blocks.len) : (end += 1) {
+        if (croatianSynonymBoundary(blocks[end])) return .{ .kind = kind.?, .first = first, .end = end, .croatian = true };
+        if (blocks[end].kind == .blank) continue;
+        _ = croatianSense(blocks[end]) orelse return null;
+    }
+    return null;
+}
+fn markedParagraphPart(blocks: []const wiki.Block, owner: ?[]const u8, level: u8) ?MarkedParagraphPart {
+    return sloveneParagraphPart(blocks, owner, level) orelse croatianParagraphPart(blocks, owner, level);
+}
+fn analyzeCroatianParagraph(a: A, marker: MarkedParagraphPart, index: usize, etymology: ?usize, blocks: []const wiki.Block) !Lexeme {
+    var senses: std.ArrayList(Sense) = .empty;
+    var other: std.ArrayList(usize) = .empty;
+    const intro = try a.alloc(usize, marker.first);
+    for (intro, 0..) |*item, n| item.* = n;
+    for (blocks[marker.first..marker.end], marker.first..) |block, b| {
+        if (croatianSense(block) orelse false) try senses.append(a, .{ .block = b }) else try other.append(a, b);
+    }
+    for (marker.end..blocks.len) |b| try other.append(a, b);
+    return .{ .kind = marker.kind, .section = index, .etymology = etymology, .definitions = try senses.toOwnedSlice(a), .introduction = intro, .other_blocks = try other.toOwnedSlice(a) };
+}
+
 fn offsetBlockIndices(a: A, indices: []const usize, offset: usize) ![]const usize {
     const result = try a.dupe(usize, indices);
     for (result) |*index| index.* += offset;
     return result;
 }
 fn analyzeMarkedParagraph(a: A, marker: MarkedParagraphPart, index: usize, etymology: ?usize, blocks: []const wiki.Block) !Lexeme {
+    if (marker.croatian) return analyzeCroatianParagraph(a, marker, index, etymology, blocks);
     var lexical = try analyze(a, marker.kind, index, etymology, blocks[marker.first..marker.end], false);
     const senses = try a.dupe(Sense, lexical.definitions);
     for (senses) |*sense| {
@@ -3029,4 +3151,71 @@ test "retained Slovak biola and Czech houslista Reader bodies change only noun o
         try std.testing.expectEqualDeep(types.Stored{ .entry = before }, body_only);
         try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, decoded));
     }
+}
+
+test "Croatian inline definition markers retain explicit senses and closed support boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const cases = .{
+        .{ "'''izgovor:'''\n<br>'''definicija:'''<br>\n''imenica''<span>, ''ženski rod''</span>\n:(1.1) actual noun [[sense]]\n'''sinonimi:'''\n:(1.1) not a second sense", "Noun" },
+        .{ "'''izgovor:'''\n<br>'''definicija:'''<br>\n''pridjev''\n* actual adjective ''sense''\n:(1.1)\n'''sinonimi:'''\n<br>'''srodne riječi:'''\n* related word\n:1. related meaning", "Adjective" },
+    };
+    inline for (cases) |case| {
+        var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "control" } };
+        const blocks = try renderer.renderBody(case[0]);
+        const sections = [_]Section{.{ .level = 2, .title = "authored headword", .blocks = blocks }};
+        for ([_][]const u8{ "hrvatski", "Independent owner" }) |owner| {
+            const layout = try buildOwned(a, &sections, owner);
+            try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+            const lexical = layout.lexemes[0];
+            try std.testing.expectEqualStrings(owner, lexical.language);
+            try std.testing.expectEqualStrings(case[1], lexical.kind);
+            try std.testing.expectEqual(@as(usize, 0), lexical.section);
+            try std.testing.expectEqual(@as(usize, 1), lexical.definitions.len);
+            try std.testing.expectEqual(@as(usize, 1), lexical.definitions[0].block);
+            try std.testing.expect(lexical.definitions[0].parent == null and lexical.definitions[0].form == null);
+            try std.testing.expectEqualSlices(usize, &.{0}, lexical.introduction);
+            try std.testing.expectEqual(@as(usize, blocks.len - 2), lexical.other_blocks.len);
+            for (lexical.other_blocks, 2..) |actual, expected| try std.testing.expectEqual(expected, actual);
+        }
+        try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &sections)).lexemes.len);
+        try std.testing.expectEqual(@as(usize, 0), (try build(a, &sections)).lexemes.len);
+        try std.testing.expect(croatianParagraphPart(blocks, "", 2) == null);
+        try std.testing.expect(croatianParagraphPart(blocks, "Unclassified", 2) == null);
+        try std.testing.expect(croatianParagraphPart(blocks, "hrvatski", 3) == null);
+        // A second authored POS marker makes this one-section pattern ambiguous.
+        const doubled = try std.fmt.allocPrint(a, "{s}\n\n{s}", .{ case[0], case[0] });
+        try std.testing.expect(croatianParagraphPart(try renderer.renderBody(doubled), "hrvatski", 2) == null);
+    }
+    const negatives = [_][]const u8{
+        "definicija:\n''imenica''\n:(1.1) text\n'''sinonimi:'''",
+        "'''definicija:''' ''imenica''\n:(1.1) text\n'''sinonimi:'''",
+        "'''definicija:'''<br>imenica\n:(1.1) text\n'''sinonimi:'''",
+        "'''definicija:'''<br>''[[imenica]]''\n:(1.1) text\n'''sinonimi:'''",
+        "'''Definicija:'''<br>''imenica''\n:(1.1) text\n'''sinonimi:'''",
+        "'''definicija:'''<br>''glagol''\n:(1.1) text\n'''sinonimi:'''",
+        "'''definicija:'''<br>''imenica'' extra prose\n:(1.1) text\n'''sinonimi:'''",
+        "'''definicija:'''<br>''imenica''\n:(1.1)\n'''sinonimi:'''",
+        "'''definicija:'''<br>''pridjev''\n*(1.1)\n'''sinonimi:'''",
+        "'''definicija:'''<br>''imenica''\n:(1.1)<ref>citation only</ref>\n'''sinonimi:'''",
+        "'''definicija:'''<br>''imenica''\n: unnumbered prose\n'''sinonimi:'''",
+        "'''definicija:'''<br>''imenica''\n:(1.1) text",
+        "'''definicija:'''<br>''imenica''\n:(1.1) text\n\nunrelated paragraph\n'''sinonimi:'''",
+        "'''definicija:'''<br>''imenica''\n:(1.1) text\n===Other===\n'''sinonimi:'''",
+        "'''definicija:'''<br>''imenica''\n:(1.1) text\nsinonimi:",
+        "<nowiki>'''definicija:'''<br>''imenica''\n:(1.1) text\n'''sinonimi:'''</nowiki>",
+        "<pre>'''definicija:'''<br>''imenica''\n:(1.1) text\n'''sinonimi:'''</pre>",
+        "<code>'''definicija:'''</code><br>''imenica''\n:(1.1) text\n'''sinonimi:'''",
+    };
+    for (negatives) |source| {
+        var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "control" } };
+        try std.testing.expect(croatianParagraphPart(try renderer.renderBody(source), "hrvatski", 2) == null);
+    }
+    const diagnostics = [_]wiki.Span{
+        .{ .kind = .text, .text = "(1.1) " },
+        .{ .kind = .text, .text = "generated error", .generated_diagnostic = true },
+    };
+    try std.testing.expectEqual(@as(?bool, false), croatianSense(.{ .kind = .indent, .list_path = ":", .spans = &diagnostics }));
 }

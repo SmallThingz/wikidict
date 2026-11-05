@@ -1,0 +1,32 @@
+'''tako'''
+{{-sr-}}
+== tako ([[Викиречник:Српски|српски]], [[Викиречник:Ћирилица|ћир.]] [[тако]]) ==
+
+=== Прилог ===
+{{српски-прилог}}
+
+{{Слогови|ta-ko|}}
+
+{{Значење|
+# на такав начин{{R:Recnik Sinonima}}
+# {{значење преко синонима| [[vidljivo]], [[grdno]], [[znatno]], [[osetno]], [[dobrano]], [[značajno]], [[dozlaboga]], ''[[Викиречник:Архаичне речи|арх.]]''  [[dobesa]] [[арх.]], [[natprosečno]], [[jako]], [[izuzetno]], [[veoma]], [[prilično]], ''[[Викиречник:Фигуративне речи|фиг.]]''  [[dobro]] [[фиг.]], [[temeljito]], ''[[Викиречник:Фамилијарне речи|фам.]]''  [[gadno]] [[фам.]], [[vrlo]], [[tako]], [[puno]], [[izraženo]], [[vesma]] [[арх.]], [[propisno]] [[фам.]], [[naročito]], [[u velikoj meri]], [[itekoliko]], [[podosta]], [[itekako]], [[silno]], [[posebno]], [[osobito]], [[debelo]] [[фиг.]], [[vraški]], [[iznimno]], [[toli]] [[арх.]], [[primetno]], [[toliko]], [[dosta]], [[ljuto]] [[фиг.]] {{R:Recnik Sinonima}}|облик=пун}}
+}}
+
+{{Синоними|
+# [[ovako]]  <ref name="П. Ћосић и сарадници, Речник синонима" />
+# [[vidljivo]], [[grdno]], [[znatno]], [[osetno]], [[dobrano]], [[značajno]], [[dozlaboga]], ''[[Викиречник:Архаичне речи|арх.]]''  [[dobesa]] [[арх.]], [[natprosečno]], [[jako]], [[izuzetno]], [[veoma]], [[prilično]], ''[[Викиречник:Фигуративне речи|фиг.]]''  [[dobro]] [[фиг.]], [[temeljito]], ''[[Викиречник:Фамилијарне речи|фам.]]''  [[gadno]] [[фам.]], [[vrlo]], [[tako]], [[puno]], [[izraženo]], [[vesma]] [[арх.]], [[propisno]] [[фам.]], [[naročito]], [[u velikoj meri]], [[itekoliko]], [[podosta]], [[itekako]], [[silno]], [[posebno]], [[osobito]], [[debelo]] [[фиг.]], [[vraški]], [[iznimno]], [[toli]] [[арх.]], [[primetno]], [[toliko]], [[dosta]], [[ljuto]] [[фиг.]]  <ref name="П. Ћосић и сарадници, Речник синонима" />|облик=скраћен 
+}}
+
+{{Примери|
+{{цитат|{{sr1 Moj. 1:1|0}}|
+{{sr1 Moj. 1:1|7|11|}}
+}}
+}}
+{{sr119:007|{{PAGENAME}}|1}}
+{{Tetr|4|t|a|k|o|22|01|12|18}}
+{{t|th|ดังนั้น}}
+== Референце ==
+{{reflist}}
+
+== Напомене ==
+{{reflist|group="н"}}

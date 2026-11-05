@@ -3885,3 +3885,38 @@ test "default text exposes Slovak child meanings through their local noun sense 
         }
     }
 }
+
+test "default text exposes Croatian inline senses and details retain every local support block" {
+    const cases = .{
+        .{ "skakavica", "Noun", "(1.1) (čakavski) kukci, pripadnici reda ravnokrilaca; skakavac.[1]", true },
+        .{ "intrigantan", "Adjective", "intrigàntan prid. <odr. intrigàntnī> koji pobuđuje na razmišljanje, koji izaziva asocijacije, takav da se može problematizirati [~ fenomen plasmana Hrvatske na Biennalu nije samo odabir umjetnika]", false },
+    };
+    inline for (cases) |case| {
+        const blocks = [_]model.Block{
+            .{ .kind = .paragraph, .spans = &.{.{ .text = "headword support" }} },
+            .{ .kind = .paragraph, .spans = &.{.{ .text = "inflection support" }} },
+            .{ .kind = .paragraph, .spans = &.{.{ .text = "authored POS marker" }} },
+            .{ .kind = if (case[3]) .indent else .list_item, .list_path = if (case[3]) ":" else "*", .depth = 1, .spans = &.{.{ .text = case[2] }} },
+            .{ .kind = .indent, .list_path = ":", .depth = 1, .spans = &.{.{ .text = "empty source marker support" }} },
+            .{ .kind = .paragraph, .spans = &.{.{ .text = "synonyms and related-word support" }} },
+        };
+        const sections = [_]model.Section{
+            .{ .level = 2, .title = "authored headword", .blocks = &blocks },
+            .{ .level = 3, .title = "translations", .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "translation support" }} }} },
+            .{ .level = 2, .title = "source", .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "bibliography support" }} }} },
+        };
+        const senses = [_]model.Sense{.{ .block = 3 }};
+        const lexemes = [_]model.Lexeme{.{ .language = "hrvatski", .kind = case[1], .section = 0, .definitions = &senses, .introduction = &.{ 0, 1, 2 }, .other_blocks = &.{ 4, 5 }, .related_sections = &.{1} }};
+        const entry: model.Entry = .{ .title = case[0], .kind = .language, .language = "hrvatski", .language_code = "hr", .sections = &sections, .organization = .{ .lexemes = &lexemes, .other_sections = &.{2} } };
+        var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer out.deinit();
+        try entryTextWithDetails(&out.writer, entry, false, false);
+        const expected = try std.fmt.allocPrint(std.testing.allocator, "{s}  / hrvatski\n\n{s}\n  {s}{s}\n", .{ case[0], case[1], if (case[3]) "" else "• ", case[2] });
+        defer std.testing.allocator.free(expected);
+        try std.testing.expectEqualStrings(expected, out.written());
+        out.clearRetainingCapacity();
+        try entryTextWithDetails(&out.writer, entry, false, true);
+        for ([_][]const u8{ "headword support", "inflection support", "authored POS marker", case[2], "empty source marker support", "synonyms and related-word support", "translation support", "bibliography support" }) |witness|
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), witness));
+    }
+}

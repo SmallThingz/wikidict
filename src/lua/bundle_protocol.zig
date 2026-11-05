@@ -5,7 +5,10 @@ pub const max_source_bytes: usize = 16 * 1024 * 1024;
 pub const max_display_title_bytes: usize = 64 * 1024;
 pub const max_path_bytes: usize = 4096;
 pub const max_title_bytes: usize = 4096;
-const request_version: u8 = 4;
+const request_version: u8 = 5;
+// Disjoint from all legacy reply payload tags (0..6).
+const reply_envelope_version: u8 = 0x85;
+const cpu_envelope_len: usize = 9;
 pub const max_poem_metadata_bytes: usize = 16 * 1024 * 1024;
 // Encoder-only occurrence provenance; independent from Poem and never DPR data.
 pub const max_missing_dependency_metadata_bytes: usize = 16 * 1024 * 1024;
@@ -137,17 +140,17 @@ pub fn decodeRequest(bytes: []const u8) !Request {
     return request;
 }
 
-pub fn writeSuccess(w: *std.Io.Writer, output: []const u8, display_title: []const u8, unsupported_parser_function: bool) !void {
+fn writeSuccess(w: *std.Io.Writer, output: []const u8, display_title: []const u8, unsupported_parser_function: bool) !void {
     return writeSuccessWithPoem(w, output, display_title, unsupported_parser_function, null);
 }
 
-pub fn writeSuccessWithPoem(w: *std.Io.Writer, output: []const u8, display_title: []const u8, unsupported_parser_function: bool, poem_metadata: ?[]const u8) !void {
-    return writeSuccessWithMetadata(w, output, display_title, unsupported_parser_function, poem_metadata, null);
+fn writeSuccessWithPoem(w: *std.Io.Writer, output: []const u8, display_title: []const u8, unsupported_parser_function: bool, poem_metadata: ?[]const u8) !void {
+    return writeSuccessWithMetadata(w, output, display_title, unsupported_parser_function, poem_metadata, null, false);
 }
 
 // Missing-dependency phase bytes are opaque here. The shared phase decoder
 // authenticates occurrence IDs/ranges against these exact output/title bytes.
-pub fn writeSuccessWithMetadata(w: *std.Io.Writer, output: []const u8, display_title: []const u8, unsupported_parser_function: bool, poem_metadata: ?[]const u8, missing_dependency_metadata: ?[]const u8) !void {
+fn writeSuccessWithMetadata(w: *std.Io.Writer, output: []const u8, display_title: []const u8, unsupported_parser_function: bool, poem_metadata: ?[]const u8, missing_dependency_metadata: ?[]const u8, timed: bool) !void {
     if (poem_metadata) |metadata| {
         if (metadata.len == 0 or metadata.len > max_poem_metadata_bytes or !std.unicode.utf8ValidateSlice(metadata)) return error.InvalidPoemMetadata;
     }
@@ -156,15 +159,13 @@ pub fn writeSuccessWithMetadata(w: *std.Io.Writer, output: []const u8, display_t
     }
     if (output.len > max_source_bytes or display_title.len > max_display_title_bytes) return error.FrameTooLarge;
     const payload_len = try checkedFramePayload(&.{ success_header_len, if (poem_metadata != null) @as(usize, 4) else 0, if (missing_dependency_metadata != null) @as(usize, 4) else 0, output.len, display_title.len, if (poem_metadata) |metadata| metadata.len else 0, if (missing_dependency_metadata) |metadata| metadata.len else 0 });
-    var outer: [4]u8 = undefined;
-    std.mem.writeInt(u32, &outer, payload_len, .little);
     var header: [success_header_len]u8 = undefined;
     // Existing success0/4 are byte-for-byte unchanged without the new phase.
     header[0] = if (missing_dependency_metadata != null) (if (poem_metadata != null) @as(u8, 6) else 5) else (if (poem_metadata != null) @as(u8, 4) else 0);
     try putU32(header[1..5], output.len);
     try putU32(header[5..9], display_title.len);
     header[9] = @intFromBool(unsupported_parser_function);
-    try w.writeAll(&outer);
+    try writeReplyHeader(w, payload_len, timed);
     try w.writeAll(&header);
     if (poem_metadata) |metadata| {
         var length: [4]u8 = undefined;
@@ -183,13 +184,13 @@ pub fn writeSuccessWithMetadata(w: *std.Io.Writer, output: []const u8, display_t
     try w.flush();
 }
 
-pub fn writeReady(w: *std.Io.Writer) !void {
+fn writeReady(w: *std.Io.Writer) !void {
     const frame = [_]u8{ 1, 0, 0, 0, 3 };
     try w.writeAll(&frame);
     try w.flush();
 }
 
-pub fn writeSkip(w: *std.Io.Writer) !void {
+fn writeSkip(w: *std.Io.Writer) !void {
     var outer: [4]u8 = undefined;
     std.mem.writeInt(u32, &outer, 1, .little);
     try w.writeAll(&outer);
@@ -197,16 +198,14 @@ pub fn writeSkip(w: *std.Io.Writer) !void {
     try w.flush();
 }
 
-pub fn writeError(w: *std.Io.Writer, stage: []const u8, error_name: []const u8, detail: []const u8) !void {
+fn writeError(w: *std.Io.Writer, stage: []const u8, error_name: []const u8, detail: []const u8, timed: bool) !void {
     const payload_len = try checkedFramePayload(&.{ error_header_len, stage.len, error_name.len, detail.len });
-    var outer: [4]u8 = undefined;
-    std.mem.writeInt(u32, &outer, payload_len, .little);
     var header: [error_header_len]u8 = undefined;
     header[0] = 1;
     try putU32(header[1..5], stage.len);
     try putU32(header[5..9], error_name.len);
     try putU32(header[9..13], detail.len);
-    try w.writeAll(&outer);
+    try writeReplyHeader(w, payload_len, timed);
     try w.writeAll(&header);
     try w.writeAll(stage);
     try w.writeAll(error_name);
@@ -214,7 +213,7 @@ pub fn writeError(w: *std.Io.Writer, stage: []const u8, error_name: []const u8, 
     try w.flush();
 }
 
-pub fn decodeReply(bytes: []const u8) !Reply {
+fn decodeReply(bytes: []const u8) !Reply {
     if (bytes.len == 0 or bytes.len > max_frame_bytes) return error.InvalidFrame;
     if (bytes[0] == 0 or bytes[0] == 4 or bytes[0] == 5 or bytes[0] == 6) {
         if (bytes.len < success_header_len) return error.InvalidFrame;
@@ -293,7 +292,7 @@ test "binary bundle replies preserve output and errors" {
 
     var failure: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer failure.deinit();
-    try writeError(&failure.writer, "expand", "LuaError", "detail");
+    try writeError(&failure.writer, "expand", "LuaError", "detail", false);
     const failure_reply = try decodeReply(failure.written()[4..]);
     try std.testing.expectEqualStrings("expand", failure_reply.failure.stage);
     try std.testing.expectEqualStrings("LuaError", failure_reply.failure.error_name);
@@ -320,7 +319,7 @@ test "binary bundle protocol rejects malformed framing" {
     try std.testing.expectError(error.InvalidFrame, decodeReply(&.{ 2, 0 }));
     var error_bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer error_bytes.deinit();
-    try writeError(&error_bytes.writer, "expand", "Failure", "detail");
+    try writeError(&error_bytes.writer, "expand", "Failure", "detail", false);
     const error_payload = error_bytes.written()[4..];
     try std.testing.expectError(error.InvalidFrame, decodeReply(error_payload[0 .. error_payload.len - 1]));
 }
@@ -398,27 +397,27 @@ test "bundle request version rejects old native workers" {
     try writeRequest(&bytes.writer, .{ .root = "root", .dump = "dump", .now_unix = 1, .page_ordinal = 0, .identity = .{ .index_offset = 0, .page_id = 1, .revision_id = 2, .namespace = 0 }, .title = "x", .source = "body" });
     const payload = try std.testing.allocator.dupe(u8, bytes.written()[4..]);
     defer std.testing.allocator.free(payload);
-    try std.testing.expectEqual(@as(u8, 4), payload[0]);
-    payload[0] = 3;
+    try std.testing.expectEqual(@as(u8, 5), payload[0]);
+    payload[0] = 4;
     try std.testing.expectError(error.InvalidFrame, decodeRequest(payload));
-    payload[0] = 5;
+    payload[0] = 6;
     try std.testing.expectError(error.InvalidFrame, decodeRequest(payload));
 }
 
 test "missing dependency phase preserves legacy success bytes and independent metadata slices" {
     var legacy: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer legacy.deinit();
-    try writeSuccessWithMetadata(&legacy.writer, "B", "T", false, null, null);
+    try writeSuccessWithMetadata(&legacy.writer, "B", "T", false, null, null, false);
     try std.testing.expectEqualSlices(u8, &.{ 12, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 'B', 'T' }, legacy.written());
     var poem_only: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer poem_only.deinit();
-    try writeSuccessWithMetadata(&poem_only.writer, "B", "T", false, "{}", null);
+    try writeSuccessWithMetadata(&poem_only.writer, "B", "T", false, "{}", null, false);
     try std.testing.expectEqualSlices(u8, &.{ 18, 0, 0, 0, 4, 1, 0, 0, 0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 'B', 'T', '{', '}' }, poem_only.written());
     const phase = "{\"schema\":\"wikidict.missing-dependency-phase.v1\"}";
     for ([_]?[]const u8{ null, "{}" }) |poem| {
         var framed: std.Io.Writer.Allocating = .init(std.testing.allocator);
         defer framed.deinit();
-        try writeSuccessWithMetadata(&framed.writer, "body", "title", true, poem, phase);
+        try writeSuccessWithMetadata(&framed.writer, "body", "title", true, poem, phase, false);
         const payload = framed.written()[4..];
         try std.testing.expectEqual(@as(u8, if (poem != null) 6 else 5), payload[0]);
         try std.testing.expectEqual(@as(u32, @intCast(payload.len)), std.mem.readInt(u32, framed.written()[0..4], .little));
@@ -437,7 +436,7 @@ test "missing dependency phase strictly rejects malformed lengths truncation and
     for ([_]?[]const u8{ null, "{}" }) |poem| {
         var framed: std.Io.Writer.Allocating = .init(std.testing.allocator);
         defer framed.deinit();
-        try writeSuccessWithMetadata(&framed.writer, "body", "title", false, poem, "{}");
+        try writeSuccessWithMetadata(&framed.writer, "body", "title", false, poem, "{}", false);
         const payload = framed.written()[4..];
         for (0..payload.len) |end| try std.testing.expectError(error.InvalidFrame, decodeReply(payload[0..end]));
         const bad = try std.testing.allocator.dupe(u8, payload);
@@ -459,8 +458,112 @@ test "missing dependency phase strictly rejects malformed lengths truncation and
     }
     var invalid: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer invalid.deinit();
-    try std.testing.expectError(error.InvalidMissingDependencyMetadata, writeSuccessWithMetadata(&invalid.writer, "", "", false, null, ""));
-    try std.testing.expectError(error.InvalidMissingDependencyMetadata, writeSuccessWithMetadata(&invalid.writer, "", "", false, null, &.{0xff}));
+    try std.testing.expectError(error.InvalidMissingDependencyMetadata, writeSuccessWithMetadata(&invalid.writer, "", "", false, null, "", false));
+    try std.testing.expectError(error.InvalidMissingDependencyMetadata, writeSuccessWithMetadata(&invalid.writer, "", "", false, null, &.{0xff}, false));
     try std.testing.expectEqual(@as(usize, 0), invalid.written().len);
     try std.testing.expectError(error.FrameTooLarge, checkedFramePayload(&.{ success_header_len + 8, max_source_bytes, max_poem_metadata_bytes, max_missing_dependency_metadata_bytes }));
+}
+
+// Only this stamped interface is exported to producer and client. Payload-only
+// codecs above are private and cannot provide an old-worker compatibility path.
+fn writeReplyHeader(w: *std.Io.Writer, payload_len: u32, timed: bool) !void {
+    var outer: [4]u8 = undefined;
+    const total = try checkedFramePayload(&.{ payload_len, if (timed) cpu_envelope_len else 0 });
+    std.mem.writeInt(u32, &outer, total, .little);
+    try w.writeAll(&outer);
+    if (timed) try w.writeByte(reply_envelope_version);
+}
+
+pub const TimedReply = struct { cpu_ns: u64, reply: Reply };
+
+fn writeTimedPayload(w: *std.Io.Writer, reply: Reply) !void {
+    switch (reply) {
+        .output => |v| try writeSuccessWithMetadata(w, v.output, v.display_title, v.unsupported_parser_function, v.poem_metadata, v.missing_dependency_metadata, true),
+        .failure => |v| try writeError(w, v.stage, v.error_name, v.detail, true),
+        .ready, .skip => {
+            try writeReplyHeader(w, 1, true);
+            try w.writeByte(if (reply == .ready) 3 else 2);
+            try w.flush();
+        },
+    }
+}
+
+fn writeCpuTrailer(w: *std.Io.Writer, cpu_ns: u64) !void {
+    var trailer: [8]u8 = undefined;
+    std.mem.writeInt(u64, &trailer, cpu_ns, .little);
+    try w.writeAll(&trailer);
+    try w.flush();
+}
+
+pub fn writeTimedReply(w: *std.Io.Writer, cpu_ns: u64, reply: Reply) !void {
+    try writeTimedPayload(w, reply);
+    try writeCpuTrailer(w, cpu_ns);
+}
+
+// Producer clock is sampled after payload serialization/flush. No payload copy
+// or staging allocation is needed; a clock failure leaves an incomplete frame.
+pub fn writeTimedReplyWithClock(w: *std.Io.Writer, clock: anytype, reply: Reply) !void {
+    try writeTimedPayload(w, reply);
+    try writeCpuTrailer(w, try clock());
+}
+
+pub fn decodeTimedReply(bytes: []const u8) !TimedReply {
+    if (bytes.len <= cpu_envelope_len or bytes.len > max_frame_bytes or bytes[0] != reply_envelope_version) return error.InvalidFrame;
+    const end = bytes.len - 8;
+    return .{ .cpu_ns = std.mem.readInt(u64, bytes[end..][0..8], .little), .reply = try decodeReply(bytes[1..end]) };
+}
+
+test "CPU reply envelope rejects old missing truncated and malformed readiness" {
+    var bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer bytes.deinit();
+    try writeTimedReply(&bytes.writer, 123456789, .ready);
+    const timed = try decodeTimedReply(bytes.written()[4..]);
+    try std.testing.expectEqual(@as(u64, 123456789), timed.cpu_ns);
+    try std.testing.expect(timed.reply == .ready);
+    try std.testing.expectError(error.InvalidFrame, decodeTimedReply(&.{3}));
+    try std.testing.expectError(error.InvalidFrame, decodeTimedReply(bytes.written()[4..12]));
+    const broken = try std.testing.allocator.dupe(u8, bytes.written()[4..]);
+    defer std.testing.allocator.free(broken);
+    broken[0] = 4;
+    try std.testing.expectError(error.InvalidFrame, decodeTimedReply(broken));
+    broken[0] = reply_envelope_version;
+    broken[1] = 99;
+    try std.testing.expectError(error.InvalidFrame, decodeTimedReply(broken));
+}
+
+test "completed OOM and ordinary replies retain exact CPU stamps independently of worker lifetime" {
+    const replies = [_]Reply{ .{ .failure = .{ .stage = "expand", .error_name = "OutOfMemory", .detail = "owned" } }, .skip, .{ .output = .{ .output = "body", .display_title = "title" } } };
+    for (replies) |reply| {
+        var bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer bytes.deinit();
+        try writeTimedReply(&bytes.writer, 987, reply);
+        const decoded = try decodeTimedReply(bytes.written()[4..]);
+        try std.testing.expectEqual(@as(u64, 987), decoded.cpu_ns);
+        try std.testing.expectEqual(std.meta.activeTag(reply), std.meta.activeTag(decoded.reply));
+        if (decoded.reply == .failure) try std.testing.expectEqualStrings("OutOfMemory", decoded.reply.failure.error_name);
+        try std.testing.expectError(error.InvalidFrame, decodeTimedReply(bytes.written()[4 .. bytes.written().len - 1]));
+    }
+}
+
+test "producer CPU trailer samples after payload and clock failure leaves an incomplete frame" {
+    const Clock = struct {
+        var output: *std.Io.Writer.Allocating = undefined;
+        fn now() !u64 {
+            // Framed length, version and ready tag have already been emitted.
+            try std.testing.expectEqual(@as(usize, 6), output.written().len);
+            return 321;
+        }
+        fn unavailable() !u64 {
+            return error.WorkerCpuClockUnavailable;
+        }
+    };
+    var bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer bytes.deinit();
+    Clock.output = &bytes;
+    try writeTimedReplyWithClock(&bytes.writer, Clock.now, .ready);
+    try std.testing.expectEqual(@as(u64, 321), (try decodeTimedReply(bytes.written()[4..])).cpu_ns);
+    var partial: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer partial.deinit();
+    try std.testing.expectError(error.WorkerCpuClockUnavailable, writeTimedReplyWithClock(&partial.writer, Clock.unavailable, .ready));
+    try std.testing.expectError(error.InvalidFrame, decodeTimedReply(partial.written()[4..]));
 }

@@ -381,6 +381,18 @@ fn runSingleTest(name: []const u8, seed: ?u32) void {
 
     std.testing.allocator_instance = .init(std.heap.page_allocator, .{});
     const result = test_fn.func();
+    // Report while the callee's return trace is live, before allocator cleanup
+    // can issue fallible diagnostics. Cleanup still decides leak exit priority.
+    if (result) |_| {} else |err| {
+        if (err != error.SkipZigTest) {
+            std.debug.print("{s}\n", .{@errorName(err)});
+            if (@errorReturnTrace()) |trace| {
+                std.debug.dumpErrorReturnTrace(trace);
+            } else {
+                std.debug.print("error return trace unavailable (enable error tracing for this test build)\n", .{});
+            }
+        }
+    }
     const leak_status = std.testing.allocator_instance.deinit();
 
     if (leak_status != 0) {
@@ -392,10 +404,7 @@ fn runSingleTest(name: []const u8, seed: ?u32) void {
         std.process.exit(0);
     } else |err| switch (err) {
         error.SkipZigTest => std.process.exit(2),
-        else => {
-            std.debug.print("{s}\n", .{@errorName(err)});
-            std.process.exit(1);
-        },
+        else => std.process.exit(1),
     }
 }
 

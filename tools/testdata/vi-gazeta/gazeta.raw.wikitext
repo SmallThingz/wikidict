@@ -1,0 +1,139 @@
+{{also|ґазета}}
+{{minitoc}}
+=={{langname|be}}==
+
+==={{section|alt}}===
+* {{alt|be|газэ́та||Taraškievica}}
+* {{alt|be|ґазэ́та||Taraškievica|rare}}
+* {{alt|be|hazeta|gazeta|hazieta|gazieta||Łacinka}}
+
+==={{section|etym}}===
+{{bor+|be|fr|gazette}}.
+
+==={{section|pron}}===
+* {{be-IPA|газе́та}}
+* {{audio|be|Be-газета.ogg}}
+
+==={{section|n}}===
+{{be-noun|газе́та<>|adj=газе́тны|dim=газе́тка}}
+
+# [[báo viết|Báo viết]].
+
+===={{section|decl}}====
+{{be-ndecl|газе́та<>}}
+
+==={{section|ref}}===
+* {{R:be:slounik.org}}
+
+=={{langname|bg}}==
+
+==={{section|etym}}===
+{{bor+|bg|it|gazzetta}}.
+
+==={{section|pron}}===
+{{bg-pr|газе́та|a=[KK]}}
+
+==={{section|n}}===
+{{bg-noun|газе́та|f}}
+
+# {{lb|bg|obsolete}} [[tạp chí|Tạp chí]].
+
+===={{section|decl}}====
+{{bg-ndecl|газе́та<>}}
+
+==={{section|ref}}===
+* {{R:bg:RBE}}
+* {{R:bg:RBE2}}
+
+{{cln|bg|Từ có hậu tố -ета}}
+
+=={{langname|mk}}==
+
+==={{section|pron}}===
+* {{mk-IPA|газе́та}}
+
+==={{section|n}}===
+{{mk-noun|f}}
+
+# {{rfdef|mk}}
+
+===={{section|decl}}====
+{{mk-decl-noun-f|газет}}
+
+=={{langname|ru}}==
+{{wikipedia|lang=ru}}
+
+==={{section|etym}}===
+{{bor+|ru|fr|gazette}}.
+
+==={{section|pron}}===
+* {{audio|ru|Ru-газета.ogg}}
+* {{ru-IPA|газе́та}}
+
+==={{section|n}}===
+{{ru-noun+|газе́та|adj=газе́тный|dim=газе́тка|pej=газетёнка}}
+
+# [[báo viết|Báo viết]].
+#* {{quote-book|ru|year=1857|author=w:ru:Лев Толстой<t:{{w|Leo Tolstoy}}>|title=w:ru:[[Юность (повесть)|Юность]]|chapter=s:ru:[[Юность (Толстой)/Глава XIII|Глава XIII]]|text=С Кузне́цкого моста́ я зае́хал в конди́терскую на Тверско́й и, хотя́ жела́л притвори́ться, что меня́ в конди́терской преиму́щественно интересу́ют '''газе́ты''', не мог удержа́ться и на́чал есть оди́н сла́дкий пирожо́к за други́м.}}
+#* {{quote-book|ru|year=1973|author=w:ru:Михаил Булгаков<t:{{w|Mikhail Bulgakov}}>|title=w:ru:Мастер и Маргарита|chapter=Глава XVIII. Неудачливые визитёры|text=Объявле́ния в '''газе́тах''' об обме́не кварти́ры на Институ́тской у́лице в Ки́еве на ме́ньшую пло́щадь в Москве́ не дава́ли никако́го результа́та.}}
+
+===={{section|decl}}====
+{{ru-noun-table|газе́та}}
+{{ru-noun-table|газе́та|old=1}}
+
+===={{section|drv}}====
+* {{l|ru|газе́тчик}}
+* {{l|ru|газе́тный}}
+
+===={{section|desc}}====
+{{col-top|2|desc}}
+* {{desc|az|qəzet|bor=1}}
+* {{desc|ba|гәзит|bor=1}}
+* {{desc|bua|газетэ|bor=1}}
+* {{desc|dlg|газета|tr=gazeta|bor=1}}
+* {{desc|evn|газе̄та|bor=1}}
+* {{desc|kap|газит|bor=1}}
+* {{desc|ka|გაზეთი|bor=1}}
+* {{desc|xal|газет|bor=1}}
+* {{desc|kk|-|bor=1}}
+*: {{desc|kk|گازەت|tr=gazet|sclb=1}}
+*: {{desc|kk|газет|sc=Cyrl|sclb=1}}
+* {{desc|kjh|газета|bor=1}}
+* {{desc|ky|гезит|bor=1}}
+* {{desc|sjd|газет|bor=1}}
+* {{desc|sms|gaʹzaat|alts=1|bor=1}}
+* {{desc|alt|газет|bor=1}}
+* {{desc|tg|газета|bor=1}}
+* {{desc|bor=1|tt|газет|гәзит}}
+* {{desc|tk|gazet|bor=1}}
+* {{desc|ug|-|bor=1}}
+*: {{desc|ug|گېزىت|sclb=1}}
+*: {{desc|ug|гезит|sclb=1}}
+* {{desc|uz|gazeta|bor=1}}
+* {{desc|sah|хаһыат|bor=1}}
+{{col-bottom}}
+
+=={{langname|uk}}==
+{{wp|lang=uk}}
+
+==={{section|alt}}===
+* {{alter|uk|ґазе́та||kiều dân; trước 1933}}
+
+==={{section|etym}}===
+Từ {{bor|uk|fr|gazette}}.
+
+==={{section|pron}}===
+* {{uk-IPA|газе́та}}
+* {{audio|uk|Uk-газета.ogg}}
+
+==={{section|n}}===
+{{uk-noun|газе́та<>|adj=газе́тний|dim=газе́тка}}
+
+# [[báo viết|Báo viết]].
+
+===={{section|decl}}====
+{{uk-ndecl|газе́та<>}}
+
+==={{section|ref}}===
+* {{R:uk:SUM-11}}
+* {{R:uk:Horokh}}

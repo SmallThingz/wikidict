@@ -136,6 +136,20 @@ pub fn categoryDeclaration(source: []const u8, category: []const u8, registry: *
     return .{ .code = code, .heading = heading };
 }
 
+// This category's complete authored declaration names Slovenian in prose and
+// in its direct language parent. No category name or edition default alone is
+// authority; additional/mixed/protected declarations are outside this proof.
+pub fn slovenianNounDeclaration(source: []const u8, category: []const u8, registry: *const languages.Registry) ?Resolved {
+    if (!std.mem.eql(u8, category, "Slovenski samostalniki")) return null;
+    const declaration = "Ta [[Wikislovar:Kategorija|kategorija]] zajema [[slovenščina|slovenske]] [[samostalnik]]e.\n\n{{a-z}}\n\n[[Kategorija:Samostalniki]]\n[[Kategorija:Slovenščina|Samostalniki]]";
+    if (!std.mem.eql(u8, std.mem.trim(u8, source, " \t\r\n"), declaration)) return null;
+    const resolved = registry.resolveStrong("Slovenščina") orelse registry.resolveTrusted("Slovenščina") orelse return null;
+    if (!std.mem.eql(u8, resolved.code, "sl")) return null;
+    const code = registry.codes.getKey(resolved.code) orelse return null;
+    const heading = registry.headings.get(resolved.code) orelse return null;
+    return .{ .code = code, .heading = heading };
+}
+
 pub const Context = struct {
     allocator: std.mem.Allocator,
     registry: *const languages.Registry,
@@ -170,6 +184,17 @@ pub const Context = struct {
             else => return null,
         };
         for (self.cache) |entry| if (entry) |cached| if (std.mem.eql(u8, cached.title, title)) return cached.owner;
+        // The SL declaration is direct source evidence, not the unrelated
+        // Telugu topic-cat template convention. Preserve that path unchanged.
+        if (std.mem.eql(u8, self.namespace_catalog.content_language, "sl") and
+            std.mem.eql(u8, self.namespace_catalog.ofTitle(title).text, "Slovenski samostalniki"))
+        {
+            const category = (try self.readPage(a, title, 14, 4096)) orelse return null;
+            const owner = slovenianNounDeclaration(category.source, self.namespace_catalog.ofTitle(category.title).text, self.registry);
+            self.cache[self.cache_cursor] = .{ .title = category.title, .owner = owner };
+            self.cache_cursor = (self.cache_cursor + 1) % self.cache.len;
+            return owner;
+        }
         if (self.template_support == null) {
             const spec = self.namespace_catalog.byId(10) orelse return null;
             const template_title = try std.fmt.allocPrint(a, "{s}:topic cat", .{spec.name});

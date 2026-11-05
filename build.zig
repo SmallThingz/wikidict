@@ -366,7 +366,12 @@ pub fn build(b: *std.Build) void {
         .root_module = encoder_mod_test,
         .test_runner = .{ .path = test_runner, .mode = .simple },
     };
-    const encoder_tests = b.addTest(encoder_test_options);
+    var encoder_tests: [encoder_partitions.len]*std.Build.Step.Compile = undefined;
+    for (encoder_partitions, 0..) |partition, i| {
+        var options = encoder_test_options;
+        options.filters = partition.filters;
+        encoder_tests[i] = b.addTest(options);
+    }
     const blob_encoder_tests = b.addTest(.{
         .root_module = blob_encoder_mod_test,
         .test_runner = .{ .path = test_runner, .mode = .simple },
@@ -607,7 +612,15 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    const run_encoder_tests = b.addRunArtifact(encoder_tests);
+    var run_encoder_tests: [encoder_partitions.len]*std.Build.Step.Run = undefined;
+    for (encoder_partitions, 0..) |partition, i| {
+        const run = b.addRunArtifact(encoder_tests[i]);
+        if (partition.runtime_filter) |filter| run.addArgs(&.{ "--test-filter", filter });
+        // Serialize compilation as well as execution. Each next compiler waits
+        // for the preceding partition's tests, not merely its compilation.
+        if (i != 0) encoder_tests[i].step.dependOn(&run_encoder_tests[i - 1].step);
+        run_encoder_tests[i] = run;
+    }
     const run_blob_encoder_tests = b.addRunArtifact(blob_encoder_tests);
     const run_blob_decoder_tests = b.addRunArtifact(blob_decoder_tests);
     const run_blob_query_tests = b.addRunArtifact(blob_query_tests);
@@ -624,7 +637,7 @@ pub fn build(b: *std.Build) void {
     const run_lua_scribunto_tests = b.addRunArtifact(lua_scribunto_tests);
     const run_lua_wikitext_tests = b.addRunArtifact(lua_wikitext_tests);
 
-    blob_encoder_tests.step.dependOn(&run_encoder_tests.step);
+    blob_encoder_tests.step.dependOn(&run_encoder_tests[encoder_partitions.len - 1].step);
     blob_decoder_tests.step.dependOn(&run_blob_encoder_tests.step);
     blob_query_tests.step.dependOn(&run_blob_decoder_tests.step);
     wikimedia_dump_tests.step.dependOn(&run_blob_query_tests.step);
@@ -761,13 +774,17 @@ pub fn build(b: *std.Build) void {
     // above remains unfiltered, including when these options are supplied.
     const prepare_group = b.option(PreparedTestGroup, "prepare-test-group", "Compile only this prepare-tests group");
     const requested_filters = b.option([]const []const u8, "prepare-test-filter", "Repeat to compile named tests in the selected prepare-tests group") orelse &.{};
+    const prepare_error_tracing = b.option(bool, "prepare-test-error-tracing", "Enable error-return traces for selected prepared test roots") orelse false;
     const prepare_filters = preparedTestFilters(b.allocator, prepare_group, requested_filters) catch |err| {
         std.log.err("invalid prepare-tests selection: {s}", .{@errorName(err)});
         b.invalid_user_input = true;
         return;
     };
     const prepared_tests = [_]struct { group: PreparedTestGroup, artifact: *std.Build.Step.Compile }{
-        .{ .group = .encoder, .artifact = encoder_tests },
+        .{ .group = .encoder_compile, .artifact = encoder_tests[0] },
+        .{ .group = .encoder_document, .artifact = encoder_tests[1] },
+        .{ .group = .encoder_writer, .artifact = encoder_tests[2] },
+        .{ .group = .encoder_support, .artifact = encoder_tests[3] },
         .{ .group = .lua, .artifact = lua_tests },
         .{ .group = .lua_core, .artifact = lua_core_tests },
         .{ .group = .lua_abi, .artifact = lua_abi_tests },
@@ -805,12 +822,28 @@ pub fn build(b: *std.Build) void {
         });
         prepare_tests.dependOn(&smoke.step);
     }
+    // Preserve existing explicitly filtered invocations. Empty filters always
+    // use the four normal partitions; there is no unfiltered encoder fallback.
+    if (prepare_group == .encoder and prepare_filters.len != 0) {
+        var options = preparedTestOptions(encoder_tests[0], prepare_filters);
+        options.root_module = preparedRoot(b, options.root_module, prepare_error_tracing);
+        const install = b.addInstallArtifact(b.addTest(options), .{ .dest_sub_path = "wikidict-tests/encoder" });
+        prepare_tests.dependOn(&install.step);
+        return;
+    }
+    var previous_prepared_encoder: ?*std.Build.Step = null;
     for (prepared_tests) |prepared| {
         if (!preparedTestGroupIncluded(prepare_group, prepared.group)) continue;
-        const options = preparedTestOptions(prepared.artifact, prepare_filters);
-        const install = b.addInstallArtifact(b.addTest(options), .{
+        var options = preparedTestOptions(prepared.artifact, prepare_filters);
+        options.root_module = preparedRoot(b, options.root_module, prepare_error_tracing);
+        const compiled = b.addTest(options);
+        if (isEncoderPartition(prepared.group)) {
+            if (previous_prepared_encoder) |previous| compiled.step.dependOn(previous);
+        }
+        const install = b.addInstallArtifact(compiled, .{
             .dest_sub_path = b.fmt("wikidict-tests/{s}", .{@tagName(prepared.group)}),
         });
+        if (isEncoderPartition(prepared.group)) previous_prepared_encoder = &install.step;
         prepare_tests.dependOn(&install.step);
     }
 }
@@ -965,15 +998,56 @@ fn namespaceRegistryModule(b: *std.Build, target: std.Build.ResolvedTarget, opti
 }
 
 const PreparedTestGroup = enum {
-    encoder, lua, lua_core, lua_abi, lua_stdlib, lua_wikitext, tools, closure, provider, storage_unit, namespace_registry, blob_encoder, blob_decoder, blob_query, wikimedia_dump, global_index, program_shapes, lua_ustring, lua_scribunto, bundle_protocol, bundle_pipeline, blob_file_tools, missing_dependency
+    encoder, encoder_compile, encoder_document, encoder_writer, encoder_support, lua, lua_core, lua_abi, lua_stdlib, lua_wikitext, tools, closure, provider, storage_unit, namespace_registry, blob_encoder, blob_decoder, blob_query, wikimedia_dump, global_index, program_shapes, lua_ustring, lua_scribunto, bundle_protocol, bundle_pipeline, blob_file_tools, missing_dependency
 };
 
-fn preparedTestGroupIncluded(selected: ?PreparedTestGroup, group: PreparedTestGroup) bool {
-    if (selected) |wanted| return wanted == group;
-    // Keep the established seven-artifact default. Other normal roots are
-    // opt-in for source-bound continuations, never implicit suite completion.
+const encoder_discovery_filter = "encoder root imports bundle-time presentation modules";
+const EncoderPartition = struct {
+    group: PreparedTestGroup,
+    filters: []const []const u8,
+    runtime_filter: ?[]const u8,
+};
+// Keep the existing source root and qualified names. Discovery is compiled in
+// every artifact, but only support executes it. Match the complete inventory
+// when changing these boundaries; test-filter is substring-based.
+const encoder_partitions = [_]EncoderPartition{
+    .{ .group = .encoder_compile, .filters = &.{ "presentation_compile.test.", encoder_discovery_filter }, .runtime_filter = "presentation_compile.test." },
+    .{ .group = .encoder_document, .filters = &.{ "presentation_document.test.", encoder_discovery_filter }, .runtime_filter = "presentation_document.test." },
+    .{ .group = .encoder_writer, .filters = &.{ "blob_builder.test.", encoder_discovery_filter }, .runtime_filter = "blob_builder.test." },
+    .{ .group = .encoder_support, .filters = &.{
+        "font_scale.test.", "hieroglyph_unicode.test.", "language_source.test.",
+        "presentation_citations.test.", "presentation_heading_anchors.test.",
+        "presentation_layout.test.", "presentation_media.test.",
+        "redirect_source.test.", "root.test.", "table_style_profile.test.",
+    }, .runtime_filter = null },
+};
+
+fn isEncoderPartition(group: PreparedTestGroup) bool {
     return switch (group) {
-        .encoder, .lua, .lua_core, .lua_abi, .lua_stdlib, .lua_wikitext, .tools => true,
+        .encoder_compile, .encoder_document, .encoder_writer, .encoder_support => true,
+        else => false,
+    };
+}
+
+fn preparedRoot(b: *std.Build, original: *std.Build.Module, tracing: bool) *std.Build.Module {
+    if (!tracing) return original;
+    // Preserve every root setting/import, changing only this prepared compile.
+    const traced = b.allocator.create(std.Build.Module) catch @panic("OOM");
+    traced.init(b, .{ .existing = original });
+    traced.error_tracing = true;
+    return traced;
+}
+
+fn preparedTestGroupIncluded(selected: ?PreparedTestGroup, group: PreparedTestGroup) bool {
+    if (selected) |wanted| {
+        if (wanted == .encoder) return isEncoderPartition(group);
+        return wanted == group;
+    }
+    // Seven logical suites, with encoder represented by four physical artifacts.
+    // Other normal roots remain opt-in, never implicit suite completion.
+    return switch (group) {
+        .encoder_compile, .encoder_document, .encoder_writer, .encoder_support,
+        .lua, .lua_core, .lua_abi, .lua_stdlib, .lua_wikitext, .tools => true,
         else => false,
     };
 }
@@ -998,6 +1072,9 @@ fn preparedTestFilters(a: std.mem.Allocator, group: ?PreparedTestGroup, requeste
     if (requested.len == 0) return &.{};
     const selected = group orelse return error.PrepareTestGroupRequired;
     for (requested) |filter| if (filter.len == 0) return error.EmptyTestFilter;
+    // Zig's filters are ORed substrings, not an intersection with a partition.
+    // Explicit focused filters continue to use -Dprepare-test-group=encoder.
+    if (isEncoderPartition(selected)) return error.EncoderPartitionFilterNotSupported;
     var filters: std.ArrayList([]const u8) = .empty;
     errdefer filters.deinit(a);
     try filters.appendSlice(a, requested);
@@ -1021,13 +1098,13 @@ fn preparedTestFilters(a: std.mem.Allocator, group: ?PreparedTestGroup, requeste
     return filters.toOwnedSlice(a);
 }
 
-test "prepared test default retains all seven groups and unfiltered artifacts" {
+test "prepared test default retains seven logical suites with four encoder artifacts" {
     var count: usize = 0;
     for (std.meta.tags(PreparedTestGroup)) |group| {
         if (preparedTestGroupIncluded(null, group)) count += 1;
     }
-    try std.testing.expectEqual(@as(usize, 7), count);
-    for ([_]PreparedTestGroup{ .encoder, .lua, .lua_core, .lua_abi, .lua_stdlib, .lua_wikitext, .tools }) |group| {
+    try std.testing.expectEqual(@as(usize, 10), count);
+    for ([_]PreparedTestGroup{ .encoder_compile, .encoder_document, .encoder_writer, .encoder_support, .lua, .lua_core, .lua_abi, .lua_stdlib, .lua_wikitext, .tools }) |group| {
         try std.testing.expect(preparedTestGroupIncluded(null, group));
     }
     try std.testing.expect(!preparedTestGroupIncluded(null, .blob_encoder));
@@ -1037,7 +1114,7 @@ test "prepared test default retains all seven groups and unfiltered artifacts" {
 
 test "prepared test selection excludes unrelated groups" {
     for (std.meta.tags(PreparedTestGroup)) |group| {
-        try std.testing.expectEqual(group == .encoder, preparedTestGroupIncluded(.encoder, group));
+        try std.testing.expectEqual(isEncoderPartition(group), preparedTestGroupIncluded(.encoder, group));
     }
     for (std.meta.tags(PreparedTestGroup)) |group| {
         try std.testing.expectEqual(group == .blob_encoder, preparedTestGroupIncluded(.blob_encoder, group));
@@ -1089,4 +1166,37 @@ test "prepared test options preserve normal modules backend runner and limits" {
     try std.testing.expect(options.test_runner.?.mode == .simple);
     try std.testing.expectEqualStrings("zig-lib", options.zig_lib_dir.?.cwd_relative);
     try std.testing.expectEqualStrings("one", options.filters[0]);
+}
+
+
+test "encoder partitions retain discovery and select disjoint module tests" {
+    const cases = [_]struct { name: []const u8, group: PreparedTestGroup }{
+        .{ .name = "presentation_compile.test.same", .group = .encoder_compile },
+        .{ .name = "presentation_compile.test.same with suffix", .group = .encoder_compile },
+        .{ .name = "presentation_document.test.same", .group = .encoder_document },
+        .{ .name = "blob_builder.test.same", .group = .encoder_writer },
+        .{ .name = "presentation_layout.test.same", .group = .encoder_support },
+        .{ .name = "root.test.encoder root imports bundle-time presentation modules", .group = .encoder_support },
+    };
+    for (cases) |case| {
+        var executions: usize = 0;
+        for (encoder_partitions) |partition| {
+            var compiled = false;
+            for (partition.filters) |filter| compiled = compiled or std.mem.indexOf(u8, case.name, filter) != null;
+            const selected = compiled and (if (partition.runtime_filter) |filter| std.mem.indexOf(u8, case.name, filter) != null else true);
+            if (selected) {
+                executions += 1;
+                try std.testing.expectEqual(case.group, partition.group);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), executions);
+    }
+    for (encoder_partitions) |partition| {
+        var discovered = false;
+        for (partition.filters) |filter| discovered = discovered or std.mem.indexOf(u8, "root.test.encoder root imports bundle-time presentation modules", filter) != null;
+        try std.testing.expect(discovered);
+        try std.testing.expect(preparedTestGroupIncluded(.encoder, partition.group));
+        try std.testing.expect(preparedTestGroupIncluded(partition.group, partition.group));
+        try std.testing.expectError(error.EncoderPartitionFilterNotSupported, preparedTestFilters(std.testing.allocator, partition.group, &.{"same"}));
+    }
 }

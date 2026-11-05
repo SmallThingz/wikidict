@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	sawiktionary
+# dump-date	20261001
+# content-language	sa
+-2	माध्यमम्	Media	case-sensitive	0	0	0		compile_only	virtual_namespace	माध्यम
+-1	विशेषः	Special	first-letter	0	0	0		compile_only	virtual_namespace	विशेष	विशेषम्
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	सम्भाषणम्	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	संभाषणं
+2	सदस्यः	User	first-letter	1	0	0		compile_only	standard_build_input	योजकः
+3	सदस्यसम्भाषणम्	User talk	first-letter	1	0	0		compile_only	discussion_namespace	योजकसंभाषणं	योजकसम्भाषणम्
+4	विकिशब्दकोशः	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	विकिशब्दकोशःसम्भाषणम्	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk	विकिशब्दकोशःसंभाषणं
+6	सञ्चिका	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	चित्रं	चित्रम्
+7	सञ्चिकासम्भाषणम्	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	चित्रसंभाषणं	चित्रसम्भाषणम्
+8	मीडियाविकि	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input	मिडीयाविकी
+9	मीडियाविकिसम्भाषणम्	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	मिडियाविकीसंभाषणं	मिडियाविकीसम्भाषणम्
+10	फलकम्	Template	case-sensitive	1	0	0		compile_only	standard_build_input	बिंबधर
+11	फलकसम्भाषणम्	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	फलकस्य सम्भाषणम्	बिंबधर संभाषणं
+12	साहाय्यम्	Help	case-sensitive	1	0	0		compile_only	standard_build_input	उपकारः	सहाय्य	सहाय्यम्
+13	साहाय्यसम्भाषणम्	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	उपकारसंभाषणं	सहाय्यसंभाषणं	सहाय्यस्य सम्भाषणम्
+14	वर्गः	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	वर्गसम्भाषणम्	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	वर्गसंभाषणं
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	पटलम्	Module	case-sensitive	1	0	0		compile_only	standard_build_input	अनुखंड
+829	पटलसम्भाषणम्	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace	अनुखंड वार्ता
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

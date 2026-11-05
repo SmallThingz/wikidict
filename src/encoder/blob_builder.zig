@@ -2129,6 +2129,62 @@ fn arabicMeaningsSupportCategoryLanguage(codes: LanguageCodes, source: []const u
     return raw_language;
 }
 
+// The captured headingless SL nouns retain the same explicit headword line,
+// one translation support heading, and one literal category before/after
+// expansion. Only the category's independently loaded declaration owns them.
+fn slovenianSupportCategoryLanguage(codes: LanguageCodes, title: []const u8, source: []const u8, raw_source: ?[]const u8, raw_sections: []const language_source.Section, page_sections: []const language_source.Section) !?ResolvedLanguage {
+    const ns = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, ns.content_language, "sl") or raw_sections.len != 0 or page_sections.len != 0) return null;
+    const raw = raw_source orelse return null;
+    const corroborate = codes.source_category_fn orelse return null;
+    const Observe = struct {
+        fn anyHeading(_: ?*const anyopaque, _: []const u8) bool { return true; }
+        fn firstLine(text: []const u8) []const u8 {
+            return std.mem.trim(u8, text[0 .. std.mem.indexOfScalar(u8, text, '\n') orelse text.len], " \t\r");
+        }
+        fn headword(line: []const u8, lemma: []const u8) bool {
+            if (!std.mem.startsWith(u8, line, "''")) return false;
+            const end = std.mem.indexOfPos(u8, line, 2, "'', [[samostalnik]] ") orelse return false;
+            if (!std.mem.eql(u8, line[2..end], lemma)) return false;
+            const gender = line[end + "'', [[samostalnik]] ".len ..];
+            return std.mem.eql(u8, gender, "ženskega [[spol]]a") or std.mem.eql(u8, gender, "srednjega [[spol]]a");
+        }
+        fn owner(value: LanguageCodes, text: []const u8, catalog: *const @import("namespace_registry").Registry, callback: *const fn (?*anyopaque, []const u8) anyerror!?ResolvedLanguage) !?ResolvedLanguage {
+            var categories: language_source.CategoryIterator = .{ .source = text };
+            var found: ?ResolvedLanguage = null;
+            while (categories.next()) |target| {
+                const category = catalog.ofTitle(target);
+                if (category.id != 14) continue;
+                // Other or duplicate categories are outside the two captured
+                // forms; neither an unknown peer nor a mixed owner is guessed.
+                if (found != null or !std.mem.eql(u8, category.text, "Slovenski samostalniki")) return null;
+                const language = (try callback(value.source_category_ctx, target)) orelse return null;
+                if (!std.mem.eql(u8, language.code, "sl")) return null;
+                found = language;
+            }
+            return found;
+        }
+    };
+    const first = Observe.firstLine(raw);
+    if (!Observe.headword(first, title) or !std.mem.eql(u8, first, Observe.firstLine(source))) return null;
+    const markers: LanguageMarkers = .{ .codes = &codes };
+    var authored_headings = languageSections(raw, &markers);
+    authored_headings.all_heading_levels = true;
+    // This audit must see every unprotected depth, not just peers of the
+    // iterator's first active level. It never changes the grouping iterator.
+    authored_headings.heading_filter = .{ .ctx = null, .accepts = Observe.anyHeading };
+    if (authored_headings.next() != null) return null;
+    var expanded_headings = languageSections(source, &markers);
+    expanded_headings.all_heading_levels = true;
+    expanded_headings.heading_filter = .{ .ctx = null, .accepts = Observe.anyHeading };
+    const support = expanded_headings.next() orelse return null;
+    if (support.hyphen_marker or !std.mem.eql(u8, std.mem.trim(u8, support.heading, " \t\r\n"), "Prevodi") or
+        !std.mem.eql(u8, Observe.firstLine(support.source), "==== Prevodi ====") or expanded_headings.next() != null) return null;
+    const authored = (try Observe.owner(codes, raw, ns, corroborate)) orelse return null;
+    const expanded = (try Observe.owner(codes, source, ns, corroborate)) orelse return null;
+    return if (std.mem.eql(u8, authored.code, expanded.code) and std.mem.eql(u8, authored.heading, expanded.heading)) authored else null;
+}
+
 // TE's captured grammar form has no language heading or populated POS field.
 // Its authored category can supply an owner only with current source evidence;
 // empty support fields never acquire a lexical sense or POS here.
@@ -3269,7 +3325,8 @@ fn processMain(
             assameseSupportLanguage(codes, source, raw_source) orelse
             (try teluguSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items));
         const explicit = if (page_sections.items.len == 0)
-            rawPrefixParagraphLanguage(codes, raw_source, source, raw_sections.items, page_sections.items) orelse
+            (try slovenianSupportCategoryLanguage(codes, title, source, raw_source, raw_sections.items, page_sections.items)) orelse
+                rawPrefixParagraphLanguage(codes, raw_source, source, raw_sections.items, page_sections.items) orelse
                 unsectionedLanguage(codes, raw_source orelse source) orelse unsectionedExpandedLanguage(codes, source) orelse unsectionedAfrikaansExpandedLanguage(codes, source)
         else
             support;
@@ -7689,9 +7746,9 @@ test "Writer refused ordinary roots expose language owners without inheriting na
     };
     // Check.spans ignores actual ASCII whitespace; Part text stores only its nonspace token sequence.
     const english = [_]Part{ .{ .text = "one", .target = "First" }, .{ .text = "first", .target = "First" }, .{ .text = "[malformedlink]Target|lead" } };
-    const french = [_]Part{ .{ .text = "body" }, .{ .text = "explicit", .target = "cat" }, .{ .text = "end[malformedlink]" }, .{ .text = "after", .bold = true }, .{ .text = "plain" } };
+    const french = [_]Part{ .{ .text = "body" }, .{ .text = "explicit", .target = "cat" }, .{ .text = "end]]" }, .{ .text = "after", .bold = true }, .{ .text = "plain" } };
     const nested_english = [_]Part{ .{ .text = "[malformedlink]Outer|lead" }, .{ .text = "one", .target = "Inner" } };
-    const nested_french = [_]Part{ .{ .text = "French", .target = "Inner" }, .{ .text = "body", .target = "Inner" }, .{ .text = "tail[malformedlink]" }, .{ .text = "outside" } };
+    const nested_french = [_]Part{ .{ .text = "French", .target = "Inner" }, .{ .text = "body", .target = "Inner" }, .{ .text = "tail]]" }, .{ .text = "outside" } };
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -13334,4 +13391,259 @@ test "captured Korean girl preserves piped IPA brackets full body actions owner 
     try std.testing.expectEqualStrings("En-us-girl.ogg", stored.entry.media[0].file);
     try std.testing.expectEqualStrings("En-us-girl.ogg", stored.entry.media[0].caption);
     try std.testing.expectEqual(blobs.presentation_types.MediaKind.audio, stored.entry.media[0].kind);
+}
+
+test "captured Bulgarian may retains computed subpage noun particle forms translations and codec" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact p113495/r1124394 raw2366/b7957cf3 and expanded6415/24a0598a.
+    // Reference protects only the invalid computed outer name; no ID is guessed.
+    const raw = "{{-bg-}}\n{{Уикипедия}}\n{{Съществително нарицателно име| също наречие\n  ID = Май\n| ЗНАЧЕНИЕ = \n# Петият месец от календарната година.\n| РОД = м\n| ТИП = 193\n| СРИЧКИ = май\n| ЕТИМОЛОГИЯ = Чрез гр. μάϊος, от лат. māius (“(месец) на Мая”), от Мая (Гръцки: Μαία; Латински: Maia), древноримска богиня покровителка на земята, принасяли ѝ жертви на 1 май. Прото-Индо-Европейски *magya (“тя която е велика”), от Прото-Индо-Европейски *méǵh₂s (“велик”).\n| ИЗРАЗИ = \n| ПРЕВОД1 =\n* английски: {{п|en|May}}\n* белоруски: {{t|be|травень|m}}, {{t|be|май|m}}\n* гръцки: [[Μάιος]]\n* есперанто: [[majo]] \n* ирландски: [[Bealtaine]] \n* исландски: [[mega]] \n* испански: {{п|es|mayo}}\n* италиански: {{п|it|maggio|m}}\n* немски: {{п|de|Mai}} \n* осетински: [[май]], [[зæрдæвæрæны мæй]]\n| ПРЕВОД2 =\n* персийски: {{п|fa|مه}}\n* полски: [[maj]] \n* португалски: [[Maio]]\n* руски: {{п|ru|май|m}}\n* словашки: {{t|sk|máj|m}}\n* словенски: {{п|sl|maj}}\n* сръбски: {{п|sr|мај}}\n* унгарски: {{п|hu|május}}\n* фински: [[toukokuu]] \n* френски: [[Mai]] \n* хърватски: {{п|hr|svibanj}}\n| СИНОНИМИ = \n| СРОДНИ ДУМИ = \n| ПРОИЗВОДНИ ДУМИ = \n| ДРУГИ = \n}}\n\n{{Частица|\n  ID = май2\n| ЗНАЧЕНИЕ =\n# Израз на вероятност. (''Май ще вали.'')\n| СРИЧКИ = май\n| ЕТИМОЛОГИЯ = \n| ИЗРАЗИ =\n| ПРЕВОД1 = \n| ПРЕВОД2 = \n| ДРУГИ = '''Синоними:''' [[като че ли]], [[комай]], [[изглежда]], [[вероятно]], [[сигурно]], [[почти]], [[току-речи]], [[гаче ли]], види се, струва ми се, чини ми се, [[сякаш]], [[може би]], възможно е, тъй да се каже\n}}\n\n{{Форма|\n  ID = май3\n| ЧАСТ НА РЕЧТА = \n| ВИД = \n| ОСНОВНА ФОРМА = мая\n}}";
+    const expanded = "<div style=\"clear:both;\"></div>\n== [[:bg:w:Български език|Български]] ==\n[[Категория:Думи в българския език]]\n<templatestyles src=\"Шаблон:Уикипедия-кутия/styles.css\" />\n<table class=\"bgwik-wp-box\">\n<tr>\n<td class=\"bgwik-wp-logo\">[[File:Wikipedia-logo-bg.png|45px|link=w:|Емблемата на Уикипедия]]</td>\n<td class=\"bgwik-wp-text\">[[w:|Уикипедия]] разполага със статия за '''[[w:май|май]]'''.</td>\n</tr>\n</table>\n{{Словоформи/{{{ID}}}}}\n=== Съществително нарицателно име, ''<em title=\"Genus: Maskulinum (граматически род: мъжки)\">мъжки род</em>'', ''[[Уикиречник:Български/Типове думи/193|тип 193]]'' ===\n# Петият месец от календарната година.\n==== Етимология ====\nЧрез гр. μάϊος, от лат. māius (“(месец) на Мая”), от Мая (Гръцки: Μαία; Латински: Maia), древноримска богиня покровителка на земята, принасяли ѝ жертви на 1 май. Прото-Индо-Европейски *magya (“тя която е велика”), от Прото-Индо-Европейски *méǵh₂s (“велик”).\n\n==== Изговор ====\n{{{ИЗГОВОР}}}\n==== Фразеологични изрази ====\n\n==== Превод ====\n\n<div class=\"NavFrame mw-collapsible  \">\n<div class=\"NavHead\" style=\"background:#ece7ff;\nborder-bottom:1px solid #b8b0d9;\nfont-weight:bold;\"></div>\n<div class=\"NavContent mw-collapsible-content\">\n{| style=\"margin:0 auto 0.3em auto; width:100%; background: #fcfbff;\" cellspacing=\"0\" class=\"translations\"\n|-\n|valign=\"top\" style=\"text-align:left; width:48%; background: #f7f8ff;\"|\n\n* английски: <span class=\"п\" lang=\"en\" xml:lang=\"en\">[[May#Английски|May]]</span><sup class=\"trans-exists\">&nbsp;[[:en:May|(en)]]</sup></span>\n* белоруски: <span class=\"п\" lang=\"be\" xml:lang=\"be\">[[травень#Белоруски|травень]]</span><sup class=\"trans-exists\">&nbsp;[[:be:травень|(be)]]</sup><abbr title=\"неизвестно\">?</abbr></span>, <span class=\"п\" lang=\"be\" xml:lang=\"be\">[[май#Белоруски|май]]</span><sup class=\"trans-exists\">&nbsp;[[:be:май|(be)]]</sup><abbr title=\"неизвестно\">?</abbr></span>\n* гръцки: [[Μάιος]]\n* есперанто: [[majo]] \n* ирландски: [[Bealtaine]] \n* исландски: [[mega]] \n* испански: <span class=\"п\" lang=\"es\" xml:lang=\"es\">[[mayo#Испански|mayo]]</span><sup class=\"trans-exists\">&nbsp;[[:es:mayo|(es)]]</sup></span>\n* италиански: <span class=\"п\" lang=\"it\" xml:lang=\"it\">[[maggio#Италиански|maggio]]</span><sup class=\"trans-exists\">&nbsp;[[:it:maggio|(it)]]</sup><abbr title=\"неизвестно\">?</abbr></span>\n* немски: <span class=\"п\" lang=\"de\" xml:lang=\"de\">[[Mai#Немски|Mai]]</span><sup class=\"trans-exists\">&nbsp;[[:de:Mai|(de)]]</sup></span> \n* осетински: [[май]], [[зæрдæвæрæны мæй]]\n|width=\"1%\"|\n|width=\"48%\" valign=\"top\" style=\"text-align:left; background: #f7f8ff;\"|\n* персийски: <span class=\"п\" lang=\"fa\" xml:lang=\"fa\">[[مه#Персийски|مه]]</span><sup class=\"trans-exists\">&nbsp;[[:fa:مه|(fa)]]</sup></span>\n* полски: [[maj]] \n* португалски: [[Maio]]\n* руски: <span class=\"п\" lang=\"ru\" xml:lang=\"ru\">[[май#Руски|май]]</span><sup class=\"trans-exists\">&nbsp;[[:ru:май|(ru)]]</sup><abbr title=\"неизвестно\">?</abbr></span>\n* словашки: <span class=\"п\" lang=\"sk\" xml:lang=\"sk\">[[máj#Словашки|máj]]</span><sup class=\"trans-exists\">&nbsp;[[:sk:máj|(sk)]]</sup><abbr title=\"неизвестно\">?</abbr></span>\n* словенски: <span class=\"п\" lang=\"sl\" xml:lang=\"sl\">[[maj#Словенски|maj]]</span><sup class=\"trans-exists\">&nbsp;[[:sl:maj|(sl)]]</sup></span>\n* сръбски: <span class=\"п\" lang=\"sr\" xml:lang=\"sr\">[[мај#Сръбски|мај]]</span><sup class=\"trans-exists\">&nbsp;[[:sr:мај|(sr)]]</sup></span>\n* унгарски: <span class=\"п\" lang=\"hu\" xml:lang=\"hu\">[[május#Унгарски|május]]</span><sup class=\"trans-exists\">&nbsp;[[:hu:május|(hu)]]</sup></span>\n* фински: [[toukokuu]] \n* френски: [[Mai]] \n* хърватски: <span class=\"п\" lang=\"hr\" xml:lang=\"hr\">[[svibanj#Хърватски|svibanj]]</span><sup class=\"trans-exists\">&nbsp;[[:hr:svibanj|(hr)]]</sup></span>\n|}</div></div>\n==== Синоними ====\n\n\n==== Сродни думи ====\n\n==== Производни думи ====\n\n==== Надсловия ====\n{{{НАДСЛОВИЯ}}}\n==== Подсловия ====\n{{{ПОДСЛОВИЯ}}}\n==== Източници ====\n{{{ИЗТОЧНИЦИ}}}\n==== Други ====\n \n\n[[Категория:Съществителни имена (български)]] __БЕЗ_РЕДАКТИРАНЕ_НА_РАЗДЕЛИ__\n\n=== Частица, ''[[Уикиречник:Български/Типове думи/191|тип 191]]'' ===\n# Израз на вероятност. (''Май ще вали.'')\n==== Етимология ====\n\n==== Фразеологични изрази ====\n\n==== Превод ====\n\n<div class=\"NavFrame mw-collapsible  \">\n<div class=\"NavHead\" style=\"background:#ece7ff;\nborder-bottom:1px solid #b8b0d9;\nfont-weight:bold;\"></div>\n<div class=\"NavContent mw-collapsible-content\">\n{| style=\"margin:0 auto 0.3em auto; width:100%; background: #fcfbff;\" cellspacing=\"0\" class=\"translations\"\n|-\n|valign=\"top\" style=\"text-align:left; width:48%; background: #f7f8ff;\"|\n\n\n|width=\"1%\"|\n|width=\"48%\" valign=\"top\" style=\"text-align:left; background: #f7f8ff;\"|\n\n|}</div></div>\n'''Синоними:''' [[като че ли]], [[комай]], [[изглежда]], [[вероятно]], [[сигурно]], [[почти]], [[току-речи]], [[гаче ли]], види се, струва ми се, чини ми се, [[сякаш]], [[може би]], възможно е, тъй да се каже [[Категория:Частици в българския език]]  __БЕЗ_РЕДАКТИРАНЕ_НА_РАЗДЕЛИ__\n\n<div class=\"entry\">\n=== , неосновна форма ===\n==== Вид ====\n\n==== Oсновна форма ====\n[[мая]]\n</div>";
+    const reference = "<div style=\"clear:both;\"></div>\n== [[:bg:w:Български език|Български]] ==\n[[Категория:Думи в българския език]]\n<templatestyles src=\"Шаблон:Уикипедия-кутия/styles.css\" />\n<table class=\"bgwik-wp-box\">\n<tr>\n<td class=\"bgwik-wp-logo\">[[File:Wikipedia-logo-bg.png|45px|link=w:|Емблемата на Уикипедия]]</td>\n<td class=\"bgwik-wp-text\">[[w:|Уикипедия]] разполага със статия за '''[[w:май|май]]'''.</td>\n</tr>\n</table>\n<nowiki>{{Словоформи/{{{ID}}}}}</nowiki>\n=== Съществително нарицателно име, ''<em title=\"Genus: Maskulinum (граматически род: мъжки)\">мъжки род</em>'', ''[[Уикиречник:Български/Типове думи/193|тип 193]]'' ===\n# Петият месец от календарната година.\n==== Етимология ====\nЧрез гр. μάϊος, от лат. māius (“(месец) на Мая”), от Мая (Гръцки: Μαία; Латински: Maia), древноримска богиня покровителка на земята, принасяли ѝ жертви на 1 май. Прото-Индо-Европейски *magya (“тя която е велика”), от Прото-Индо-Европейски *méǵh₂s (“велик”).\n\n==== Изговор ====\n{{{ИЗГОВОР}}}\n==== Фразеологични изрази ====\n\n==== Превод ====\n\n<div class=\"NavFrame mw-collapsible  \">\n<div class=\"NavHead\" style=\"background:#ece7ff;\nborder-bottom:1px solid #b8b0d9;\nfont-weight:bold;\"></div>\n<div class=\"NavContent mw-collapsible-content\">\n{| style=\"margin:0 auto 0.3em auto; width:100%; background: #fcfbff;\" cellspacing=\"0\" class=\"translations\"\n|-\n|valign=\"top\" style=\"text-align:left; width:48%; background: #f7f8ff;\"|\n\n* английски: <span class=\"п\" lang=\"en\" xml:lang=\"en\">[[May#Английски|May]]</span><sup class=\"trans-exists\">&nbsp;[[:en:May|(en)]]</sup></span>\n* белоруски: <span class=\"п\" lang=\"be\" xml:lang=\"be\">[[травень#Белоруски|травень]]</span><sup class=\"trans-exists\">&nbsp;[[:be:травень|(be)]]</sup><abbr title=\"неизвестно\">?</abbr></span>, <span class=\"п\" lang=\"be\" xml:lang=\"be\">[[май#Белоруски|май]]</span><sup class=\"trans-exists\">&nbsp;[[:be:май|(be)]]</sup><abbr title=\"неизвестно\">?</abbr></span>\n* гръцки: [[Μάιος]]\n* есперанто: [[majo]] \n* ирландски: [[Bealtaine]] \n* исландски: [[mega]] \n* испански: <span class=\"п\" lang=\"es\" xml:lang=\"es\">[[mayo#Испански|mayo]]</span><sup class=\"trans-exists\">&nbsp;[[:es:mayo|(es)]]</sup></span>\n* италиански: <span class=\"п\" lang=\"it\" xml:lang=\"it\">[[maggio#Италиански|maggio]]</span><sup class=\"trans-exists\">&nbsp;[[:it:maggio|(it)]]</sup><abbr title=\"неизвестно\">?</abbr></span>\n* немски: <span class=\"п\" lang=\"de\" xml:lang=\"de\">[[Mai#Немски|Mai]]</span><sup class=\"trans-exists\">&nbsp;[[:de:Mai|(de)]]</sup></span> \n* осетински: [[май]], [[зæрдæвæрæны мæй]]\n|width=\"1%\"|\n|width=\"48%\" valign=\"top\" style=\"text-align:left; background: #f7f8ff;\"|\n* персийски: <span class=\"п\" lang=\"fa\" xml:lang=\"fa\">[[مه#Персийски|مه]]</span><sup class=\"trans-exists\">&nbsp;[[:fa:مه|(fa)]]</sup></span>\n* полски: [[maj]] \n* португалски: [[Maio]]\n* руски: <span class=\"п\" lang=\"ru\" xml:lang=\"ru\">[[май#Руски|май]]</span><sup class=\"trans-exists\">&nbsp;[[:ru:май|(ru)]]</sup><abbr title=\"неизвестно\">?</abbr></span>\n* словашки: <span class=\"п\" lang=\"sk\" xml:lang=\"sk\">[[máj#Словашки|máj]]</span><sup class=\"trans-exists\">&nbsp;[[:sk:máj|(sk)]]</sup><abbr title=\"неизвестно\">?</abbr></span>\n* словенски: <span class=\"п\" lang=\"sl\" xml:lang=\"sl\">[[maj#Словенски|maj]]</span><sup class=\"trans-exists\">&nbsp;[[:sl:maj|(sl)]]</sup></span>\n* сръбски: <span class=\"п\" lang=\"sr\" xml:lang=\"sr\">[[мај#Сръбски|мај]]</span><sup class=\"trans-exists\">&nbsp;[[:sr:мај|(sr)]]</sup></span>\n* унгарски: <span class=\"п\" lang=\"hu\" xml:lang=\"hu\">[[május#Унгарски|május]]</span><sup class=\"trans-exists\">&nbsp;[[:hu:május|(hu)]]</sup></span>\n* фински: [[toukokuu]] \n* френски: [[Mai]] \n* хърватски: <span class=\"п\" lang=\"hr\" xml:lang=\"hr\">[[svibanj#Хърватски|svibanj]]</span><sup class=\"trans-exists\">&nbsp;[[:hr:svibanj|(hr)]]</sup></span>\n|}</div></div>\n==== Синоними ====\n\n\n==== Сродни думи ====\n\n==== Производни думи ====\n\n==== Надсловия ====\n{{{НАДСЛОВИЯ}}}\n==== Подсловия ====\n{{{ПОДСЛОВИЯ}}}\n==== Източници ====\n{{{ИЗТОЧНИЦИ}}}\n==== Други ====\n \n\n[[Категория:Съществителни имена (български)]] __БЕЗ_РЕДАКТИРАНЕ_НА_РАЗДЕЛИ__\n\n=== Частица, ''[[Уикиречник:Български/Типове думи/191|тип 191]]'' ===\n# Израз на вероятност. (''Май ще вали.'')\n==== Етимология ====\n\n==== Фразеологични изрази ====\n\n==== Превод ====\n\n<div class=\"NavFrame mw-collapsible  \">\n<div class=\"NavHead\" style=\"background:#ece7ff;\nborder-bottom:1px solid #b8b0d9;\nfont-weight:bold;\"></div>\n<div class=\"NavContent mw-collapsible-content\">\n{| style=\"margin:0 auto 0.3em auto; width:100%; background: #fcfbff;\" cellspacing=\"0\" class=\"translations\"\n|-\n|valign=\"top\" style=\"text-align:left; width:48%; background: #f7f8ff;\"|\n\n\n|width=\"1%\"|\n|width=\"48%\" valign=\"top\" style=\"text-align:left; background: #f7f8ff;\"|\n\n|}</div></div>\n'''Синоними:''' [[като че ли]], [[комай]], [[изглежда]], [[вероятно]], [[сигурно]], [[почти]], [[току-речи]], [[гаче ли]], види се, струва ми се, чини ми се, [[сякаш]], [[може би]], възможно е, тъй да се каже [[Категория:Частици в българския език]]  __БЕЗ_РЕДАКТИРАНЕ_НА_РАЗДЕЛИ__\n\n<div class=\"entry\">\n=== , неосновна форма ===\n==== Вид ====\n\n==== Oсновна форма ====\n[[мая]]\n</div>";
+    const namespace_source = "# wikidict-namespace-registry-v1\n# wiki\tbgwiktionary\n# dump-date\t20261001\n# content-language\tbg\n-2\tМедия\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n-1\tСпециални\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\tБеседа\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n2\tПотребител\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n3\tПотребител беседа\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n4\tУикиречник\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\tWiktionary\n5\tУикиречник беседа\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWiktionary talk\n6\tФайл\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\tКартинка\n7\tФайл беседа\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tImage talk\tКартинка беседа\n8\tМедияУики\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n9\tМедияУики беседа\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n10\tШаблон\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n11\tШаблон беседа\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n12\tПомощ\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n13\tПомощ беседа\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n14\tКатегория\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n15\tКатегория беседа\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n100\tСловоформи\tСловоформи\tcase-sensitive\t1\t0\t0\t\tsupplemental\tunclassified_subject_retained\n101\tСловоформи беседа\tСловоформи беседа\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\tМодул\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\tМодул беседа\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\tEvent\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\tEvent talk\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
+    const behavior_source = "# wikidict-behavior-switches-v1\n# wiki\tbgwiktionary\n# dump-date\t20261001\n# content-language\tbg\n# namespace-registry-sha256\t3073f847fc908ae17052f632ced7ed61a98afa040055f83a756a844da2af659b\narchivedtalk\t0\t__ARCHIVEDTALK__\ndisambiguation\t1\t__DISAMBIG__\nexpectedUnconnectedPage\t1\t__EXPECTED_UNCONNECTED_PAGE__\nexpectshortpage\t1\t__EXPECTSHORTPAGE__\nexpectunusedcategory\t1\t__EXPECTUNUSEDCATEGORY__\nexpectunusedtemplate\t1\t__EXPECTUNUSEDTEMPLATE__\nexpectwithoutscans\t0\t__EXPECTWITHOUTSCANS__\nforcetoc\t0\t__FORCETOC__\nforcetoc\t0\t__СЪССЪДЪРЖАНИЕ__\nhiddencat\t1\t__HIDDENCAT__\nhiddencat\t1\t__СКРИТАКАТЕГОРИЯ__\nindex\t1\t__INDEX__\nindex\t1\t__ИНДЕКСИРАНЕ__\nkeeptitle\t1\t__KEEPTITLE__\nnewsectionlink\t1\t__NEWSECTIONLINK__\nnewsectionlink\t1\t__ВРЪЗКА_ЗА_НОВ_РАЗДЕЛ__\nnocontentconvert\t0\t__NOCC__\nnocontentconvert\t0\t__NOCONTENTCONVERT__\nnoeditsection\t0\t__NOEDITSECTION__\nnoeditsection\t0\t__БЕЗ_РЕДАКТИРАНЕ_НА_РАЗДЕЛИ__\nnogallery\t0\t__NOGALLERY__\nnogallery\t0\t__БЕЗГАЛЕРИЯ__\nnoglobal\t1\t__NOGLOBAL__\nnoindex\t1\t__NOINDEX__\nnoindex\t1\t__БЕЗИНДЕКСИРАНЕ__\nnomediaviewercarousel\t0\t__NOMEDIAVIEWERCAROUSEL__\nnonewsectionlink\t1\t__NONEWSECTIONLINK__\nnotalk\t0\t__NOTALK__\nnotitleconvert\t0\t__NOTC__\nnotitleconvert\t0\t__NOTITLECONVERT__\nnotoc\t0\t__NOTOC__\nnotoc\t0\t__БЕЗСЪДЪРЖАНИЕ__\nstaticredirect\t1\t__STATICREDIRECT__\ntoc\t0\t__TOC__\ntoc\t0\t__СЪДЪРЖАНИЕ__\n";
+    const css = "h3, h4 { padding-top: 0; padding-bottom: 0; }\nh4 { font-size: 1.1em; }\n\n#extraCharsWrapper {\n\tmargin: 0.5em 0; \n\tline-height: 1.8em;\n}\n\n.trans-table {\n\tbackground-color: white;\n\tpadding: 0;\n\tborder: 0;\n\twidth: 100%;\n\tclear: both;\n}\n.trans-table-left, .trans-table-right { padding: 0; width: 50%; }\n\n.forms-table {\n\tbackground-color: white;\n\tborder: thin solid silver;\n\tmargin-left: 1em;\n\tfloat: right;\n}\n.forms-table th { background-color: #e0e3e6; }\n.forms-table th, .forms-table td { padding-left: .5em; padding-right: .5em; }\n\n.edit-cell {\n\tbackground-color: #e8e8e8;\n\ttext-align: center;\n\topacity: .10;\n}\n\n.entry {\n\tbackground-color: #fcfcec;\n\tborder: thin dashed silver;\n\tpadding: .5em;\n\tmargin: 0 0 1em 0;\n}\n.entry table { background-color: inherit; }\n\n.detached { float: none; }\n.hidden-links { display: none; }\n\n#loadIndicator {\n\tposition: absolute;\n\ttop: 6em;\n\tleft: 20%;\n\tfloat: left;\n\tcolor: black;\n\tbackground-color: #CCDDEE;\n\tfont-size: 2em;\n\tpadding: 0.5em;\n\tborder: solid thin #006699;\n}\n\n/* скриване на формуляра за качване */\n#mw-upload-form { display: none; }\n\n/* съобщения за блокиране на беседи */\n.user-block {\n\tpadding: 5px;\n\tborder: 1px solid #A9A9A9;\n\tbackground-color: #FFEFD5;\n}\n\n/* copied from https://foundation.wikimedia.org/wiki/Template:Social_accounts */\n.fancy-btn {\n\tbackground-color: #3366bb;\n\tbackground-image: linear-gradient(to bottom, #3670c8, #3366bb);\n\tborder: 1px solid #3366bb;\n\tborder-radius: 3px;\n\tcolor: #fff;\n\tdisplay: inline-block;\n\tline-height: 1;\n\tpadding: 0.7em;\n\ttext-align: center;\n\ttext-shadow: 0 -1px 0 rgba(0, 0, 0, 0.25);\n\tfont-size: 1.4em;\n\tmin-width: 200px;\n\tmargin: 4px;\n}\n\n.fancy-btn:hover {\n\topacity: 0.9;\n}\n\n/* EditToolbar gadget styles */\n\n.custom-toolbar {\n\tclear: both;\n\tmargin-bottom: 0.2em;\n\tline-height: 1.9em;\n}\n.custom-toolbar select {\n\tmargin-right: 0.5em;\n}\n.buttonlinks a {\n\tcolor: #333333;\n\tbackground-color: #E0EEF7;\n\tbackground: linear-gradient(to bottom, #F4F9FB, #E0EEF7);\n\tfont-size: 0.9em;\n\ttext-decoration: none;\n\tborder: 1px solid #e0e0e0;\n\tpadding: 0.1em;\n}\n.buttonlinks a:hover, .buttonlinks a:active {\n\tcolor: #000000;\n\tborder-color: #c0c0c0;\n}\n\n/* elements which are doing something... */\n.working {\n\tbackground: url(//upload.wikimedia.org/wikipedia/commons/3/32/Loader3.gif) right center no-repeat;\n}\n/* contents are currently loaded */\n.loading:before {\n\tcontent: url(//upload.wikimedia.org/wikipedia/commons/thumb/c/cd/Vector_Loading_fallback.gif/16px-Vector_Loading_fallback.gif);\n}\n/* A working element has done its job */\n.done:before {\n\tcontent: url(//upload.wikimedia.org/wikipedia/commons/thumb/f/fb/Yes_check.svg/16px-Yes_check.svg.png);\n}\n/* A working element that hadn’t been so lucky */\n.not-done:before,\n.fail:before {\n\tcontent: url(//upload.wikimedia.org/wikipedia/commons/thumb/b/ba/Red_x.svg/16px-Red_x.svg.png);\n}\n\ndiv.NavHead {\n        font-weight: bold;\n        background-color: #e2e4c0;\n        padding-left: 10px;\n        min-height: 1.6em;\n}\n        \ndiv.NavFrame {\n        border: 1px solid #e2e4c0;\n        margin: 0 0 -1px 0;\n        width: 100%;\n        padding: 2px;\n        font-size: 95%;\n}\n\ntable.infobox th {\n    background-color: #e2e4c0;\n}\n\n/* Страница с документация на шаблон */\n.template-documentation {\n\tclear: both;\n\tmargin: 1em 0 0 0;\n\tborder: 1px solid #aaa;\n\tbackground-color: #eaf1f4;\n\tpadding: 5px;\n}\n\n/*\n\tШаблони за Messagebox\n\tИзползват се например от [[МедияУики:Gadget-QuickLinks.js]].\n*/\n.messagebox {\n\tborder: 1px solid #aaaaaa;\n\tbackground-color: #f9f9f9;\n\twidth: 80%;\n\tmargin: 0 auto 1em auto;\n\tpadding: .2em;\n}\n.messagebox.merge {\n\tborder: 1px solid #c0b8cc;\n\tbackground-color: #f0e5ff;\n\ttext-align: center;\n}\n.messagebox.cleanup {\n\tborder: 1px solid #9f9fff;\n\tbackground-color: #efefff;\n\ttext-align: center;\n}\n.messagebox.standard-talk {\n\tborder: 1px solid #c0c090;\n\tbackground-color: #f8eaba;\n\tmargin: 4px auto;\n}\n\n/* Без заглавие (заглавка първо ниво) за началната страница */\n.page-Уикиречник_Начална_страница h1.firstHeading,\n.page-Уикиречник_Начална_страница #lastmod,\n.page-Уикиречник_Начална_страница #siteSub,\n.page-Уикиречник_Начална_страница #contentSub,\n.page-Уикиречник_Начална_страница #firstHeading {\n\tdisplay: none; /* NOT important */\n}";
+    var namespaces = try @import("namespace_registry").Registry.init(a, namespace_source);
+    defer namespaces.deinit();
+    try namespaces.attachInterwikiMap("# interwiki-magic\t1\nbg\t1\t1\t0\t0\thttps://bg.wiktionary.org/wiki/$1\t1\nw\t1\t0\t0\t0\thttps://bg.wikipedia.org/wiki/$1\t0\n");
+    var behavior = try @import("namespace_registry").behavior_switches.Registry.init(a, behavior_source, "bgwiktionary", "20261001", "bg", namespaces.source_sha256);
+    defer behavior.deinit();
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, css);
+    defer styles.deinit();
+    try std.testing.expectEqualSlices(u32, &.{ 7, 8, 11, 29 }, styles.admitted_rule_numbers);
+    const Fixture = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            // Exact captured registry row: bg / български / Български / bg / Bulgarian / bul.
+            if (std.mem.eql(u8, value, "Български") or std.mem.eql(u8, value, "български") or std.mem.eql(u8, value, "bg"))
+                return .{ .code = "bg", .heading = "български" };
+            return null;
+        }
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return (resolve(ctx, value) orelse return null).code;
+        }
+        fn trail(_: ?*const anyopaque, cp: u21) bool {
+            // Exact captured linktrail character class, without guessing by edition.
+            return (cp >= 'a' and cp <= 'z') or std.mem.indexOfScalar(u21, &.{ 'а','б','в','г','д','е','ж','з','и','й','к','л','м','н','о','п','р','с','т','у','ф','х','ц','ч','ш','щ','ъ','ы','ь','э','ю','я' }, cp) != null;
+        }
+    };
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .behavior_switches = &behavior, .table_styles = &styles, .get_fn = Fixture.get, .resolve_fn = Fixture.resolve, .trusted_fn = Fixture.resolve, .link_trail = .{ .contains_fn = Fixture.trail } };
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/source", .{tmp.sub_path});
+    const reference_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/literal-reference", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    var literal_writer = try Writer.init(std.testing.io, a, reference_root);
+    defer literal_writer.deinit();
+    literal_writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "май", expanded, raw, null);
+    try literal_writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "май", reference, raw, null);
+    const stats = try writer.finish(codes);
+    const literal_stats = try literal_writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), literal_stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "български"));
+    defer mapped.deinit();
+    var literal_mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, reference_root, "български"));
+    defer literal_mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const literal_blob = try blob_format.inspect(literal_mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    var literal_index = try literal_blob.buildTrustedIndexAlloc(a);
+    defer literal_index.deinit(a);
+    const record = (try index.find("май")).?;
+    const literal_record = (try literal_index.find("май")).?;
+    try std.testing.expectEqualSlices(u8, literal_record.payload, record.payload);
+    const stored = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, stored));
+    try std.testing.expectEqualStrings("bg", stored.entry.language_code);
+    try std.testing.expectEqualStrings("български", stored.entry.language.?);
+    const Scan = struct {
+        visible: std.ArrayList(u8) = .empty,
+        targets: std.ArrayList([]const u8) = .empty,
+        definitions: std.ArrayList([]const u8) = .empty,
+        tables: usize = 0,
+        translation_tables: usize = 0,
+        literal_names: usize = 0,
+        // Failure-only structural evidence; these diagnostics do not change any oracle.
+        fn diagnosticBlocks(values: []const blobs.presentation_types.Block, nesting: usize) void {
+            for (values, 0..) |block, block_index| {
+                std.debug.print("BG may block nesting={d} index={d} kind={s} depth={d} path={s} number={s} level={d} text=", .{ nesting, block_index, @tagName(block.kind), block.depth, block.list_path, block.number, block.level });
+                for (block.spans) |span| std.debug.print("{s}{s}", .{ span.text, span.trail });
+                std.debug.print("\n", .{});
+                if (block.table) |child_table| diagnosticTable(child_table, nesting + 1);
+            }
+        }
+        fn diagnosticTable(value: blobs.presentation_types.Table, nesting: usize) void {
+            std.debug.print("BG may table nesting={d} rows={d} caption=", .{ nesting, value.rows.len });
+            for (value.caption) |span| std.debug.print("{s}{s}", .{ span.text, span.trail });
+            std.debug.print("\n", .{});
+            for (value.rows, 0..) |row, row_index| for (row.cells, 0..) |cell, cell_index| {
+                std.debug.print("BG may cell row={d} col={d} background={s} text=", .{ row_index, cell_index, cell.background orelse "<null>" });
+                for (cell.spans) |span| std.debug.print("{s}{s}", .{ span.text, span.trail });
+                std.debug.print("\n", .{});
+                if (cell.blocks) |inner| diagnosticBlocks(inner, nesting + 1)
+                else if (cell.nested_table) |nested| diagnosticTable(nested, nesting + 1);
+            };
+        }
+        fn spans(self: *@This(), allocator: std.mem.Allocator, values: []const blobs.presentation_types.Span) anyerror!void {
+            for (values) |span| {
+                try self.visible.appendSlice(allocator, span.text);
+                if (std.mem.eql(u8, span.text, "{{Словоформи/{{{ID}}}}}")) {
+                    self.literal_names += 1;
+                    try std.testing.expect(span.kind == .text and span.target.len == 0);
+                }
+                if (span.kind == .link or span.kind == .external_link) {
+                    try std.testing.expect(std.mem.indexOf(u8, span.target, "{{") == null);
+                    try self.targets.append(allocator, span.target);
+                }
+            }
+        }
+        fn blocks(self: *@This(), allocator: std.mem.Allocator, values: []const blobs.presentation_types.Block) anyerror!void {
+            for (values) |block| {
+                if (block.kind == .definition) {
+                    var text: std.ArrayList(u8) = .empty;
+                    for (block.spans) |span| try text.appendSlice(allocator, span.text);
+                    try self.definitions.append(allocator, try text.toOwnedSlice(allocator));
+                }
+                try self.spans(allocator, block.spans);
+                if (block.table) |child_table| try self.table(allocator, child_table);
+            }
+        }
+        fn table(self: *@This(), allocator: std.mem.Allocator, value: blobs.presentation_types.Table) anyerror!void {
+            self.tables += 1;
+            // The captured unindexed "translations" class keeps typed table
+            // style partial; authored table paint survives as effective cell paint.
+            // Identify both exact translation grids by shape, then require every
+            // authored cell color, including the inherited center background.
+            if (value.rows.len == 1 and value.rows[0].cells.len == 3) {
+                self.translation_tables += 1;
+                const colors = [_][]const u8{ "#f7f8ff", "#fcfbff", "#f7f8ff" };
+                for (value.rows[0].cells, colors) |cell, color| {
+                    try std.testing.expect(!cell.header);
+                    try std.testing.expectEqual(@as(u16, 1), cell.colspan);
+                    try std.testing.expectEqual(@as(u16, 1), cell.rowspan);
+                    try std.testing.expectEqualStrings(color, cell.background orelse return error.TestUnexpectedResult);
+                }
+            }
+            try self.spans(allocator, value.caption);
+            for (value.rows) |row| for (row.cells) |cell| {
+                if (cell.blocks) |inner| try self.blocks(allocator, inner)
+                else if (cell.nested_table) |nested| try self.table(allocator, nested)
+                else try self.spans(allocator, cell.spans);
+            };
+        }
+    };
+    var scan: Scan = .{};
+    errdefer {
+        std.debug.print("BG may summary definitions={d} tables={d} translation_tables={d} literal_names={d} sections={d} lexemes={d}\n", .{ scan.definitions.items.len, scan.tables, scan.translation_tables, scan.literal_names, stored.entry.sections.len, stored.entry.organization.lexemes.len });
+        for (stored.entry.sections, 0..) |section, section_index| {
+            std.debug.print("BG may section index={d} level={d} title={s} anchor={s} anchor_fallback={s}\n", .{ section_index, section.level, section.title, section.anchor, section.anchor_fallback });
+            Scan.diagnosticBlocks(section.blocks, 0);
+        }
+    }
+    for (stored.entry.sections) |section| try scan.blocks(a, section.blocks);
+    try std.testing.expectEqual(@as(usize, 1), scan.literal_names);
+    try std.testing.expectEqual(@as(usize, 2), scan.definitions.items.len);
+    try std.testing.expectEqualStrings("Петият месец от календарната година.", scan.definitions.items[0]);
+    try std.testing.expectEqualStrings("Израз на вероятност. (Май ще вали.)", scan.definitions.items[1]);
+    try std.testing.expectEqual(@as(usize, 3), scan.tables);
+    try std.testing.expectEqual(@as(usize, 2), scan.translation_tables);
+    for ([_][]const u8{ "английски:", "белоруски:", "гръцки:", "есперанто:", "ирландски:", "исландски:", "испански:", "италиански:", "немски:", "осетински:", "персийски:", "полски:", "португалски:", "руски:", "словашки:", "словенски:", "сръбски:", "унгарски:", "фински:", "френски:", "хърватски:", "Прото-Индо-Европейски", "възможно е, тъй да се каже", "{{{ИЗГОВОР}}}", "{{{НАДСЛОВИЯ}}}", "{{{ПОДСЛОВИЯ}}}", "{{{ИЗТОЧНИЦИ}}}" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, text) != null);
+    for ([_][]const u8{ "мая", "May#Английски", "mayo#Испански", "Mai#Немски", "май#Руски", "máj#Словашки", "svibanj#Хърватски" }) |target| {
+        var found = false;
+        for (scan.targets.items) |actual| if (std.mem.eql(u8, actual, target)) { found = true; break; };
+        try std.testing.expect(found);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, "[missing parameter]") == null);
+    try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, "__БЕЗ_РЕДАКТИРАНЕ_НА_РАЗДЕЛИ__") == null);
+}
+
+
+test "SL internal Writer preserves missing raw authority and the complete expanded body" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var namespaces = try @import("namespace_registry").Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tslwiktionary\n# dump-date\t20261001\n# content-language\tsl\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tPredloga\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tKategorija\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const Proof = struct {
+        calls: usize = 0,
+        fn resolve(_: ?*const anyopaque, label: []const u8) ?ResolvedLanguage {
+            return if (std.mem.eql(u8, label, "slovenščina") or std.mem.eql(u8, label, "Slovenščina"))
+                .{ .code = "sl", .heading = "slovenščina" } else null;
+        }
+        fn get(ctx: ?*const anyopaque, label: []const u8) ?[]const u8 {
+            return if (resolve(ctx, label)) |value| value.code else null;
+        }
+        fn category(raw: ?*anyopaque, target: []const u8) !?ResolvedLanguage {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            self.calls += 1;
+            return if (std.mem.eql(u8, target, "Kategorija:Slovenski samostalniki"))
+                .{ .code = "sl", .heading = "slovenščina" } else null;
+        }
+    };
+    // Finite synthetic control for the captured structural form. Full captured
+    // source/category/normal-loader bodies remain covered by the tools tests.
+    const raw = "''smrt'', [[samostalnik]] ženskega [[spol]]a\n\n{{Prevodi}}\n*Angleško: {{prev|en|death}}\n\n[[Kategorija:Slovenski samostalniki]]\n";
+    const expanded = "''smrt'', [[samostalnik]] ženskega [[spol]]a\n\n==== Prevodi ====\n*Angleško: [[death]] <sup>[[:en:death|(en)]]</sup>\n\n[[Kategorija:Slovenski samostalniki]]\n";
+    for ([_]?[]const u8{ null, raw }, 0..) |authored, i| {
+        var proof: Proof = .{};
+        const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = Proof.get, .resolve_fn = Proof.resolve, .trusted_fn = Proof.resolve,
+            .source_category_ctx = &proof, .source_category_fn = Proof.category };
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/sl-raw-{d}", .{ tmp.sub_path, i });
+        var writer = try Writer.init(io, a, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        // Exercise the existing private optional-source path. Public addPage
+        // supplies expanded bytes as raw and therefore cannot model this case.
+        try writer.addPageInternal(a, .{ .id = 0, .kind = .language }, "smrt", expanded, authored, null, .{}, &.{}, null, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        const owned = authored != null;
+        try std.testing.expectEqual(@as(usize, if (owned) 2 else 0), proof.calls);
+        try std.testing.expectEqual(@as(usize, if (owned) 0 else 1), stats.fallback_pages);
+        const heading: []const u8 = if (owned) "slovenščina" else "Unclassified";
+        const code: []const u8 = if (owned) "sl" else "";
+        const path = try languageBlobPathAlloc(a, root, heading);
+        var mapped = try mmapPath(io, path);
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(code, metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("smrt")) orelse return error.TestUnexpectedResult;
+        const stored = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(heading, stored.entry.language.?);
+        try std.testing.expectEqualStrings(code, stored.entry.language_code);
+        try std.testing.expectEqual(@as(usize, 0), stored.entry.organization.lexemes.len);
+        const direct = try presentation_document.compileReportedWithLinkTrailAlloc(a, "smrt", .language, heading, code, expanded, null, .{}, &namespaces, null);
+        const complete = try blobs.presentation_codec.decodeAlloc(a, direct, "smrt", .language, metadata);
+        try std.testing.expectEqualDeep(complete, stored);
+        try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, stored));
+        var translation_link: usize = 0;
+        var italic_headword = false;
+        for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (std.mem.eql(u8, span.target, "death")) translation_link += 1;
+            if (span.italic and std.mem.eql(u8, span.text, "smrt")) italic_headword = true;
+        };
+        try std.testing.expectEqual(@as(usize, 1), translation_link);
+        try std.testing.expect(italic_headword);
+        const report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(65536));
+        try std.testing.expectEqual(!owned, std.mem.indexOf(u8, report, "missing_language_heading") != null);
+    }
 }

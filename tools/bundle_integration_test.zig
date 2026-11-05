@@ -808,14 +808,20 @@ fn startupHandshakeProbe(h: *Harness, dir: []const u8) !void {
         \\        out.extend(part)
         \\    return bytes(out)
         \\def send(body):
-        \\    sys.stdout.buffer.write(struct.pack('<I',len(body))+body);sys.stdout.buffer.flush()
+        \\    sys.stdout.buffer.write(struct.pack('<I',len(body)+9)+b'\x85'+body);sys.stdout.buffer.flush()
+        \\    sys.stdout.buffer.write(struct.pack('<Q',time.process_time_ns()));sys.stdout.buffer.flush()
+        \\def burn(seconds):
+        \\    end=time.process_time_ns()+int(seconds*1_000_000_000)
+        \\    while time.process_time_ns()<end:pass
         \\output=b'==English==\n# startup recovered\n'
         \\reply=b'\x00'+struct.pack('<II',len(output),0)+b'\x00'+output
         \\first=True
         \\while True:
         \\    head=exact(4)
         \\    if head is None:break
-        \\    if exact(struct.unpack('<I',head)[0]) is None:break
+        \\    body=exact(struct.unpack('<I',head)[0])
+        \\    if body is None:break
+        \\    assert body and body[0]==5
         \\    if first:
         \\        if mode=='missing':time.sleep(5);break
         \\        if mode=='wrong':send(b'\x03\x00');break
@@ -827,9 +833,10 @@ fn startupHandshakeProbe(h: *Harness, dir: []const u8) !void {
         \\        send(b'\x03');first=False
         \\        if mode=='duplicate':send(b'\x03');break
         \\    elif mode=='warm-duplicate':send(b'\x03');break
-        \\    if mode=='page-stall':time.sleep(5);break
+        \\    if mode=='page-idle':time.sleep(0.8)
+        \\    if mode=='page-stall':burn(5);break
         \\    if mode in ('retry-startup','retry-budget'):
-        \\        time.sleep(0.1 if mode=='retry-startup' else 0.3)
+        \\        burn(0.1 if mode=='retry-startup' else 0.3)
         \\        if attempt==1:
         \\            stage=b'expand';name=b'OutOfMemory'
         \\            send(b'\x01'+struct.pack('<III',len(stage),len(name),0)+stage+name);break
@@ -843,6 +850,7 @@ fn startupHandshakeProbe(h: *Harness, dir: []const u8) !void {
         .{ .mode = "retry-startup", .expected = null },
         .{ .mode = "retry-budget", .expected = error.ColdRetryFailed },
         .{ .mode = "page-stall", .expected = error.Timeout },
+        .{ .mode = "page-idle", .expected = null },
         .{ .mode = "missing", .expected = error.StartupTimeout },
         .{ .mode = "wrong", .expected = error.InvalidResponse },
         .{ .mode = "before-ready", .expected = error.InvalidResponse },
@@ -877,23 +885,43 @@ fn startupHandshakeProbe(h: *Harness, dir: []const u8) !void {
     }
 }
 
-fn writeFailureExpander(h: *Harness, script: []const u8, stage: []const u8) !void {
-    var reply: std.Io.Writer.Allocating = .init(h.a);
-    defer reply.deinit();
-    try @import("bundle_protocol").writeReady(&reply.writer);
-    try @import("bundle_protocol").writeError(&reply.writer, stage, "E", "d");
+fn writeFailureExpander(h: *Harness, script: []const u8, stage: []const u8, error_name: []const u8, detail: []const u8, make_executable: bool) !void {
     var text: std.Io.Writer.Allocating = .init(h.a);
     defer text.deinit();
-    try text.writer.writeAll("#!/bin/sh\ndd bs=4096 count=1 of=/dev/null 2>/dev/null\nprintf '");
-    for (reply.written()) |byte| try text.writer.print("\\{o:0>3}", .{byte});
-    try text.writer.writeAll("'\n");
+    try text.writer.writeAll(
+        \\#!/usr/bin/env python3
+        \\import struct, sys, time
+        \\def exact(n):
+        \\    out=bytearray()
+        \\    while len(out)<n:
+        \\        part=sys.stdin.buffer.read(n-len(out))
+        \\        if not part:raise EOFError('incomplete fixture request')
+        \\        out.extend(part)
+        \\    return bytes(out)
+        \\head=exact(4)
+        \\size=struct.unpack('<I',head)[0]
+        \\assert 0<size<=32*1024*1024
+        \\request=exact(size)
+        \\assert request and request[0]==5
+        \\def send(body):
+        \\    sys.stdout.buffer.write(struct.pack('<I',len(body)+9)+b'\x85'+body);sys.stdout.buffer.flush()
+        \\    sys.stdout.buffer.write(struct.pack('<Q',time.process_time_ns()));sys.stdout.buffer.flush()
+        \\
+    );
+    // Hex encoding keeps each exact stage/error/detail byte in the fixture.
+    for ([_][]const u8{ stage, error_name, detail }, [_][]const u8{ "stage", "name", "detail" }) |value, field| {
+        try text.writer.print("{s}=bytes.fromhex('", .{field});
+        for (value) |byte| try text.writer.print("{x:0>2}", .{byte});
+        try text.writer.writeAll("')\n");
+    }
+    try text.writer.writeAll("send(b'\\x03')\nsend(b'\\x01'+struct.pack('<III',len(stage),len(name),len(detail))+stage+name+detail)\n");
     try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = script, .data = text.written() });
-    _ = try h.run(&.{ "chmod", "755", script }, 0);
+    if (make_executable) _ = try h.run(&.{ "chmod", "755", script }, 0);
 }
 
 fn failureMetadataProbe(h: *Harness, dir: []const u8) !void {
     const script = try std.fs.path.join(h.a, &.{ dir, "failure-expander.sh" });
-    try writeFailureExpander(h, script, "x");
+    try writeFailureExpander(h, script, "x", "E", "d", true);
     var worker = expander.Worker.init(h.io, dir, script, "missing-dump.xml");
     defer worker.deinit();
     try std.testing.expectError(error.BundleInfrastructureFailed, worker.expand(h.a, 0, transport_probe_identity, "probe", "==English==\n"));
@@ -931,6 +959,12 @@ fn coldRetryProbe(h: *Harness, blob_builder: []const u8, verifier: []const u8, r
         \\        if not part: return None
         \\        out.extend(part)
         \\    return bytes(out)
+        \\def send(body):
+        \\    sys.stdout.buffer.write(struct.pack('<I',len(body)+9)+b'\x85'+body);sys.stdout.buffer.flush()
+        \\    sys.stdout.buffer.write(struct.pack('<Q',time.process_time_ns()));sys.stdout.buffer.flush()
+        \\def burn(seconds):
+        \\    end=time.process_time_ns()+int(seconds*1_000_000_000)
+        \\    while time.process_time_ns()<end:pass
         \\def failure(name):
         \\    stage=b'expand'
         \\    return b'\x01'+struct.pack('<III',len(stage),len(name),0)+stage+name
@@ -940,9 +974,10 @@ fn coldRetryProbe(h: *Harness, blob_builder: []const u8, verifier: []const u8, r
         \\    if head is None: break
         \\    body=exact(struct.unpack('<I',head)[0])
         \\    if body is None: break
+        \\    assert body and body[0]==5
         \\    (root/('retry-request-'+str(attempt))).write_bytes(head+body)
         \\    if not ready:
-        \\        sys.stdout.buffer.write(b'\x01\x00\x00\x00\x03');sys.stdout.buffer.flush();ready=True
+        \\        send(b'\x03');ready=True
         \\    if mode=='semantic-initial': reply=failure(b'ExpectedSemanticError')
         \\    elif mode!='output-initial' and attempt==1: reply=failure(b'OutOfMemory')
         \\    elif mode=='oom': reply=failure(b'OutOfMemory')
@@ -951,12 +986,12 @@ fn coldRetryProbe(h: *Harness, blob_builder: []const u8, verifier: []const u8, r
         \\    elif mode=='malformed': reply=b'\xff'
         \\    elif mode=='eof': break
         \\    elif mode=='truncated':
-        \\        sys.stdout.buffer.write(struct.pack('<I',12)+b'\x00');sys.stdout.buffer.flush();break
-        \\    elif mode=='timeout': time.sleep(5);break
+        \\        sys.stdout.buffer.write(struct.pack('<I',21)+b'\x85\x00');sys.stdout.buffer.flush();break
+        \\    elif mode=='timeout': burn(5);break
         \\    else:
         \\        output=b'==English==\n# recovered\n'; title=b'Recovered' if mode=='output' else b''
         \\        reply=b'\x00'+struct.pack('<II',len(output),len(title))+b'\x00'+output+title
-        \\    sys.stdout.buffer.write(struct.pack('<I',len(reply))+reply);sys.stdout.buffer.flush()
+        \\    send(reply)
         \\    if mode!='output-initial' and mode!='semantic-initial' and attempt==1: break
         \\
     });
@@ -1044,7 +1079,7 @@ fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []con
             "# iso-639-3\n",
     });
     const script = try std.fs.path.join(h.a, &.{ root, "dict-bundle-expander" });
-    try writeFailureExpander(h, script, "expand");
+    try writeFailureExpander(h, script, "expand", "E", "d", true);
 
     const dump = try std.fs.path.join(h.a, &.{ dir, "failure-page.txt" });
     const source_text = "==English==\n# source that must not become synthetic error text\n";
@@ -1070,16 +1105,15 @@ fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []con
     try h.require(std.mem.indexOf(u8, text, "Script error") == null and std.mem.indexOf(u8, text, "source that must not become synthetic") == null, "operational fallback publishes no invented or original body text");
 
     for ([_][]const u8{ "assets", "request", "install", "unknown" }) |stage| {
-        try writeFailureExpander(h, script, stage);
+        try writeFailureExpander(h, script, stage, "E", "d", true);
         const failed_output = try std.fmt.allocPrint(h.a, "{s}/infrastructure-{s}", .{ dir, stage });
         _ = try h.run(&.{ blob_builder, dump, failed_output, "--expander-root", root, "--workers", "1" }, 1);
         try h.require(!exists(h.io, try std.fs.path.join(h.a, &.{ failed_output, "page-coverage.json" })), "infrastructure failures cannot publish coverage");
     }
 
     // Real framed worker response, rather than a local allocator failure.
-    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = script, .data = "#!/bin/sh\n" ++
-        "dd bs=4096 count=1 of=/dev/null 2>/dev/null\n" ++
-        "printf '\\001\\000\\000\\000\\003\\036\\000\\000\\000\\001\\006\\000\\000\\000\\013\\000\\000\\000\\000\\000\\000\\000expandOutOfMemory'\n" });
+    // Rewriting the existing executable preserves its mode, as the old literal fixture did.
+    try writeFailureExpander(h, script, "expand", "OutOfMemory", "", false);
     var exhausted = expander.Worker.init(h.io, root, script, dump);
     defer exhausted.deinit();
     try std.testing.expectError(error.OutOfMemory, exhausted.expand(h.a, 0, transport_probe_identity, "probe", source_text));
@@ -1094,7 +1128,26 @@ fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []con
 
     try coldRetryProbe(h, blob_builder, verifier, root, dump, dir);
 
-    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = script, .data = "#!/bin/sh\ndd bs=4096 count=1 of=/dev/null 2>/dev/null\nprintf '\\001\\000\\000\\000\\003'\nexec tail -f /dev/null\n" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = script, .data =
+        \\#!/usr/bin/env python3
+        \\import struct, sys, time
+        \\def exact(n):
+        \\    out=bytearray()
+        \\    while len(out)<n:
+        \\        part=sys.stdin.buffer.read(n-len(out))
+        \\        if not part:raise EOFError('incomplete fixture request')
+        \\        out.extend(part)
+        \\    return bytes(out)
+        \\head=exact(4)
+        \\size=struct.unpack('<I',head)[0]
+        \\assert 0<size<=32*1024*1024
+        \\request=exact(size)
+        \\assert request and request[0]==5
+        \\sys.stdout.buffer.write(struct.pack('<I',10)+b'\x85\x03');sys.stdout.buffer.flush()
+        \\sys.stdout.buffer.write(struct.pack('<Q',time.process_time_ns()));sys.stdout.buffer.flush()
+        \\while True:pass
+        \\
+    });
     const timed_out = try std.fs.path.join(h.a, &.{ dir, "timeout-dictionary" });
     try h.requireTimeout(&.{ blob_builder, dump, timed_out, "--expander-root", root, "--workers", "1", "--expansion-timeout-ms", "100" });
     try h.require(!exists(h.io, try std.fs.path.join(h.a, &.{ timed_out, "page-coverage.json" })), "timed-out build cannot publish successful coverage");
@@ -2943,18 +2996,27 @@ fn poemPhaseProbe(h: *Harness, pipeline: []const u8, blob_builder: []const u8, v
             try h.require(!expanded.unsupported_parser_function, "Poem fixture uses supported native functions");
             var encoded: std.Io.Writer.Allocating = .init(h.a);
             defer encoded.deinit();
-            try protocol.writeSuccessWithPoem(&encoded.writer, expanded.source, expanded.display_title orelse "", expanded.unsupported_parser_function, expanded.poem_metadata);
+            // Fixture codec stamp, not an observation of the native worker CPU.
+            const fixture_cpu_ns: u64 = 123_456_789;
+            try protocol.writeTimedReply(&encoded.writer, fixture_cpu_ns, .{ .output = .{
+                .output = expanded.source,
+                .display_title = expanded.display_title orelse "",
+                .unsupported_parser_function = expanded.unsupported_parser_function,
+                .poem_metadata = expanded.poem_metadata,
+            } });
             const record_path = try std.fmt.allocPrint(h.a, "{s}/{s}.reply", .{ records, case.title });
             try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = record_path, .data = encoded.written() });
             const saved = try std.Io.Dir.cwd().readFileAlloc(h.io, record_path, h.a, .limited(protocol.max_frame_bytes + 4));
-            try h.require(saved.len >= 5 and std.mem.readInt(u32, saved[0..4], .little) == saved.len - 4, "saved success record retains exact framing");
-            const reply = try protocol.decodeReply(saved[4..]);
+            try h.require(saved.len >= 14 and saved[4] == 0x85 and std.mem.readInt(u32, saved[0..4], .little) == saved.len - 4, "saved success record retains exact CPU-envelope framing");
+            const timed_reply = try protocol.decodeTimedReply(saved[4..]);
+            try h.require(timed_reply.cpu_ns == fixture_cpu_ns, "saved native reply retains its explicit fixture CPU stamp");
+            const reply = timed_reply.reply;
             if (reply != .output) return error.UnexpectedPoemReply;
             const output = reply.output;
             try h.require(std.mem.eql(u8, output.output, expanded.source) and std.mem.eql(u8, output.display_title, expanded.display_title orelse ""), "saved native output/title round-trip exactly");
             if (std.mem.startsWith(u8, case.title, "NowikiReturned") and !std.mem.eql(u8, case.title, "NowikiReturnedExplicit")) try h.require(expanded.poem_metadata != null, "direct returned nowiki carries authenticated literal metadata");
             if (expanded.poem_metadata) |metadata| {
-                try h.require(saved[4] == 4 and output.poem_metadata != null and std.mem.eql(u8, metadata, output.poem_metadata.?), "optional phase bytes survive saved kind4 record");
+                try h.require(saved[5] == 4 and output.poem_metadata != null and std.mem.eql(u8, metadata, output.poem_metadata.?), "optional phase bytes survive saved kind4 payload inside the CPU envelope");
                 const parsed = try std.json.parseFromSlice(std.json.Value, h.a, metadata, .{});
                 defer parsed.deinit();
                 const object = parsed.value.object;
@@ -2973,7 +3035,7 @@ fn poemPhaseProbe(h: *Harness, pipeline: []const u8, blob_builder: []const u8, v
                     first_metadata = output.poem_metadata;
                 }
             } else {
-                try h.require((std.mem.eql(u8, case.title, "PoemPlainControl") or std.mem.eql(u8, case.title, "NowikiReturnedExplicit") or std.mem.startsWith(u8, case.title, "Layout")) and saved[4] == 0 and output.poem_metadata == null, "ordinary no-Poem expansion retains old success0 bytes");
+                try h.require((std.mem.eql(u8, case.title, "PoemPlainControl") or std.mem.eql(u8, case.title, "NowikiReturnedExplicit") or std.mem.startsWith(u8, case.title, "Layout")) and saved[5] == 0 and output.poem_metadata == null, "ordinary no-Poem expansion retains the success0 payload inside the CPU envelope");
             }
             try replay.addExpandedPageWithReasonsAndPoem(h.a, .{ .id = 0, .kind = .language }, case.title, output.output, raw, if (output.display_title.len == 0) null else output.display_title, &.{}, output.poem_metadata);
         }

@@ -1,0 +1,10 @@
+==Türkçe==
+===Ad===
+<strong class="Latn headword" lang="tr">sünük</strong> (''belirtme hâli'' <b class="Latn" lang="tr">[[sünüğü#Türkçe|sünüğü]]</b>, ''çoğulu'' <b class="Latn" lang="tr">[[sünükler#Türkçe|sünükler]]</b>)[[Category:Türkçe sözcükler|SÜNÜK]][[Category:Türkçe adlar|SÜNÜK]]
+
+# (''anatomi'')[[Kategori:Türkçede anatomi]] [[kemik]]
+::''Vücudun iskeletini oluşturan beyazımsı, sert madde.''
+
+===Köken===
+# [[w:Eski Türkçe|Eski Türkçe]][[Kategori:Eski Türkçe kökenli Türkçe sözcükler]]
+:Kelimenin bir ihtimal süngü (<ET. süñüg), süngüleş- (<ET. süñüş-) kelimeleriyle anlam ilgisi olabilir. Bu organ adı, sü (ordu) ve sın- (kırmak) köklerinin karışmasından, sün-üg-ük > süngük/süñük/süyek/söök biçiminde türetilmiş olabilir.

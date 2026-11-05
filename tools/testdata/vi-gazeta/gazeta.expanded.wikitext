@@ -1,0 +1,341 @@
+<div class="disambig-see-also">''Xem thêm:'' <b class="Cyrl">[[:ґазета|ґазета]]</b></div>
+<templatestyles src="Module:minitoc/styles.css"/><div class="minitoc NavFrame" data-toggle-category="mục lục" data-minitoc-length="5"><div class="NavHead">Ngôn ngữ (5)</div><div class="NavContent">[[#Tiếng Belarus|Tiếng Belarus]] •&nbsp;[[#Tiếng Bulgari|Tiếng Bulgari]] •&nbsp;[[#Tiếng Macedonia|Tiếng Macedonia]] •&nbsp;[[#Tiếng Nga|Tiếng Nga]] •&nbsp;[[#Tiếng Ukraina|Tiếng Ukraina]]<hr>[[#catlinks|Thể loại trang]]</div></div><div data-toc-length="5">__TOC__</div>[[Category:Trang có gọi Bản mẫu:minitoc|ГАЗЕТА]]
+==Tiếng Belarus==
+
+===Cách viết khác===
+* <span class="Cyrl" lang="be">[[:газэта#Tiếng&#95;Belarus|газэ́та]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="be-Latn" class="tr Latn">hazéta</span><span class="mention-gloss-paren annotation-paren">)</span> &mdash; <span class="ib-content label-content">[[w:Taraškievica|Taraškievica]]</span>
+* <span class="Cyrl" lang="be">[[:ґазэта#Tiếng&#95;Belarus|ґазэ́та]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="be-Latn" class="tr Latn">gazéta</span><span class="mention-gloss-paren annotation-paren">)</span> &mdash; <span class="ib-content label-content">[[w:Taraškievica|Taraškievica]]<span class="ib-comma label-comma">,</span>&#32;[[Phụ lục:Từ điển thuật ngữ#hiếm|hiếm]]</span>
+* <span class="Latn" lang="be">[[:hazeta#Tiếng&#95;Belarus|hazeta]]</span>, <span class="Latn" lang="be">[[:gazeta#Tiếng&#95;Belarus|gazeta]]</span>, <span class="Latn" lang="be">[[:hazieta#Tiếng&#95;Belarus|hazieta]]</span>, <span class="Latn" lang="be">[[:gazieta#Tiếng&#95;Belarus|gazieta]]</span> &mdash; <span class="ib-content label-content">Łacinka</span>
+
+===Từ nguyên===
+<strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates: Wikibase sitelink snapshot missing entity=Q150 site=viwiki</span></strong>.
+
+===Cách phát âm===
+* [[Wiktionary:IPA|IPA]]<sup>([[w:Âm vị học tiếng Belarus|ghi chú]])</sup>:&#32;<span class="IPA">[ɣaˈzʲeta]</span>[[Category:Mục từ có cách phát âm IPA tiếng Belarus|ГАЗЕТА]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>Âm thanh<span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:Be-газета.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:Be-газета.ogg|tập tin]])</td></tr></table>[[Category:Mục từ có liên kết âm thanh tiếng Belarus|ГАЗЕТА]]
+
+===Danh từ===
+<span class="headword-line"><strong class="Cyrl headword" lang="be">газе́та</strong> (<span lang="be-Latn" class="headword-tr tr Latn" dir="ltr">hazjéta</span>)&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr>&nbsp;<abbr title="vô sinh">vs</abbr></span> (<i>sinh cách</i> <b class="Cyrl" lang="be">[[:газеты#Tiếng&#95;Belarus|газе́ты]]</b>, <i>danh cách số nhiều</i> <b class="Cyrl" lang="be">[[:газеты#Tiếng&#95;Belarus|газе́ты]]</b>, <i>sinh cách số nhiều</i> <b class="Cyrl" lang="be">[[:газет#Tiếng&#95;Belarus|газе́т]]</b>, <i>tính từ quan hệ</i> <b class="Cyrl" lang="be">[[:газетны#Tiếng&#95;Belarus|газе́тны]]</b>, <i>giảm nhẹ nghĩa</i> <b class="Cyrl" lang="be">[[:газетка#Tiếng&#95;Belarus|газе́тка]]</b>)</span>[[Category:Mục từ tiếng Belarus|ГАЗЕТА]][[Category:Danh từ tiếng Belarus|ГАЗЕТА]][[Category:Danh từ giống cái tiếng Belarus|ГАЗЕТА]][[Category:Danh từ vô sinh tiếng Belarus|ГАЗЕТА]][[Category:Trang có đề mục ngôn ngữ|ГАЗЕТА]][[Category:Trang có 5 đề mục ngôn ngữ|ГАЗЕТА]]
+
+# [[báo viết|Báo viết]].
+
+====Biến cách====
+<div class="NavFrame" style="max-width:45em">
+<div class="NavHead" style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;" >Biến cách của <i lang="be" class="Cyrl">газе́та</i> (<span style="font-size: smaller;">danh từ bất động vật trọng âm a trọng âm a</span>)</div>
+<div class="NavContent">
+{| style="text-align:center;max-width:45em" class="inflection-table inflection"
+|- class="rowgroup"
+! style="width:33%;background:var(--wikt-palette-lightblue, #d9ebff);color:inherit;" |
+! style="background:var(--wikt-palette-lightblue, #d9ebff);color:inherit;" | số ít
+! style="background:var(--wikt-palette-lightblue, #d9ebff);color:inherit;" | số nhiều
+|-
+!style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;"|[[nominative|danh cách]]
+| <span class="Cyrl form-of lang-be nom|s-form-of origin-газе́та" lang="be"><strong class="selflink">газе́та</strong></span><br /><span lang="be-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazjéta</span>
+| <span class="Cyrl form-of lang-be nom|p-form-of origin-газе́та" lang="be">[[:газеты#Tiếng&#95;Belarus|газе́ты]]</span><br /><span lang="be-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazjéty</span>
+|-
+!style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;"|[[genitive|sinh cách]]
+| <span class="Cyrl form-of lang-be gen|s-form-of origin-газе́та" lang="be">[[:газеты#Tiếng&#95;Belarus|газе́ты]]</span><br /><span lang="be-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazjéty</span>
+| <span class="Cyrl form-of lang-be gen|p-form-of origin-газе́та" lang="be">[[:газет#Tiếng&#95;Belarus|газе́т]]</span><br /><span lang="be-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazjét</span>
+|-
+!style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;"|[[dative|dữ cách]]
+| <span class="Cyrl form-of lang-be dat|s-form-of origin-газе́та" lang="be">[[:газеце#Tiếng&#95;Belarus|газе́це]]</span><br /><span lang="be-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazjécje</span>
+| <span class="Cyrl form-of lang-be dat|p-form-of origin-газе́та" lang="be">[[:газетам#Tiếng&#95;Belarus|газе́там]]</span><br /><span lang="be-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazjétam</span>
+|-
+!style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;"|[[accusative|đối cách]]
+| <span class="Cyrl form-of lang-be acc|s-form-of origin-газе́та" lang="be">[[:газету#Tiếng&#95;Belarus|газе́ту]]</span><br /><span lang="be-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazjétu</span>
+| <span class="Cyrl form-of lang-be acc|p-form-of origin-газе́та" lang="be">[[:газеты#Tiếng&#95;Belarus|газе́ты]]</span><br /><span lang="be-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazjéty</span>
+|-
+!style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;"|[[instrumental|cách công cụ]]
+| <span class="Cyrl form-of lang-be ins|s-form-of origin-газе́та" lang="be">[[:газетай#Tiếng&#95;Belarus|газе́тай]]</span>, <span class="Cyrl form-of lang-be ins|s-form-of origin-газе́та" lang="be">[[:газетаю#Tiếng&#95;Belarus|газе́таю]]</span><br /><span lang="be-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazjétaj</span>, <span lang="be-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazjétaju</span>
+| <span class="Cyrl form-of lang-be ins|p-form-of origin-газе́та" lang="be">[[:газетамі#Tiếng&#95;Belarus|газе́тамі]]</span><br /><span lang="be-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazjétami</span>
+|-
+!style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;"|[[locative|định vị cách]]
+| <span class="Cyrl form-of lang-be loc|s-form-of origin-газе́та" lang="be">[[:газеце#Tiếng&#95;Belarus|газе́це]]</span><br /><span lang="be-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazjécje</span>
+| <span class="Cyrl form-of lang-be loc|p-form-of origin-газе́та" lang="be">[[:газетах#Tiếng&#95;Belarus|газе́тах]]</span><br /><span lang="be-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazjétax</span>
+|-
+!style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;"|[[count form|dạng đếm]]
+| —
+| <span class="Cyrl form-of lang-be count_form-form-of origin-газе́та" lang="be">[[:газеты#Tiếng&#95;Belarus|газе́ты]]</span><sup style="color: var(--wikt-palette-red, red)">1</sup><br /><span lang="be-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazjéty</span><sup style="color: var(--wikt-palette-red, red)">1</sup>
+|}<div style="width:100%;text-align:left;background:var(--wikt-palette-lightblue, #d9ebff);color:inherit;">
+<div style="display:inline-block;text-align:left;padding-left:1em;padding-right:1em">
+<sup style="color: var(--wikt-palette-red, red)">1</sup>Dùng với các số 2, 3, 4 và lớn hơn 20 tận cùng là 2, 3, 4.
+</div></div>
+</div></div>[[Category:Danh từ có giống cái cứng  tiếng Belarus|ГАЗЕТА]][[Category:Danh từ có giống cái cứng trọng âm a tiếng Belarus|ГАЗЕТА]][[Category:Danh từ có trọng âm a tiếng Belarus|ГАЗЕТА]]
+
+===Tham khảo===
+* “[http://slounik.org/search?dict=&search=%D0%B3%D0%B0%D0%B7%D0%B5%D1%82%D0%B0 газета]”, Từ điển Belarus–Nga và Từ điển tiếng Belarus tại trang slounik.org
+
+==Tiếng Bulgari==
+
+===Từ nguyên===
+<strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates: Wikibase sitelink snapshot missing entity=Q652 site=viwiki</span></strong>.
+
+===Cách phát âm===
+
+* [[Wiktionary:IPA|IPA]]<sup>([[Phụ lục:Cách phát âm tiếng Bulgari|ghi chú]])</sup>:&#32;<span class="IPA">[ɡɐˈzɛtɐ]</span>[[Category:Mục từ có cách phát âm IPA tiếng Bulgari|ГАЗЕТА]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>Âm thanh <span class="ib-brac qualifier-brac">(</span><span class="usage-label-accent"><span class="ib-content label-content">tiếng Bulgari chuẩn</span></span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:LL-Q7918 (bul)-Kiril kovachev-газета.wav|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q7918 (bul)-Kiril kovachev-газета.wav|tập tin]])</td></tr></table>[[Category:Mục từ có liên kết âm thanh tiếng Bulgari|ГАЗЕТА]]
+* Vần: [[Vần:Tiếng Bulgari/ɛtɐ|<span class="IPA">-ɛtɐ</span>]][[Category:Vần:Tiếng Bulgari/ɛtɐ|ГАЗЕТА]][[Category:Vần:Tiếng Bulgari/ɛtɐ/3 âm tiết|ГАЗЕТА]]
+* Tách âm<sup>([[Phụ lục:Tách âm tiếng Bulgari#Tách âm|ghi chú]])</sup>: <span class="Cyrl" lang="bg">га‧зе‧та</span>
+
+===Danh từ===
+<span class="headword-line"><strong class="Cyrl headword" lang="bg">газе́та</strong> (<span lang="bg-Latn" class="headword-tr tr Latn" dir="ltr">gazéta</span>)&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span></span>[[Category:Mục từ tiếng Bulgari|ГАЗЕТА]][[Category:Danh từ tiếng Bulgari|ГАЗЕТА]][[Category:Danh từ giống cái tiếng Bulgari|ГАЗЕТА]][[Category:Trang có đề mục ngôn ngữ|ГАЗЕТА]][[Category:Trang có 5 đề mục ngôn ngữ|ГАЗЕТА]]
+
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[Phụ lục:Từ điển thuật ngữ#không còn dùng|không còn dùng]][[Category:Từ mang nghĩa không còn dùng tiếng Bulgari|ГАЗЕТА]]</span><span class="ib-brac label-brac">)</span></span> [[tạp chí|Tạp chí]].
+
+====Biến cách====
+<div class="inflection-table-wrapper inflection-table-collapsible inflection-table-collapsed no-vc tr-alongside" style="width: fit-content" data-wikt-palette-p="blue" data-toggle-category="biến tố">
+{| class="inflection-table"
+|+ class="inflection-table-title" | Biến cách của газе́та
+|-
+! class="outer" |
+! class="outer" | số ít
+! class="outer" | số nhiều
+|-
+! bất định
+| <span class="Cyrl form-of lang-bg indef|s-form-of origin-газе́та" lang="bg"><strong class="selflink">газе́та</strong></span><br /><span lang="bg-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">gazéta</span>
+| <span class="Cyrl form-of lang-bg indef|p-form-of origin-газе́та" lang="bg">[[:газети#Tiếng&#95;Bulgari|газе́ти]]</span><br /><span lang="bg-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">gazéti</span>
+|-
+! xác định
+| <span class="Cyrl form-of lang-bg def|s-form-of origin-газе́та" lang="bg">[[:газетата#Tiếng&#95;Bulgari|газе́тата]]</span><br /><span lang="bg-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">gazétata</span>
+| <span class="Cyrl form-of lang-bg def|p-form-of origin-газе́та" lang="bg">[[:газетите#Tiếng&#95;Bulgari|газе́тите]]</span><br /><span lang="bg-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">gazétite</span>
+|}
+
+</div>
+
+===Tham khảo===
+* <span class="citation-whole"><span class="cited-source">“[https://ibl.bas.bg/rbe/lang/bg/%D0%B3%D0%B0%D0%B7%D0%B5%D1%82%D0%B0 <span class="Cyrl" lang="bg">газета</span>]”, trong <cite><span class="Cyrl" lang="und">Речник на българския език</span></cite> &#91;<cite><span class="e-translation">Từ điển tiếng Bulgari</span></cite>&#93; (bằng tiếng Bulgari), Sofia&#58; Bulgarian Academy of Sciences, <span class="None" lang="und">2014</span></span></span>
+* <span class="citation-whole"><span class="cited-source">“[https://rechnik.chitanka.info/w/%D0%B3%D0%B0%D0%B7%D0%B5%D1%82%D0%B0 <span class="Cyrl" lang="bg">газета</span>]”, trong <cite><span class="Cyrl" lang="und">Речник на българския език</span></cite> &#91;<cite><span class="e-translation">Từ điển tiếng Bulgari</span></cite>&#93; (bằng tiếng Bulgari), [https://chitanka.info/ Chitanka], <span class="None" lang="und">2010</span></span></span>
+
+[[Category:Từ có hậu tố -ета tiếng Bulgari|ГАЗЕТА]]
+
+==Tiếng Macedonia==
+
+===Cách phát âm===
+* [[Wiktionary:IPA|IPA]]<sup>([[Phụ lục:Cách phát âm tiếng Macedonia|ghi chú]])</sup>:&#32;<span class="IPA">[ɡaˈzɛta]</span>[[Category:Từ 3 âm tiết tiếng Macedonia|ГАЗЕТА]][[Category:Mục từ có cách phát âm IPA tiếng Macedonia|ГАЗЕТА]][[Category:Macedonian paroxytone terms|ГАЗЕТА]]
+
+===Danh từ===
+<span class="headword-line"><strong class="Cyrl headword" lang="mk">газета</strong> (<span lang="mk-Latn" class="headword-tr tr Latn" dir="ltr">gazeta</span>)&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span></span>[[Category:Mục từ tiếng Macedonia|ГАЗЕТА]][[Category:Danh từ tiếng Macedonia|ГАЗЕТА]][[Category:Danh từ giống cái tiếng Macedonia|ГАЗЕТА]][[Category:Danh từ giống cái tiếng Macedonia|ГАЗЕТА]][[Category:Trang có đề mục ngôn ngữ|ГАЗЕТА]][[Category:Trang có 5 đề mục ngôn ngữ|ГАЗЕТА]]
+
+# ''Mục từ này cần một bản dịch sang tiếng Việt. Xin hãy giúp đỡ bằng cách '''thêm bản dịch vào mục''', sau đó xóa văn bản <code>{<nowiki />{[[Bản mẫu:rfdef|rfdef]]}<nowiki />}</code>.''[[Category:Yêu cầu định nghĩa mục từ tiếng Macedonia|ГАЗЕТА]]
+
+====Biến cách====
+<div class="inflection-table-wrapper inflection-table-collapsible inflection-table-collapsed no-vc" style="width: fit-content" data-wikt-palette-p="blue" data-toggle-category="biến tố">
+{| class="inflection-table"
+|+ class="inflection-table-title" | Biến cách của <i class="Cyrl mention" lang="mk">газета</i>
+|-
+
+! |
+! | số ít
+! | số nhiều
+|-
+! | bất định
+| <span class="Cyrl" lang="mk"><strong class="selflink">газета</strong></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">gazeta</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Cyrl form-of lang-mk indef|pl-form-of" lang="mk">[[:газети#Tiếng&#95;Macedonia|газети]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">gazeti</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! | xác định<br/><span style="font-size:85%;">(không chỉ rõ)</span>
+| <span class="Cyrl form-of lang-mk unspecified|def|sg-form-of" lang="mk">[[:газетата#Tiếng&#95;Macedonia|газетата]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">gazetata</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Cyrl form-of lang-mk unspecified|def|pl-form-of" lang="mk">[[:газетите#Tiếng&#95;Macedonia|газетите]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">gazetite</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! | xác định<br/><span style="font-size:85%;">(gần người nói)</span>
+| <span class="Cyrl form-of lang-mk prox|def|sg-form-of" lang="mk">[[:газетава#Tiếng&#95;Macedonia|газетава]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">gazetava</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Cyrl form-of lang-mk prox|def|pl-form-of" lang="mk">[[:газетиве#Tiếng&#95;Macedonia|газетиве]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">gazetive</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! | xác định<br/><span style="font-size:85%;">(xa người nói)</span>
+| <span class="Cyrl form-of lang-mk distal|def|sg-form-of" lang="mk">[[:газетана#Tiếng&#95;Macedonia|газетана]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">gazetana</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Cyrl form-of lang-mk distal|def|pl-form-of" lang="mk">[[:газетине#Tiếng&#95;Macedonia|газетине]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">gazetine</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! | [[vocative|hô cách]]
+| <span class="Cyrl form-of lang-mk voc|sg-form-of" lang="mk">[[:газето#Tiếng&#95;Macedonia|газето]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">gazeto</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Cyrl form-of lang-mk voc|pl-form-of" lang="mk">[[:газети#Tiếng&#95;Macedonia|газети]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">gazeti</span><span class="mention-gloss-paren annotation-paren">)</span>
+
+|}
+
+</div>
+
+==Tiếng Nga==
+<div class="interproject-box sister-wikipedia sister-project noprint floatright"><div style="float: left;" class="interproject-box-logo">[[File:Wikipedia-logo-v2.svg|x40px|none|link=|alt=]]</div><div style="margin-left: 60px;">[[Wikipedia]] tiếng Nga có một bài viết về:<div style="margin-left: 10px;"><b class="Cyrl" lang="ru">[[:w&#58;ru&#58;газета|газета]]</b></div></div></div><templatestyles src="Module:interproject/style.css"></templatestyles>
+
+===Từ nguyên===
+<strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates: Wikibase sitelink snapshot missing entity=Q150 site=viwiki</span></strong>.
+
+===Cách phát âm===
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>Âm thanh<span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:Ru-газета.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:Ru-газета.ogg|tập tin]])</td></tr></table>[[Category:Mục từ có liên kết âm thanh tiếng Nga|ГАЗЕТА]]
+* [[Wiktionary:IPA|IPA]]<sup>([[Phụ lục:Cách phát âm tiếng Nga|ghi chú]])</sup>:&#32;<span class="IPA">[ɡɐˈzʲetə]</span>[[Category:Từ 3 âm tiết tiếng Nga|ГАЗЕТА]][[Category:Mục từ có cách phát âm IPA tiếng Nga|ГАЗЕТА]]
+
+===Danh từ===
+<span class="headword-line"><strong class="Cyrl headword" lang="ru">газе́та</strong> (<span lang="ru-Latn" class="headword-tr tr Latn" dir="ltr">gazéta</span>)&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr>&nbsp;<abbr title="vô sinh">vs</abbr></span> (<i>sinh cách</i> <b class="Cyrl" lang="ru">[[:газеты#Tiếng&#95;Nga|газе́ты]]</b>[[Category:Liên kết mục từ có liên kết wiki thừa tiếng Nga|ГАЗЕТА]][[Category:Liên kết mục từ có tham số alt thừa tiếng Nga|ГАЗЕТА]], <i>danh cách số nhiều</i> <b class="Cyrl" lang="ru">[[:газеты#Tiếng&#95;Nga|газе́ты]]</b>[[Category:Liên kết mục từ có liên kết wiki thừa tiếng Nga|ГАЗЕТА]][[Category:Liên kết mục từ có tham số alt thừa tiếng Nga|ГАЗЕТА]], <i>sinh cách số nhiều</i> <b class="Cyrl" lang="ru">[[:газет#Tiếng&#95;Nga|газе́т]]</b>[[Category:Liên kết mục từ có liên kết wiki thừa tiếng Nga|ГАЗЕТА]][[Category:Liên kết mục từ có tham số alt thừa tiếng Nga|ГАЗЕТА]], <i>tính từ quan hệ</i> <b class="Cyrl" lang="ru">[[:газетный#Tiếng&#95;Nga|газе́тный]]</b>, <i>[[Phụ lục:Từ điển thuật ngữ#diminutive|diminutive]]</i> <b class="Cyrl form-of lang-ru giảm_nhẹ_nghĩa-form-of target-газе́тка origin-газе́та origin_transliteration-" lang="ru">[[:газетка#Tiếng&#95;Nga|газе́тка]]</b>, <i>[[Phụ lục:Từ điển thuật ngữ#pejorative|pejorative]]</i> <b class="Cyrl form-of lang-ru nghĩa_xấu-form-of target-газетёнка origin-газе́та origin_transliteration-" lang="ru">[[:газетёнка#Tiếng&#95;Nga|газетёнка]]</b>)</span>[[Category:Mục từ tiếng Nga|ГАЗЕТА]][[Category:Danh từ tiếng Nga|ГАЗЕТА]][[Category:Danh từ giống cái tiếng Nga|ГАЗЕТА]][[Category:Danh từ vô sinh tiếng Nga|ГАЗЕТА]][[Category:Trang có đề mục ngôn ngữ|ГАЗЕТА]][[Category:Trang có 5 đề mục ngôn ngữ|ГАЗЕТА]]
+
+# [[báo viết|Báo viết]].
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''1857'''</span>, <span class="Cyrl" lang="und">[[:w&#58;ru&#58;Лев Толстой|Лев Толстой]]</span> &#91;<span class="e-translation">[[w:Leo Tolstoy|Leo Tolstoy]]</span>&#93;, “<span class="Cyrl" lang="und">[[:s&#58;ru&#58;Юность (Толстой)&#47;Глава XIII|Глава XIII]]</span>”, trong <cite><span class="Cyrl" lang="und">[[:w&#58;ru&#58;Юность (повесть)|Юность]]</span></cite>:</span><dl><dd><div class="h-quotation"><span class="Cyrl e-quotation cited-passage" lang="ru">С Кузне́цкого моста́ я зае́хал в конди́терскую на Тверско́й и, хотя́ жела́л притвори́ться, что меня́ в конди́терской преиму́щественно интересу́ют '''газе́ты''', не мог удержа́ться и на́чал есть оди́н сла́дкий пирожо́к за други́м.</span><dl><dd><i lang="ru-Latn" class="e-transliteration tr Latn">S Kuznéckovo mostá ja zajéxal v kondíterskuju na Tverskój i, xotjá želál pritvorítʹsja, što menjá v kondíterskoj preimúščestvenno interesújut '''gazéty''', ne mog uderžátʹsja i náčal jestʹ odín sládkij pirožók za drugím.</i></dd><dd><small>(vui lòng thêm bản dịch tiếng Việt cho phần trích dẫn ngữ liệu này)</small></dd></dl></div>[[Category:Mục từ có trích dẫn ngữ liệu tiếng Nga|ГАЗЕТА]][[Category:Từ tiếng Nga có trích dẫn ngữ liệu cần dịch|ГАЗЕТА]]</dd></dl></div>
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''1973'''</span>, <span class="Cyrl" lang="und">[[:w&#58;ru&#58;Михаил Булгаков|Михаил Булгаков]]</span> &#91;<span class="e-translation">[[w:Mikhail Bulgakov|Mikhail Bulgakov]]</span>&#93;, “<span class="Cyrl" lang="und">Глава XVIII. Неудачливые визитёры</span>”, trong <cite><span class="Cyrl" lang="und">[[:w&#58;ru&#58;Мастер и Маргарита|Мастер и Маргарита]]</span></cite>:</span><dl><dd><div class="h-quotation"><span class="Cyrl e-quotation cited-passage" lang="ru">Объявле́ния в '''газе́тах''' об обме́не кварти́ры на Институ́тской у́лице в Ки́еве на ме́ньшую пло́щадь в Москве́ не дава́ли никако́го результа́та.</span><dl><dd><i lang="ru-Latn" class="e-transliteration tr Latn">Obʺjavlénija v '''gazétax''' ob obméne kvartíry na Institútskoj úlice v Kíjeve na ménʹšuju plóščadʹ v Moskvé ne daváli nikakóvo rezulʹtáta.</i></dd><dd><small>(vui lòng thêm bản dịch tiếng Việt cho phần trích dẫn ngữ liệu này)</small></dd></dl></div>[[Category:Mục từ có trích dẫn ngữ liệu tiếng Nga|ГАЗЕТА]][[Category:Từ tiếng Nga có trích dẫn ngữ liệu cần dịch|ГАЗЕТА]]</dd></dl></div>
+
+====Biến cách====
+<div>
+<div class="NavFrame" data-toggle-category="declension" style="max-width:45em">
+<div class="NavHead" style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;">Biến cách của <b lang="ru" class="Cyrl"><span class="Cyrl" lang="ru"><strong class="selflink">газе́та</strong></span></b><span style="font-weight:normal;"> (<span style="font-size: smaller;">[[Phụ lục:Danh từ tiếng Nga#Bảng biến cách|bất động vật gc thân từ cứng  trọng âm a]]</span>)</span>&nbsp;</div>
+<div class="NavContent">
+{| style="table-layout:fixed; text-align:center; max-width:45em; width:100%;" class="inflection inflection-table"
+|- class="rowgroup"
+! style="width:10em;background:var(--wikt-palette-lightblue, #d9ebff);color:inherit;" |
+! style="background:var(--wikt-palette-lightblue, #d9ebff);color:inherit;" | số ít
+! style="background:var(--wikt-palette-lightblue, #d9ebff);color:inherit;" | số nhiều
+|-
+! style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;" | [[nominative|danh cách]]
+| <span class="Cyrl form-of lang-ru nom|s-form-of origin-газе́та origin_transliteration-" lang="ru"><strong class="selflink">газе́та</strong></span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazéta</span>
+| <span class="Cyrl form-of lang-ru nom|p-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газеты#Tiếng&#95;Nga|газе́ты]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazéty</span>
+|-
+! style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;" | [[genitive|sinh cách]]
+| <span class="Cyrl form-of lang-ru gen|s-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газеты#Tiếng&#95;Nga|газе́ты]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazéty</span>
+| <span class="Cyrl form-of lang-ru gen|p-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газет#Tiếng&#95;Nga|газе́т]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazét</span>
+|-
+! style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;" | [[dative|dữ cách]]
+| <span class="Cyrl form-of lang-ru dat|s-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газете#Tiếng&#95;Nga|газе́те]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazéte</span>
+| <span class="Cyrl form-of lang-ru dat|p-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газетам#Tiếng&#95;Nga|газе́там]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazétam</span>
+|-
+! style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;" | [[accusative|đối cách]]
+| <span class="Cyrl form-of lang-ru acc|s-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газету#Tiếng&#95;Nga|газе́ту]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazétu</span>
+| <span class="Cyrl form-of lang-ru acc|p-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газеты#Tiếng&#95;Nga|газе́ты]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazéty</span>
+|-
+! style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;" | [[instrumental|cách công cụ]]
+| <span class="Cyrl form-of lang-ru ins|s-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газетой#Tiếng&#95;Nga|газе́той]]</span>, <span class="Cyrl form-of lang-ru ins|s-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газетою#Tiếng&#95;Nga|газе́тою]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazétoj</span>, <span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazétoju</span>
+| <span class="Cyrl form-of lang-ru ins|p-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газетами#Tiếng&#95;Nga|газе́тами]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazétami</span>
+|-
+! style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;" | [[prepositional|giới cách]]
+| <span class="Cyrl form-of lang-ru pre|s-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газете#Tiếng&#95;Nga|газе́те]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazéte</span>
+| <span class="Cyrl form-of lang-ru pre|p-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газетах#Tiếng&#95;Nga|газе́тах]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazétax</span>
+|-
+|}</div></div></div>[[Category:Danh từ giống cái tiếng Nga có thân từ cứng|ГАЗЕТА]][[Category:Danh từ giống cái tiếng Nga có thân từ cứng, trọng âm a|ГАЗЕТА]][[Category:Danh từ tiếng Nga   có trọng âm a|ГАЗЕТА]]
+<div>
+<div class="NavFrame" data-toggle-category="declension" style="max-width:45em">
+<div class="NavHead" style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;">Biến cách trước cải cách của <b lang="ru" class="Cyrl"><span class="Cyrl" lang="ru"><strong class="selflink">газе́та</strong></span></b><span style="font-weight:normal;"> (<span style="font-size: smaller;">[[Phụ lục:Danh từ tiếng Nga#Bảng biến cách|bất động vật gc thân từ cứng  trọng âm a]]</span>)</span>&nbsp;</div>
+<div class="NavContent">
+{| style="table-layout:fixed; text-align:center; max-width:45em; width:100%;" class="inflection inflection-table"
+|- class="rowgroup"
+! style="width:10em;background:var(--wikt-palette-lightblue, #d9ebff);color:inherit;" |
+! style="background:var(--wikt-palette-lightblue, #d9ebff);color:inherit;" | số ít
+! style="background:var(--wikt-palette-lightblue, #d9ebff);color:inherit;" | số nhiều
+|-
+! style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;" | [[nominative|danh cách]]
+| <span class="Cyrl form-of lang-ru nom|s-form-of origin-газе́та origin_transliteration-" lang="ru"><strong class="selflink">газе́та</strong></span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazéta</span>
+| <span class="Cyrl form-of lang-ru nom|p-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газеты#Tiếng&#95;Nga|газе́ты]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazéty</span>
+|-
+! style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;" | [[genitive|sinh cách]]
+| <span class="Cyrl form-of lang-ru gen|s-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газеты#Tiếng&#95;Nga|газе́ты]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazéty</span>
+| <span class="Cyrl form-of lang-ru gen|p-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газетъ#Tiếng&#95;Nga|газе́тъ]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazét</span>
+|-
+! style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;" | [[dative|dữ cách]]
+| <span class="Cyrl form-of lang-ru dat|s-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газетѣ#Tiếng&#95;Nga|газе́тѣ]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazétě</span>
+| <span class="Cyrl form-of lang-ru dat|p-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газетамъ#Tiếng&#95;Nga|газе́тамъ]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazétam</span>
+|-
+! style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;" | [[accusative|đối cách]]
+| <span class="Cyrl form-of lang-ru acc|s-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газету#Tiếng&#95;Nga|газе́ту]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazétu</span>
+| <span class="Cyrl form-of lang-ru acc|p-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газеты#Tiếng&#95;Nga|газе́ты]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazéty</span>
+|-
+! style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;" | [[instrumental|cách công cụ]]
+| <span class="Cyrl form-of lang-ru ins|s-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газетой#Tiếng&#95;Nga|газе́той]]</span>, <span class="Cyrl form-of lang-ru ins|s-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газетою#Tiếng&#95;Nga|газе́тою]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazétoj</span>, <span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazétoju</span>
+| <span class="Cyrl form-of lang-ru ins|p-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газетами#Tiếng&#95;Nga|газе́тами]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazétami</span>
+|-
+! style="background:var(--wikt-palette-lighterblue, #ebf4ff);color:inherit;" | [[prepositional|giới cách]]
+| <span class="Cyrl form-of lang-ru pre|s-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газетѣ#Tiếng&#95;Nga|газе́тѣ]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazétě</span>
+| <span class="Cyrl form-of lang-ru pre|p-form-of origin-газе́та origin_transliteration-" lang="ru">[[:газетахъ#Tiếng&#95;Nga|газе́тахъ]]</span><br /><span lang="ru-Latn" class="tr Latn"  style="color: #888;">gazétax</span>
+|-
+|}</div></div></div>[[Category:Danh từ giống cái tiếng Nga có thân từ cứng|ГАЗЕТА]][[Category:Danh từ giống cái tiếng Nga có thân từ cứng, trọng âm a|ГАЗЕТА]][[Category:Danh từ tiếng Nga   có trọng âm a|ГАЗЕТА]]
+
+====Từ phái sinh====
+* <span class="Cyrl" lang="ru">[[:газетчик#Tiếng&#95;Nga|газе́тчик]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ru-Latn" class="tr Latn">gazétčik</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="Cyrl" lang="ru">[[:газетный#Tiếng&#95;Nga|газе́тный]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ru-Latn" class="tr Latn">gazétnyj</span><span class="mention-gloss-paren annotation-paren">)</span>
+
+====Hậu duệ====
+<div class="NavFrame">
+<div class="NavHead" style="text-align: left;">Hậu duệ</div>
+<div class="NavContent columns-bg ul-column-count" data-column-count="2" style="text-align: left;">
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Azerbaijan: <span class="Latn" lang="az">[[:qəzet#Tiếng&#95;Azerbaijan|qəzet]]</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Bashkir: <span class="Cyrl" lang="ba">[[:гәзит#Tiếng&#95;Bashkir|гәзит]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ba-Latn" class="tr Latn">gəzit</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Buryat: <span class="Cyrl" lang="bua">[[:газетэ#Tiếng&#95;Buryat|газетэ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bua-Latn" class="tr Latn">gazjete</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Dolgan: <span class="Cyrl" lang="dlg">[[:газета#Tiếng&#95;Dolgan|газета]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="dlg-Latn" class="tr Latn">gazeta</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thủ công không thừa tiếng Dolgan|ГАЗЕТА]]<templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Evenk: <span class="Cyrl" lang="evn">[[:газета#Tiếng&#95;Evenk|газе̄та]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="evn-Latn" class="tr Latn">gazēta</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Bezhta: <span class="Cyrl" lang="kap">[[:газит#Tiếng&#95;Bezhta|газит]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="kap-Latn" class="tr Latn">gazit</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Gruzia: <span class="Geor" lang="ka">[[:გაზეთი#Tiếng&#95;Gruzia|გაზეთი]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ka-Latn" class="tr Latn">gazeti</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Kalmyk: <span class="Cyrl" lang="xal">[[:газет#Tiếng&#95;Kalmyk|газет]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="xal-Latn" class="tr Latn">gazet</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Kazakh:<templatestyles src="Module:etymology/style.css"/>
+*: <strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates/descendant: Parameter "sclb" has been replaced by "sclang", to avoid confusion with 'labels' as in [[Bản mẫu:label]].</span></strong>
+*: <strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates/descendant: Parameter "sclb" has been replaced by "sclang", to avoid confusion with 'labels' as in [[Bản mẫu:label]].</span></strong>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Khakas: <span class="Cyrl" lang="kjh">[[:газета#Tiếng&#95;Khakas|газета]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="kjh-Latn" class="tr Latn">gazeta</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Kyrgyz: <span class="Cyrl" lang="ky">[[:гезит#Tiếng&#95;Kyrgyz|гезит]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ky-Latn" class="tr Latn">gezit</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Sami Kildin: <span class="Cyrl" lang="sjd">[[:газет#Tiếng&#95;Sami&#95;Kildin|газет]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="sjd-Latn" class="tr Latn">gaz’et</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Sami Skolt: <span class="Latn" lang="sms">[[:gaʹzaat#Tiếng&#95;Sami&#95;Skolt|gaʹzaat]]</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Nam Altai: <span class="Cyrl" lang="alt">[[:газет#Tiếng&#95;Nam&#95;Altai|газет]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="alt-Latn" class="tr Latn">gazet</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Tajik: <span class="Cyrl" lang="tg">[[:газета#Tiếng&#95;Tajik|газета]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="tg-Latn" class="tr Latn">gazeta</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Tatar: <span class="Cyrl" lang="tt">[[:газет#Tiếng&#95;Tatar|газет]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="tt-Latn" class="tr Latn">ğäzet</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Cyrl" lang="tt">[[:гәзит#Tiếng&#95;Tatar|гәзит]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="tt-Latn" class="tr Latn">gäzit</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Turkmen: <span class="Latn" lang="tk">[[:gazet#Tiếng&#95;Turkmen|gazet]]</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Duy Ngô Nhĩ:<templatestyles src="Module:etymology/style.css"/>
+*: <strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates/descendant: Parameter "sclb" has been replaced by "sclang", to avoid confusion with 'labels' as in [[Bản mẫu:label]].</span></strong>
+*: <strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates/descendant: Parameter "sclb" has been replaced by "sclang", to avoid confusion with 'labels' as in [[Bản mẫu:label]].</span></strong>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Uzbek: <span class="Latn" lang="uz">[[:gazeta#Tiếng&#95;Uzbek|gazeta]]</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Yakut: <span class="Cyrl" lang="sah">[[:хаһыат#Tiếng&#95;Yakut|хаһыат]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="sah-Latn" class="tr Latn">qahıat</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+</div></div>
+
+==Tiếng Ukraina==
+<div class="interproject-box sister-wikipedia sister-project noprint floatright"><div style="float: left;" class="interproject-box-logo">[[File:Wikipedia-logo-v2.svg|x40px|none|link=|alt=]]</div><div style="margin-left: 60px;">[[Wikipedia]] tiếng Ukraina có một bài viết về:<div style="margin-left: 10px;"><b class="Cyrl" lang="uk">[[:w&#58;uk&#58;газета|газета]]</b></div></div></div><templatestyles src="Module:interproject/style.css"></templatestyles>
+
+===Cách viết khác===
+* <span class="Cyrl" lang="uk">[[:ґазета#Tiếng&#95;Ukraina|ґазе́та]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="uk-Latn" class="tr Latn">gazéta</span><span class="mention-gloss-paren annotation-paren">)</span> &mdash; <span class="ib-content label-content">kiều dân; trước 1933</span>
+
+===Từ nguyên===
+Từ <strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates: Wikibase sitelink snapshot missing entity=Q150 site=viwiki</span></strong>.
+
+===Cách phát âm===
+* [[Wiktionary:IPA|IPA]]<sup>([[Phụ lục:Cách phát âm tiếng Ukraina|ghi chú]])</sup>:&#32;<span class="IPA">[ɦɐˈzɛtɐ]</span>[[Category:Mục từ có cách phát âm IPA tiếng Ukraina|ГАЗЕТА]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>Âm thanh<span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:Uk-газета.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:Uk-газета.ogg|tập tin]])</td></tr></table>[[Category:Mục từ có liên kết âm thanh tiếng Ukraina|ГАЗЕТА]]
+
+===Danh từ===
+<span class="headword-line"><strong class="Cyrl headword" lang="uk">газе́та</strong> (<span lang="uk-Latn" class="headword-tr tr Latn" dir="ltr">hazéta</span>)&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr>&nbsp;<abbr title="vô sinh">vs</abbr></span> (<i>sinh cách</i> <b class="Cyrl" lang="uk">[[:газети#Tiếng&#95;Ukraina|газе́ти]]</b>, <i>danh cách số nhiều</i> <b class="Cyrl" lang="uk">[[:газети#Tiếng&#95;Ukraina|газе́ти]]</b>, <i>sinh cách số nhiều</i> <b class="Cyrl" lang="uk">[[:газет#Tiếng&#95;Ukraina|газе́т]]</b>, <i>tính từ quan hệ</i> <b class="Cyrl" lang="uk">[[:газетний#Tiếng&#95;Ukraina|газе́тний]]</b>, <i>giảm nhẹ nghĩa</i> <b class="Cyrl" lang="uk">[[:газетка#Tiếng&#95;Ukraina|газе́тка]]</b>)</span>[[Category:Mục từ tiếng Ukraina|ГАЗЕТА]][[Category:Danh từ tiếng Ukraina|ГАЗЕТА]][[Category:Danh từ giống cái tiếng Ukraina|ГАЗЕТА]][[Category:Danh từ vô sinh tiếng Ukraina|ГАЗЕТА]][[Category:Trang có đề mục ngôn ngữ|ГАЗЕТА]][[Category:Trang có 5 đề mục ngôn ngữ|ГАЗЕТА]]
+
+# [[báo viết|Báo viết]].
+
+====Biến cách====
+<div class="inflection-table-wrapper inflection-table-collapsible inflection-table-collapsed no-vc sticky-left-column tr-alongside" style="width: fit-content" data-wikt-palette-p="blue" data-toggle-category="biến tố">
+{| class="inflection-table inflection-table-uk"
+|+ class="inflection-table-title" | Biến cách của <i lang="uk" class="Cyrl">газе́та</i><br> (<span style="font-size: smaller;">vô sinh hard fem-form trọng âm-a</span>)
+|-
+|- class="outer"
+! 
+! số ít
+! số nhiều
+|-
+! [[nominative|danh cách]]
+| data-accel-col=1 | <span class="Cyrl form-of lang-uk nom|s-form-of origin-газе́та" lang="uk"><strong class="selflink">газе́та</strong></span><br /><span lang="uk-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazéta</span>
+| data-accel-col=2 | <span class="Cyrl form-of lang-uk nom|p-form-of origin-газе́та" lang="uk">[[:газети#Tiếng&#95;Ukraina|газе́ти]]</span><br /><span lang="uk-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazéty</span>
+|-
+! [[genitive|sinh cách]]
+| data-accel-col=1 | <span class="Cyrl form-of lang-uk gen|s-form-of origin-газе́та" lang="uk">[[:газети#Tiếng&#95;Ukraina|газе́ти]]</span><br /><span lang="uk-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazéty</span>
+| data-accel-col=2 | <span class="Cyrl form-of lang-uk gen|p-form-of origin-газе́та" lang="uk">[[:газет#Tiếng&#95;Ukraina|газе́т]]</span><br /><span lang="uk-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazét</span>
+|-
+! [[dative|dữ cách]]
+| data-accel-col=1 | <span class="Cyrl form-of lang-uk dat|s-form-of origin-газе́та" lang="uk">[[:газеті#Tiếng&#95;Ukraina|газе́ті]]</span><br /><span lang="uk-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazéti</span>
+| data-accel-col=2 | <span class="Cyrl form-of lang-uk dat|p-form-of origin-газе́та" lang="uk">[[:газетам#Tiếng&#95;Ukraina|газе́там]]</span><br /><span lang="uk-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazétam</span>
+|-
+! [[accusative|đối cách]]
+| data-accel-col=1 | <span class="Cyrl form-of lang-uk acc|s-form-of origin-газе́та" lang="uk">[[:газету#Tiếng&#95;Ukraina|газе́ту]]</span><br /><span lang="uk-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazétu</span>
+| data-accel-col=2 | <span class="Cyrl form-of lang-uk acc|p-form-of origin-газе́та" lang="uk">[[:газети#Tiếng&#95;Ukraina|газе́ти]]</span><br /><span lang="uk-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazéty</span>
+|-
+! [[instrumental|cách công cụ]]
+| data-accel-col=1 | <span class="Cyrl form-of lang-uk ins|s-form-of origin-газе́та" lang="uk">[[:газетою#Tiếng&#95;Ukraina|газе́тою]]</span><br /><span lang="uk-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazétoju</span>
+| data-accel-col=2 | <span class="Cyrl form-of lang-uk ins|p-form-of origin-газе́та" lang="uk">[[:газетами#Tiếng&#95;Ukraina|газе́тами]]</span><br /><span lang="uk-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazétamy</span>
+|-
+! [[locative|định vị cách]]
+| data-accel-col=1 | <span class="Cyrl form-of lang-uk loc|s-form-of origin-газе́та" lang="uk">[[:газеті#Tiếng&#95;Ukraina|газе́ті]]</span><br /><span lang="uk-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazéti</span>
+| data-accel-col=2 | <span class="Cyrl form-of lang-uk loc|p-form-of origin-газе́та" lang="uk">[[:газетах#Tiếng&#95;Ukraina|газе́тах]]</span><br /><span lang="uk-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazétax</span>
+|-
+! [[vocative|hô cách]]
+| data-accel-col=1 | <span class="Cyrl form-of lang-uk voc|s-form-of origin-газе́та" lang="uk">[[:газето#Tiếng&#95;Ukraina|газе́то]]</span><br /><span lang="uk-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazéto</span>
+| data-accel-col=2 | <span class="Cyrl form-of lang-uk voc|p-form-of origin-газе́та" lang="uk">[[:газети#Tiếng&#95;Ukraina|газе́ти]]</span><br /><span lang="uk-Latn" class="tr Latn"  style="color: var(--wikt-palette-grey-8,#888);">hazéty</span>
+|}
+<div class="inflection-table-notes">
+
+</div>
+</div>[[Category:Danh từ hard feminine-form tiếng Ukraina|ГАЗЕТА]][[Category:Danh từ có trọng âm loại a tiếng Ukraina|ГАЗЕТА]]
+
+===Tham khảo===
+* <span class="citation-whole"><span class="cited-source">[[:w&#58;uk&#58;Білодід Іван Костянтинович|Bilodid, I. K.]] (biên tập) (<span class="None" lang="und">1970–1980</span>), “<span class="Cyrl" lang="und">[http://sum.in.ua/?swrd=газета газета]</span>”, trong <cite><span class="Cyrl" lang="und">[[:w&#58;uk&#58;Словник української мови в 11 томах|Словник української мови&#58; в 11 т.]]</span></cite> &#91;<cite><span class="e-translation">Từ điển tiếng Ukraina: 11 tập</span></cite>&#93; (bằng tiếng Ukraina), Kyiv&#58; [[:w&#58;Naukova Dumka|Naukova Dumka]]</span></span>
+* “[https://goroh.pp.ua/Словозміна/%D0%B3%D0%B0%D0%B7%D0%B5%D1%82%D0%B0 газета]”, ''[https://goroh.pp.ua/ Горох – Словозміна]'' [''Horokh – Biến tố''] (bằng tiếng Ukraina)

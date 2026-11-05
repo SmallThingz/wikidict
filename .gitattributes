@@ -4,3 +4,9 @@ tools/reviewed_alias_p10_r229761.wikitext -whitespace
 tools/testdata/shy-nom-data.lua -whitespace
 tools/testdata/hr-intrigantan/* -whitespace
 tools/testdata/mnw-kewk/* -whitespace
+tools/testdata/ia-styled-close/* -whitespace
+tools/testdata/mnw-ost/* -whitespace
+tools/testdata/sa-likhati/* -whitespace
+tools/testdata/sr-tako/* -whitespace
+tools/testdata/tr-sunuk/* -whitespace
+tools/testdata/vi-gazeta/* -whitespace

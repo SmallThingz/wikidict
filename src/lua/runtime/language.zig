@@ -257,8 +257,22 @@ fn parseIsoDateTime(raw: []const u8) ?Civil {
     };
 }
 
+fn parseCompactDateTime(raw: []const u8) ?Civil {
+    // PHP's compact date and time tokens accept the MediaWiki YmdHis form.
+    if (raw.len != 14) return null;
+    for (raw) |byte| if (!std.ascii.isDigit(byte)) return null;
+    return .{
+        .year = std.fmt.parseInt(i64, raw[0..4], 10) catch return null,
+        .month = std.fmt.parseInt(u8, raw[4..6], 10) catch return null,
+        .day = std.fmt.parseInt(u8, raw[6..8], 10) catch return null,
+        .hour = std.fmt.parseInt(u8, raw[8..10], 10) catch return null,
+        .minute = std.fmt.parseInt(u8, raw[10..12], 10) catch return null,
+        .second = std.fmt.parseInt(u8, raw[12..14], 10) catch return null,
+    };
+}
+
 fn parseCivil(raw: []const u8) ?Civil {
-    return parseIsoDateTime(raw) orelse parseDelimitedDate(raw) orelse parseNamedMonthYear(raw);
+    return parseCompactDateTime(raw) orelse parseIsoDateTime(raw) orelse parseDelimitedDate(raw) orelse parseNamedMonthYear(raw);
 }
 
 fn parseClockDateTime(raw: []const u8) ?Civil {
@@ -360,6 +374,42 @@ fn addDays(timestamp: i64, count: i64) !i64 {
     return std.math.add(i64, timestamp, seconds) catch error.InvalidDate;
 }
 
+fn parseFixedRelative(runtime: *const rt.Context, raw: []const u8) !?i64 {
+    // One signed fixed-unit offset. Decline other spellings so the established
+    // signed-count day grammar below remains authoritative. Calendar arithmetic
+    // stays in parseMonthRelative; this does not parse arbitrary date phrases.
+    const sign_at = std.mem.lastIndexOfAny(u8, raw, "+-") orelse return null;
+    const suffix = std.mem.trim(u8, raw[sign_at + 1 ..], " \t\r\n");
+    var fields = std.mem.tokenizeAny(u8, suffix, " \t\r\n");
+    const number = fields.next() orelse return null;
+    const unit = fields.next() orelse return null;
+    if (fields.next() != null) return null;
+    const scale: i64 = if (std.ascii.eqlIgnoreCase(unit, "day") or std.ascii.eqlIgnoreCase(unit, "days"))
+        std.time.s_per_day
+    else if (std.ascii.eqlIgnoreCase(unit, "hour") or std.ascii.eqlIgnoreCase(unit, "hours"))
+        std.time.s_per_hour
+    else if (std.ascii.eqlIgnoreCase(unit, "minute") or std.ascii.eqlIgnoreCase(unit, "minutes"))
+        std.time.s_per_min
+    else if (std.ascii.eqlIgnoreCase(unit, "second") or std.ascii.eqlIgnoreCase(unit, "seconds"))
+        1
+    else
+        return null;
+    for (number) |byte| if (!std.ascii.isDigit(byte)) return null;
+    const count = std.fmt.parseInt(i64, number, 10) catch return error.InvalidDate;
+    const base_raw = std.mem.trim(u8, raw[0..sign_at], " \t\r\n");
+    const base = if (base_raw.len == 0 or std.ascii.eqlIgnoreCase(base_raw, "now"))
+        try currentUnix(runtime)
+    else if (std.ascii.eqlIgnoreCase(base_raw, "today"))
+        floorDiv(try currentUnix(runtime), std.time.s_per_day) * std.time.s_per_day
+    else blk: {
+        const civil = parseCivil(base_raw) orelse parseClockDateTime(base_raw) orelse parseLeadingClockDateTime(base_raw) orelse return null;
+        break :blk try unixFromCivil(civil);
+    };
+    const signed = std.math.mul(i64, if (raw[sign_at] == '-') @as(i64, -1) else 1, count) catch return error.InvalidDate;
+    const seconds = std.math.mul(i64, signed, scale) catch return error.InvalidDate;
+    return std.math.add(i64, base, seconds) catch error.InvalidDate;
+}
+
 fn parseMonthRelative(runtime: *const rt.Context, raw: []const u8) !?i64 {
     const anchors = [_]struct { text: []const u8, shift: i64, last: bool }{
         .{ .text = "first day of this month", .shift = 0, .last = false },
@@ -413,6 +463,7 @@ pub fn parseTimestampText(runtime: *const rt.Context, raw_value: ?[]const u8) !i
     if (std.ascii.eqlIgnoreCase(raw, "today"))
         return floorDiv(try currentUnix(runtime), std.time.s_per_day) * std.time.s_per_day;
     if (try parseMonthRelative(runtime, raw)) |timestamp| return timestamp;
+    if (try parseFixedRelative(runtime, raw)) |timestamp| return timestamp;
     inline for (.{
         .{ "now +", @as(i64, 1), false },
         .{ "now -", @as(i64, -1), false },
@@ -2044,4 +2095,62 @@ fn dateFormattingAllocationProbe(a: std.mem.Allocator) !void {
 }
 test "localized date output releases partially allocated output on failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, dateFormattingAllocationProbe, .{});
+}
+
+
+test "compact timestamps and signed fixed offsets preserve captured citation dates" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 0);
+    defer runtime.deinit();
+    var host = host_api.Host{ .now_unix = 1_791_731_560 };
+    host_api.set(&runtime, &host);
+    const cases = [_]struct { raw: []const u8, expected: []const u8 }{
+        .{ .raw = "- 30 days", .expected = "2026-09-11 15:12:40" },
+        .{ .raw = "+ 2 hours", .expected = "2026-10-11 17:12:40" },
+        .{ .raw = "now - 30 days", .expected = "2026-09-11 15:12:40" },
+        // Existing signed-count day forms remain accepted by their original path.
+        .{ .raw = "now + -2 days", .expected = "2026-10-09 15:12:40" },
+        .{ .raw = "today - -2 days", .expected = "2026-10-13 00:00:00" },
+        .{ .raw = "2015-09-10 + -2 days", .expected = "2015-09-08 00:00:00" },
+        .{ .raw = "now + +2 days", .expected = "2026-10-13 15:12:40" },
+        .{ .raw = "today +2 HOURS", .expected = "2026-10-11 02:00:00" },
+        .{ .raw = "20150910192507", .expected = "2015-09-10 19:25:07" },
+        .{ .raw = "20150910192507 +1 hours", .expected = "2015-09-10 20:25:07" },
+        .{ .raw = "20150910192507 +2 hours", .expected = "2015-09-10 21:25:07" },
+        .{ .raw = "20150910192507 - 30 days", .expected = "2015-08-11 19:25:07" },
+        .{ .raw = "20240228235959 +1 second", .expected = "2024-02-29 00:00:00" },
+        .{ .raw = "20240101003000 -60 minutes", .expected = "2023-12-31 23:30:00" },
+        .{ .raw = "19691231235959 +1 second", .expected = "1970-01-01 00:00:00" },
+        .{ .raw = "2015-09-10T19:25:07 +2 hours", .expected = "2015-09-10 21:25:07" },
+        .{ .raw = "2013-04-08-8 days", .expected = "2013-03-31 00:00:00" },
+    };
+    for (cases) |case| {
+        const timestamp = try parseTimestampText(&runtime, case.raw);
+        const rendered = try formatDateAlloc(a, timestamp, "Y-m-d H:i:s");
+        try std.testing.expectEqualStrings(case.expected, rendered);
+    }
+}
+
+test "compact date recovery retains invalid input overflow and clock authority failures" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var host = host_api.Host{ .now_unix = 1_791_731_560 };
+    host_api.set(&runtime, &host);
+    for ([_][]const u8{
+        "2015091019250", "201509101925070", "2015091019250x", "20151310192507",
+        "20150910192599", "20150230192507", "00000910192507", "20150910192507 +hours",
+        "20150910192507 +2 hours junk", "20150910192507 +2.5 hours",
+        "20150910192507 +2 weeks", "today +days", "now +9223372036854775807 days",
+        "+999999999999999999999 hours", "<strong>bad</strong> +2 hours", "{{DATE}} +2 hours",
+    }) |raw| try std.testing.expectError(error.InvalidDate, parseTimestampText(&runtime, raw));
+    host.now_unix = null;
+    try std.testing.expectError(error.MissingCurrentTime, parseTimestampText(&runtime, "- 30 days"));
+    try std.testing.expectError(error.MissingCurrentTime, parseTimestampText(&runtime, "today +2 hours"));
+    // An authored absolute date never borrows the current clock.
+    const timestamp = try parseTimestampText(&runtime, "20150910192507 +2 hours");
+    try std.testing.expectEqualStrings("2015-09-10 21:25:07", try formatDateAlloc(arena.allocator(), timestamp, "Y-m-d H:i:s"));
 }

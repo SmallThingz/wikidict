@@ -1420,7 +1420,7 @@ test "reported recovery matches MediaWiki literal and formatting fixtures" {
     // Live oracle: tools/check_mediawiki_recovery.py and its fixture file.
     const cases = [_][2][]const u8{
         .{ "A [[-", "A [malformed link] -" },
-        .{ "B ]]word]]", "B  [malformed link]word [malformed link]" },
+        .{ "B ]]word]]", "B ]]word]]" },
         .{ "C <small>x<small> y", "C x y" },
         // MediaWiki retains a complete empty pair as authored nonaction text.
         .{ "D [[]] E", "D [[]] E" },
@@ -1442,10 +1442,11 @@ test "reported recovery matches MediaWiki literal and formatting fixtures" {
         }
         const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", case[0], null, &report);
         const parsed = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, parsed));
         var text: std.ArrayList(u8) = .empty;
         for (parsed.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
             try text.appendSlice(a, span.text);
-            if (std.mem.eql(u8, case[0], "D [[]] E")) {
+            if (std.mem.eql(u8, case[0], "D [[]] E") or std.mem.eql(u8, case[0], "B ]]word]]")) {
                 try std.testing.expectEqual(types.InlineKind.text, span.kind);
                 try std.testing.expectEqualStrings("", span.target);
                 try std.testing.expectEqualStrings("", span.trail);
@@ -3159,7 +3160,7 @@ test "malformed source recovery roundtrip stores diagnostics not active syntax" 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const cases = [_]struct { source: []const u8, visible: []const u8, actions: usize, marker_bold: ?bool = null, bold_closer: bool = false, literal_opener: bool = false }{
+    const cases = [_]struct { source: []const u8, visible: []const u8, actions: usize, marker_bold: ?bool = null, bold_closer: bool = false, literal_opener: bool = false, literal_closer: bool = false }{
         .{ .source = "before {Wendung|en|run}} after", .visible = "before [malformed template] after", .actions = 0 },
         .{ .source = "[rīmcræftig]] (cræftig in [[rīmung]]e)", .visible = "rīmcræftig [malformed link] (cræftig in rīmunge)", .actions = 2 },
         .{ .source = "([[[[irregular]]]])", .visible = "(irregular [malformed link])", .actions = 1 },
@@ -3167,7 +3168,7 @@ test "malformed source recovery roundtrip stores diagnostics not active syntax" 
         .{ .source = "[[prefix [[taking]] suffix]]", .visible = "prefix taking suffix [malformed link]", .actions = 1 },
         .{ .source = "[[[[taking]]|label]]", .visible = "taking|label [malformed link]", .actions = 1 },
         .{ .source = "[[Engle]] [[-", .visible = "Engle [malformed link] -", .actions = 1 },
-        .{ .source = "[[bótian]] (bet weorðan]]", .visible = "bótian (bet weorðan [malformed link]", .actions = 1 },
+        .{ .source = "[[bótian]] (bet weorðan]]", .visible = "bótian (bet weorðan]]", .actions = 1, .literal_closer = true },
         .{ .source = "[[khrisma]", .visible = "khrisma [malformed link]", .actions = 0 },
         // Keep the authored outside bracket separate from the diagnostic close.
         .{ .source = "[[taking#x[y]]]", .visible = "taking#x[y [malformed link] ]", .actions = 0 },
@@ -3180,15 +3181,21 @@ test "malformed source recovery roundtrip stores diagnostics not active syntax" 
         var report: Fallbacks = .{};
         const encoded = try compileReportedAlloc(a, "fixture", .language, "English", "en", case.source, null, &report);
         const decoded = try codec.decodeAlloc(a, encoded, "fixture", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
         var visible: std.ArrayList(u8) = .empty;
         var actions: usize = 0;
         var bold_closers: usize = 0;
         var literal_wrappers: usize = 0;
+        var literal_closers: usize = 0;
         var outside_opener: std.ArrayList(u8) = .empty;
         for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
             try visible.appendSlice(a, span.text);
             try visible.appendSlice(a, span.trail);
             if (span.kind == .link) actions += 1;
+            if (case.literal_closer and std.mem.indexOf(u8, span.text, "]]") != null) {
+                literal_closers += std.mem.count(u8, span.text, "]]");
+                try std.testing.expect(span.kind == .text and span.target.len == 0);
+            }
             const empty_pairs = std.mem.count(u8, span.text, "[[]]");
             if (empty_pairs != 0) {
                 literal_wrappers += empty_pairs;
@@ -3220,6 +3227,7 @@ test "malformed source recovery roundtrip stores diagnostics not active syntax" 
         if (case.marker_bold != null) try std.testing.expectEqual(@as(usize, 1), literal_wrappers);
         if (case.literal_opener) try std.testing.expectEqualStrings("[", outside_opener.items);
         if (case.bold_closer) try std.testing.expectEqual(@as(usize, 1), bold_closers);
+        if (case.literal_closer) try std.testing.expectEqual(@as(usize, 1), literal_closers);
         try std.testing.expectEqualStrings(case.visible, visible.items);
         try std.testing.expectEqual(case.actions, actions);
         try std.testing.expect(report.literal_markup and !report.missing_template);
@@ -3572,7 +3580,7 @@ test "orphan physical table closer compiles diagnostic and preserves lexical bod
     const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "ar", .heading = "Arabic" });
     var visible: std.ArrayList(u8) = .empty;
     var tables: usize = 0;
-    var diagnostics: usize = 0;
+    var literal_closers: usize = 0;
     var before = false;
     var inside = false;
     var after = false;
@@ -3580,8 +3588,8 @@ test "orphan physical table closer compiles diagnostic and preserves lexical bod
     for (decoded.entry.sections) |section| for (section.blocks) |block| {
         for (block.spans) |span| {
             try visible.appendSlice(a, span.text);
-            if (std.mem.eql(u8, span.text, "[malformed table]")) {
-                diagnostics += 1;
+            if (std.mem.eql(u8, span.text, "|}")) {
+                literal_closers += 1;
                 try std.testing.expect(span.kind == .text and span.target.len == 0);
             }
             if (span.kind == .link and std.mem.eql(u8, span.target, "Before")) before = true;
@@ -3597,11 +3605,13 @@ test "orphan physical table closer compiles diagnostic and preserves lexical bod
     };
     try std.testing.expect(report.malformed_table and report.literal_markup);
     try std.testing.expectEqual(@as(usize, 1), tables);
-    try std.testing.expectEqual(@as(usize, 1), diagnostics);
+    try std.testing.expectEqual(@as(usize, 1), literal_closers);
     try std.testing.expect(before and inside and after and last);
     for ([_][]const u8{ "prefix", "suffix", "following" }) |word|
         try std.testing.expect(std.mem.indexOf(u8, visible.items, word) != null);
-    try std.testing.expect(std.mem.indexOf(u8, visible.items, "|}") == null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, visible.items, "|}"));
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "[malformed table]") == null);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
 
     // A later physical LF stays eligible even inside an inline table capture.
     for ([_][]const u8{ "|}\nAfter", "<span>first\n|}After\n{|\n| cell\n|}\n</span>" }) |simple_source| {
@@ -3611,7 +3621,9 @@ test "orphan physical table closer compiles diagnostic and preserves lexical bod
         visible.clearRetainingCapacity();
         for (simple_decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span|
             try visible.appendSlice(a, span.text);
-        try std.testing.expect(std.mem.indexOf(u8, visible.items, "[malformed table]") != null);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, visible.items, "|}"));
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, "[malformed table]") == null);
+        try std.testing.expectEqualSlices(u8, simple, try codec.encodeAlloc(a, simple_decoded));
         try std.testing.expect(std.mem.indexOf(u8, visible.items, "After") != null);
         try std.testing.expect(simple_report.malformed_table and simple_report.literal_markup);
     }
@@ -3755,6 +3767,7 @@ test "orphan template recovery preserves literal URL balanced template and param
     const cases = [_]struct { source: []const u8, expected: []const u8 }{
         .{ .source = "<nowiki>}}</nowiki>", .expected = "}}" },
         .{ .source = "}<nowiki>}</nowiki>", .expected = "}}" },
+        .{ .source = "}<nowiki/>}", .expected = "}}" },
         .{ .source = "<pre>}}</pre>", .expected = "}}" },
         .{ .source = "&#125;&#125;", .expected = "}}" },
         .{ .source = "https://example.test/a}}", .expected = "https://example.test/a}}" },
@@ -3778,8 +3791,8 @@ test "orphan template recovery preserves literal URL balanced template and param
     try std.testing.expect(balanced_report.missing_template and !balanced_report.literal_markup);
     try std.testing.expect(std.mem.indexOf(u8, balanced, "[malformed template]") == null);
     try std.testing.expect(std.mem.indexOf(u8, balanced, "secret_argument_body") == null);
-    // An empty literal node cannot authorize two surrounding parsed braces.
-    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "}<nowiki/>}", null));
+    // An original empty nowiki is a strip boundary until after wiki parsing.
+    // The source case above earns brace provenance; code flags below do not.
     // Ordinary code styling is not literal authority for authored raw closers.
     var code_report: Fallbacks = .{};
     const code_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", "<code>}}</code>", null, &code_report);
@@ -4577,8 +4590,8 @@ test "generated reference markers preserve bracket adjacency and validate author
         for (stored.entry.references[0].spans) |span| try citation.appendSlice(a, span.text);
         try std.testing.expectEqualStrings("citation", citation.items);
     }
-    // Authored raw closers are consumed by the existing malformed-link
-    // recovery. Their diagnosed presentation is data, not an uncompiled pair.
+    // Candidate-free authored raw closers remain literal nonaction text,
+    // including ordinary reference bodies; source diagnostics remain set.
     for ([_]bool{ false, true }) |reference_body| {
         var report: Fallbacks = .{};
         const source = if (reference_body) "word<ref>bad]]body</ref>]" else "word]]tail";
@@ -4592,9 +4605,10 @@ test "generated reference markers preserve bracket adjacency and validate author
             try diagnosed.appendSlice(a, span.text);
             try std.testing.expectEqual(types.InlineKind.text, span.kind);
             try std.testing.expectEqualStrings("", span.target);
-            try std.testing.expect(std.mem.indexOf(u8, span.text, "]]") == null);
         }
-        try std.testing.expectEqualStrings(if (reference_body) "bad [malformed link]body" else "word [malformed link]tail", diagnosed.items);
+        try std.testing.expectEqualStrings(if (reference_body) "bad]]body" else "word]]tail", diagnosed.items);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, diagnosed.items, "]]"));
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
     }
     for ([_][]const u8{
         "word]__NOTOC__]tail",
@@ -5342,29 +5356,30 @@ test "restored display close survives codec without exempting outside text or ta
     const nah_unowned = [_]compiler.Span{.{ .kind = .link, .target = "x", .text = "[label]" }, .{ .text = "]" }};
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(nah_a, &nah_unowned, null));
     try std.testing.expectError(error.UncompiledPresentation, compiler.requireCompiledText("]]"));
-    // The unchanged source parser diagnoses an orphan outside pair. It does
-    // not pass those two authored bytes to the final residual validator.
+    // The source parser proves that the orphan outside pair is literal text.
+    // It keeps those authored bytes nonaction while retaining the diagnostic.
     var nah_recovery_report: Fallbacks = .{};
     const nah_recovery_bytes = try compileReportedAlloc(nah_a, "entry", .language, "English", "en", "[[x|[label]]]]]", null, &nah_recovery_report);
     const nah_recovery_record = try codec.decodeAlloc(nah_a, nah_recovery_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
     try std.testing.expectEqualSlices(u8, nah_recovery_bytes, try codec.encodeAlloc(nah_a, nah_recovery_record));
     var nah_recovery_visible: std.ArrayList(u8) = .empty;
     var nah_recovery_action: std.ArrayList(u8) = .empty;
-    var nah_recovery_markers: usize = 0;
+    var nah_recovery_closers: usize = 0;
     for (nah_recovery_record.entry.sections) |nah_recovery_section| for (nah_recovery_section.blocks) |nah_recovery_block| for (nah_recovery_block.spans) |nah_recovery_span| {
         try nah_recovery_visible.appendSlice(nah_a, nah_recovery_span.text);
         if (nah_recovery_span.kind == .link) {
             try std.testing.expectEqualStrings("x", nah_recovery_span.target);
             try nah_recovery_action.appendSlice(nah_a, nah_recovery_span.text);
         } else {
-            try std.testing.expectEqualStrings(" [malformed link]", nah_recovery_span.text);
+            try std.testing.expectEqualStrings("]]", nah_recovery_span.text);
+            try std.testing.expect(nah_recovery_span.kind == .text);
             try std.testing.expectEqualStrings("", nah_recovery_span.target);
-            nah_recovery_markers += 1;
+            nah_recovery_closers += 1;
         }
     };
-    try std.testing.expectEqualStrings("[label] [malformed link]", nah_recovery_visible.items);
+    try std.testing.expectEqualStrings("[label]]]", nah_recovery_visible.items);
     try std.testing.expectEqualStrings("[label]", nah_recovery_action.items);
-    try std.testing.expectEqual(@as(usize, 1), nah_recovery_markers);
+    try std.testing.expectEqual(@as(usize, 1), nah_recovery_closers);
     try std.testing.expect(nah_recovery_report.literal_markup);
     // An owned display byte still grants no exemption to a raw outside pair.
     const nah_owned_then_raw = [_]compiler.Span{
@@ -5381,6 +5396,7 @@ const TlMalformedLayoutWitness = struct {
     visible: std.ArrayList(u8) = .empty,
     targets: std.ArrayList([]const u8) = .empty,
     diagnostics: usize = 0,
+    literal_closers: usize = 0,
     tables: usize = 0,
     bold: bool = false,
     italic: bool = false,
@@ -5392,6 +5408,10 @@ const TlMalformedLayoutWitness = struct {
             if (std.mem.eql(u8, span.text, "[malformed table]")) {
                 try std.testing.expect(span.kind == .text and span.target.len == 0);
                 self.diagnostics += 1;
+            }
+            if (std.mem.indexOf(u8, span.text, "|}") != null) {
+                try std.testing.expect(span.kind == .text and span.target.len == 0);
+                self.literal_closers += std.mem.count(u8, span.text, "|}");
             }
             if (std.mem.indexOf(u8, span.text, "bold") != null and span.bold) self.bold = true;
             if (std.mem.indexOf(u8, span.text, "italic") != null and span.italic) self.italic = true;
@@ -5435,14 +5455,15 @@ test "malformed TL layout preserves physical close diagnostics and translation a
     try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
     var observed: TlMalformedLayoutWitness = .{};
     for (decoded.entry.sections) |section| try observed.blocks(a, section.blocks);
-    try std.testing.expectEqual(@as(usize, 2), observed.diagnostics);
+    try std.testing.expectEqual(@as(usize, 0), observed.diagnostics);
+    try std.testing.expectEqual(@as(usize, 2), observed.literal_closers);
     try std.testing.expect(report.malformed_table and report.literal_markup);
     try std.testing.expect(observed.bold and observed.italic);
     for ([_][]const u8{ "Before", "Tsino", "蕉麻", "马尼拉麻", "Tseko", "manilské konopí", "After" }) |target|
         try std.testing.expect(observed.hasTarget(target));
     for ([_][]const u8{ "prefix", "First gloss", "Second gloss", "suffix", "蕉麻", "manilské konopí" }) |text|
         try std.testing.expect(std.mem.indexOf(u8, observed.visible.items, text) != null);
-    try std.testing.expect(std.mem.indexOf(u8, observed.visible.items, "|}") == null);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, observed.visible.items, "|}"));
 }
 
 test "TL layout close routing keeps matched tables and protected action reference domains strict" {
@@ -5458,7 +5479,9 @@ test "TL layout close routing keeps matched tables and protected action referenc
     var observed: TlMalformedLayoutWitness = .{};
     for (decoded.entry.sections) |section| try observed.blocks(a, section.blocks);
     try std.testing.expectEqual(@as(usize, 1), observed.tables);
-    try std.testing.expectEqual(@as(usize, 1), observed.diagnostics);
+    try std.testing.expectEqual(@as(usize, 0), observed.diagnostics);
+    try std.testing.expectEqual(@as(usize, 1), observed.literal_closers);
+    try std.testing.expect(table_report.malformed_table and table_report.literal_markup);
     try std.testing.expect(observed.hasTarget("Cell") and observed.hasTarget("After"));
     try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
     for ([_][]const u8{
@@ -5473,6 +5496,11 @@ test "TL layout close routing keeps matched tables and protected action referenc
         for (protected_decoded.entry.sections) |section| try protected.blocks(a, section.blocks);
         try std.testing.expect(std.mem.indexOf(u8, protected.visible.items, "|}") != null);
         try std.testing.expectEqual(@as(usize, 0), protected.diagnostics);
+        // Entity-authored | and its neighboring } occupy separate spans.
+        // Require the complete visible literal and no action without assuming
+        // that a source-equivalent protected spelling uses a single span.
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, protected.visible.items, "|}"));
+        try std.testing.expectEqual(@as(usize, 0), protected.targets.items.len);
         try std.testing.expect(!report.malformed_table);
     }
     for ([_][]const u8{
@@ -5506,7 +5534,8 @@ test "TL protected-only layout does not promote tag-local list or heading marker
             for (decoded.entry.sections) |section| try observed.blocks(a, section.blocks);
             try std.testing.expect(std.mem.indexOf(u8, observed.visible.items, first_line) != null);
             try std.testing.expect(std.mem.indexOf(u8, observed.visible.items, "|}") != null);
-            try std.testing.expectEqual(@as(usize, if (with_physical_close) 1 else 0), observed.diagnostics);
+            try std.testing.expectEqual(@as(usize, 0), observed.diagnostics);
+            try std.testing.expectEqual(@as(usize, if (with_physical_close) 2 else 1), observed.literal_closers);
             try std.testing.expectEqual(with_physical_close, report.malformed_table);
             if (with_physical_close) try std.testing.expect(observed.hasTarget("After"));
             try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
@@ -5867,8 +5896,8 @@ test "Norwegian translation list tail survives wrapper recovery and complete cod
         witness.blocks(section.blocks);
     }
     try std.testing.expectEqual(@as(usize, 1), witness.tables);
-    try std.testing.expectEqual(@as(usize, 1), witness.marker);
-    try std.testing.expectEqual(@as(usize, 1), witness.diagnostic);
+    try std.testing.expectEqual(@as(usize, 2), witness.marker);
+    try std.testing.expectEqual(@as(usize, 0), witness.diagnostic);
     try std.testing.expect(witness.german and witness.first and witness.other and witness.after and witness.focus and after_heading);
     try std.testing.expect(report.malformed_table and report.literal_markup);
     for ([_][]const u8{
@@ -7211,6 +7240,37 @@ test "complete captured HR skakavica retains citation prose and typed two by fiv
     normalized_styled.entry.references = normalized_references;
     try std.testing.expectEqualDeep(stored, normalized_styled);
 
+    // The actual published Reader establishes hrvatski/hr independently. Give
+    // that owner to the same complete captured source/profile; organization
+    // must be the only body change from the already checked unresolved record.
+    const owned_bytes = try compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(
+        a, "skakavica", .language, "hrvatski", "hr", MissingText.untracked(source),
+        null, .{}, &namespaces, null, &images, .{}, null, null, &.{}, null, &.{},
+        .{ .code = "hr", .heading = "hrvatski" }, &stylesheet_profile,
+    );
+    const owned = try codec.decodeAlloc(a, owned_bytes, "skakavica", .language, .{ .code = "hr", .heading = "hrvatski" });
+    try std.testing.expectEqualSlices(u8, owned_bytes, try codec.encodeAlloc(a, owned));
+    try std.testing.expectEqualStrings("hrvatski", owned.entry.language.?);
+    try std.testing.expectEqualStrings("hr", owned.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 1), owned.entry.organization.lexemes.len);
+    const noun = owned.entry.organization.lexemes[0];
+    try std.testing.expectEqualStrings("hrvatski", noun.language);
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqual(@as(usize, 0), noun.section);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+    try std.testing.expectEqual(@as(usize, 3), noun.definitions[0].block);
+    try std.testing.expect(noun.definitions[0].parent == null and noun.definitions[0].form == null and noun.etymology == null);
+    try std.testing.expectEqual(@as(usize, 0), noun.definitions[0].examples.len + noun.definitions[0].quotations.len + noun.definitions[0].notes.len);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, noun.introduction);
+    try std.testing.expectEqualSlices(usize, &.{ 4, 5, 6, 7, 8 }, noun.other_blocks);
+    try std.testing.expectEqualSlices(usize, &.{ 1, 2, 3 }, noun.related_sections);
+    try std.testing.expectEqual(@as(usize, 0), owned.entry.organization.other_sections.len);
+    var owned_body = owned;
+    owned_body.entry.language = styled.entry.language;
+    owned_body.entry.language_code = styled.entry.language_code;
+    owned_body.entry.organization = styled.entry.organization;
+    try std.testing.expectEqualDeep(styled, owned_body);
+
 }
 
 test "reference block validation stays recursive and headings share the page registry" {
@@ -8351,7 +8411,13 @@ test "single closer recovery does not authorize assembled residual braces or exe
     const split = [_]compiler.Span{ .{ .text = "}" }, .{ .text = "}", .flags = .{ .italic = true } } };
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &split, null));
     try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "guard", .supplemental, null, "", "}''}", null));
-    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "guard", .supplemental, null, "", "}<nowiki/>}", null));
+    const boundary = try compileAlloc(a, "guard", .supplemental, null, "", "}<nowiki/>}", null);
+    const boundary_stored = try codec.decodeAlloc(a, boundary, "guard", .supplemental, null);
+    var boundary_visible: std.ArrayList(u8) = .empty;
+    for (boundary_stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span|
+        try boundary_visible.appendSlice(a, span.text);
+    try std.testing.expectEqualStrings("}}", boundary_visible.items);
+    try std.testing.expectEqualSlices(u8, boundary, try codec.encodeAlloc(a, boundary_stored));
     try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("{{deferred}}"));
     var report: Fallbacks = .{};
     const bytes = try compileReportedAlloc(a, "control", .supplemental, null, "", "{{{absent|kept}}}", null, &report);
@@ -8484,6 +8550,96 @@ test "CSS ancestor observation survives heading fragments without changing owner
     try std.testing.expectEqualStrings("", renderer.table_css_ancestor_classes);
 }
 
+
+test "source-owned malformed delimiter literals preserve complete codec while parsed forgeries fail" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Pinned MediaWiki 79b81 source semantics: these three malformed token
+    // classes are authored display text, never an action or deferred program.
+    const source = "==English==\n===Noun===\n#[[\n\n=== [[Heading|Next]] ===\n|}\n\n* [[Target|''italic'']] '''bold''' tail]]\n";
+    // Whole-token nowiki is an independent literal source with the same
+    // retained span boundaries. A single-character entity splits each token
+    // across two spans, so equal visible text alone cannot imply equal codec.
+    const reference = "==English==\n===Noun===\n#<nowiki>[[</nowiki>\n\n=== [[Heading|Next]] ===\n<nowiki>|}</nowiki>\n\n* [[Target|''italic'']] '''bold''' tail<nowiki>]]</nowiki>\n";
+    var report: Fallbacks = .{};
+    var reference_report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report);
+    const expected = try compileReportedAlloc(a, "entry", .language, "English", "en", reference, null, &reference_report);
+    try std.testing.expectEqualSlices(u8, expected, bytes);
+    const decoded = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+    try std.testing.expect(report.literal_markup and report.malformed_table);
+    try std.testing.expect(!reference_report.malformed_table);
+    try std.testing.expectEqual(@as(usize, 3), decoded.entry.sections.len);
+    try std.testing.expectEqualStrings("English", decoded.entry.sections[0].title);
+    try std.testing.expectEqualStrings("Noun", decoded.entry.sections[1].title);
+    try std.testing.expectEqualStrings("Next", decoded.entry.sections[2].title);
+    try std.testing.expectEqual(@as(u8, 3), decoded.entry.sections[2].level);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections[1].blocks.len);
+    const definition = decoded.entry.sections[1].blocks[0];
+    try std.testing.expect(definition.kind == .definition);
+    try std.testing.expectEqualStrings("#", definition.list_path);
+    try std.testing.expectEqualStrings("1", definition.number);
+    var visible: std.ArrayList(u8) = .empty;
+    var heading_action = false;
+    var target_action = false;
+    var bold = false;
+    var italic = false;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| {
+        try std.testing.expect(block.table == null);
+        for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            try visible.appendSlice(a, span.trail);
+            if (std.mem.indexOf(u8, span.text, "[[") != null or std.mem.indexOf(u8, span.text, "]]") != null or std.mem.indexOf(u8, span.text, "|}") != null)
+                try std.testing.expect(span.kind == .text and span.target.len == 0);
+            if (span.kind == .link) {
+                if (std.mem.eql(u8, span.target, "Heading") and std.mem.eql(u8, span.text, "Next")) heading_action = true;
+                if (std.mem.eql(u8, span.target, "Target") and std.mem.eql(u8, span.text, "italic")) target_action = true;
+                try std.testing.expect(std.mem.indexOfAny(u8, span.target, "[]{}\r\n") == null);
+            }
+            if (std.mem.eql(u8, span.text, "italic") and span.italic) italic = true;
+            if (std.mem.eql(u8, span.text, "bold") and span.bold) bold = true;
+        }
+    };
+    try std.testing.expect(heading_action and target_action and bold and italic);
+    try std.testing.expectEqualStrings("[[Next|}italic bold tail]]", visible.items);
+    try std.testing.expectEqual(@as(usize, 0), decoded.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 0), decoded.entry.media.len);
+    // Source proof is not serialized as permission for arbitrary parsed bytes.
+    // Both whole and separately assembled forged delimiters remain invalid.
+    const title_spellings = [_][]const u8{ "&#91;&#91;", "&#93;&#93;", "&#124;&#125;" };
+    for ([_][]const u8{ "[[", "]]", "|}" }, title_spellings) |token, title_spelling| {
+        const raw = [_]compiler.Span{.{ .text = token }};
+        try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+        const assembled = [_]compiler.Span{ .{ .text = token[0..1] }, .{ .text = token[1..] } };
+        try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &assembled, null));
+        // Title eligibility belongs to the normal renderer, before a typed
+        // action exists. Decode the exact forbidden token in the title there;
+        // its independent body label must survive without navigation authority.
+        const invalid_title_source = try std.fmt.allocPrint(a, "[[{s}|safe label]]", .{title_spelling});
+        var invalid_title_report: Fallbacks = .{};
+        const invalid_title_bytes = try compileReportedAlloc(a, "invalid-title", .language, "English", "en", invalid_title_source, null, &invalid_title_report);
+        const invalid_title = try codec.decodeAlloc(a, invalid_title_bytes, "invalid-title", .language, .{ .code = "en", .heading = "English" });
+        var invalid_title_visible: std.ArrayList(u8) = .empty;
+        for (invalid_title.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try std.testing.expect(span.kind != .link and span.kind != .external_link);
+            try std.testing.expectEqualStrings("", span.target);
+            try invalid_title_visible.appendSlice(a, span.text);
+            try invalid_title_visible.appendSlice(a, span.trail);
+        };
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "{s}|safe label [malformed link]", .{token}), invalid_title_visible.items);
+        try std.testing.expect(invalid_title_report.literal_markup);
+        try std.testing.expectEqualSlices(u8, invalid_title_bytes, try codec.encodeAlloc(a, invalid_title));
+    }
+    // The document validator independently rejects deferred action targets,
+    // even when display provenance is protected and reported mode is enabled.
+    const unresolved = [_]compiler.Span{.{ .kind = .link, .target = "{{missing}}", .text = "safe label", .provenance = .protected_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &unresolved, null));
+    var unresolved_report: Fallbacks = .{};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &unresolved, &unresolved_report));
+}
+
 test "quoted terminal dot lexical document preserves style actions codec and raw source rejection" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -8536,4 +8692,344 @@ test "quoted terminal dot lexical document preserves style actions codec and raw
     }
     const unresolved_target = [_]compiler.Span{.{ .kind = .link, .target = "{{missing}}", .text = "<", .provenance = .entity_literal }};
     try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &unresolved_target, null));
+}
+
+test "empty target source delimiters prevent synthetic table tokens through codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, control: []const u8, visible: []const u8, child: bool = false }{
+        .{ .source = "{[[|6]]}", .control = "{<nowiki>[[</nowiki>|6<nowiki>]]</nowiki>}", .visible = "{[[|6]]}" },
+        .{ .source = "[[|<b>label</b> [[Target|child]]]]s", .control = "<nowiki>[[</nowiki>|<b>label</b> [[Target|child]]<nowiki>]]</nowiki>s", .visible = "[[|label child]]s", .child = true },
+        .{ .source = "[[ |label]]", .control = "<nowiki>[[</nowiki> |label<nowiki>]]</nowiki>", .visible = "[[ |label]]" },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("empty-target source={s}\n", .{case.source});
+        var report: Fallbacks = .{};
+        var control_report: Fallbacks = .{};
+        const actual = try compileReportedAlloc(a, "entry", .language, "Unclassified", "", case.source, null, &report);
+        const expected = try compileReportedAlloc(a, "entry", .language, "Unclassified", "", case.control, null, &control_report);
+        try std.testing.expectEqualSlices(u8, expected, actual);
+        try std.testing.expect(report.literal_markup and !control_report.literal_markup);
+        const stored = try codec.decodeAlloc(a, actual, "entry", .language, .{ .code = "", .heading = "Unclassified" });
+        try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, stored));
+        var visible: std.ArrayList(u8) = .empty;
+        var actions: usize = 0;
+        var bold_label = false;
+        for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            try visible.appendSlice(a, span.trail);
+            if (std.mem.eql(u8, span.text, "label") and span.bold) bold_label = true;
+            if (span.kind == .link or span.kind == .external_link) {
+                actions += 1;
+                try std.testing.expectEqualStrings("Target", span.target);
+                try std.testing.expectEqualStrings("child", span.text);
+            }
+        };
+        try std.testing.expectEqualStrings(case.visible, visible.items);
+        try std.testing.expectEqual(@as(usize, @intFromBool(case.child)), actions);
+        if (case.child) try std.testing.expect(bold_label);
+    }
+    // Suppress an inherited action from the refused outer while retaining the
+    // independently parsed child. Literal provenance is only on raw wrappers.
+    var renderer: compiler.Renderer = .{ .a = a, .context = .{} };
+    const nested = try renderer.parseSpans("[[|[[Target|child]]]]", .{ .kind = .link, .target = "Parent", .italic = true, .language = "cy" });
+    var wrappers: usize = 0;
+    var children: usize = 0;
+    for (nested) |span| {
+        try std.testing.expect(span.flags.italic);
+        try std.testing.expectEqualStrings("cy", span.language);
+        try std.testing.expect(!std.mem.eql(u8, span.target, "Parent"));
+        if (std.mem.eql(u8, span.text, "[[") or std.mem.eql(u8, span.text, "]]")) {
+            wrappers += 1;
+            try std.testing.expect(span.provenance == .protected_literal and span.kind == .text and span.target.len == 0);
+        } else if (span.kind == .link) {
+            children += 1;
+            try std.testing.expectEqualStrings("Target", span.target);
+            try std.testing.expectEqualStrings("child", span.text);
+        } else try std.testing.expect(span.provenance == .parsed and span.kind == .text);
+    }
+    try std.testing.expectEqual(@as(usize, 2), wrappers);
+    try std.testing.expectEqual(@as(usize, 1), children);
+    try validateSpans(a, nested, null);
+
+    const raw = [_]compiler.Span{.{ .text = "{[[|6]]}" }};
+    const synthesized = [_]compiler.Span{ .{ .text = "{" }, .{ .text = "|6" } };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &synthesized, null));
+    const unresolved = [_]compiler.Span{.{ .kind = .link, .text = "child", .target = "{{missing}}", .provenance = .protected_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &unresolved, null));
+    const unresolved_external = [_]compiler.Span{.{ .kind = .external_link, .text = "child", .target = "https://example.test/{{missing}}", .provenance = .protected_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &unresolved_external, null));
+    try std.testing.expectError(error.UncompiledPresentation, compileReportedAlloc(a, "entry", .language, "Unclassified", "", "before |} after", null, null));
+    var unclosed: compiler.Renderer = .{ .a = a, .context = .{} };
+    const unclosed_spans = try unclosed.parseSpans("[[|unclosed", .{});
+    try std.testing.expect(unclosed.fallbacks.literal_markup);
+    for (unclosed_spans) |span| try std.testing.expect(!(span.provenance == .protected_literal and std.mem.eql(u8, span.text, "[[")));
+}
+
+
+test "source empty nowiki braces preserve live code links while assembled and target guards stay strict" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "==Notice==\n# ''<code>{<nowiki />{[[Template:rfdef|rfdef]]}<nowiki />}</code>'' after [[Child|kept]]\n";
+    const reference = "==Notice==\n# ''<code><nowiki>{</nowiki>{[[Template:rfdef|rfdef]]<nowiki>}</nowiki>}</code>'' after [[Child|kept]]\n";
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "nowiki brace boundary", .supplemental, null, "", source, null, &report);
+    const expected = try compileAlloc(a, "nowiki brace boundary", .supplemental, null, "", reference, null);
+    try std.testing.expectEqualSlices(u8, expected, bytes);
+    const stored = try codec.decodeAlloc(a, bytes, "nowiki brace boundary", .supplemental, null);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    try std.testing.expect(!report.literal_markup and !report.missing_template);
+    var rfdef: usize = 0;
+    var child: usize = 0;
+    var code_text: std.ArrayList(u8) = .empty;
+    for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (span.code) {
+            try std.testing.expect(span.italic);
+            try code_text.appendSlice(a, span.text);
+        }
+        if (span.kind == .link and std.mem.eql(u8, span.target, "Template:rfdef")) {
+            try std.testing.expectEqualStrings("rfdef", span.text);
+            try std.testing.expect(span.code and span.italic);
+            rfdef += 1;
+        }
+        if (span.kind == .link and std.mem.eql(u8, span.target, "Child")) {
+            try std.testing.expectEqualStrings("kept", span.text);
+            try std.testing.expect(!span.code and !span.italic);
+            child += 1;
+        }
+    };
+    try std.testing.expectEqualStrings("{{rfdef}}", code_text.items);
+    try std.testing.expectEqual(@as(usize, 1), rfdef);
+    try std.testing.expectEqual(@as(usize, 1), child);
+    const forged = [_]compiler.Span{
+        .{ .text = "{", .flags = .{ .code = true } },
+        .{ .text = "{", .flags = .{ .code = true, .italic = true } },
+        .{ .text = "rfdef", .kind = .link, .target = "Template:rfdef", .flags = .{ .code = true } },
+        .{ .text = "}}", .flags = .{ .code = true } },
+    };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &forged, null));
+    const unresolved = [_]compiler.Span{.{ .kind = .link, .target = "{{missing}}", .text = "}", .provenance = .protected_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &unresolved, null));
+    for ([_][]const u8{
+        "}''}",
+        "[[Target|{<nowiki/>{label}<nowiki/>}]]",
+        "[https://example.test {<nowiki/>{label}<nowiki/>}]",
+    }) |negative| {
+        errdefer std.debug.print("VI nowiki strict source={s}\n", .{negative});
+        try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "guard", .supplemental, null, "", negative, null));
+    }
+}
+
+test "parenthetical terminal dot source angles survive semantic codec without a raw guard waiver" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "word (<ET. süñüg), other (<ET. süñüş-) then root > derived [[Child|kept]] <b>bold</b>";
+    const control = "word (<nowiki><</nowiki>ET. süñüg), other (<nowiki><</nowiki>ET. süñüş-) then root > derived [[Child|kept]] <b>bold</b>";
+    var report: Fallbacks = .{};
+    var control_report: Fallbacks = .{};
+    const actual = try compileReportedAlloc(a, "entry", .language, "Unclassified", "", source, null, &report);
+    const expected = try compileReportedAlloc(a, "entry", .language, "Unclassified", "", control, null, &control_report);
+    try std.testing.expectEqualSlices(u8, expected, actual);
+    try std.testing.expect(report.literal_markup and !control_report.literal_markup);
+    const stored = try codec.decodeAlloc(a, actual, "entry", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, stored));
+    var visible: std.ArrayList(u8) = .empty;
+    var actions: usize = 0;
+    var bold = false;
+    for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        try visible.appendSlice(a, span.trail);
+        if (span.kind == .link or span.kind == .external_link) {
+            actions += 1;
+            try std.testing.expectEqualStrings("Child", span.target);
+            try std.testing.expectEqualStrings("kept", span.text);
+        }
+        if (std.mem.eql(u8, span.text, "bold")) bold = span.bold;
+    };
+    try std.testing.expectEqualStrings("word (<ET. süñüg), other (<ET. süñüş-) then root > derived kept bold", visible.items);
+    try std.testing.expectEqual(@as(usize, 1), actions);
+    try std.testing.expect(bold);
+    const raw = [_]compiler.Span{.{ .text = "(<ET. word) > tail" }};
+    const assembled = [_]compiler.Span{ .{ .text = "(<" }, .{ .text = "ET. word) > tail" } };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &assembled, null));
+    const unresolved = [_]compiler.Span{.{ .kind = .link, .text = "child", .target = "{{missing}}", .provenance = .protected_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &unresolved, null));
+    const unresolved_external = [_]compiler.Span{.{ .kind = .external_link, .text = "child", .target = "https://example.test/{{missing}}", .provenance = .protected_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &unresolved_external, null));
+    const nested_raw = [_]compiler.Span{.{ .text = "<broken (<ET. word) > tail" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &nested_raw, null));
+}
+
+test "source styled closing brackets preserve full codec while assembled runs and action targets stay strict" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "prefix [phon]<i>]</i> [[Target|tail]]";
+    const reference = "prefix [phon<nowiki>]</nowiki><i>]</i> [[Target|tail]]";
+    var report: Fallbacks = .{};
+    var reference_report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "styled-close", .language, "English", "en", source, null, &report);
+    const expected = try compileReportedAlloc(a, "styled-close", .language, "English", "en", reference, null, &reference_report);
+    try std.testing.expectEqualDeep(reference_report, report);
+    try std.testing.expect(!report.literal_markup);
+    try std.testing.expectEqualSlices(u8, expected, bytes);
+    const stored = try codec.decodeAlloc(a, bytes, "styled-close", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    try std.testing.expectEqualStrings("English", stored.entry.language.?);
+    try std.testing.expectEqualStrings("en", stored.entry.language_code);
+    var visible: std.ArrayList(u8) = .empty;
+    var italic_closes: usize = 0;
+    var actions: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        try visible.appendSlice(a, span.trail);
+        if (span.italic and std.mem.eql(u8, span.text, "]")) italic_closes += 1;
+        if (span.kind == .link) {
+            try std.testing.expectEqualStrings("Target", span.target);
+            try std.testing.expectEqualStrings("tail", span.text);
+            actions += 1;
+        }
+    };
+    try std.testing.expectEqualStrings("prefix [phon]] tail", visible.items);
+    try std.testing.expectEqual(@as(usize, 1), italic_closes);
+    try std.testing.expectEqual(@as(usize, 1), actions);
+    const assembled = [_]compiler.Span{ .{ .text = "prefix [phon]" }, .{ .text = "]", .flags = .{ .italic = true } } };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &assembled, null));
+    const code_assembly = [_]compiler.Span{ .{ .text = "]", .flags = .{ .code = true } }, .{ .text = "]", .flags = .{ .code = true } } };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &code_assembly, null));
+    const generated = [_]compiler.Span{.{ .text = "]]", .generated_diagnostic = true }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &generated, null));
+    const protected_then_raw = [_]compiler.Span{ .{ .text = "]", .provenance = .protected_literal }, .{ .text = "]]" } };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &protected_then_raw, null));
+    const action = [_]compiler.Span{.{ .kind = .link, .target = "{{deferred}}", .text = "]", .provenance = .protected_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &action, null));
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("]]"));
+}
+
+test "source empty nowiki closing brackets preserve media caption body actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source =
+        "[[File:Spread.png|thumb|300px|<span lang=\"sv\">[[mjukost#Swedish|mjuk'''ost''']]</span> [cheese spread [soft '''cheese''']<nowiki />] ]]\n" ++
+        "[[File:Plane.png|thumb|300px|en <span lang=\"sv\">[[osthyvel#Swedish|'''ost'''hyvel]]</span> [a '''cheese''' slicer ['''cheese''' plane]<nowiki />] ]]\n[[Child|kept]]";
+    const control =
+        "[[File:Spread.png|thumb|300px|<span lang=\"sv\">[[mjukost#Swedish|mjuk'''ost''']]</span> [cheese spread [soft '''cheese'''<nowiki>]</nowiki>] ]]\n" ++
+        "[[File:Plane.png|thumb|300px|en <span lang=\"sv\">[[osthyvel#Swedish|'''ost'''hyvel]]</span> [a '''cheese''' slicer ['''cheese''' plane<nowiki>]</nowiki>] ]]\n[[Child|kept]]";
+    var report: Fallbacks = .{};
+    var control_report: Fallbacks = .{};
+    const actual = try compileReportedAlloc(a, "entry", .language, "Unclassified", "", source, null, &report);
+    const expected = try compileReportedAlloc(a, "entry", .language, "Unclassified", "", control, null, &control_report);
+    try std.testing.expectEqualSlices(u8, expected, actual);
+    try std.testing.expectEqualDeep(control_report, report);
+    try std.testing.expect(!report.literal_markup);
+    const stored = try codec.decodeAlloc(a, actual, "entry", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, stored));
+    try std.testing.expectEqual(@as(usize, 2), stored.entry.media.len);
+    try std.testing.expectEqualStrings("Spread.png", stored.entry.media[0].file);
+    try std.testing.expectEqualStrings("mjukost [cheese spread [soft cheese]]", stored.entry.media[0].caption);
+    try std.testing.expectEqualStrings("Plane.png", stored.entry.media[1].file);
+    try std.testing.expectEqualStrings("en osthyvel [a cheese slicer [cheese plane]]", stored.entry.media[1].caption);
+    var spread_child = false;
+    var plane_child = false;
+    var ordinary_child = false;
+    var bold_cheese = false;
+    for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (std.mem.eql(u8, span.text, "cheese") and span.bold) bold_cheese = true;
+        if (span.kind != .link) continue;
+        if (std.mem.eql(u8, span.target, "mjukost#Swedish") and std.mem.eql(u8, span.text, "ost")) {
+            try std.testing.expect(span.bold);
+            try std.testing.expectEqualStrings("sv", span.language);
+            spread_child = true;
+        }
+        if (std.mem.eql(u8, span.target, "osthyvel#Swedish") and std.mem.eql(u8, span.text, "ost")) {
+            try std.testing.expect(span.bold);
+            try std.testing.expectEqualStrings("sv", span.language);
+            plane_child = true;
+        }
+        if (std.mem.eql(u8, span.target, "Child") and std.mem.eql(u8, span.text, "kept")) ordinary_child = true;
+    };
+    try std.testing.expect(spread_child and plane_child and ordinary_child and bold_cheese);
+    const raw = [_]compiler.Span{.{ .text = "]]" }};
+    const assembled = [_]compiler.Span{ .{ .text = "]" }, .{ .text = "]", .flags = .{ .bold = true } } };
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &assembled, null));
+    const unresolved = [_]compiler.Span{.{ .kind = .link, .text = "]]", .target = "{{missing}}", .provenance = .protected_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &unresolved, null));
+    const unresolved_external = [_]compiler.Span{.{ .kind = .external_link, .text = "]]", .target = "https://example.test/{{missing}}", .provenance = .protected_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &unresolved_external, null));
+}
+
+test "nonfloating image blocks preserve complete body actions cell ownership and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "==English==\n[[Before|before]][[File:Logo.svg|none|x40px|link=|alt=]][[After|after]]";
+    // An independently authored block sequence uses the existing inline-image
+    // representation on its own paragraph; none itself must not reach readers.
+    const reference = "==English==\n[[Before|before]]\n\n[[File:Logo.svg|x40px|link=|alt=]]\n\n[[After|after]]";
+    const bytes = try compileAlloc(a, "entry", .language, "English", "en", source, null);
+    const reference_bytes = try compileAlloc(a, "entry", .language, "English", "en", reference, null);
+    try std.testing.expectEqualSlices(u8, reference_bytes, bytes);
+    const stored = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    var seen: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks, 0..) |value, index| for (value.spans) |span| if (span.image) |image| {
+        seen += 1;
+        try std.testing.expect(value.kind == .paragraph and value.list_path.len == 0);
+        try std.testing.expectEqual(@as(usize, 1), value.spans.len);
+        try std.testing.expect(index != 0 and index + 1 < section.blocks.len);
+        try std.testing.expectEqualStrings("Before", section.blocks[index - 1].spans[0].target);
+        try std.testing.expectEqualStrings("After", section.blocks[index + 1].spans[0].target);
+        try std.testing.expectEqualStrings("Logo.svg", image.file);
+        try std.testing.expectEqual(@as(?u32, null), image.width_px);
+        try std.testing.expectEqual(@as(?u32, 40), image.height_px);
+        try std.testing.expectEqualStrings("", image.alt.?);
+        try std.testing.expect(image.tooltip == null);
+        try std.testing.expect(span.kind == .text and span.target.len == 0 and span.text.len == 0 and span.trail.len == 0);
+    };
+    try std.testing.expectEqual(@as(usize, 1), seen);
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.media.len);
+    try std.testing.expectEqualStrings("Logo.svg", stored.entry.media[0].file);
+
+    const cell_source = "==English==\n{| border=1\n| bgcolor=#abcdef | [[Before|before]][[File:Logo.svg|none|x40px|link=|alt=]][[After|after]]\n| neighbor\n|}\n# preserved meaning";
+    const cell_bytes = try compileAlloc(a, "entry", .language, "English", "en", cell_source, null);
+    const cell_stored = try codec.decodeAlloc(a, cell_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualSlices(u8, cell_bytes, try codec.encodeAlloc(a, cell_stored));
+    var tables: usize = 0;
+    var definitions: usize = 0;
+    for (cell_stored.entry.sections) |section| for (section.blocks) |value| {
+        if (value.kind == .definition) {
+            definitions += 1;
+            try std.testing.expectEqualStrings("#", value.list_path);
+            try std.testing.expectEqualStrings("preserved meaning", value.spans[0].text);
+        }
+        if (value.table) |table| {
+            tables += 1;
+            try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+            try std.testing.expectEqual(@as(usize, 2), table.rows[0].cells.len);
+            const cell = table.rows[0].cells[0];
+            try std.testing.expectEqualStrings("#abcdef", cell.background.?);
+            try std.testing.expectEqual(@as(usize, 0), cell.spans.len);
+            const blocks = cell.blocks orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 3), blocks.len);
+            try std.testing.expectEqualStrings("Before", blocks[0].spans[0].target);
+            try std.testing.expectEqualStrings("After", blocks[2].spans[0].target);
+            try std.testing.expect(blocks[1].kind == .paragraph);
+            try std.testing.expectEqual(@as(usize, 1), blocks[1].spans.len);
+            const logo = blocks[1].spans[0];
+            try std.testing.expectEqualStrings("Logo.svg", logo.image.?.file);
+            try std.testing.expectEqual(@as(?u32, 40), logo.image.?.height_px);
+            try std.testing.expectEqualStrings("", logo.image.?.alt.?);
+            try std.testing.expect(logo.kind == .text and logo.target.len == 0);
+            try std.testing.expectEqualStrings("neighbor", std.mem.trim(u8, table.rows[0].cells[1].spans[0].text, " \t\r\n"));
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), tables);
+    try std.testing.expectEqual(@as(usize, 1), definitions);
 }
