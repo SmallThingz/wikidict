@@ -15,6 +15,24 @@ class AbbreviationTest {
         assertEquals("abbr / f / f", textOf(spans)); assertEquals("gender", spans[3].target)
         assertEquals(spans, compactSpans(spans)); assertTrue(entry.abbreviations.all { it.context.startsWith("Noun: ") })
     }
+    @Test fun authoredAudioCaptionIsGenericTextDetailWithoutChangingMediaOrLinkBody() {
+        val file = "En-us-girl.ogg"
+        val audio = Span("link", file, "File:$file",
+            classes = "wikidict-media wikidict-media-file-456e2d75732d6769726c2e6f6767", explanation = "Audio (US)")
+        val abbreviation = span("f", "feminine")
+        val media = Media(file, "audio", file)
+        val entry = Entry("girl", emptyList(), "language", "English", "en", listOf(
+            Section(3, "Pronunciation", listOf(Block("paragraph", 0, listOf(audio)))),
+            Section(3, "Noun", listOf(Block("paragraph", 0, listOf(abbreviation))))), emptyList(), media = listOf(media))
+        assertEquals(listOf(file, "f"), entry.abbreviations.map { it.label })
+        assertEquals(listOf("Audio (US)", "feminine"), entry.abbreviations.map { it.explanation })
+        assertEquals(listOf("Pronunciation: $file", "Noun: f"), entry.abbreviations.map { it.context })
+        assertEquals(listOf(media), MediaOwners(entry.media).embedded(listOf(audio)))
+        assertEquals(file, textOf(entry.sections[0].blocks[0].spans))
+        assertEquals("File:$file", entry.sections[0].blocks[0].spans.single().target)
+        assertEquals(file, entry.media.single().caption)
+        assertEquals(listOf(audio), compactSpans(listOf(audio)))
+    }
     @Test fun collectionVisitsAllContainersAndKeepsStructuralAndEmptyAnnotationBoundaries() {
         val explained = listOf(span("f", "feminine"))
         val table = Table(explained, listOf(listOf(Cell(explained, false, 1, 1))))

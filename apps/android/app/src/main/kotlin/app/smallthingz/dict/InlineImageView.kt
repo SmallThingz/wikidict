@@ -6,7 +6,6 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.text.InlineTextContent
@@ -21,7 +20,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFontFamilyResolver
@@ -269,7 +267,8 @@ private fun InlineImageOccurrence(span: Span, pixels: InlineImagePixels, metrics
     val hasMenu = !image.tooltip.isNullOrEmpty() || ready != null || state == InlineImageAssetState.Failed
     val input = if (click != null) Modifier.combinedClickable(role = Role.Image, onClickLabel = "Open image link",
         onClick = click, onLongClick = if (hasMenu) ({ menu = true }) else null)
-        else if (hasMenu) Modifier.pointerInput(image, state) { detectTapGestures(onLongPress = { menu = true }) } else Modifier
+        else if (hasMenu) Modifier.combinedClickable(role = Role.Image, onClickLabel = "Image details",
+            onClick = { menu = true }, onLongClick = { menu = true }) else Modifier
     Box(Modifier.fillMaxSize().then(input).semantics {
         role = Role.Image
         image.alt?.let { contentDescription = it }

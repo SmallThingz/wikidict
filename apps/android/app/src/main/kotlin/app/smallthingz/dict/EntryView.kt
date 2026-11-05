@@ -261,7 +261,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                         TextButton(onClick = { folded["abbreviations"] = !closed },
                             modifier = Modifier.testTag("entry-abbreviations").semantics {
                                 stateDescription = if (closed) "Collapsed" else "Expanded"
-                            }) { Text("Abbreviations") }
+                            }) { Text("Text details") }
                     }
                     entry.redirect?.let { redirect ->
                         Text("${redirect.source} -> ${redirect.target}" + if (redirect.fragment.isEmpty()) "" else "#${redirect.fragment}",

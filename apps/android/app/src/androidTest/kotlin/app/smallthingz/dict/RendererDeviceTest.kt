@@ -203,6 +203,58 @@ internal fun assertCompletePlainTextLayout(layout: androidx.compose.ui.text.Text
 }
 
 class RendererDeviceTest {
+    @Test fun textDetailsExposeAuthoredAudioCaptionAndAbbreviationWithoutChangingBodyActions() {
+        val file = "En-us-girl.ogg"
+        val audio = Span("link", file, "File:$file",
+            classes = "wikidict-media wikidict-media-file-456e2d75732d6769726c2e6f6767", explanation = "Audio (US)")
+        val entry = Entry("girl", emptyList(), "language", "English", "en", listOf(
+            Section(3, "Pronunciation", listOf(Block("paragraph", 0, listOf(audio)))),
+            Section(3, "Noun", listOf(Block("paragraph", 0, listOf(Span("text", "f", explanation = "feminine")))))),
+            emptyList(), media = listOf(Media(file, "audio", file)), edition = "enwiktionary-20260901")
+        val links = mutableListOf<String>()
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                DictTheme("light") {
+                    EntryView(entry, false, {}, onLink = { links += it }, settings = AppSettings(
+                        allowImages = false, allowAudio = false, collapsePronunciation = false,
+                        collapseOtherSections = false, collapseDetails = true))
+                }
+            } }
+            val details = compose.onNodeWithTag("entry-abbreviations")
+            details.assertTextEquals("Text details").assertHasClickAction()
+            details.assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "Collapsed"))
+            compose.onNodeWithText("Abbreviations").assertDoesNotExist()
+            compose.onNodeWithText("Audio (US)").assertDoesNotExist()
+            compose.onNodeWithText("feminine").assertDoesNotExist()
+            compose.onNodeWithText(file).assertIsDisplayed()
+            details.performClick()
+            details.assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "Expanded"))
+            compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText("Audio (US)"))
+            compose.onNodeWithText("Audio (US)").assertIsDisplayed()
+            compose.onNodeWithText("Pronunciation: $file").assertIsDisplayed()
+            compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText("feminine"))
+            compose.onNodeWithText("feminine").assertIsDisplayed()
+            compose.onNodeWithText("Noun: f").assertIsDisplayed()
+            compose.onNodeWithTag("entry-scroll").performScrollToIndex(0)
+            details.performClick()
+            compose.onNodeWithText("Audio (US)").assertDoesNotExist()
+            compose.onNodeWithText("feminine").assertDoesNotExist()
+            val body = compose.onNodeWithText(file)
+            body.assertIsDisplayed()
+            val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+            body.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            val text = layouts.single().layoutInput.text
+            assertEquals(file, text.text)
+            val link = text.getLinkAnnotations(0, text.length).single().item as androidx.compose.ui.text.LinkAnnotation.Clickable
+            assertEquals("File:$file", link.tag)
+            compose.runOnIdle { assertTrue(links.isEmpty()) }
+            body.performTouchInput { click(layouts.single().getBoundingBox(0).center) }
+            compose.runOnIdle { assertEquals(listOf("File:$file"), links) }
+        } finally {
+            compose.activityRule.scenario.onActivity { it.setContent {} }
+        }
+    }
+
     @Test fun typedInlineImagesUseOneCanonicalAssetAndKeepZeroFontInkAndCompiledActionsWithControlledPng(): Unit = runBlocking {
         // Controlled PNG/UI/resource test only, not actual HE SVG availability.
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -222,16 +274,21 @@ class RendererDeviceTest {
         val opened = mutableListOf<String>()
         val links = mutableListOf<String>()
         val metadata = """{"query":{"pages":[{"imageinfo":[{"url":"https://fixture.invalid/controlled.png","descriptionurl":"https://commons.wikimedia.org/wiki/File:Different_asset_description","width":100,"height":300,"mime":"image/png"}]}]}}""".toByteArray()
-        val cache = MediaCache(context, metadata = { query -> metadataCalls.incrementAndGet(); queries += query; metadata },
+        val cache = MediaCache(context, metadata = { query ->
+            val attempt = metadataCalls.incrementAndGet(); queries += query
+            if (attempt == 1) throw java.io.IOException("Controlled first image request failure")
+            metadata
+        },
             openMedia = { downloads.incrementAndGet(); java.io.ByteArrayInputStream(png) }, directory = directory)
         val file = "File:Controlled.png"
         val first = Span("link", "", "File:File:Controlled.png", fontScale = 0f, small = true, image = InlineImage(file, 15))
         val second = Span("link", "", "Target", fontScale = 0f, image = InlineImage(file, 30, alt = "Body alternative", tooltip = "Body tooltip"))
+        val unlinked = Span("text", "", image = InlineImage(file, 20, alt = "Unlinked alternative", tooltip = "Unlinked details"))
         val heading = Block("heading", 0, listOf(Span("text", "Heading "), first), level = 3, anchor = "Heading")
         val legacyCatalogue = Span("link", "Legacy caption", first.target, classes = "wikidict-media")
         val entry = Entry("Inline image control", emptyList(), "language", "English", "en", listOf(Section(3, "Heading",
             listOf(heading, Block("paragraph", 0, listOf(Span("text", "Before "), second, Span("text", " After"))),
-                Block("paragraph", 0, listOf(legacyCatalogue))))), emptyList(),
+                Block("paragraph", 0, listOf(unlinked)), Block("paragraph", 0, listOf(legacyCatalogue))))), emptyList(),
             media = listOf(Media(file, "image", "Distinct catalogue caption")), edition = "hewiktionary-20261001")
         val settings = mutableStateOf(AppSettings(allowImages = false, mediaCacheMb = 0,
             collapseOtherSections = false, collapseDetails = false))
@@ -259,7 +316,7 @@ class RendererDeviceTest {
                         }) { EntryView(entry, false, {}, onLink = { links += it }, settings = settings.value) }
                 }
             } }
-            compose.waitUntil(15000) { compose.onAllNodes(images, useUnmergedTree = true).fetchSemanticsNodes(atLeastOneRootRequired = false).size == 2 }
+            compose.waitUntil(15000) { compose.onAllNodes(images, useUnmergedTree = true).fetchSemanticsNodes(atLeastOneRootRequired = false).size == 3 }
             assertEquals(0, metadataCalls.get()); assertEquals(0, downloads.get())
             compose.onNodeWithText("Body alternative").assertIsDisplayed()
             assertTrue(compose.onNodeWithText("Body alternative").fetchSemanticsNode().boundsInRoot.width > 30f * displayDensity)
@@ -267,11 +324,29 @@ class RendererDeviceTest {
             compose.runOnIdle { assertEquals("https://he.wiktionary.org/wiki/File%3AFile%3AControlled.png", opened.single()); settings.value = settings.value.copy(allowImages = true) }
             compose.waitUntil(15000) {
                 val nodes = compose.onAllNodes(images, useUnmergedTree = true).fetchSemanticsNodes(atLeastOneRootRequired = false)
-                nodes.size == 2 && nodes.all { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.StateDescription) == "" }
+                nodes.size == 3 && nodes.all { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.StateDescription) == "Image unavailable" }
+            }
+            // Retry/details on an unlinked image must be reachable without inventing a link.
+            val manager = checkNotNull(inputModeManager.get())
+            compose.runOnIdle {
+                assertPhysicalActivity(compose.activity)
+                assertTrue(compose.activity.hasWindowFocus() && compose.activity.window.decorView.hasWindowFocus())
+                assertTrue("The platform must accept keyboard input mode", manager.requestInputMode(androidx.compose.ui.input.InputMode.Keyboard))
+            }
+            compose.waitUntil(10000) { manager.inputMode == androidx.compose.ui.input.InputMode.Keyboard }
+            compose.onAllNodes(images, useUnmergedTree = true)[2].performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus) { assertTrue(it()) }
+            compose.onAllNodes(images, useUnmergedTree = true)[2].assertIsFocused()
+            compose.onAllNodes(images, useUnmergedTree = true)[2].performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Enter) }
+            compose.onNodeWithText("Retry image").assertIsDisplayed().performClick()
+            compose.runOnIdle { assertEquals(1, opened.size); assertTrue(links.isEmpty()) }
+            compose.waitUntil(15000) {
+                val nodes = compose.onAllNodes(images, useUnmergedTree = true).fetchSemanticsNodes(atLeastOneRootRequired = false)
+                nodes.size == 3 && nodes.all { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.StateDescription) == "" }
             }
             compose.waitUntil(15000) { kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) { directory.listFiles().orEmpty().isEmpty() } }
-            assertEquals(1, metadataCalls.get()); assertEquals(1, downloads.get())
-            assertTrue(queries.single().contains("titles=File%3AFile%3AControlled.png"))
+            assertEquals(2, metadataCalls.get()); assertEquals(1, downloads.get())
+            assertEquals(2, queries.size)
+            assertTrue(queries.all { it.contains("titles=File%3AFile%3AControlled.png") })
             compose.onAllNodesWithText("Body alternative").assertCountEquals(0)
             val firstNode = compose.onAllNodes(images, useUnmergedTree = true)[0]
             assertNull(firstNode.fetchSemanticsNode().config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription))
@@ -293,24 +368,27 @@ class RendererDeviceTest {
             compose.runOnIdle { assertEquals(opened[0], opened[1]); assertTrue(links.isEmpty()) }
             compose.onAllNodes(images, useUnmergedTree = true)[1].performClick()
             compose.runOnIdle { assertEquals(listOf("Target"), links) }
-            // This keyboard check requires keyboard input mode.
-            val manager = checkNotNull(inputModeManager.get())
-            compose.runOnIdle {
-                assertPhysicalActivity(compose.activity)
-                assertTrue(compose.activity.hasWindowFocus() && compose.activity.window.decorView.hasWindowFocus())
-                assertTrue("The platform must accept keyboard input mode", manager.requestInputMode(androidx.compose.ui.input.InputMode.Keyboard))
-            }
-            compose.waitUntil(10000) { manager.inputMode == androidx.compose.ui.input.InputMode.Keyboard }
             compose.runOnIdle { assertEquals(androidx.compose.ui.input.InputMode.Keyboard, manager.inputMode) }
             compose.onAllNodes(images, useUnmergedTree = true)[1].performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus) { assertTrue(it()) }
             compose.onAllNodes(images, useUnmergedTree = true)[1].assertIsFocused()
             compose.onAllNodes(images, useUnmergedTree = true)[1].performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Enter) }
             compose.runOnIdle { assertEquals(listOf("Target", "Target"), links); assertEquals(1, downloads.get()) }
+            compose.onAllNodes(images, useUnmergedTree = true)[2].performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus) { assertTrue(it()) }
+            compose.onAllNodes(images, useUnmergedTree = true)[2].assertIsFocused()
+            compose.onAllNodes(images, useUnmergedTree = true)[2].performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Enter) }
+            compose.onNodeWithText("Unlinked details").assertIsDisplayed()
+            compose.onNodeWithText("Source and licence").assertIsDisplayed().performClick()
+            compose.runOnIdle {
+                assertEquals(listOf("Target", "Target"), links)
+                assertEquals(3, opened.size)
+                assertEquals("https://commons.wikimedia.org/wiki/File:Different_asset_description", opened.last())
+                assertEquals(1, downloads.get())
+            }
             compose.onNodeWithTag("entry-scroll").performScrollToNode(hasText("Distinct catalogue caption"))
             compose.onNodeWithText("Distinct catalogue caption").assertIsDisplayed()
             compose.onNodeWithTag("entry-scroll").performScrollToIndex(0)
             compose.waitForIdle()
-            assertEquals(1, metadataCalls.get()); assertEquals(1, downloads.get())
+            assertEquals(2, metadataCalls.get()); assertEquals(1, downloads.get())
         } catch (problem: Throwable) {
             primaryFailure = problem
             throw problem
