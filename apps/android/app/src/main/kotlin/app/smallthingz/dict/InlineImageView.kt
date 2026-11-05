@@ -330,7 +330,8 @@ private fun InlineImageOccurrence(span: Span, pixels: InlineImagePixels, metrics
             image.tooltip?.takeIf { it.isNotEmpty() }?.let { tooltip ->
                 DropdownMenuItem(text = { Text(tooltip) }, enabled = false, onClick = {})
             }
-            if (state == InlineImageAssetState.Failed) DropdownMenuItem(text = { Text("Retry image") }, onClick = { menu = false; retry() })
+            if (state == InlineImageAssetState.Failed || state is InlineImageAssetState.GeometryUnavailable)
+                DropdownMenuItem(text = { Text("Retry image") }, onClick = { menu = false; retry() })
             ready?.let { loaded ->
                 loaded.credit.takeIf { it.isNotEmpty() }?.let { credit -> DropdownMenuItem(text = { Text(credit) }, enabled = false, onClick = {}) }
                 DropdownMenuItem(text = { Text("Source and licence") }, onClick = { menu = false; uri.openUri(loaded.source) })
