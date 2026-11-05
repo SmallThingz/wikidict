@@ -80,11 +80,15 @@ def regular(path, limit=MAX_RESPONSE_BYTES):
     path = Path(path)
     if path.is_symlink() or not path.is_file() or path.stat().st_size > limit:
         raise ValueError('Missing, unsafe or oversized capture artifact: ' + str(path))
+    chunks = []
+    length = 0
     with path.open('rb') as stream:
-        raw = stream.read(limit + 1)
-    if len(raw) > limit:
-        raise ValueError('Oversized capture artifact')
-    return raw
+        while chunk := stream.read(min(1024 * 1024, limit + 1 - length)):
+            length += len(chunk)
+            if length > limit:
+                raise ValueError('Oversized capture artifact')
+            chunks.append(chunk)
+    return b''.join(chunks)
 
 
 def valid_id(value):

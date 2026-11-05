@@ -428,5 +428,56 @@ class WikibaseCaptureTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         entities.validate_snapshot(folder)
 
+
+    def test_regular_returns_exact_bytes_at_bound_and_with_large_permitted_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'artifact'
+            large = bytes(range(256)) * 8192 + b'last bytes'
+            for payload, limit in ((b'', 0), (b'abc', 3), (large, len(large)), (b'tiny', entities.MAX_OUTPUT_BYTES)):
+                with self.subTest(bytes=len(payload), limit=limit):
+                    path.write_bytes(payload)
+                    self.assertEqual(entities.regular(path, limit), payload)
+            path.write_bytes(b'abcd')
+            with self.assertRaisesRegex(ValueError, 'Missing, unsafe or oversized'):
+                entities.regular(path, 3)
+
+    def test_regular_rejects_cap_plus_one_growth_after_size_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'artifact';path.write_bytes(b'abc')
+            original_open = Path.open
+            grew = False
+            def open_with_growth(selected, *args, **kwargs):
+                nonlocal grew
+                if selected == path and args and args[0] == 'rb' and not grew:
+                    grew = True
+                    with original_open(path, 'ab') as stream:stream.write(b'd')
+                return original_open(selected, *args, **kwargs)
+            with patch.object(Path, 'open', open_with_growth):
+                with self.assertRaisesRegex(ValueError, 'Oversized capture artifact'):
+                    entities.regular(path, 3)
+            self.assertTrue(grew)
+            self.assertEqual(path.read_bytes(), b'abcd')
+
+    def test_new_validator_identity_replays_old_capture_without_rewriting_generator(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'capture'
+            (manifest, _), seeds = self.capture(root)
+            output = root / entities.DIRECTORY
+            before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in output.iterdir()}
+            generator = manifest['generator_sha256']
+            changed_validator = '0' * 64 if generator != '0' * 64 else '1' * 64
+            fetch = Mock(side_effect=AssertionError('No API on validator change'))
+            with patch.object(entities, 'PRODUCER_SHA256', changed_validator), patch.object(entities, 'replay', wraps=entities.replay) as replay:
+                entities._VALIDATED_REPLAY_KEYS.clear()
+                try:
+                    self.assertEqual(entities.validate_snapshot(output), manifest)
+                    self.assertEqual(entities.capture_snapshot(root, self.wiki, self.date, seeds, fetcher=fetch), (manifest, False))
+                    self.assertEqual(replay.call_count, 1)
+                    self.assertEqual(manifest['generator_sha256'], generator)
+                    self.assertNotEqual(generator, changed_validator)
+                finally:entities._VALIDATED_REPLAY_KEYS.clear()
+            fetch.assert_not_called()
+            self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in output.iterdir()})
+
 if __name__ == '__main__':
     unittest.main()
