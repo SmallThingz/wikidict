@@ -338,9 +338,46 @@ private slots:
         permission->setChecked(true); QTRY_VERIFY_WITH_TIMEOUT(ready(window.reading_->document()), 10000);
         QCOMPARE(images(window.reading_->document())[2].width(), 20.0);
         QCOMPARE(images(window.reading_->document())[2].height(), 40.0);
-        // The existing unsupported height-only SVG path produces a real
-        // consumer Error without network failure injection or a new loader.
-        QJsonObject errorImage{{"file", file}, {"height_px", 15}, {"alt", QString::fromUtf8("וי")}};
+        // Authored height uses validated original dimensions, including vector
+        // upscaling. These are synthetic pixels, not assumed public asset sizes.
+        for (int height : {20, 40, 80}) {
+            const QJsonObject heightImage{{"file", file}, {"height_px", height}, {"alt", ""}, {"tooltip", QJsonValue::Null}};
+            const QJsonObject heightParagraph{{"kind", "paragraph"}, {"spans", QJsonArray{occurrence(heightImage, "text", "")}}};
+            const QJsonObject heightSection{{"level", 2}, {"title", "Height-only image"}, {"blocks", QJsonArray{heightParagraph}}};
+            QJsonObject heightEntry = entry;
+            heightEntry.insert("sections", QJsonArray{heightSection}); heightEntry.insert("references", QJsonArray{});
+            window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{heightEntry}}}).toJson(), false);
+            QTRY_VERIFY_WITH_TIMEOUT(ready(window.reading_->document()), 10000);
+            const auto heightFormats = images(window.reading_->document()); QCOMPARE(heightFormats.size(), 1);
+            const auto heightFormat = heightFormats.first();
+            QCOMPARE(heightFormat.width(), height / 2.0); QCOMPARE(heightFormat.height(), qreal(height));
+            QVERIFY(heightFormat.hasProperty(QTextFormat::ImageAltText));
+            QCOMPARE(heightFormat.stringProperty(QTextFormat::ImageAltText), QString());
+            QVERIFY(!heightFormat.hasProperty(QTextFormat::ImageTitle)); QVERIFY(heightFormat.toolTip().isEmpty());
+            QVERIFY(!heightFormat.isAnchor()); QVERIFY(heightFormat.anchorHref().isEmpty());
+            const QImage pixels = window.reading_->document()->resource(QTextDocument::ImageResource, QUrl(heightFormat.name())).value<QImage>();
+            QVERIFY(!pixels.isNull()); QCOMPARE(pixels.pixelColor(pixels.width() / 2, pixels.height() / 2), QColor("#d13a30"));
+            QVERIFY(window.reading_->accessibleDescription().isEmpty());
+            QCOMPARE(window.reading_->toPlainText().count(file), 1); // The ordinary Media catalogue link remains.
+            const QTextCursor catalogue = window.reading_->document()->find(file);
+            QVERIFY(!catalogue.isNull()); QVERIFY(catalogue.charFormat().isAnchor());
+            QCOMPARE(QUrl(catalogue.charFormat().anchorHref()), QUrl(QStringLiteral("https://commons.wikimedia.org/wiki/File:%1")
+                .arg(QString::fromLatin1(QUrl::toPercentEncoding(file)))));
+            int imageParagraphs = 0;
+            for (QTextBlock block = window.reading_->document()->begin(); block.isValid(); block = block.next()) {
+                if (!block.text().contains(QChar::ObjectReplacementCharacter)) continue;
+                ++imageParagraphs;
+                QCOMPARE(block.text(), QString(QChar::ObjectReplacementCharacter));
+            }
+            QCOMPARE(imageParagraphs, 1); // No filename or alternative-text substitution in the image paragraph.
+            QCOMPARE(window.currentEntry_, heightEntry);
+            QCoreApplication::processEvents();
+            QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+            QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-height-only-svg-%1.png").arg(height)));
+        }
+        // An uncatalogued image produces the ordinary consumer Error without
+        // network access; preserve the authored-alt fallback and recovery checks.
+        QJsonObject errorImage{{"file", "Missing inline fixture.svg"}, {"height_px", 15}, {"alt", QString::fromUtf8("וי")}};
         const QJsonObject errorParagraph{{"kind", "paragraph"}, {"spans", QJsonArray{occurrence(errorImage, "text", "")}}};
         const QJsonObject errorSection{{"level", 2}, {"title", "Unavailable image"}, {"blocks", QJsonArray{errorParagraph}}};
         QJsonObject errorEntry = entry;
@@ -348,6 +385,7 @@ private slots:
         window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{errorEntry}}}).toJson(), false);
         QTRY_COMPARE(images(window.reading_->document()).first().intProperty(SemanticHtml::inlineImageStateProperty), int(MediaPanel::InlineImageState::Error));
         const auto errorFormat = images(window.reading_->document()).first();
+        QCOMPARE(errorFormat.stringProperty(SemanticHtml::inlineImageStatusProperty), QStringLiteral("This image is not in the dictionary's media catalogue."));
         QCOMPARE(errorFormat.stringProperty(QTextFormat::ImageAltText), QString::fromUtf8("וי"));
         QVERIFY(errorFormat.width() >= fallbackMetrics.horizontalAdvance(QString::fromUtf8("וי")));
         QVERIFY(errorFormat.height() >= fallbackMetrics.height());

@@ -299,7 +299,7 @@ inline QString inlineImageHtml(const QJsonValue &value) {
     if (present(image.value(QStringLiteral("alt")))) html += QStringLiteral(" alt=\"%1\"").arg(image.value(QStringLiteral("alt")).toString().toHtmlEscaped());
     return html + QStringLiteral(">");
 }
-inline void imageDimensions(QTextImageFormat &format, const QJsonObject &image, const QTextDocument *document, const QSizeF &intrinsic = {}) {
+inline void imageDimensions(QTextImageFormat &format, const QJsonObject &image, const QTextDocument *document, const QSizeF &intrinsic = {}, bool vectorImage = false) {
     const qreal maximum = maximumFontPoints(document) * QFontMetricsF(QFont()).fontDpi() / 72;
     const bool hasWidth = present(image.value(QStringLiteral("width_px"))), hasHeight = present(image.value(QStringLiteral("height_px")));
     const qreal width = hasWidth ? image.value(QStringLiteral("width_px")).toDouble() : (intrinsic.isValid() ? intrinsic.width() : 1);
@@ -312,7 +312,9 @@ inline void imageDimensions(QTextImageFormat &format, const QJsonObject &image, 
             return qMax(1.0, std::round(up * intrinsic.height() / intrinsic.width()) > boundHeight ? std::floor(ideal) : up);
         };
         qreal displayWidth = width, displayHeight = height;
-        if (!hasHeight || width * intrinsic.height() <= height * intrinsic.width())
+        // Height-only vector images are not limited by their natural width.
+        if (!hasWidth && hasHeight && vectorImage) displayWidth = fitBoxWidth(height);
+        else if (!hasHeight || width * intrinsic.height() <= height * intrinsic.width())
             displayHeight = qMax(1.0, std::round(intrinsic.height() * width / intrinsic.width()));
         else if (hasHeight) displayWidth = fitBoxWidth(height);
         // Bound both authored axes before display, retaining MediaWiki's integer

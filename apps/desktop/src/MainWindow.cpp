@@ -1713,11 +1713,7 @@ void MainWindow::bindInlineImages() {
                 if (!widget || !document || generation != inlineImageGeneration_) return;
                 const auto apply = [this, widget, document, url, image, generation](const MediaPanel::InlineImageAsset &asset) {
                     if (!widget || !document || generation != inlineImageGeneration_) return;
-                    const bool heightOnlySvg = !SemanticHtml::present(image.value(QStringLiteral("width_px"))) && SemanticHtml::present(image.value(QStringLiteral("height_px")))
-                        && (asset.originalMime.isEmpty() || asset.originalMime == QStringLiteral("image/svg+xml"));
-                    const bool ready = asset.state == MediaPanel::InlineImageState::Ready && !heightOnlySvg;
-                    const auto state = asset.state == MediaPanel::InlineImageState::Ready && heightOnlySvg ? MediaPanel::InlineImageState::Error : asset.state;
-                    const QString message = heightOnlySvg && asset.state == MediaPanel::InlineImageState::Ready ? QStringLiteral("This image size cannot be displayed yet.") : asset.message;
+                    const bool ready = asset.state == MediaPanel::InlineImageState::Ready;
                     QImage pixels = asset.image;
                     QSize fallbackSize;
                     if (!ready) {
@@ -1748,10 +1744,11 @@ void MainWindow::bindInlineImages() {
                         for (auto it = block.begin(); !it.atEnd(); ++it) {
                             const QTextFragment fragment = it.fragment(); if (!fragment.isValid() || !fragment.charFormat().isImageFormat()) continue;
                             QTextImageFormat format = fragment.charFormat().toImageFormat(); if (QUrl(format.name()) != url) continue;
-                            SemanticHtml::imageDimensions(format, image, document, ready ? asset.intrinsic : QSizeF());
+                            SemanticHtml::imageDimensions(format, image, document, ready ? asset.intrinsic : QSizeF(),
+                                asset.originalMime == QStringLiteral("image/svg+xml"));
                             if (fallbackSize.isValid()) { format.setWidth(fallbackSize.width()); format.setHeight(fallbackSize.height()); }
-                            format.setProperty(SemanticHtml::inlineImageStateProperty, int(state));
-                            format.setProperty(SemanticHtml::inlineImageStatusProperty, message);
+                            format.setProperty(SemanticHtml::inlineImageStateProperty, int(asset.state));
+                            format.setProperty(SemanticHtml::inlineImageStatusProperty, asset.message);
                             edits.append({fragment.position(), format});
                         }
                     for (const auto &edit : edits) { QTextCursor cursor(document); cursor.setPosition(edit.position); cursor.setPosition(edit.position + 1, QTextCursor::KeepAnchor); cursor.setCharFormat(edit.format); }
