@@ -36,6 +36,7 @@
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QStandardPaths>
+#include <QSvgRenderer>
 #include <QTextBlock>
 #include <QTextDocument>
 #include <QTextDocumentFragment>
@@ -50,6 +51,10 @@
 namespace {
 constexpr qint64 MaxMediaBytes = 50 * 1024 * 1024;
 constexpr qint64 MaxMetadataBytes = 2 * 1024 * 1024;
+
+bool svgMime(const QString &mime) {
+    return mime.trimmed().compare(QStringLiteral("image/svg+xml"), Qt::CaseInsensitive) == 0;
+}
 
 bool allowedUrl(const QUrl &url, bool download, const QString &sourceHost = {}) {
     if (!url.isValid() || url.scheme() != QStringLiteral("https") || !url.userInfo().isEmpty() ||
@@ -230,6 +235,7 @@ public:
     QString kind, file, key, sourceHost, display;
     QByteArray data;
     QImage decodedImage;
+    std::shared_ptr<QSvgRenderer> vectorImage;
     QSizeF intrinsicImage;
     bool inlineRequested = false;
     QString inlineFailure;
@@ -296,7 +302,7 @@ struct MediaPanel::Impl {
         if (!allowed(card)) return {State::Disabled, {}, QStringLiteral("Online images are disabled.")};
         if (card->busy) return {State::Loading, {}, card->status->text()};
         if (!card->inlineFailure.isEmpty()) return {State::Error, {}, card->inlineFailure};
-        if (!card->decodedImage.isNull() && card->intrinsicImage.isValid()) return {State::Ready, card->decodedImage, QString(), card->intrinsicImage, card->metadata.value(QStringLiteral("original_mime")).toString()};
+        if (!card->decodedImage.isNull() && card->intrinsicImage.isValid()) return {State::Ready, card->decodedImage, QString(), card->intrinsicImage, card->metadata.value(QStringLiteral("original_mime")).toString().trimmed().toLower(), card->vectorImage};
         return {State::Loading, {}, QStringLiteral("Loading image.")};
     }
     void notifyInline(MediaCard *card) {
@@ -584,7 +590,7 @@ struct MediaPanel::Impl {
                 if (!allowed(card) || card->busy) return;
                 if (card->kind == QStringLiteral("audio") && !card->data.isEmpty()) play(card);
                 else {
-                    if (!card->data.isEmpty() || !card->decodedImage.isNull()) { removeCached(card); card->data.clear(); card->decodedImage = {}; }
+                    if (!card->data.isEmpty() || !card->decodedImage.isNull()) { removeCached(card); card->data.clear(); card->decodedImage = {}; card->vectorImage.reset(); }
                     if (card->kind == QStringLiteral("image") && card->inlineRequested) { card->inlineFailure.clear(); enqueueInline(card); }
                     else load(card);
                 }
@@ -771,23 +777,46 @@ struct MediaPanel::Impl {
 
     bool present(MediaCard *card, const QByteArray &bytes, const QJsonObject &metadata) {
         if (card->kind == QStringLiteral("image")) {
-            QBuffer buffer;
-            buffer.setData(bytes);
-            buffer.open(QIODevice::ReadOnly);
-            QImageReader reader(&buffer);
-            reader.setAutoTransform(true);
-            const QSize dimensions = reader.size();
-            if (!dimensions.isValid()) {
-                fail(card, QStringLiteral("This image format could not be opened."));
-                return false;
+            QImage image;
+            std::shared_ptr<QSvgRenderer> vector;
+            if (svgMime(metadata.value(QStringLiteral("original_mime")).toString())) {
+                // Metadata can describe an SVG whose old cached payload is PNG.
+                // Only a successful native SVG parse grants the vector path.
+                auto candidate = std::make_shared<QSvgRenderer>();
+                candidate->setFramesPerSecond(0); // Before load: no animation timer.
+                if (candidate->load(bytes) && candidate->defaultSize().isValid()) {
+                    const QSize preview = candidate->defaultSize().scaled(QSize(1280, 800), Qt::KeepAspectRatio);
+                    image = QImage(preview, QImage::Format_ARGB32_Premultiplied);
+                    if (!image.isNull()) {
+                        image.fill(Qt::transparent);
+                        QPainter painter(&image);
+                        painter.setRenderHint(QPainter::Antialiasing);
+                        if (candidate->animated()) candidate->setCurrentFrame(0);
+                        candidate->render(&painter, QRectF(QPointF(), preview));
+                        vector = std::move(candidate);
+                    }
+                }
             }
-            reader.setScaledSize(dimensions.scaled(QSize(1280, 800), Qt::KeepAspectRatio));
-            const QImage image = reader.read();
+            if (image.isNull()) {
+                QBuffer buffer;
+                buffer.setData(bytes);
+                buffer.open(QIODevice::ReadOnly);
+                QImageReader reader(&buffer);
+                reader.setAutoTransform(true);
+                const QSize dimensions = reader.size();
+                if (!dimensions.isValid()) {
+                    fail(card, QStringLiteral("This image format could not be opened."));
+                    return false;
+                }
+                reader.setScaledSize(dimensions.scaled(QSize(1280, 800), Qt::KeepAspectRatio));
+                image = reader.read();
+            }
             if (image.isNull()) {
                 fail(card, QStringLiteral("This image could not be opened."));
                 return false;
             }
             card->decodedImage = image;
+            card->vectorImage = std::move(vector);
             card->intrinsicImage = originalImageSize(metadata, QStringLiteral("intrinsic_width"), QStringLiteral("intrinsic_height"));
             card->image->setImage(image);
             card->image->show();
@@ -857,7 +886,7 @@ struct MediaPanel::Impl {
             if (card->kind == QStringLiteral("audio")) play(card);
             return;
         }
-        if (card->inlineRequested) { card->data.clear(); card->decodedImage = {}; }
+        if (card->inlineRequested) { card->data.clear(); card->decodedImage = {}; card->vectorImage.reset(); }
         card->busy = true;
         card->status->setText(QStringLiteral("Finding media..."));
         card->progress->setRange(0, 0);
@@ -894,7 +923,8 @@ struct MediaPanel::Impl {
                 else fail(card, QStringLiteral("This media is no longer available from Wikimedia."));
                 return;
             }
-            const QUrl mediaUrl(card->kind == QStringLiteral("image") && !info.value(QStringLiteral("thumburl")).toString().isEmpty()
+            const QUrl mediaUrl(card->kind == QStringLiteral("image") && !svgMime(info.value(QStringLiteral("mime")).toString())
+                && !info.value(QStringLiteral("thumburl")).toString().isEmpty()
                 ? info.value(QStringLiteral("thumburl")).toString() : info.value(QStringLiteral("url")).toString());
             if (!allowedUrl(mediaUrl, true)) { fail(card, QStringLiteral("The media server returned an unsupported address.")); return; }
             QUrl source(info.value(QStringLiteral("descriptionurl")).toString());
@@ -916,7 +946,7 @@ struct MediaPanel::Impl {
                 if (payload.isEmpty()) { fail(card, QStringLiteral("The media file was empty.")); return; }
                 if (!present(card, payload, metadata)) return;
                 writeCached(card);
-                // Inline rendering retains shared decoded pixels and attribution,
+                // Inline rendering retains shared bounded pixels/parsed vectors and attribution,
                 // never up to50MiB of source bytes per visible occurrence. A
                 // disabled/failed disk cache does not invalidate decoded pixels.
                 if (card->inlineRequested) card->data.clear();

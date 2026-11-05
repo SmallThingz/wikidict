@@ -19,9 +19,15 @@ wikitext remain build-time concerns in the core project.
 
 - CMake 3.21+
 - C++20 compiler
-- Qt 6.5+ with Core, Gui, Widgets, Concurrent, Network and Multimedia
+- Qt 6.5+ with Core, Gui, Widgets, Concurrent, Network, Multimedia and Svg
 - Zig 0.17.0 for the core and fixture generator
 - a built Wikidict core CLI and C ABI from this repository
+
+The native install uses the system Qt libraries, including QtSvg; it does not
+bundle a separate Qt runtime. Confirmed original SVG images use the linked native
+QtSvg renderer directly, so their rendering does not require an SVG imageformat
+plugin. Existing cached raster thumbnails remain available offline; Reload image
+fetches the original SVG through the ordinary opt-in media path.
 
 From the Wikidict repository root, build the core and desktop application:
 

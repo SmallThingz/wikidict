@@ -1,4 +1,5 @@
 #include "MainWindow.hpp"
+#include "InlineVectorImages.hpp"
 #include "SemanticHtml.hpp"
 #include "LibraryDialog.hpp"
 #include "MediaPanel.hpp"
@@ -1705,13 +1706,14 @@ void MainWindow::bindInlineImages() {
     for (QTextBrowser *browser : {title_, reading_}) {
         QPointer<QTextBrowser> widget(browser);
         QPointer<QTextDocument> document(browser->document());
-        document->setResourceProvider([this, widget, document](const QUrl &url) -> QVariant {
+        QPointer<InlineVectorImages> vectors(new InlineVectorImages(document->documentLayout()));
+        document->setResourceProvider([this, widget, document, vectors](const QUrl &url) -> QVariant {
             if (url.scheme() != SemanticHtml::inlineImageScheme || !widget || !document) return {};
             const QJsonObject image = SemanticHtml::inlineImageData(url);
             const quint64 generation = inlineImageGeneration_;
-            QTimer::singleShot(0, document, [this, widget, document, url, image, generation] {
+            QTimer::singleShot(0, document, [this, widget, document, vectors, url, image, generation] {
                 if (!widget || !document || generation != inlineImageGeneration_) return;
-                const auto apply = [this, widget, document, url, image, generation](const MediaPanel::InlineImageAsset &asset) {
+                const auto apply = [this, widget, document, vectors, url, image, generation](const MediaPanel::InlineImageAsset &asset) {
                     if (!widget || !document || generation != inlineImageGeneration_) return;
                     const bool ready = asset.state == MediaPanel::InlineImageState::Ready;
                     QImage pixels = asset.image;
@@ -1738,6 +1740,7 @@ void MainWindow::bindInlineImages() {
                             painter.drawText(pixels.rect(), Qt::AlignCenter | Qt::TextSingleLine, visibleAlt);
                         }
                     }
+                    if (vectors) vectors->setVector(url, ready ? asset.vector : nullptr);
                     document->addResource(QTextDocument::ImageResource, url, pixels);
                     struct Edit { int position; QTextImageFormat format; }; QVector<Edit> edits;
                     for (QTextBlock block = document->begin(); block.isValid(); block = block.next())

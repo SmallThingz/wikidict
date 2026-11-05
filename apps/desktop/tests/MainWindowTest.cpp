@@ -30,6 +30,7 @@
 #include <QPainterPath>
 #include <QPainter>
 #include <QImage>
+#include <QImageReader>
 #include <QItemSelectionModel>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -236,6 +237,101 @@ private:
     }
 
 private slots:
+    void largeInlineSvgKeepsFineDetailAtDeviceResolution() {
+        QSettings().setValue("media/allowImages", true);
+        QSettings().setValue("media/cacheMb", 10);
+        MainWindow window(fixture_, QStringLiteral("dog"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(1120, 800); window.show();
+        const QString file = QStringLiteral("Vector fidelity fixture.svg");
+        const QString host = LibraryStorage::sourceHost(window.api_->root());
+        const QString cache = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + QStringLiteral("/media-v1");
+        QVERIFY(QDir().mkpath(cache));
+        const QString key = QString::fromLatin1(QCryptographicHash::hash((host + ":image:" + file).toUtf8(), QCryptographicHash::Sha256).toHex());
+        const QString payloadPath = cache + '/' + key + ".bin", metadataPath = cache + '/' + key + ".json";
+        const auto removeFixture = qScopeGuard([&] { QFile::remove(payloadPath); QFile::remove(metadataPath); });
+        // Owned vector data. At600 logical pixels wide the bars are1 pixel wide,
+        // beyond the detail retained by the current400px-wide shared bitmap.
+        QByteArray svg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="40" viewBox="0 0 20 40"><rect width="20" height="40" fill="#ff00ff"/><rect x="1" y="1" width="18" height="38" fill="white"/>)svg";
+        for (int stripe = 0; stripe < 480; stripe += 2)
+            svg += "<rect x=\"" + QByteArray::number(2.0 + stripe / 30.0, 'f', 8)
+                + "\" y=\"2\" width=\"0.03333333\" height=\"4\" fill=\"black\"/>";
+        svg += R"svg(<path d="M2 8L18 20M2 20L18 8" fill="none" stroke="black" stroke-width="0.04"/><circle cx="10" cy="29" r="7" fill="none" stroke="black" stroke-width="0.04"/></svg>)svg";
+        QFile payload(payloadPath); QVERIFY(payload.open(QIODevice::WriteOnly)); QCOMPARE(payload.write(svg), svg.size()); payload.close();
+        const QJsonObject assetMetadata{{"url", "https://upload.wikimedia.org/wikipedia/commons/a/vector-fidelity-fixture.svg"},
+            {"source", "https://commons.wikimedia.org/wiki/File:Vector_fidelity_fixture.svg"}, {"credit", "Owned fine-line SVG"},
+            {"intrinsic_width", 20}, {"intrinsic_height", 40}, {"original_mime", "image/svg+xml"}};
+        QFile metadata(metadataPath); QVERIFY(metadata.open(QIODevice::WriteOnly));
+        const QByteArray metadataBytes = QJsonDocument(assetMetadata).toJson(QJsonDocument::Compact);
+        QCOMPARE(metadata.write(metadataBytes), metadataBytes.size()); metadata.close();
+        const QJsonObject image{{"file", file}, {"height_px", 1200}, {"alt", ""}, {"tooltip", QJsonValue::Null}};
+        const QJsonObject span{{"kind", "text"}, {"text", ""}, {"target", ""}, {"image", image}};
+        const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", QJsonArray{span}}};
+        const QJsonObject section{{"level", 2}, {"title", "Large vector detail"}, {"blocks", QJsonArray{paragraph}}};
+        const QJsonObject entry{{"title", "Owned vector fidelity fixture"}, {"kind", "language"}, {"language", window.api_->language()},
+            {"sections", QJsonArray{section}}, {"media", QJsonArray{QJsonObject{{"kind", "image"}, {"file", file}, {"caption", "Owned fine-line SVG"}}}}};
+        window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false);
+        const auto firstImage = [&] {
+            for (QTextBlock block = window.reading_->document()->begin(); block.isValid(); block = block.next())
+                for (auto it = block.begin(); !it.atEnd(); ++it)
+                    if (it.fragment().charFormat().isImageFormat()) return it.fragment().charFormat().toImageFormat();
+            return QTextImageFormat();
+        };
+        QTRY_COMPARE_WITH_TIMEOUT(firstImage().intProperty(SemanticHtml::inlineImageStateProperty), int(MediaPanel::InlineImageState::Ready), 10000);
+        const auto format = firstImage();
+        QCOMPARE(format.width(), 600.0); QCOMPARE(format.height(), 1200.0);
+        QVERIFY(format.hasProperty(QTextFormat::ImageAltText)); QCOMPARE(format.stringProperty(QTextFormat::ImageAltText), QString());
+        QVERIFY(!format.isAnchor()); QVERIFY(format.anchorHref().isEmpty()); QCOMPARE(window.currentEntry_, entry);
+        window.reading_->verticalScrollBar()->setValue(0); window.reading_->horizontalScrollBar()->setValue(0);
+        QCoreApplication::processEvents();
+        const qreal dpr = window.reading_->viewport()->devicePixelRatioF();
+        const QSize target(qRound(format.width() * dpr), qRound(format.height() * dpr));
+        // Independent native-resolution oracle, not a resized product resource.
+        QBuffer original(&svg); QVERIFY(original.open(QIODevice::ReadOnly));
+        QImageReader referenceReader(&original); referenceReader.setScaledSize(target);
+        const QImage reference = referenceReader.read();
+        QVERIFY2(!reference.isNull(), qPrintable(referenceReader.errorString())); QCOMPARE(reference.size(), target);
+        const QImage actual = window.reading_->viewport()->grab().toImage();
+        QCOMPARE(actual.devicePixelRatio(), dpr);
+        QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+        const QString stem = QStringLiteral(".tmp/ui-screenshots/desktop-vector-detail-dpr%1").arg(dpr, 0, 'g', 3);
+        QVERIFY(window.grab().save(stem + QStringLiteral("-window.png")));
+        QVERIFY(actual.save(stem + QStringLiteral("-actual.png")));
+        QVERIFY(reference.save(stem + QStringLiteral("-reference.png")));
+        // Magenta belongs only to this fixture's border. It locates the image
+        // in the actual viewport without assuming themed furniture coordinates.
+        int left = actual.width(), top = actual.height(), right = -1;
+        for (int y = 0; y < actual.height(); ++y)
+            for (int x = 0; x < actual.width(); ++x)
+                if (actual.pixelColor(x, y) == QColor(255, 0, 255)) { left = qMin(left, x); top = qMin(top, y); right = qMax(right, x); }
+        QVERIFY(right >= left); QVERIFY(top < actual.height());
+        QVERIFY(qAbs(right - left + 1 - target.width()) <= 2);
+        const QRect detail(qRound(target.width() * 0.125), qRound(target.height() * 0.075),
+            qRound(target.width() * 0.5), qRound(target.height() * 0.025));
+        QVERIFY(reference.rect().contains(detail));
+        int darkest = 255, lightest = 0;
+        for (int x = detail.left(); x <= detail.right(); ++x) {
+            const int value = qGray(reference.pixel(x, detail.center().y()));
+            darkest = qMin(darkest, value); lightest = qMax(lightest, value);
+        }
+        QVERIFY(darkest <= 32 && lightest >= 223); // Oracle itself retains contrasting fine bars.
+        double bestError = std::numeric_limits<double>::infinity();
+        // Allow only the integer rounding of the located painted border, not
+        // scaling or blurring of either image to manufacture agreement.
+        for (int dy = -2; dy <= 2; ++dy) for (int dx = -2; dx <= 2; ++dx) {
+            const QPoint origin(left + dx, top + dy);
+            if (!actual.rect().contains(detail.translated(origin))) continue;
+            qint64 error = 0;
+            for (int y = detail.top(); y <= detail.bottom(); ++y)
+                for (int x = detail.left(); x <= detail.right(); ++x)
+                    error += qAbs(qGray(actual.pixel(origin.x() + x, origin.y() + y)) - qGray(reference.pixel(x, y)));
+            bestError = qMin(bestError, double(error) / (detail.width() * detail.height()));
+        }
+        const QImage resource = window.reading_->document()->resource(QTextDocument::ImageResource, QUrl(format.name())).value<QImage>();
+        qInfo() << "SVG_DETAIL" << "dpr" << dpr << "target" << target << "resource" << resource.size() << "mean_gray_error" << bestError;
+        QVERIFY2(bestError <= 8.0, qPrintable(QStringLiteral("Normal reader lost SVG fine detail: mean gray error%1 at DPR%2 (allowed8/255)").arg(bestError).arg(dpr)));
+    }
+
     void typedInlineImagesUseRealBodyAndHeadingResourcesWithoutFilenameLabels() {
         QSettings().setValue("media/allowImages", true);
         QSettings().setValue("media/cacheMb", 10);

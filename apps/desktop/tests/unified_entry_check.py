@@ -71,6 +71,8 @@ def main():
             raise RuntimeError("CLI has a direct Qt or GUI shared-library dependency")
         gui_library = bin_dir.parent / "lib/libwikidict-gui.so"
         gui_dynamic, _ = run(["readelf", "-d", str(gui_library)], env, root, "gui-readelf")
+        if not re.search(rb"\(NEEDED\)[^\n]*\[libQt6Svg\.so(?:\.[^\]]*)?\]", gui_dynamic):
+            raise RuntimeError("GUI must declare its system QtSvg runtime dependency")
         rpaths = re.findall(rb"\((?:RUNPATH|RPATH)\)[^\n]*\[([^\]]*)\]", gui_dynamic)
         if rpaths != [b"$ORIGIN"] or re.search(rb"\(NEEDED\)[^\n]*\[/", gui_dynamic):
             raise RuntimeError("GUI dependencies must resolve through the installed library directory or system paths")
@@ -85,6 +87,8 @@ def main():
         _, smoke_err = run([str(gui), "--smoke", "--root", str(fixture), "cat"], env, root, "gui-smoke")
         if not (settings / "bootstrap-ok").is_file():
             raise RuntimeError("settings bootstrap did not run")
+        if b"libQt6Svg" not in smoke_err:
+            raise RuntimeError("installed GUI did not resolve the system QtSvg runtime")
         if b"libwikidict-gui" not in smoke_err:
             raise RuntimeError("GUI symlink did not load the GUI component")
     except Exception:

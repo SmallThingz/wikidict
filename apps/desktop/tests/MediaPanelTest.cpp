@@ -5,6 +5,8 @@
 #include <QAudioDevice>
 #include <QBuffer>
 #include <QCheckBox>
+#include <QCryptographicHash>
+#include <QScopeGuard>
 #include <QComboBox>
 #include <QDir>
 #include <QDataStream>
@@ -27,6 +29,7 @@
 #include <QScrollBar>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QSvgRenderer>
 #include <QStringList>
 #include <QTemporaryDir>
 #include <QTest>
@@ -166,6 +169,71 @@ private slots:
     void init() {
         QSettings().clear();
         QDir(cacheRoot()).removeRecursively();
+    }
+
+    void originalSvgUsesSharedNativeVectorAndSurvivesOfflineCache() {
+        using State = MediaPanel::InlineImageState;
+        const QString original = QStringLiteral("https://upload.wikimedia.org/wikipedia/commons/v/vector.svg");
+        const QString thumbnail = QStringLiteral("https://upload.wikimedia.org/wikipedia/commons/thumb/v/vector.svg/960px-vector.svg.png");
+        const QJsonObject info{{"url", original}, {"thumburl", thumbnail}, {"mime", "image/svg+xml"},
+            {"descriptionurl", "https://commons.wikimedia.org/wiki/File:Vector.svg"}, {"width", 20}, {"height", 40}};
+        const QByteArray response = QJsonDocument(QJsonObject{{"query", QJsonObject{{"pages", QJsonArray{
+            QJsonObject{{"imageinfo", QJsonArray{info}}}}}}}}).toJson();
+        const QByteArray svg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="40"><rect width="20" height="40" fill="red"/></svg>)svg";
+        QJsonObject value = entry(); value.insert("media", QJsonArray{QJsonObject{{"kind", "image"}, {"file", "File:Vector.svg"}}});
+        Network network; network.responses = {{response}, {svg}};
+        MediaPanel panel(nullptr, &network); panel.setEntry(value); panel.show();
+        // QtSvg is linked directly; this path must not depend on an imageformat plugin.
+        const QStringList libraryPaths = QCoreApplication::libraryPaths();
+        const auto restorePlugins = qScopeGuard([&] { QCoreApplication::setLibraryPaths(libraryPaths); });
+        QCoreApplication::setLibraryPaths({});
+        QObject owner; MediaPanel::InlineImageAsset last{State::Loading};
+        const auto changed = [&](const auto &asset) { last = asset; };
+        QCOMPARE(panel.requestInlineImage("Vector.svg", &owner, "first", changed).state, State::Disabled);
+        QCOMPARE(network.urls.size(), 0); enableImages(panel);
+        QTRY_COMPARE(last.state, State::Ready);
+        QCOMPARE(network.urls.size(), 2); QCOMPARE(network.urls.last(), QUrl(original));
+        QVERIFY(last.vector); QVERIFY(last.vector->isValid()); QCOMPARE(last.vector->thread(), QThread::currentThread());
+        QCOMPARE(last.vector->framesPerSecond(), 0); QCOMPARE(last.intrinsic, QSizeF(20, 40));
+        QVERIFY(last.image.width() <= 1280 && last.image.height() <= 800);
+        const std::weak_ptr<QSvgRenderer> prior = last.vector;
+        {
+            const auto second = panel.requestInlineImage("Vector.svg", &owner, "second", changed);
+            QVERIFY(second.vector == last.vector); QCOMPARE(network.urls.size(), 2);
+        }
+        enableImages(panel); QCOMPARE(last.state, State::Disabled); QVERIFY(!last.vector);
+        enableImages(panel); QCOMPARE(last.state, State::Ready); QCOMPARE(network.urls.size(), 2);
+        last = {State::Loading};
+        panel.setEntry(value); // Same owned cache, no resolver or network reply remains.
+        QVERIFY(prior.expired());
+        last = panel.requestInlineImage("Vector.svg", &owner, "cached", changed);
+        QTRY_COMPARE(last.state, State::Ready); QVERIFY(last.vector); QCOMPARE(network.urls.size(), 2);
+        panel.findChild<QPushButton *>("mediaClearCache")->click(); panel.setEntry(value);
+        network.responses = {{response}, {"not an SVG or raster"}};
+        last = panel.requestInlineImage("Vector.svg", &owner, "failure", changed);
+        QTRY_COMPARE(last.state, State::Error); QVERIFY(!last.vector); QVERIFY(last.image.isNull());
+    }
+
+    void cachedSvgThumbnailRemainsRasterWithoutImplicitNetworkUpgrade() {
+        using State = MediaPanel::InlineImageState;
+        const QString key = QString::fromLatin1(QCryptographicHash::hash(":image:Cat.jpg", QCryptographicHash::Sha256).toHex());
+        const QJsonObject info{{"url", "https://upload.wikimedia.org/wikipedia/commons/thumb/v/vector.svg/960px-vector.svg.png"},
+            {"original_mime", "image/svg+xml"}, {"source", "https://commons.wikimedia.org/wiki/File:Vector.svg"},
+            {"intrinsic_width", 480}, {"intrinsic_height", 320}};
+        Network network;
+        MediaPanel panel(nullptr, &network); panel.setEntry(entry()); panel.show(); enableImages(panel);
+        QFile payload(cacheRoot() + '/' + key + ".bin"); QVERIFY(payload.open(QIODevice::WriteOnly));
+        const QByteArray pixels = picture(); QCOMPARE(payload.write(pixels), pixels.size()); payload.close();
+        QFile cacheInfo(cacheRoot() + '/' + key + ".json"); QVERIFY(cacheInfo.open(QIODevice::WriteOnly));
+        const QByteArray json = QJsonDocument(info).toJson(); QCOMPARE(cacheInfo.write(json), json.size()); cacheInfo.close();
+        QObject owner; MediaPanel::InlineImageAsset last{State::Loading};
+        const auto changed = [&](const auto &asset) { last = asset; };
+        last = panel.requestInlineImage("Cat.jpg", &owner, "first", changed);
+        QTRY_COMPARE(last.state, State::Ready); QVERIFY(!last.vector); QVERIFY(!last.image.isNull());
+        QCOMPARE(last.originalMime, QStringLiteral("image/svg+xml")); QCOMPARE(network.urls.size(), 0);
+        panel.setEntry(entry()); last = panel.requestInlineImage("Cat.jpg", &owner, "cached", changed);
+        QTRY_COMPARE(last.state, State::Ready); QVERIFY(!last.vector); QVERIFY(!last.image.isNull());
+        QCOMPARE(network.urls.size(), 0); // Offline PNG cache is not relabelled as parsed SVG.
     }
 
     void inlineImagesReusePassiveCachePermissionsAndFailureLifecycle() {
