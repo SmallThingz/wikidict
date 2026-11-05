@@ -375,6 +375,27 @@ def load_preparations(cfg):
     return list(unique.values())
 
 
+def attempt_phase_seconds(row):
+    # Older noncampaign rows stored controller wall time in elapsed_seconds.
+    # Their retained edition event is the production/verification authority.
+    if 'edition_build' in row:
+        phase = row['edition_build']
+        if phase is not None:
+            require(isinstance(phase, dict) and phase.get('edition') == row['edition']
+                    and phase.get('phase') == 'edition_build' and phase.get('event') == 'end',
+                    'Invalid edition timing authority')
+            seconds = phase.get('seconds')
+        else:
+            seconds = 0.0 if row.get('production_started') is False else None
+    elif row.get('timing_authority') == 'actual controller monotonic interval around joined tracked CLI':
+        seconds = None
+    else:
+        seconds = row['elapsed_seconds']
+    require(seconds is None or (type(seconds) in (int, float) and math.isfinite(seconds) and seconds >= 0),
+            'Invalid interval')
+    return seconds
+
+
 def summarize(attempt_results, editions, preparations=()):
     unique = {}
     for row in attempt_results:
@@ -400,7 +421,7 @@ def summarize(attempt_results, editions, preparations=()):
     unknown = []
     for edition in edition_order(editions):
         history = [x for x in unique.values() if x['edition'] == edition]
-        measured = [x['elapsed_seconds'] for x in history if x.get('execution_mode') != 'existing_output']
+        measured = [attempt_phase_seconds(x) for x in history if x.get('execution_mode') != 'existing_output']
         for seconds in measured:
             require(seconds is None or (type(seconds) in (int, float) and math.isfinite(seconds) and seconds >= 0), 'Invalid interval')
         timing_unknown = any(x is None for x in measured)
@@ -420,7 +441,7 @@ def summarize(attempt_results, editions, preparations=()):
             production_preparations=own_preparations,
             observed_preparation_seconds=None if edition in EXCLUDED else preparation_seconds,
             observed_total_seconds=None if edition in EXCLUDED or timing_unknown else known_build_seconds + preparation_seconds,
-            verification_seconds=None if edition in EXCLUDED else sum(x['elapsed_seconds'] or 0 for x in history if x.get('execution_mode') == 'existing_output'),
+            verification_seconds=None if edition in EXCLUDED else sum(attempt_phase_seconds(x) or 0 for x in history if x.get('execution_mode') == 'existing_output'),
             original_build_time_unknown=original_unknown, latest_outcome=latest.get(edition, {}).get('outcome')))
     cohort = [x for x in rows if not x['timing_excluded']]
     complete = len(rows) == 198 and len(cohort) == 191 and all(x['accepted'] is not None for x in rows)
@@ -1547,7 +1568,7 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
     log_ref = descriptor(folder / 'build.log') if (folder / 'build.log').exists() else None
     phase_error = None
     try:
-        evidence = phase_evidence(folder / 'build.log', edition, cfg['date'], strict=cfg.get('campaign') is not None) if log_ref else dict(production_started=False, end=None)
+        evidence = phase_evidence(folder / 'build.log', edition, cfg['date'], strict=True) if log_ref else dict(production_started=False, end=None)
     except (OSError, ValueError) as exc:
         phase_error = f'{type(exc).__name__}: {exc}'
         error = '; '.join(part for part in (error, 'Invalid phase evidence: ' + phase_error) if part)
@@ -1579,19 +1600,18 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
         timing_authority='actual controller monotonic interval around joined tracked CLI', ended_utc=utc(),
         execution_mode=phase.get('execution_mode') if phase else None, edition_build=phase, phase_evidence_error=phase_error,
         watchdog=descriptor(wdpath) if wdpath.exists() else None, build_log=log_ref, accepted=accepted)
-    if cfg.get('campaign') is not None:
-        verification_only = None if phase_error else phase is not None and phase.get('execution_mode') == 'existing_output'
-        row['controller_elapsed_seconds'] = elapsed
-        row['verification_only'] = verification_only
-        row['production_started'] = evidence['production_started'] and not verification_only
-        row['elapsed_seconds'] = phase.get('seconds') if phase else (None if evidence['production_started'] is not False else 0.0)
-        require(row['elapsed_seconds'] is None or (type(row['elapsed_seconds']) in (int, float)
-                and math.isfinite(row['elapsed_seconds']) and row['elapsed_seconds'] >= 0), 'Invalid edition build time')
-        row['production_elapsed_seconds'] = row['elapsed_seconds'] if row['production_started'] else None
-        row['verification_elapsed_seconds'] = row['elapsed_seconds'] if verification_only else None
-        row['timing_authority'] = 'actual edition_build terminal; existing_output is verification only; controller wall retained separately'
-        row['not_ready_reason'] = 'Invalid phase evidence; production status and timing are unknown' if phase_error else (
-            None if evidence['production_started'] else 'Normal builder stopped before edition_build; see exact build_log')
+    verification_only = None if phase_error else phase is not None and phase.get('execution_mode') == 'existing_output'
+    row['controller_elapsed_seconds'] = elapsed
+    row['verification_only'] = verification_only
+    row['production_started'] = evidence['production_started'] and not verification_only
+    row['elapsed_seconds'] = phase.get('seconds') if phase else (None if evidence['production_started'] is not False else 0.0)
+    require(row['elapsed_seconds'] is None or (type(row['elapsed_seconds']) in (int, float)
+            and math.isfinite(row['elapsed_seconds']) and row['elapsed_seconds'] >= 0), 'Invalid edition build time')
+    row['production_elapsed_seconds'] = row['elapsed_seconds'] if row['production_started'] else None
+    row['verification_elapsed_seconds'] = row['elapsed_seconds'] if verification_only else None
+    row['timing_authority'] = 'actual edition_build terminal; existing_output is verification only; controller wall retained separately'
+    row['not_ready_reason'] = 'Invalid phase evidence; production status and timing are unknown' if phase_error else (
+        None if evidence['production_started'] else 'Normal builder stopped before edition_build; see exact build_log')
     write_json(folder / 'result.json', row)
     # Keep the original failure durable before optional generated-output retirement.
     if row['accepted'] is None:

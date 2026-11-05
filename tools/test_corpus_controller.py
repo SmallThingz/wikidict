@@ -177,6 +177,89 @@ class ControllerPureTests(unittest.TestCase):
             controller.summarize([attempt('a', 1)], ['arwiktionary'])
 
 
+    def test_retained_tl_mon_phase_times_exclude_controller_wall_and_keep_unknown(self):
+        def retained(identity, sequence, edition, wall, seconds, accepted):
+            row = attempt(identity, sequence, edition, seconds=wall, accepted=accepted)
+            row['timing_authority'] = 'actual controller monotonic interval around joined tracked CLI'
+            row['edition_build'] = (dict(edition=edition, date='20261001', phase='edition_build',
+                event='end', status='success' if accepted else 'failure', seconds=seconds)
+                if seconds is not None else None)
+            return row
+        tl = retained('tl', 1, 'tlwiktionary', 242.23714185500285, 238.341, True)
+        mon_disk = retained('mon-disk', 2, 'mnwwiktionary', 628.3383523279917, None, False)
+        mon_writer = retained('mon-writer', 3, 'mnwwiktionary', 1373.5042524439923, 1354.011, False)
+        rows = [tl, mon_disk, mon_writer, copy.deepcopy(mon_writer)]
+        before = copy.deepcopy(rows)
+        summary = controller.summarize(rows, ['tlwiktionary', 'mnwwiktionary'])
+        by_edition = {row['edition']: row for row in summary['editions']}
+        self.assertEqual(by_edition['tlwiktionary']['known_production_seconds'], 238.341)
+        self.assertEqual(by_edition['mnwwiktionary']['known_production_seconds'], 1354.011)
+        self.assertEqual(by_edition['mnwwiktionary']['attempt_count'], 2)
+        self.assertIsNone(by_edition['mnwwiktionary']['observed_build_seconds'])
+        self.assertEqual(summary['unknown_timing_editions'], ['mnwwiktionary'])
+        self.assertAlmostEqual(summary['known_cohort_build_seconds'], 1592.352)
+        self.assertIsNone(summary['observed_cohort_seconds'])
+        self.assertIsNone(summary['final_observed_pages_per_second'])
+        self.assertEqual(rows, before)
+
+    def test_legacy_controller_only_interval_is_unknown_without_phase(self):
+        row = attempt('legacy-controller', 1, seconds=300)
+        row['timing_authority'] = 'actual controller monotonic interval around joined tracked CLI'
+        summary = controller.summarize([row], ['enwiktionary'])
+        self.assertEqual(summary['known_cohort_build_seconds'], 0)
+        self.assertEqual(summary['unknown_timing_editions'], ['enwiktionary'])
+        self.assertIsNone(summary['observed_cohort_seconds'])
+        self.assertIsNotNone(summary['editions'][0]['accepted'])
+
+    def test_retained_existing_output_phase_counts_only_verification(self):
+        row = attempt('legacy-verify', 1, seconds=8, mode='existing_output')
+        row['timing_authority'] = 'actual controller monotonic interval around joined tracked CLI'
+        row['edition_build'] = dict(edition='enwiktionary', phase='edition_build', event='end',
+                                   execution_mode='existing_output', seconds=3.25)
+        summary = controller.summarize([row], ['enwiktionary'])
+        self.assertEqual(summary['known_cohort_build_seconds'], 0)
+        self.assertEqual(summary['editions'][0]['verification_seconds'], 3.25)
+        self.assertTrue(summary['editions'][0]['original_build_time_unknown'])
+
+    def test_noncampaign_execute_records_phase_and_separate_controller_time(self):
+        cases = [('tlwiktionary', 238.341, True, True, FRESH),
+                 ('mnwwiktionary', 1354.011, True, False, FRESH),
+                 ('mnwwiktionary', None, True, False, FRESH),
+                 ('mnwwiktionary', None, False, False, FRESH),
+                 ('tlwiktionary', 3.25, True, True, 'existing_output')]
+        for edition, seconds, started, success, mode in cases:
+            with self.subTest(edition=edition, seconds=seconds, started=started, mode=mode), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); cfg = ControllerMemoryPolicyTests().cfg(root)
+                self.assertNotIn('campaign', cfg)
+                folder = root / 'attempt'; code = 0 if success else 1
+                process = mock.Mock(pid=900123); process.poll.return_value=code; process.wait.return_value=code
+                start = dict(edition=edition, date='20261001', phase='edition_build', event='start')
+                end = dict(start, event='end', status='success' if success else 'failure', seconds=seconds, execution_mode=mode)
+                def spawn(*args, **kwargs):
+                    write_json(Path(kwargs['cwd'])/'.tmp/build-watchdog-report.json', dict(termination_reason='child_exit',
+                        child_exit_status=code, guardian_exit_status=0, memory_limit_bytes=controller.MEMORY_INITIAL))
+                    if started:
+                        kwargs['stdout'].write(('BUILD_PHASE '+json.dumps(start)+'\n').encode())
+                    if seconds is not None:
+                        kwargs['stdout'].write(('BUILD_PHASE '+json.dumps(end)+'\n').encode())
+                    kwargs['stdout'].flush()
+                    return process
+                with mock.patch.object(controller, 'ROOT', root), \
+                     mock.patch.object(controller.subprocess, 'Popen', side_effect=spawn), \
+                     mock.patch.object(controller, 'process_identity', return_value=dict(pid=900123, start_time_ticks=1)), \
+                     mock.patch.object(controller, 'watchdog_closed', return_value=True), \
+                     mock.patch.object(controller, 'source_guard'), \
+                     mock.patch.object(controller, 'accept', return_value=dict(input_pages=10)):
+                    row, _ = controller.execute(cfg, edition, 4, folder, 1, 'context', [])
+                self.assertEqual(controller.read_json(folder/'result.json'), row)
+                self.assertEqual(row['elapsed_seconds'], seconds if started else 0.0)
+                self.assertGreaterEqual(row['controller_elapsed_seconds'], 0)
+                self.assertEqual(row['production_started'], started and mode != 'existing_output')
+                self.assertEqual(row['production_elapsed_seconds'], seconds if started and mode != 'existing_output' else None)
+                self.assertEqual(row['verification_elapsed_seconds'], seconds if mode == 'existing_output' else None)
+                self.assertEqual(row['accepted'] is not None, success)
+
+
 class ControllerHistoryTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
