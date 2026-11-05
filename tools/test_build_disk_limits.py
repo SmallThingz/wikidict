@@ -87,18 +87,21 @@ class MergeDiskAdmissionTests(unittest.TestCase):
         self.assertTrue(target.is_file());self.assertFalse(self.destination.exists())
         with self.assertRaises(ValueError): self.admit([one,two])
 
-    def test_streamed_output_admission_uses_headroom_not_logical_or_stored_total(self):
+    def test_streamed_output_admission_uses_transport_estimate_plus_separate_reserve(self):
         shard,raw=self.shard()
         payload=raw.read_bytes()+b'x'*65536
         raw.write_bytes(payload);target=Path(str(raw)+'.xz')
         target.write_bytes(lzma.compress(payload));raw.unlink()
         ordinary=self.admit([shard],allow_compressed=True)
         streamed=self.admit([shard],allow_compressed=True,compressed_output=True)
-        self.assertEqual(ordinary['required_free_bytes']-streamed['required_free_bytes'],len(payload))
+        self.assertEqual(ordinary['required_free_bytes']-streamed['required_free_bytes'],
+                         len(payload)-target.stat().st_size)
         self.assertEqual(streamed['logical_shard_bytes'],len(payload))
         self.assertEqual(streamed['stored_shard_blob_bytes'],target.stat().st_size)
         self.assertEqual(streamed['raw_output_reservation_bytes'],0)
-        self.assertEqual(streamed['streaming_output_headroom_bytes'],128)
+        self.assertEqual(streamed['compressed_output_estimate_bytes'],target.stat().st_size)
+        self.assertEqual(streamed['streaming_output_headroom_bytes'],target.stat().st_size+128)
+        self.assertEqual(streamed['remaining_write_headroom_bytes']+128,streamed['required_free_bytes'])
         self.assertIsNone(streamed['compressed_output_size_bound_bytes'])
         required=streamed['required_free_bytes']
         self.admit([shard],required,allow_compressed=True,compressed_output=True)
@@ -107,6 +110,41 @@ class MergeDiskAdmissionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'Insufficient merge disk space'):
             self.admit([shard],required,allow_compressed=True)
         self.assertTrue(target.is_file());self.assertFalse(self.destination.exists())
+
+    def test_small_completed_merge_funds_remaining_writes_below_old_floor(self):
+        shard,raw=self.shard()
+        payload=raw.read_bytes()+b'x'*65536
+        target=Path(str(raw)+'.xz')
+        target.write_bytes(lzma.compress(payload));raw.unlink()
+        before=target.read_bytes()
+        receipt=self.admit([shard],available=2*1024**3-786432,
+                           reserve=d.BUILD_DISK_RESERVE_BYTES,
+                           allow_compressed=True,compressed_output=True)
+        self.assertGreater(receipt['remaining_write_headroom_bytes'],len(before))
+        self.assertLess(receipt['required_free_bytes'],2*1024**3-786432)
+        self.assertGreater(receipt['reserve_bytes'],0)
+        self.admit([shard],receipt['required_free_bytes'],reserve=d.BUILD_DISK_RESERVE_BYTES,
+                   allow_compressed=True,compressed_output=True)
+        with self.assertRaisesRegex(ValueError,'Insufficient merge disk space'):
+            self.admit([shard],receipt['required_free_bytes']-1,reserve=d.BUILD_DISK_RESERVE_BYTES,
+                       allow_compressed=True,compressed_output=True)
+        self.assertEqual(before,target.read_bytes())
+        self.assertFalse(self.destination.exists())
+
+    def test_streamed_mixed_shards_budget_all_pending_transports_without_raw_copy(self):
+        one,raw_one=self.shard('one')
+        two,raw_two=self.shard('two',heading='French')
+        target=Path(str(raw_one)+'.xz')
+        target.write_bytes(lzma.compress(raw_one.read_bytes()));raw_one.unlink()
+        receipt=self.admit([one,two],allow_compressed=True,compressed_output=True)
+        self.assertEqual(receipt['compressed_output_estimate_bytes'],
+                         target.stat().st_size+raw_two.stat().st_size)
+        self.assertEqual(receipt['raw_output_reservation_bytes'],0)
+        self.assertIsNone(receipt['compressed_output_size_bound_bytes'])
+        self.assertEqual(receipt['remaining_write_headroom_bytes'],sum(receipt[k] for k in
+            ('compressed_output_estimate_bytes','fallback_bytes','language_manifest_bound_bytes',
+             'namespace_coverage_bound_bytes','metadata_bytes')))
+        self.assertFalse(self.destination.exists())
 
     def test_streamed_output_keeps_manifest_duplicate_and_identity_checks(self):
         shard,raw=self.shard();target=Path(str(raw)+'.xz')

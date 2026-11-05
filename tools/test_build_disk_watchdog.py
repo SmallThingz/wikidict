@@ -72,6 +72,21 @@ class DiskWatchdogTest(unittest.TestCase):
                     with self.assertRaisesRegex(limits._DiskFloorReached, 'second'):
                         limits._check_watchdog_disk_floor(report)
 
+    def test_phase_writes_may_use_old_margin_but_maintained_floor_remains_enforced(self):
+        with self.temp() as tmp:
+            report=self.report(tmp,floor=limits.BUILD_DISK_RESERVE_BYTES)
+            available=2*1024**3-786432
+            with patch.object(limits.os,'statvfs',return_value=SimpleNamespace(
+                    f_bavail=available//4096,f_frsize=4096)):
+                limits._check_watchdog_disk_floor(report)
+            self.assertEqual(report['disk_space'][0]['available_bytes'],available)
+            with patch.object(limits.os,'statvfs',return_value=SimpleNamespace(
+                    f_bavail=limits.BUILD_DISK_RESERVE_BYTES//4096-1,f_frsize=4096)):
+                with self.assertRaises(limits._DiskFloorReached):
+                    limits._check_watchdog_disk_floor(report)
+            self.assertEqual(report['disk_space'][0]['minimum_available_bytes'],
+                             limits.BUILD_DISK_RESERVE_BYTES-4096)
+
     def test_filesystem_replacement_or_measurement_error_fails_closed(self):
         with self.temp() as tmp:
             report = self.report(tmp)

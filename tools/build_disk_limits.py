@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import stat
 
-BUILD_DISK_RESERVE_BYTES = 2 * 1024**3  # Policy margin, not an output-size bound.
+BUILD_DISK_RESERVE_BYTES = 512 * 1024**2  # Maintained floor, separate from pending writes.
 MAX_DISK_BYTES = (1 << 63) - 1
 _COUNTERS = ('input_rows', 'compile_only_rows', 'source_unavailable_rows', 'site_metadata_rows',
              'dispatched_rows', 'expanded_pages', 'fallback_pages', 'duplicate_rows', 'alias_pages')
@@ -111,7 +111,7 @@ def compressed_blob_size(path, kind):
 def require_merge_disk_space(shard_paths, destination, reserve_bytes,
                              *, metadata_paths=(), metadata_texts=(), allow_compressed=False, compressed_output=False,
                              reviewed_manifest_path=None):
-    """Require raw output room or streaming headroom, plus sidecars/metadata.
+    """Require pending output headroom plus sidecars, metadata and a maintained floor.
 
     Call immediately before merge while owning the edition lock. Shards must
     already have passed the native verifier. Raw merge bytes are at most the
@@ -120,11 +120,12 @@ def require_merge_disk_space(shard_paths, destination, reserve_bytes,
     transport size, to the merged-output reservation. Stored transport bytes are
     reported separately and already consume space. XZ listing/header checks do
     not replace the ordinary native verifier.
-    With compressed_output, reserve only sidecars/metadata and the existing
-    policy headroom. No XZ ratio or full compressed-output fit is assumed; the
-    unchanged watchdog disk floor handles ongoing growth.
+    With compressed_output, use the stored shard transport bytes as an output
+    estimate. Recompression can change that size: it is not an XZ fit bound.
+    The watchdog maintains the separate reserve if actual growth exceeds the
+    estimate or concurrent writers consume space.
     Existing shards already consume space; do not require their bytes twice.
-    The watchdog handles later capacity loss. Compressed input size is unused.
+    The watchdog handles later capacity loss.
     Optional metadata paths are subsequent copies (absent paths are skipped);
     texts are the actual pending serializations. Reserve covers filesystem
     allocation/metadata and concurrent writes, not unmeasured output growth.
@@ -234,10 +235,12 @@ def require_merge_disk_space(shard_paths, destination, reserve_bytes,
         if not isinstance(content, str):
             raise ValueError('Metadata must be serialized text')
         metadata = _add(metadata, len(content.encode('utf-8')))
-    # Streaming XZ never allocates a full raw merged copy. Its total transport
-    # size is unknown: the existing reserve is write headroom, not a fit bound.
+    # Streaming XZ never allocates a full raw merged copy. Use the measured
+    # transports for planning, while retaining a separate runtime floor.
     output_bound = 0 if compressed_output else raw
-    required = _add(output_bound, fallback, manifests, coverage, metadata, reserve_bytes)
+    compressed_estimate = stored if compressed_output else 0
+    remaining_writes = _add(output_bound, compressed_estimate, fallback, manifests, coverage, metadata)
+    required = _add(remaining_writes, reserve_bytes)
     for path, expected_identity in checked.items():
         if _identity(path.lstat()) != expected_identity:
             raise ValueError(f'Merge artifact changed during admission: {path}')
@@ -250,8 +253,10 @@ def require_merge_disk_space(shard_paths, destination, reserve_bytes,
     receipt = dict(raw_shard_bytes=raw, raw_blob_count=blob_count,
                    compressed_output=compressed_output, logical_shard_bytes=raw,
                    raw_output_reservation_bytes=output_bound,
-                   streaming_output_headroom_bytes=reserve_bytes if compressed_output else 0,
+                   streaming_output_headroom_bytes=_add(compressed_estimate, reserve_bytes) if compressed_output else 0,
                    compressed_output_size_bound_bytes=None if compressed_output else raw,
+                   compressed_output_estimate_bytes=compressed_estimate if compressed_output else None,
+                   remaining_write_headroom_bytes=remaining_writes,
                    stored_shard_blob_bytes=stored, compressed_shard_blob_bytes=compressed,
                    fallback_bytes=fallback, language_manifest_bound_bytes=manifests,
                    namespace_coverage_bound_bytes=coverage, metadata_bytes=metadata,
