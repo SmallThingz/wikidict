@@ -253,6 +253,7 @@ inline const QString inlineImageScheme = QStringLiteral("wikidict-inline-image")
 inline constexpr int inlineImageStateProperty = QTextFormat::UserProperty + 0x5744;
 inline constexpr int inlineImageStatusProperty = inlineImageStateProperty + 1;
 inline constexpr int inlineImageExplanationProperty = inlineImageStateProperty + 2;
+inline constexpr int inlineImageBorderProperty = inlineImageStateProperty + 3;
 inline QJsonObject checkedImage(const QJsonValue &value) {
     if (!value.isObject()) throw std::runtime_error("invalid inline image");
     const QJsonObject image = value.toObject();
@@ -266,7 +267,8 @@ inline QJsonObject checkedImage(const QJsonValue &value) {
             || QStringLiteral("_[]{}<>|#").contains(character)) throw std::runtime_error("invalid canonical inline image file");
     for (auto it = image.begin(); it != image.end(); ++it)
         if (it.key() != QStringLiteral("file") && it.key() != QStringLiteral("width_px") && it.key() != QStringLiteral("height_px")
-            && it.key() != QStringLiteral("alt") && it.key() != QStringLiteral("tooltip")) throw std::runtime_error("unknown inline image field");
+            && it.key() != QStringLiteral("alt") && it.key() != QStringLiteral("tooltip")
+            && it.key() != QStringLiteral("border")) throw std::runtime_error("unknown inline image field");
     for (const QString &key : {QStringLiteral("width_px"), QStringLiteral("height_px")}) {
         const QJsonValue axis = image.value(key); if (!present(axis)) continue;
         const double n = axis.toDouble(-1);
@@ -275,6 +277,8 @@ inline QJsonObject checkedImage(const QJsonValue &value) {
     }
     for (const QString &key : {QStringLiteral("alt"), QStringLiteral("tooltip")})
         if (present(image.value(key)) && !image.value(key).isString()) throw std::runtime_error("invalid inline image text");
+    if (image.contains(QStringLiteral("border")) && !image.value(QStringLiteral("border")).isBool())
+        throw std::runtime_error("invalid inline image border");
     return image;
 }
 inline QUrl inlineImageUrl(const QJsonObject &image) {
@@ -323,7 +327,10 @@ inline void imageDimensions(QTextImageFormat &format, const QJsonObject &image, 
         w = displayWidth * factor; h = displayHeight * factor;
     } else if (hasWidth && !hasHeight) h = w;
     else if (hasHeight && !hasWidth) w = h;
+    // Authored dimensions describe content; the image handler adds the outside border.
     format.setWidth(w); format.setHeight(h);
+    if (image.value(QStringLiteral("border")).toBool()) format.setProperty(inlineImageBorderProperty, true);
+    else format.clearProperty(inlineImageBorderProperty);
 }
 inline void normalizeImages(QTextDocument *document) {
     struct ImageEdit { int position; QTextImageFormat format; };

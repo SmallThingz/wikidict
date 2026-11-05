@@ -1,5 +1,7 @@
 #pragma once
 
+#include "SemanticHtml.hpp"
+
 #include <QAbstractTextDocumentLayout>
 #include <QHash>
 #include <QPainter>
@@ -9,8 +11,8 @@
 #include <QTextImageFormat>
 #include <memory>
 
-// Keep ordinary image layout, accessibility and raster painting in Qt. Only a
-// validated shared vector paints directly into the current device/transform.
+// Keep content sizing, accessibility and raster painting in Qt. Authored borders
+// extend the object outside its content; shared vectors paint at device resolution.
 class InlineVectorImages final : public QObject, public QTextObjectInterface {
     Q_OBJECT
     Q_INTERFACES(QTextObjectInterface)
@@ -30,23 +32,40 @@ public:
     }
 
     QSizeF intrinsicSize(QTextDocument *document, int position, const QTextFormat &format) override {
-        return fallbackOwner_ ? fallback_->intrinsicSize(document, position, format) : QSizeF();
+        if (!fallbackOwner_) return {};
+        const QSizeF content = fallback_->intrinsicSize(document, position, format);
+        return content.isValid() && format.boolProperty(SemanticHtml::inlineImageBorderProperty)
+            ? content + QSizeF(2, 2) : content;
     }
 
     void drawObject(QPainter *painter, const QRectF &rect, QTextDocument *document,
                     int position, const QTextFormat &format) override {
+        const bool border = format.boolProperty(SemanticHtml::inlineImageBorderProperty);
         const auto vector = vectors_.value(format.toImageFormat().name()).lock();
-        if (!vector) {
+        if (!border && !vector) {
             if (fallbackOwner_) fallback_->drawObject(painter, rect, document, position, format);
             return;
         }
+        const QRectF content = border ? rect.adjusted(1, 1, -1, -1) : rect;
         // No disk/network access, parse or occurrence-sized intermediate bitmap.
-        // QPainter already carries the device pixel ratio and viewport transform.
+        // Logical-pixel bands follow the same painter transform/DPR as content.
         painter->save();
         painter->setClipRect(rect, Qt::IntersectClip);
-        painter->setRenderHint(QPainter::Antialiasing);
-        if (vector->animated()) vector->setCurrentFrame(0);
-        vector->render(painter, rect);
+        if (border) {
+            const QColor color(0xea, 0xec, 0xf0);
+            painter->fillRect(QRectF(rect.left(), rect.top(), rect.width(), 1), color);
+            painter->fillRect(QRectF(rect.left(), rect.bottom() - 1, rect.width(), 1), color);
+            painter->fillRect(QRectF(rect.left(), rect.top() + 1, 1, rect.height() - 2), color);
+            painter->fillRect(QRectF(rect.right() - 1, rect.top() + 1, 1, rect.height() - 2), color);
+        }
+        painter->setClipRect(content, Qt::IntersectClip);
+        if (vector) {
+            painter->setRenderHint(QPainter::Antialiasing);
+            if (vector->animated()) vector->setCurrentFrame(0);
+            vector->render(painter, content);
+        } else if (fallbackOwner_) {
+            fallback_->drawObject(painter, content, document, position, format);
+        }
         painter->restore();
     }
 

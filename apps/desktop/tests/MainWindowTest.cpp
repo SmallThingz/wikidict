@@ -237,6 +237,155 @@ private:
     }
 
 private slots:
+    void typedInlineImageBorderRequiresBoolean() {
+        const QJsonObject absent{{"file", "Flag fixture.svg"}, {"width_px", 40}};
+        QCOMPARE(SemanticHtml::checkedImage(absent), absent);
+        for (bool value : {false, true}) {
+            QJsonObject image = absent; image.insert("border", value);
+            QCOMPARE(SemanticHtml::inlineImageData(SemanticHtml::inlineImageUrl(image)), image);
+        }
+        for (const QJsonValue &value : {QJsonValue(QJsonValue::Null), QJsonValue(1), QJsonValue("true"), QJsonValue(QJsonObject{})}) {
+            QJsonObject image = absent; image.insert("border", value);
+            QVERIFY_EXCEPTION_THROWN(SemanticHtml::inlineImageHtml(image), std::runtime_error);
+        }
+    }
+
+    void inlineImageBorderPaintsOutsideContent_data() {
+        QTest::addColumn<bool>("vectorPayload");
+        QTest::addColumn<int>("borderMode"); // 0 absent, 1 explicit false, 2 true.
+        QTest::newRow("svg-absent") << true << 0;
+        QTest::newRow("svg-false") << true << 1;
+        QTest::newRow("svg-border") << true << 2;
+        QTest::newRow("png-absent") << false << 0;
+        QTest::newRow("png-false") << false << 1;
+        QTest::newRow("png-border") << false << 2;
+    }
+
+    void inlineImageBorderPaintsOutsideContent() {
+        QFETCH(bool, vectorPayload); QFETCH(int, borderMode);
+        const bool border = borderMode == 2;
+        QSettings().setValue("media/allowImages", false);
+        QSettings().setValue("media/cacheMb", 10);
+        MainWindow window(fixture_, QStringLiteral("dog"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(900, 700); window.show();
+        const QString file = vectorPayload ? QStringLiteral("Border fixture.svg") : QStringLiteral("Border fixture.png");
+        const QString host = LibraryStorage::sourceHost(window.api_->root());
+        const QString cache = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + QStringLiteral("/media-v1");
+        QVERIFY(QDir().mkpath(cache));
+        const QString key = QString::fromLatin1(QCryptographicHash::hash((host + ":image:" + file).toUtf8(), QCryptographicHash::Sha256).toHex());
+        const QString payloadPath = cache + '/' + key + ".bin", metadataPath = cache + '/' + key + ".json";
+        const auto removeFixture = qScopeGuard([&] { QFile::remove(payloadPath); QFile::remove(metadataPath); });
+        const QColor ink(0xd1, 0x3a, 0x30);
+        if (vectorPayload) {
+            const QByteArray svg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10" viewBox="0 0 20 10"><rect width="20" height="10" fill="#d13a30"/></svg>)svg";
+            QFile payload(payloadPath); QVERIFY(payload.open(QIODevice::WriteOnly)); QCOMPARE(payload.write(svg), svg.size());
+        } else {
+            QImage raster(20, 10, QImage::Format_ARGB32_Premultiplied); raster.fill(ink);
+            QVERIFY(raster.save(payloadPath, "PNG"));
+        }
+        const QJsonObject assetMetadata{{"url", "https://upload.wikimedia.org/wikipedia/commons/a/owned-border-fixture"},
+            {"source", "https://commons.wikimedia.org/wiki/File:" + file}, {"credit", "Owned border fixture"},
+            {"intrinsic_width", 20}, {"intrinsic_height", 10}, {"original_mime", vectorPayload ? "image/svg+xml" : "image/png"}};
+        QFile metadata(metadataPath); QVERIFY(metadata.open(QIODevice::WriteOnly));
+        const QByteArray metadataBytes = QJsonDocument(assetMetadata).toJson(QJsonDocument::Compact);
+        QCOMPARE(metadata.write(metadataBytes), metadataBytes.size()); metadata.close();
+        QJsonObject image{{"file", file}, {"width_px", 40}, {"height_px", QJsonValue::Null}, {"alt", ""}, {"tooltip", "Border tooltip"}};
+        if (borderMode != 0) image.insert("border", border);
+        const QJsonObject linked{{"kind", "link"}, {"text", ""}, {"target", "File:" + file},
+            {"bold", true}, {"italic", true}, {"foreground", "#123456"}, {"image", image}};
+        QJsonObject decorative = linked; decorative.insert("kind", "text"); decorative.insert("target", "");
+        const QJsonObject section{{"level", 2}, {"title", "Outside image border"}, {"blocks", QJsonArray{
+            QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{linked}}},
+            QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{decorative}}}}}};
+        const QJsonObject entry{{"title", "Owned border fixture"}, {"kind", "language"}, {"language", window.api_->language()},
+            {"sections", QJsonArray{section}}, {"media", QJsonArray{QJsonObject{{"kind", "image"}, {"file", file}, {"caption", "Owned cached image"}}}}};
+        const auto render = [&](const QJsonObject &value) {
+            window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{value}}}).toJson(), false);
+        };
+        const auto images = [&] {
+            QList<QPair<int, QTextImageFormat>> result;
+            for (QTextBlock block = window.reading_->document()->begin(); block.isValid(); block = block.next())
+                for (auto it = block.begin(); !it.atEnd(); ++it) {
+                    const auto fragment = it.fragment();
+                    if (fragment.charFormat().isImageFormat()) result.append(qMakePair(fragment.position(), fragment.charFormat().toImageFormat()));
+                }
+            return result;
+        };
+        render(entry);
+        QCOMPARE(images().size(), 2);
+        QCOMPARE(images().first().second.intProperty(SemanticHtml::inlineImageStateProperty), int(MediaPanel::InlineImageState::Loading));
+        QTRY_COMPARE(images().first().second.intProperty(SemanticHtml::inlineImageStateProperty), int(MediaPanel::InlineImageState::Disabled));
+        auto *document = window.reading_->document();
+        auto *handler = document->documentLayout()->handlerForObject(QTextFormat::ImageObject); QVERIFY(handler);
+        auto sample = images().first();
+        QCOMPARE(sample.second.width(), 40.0); QCOMPARE(sample.second.height(), 40.0);
+        QCOMPARE(handler->intrinsicSize(document, sample.first, sample.second), border ? QSizeF(42, 42) : QSizeF(40, 40));
+        auto *permission = window.media_->findChild<QCheckBox *>("mediaAllowImages"); QVERIFY(permission); permission->setChecked(true);
+        const auto ready = [&] {
+            const auto current = images();
+            return current.size() == 2 && std::all_of(current.cbegin(), current.cend(), [](const auto &item) {
+                return item.second.intProperty(SemanticHtml::inlineImageStateProperty) == int(MediaPanel::InlineImageState::Ready);
+            });
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(ready(), 10000);
+        const auto formats = images(); sample = formats.first();
+        for (const auto &item : formats) {
+            QCOMPARE(item.second.width(), 40.0); QCOMPARE(item.second.height(), 20.0);
+            QCOMPARE(item.second.boolProperty(SemanticHtml::inlineImageBorderProperty), border);
+            if (!border) QVERIFY(!item.second.hasProperty(SemanticHtml::inlineImageBorderProperty));
+            QCOMPARE(item.second.stringProperty(QTextFormat::ImageAltText), QString());
+            QVERIFY(item.second.hasProperty(QTextFormat::ImageAltText));
+            QCOMPARE(item.second.toolTip(), QStringLiteral("Border tooltip"));
+            QVERIFY(item.second.fontWeight() >= QFont::Bold); QVERIFY(item.second.fontItalic());
+            QCOMPARE(item.second.foreground().color(), QColor("#123456"));
+            QCOMPARE(handler->intrinsicSize(document, item.first, item.second), border ? QSizeF(42, 22) : QSizeF(40, 20));
+        }
+        QCOMPARE(QUrl(formats[0].second.anchorHref()).scheme(), QStringLiteral("media-source"));
+        QCOMPARE(QUrl(formats[0].second.anchorHref()).path(QUrl::FullyDecoded), QStringLiteral("File:") + file);
+        QVERIFY(formats[0].second.isAnchor()); QVERIFY(!formats[1].second.isAnchor()); QVERIFY(formats[1].second.anchorHref().isEmpty());
+        QCOMPARE(window.currentEntry_, entry);
+        // Paint through the actual normal document handler, with its ready media
+        // asset, into exact device-pixel canvases. No new decoder or test painter.
+        const QSizeF outerSize = handler->intrinsicSize(document, sample.first, sample.second);
+        const QRectF outerRect(QPointF(2, 2), outerSize);
+        const QRectF contentRect(QPointF(border ? 3 : 2, border ? 3 : 2), QSizeF(40, 20));
+        const QColor background(0x13, 0x4f, 0x61), borderColor(0xea, 0xec, 0xf0);
+        QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+        for (int dpr : {1, 2}) {
+            const QSize pixels(qRound((outerSize.width() + 4) * dpr), qRound((outerSize.height() + 4) * dpr));
+            QImage actual(pixels, QImage::Format_ARGB32_Premultiplied); actual.setDevicePixelRatio(dpr); actual.fill(background);
+            { QPainter painter(&actual); handler->drawObject(&painter, outerRect, document, sample.first, sample.second); }
+            QImage expected(pixels, QImage::Format_ARGB32_Premultiplied); expected.setDevicePixelRatio(dpr);
+            qsizetype mismatched = 0, borderPixels = 0, contentPixels = 0;
+            for (int y = 0; y < pixels.height(); ++y) for (int x = 0; x < pixels.width(); ++x) {
+                const QPointF logical((x + 0.5) / dpr, (y + 0.5) / dpr);
+                const QColor wanted = contentRect.contains(logical) ? ink : (border && outerRect.contains(logical) ? borderColor : background);
+                expected.setPixelColor(x, y, wanted);
+                if (actual.pixelColor(x, y) != wanted) ++mismatched;
+                if (actual.pixelColor(x, y) == borderColor) ++borderPixels;
+                if (actual.pixelColor(x, y) == ink) ++contentPixels;
+            }
+            const QString stem = QStringLiteral(".tmp/ui-screenshots/desktop-inline-border-%1-%2-dpr%3").arg(vectorPayload ? "svg" : "png").arg(borderMode).arg(dpr);
+            QVERIFY(actual.save(stem + "-actual.png")); QVERIFY(expected.save(stem + "-reference.png"));
+            qInfo() << "INLINE_BORDER" << vectorPayload << borderMode << dpr << "mismatched" << mismatched << "content" << contentPixels << "border" << borderPixels;
+            QCOMPARE(contentPixels, qsizetype(40 * 20 * dpr * dpr));
+            QCOMPARE(borderPixels, qsizetype(border ? (42 * 22 - 40 * 20) * dpr * dpr : 0));
+            QCOMPARE(mismatched, qsizetype(0));
+        }
+        QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-inline-border-%1-%2-window.png").arg(vectorPayload ? "svg" : "png").arg(borderMode)));
+        if (border) {
+            QJsonObject missing = entry; missing.insert("media", QJsonArray{}); render(missing);
+            QTRY_COMPARE(images().first().second.intProperty(SemanticHtml::inlineImageStateProperty), int(MediaPanel::InlineImageState::Error));
+            sample = images().first();
+            QCOMPARE(sample.second.width(), 40.0); QCOMPARE(sample.second.height(), 40.0);
+            QCOMPARE(handler->intrinsicSize(document, sample.first, sample.second), QSizeF(42, 42));
+            QVERIFY(sample.second.boolProperty(SemanticHtml::inlineImageBorderProperty));
+            QVERIFY(window.reading_->accessibleDescription().contains(QStringLiteral("not in the dictionary's media catalogue")));
+            QCOMPARE(window.currentEntry_, missing);
+        }
+    }
+
     void largeInlineSvgKeepsFineDetailAtDeviceResolution() {
         QSettings().setValue("media/allowImages", true);
         QSettings().setValue("media/cacheMb", 10);
