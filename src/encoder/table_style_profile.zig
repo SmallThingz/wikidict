@@ -51,6 +51,55 @@ const Winners = struct {
     }
 };
 
+// Visibility is resolved only during production; no CSS enters a reader record.
+// Its own-class namespace is separate from the table ancestor paint namespace.
+const DisplaySelector = struct {
+    tag: ?[]const u8 = null,
+    id: ?[]const u8 = null,
+    classes: Scope = 0,
+    specificity: u32 = 0,
+    uncertain: bool = false,
+};
+const DisplayRule = struct { selector: DisplaySelector, css: []const u8, order: u32 };
+pub const DisplayMatch = struct { css: []const u8, specificity: u32, order: u32, uncertain: bool };
+pub const DisplayIterator = struct {
+    profile: *const Profile,
+    tag: []const u8,
+    id: []const u8,
+    classes: Scope,
+    cursor: usize = 0,
+
+    pub fn next(self: *DisplayIterator) ?DisplayMatch {
+        while (self.cursor < self.profile.display_rules.len) {
+            const rule = self.profile.display_rules[self.cursor];
+            self.cursor += 1;
+            const selector = rule.selector;
+            if (selector.tag) |tag| if (!std.ascii.eqlIgnoreCase(tag, self.tag)) continue;
+            if (selector.id) |id| if (!std.mem.eql(u8, id, self.id)) continue;
+            if (selector.classes & self.classes != selector.classes) continue;
+            return .{ .css = rule.css, .specificity = selector.specificity, .order = rule.order, .uncertain = selector.uncertain };
+        }
+        return null;
+    }
+};
+
+pub const DisplayCascade = struct {
+    hidden: ?bool = false,
+    seen: bool = false,
+    priority: Priority = .{},
+    inline_style: bool = false,
+
+    pub fn consider(self: *DisplayCascade, hidden: ?bool, important: bool, specificity: u32, order: u32, inline_style: bool) void {
+        const next: Priority = .{ .important = important, .specificity = specificity, .order = order };
+        if (self.seen) {
+            if (important == self.priority.important and inline_style != self.inline_style) {
+                if (!inline_style) return;
+            } else if (!next.wins(self.priority)) return;
+        }
+        self.* = .{ .hidden = hidden, .seen = true, .priority = next, .inline_style = inline_style };
+    }
+};
+
 /// Producer-only static table styles. No selector or declaration text enters a reader.
 pub const Profile = struct {
     arena: std.heap.ArenaAllocator,
@@ -60,6 +109,19 @@ pub const Profile = struct {
     admitted_rule_numbers: []const u32,
     has_unsupported_rules: bool,
     globally_unresolved: bool = false,
+    display_rules: []const DisplayRule = &.{},
+    display_classes: []const []const u8 = &.{},
+
+    pub fn displayRules(self: *const Profile, tag: []const u8, classes: []const u8, id: []const u8) DisplayIterator {
+        var scope: Scope = 0;
+        var tokens = std.mem.tokenizeAny(u8, classes, " \t\r\n\x0c");
+        while (tokens.next()) |token| {
+            for (self.display_classes, 0..) |name, i| if (std.mem.eql(u8, token, name)) {
+                scope |= @as(Scope, 1) << @intCast(i);
+            };
+        }
+        return .{ .profile = self, .tag = tag, .id = id, .classes = scope };
+    }
 
     pub fn deinit(self: *Profile) void {
         self.arena.deinit();
@@ -191,6 +253,121 @@ const Builder = struct {
     declaration_order: u32 = 0,
     unsupported: bool = false,
     globally_unresolved: bool = false,
+    display_rules: std.ArrayList(DisplayRule) = .empty,
+    display_classes: std.ArrayList([]const u8) = .empty,
+
+    fn displayClassBit(self: *Builder, name: []const u8) !Scope {
+        for (self.display_classes.items, 0..) |prior, i| if (std.mem.eql(u8, prior, name)) return @as(Scope, 1) << @intCast(i);
+        if (self.display_classes.items.len == 64) return error.StyleProfileLimit;
+        try self.display_classes.append(self.a, try self.a.dupe(u8, name));
+        return @as(Scope, 1) << @intCast(self.display_classes.items.len - 1);
+    }
+
+    fn displayIdentifierStart(text: []const u8, pos: usize) bool {
+        if (pos == text.len) return false;
+        if (std.ascii.isAlphabetic(text[pos]) or text[pos] == '_') return true;
+        if (text[pos] != '-' or pos + 1 == text.len) return false;
+        return std.ascii.isAlphabetic(text[pos + 1]) or text[pos + 1] == '_' or text[pos + 1] == '-';
+    }
+
+    fn displaySelector(self: *Builder, raw: []const u8, conditional: bool) !DisplaySelector {
+        const text = trim(raw);
+        // A comment inside a selector can alter token boundaries. The existing
+        // parser preserves it; do not infer a tag from its comment contents.
+        if (std.mem.indexOf(u8, text, "/*") != null)
+            return .{ .uncertain = true, .specificity = std.math.maxInt(u32) };
+        // Simple type/class/ID selectors are exact. For combinators or unknown
+        // syntax, retain only necessary conditions from the final compound.
+        // A possible override stays unknown and can never authorize hiding.
+        var start: usize = 0;
+        var depth: usize = 0;
+        var quote: u8 = 0;
+        var pos: usize = 0;
+        while (pos < text.len) : (pos += 1) {
+            const byte = text[pos];
+            if (byte == '\\') {
+                pos += 1;
+                continue;
+            }
+            if (quote != 0) {
+                if (byte == quote) quote = 0;
+                continue;
+            }
+            if (byte == '\'' or byte == '"') {
+                quote = byte;
+            } else if (byte == '(' or byte == '[') {
+                depth += 1;
+            } else if (byte == ')' or byte == ']') {
+                depth -|= 1;
+            } else if (depth == 0 and (std.ascii.isWhitespace(byte) or byte == '>' or byte == '+' or byte == '~')) {
+                start = pos + 1;
+            }
+        }
+        const tail = trim(text[start..]);
+        var result: DisplaySelector = .{ .uncertain = conditional or start != 0 };
+        var class_count: u32 = 0;
+        pos = 0;
+        if (tail.len != 0 and (std.ascii.isAlphabetic(tail[0]) or tail[0] == '_')) {
+            const end = identifierEnd(tail, 0);
+            if (end == tail.len or std.mem.indexOfScalar(u8, ".#:[", tail[end]) != null) {
+                result.tag = try self.a.dupe(u8, tail[0..end]);
+                result.specificity += 1;
+                pos = end;
+            }
+        } else if (tail.len != 0 and tail[0] == '*') pos = 1;
+        while (pos < tail.len and (tail[pos] == '.' or tail[pos] == '#')) {
+            const kind = tail[pos];
+            pos += 1;
+            if (!displayIdentifierStart(tail, pos)) {
+                result.uncertain = true;
+                break;
+            }
+            const end = identifierEnd(tail, pos);
+            // Only a proved token boundary makes this ASCII prefix a necessary
+            // condition; escapes, non-ASCII and replaced NUL can extend it.
+            if (end < tail.len and std.mem.indexOfScalar(u8, ".#:[", tail[end]) == null) break;
+            if (kind == '.') {
+                result.classes |= try self.displayClassBit(tail[pos..end]);
+                // Pack the exact lexicographic ID/class/type tuple. Only one
+                // ID and one type are admitted; larger class counts stay
+                // uncertain instead of carrying into the ID component.
+                class_count += 1;
+                if (class_count <= 65535) result.specificity += 1 << 8 else result.uncertain = true;
+            } else {
+                if (result.id != null) break;
+                result.id = try self.a.dupe(u8, tail[pos..end]);
+                result.specificity += 1 << 24;
+            }
+            pos = end;
+        }
+        if (pos != tail.len or tail.len == 0) result.uncertain = true;
+        if (result.uncertain) result.specificity = std.math.maxInt(u32);
+        return result;
+    }
+
+    fn appendDisplayRules(self: *Builder, prelude: []const u8, css: []const u8, conditional: bool, order: u32) !void {
+        var selectors: std.ArrayList(DisplaySelector) = .empty;
+        var parts = std.mem.splitScalar(u8, prelude, ',');
+        var uncertain = false;
+        while (parts.next()) |raw| {
+            if (self.display_rules.items.len + selectors.items.len == max_rules) return error.StyleProfileLimit;
+            const selector_value = try self.displaySelector(raw, conditional);
+            uncertain = uncertain or selector_value.uncertain;
+            try selectors.append(self.a, selector_value);
+        }
+        // A non-forgiving selector list is invalid if any branch is invalid.
+        // Until every branch is proved, even an exact matching branch cannot
+        // authorize hiding. Keep necessary conditions for potential overrides.
+        if (uncertain) self.unsupported = true;
+        for (selectors.items) |original| {
+            var selector_value = original;
+            if (uncertain) {
+                selector_value.uncertain = true;
+                selector_value.specificity = std.math.maxInt(u32);
+            }
+            try self.display_rules.append(self.a, .{ .selector = selector_value, .css = css, .order = order });
+        }
+    }
 
     fn classBit(self: *Builder, name: []const u8) !Scope {
         for (self.classes.items, 0..) |prior, i| if (std.mem.eql(u8, prior, name)) return @as(Scope, 1) << @intCast(i);
@@ -314,13 +491,20 @@ const Builder = struct {
             if (self.number > max_rules) return error.StyleProfileLimit;
             var declarations: std.ArrayList(Declaration) = .empty;
             var declaration_pos: usize = 0;
+            const display_order = self.declaration_order;
+            var has_display = false;
             while (try nextDeclarationAlloc(self.a, css[body_start..end], &declaration_pos)) |raw| {
+                if (std.mem.indexOfScalar(u8, raw, ':')) |colon| {
+                    const property = trim(raw[0..colon]);
+                    has_display = has_display or std.ascii.eqlIgnoreCase(property, "display") or std.ascii.eqlIgnoreCase(property, "all") or std.mem.indexOfScalar(u8, property, '\\') != null;
+                }
                 self.declaration_order += 1;
                 if (self.declaration_order >= max_rules * 1024) return error.StyleProfileLimit;
                 if (try declarationAlloc(self.a, raw, self.declaration_order)) |declaration| try declarations.append(self.a, declaration);
             }
+            if (has_display) try self.appendDisplayRules(prelude, try self.a.dupe(u8, css[body_start..end]), conditional, display_order);
             var selectors = std.mem.splitScalar(u8, prelude, ',');
-            var admitted = false;
+            var admitted = has_display;
             while (selectors.next()) |raw| {
                 if (try self.selector(raw, conditional)) |selector_value| {
                     if (self.rules.items.len == max_rules) return error.StyleProfileLimit;
@@ -344,7 +528,7 @@ pub fn parseAlloc(a: std.mem.Allocator, css: []const u8) !Profile {
     var builder: Builder = .{ .a = arena.allocator() };
     try builder.parse(css, false, 0, true);
     try builder.parse(css, false, 0, false);
-    return .{ .arena = arena, .rules = builder.rules.items, .classes = builder.classes.items, .ancestor_classes = builder.ancestor_classes.items, .admitted_rule_numbers = builder.numbers.items, .has_unsupported_rules = builder.unsupported, .globally_unresolved = builder.globally_unresolved };
+    return .{ .arena = arena, .rules = builder.rules.items, .classes = builder.classes.items, .ancestor_classes = builder.ancestor_classes.items, .admitted_rule_numbers = builder.numbers.items, .has_unsupported_rules = builder.unsupported, .globally_unresolved = builder.globally_unresolved, .display_rules = builder.display_rules.items, .display_classes = builder.display_classes.items };
 }
 
 fn isConditionalGroup(prelude: []const u8) bool {
@@ -1167,4 +1351,54 @@ test "generic CSS ancestry cannot satisfy a table qualified selector" {
     var css: std.ArrayList(u8) = .empty;
     for (0..65) |i| try css.appendSlice(a, try std.fmt.allocPrint(a, ".class{d} td {{ background:inherit; }}\n", .{i}));
     try std.testing.expectError(error.StyleProfileLimit, parseAlloc(a, css.items));
+}
+
+test "display profile uses bounded own classes independently of table paint scope" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var css: std.ArrayList(u8) = .empty;
+    for (0..64) |i| try css.appendSlice(a, try std.fmt.allocPrint(a, "table.p{d} {{ background:#fff; }}\n", .{i}));
+    try css.appendSlice(a, ".omit { display:none; } tr.omit.extra { display:table-row; } #chosen { display:block; }");
+    var profile = try parseAlloc(a, css.items);
+    defer profile.deinit();
+    try std.testing.expectEqual(@as(usize, 64), profile.classes.len);
+    try std.testing.expectEqual(@as(usize, 2), profile.display_classes.len);
+    var exact = profile.displayRules("tr", "omit extra", "");
+    try std.testing.expectEqual(@as(u32, 1 << 8), exact.next().?.specificity);
+    try std.testing.expectEqual(@as(u32, (2 << 8) + 1), exact.next().?.specificity);
+    try std.testing.expect(exact.next() == null);
+    var wrong_tag = profile.displayRules("td", "omit extra", "");
+    try std.testing.expectEqual(@as(u32, 1 << 8), wrong_tag.next().?.specificity);
+    try std.testing.expect(wrong_tag.next() == null);
+    var absent = profile.displayRules("tr", "", "");
+    try std.testing.expect(absent.next() == null);
+    var own_id = profile.displayRules("tr", "", "chosen");
+    try std.testing.expectEqual(@as(u32, 1 << 24), own_id.next().?.specificity);
+    try std.testing.expect(own_id.next() == null);
+    var too_many: std.ArrayList(u8) = .empty;
+    for (0..65) |i| try too_many.appendSlice(a, try std.fmt.allocPrint(a, ".v{d} {{ display:none; }}\n", .{i}));
+    try std.testing.expectError(error.StyleProfileLimit, parseAlloc(a, too_many.items));
+    var overflow: std.ArrayList(u8) = .empty;
+    for (0..65536) |_| try overflow.appendSlice(a, ".a");
+    try overflow.appendSlice(a, "{display:none}");
+    var overflow_profile = try parseAlloc(a, overflow.items);
+    defer overflow_profile.deinit();
+    var overflow_rules = overflow_profile.displayRules("tr", "a", "");
+    try std.testing.expect(overflow_rules.next().?.uncertain);
+}
+
+test "display cascade keeps important and inline priority distinct from selector specificity" {
+    var cascade: DisplayCascade = .{};
+    cascade.consider(true, false, 10, 1, false);
+    cascade.consider(false, false, 0, 1, true);
+    try std.testing.expectEqual(@as(?bool, false), cascade.hidden);
+    cascade.consider(true, true, 10, 2, false);
+    try std.testing.expectEqual(@as(?bool, true), cascade.hidden);
+    cascade.consider(null, true, std.math.maxInt(u32), 3, false);
+    try std.testing.expect(cascade.hidden == null);
+    cascade.consider(false, true, 0, 1, true);
+    try std.testing.expectEqual(@as(?bool, false), cascade.hidden);
+    cascade.consider(null, true, std.math.maxInt(u32), std.math.maxInt(u32), false);
+    try std.testing.expectEqual(@as(?bool, false), cascade.hidden);
 }

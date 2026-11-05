@@ -50,6 +50,28 @@ CPU_UTILIZATION_TARGET = 0.75
 RESOURCE_ADMISSION_WAIT_SECONDS = 10 * 60
 RESOURCE_ADMISSION_POLL_SECONDS = 5
 
+def workspace_root(spec=None):
+    if spec is None:
+        return PROJECT
+    if (not isinstance(spec,dict) or set(spec)!={'path','device','inode','uid','mode'}
+            or not isinstance(spec['path'],str)
+            or any(type(spec[key]) is not int for key in ('device','inode','uid','mode'))):
+        raise ValueError('Invalid workspace directory identity')
+    root=Path(spec['path'])
+    if (not root.is_absolute() or str(root)!=os.path.normpath(str(root))
+            or any(node.is_symlink() for node in (root,*root.parents)) or not root.is_dir()):
+        raise ValueError('Workspace directory is not canonical and regular')
+    actual=root.stat()
+    if ((actual.st_dev,actual.st_ino,actual.st_uid,actual.st_mode & 0o7777)
+            !=tuple(spec[key] for key in ('device','inode','uid','mode'))
+            or actual.st_uid!=os.geteuid()):
+        raise ValueError('Workspace directory identity changed')
+    if (PROJECT!=Path(__file__).resolve().parent.parent
+            or PROJECT==root or not PROJECT.is_relative_to(root/'.tmp')):
+        raise ValueError('Workspace override requires an enclosed retained producer')
+    return root
+
+
 def expansion_deadline_args(value):
     if value is None:
         return []
@@ -720,8 +742,9 @@ def discover_auxiliary_generation(root,directory,names,edition,date):
     return snapshots
 
 
-def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None):
+def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None, *, workspace=None):
     """Resolve each edition independently; never reuse another edition's captures."""
+    workspace=PROJECT if workspace is None else workspace
     captures=manifest.get('auxiliary_capture_roots',{})
     if not isinstance(captures,dict):raise ValueError('Invalid auxiliary capture roots')
     records=manifest.get('language_registries',[])
@@ -744,10 +767,10 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
         captured=captures.get(edition)
         if captured is not None:
             if not isinstance(captured,str) or Path(captured).is_absolute() or '..' in Path(captured).parts:raise ValueError('Unsafe auxiliary capture root')
-            root=(PROJECT/captured).resolve(strict=True)
+            root=(workspace/captured).resolve(strict=True)
             record=read_small_json(root/'capture.complete.json',2*1024*1024)
             if record.get('wiki')!=edition or record.get('date')!=date:raise ValueError('Auxiliary capture edition/date mismatch')
-            if not root.is_relative_to(PROJECT.resolve()):raise ValueError('Capture root escapes project')
+            if not root.is_relative_to(workspace.resolve()):raise ValueError('Capture root escapes project')
             selected=groups[(edition,date)]
             if len({item['name'] for item in selected})!=len(selected):raise ValueError('Duplicate selected source')
             source=selected_source(record.get('source_xml'),selected)
@@ -1626,7 +1649,96 @@ def timed_run(command, edition, date, phase, **fields):
         run_checked(command)
 
 
+BLOB_TOOL_NAMES = ('dict-blob-build', 'dict-blob-merge', 'dict-blob-verify')
+
+
+def require_native_tool_directory(prefix):
+    for path in (prefix/'bin',prefix,*prefix.parents):
+        if path.is_symlink() or (path.exists() and not path.is_dir()):
+            raise ValueError('Invalid native blob tool installation directory: '+str(path))
+
+
+def require_private_native_tool(path):
+    info=path.lstat()
+    if not stat.S_ISREG(info.st_mode) or not info.st_mode & 0o111 or info.st_nlink!=1:
+        raise ValueError('Native blob tool must be a private regular executable: '+str(path))
+    return info
+
+
+def native_tool_stamp(path):
+    for parent in (path.parent, *path.parent.parents):
+        if parent.is_symlink():
+            raise ValueError('Prepared native tool parent is a symlink: '+str(parent))
+    info=path.lstat()
+    if not stat.S_ISREG(info.st_mode) or not info.st_mode & 0o111 or info.st_mode & 0o222:
+        raise ValueError('Prepared native tool is not a read-only executable: '+str(path))
+    return (info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns,info.st_mode)
+
+
+class PreparedBlobTool:
+    def __init__(self, path):
+        self.path=path
+        self.stamp=native_tool_stamp(path)
+        self.sha256=sha256_file(path)
+        self.require_unchanged()
+
+    def require_unchanged(self):
+        if native_tool_stamp(self.path)!=self.stamp:
+            raise ValueError('Prepared native tool changed: '+str(self.path))
+
+    def command(self, args):
+        self.require_unchanged()
+        return [str(self.path),*args]
+
+    def run(self, args, edition, date, phase, **fields):
+        command=self.command(args)
+        try:
+            timed_run(command,edition,date,phase,**fields)
+        finally:
+            self.require_unchanged()
+
+
+def prepare_blob_tools(workspace, zig, edition, date, build_identity=None):
+    """Use the existing Zig graph once, then bind its private installed outputs."""
+    with build_phase(edition,date,'blob_tools_prepare') as outcome:
+        source=source_fingerprint()
+        compiler=shutil.which(zig)
+        if compiler is None:raise ValueError('Zig compiler executable is unavailable')
+        compiler=Path(compiler).resolve(strict=True)
+        compiler_sha=sha256_file(compiler)
+        if build_identity is not None and (source!=build_identity['source'] or compiler_sha!=build_identity['zig_sha256']):
+            raise ValueError('Native blob tool preparation source or compiler differs from build identity')
+        prefix=(workspace/'native-blob-tools').absolute()
+        require_native_tool_directory(prefix)
+        for name in BLOB_TOOL_NAMES:
+            path=prefix/'bin'/name
+            if path.exists() or path.is_symlink():require_private_native_tool(path)
+        run_checked([str(compiler),'build','-j1','-Doptimize=fast','--prefix',str(prefix),'prepare-blob-tools'])
+        if source_fingerprint()!=source or sha256_file(compiler)!=compiler_sha:
+            raise ValueError('Source or compiler changed during native blob tool preparation')
+        require_native_tool_directory(prefix)
+        tools={}
+        for name in BLOB_TOOL_NAMES:
+            path=prefix/'bin'/name
+            info=require_private_native_tool(path)
+            # These are private install copies, never the shared Zig cache artifacts.
+            path.chmod(stat.S_IMODE(info.st_mode)&~0o222)
+            tools[name]=PreparedBlobTool(path)
+        record=dict(schema='wikidict.prepared-blob-tools.v1',source=source,zig_sha256=compiler_sha,
+                    optimize='fast',tools={name:dict(path=str(tool.path),sha256=tool.sha256,
+                        bytes=tool.stamp[2],mode=stat.S_IMODE(tool.stamp[-1])) for name,tool in tools.items()})
+        # This source/artifact binding survives workspace retirement in the
+        # existing BUILD_PHASE log; no independent receipt or cache is needed.
+        outcome.update(record)
+        return tools
+
 class DeterministicPresentationFailure(subprocess.CalledProcessError):
+    def __init__(self, original, receipt):
+        super().__init__(original.returncode, original.cmd, output=original.output, stderr=original.stderr)
+        self.failure_receipt = str(receipt)
+
+
+class DeterministicBuildInputFailure(subprocess.CalledProcessError):
     def __init__(self, original, receipt):
         super().__init__(original.returncode, original.cmd, output=original.output, stderr=original.stderr)
         self.failure_receipt = str(receipt)
@@ -1710,7 +1822,7 @@ def matching_template_capture(receipt, invocation_id, invocation_args, start, li
         return False
 
 
-def matching_presentation_failure(path, invocation_id, invocation_args, start, limit):
+def matching_build_failure(path, invocation_id, invocation_args, start, limit):
     # Return the exact typed error and evidence path, never a classification from
     # exit 1, page text, or inherited stderr. Input identity is checked by caller.
     try:
@@ -1721,10 +1833,19 @@ def matching_presentation_failure(path, invocation_id, invocation_args, start, l
         row = json.loads(raw)
         if not isinstance(row, dict): return None
         if (row.get('schema') != 'wikidict.blob-build.failure.v1'
-                or row.get('error_name') != 'UncompiledPresentation'
-                or row.get('failure_class') != 'deterministic-presentation'
                 or row.get('invocation_id') != invocation_id
                 or row.get('invocation_args') != invocation_args): return None
+        if (row.get('failure_class'),row.get('error_name')) == ('deterministic-presentation','UncompiledPresentation'):
+            pass
+        elif (row.get('failure_class'),row.get('error_name')) == ('deterministic-build-input','InterfaceMessageSnapshotMissing'):
+            worker=row.get('worker');source=row.get('source')
+            if (not isinstance(worker,dict) or worker.get('stage')!='expand'
+                    or worker.get('error_name')!='InterfaceMessageSnapshotMissing'
+                    or not isinstance(worker.get('detail'),str)
+                    or not isinstance(source,dict) or type(source.get('bytes')) is not int or source['bytes']<0
+                    or not isinstance(source.get('sha256'),str)
+                    or re.fullmatch(r'[0-9a-f]{64}',source['sha256']) is None): return None
+        else: return None
         page = row.get('page')
         if (isinstance(page, dict) and type(page.get('ordinal')) is int
                 and start <= page['ordinal'] < start + limit
@@ -1732,7 +1853,7 @@ def matching_presentation_failure(path, invocation_id, invocation_args, start, l
                 and isinstance(page.get('title'), str) and bool(page['title'])
                 and type(page.get('page_id')) is int and page['page_id'] >= 0
                 and type(page.get('revision_id')) is int and page['revision_id'] >= 0):
-            return 'UncompiledPresentation',path
+            return row['error_name'],path
     except FileNotFoundError:
         if matching_template_capture(path,invocation_id,invocation_args,start,limit):
             return 'UncompiledTemplate',path.parent/'.presentation-first-failure'/'capture.json'
@@ -1851,7 +1972,7 @@ def retain_failed_shard_diagnostics(shard, evidence, *, retire_payload=True):
     return result['status'] not in ('cleanup-error','retained-completed')
 
 
-def build_shard_with_retries(command, shard, evidence_root, edition, date, start, limit, check_identity, validate):
+def build_shard_with_retries(tool, native_args, shard, evidence_root, edition, date, start, limit, check_identity, validate):
     evidence_root.mkdir(mode=0o700, exist_ok=True)
     if evidence_root.is_symlink() or not evidence_root.is_dir():
         raise ValueError('Invalid shard failure evidence directory')
@@ -1864,23 +1985,25 @@ def build_shard_with_retries(command, shard, evidence_root, edition, date, start
         evidence = evidence_root / invocation_id
         evidence.mkdir(mode=0o700)
         receipt = evidence / 'failure.json'
-        argv = list(command) + ['--failure-receipt', str(receipt), '--invocation-id', invocation_id]
-        invocation_args = argv[argv.index('--') + 1:]
+        invocation_args = list(native_args) + ['--failure-receipt', str(receipt), '--invocation-id', invocation_id]
+        argv = tool.command(invocation_args)
         (evidence / 'invocation.json').write_text(json.dumps(dict(
             invocation_id=invocation_id, argv=argv, start_page=start, pages=limit,
             attempt=attempt), sort_keys=True) + '\n')
         try:
-            timed_run(argv, edition, date, 'shard_build', start_page=start, pages=limit, attempt=attempt)
+            tool.run(invocation_args, edition, date, 'shard_build', start_page=start, pages=limit, attempt=attempt)
         except subprocess.CalledProcessError as error:
             write_failure_evidence(evidence / 'exit.json', dict(returncode=error.returncode,
                 classification='pending-input-identity'))
             # Preserve the command evidence first. Changed input identity is an
             # independent fatal condition, never a typed-data failure or retry.
             check_identity()
-            matched_failure = matching_presentation_failure(receipt, invocation_id, invocation_args, start, limit)
+            matched_failure = matching_build_failure(receipt, invocation_id, invocation_args, start, limit)
             deterministic = matched_failure is not None
+            missing_input = deterministic and matched_failure[0] == 'InterfaceMessageSnapshotMissing'
             write_failure_evidence(evidence / 'classification.json', dict(
-                deterministic_presentation=deterministic))
+                deterministic_presentation=deterministic and not missing_input,
+                deterministic_build_input=missing_input))
             # A signaled command can leave descendants alive. Archive evidence,
             # but leave new payload retirement to the controller's proven join.
             may_retry=retain_failed_shard_diagnostics(shard,evidence,
@@ -1889,7 +2012,8 @@ def build_shard_with_retries(command, shard, evidence_root, edition, date, start
                 phase_event(edition, date, 'shard_build', 'retry_suppressed', start_page=start,
                             pages=limit, attempt=attempt, failure_receipt=str(matched_failure[1]),
                             error_name=matched_failure[0])
-                raise DeterministicPresentationFailure(error, matched_failure[1]) from error
+                failure_type = DeterministicBuildInputFailure if missing_input else DeterministicPresentationFailure
+                raise failure_type(error, matched_failure[1]) from error
             if not may_retry: raise error
             last_error = error
             print(f'Retrying failed shard builder {edition} start={start} attempt={attempt}/{SHARD_RETRIES}', flush=True)
@@ -2021,6 +2145,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         nonlexical.bind_identity(workspace,build_identity,reviewed_nonlexical)
     reviewed_args = ['--reviewed-nonlexical',str(reviewed_path)] if reviewed_path is not None else []
 
+    tools=prepare_blob_tools(workspace,zig,edition,date,build_identity)
+    blob_builder=tools['dict-blob-build'];verifier=tools['dict-blob-verify'];merger=tools['dict-blob-merge']
     shards_root=raw_shards_path if raw_shards_path is not None else workspace/'shards'
     shards_root.mkdir(exist_ok=True)
     cleanup_dead_private_shards(shards_root)
@@ -2043,7 +2169,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
             break
         # A verifier failure can be a transient resource/tool failure. Preserve
         # the existing shard and stop; only invalid coverage permits deletion.
-        timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(shard)],
+        verifier.run([str(shard)],
                   edition,date,'resume_shard_verify',start_page=start,pages=limit)
         require_index_identity(index_path,index)
         marker=shard/'.verified'
@@ -2057,7 +2183,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     if not compress_shards and missing_starts and all(not (shards_root/f'{start:08d}').exists() for start in missing_starts):
         first=missing_starts[0]
         require_index_identity(index_path,index)
-        timed_run([zig,'build','-j1','-Doptimize=fast','build-blobs','--',str(dump),str(shards_root),
+        blob_builder.run([str(dump),str(shards_root),
                    '--expander-root',str(expander),'--start-page',str(first),
                    '--limit-pages',str(indexed_pages-first),
                    '--index-byte-offset',str(index['offsets'][first]),
@@ -2069,7 +2195,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
             shard=shards_root/f'{start:08d}'
             limit=min(SHARD_PAGES,indexed_pages-start)
             validate_page_coverage(shard,start,limit,index,index['offsets'][start])
-            timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(shard)],
+            verifier.run([str(shard)],
                       edition,date,'shard_verify',start_page=start,pages=limit)
             (shard/'.verified').write_text('verified\n')
             require_index_identity(index_path,index)
@@ -2090,7 +2216,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                     print(f'Rebuilding shard with invalid coverage {items[0]["wiki"]} start={start}',flush=True)
                     remove_artifact_tree(shard)
                 else:
-                    timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(shard)],
+                    verifier.run([str(shard)],
                               edition,date,'resume_shard_verify',start_page=start,pages=limit)
                     require_index_identity(index_path,index)
                     if not marker.is_file(): marker.write_text('verified\n')
@@ -2098,17 +2224,17 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                         with build_phase(edition,date,'shard_compress',start_page=start,pages=limit):
                             compress_verified_shard(shard)
                     shard_paths.append(shard);continue
-            command=[zig,'build','-j1','-Doptimize=fast','build-blobs','--',str(dump),str(shard),
+            native_args=[str(dump),str(shard),
                      '--expander-root',str(expander),'--start-page',str(start),'--limit-pages',str(limit),
                      '--index-byte-offset',str(offset),
                      '--workers',str(expansion_workers),'--now-unix',str(now_unix),*timeout_args,*reviewed_args]
             evidence_root=workspace.with_name(workspace.name+'.failures')
-            attempt=build_shard_with_retries(command,shard,evidence_root,edition,date,start,limit,
+            attempt=build_shard_with_retries(blob_builder,native_args,shard,evidence_root,edition,date,start,limit,
                 lambda:require_index_identity(index_path,index),
                 lambda:validate_page_coverage(shard,start,limit,index,offset))
             # Preserve a completed shard if verification fails because of
             # a transient tool/resource error. The next run revalidates it.
-            timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(shard)],
+            verifier.run([str(shard)],
                       edition,date,'shard_verify',start_page=start,pages=limit,attempt=attempt)
             require_index_identity(index_path,index)
             marker.write_text('verified\n')
@@ -2133,9 +2259,9 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         **({'reviewed_manifest_path':reviewed_path} if reviewed_path is not None else {}),
         **({'allow_compressed':True,'compressed_output':True} if compress_shards else {}))
     phase_event(edition,date,'merge_disk_admission','admitted',**admission)
-    timed_run([zig,'build','-j1','-Doptimize=fast','merge-blobs','--',*(['--compress-output'] if compress_shards else []),*reviewed_args,str(staging),*[str(path) for path in shard_paths]],
+    merger.run([*(['--compress-output'] if compress_shards else []),*reviewed_args,str(staging),*[str(path) for path in shard_paths]],
               edition,date,'merge',shards=len(shard_paths))
-    timed_run([zig,'build','-j1','-Doptimize=fast','verify-blobs','--',str(staging)],
+    verifier.run([str(staging)],
               edition,date,'merged_verify',shards=len(shard_paths))
     (staging/'page-coverage.json').write_text(json.dumps(coverage,sort_keys=True)+'\n')
     if reviewed_path is not None:
@@ -2838,8 +2964,9 @@ def watchdog_memory_limit_bytes(limit_mib, resource_mode):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--downloads','--in',type=Path,default=PROJECT/'data/dumps',metavar='DIR')
-    p.add_argument('--output','--out',type=Path,default=PROJECT/'data/dictionaries',metavar='DIR')
+    p.add_argument('--workspace-root-spec',help='Bound workspace directory identity for a retained producer source')
+    p.add_argument('--downloads','--in',type=Path,metavar='DIR')
+    p.add_argument('--output','--out',type=Path,metavar='DIR')
     p.add_argument('--compress-shards',action='store_true',help='Verify and compress each temporary shard before building the next; merged output remains raw until verified')
     p.add_argument('--extraction-cache-root',type=Path,metavar='DIR',help='Existing verified native extraction/object cache for one edition; cache identities are checked against fresh build inputs')
     p.add_argument('--raw-shard-root',type=Path,metavar='DIR',help='Optional raw shard volume; input/native caches and merged publication remain under --output')
@@ -2867,6 +2994,10 @@ def main():
         p.add_argument('--'+name+'-snapshot',type=Path,
                        help='Optional '+name+' snapshot; its SHA-256 is part of the shard identity')
     a=p.parse_args()
+    try: workspace=workspace_root(json.loads(a.workspace_root_spec) if a.workspace_root_spec is not None else None)
+    except (ValueError,OSError) as error: p.error(str(error))
+    if a.downloads is None:a.downloads=workspace/'data/dumps'
+    if a.output is None:a.output=workspace/'data/dictionaries'
     try: watchdog_memory_limit_bytes(a.watchdog_memory_limit_mib,a.resource_mode)
     except ValueError as error: p.error(str(error))
     configure_artifact_root(json.loads(a.artifact_root_spec) if a.artifact_root_spec is not None else None, a.output, a.raw_shard_root)
@@ -2953,7 +3084,7 @@ def main():
     if a.compress_shards: options['compress_shards']=True
     if a.extraction_cache_root is not None: options['extraction_cache_root']=a.extraction_cache_root.absolute()
     if a.interwiki_map_snapshot: options['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()
-    try: options['edition_options']=resolve_edition_snapshot_options(manifest,groups,a.downloads.resolve(),auxiliary)
+    try: options['edition_options']=resolve_edition_snapshot_options(manifest,groups,a.downloads.resolve(),auxiliary,workspace=workspace)
     except (ValueError,OSError) as error:p.error(str(error))
     if a.interwiki_map_snapshot:
         for value in options['edition_options'].values():value['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()
@@ -2969,15 +3100,19 @@ def cli():
         route.add_argument('--watchdog-memory-limit-mib',type=int)
         route.add_argument('--cpu-admission',choices=('load','affinity'),default='load')
         route.add_argument('--artifact-root-spec')
+        route.add_argument('--workspace-root-spec')
         route.add_argument('--threads',type=int)
         route.add_argument('--llvm-workers',type=int)
         route.add_argument('--jobs',type=int)
         route.add_argument('--expansion-workers',type=int)
         route.add_argument('--build-timeout-seconds',type=int)
-        route.add_argument('--output','--out',type=Path,default=PROJECT/'data/dictionaries')
+        route.add_argument('--output','--out',type=Path)
         route.add_argument('--raw-shard-root',type=Path)
         route.add_argument('--extraction-cache-root',type=Path)
         routing=route.parse_known_args()[0]
+        try: workspace=workspace_root(json.loads(routing.workspace_root_spec) if routing.workspace_root_spec is not None else None)
+        except (ValueError,OSError) as error: raise ContainmentUnavailable(str(error)) from error
+        if routing.output is None:routing.output=workspace/'data/dictionaries'
         configure_artifact_root(json.loads(routing.artifact_root_spec) if routing.artifact_root_spec is not None else None, routing.output, routing.raw_shard_root)
         mode=routing.resource_mode
         try: requested_memory=watchdog_memory_limit_bytes(routing.watchdog_memory_limit_mib,mode)
@@ -3007,9 +3142,9 @@ def cli():
                             raise ContainmentUnavailable('Authenticated watchdog memory budget differs from requested limit')
                     main()
                 else:
-                    with acquire_build_resource_lock(PROJECT/'.tmp'/'build-resources.lock'):
+                    with acquire_build_resource_lock(workspace/'.tmp'/'build-resources.lock'):
                         options={'wall_seconds':routing.build_timeout_seconds if routing.build_timeout_seconds is not None else 7200,
-                                 'disk_paths':(PROJECT/'.tmp', routing.output)}
+                                 'disk_paths':(workspace/'.tmp', routing.output)}
                         if requested_memory is not None: options['memory_limit_bytes']=requested_memory
                         if routing.watchdog_address_space=='unlimited': options['address_space_limit_bytes']='unlimited'
                         if routing.raw_shard_root is not None: options['disk_paths']+=(routing.raw_shard_root,)
@@ -3020,7 +3155,7 @@ def cli():
             elif inside_envelope():
                 main()
             else:
-                with acquire_build_resource_lock(PROJECT/'.tmp'/'build-resources.lock'):
+                with acquire_build_resource_lock(workspace/'.tmp'/'build-resources.lock'):
                     raise SystemExit(supervise())
     except ContainmentUnavailable as error:
         raise SystemExit(str(error)) from error

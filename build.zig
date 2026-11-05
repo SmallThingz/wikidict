@@ -182,6 +182,12 @@ pub fn build(b: *std.Build) void {
     blob_verify_exe.root_module.addImport("xz", blob_xz_mod);
     blob_verify_exe.root_module.link_libc = true;
 
+    const prepare_blob_tools = b.step("prepare-blob-tools", "Prepare native blob build, merge and verification tools");
+    for ([_]*std.Build.Step.Compile{ blob_build_exe, blob_merge_exe, blob_verify_exe }) |artifact| {
+        const install = b.addInstallArtifact(artifact, .{});
+        prepare_blob_tools.dependOn(&install.step);
+    }
+
     const llvm_obj = b.addObject(.{
         .name = "dict-llvm-build-core",
         .root_module = b.createModule(.{

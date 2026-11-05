@@ -1,9 +1,11 @@
 """Pure controller controls; no builder, provider, or native process is invoked."""
 import copy
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -2863,6 +2865,181 @@ class OptionalControllerSourceTimingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             result=self.exercise(Path(folder), True, broken_emit=True, fingerprint_error=failure)
             self.assertIs(result[1], failure)
+
+
+class RetainedProducerRootTests(unittest.TestCase):
+    @staticmethod
+    def directory(path):
+        st = path.stat()
+        return dict(path=str(path), device=st.st_dev, inode=st.st_ino,
+                    uid=st.st_uid, mode=st.st_mode & 0o7777)
+
+    @contextmanager
+    def retained(self):
+        import sys
+        from build_wiktionaries import AUXILIARY_SNAPSHOT_NAMES
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary) / 'workspace'
+            source = workspace / '.tmp/producer'
+            for name in ('src', 'tools', '.tmp', '.zig-cache'):
+                (source / name).mkdir(parents=True, exist_ok=True)
+            for name in ('downloads', 'state', 'output', 'raw'):
+                (workspace / 'data' / name).mkdir(parents=True)
+            names = ('build.zig', 'src/producer.zig', 'tools/corpus_controller.py',
+                     'tools/build_wiktionaries.py', 'tools/build_artifact_root.py',
+                     'tools/reviewed_language_aliases.json')
+            for name in names:
+                (source / name).write_text('# qualified fixture bytes: ' + name + '\n')
+            manifest = workspace / 'data/downloads/manifest.json'
+            write_json(manifest, {'requested_editions': ['enwiktionary']})
+            compiler = workspace / 'compiler'
+            compiler.write_bytes(b'bound compiler fixture')
+            inventory = workspace / 'data/state/source-inventory.json'
+            write_json(inventory, dict(head='a' * 40,
+                files={name: controller.descriptor(source / name) for name in names},
+                modes={name: (source / name).stat().st_mode & 0o7777 for name in names}))
+            cfg = dict(source=dict(head='a' * 40, fingerprint='f' * 64,
+                                  root=self.directory(source), inventory=controller.descriptor(inventory)),
+                       workspace_root=self.directory(workspace), compiler=controller.descriptor(compiler),
+                       manifest=controller.descriptor(manifest), date='20261001', now_unix=1791731560,
+                       expansion_timeout_ms=60000, build_timeout_seconds=7200,
+                       downloads=str(manifest.parent), state_directory=str(inventory.parent),
+                       output=str(workspace / 'data/output'), raw_shard_root=str(workspace / 'data/raw'))
+            builder = SimpleNamespace(__file__=str(source / 'tools/build_wiktionaries.py'),
+                                      PROJECT=source, source_fingerprint=lambda: 'f' * 64,
+                                      AUXILIARY_SNAPSHOT_NAMES=AUXILIARY_SNAPSHOT_NAMES)
+            origins = {'__main__': str(source / 'tools/corpus_controller.py'),
+                       'build_wiktionaries': builder.__file__,
+                       'build_artifact_root': str(source / 'tools/build_artifact_root.py')}
+            with mock.patch.object(controller, 'ROOT', source), \
+                 mock.patch.object(controller, '__file__', str(source / 'tools/corpus_controller.py')), \
+                 mock.patch.dict(sys.modules, {'build_wiktionaries': builder}), \
+                 mock.patch.object(controller, 'loaded_module_origins', side_effect=lambda: dict(origins)), \
+                 mock.patch.dict(os.environ, {'WIKIDICT_PHASE_TIMING': '0'}):
+                yield cfg, source, workspace, builder, origins
+
+    def test_retained_guard_ignores_later_canonical_changes_without_reading_git(self):
+        with self.retained() as (cfg, source, workspace, _, _), \
+             mock.patch.object(controller.subprocess, 'check_output', side_effect=AssertionError('No live Git membership')):
+            first = controller.source_guard(cfg)
+            (workspace / 'src').mkdir()
+            (workspace / 'src/new-compiler-input.zig').write_text('later main work')
+            (workspace / '.git').mkdir()
+            (workspace / '.git/index').write_bytes(b'changed canonical index')
+            (source / '.tmp/runtime.log').write_text('ordinary generated output')
+            (source / '.zig-cache/cache-item').write_bytes(b'ordinary compiler output')
+            self.assertEqual(first, controller.source_guard(cfg))
+            self.assertIsNone(first['current_head'])
+            self.assertFalse(first['canonical_worktree_consumed'])
+            self.assertEqual(first['source_root'], cfg['source']['root'])
+
+    def test_retained_guard_rejects_changed_missing_extra_aliased_and_redirected_source(self):
+        changes = ('content', 'mode', 'missing', 'extra-python', 'extra-data', 'symlink', 'directory-symlink', 'hardlink')
+        for change in changes:
+            with self.subTest(change=change), self.retained() as (cfg, source, workspace, _, _):
+                path = source / 'src/producer.zig'
+                if change == 'content': path.write_text('changed source')
+                elif change == 'mode': path.chmod(0o600 if path.stat().st_mode & 0o7777 != 0o600 else 0o644)
+                elif change == 'missing': path.unlink()
+                elif change == 'extra-python': (source / 'tools/extra.py').write_text('new consumed helper')
+                elif change == 'extra-data': (source / 'tools/extra.json').write_text('{}')
+                elif change == 'directory-symlink': (source / 'linked').symlink_to(workspace, target_is_directory=True)
+                else:
+                    external = workspace / 'external.zig'; external.write_bytes(path.read_bytes()); path.unlink()
+                    if change == 'symlink': path.symlink_to(external)
+                    else: os.link(external, path)
+                with self.assertRaises(ValueError): controller.source_guard(cfg)
+
+    def test_retained_guard_rejects_wrong_root_inventory_and_mixed_helper_imports(self):
+        for change in ('source-inode', 'workspace-inode', 'source-path', 'inventory-path',
+                       'builder-project', 'builder-origin', 'late-helper'):
+            with self.subTest(change=change), self.retained() as (cfg, source, workspace, builder, origins):
+                if change == 'source-inode': cfg['source']['root']['inode'] += 1
+                elif change == 'workspace-inode': cfg['workspace_root']['inode'] += 1
+                elif change == 'source-path':
+                    other = workspace / '.tmp/other'; other.mkdir()
+                    cfg['source']['root'] = self.directory(other)
+                elif change == 'inventory-path':
+                    p = Path(cfg['source']['inventory']['path']); value = json.loads(p.read_text())
+                    value['files']['src/producer.zig']['path'] = str(workspace / 'src/producer.zig')
+                    write_json(p, value); cfg['source']['inventory'] = controller.descriptor(p)
+                elif change == 'builder-project': builder.PROJECT = workspace
+                elif change == 'builder-origin': builder.__file__ = str(workspace / 'tools/build_wiktionaries.py')
+                else: origins['late_helper'] = str(workspace / 'tools/late_helper.py')
+                with self.assertRaises(ValueError): controller.source_guard(cfg)
+
+    def test_retained_guard_rejects_real_standard_legacy_and_external_bytecode(self):
+        import importlib.util
+        import py_compile
+        import sys
+        for kind in ('standard', 'legacy', 'external'):
+            with self.subTest(kind=kind), self.retained() as (cfg, source, workspace, _, _):
+                helper = source / 'tools/build_wiktionaries.py'
+                if kind == 'legacy':
+                    py_compile.compile(str(helper), cfile=str(helper.with_suffix('.pyc')), doraise=True)
+                elif kind == 'standard':
+                    py_compile.compile(str(helper), doraise=True)
+                else:
+                    with mock.patch.object(sys, 'pycache_prefix', str(workspace / 'external-cache')):
+                        cached = Path(importlib.util.cache_from_source(str(helper)))
+                        py_compile.compile(str(helper), doraise=True)
+                        self.assertTrue(cached.is_file())
+                        self.assertFalse(cached.is_relative_to(source))
+                        with self.assertRaisesRegex(ValueError, 'unbound Python bytecode'):
+                            controller.source_guard(cfg)
+                    continue
+                with self.assertRaisesRegex(ValueError, 'Python bytecode'):
+                    controller.source_guard(cfg)
+
+    def test_retained_guard_preserves_data_and_toolchain_boundaries(self):
+        for change in ('downloads', 'state_directory', 'output', 'raw_shard_root', 'compiler', 'fingerprint'):
+            with self.subTest(change=change), self.retained() as (cfg, source, workspace, builder, _):
+                if change == 'compiler': Path(cfg['compiler']['path']).write_bytes(b'changed compiler')
+                elif change == 'fingerprint': builder.source_fingerprint = lambda: '0' * 64
+                else: cfg[change] = str(source / 'data/escaped-role')
+                with self.assertRaises(ValueError): controller.source_guard(cfg)
+
+    def test_retained_command_uses_bound_source_and_existing_workspace_artifacts(self):
+        with self.retained() as (cfg, source, workspace, _, _):
+            argv = controller.command(cfg, 'enwiktionary', 4)
+            self.assertEqual(argv[:3], [controller.sys.executable, '-B', str(source / 'tools/build_wiktionaries.py')])
+            for flag, key in (('--downloads', 'downloads'), ('--output', 'output'), ('--raw-shard-root', 'raw_shard_root')):
+                self.assertEqual(argv[argv.index(flag) + 1], cfg[key])
+                self.assertTrue(Path(cfg[key]).is_relative_to(workspace / 'data'))
+            self.assertEqual(argv[argv.index('--zig') + 1], cfg['compiler']['path'])
+            self.assertEqual(argv[argv.index('--resource-mode') + 1], 'watchdog')
+            self.assertEqual(argv[argv.index('--watchdog-memory-limit-mib') + 1], '4096')
+            self.assertEqual(json.loads(argv[argv.index('--workspace-root-spec') + 1]), cfg['workspace_root'])
+            changed = copy.deepcopy(cfg); changed['workspace_root']['inode'] += 1
+            self.assertNotEqual(controller.production_context(cfg), controller.production_context(changed))
+
+    def test_retained_lock_paths_preserve_original_workspace_inode_checks(self):
+        with self.retained() as (cfg, source, workspace, _, _):
+            own, shared = controller.resource_lock_paths(cfg)
+            self.assertEqual(own, workspace / 'data/build-resources/corpus-controller.lock')
+            self.assertEqual(shared, workspace / '.tmp/build-resources.lock')
+            self.assertFalse(shared.is_relative_to(source))
+            with controller.Lock(shared, False) as lock:
+                inode = shared.stat().st_ino
+                lock.check()
+                # The ordinary builder, not the controller, owns this flock.
+                holder = os.open(shared, os.O_RDWR)
+                try:
+                    controller.fcntl.flock(holder, controller.fcntl.LOCK_EX | controller.fcntl.LOCK_NB)
+                    lock.check()
+                    shared.rename(shared.with_name('original.lock'))
+                    shared.write_bytes(b'')
+                    with self.assertRaises(ValueError): lock.check()
+                finally: os.close(holder)
+                self.assertEqual(shared.with_name('original.lock').stat().st_ino, inode)
+
+    def test_default_roots_and_lock_paths_remain_unchanged(self):
+        cfg = {'source': {}}
+        self.assertEqual(controller.source_roots(cfg), (controller.ROOT, controller.ROOT))
+        self.assertEqual(controller.resource_lock_paths(cfg),
+                         (controller.ROOT / 'data/build-resources/corpus-controller.lock',
+                          controller.ROOT / '.tmp/build-resources.lock'))
+        with self.assertRaises(ValueError): controller.source_roots(dict(cfg, workspace_root={}))
 
 
 if __name__ == '__main__':

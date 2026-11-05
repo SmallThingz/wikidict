@@ -21,7 +21,37 @@ import build_wiktionaries as b
 import build_resource_limits as limits
 
 
-class ShardSourceIdentityTests(unittest.TestCase):
+def fixture_blob_tool(root, name='dict-blob-build'):
+    path=root/'test-blob-tools'/name
+    path.parent.mkdir(parents=True,exist_ok=True)
+    if not path.exists():
+        path.write_bytes(b'fixture executable; native execution is mocked\n')
+        path.chmod(0o555)
+    return b.PreparedBlobTool(path)
+
+
+def blob_command(command, name):
+    native={'build-blobs':'dict-blob-build','verify-blobs':'dict-blob-verify','merge-blobs':'dict-blob-merge'}
+    return bool(command) and (Path(command[0]).name==native[name] or name in command)
+
+
+def tool_arguments(command):
+    if command and Path(command[0]).name in b.BLOB_TOOL_NAMES:return command[1:]
+    return command[command.index('--')+1:]
+
+
+class PreparedToolsFixture(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        # Existing orchestration tests mock native subprocesses. Give that path
+        # real read-only bindings while testing preparation separately below.
+        def prepare(workspace,*args,**kwargs):
+            return {name:fixture_blob_tool(workspace,name) for name in b.BLOB_TOOL_NAMES}
+        mock=patch.object(b,'prepare_blob_tools',side_effect=prepare)
+        mock.start();self.addCleanup(mock.stop)
+
+
+class ShardSourceIdentityTests(PreparedToolsFixture):
     def fixture(self, root):
         sources={
             'build.zig':b'build graph', 'build.zig.zon':b'package dependencies',
@@ -89,21 +119,21 @@ class ShardSourceIdentityTests(unittest.TestCase):
                 def run(command):
                     calls.append(list(command))
                     if 'build-dictionary' in command:
-                        dest=Path(command[command.index('--')+2]);exp=dest/'.bundle-expander';exp.mkdir(parents=True)
+                        dest=Path(tool_arguments(command)[1]);exp=dest/'.bundle-expander';exp.mkdir(parents=True)
                         (dest/'.incomplete').write_text('expander ready')
                         (exp/'page-index.tsv').write_text('0\n1\n')
                         (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
-                    elif 'build-blobs' in command:
-                        dest=Path(command[command.index('--')+2]);dest.mkdir(parents=True,exist_ok=True)
+                    elif blob_command(command,'build-blobs'):
+                        dest=Path(tool_arguments(command)[1]);dest.mkdir(parents=True,exist_ok=True)
                         write_coverage(dest,command)
-                    elif 'merge-blobs' in command:
+                    elif blob_command(command,'merge-blobs'):
                         merges.append(list(command))
                         if len(merges)==1:raise subprocess.CalledProcessError(1,command)
                         for relative,(contents,inode) in retained.items():
                             path=workspace/relative
                             self.assertEqual(path.read_bytes(),contents)
                             self.assertEqual(path.stat().st_ino,inode)
-                        args=command[command.index('--')+1:]
+                        args=tool_arguments(command)
                         if args[0]=='--compress-output':args=args[1:]
                         dest=Path(args[0]);dest.mkdir()
                         write_namespace_coverage(dest,sum(json.loads((Path(p)/'page-coverage.json').read_text())['pages_seen'] for p in args[1:]))
@@ -120,13 +150,13 @@ class ShardSourceIdentityTests(unittest.TestCase):
                                      'shards/00000000/page-coverage.json','shards/00000000/.verified',
                                      'shards/00000001/page-coverage.json','shards/00000001/.verified'):
                         path=workspace/relative;retained[relative]=(path.read_bytes(),path.stat().st_ino)
-                    first_builds=[c for c in calls if 'build-dictionary' in c or 'build-blobs' in c]
+                    first_builds=[c for c in calls if 'build-dictionary' in c or blob_command(c,'build-blobs')]
                     boundary=len(calls)
                     (root/'tools/corpus_controller.py').write_bytes(b'changed reporting only')
                     audit_after=b.source_fingerprint();self.assertNotEqual(audit_before,audit_after)
                     b.build([item],root,root/'output','zig',1,compress_shards=compressed)
-                    self.assertEqual([c for c in calls if 'build-dictionary' in c or 'build-blobs' in c],first_builds)
-                    verified={Path(c[c.index('--')+1]) for c in calls[boundary:] if 'verify-blobs' in c}
+                    self.assertEqual([c for c in calls if 'build-dictionary' in c or blob_command(c,'build-blobs')],first_builds)
+                    verified={Path(tool_arguments(c)[0]) for c in calls[boundary:] if blob_command(c,'verify-blobs')}
                     self.assertTrue({workspace/'shards/00000000',workspace/'shards/00000001'}<=verified)
                     self.assertEqual(len(merges),2)
                     self.assertFalse(workspace.exists())
@@ -224,7 +254,7 @@ class PresentationRetryPolicyTests(unittest.TestCase):
     def exercise(self, mode):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);shard=root/'00000000';calls=[];validated=[]
-            command=['zig','build','build-blobs','--','dump',str(shard),'--start-page','0','--limit-pages','2']
+            tool=fixture_blob_tool(root);command=['dump',str(shard),'--start-page','0','--limit-pages','2']
             def run(argv, *args, **kwargs):
                 calls.append(argv);shard.mkdir();(shard/'partial').write_text('retained failure bytes')
                 if len(calls)>1: return
@@ -234,24 +264,77 @@ class PresentationRetryPolicyTests(unittest.TestCase):
                     receipt.write_text(json.dumps(dict(schema='wikidict.blob-build.failure.v1',
                         error_name='OtherFailure' if mode=='unknown' else 'UncompiledPresentation',failure_class='deterministic-presentation',
                         invocation_id='old-invocation' if mode=='stale' else invocation,
-                        invocation_args=argv[argv.index('--')+1:]+(['--different-context'] if mode=='argv-mismatch' else []),
+                        invocation_args=tool_arguments(argv)+(['--different-context'] if mode=='argv-mismatch' else []),
                         page=dict(ordinal=2 if mode=='out-of-range' else 1,namespace=114,title='fixture',page_id=7,revision_id=9))))
                     if mode=='malformed': receipt.write_text('{')
                 raise subprocess.CalledProcessError(1,argv)
             with patch.object(b,'timed_run',side_effect=run):
                 if mode=='deterministic':
                     with self.assertRaises(b.DeterministicPresentationFailure) as failed:
-                        b.build_shard_with_retries(command,shard,root/'failures','enwiktionary','20261001',0,2,lambda:None,lambda:validated.append(True))
+                        b.build_shard_with_retries(tool,command,shard,root/'failures','enwiktionary','20261001',0,2,lambda:None,lambda:validated.append(True))
                     self.assertTrue(Path(failed.exception.failure_receipt).is_file())
                     self.assertEqual(len(calls),1);self.assertEqual(validated,[])
                     self.assertEqual((shard/'partial').read_text(),'retained failure bytes')
                 else:
-                    self.assertEqual(b.build_shard_with_retries(command,shard,root/'failures','enwiktionary','20261001',0,2,lambda:None,lambda:validated.append(True)),2)
+                    self.assertEqual(b.build_shard_with_retries(tool,command,shard,root/'failures','enwiktionary','20261001',0,2,lambda:None,lambda:validated.append(True)),2)
                     self.assertEqual(len(calls),2);self.assertEqual(validated,[True])
             evidence=list((root/'failures').iterdir())
             self.assertEqual(len(evidence),1)
             self.assertEqual(json.loads((evidence[0]/'exit.json').read_text())['returncode'],1)
             self.assertTrue((evidence[0]/'invocation.json').is_file())
+
+    def test_missing_interface_input_stops_once_only_with_bound_typed_evidence(self):
+        modes=('matching','stale','argv','page','class','name','worker-name','stage','detail','source-hash','source-size','missing-source')
+        for mode in modes:
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);shard=root/'shard';calls=[];checked=[];validated=[];errors=[]
+                tool=fixture_blob_tool(root);command=['dump',str(shard)]
+                def run(argv,*args,**kwargs):
+                    calls.append(argv);shard.mkdir();(shard/'partial').write_bytes(b'retained bytes')
+                    if len(calls)>1:return
+                    receipt=Path(argv[argv.index('--failure-receipt')+1])
+                    row=dict(schema='wikidict.blob-build.failure.v1',error_name='InterfaceMessageSnapshotMissing',
+                        failure_class='deterministic-build-input',invocation_id=argv[argv.index('--invocation-id')+1],
+                        invocation_args=tool_arguments(argv),page=dict(ordinal=1,namespace=0,title='fixture',page_id=7,revision_id=9),
+                        source=dict(bytes=12,sha256=hashlib.sha256(b'{{int:Show}}').hexdigest()),
+                        worker=dict(stage='expand',error_name='InterfaceMessageSnapshotMissing',detail='InterfaceMessageSnapshotMissing'))
+                    if mode=='stale':row['invocation_id']='old'
+                    if mode=='argv':row['invocation_args']=row['invocation_args']+['changed']
+                    if mode=='page':row['page']['ordinal']=2
+                    if mode=='class':row['failure_class']='deterministic-presentation'
+                    if mode=='name':row['error_name']='ExampleLuaError'
+                    if mode=='worker-name':row['worker']['error_name']='ExampleLuaError'
+                    if mode=='stage':row['worker']['stage']='assets'
+                    if mode=='detail':row['worker']['detail']=None
+                    if mode=='source-hash':row['source']['sha256']='not-a-hash'
+                    if mode=='source-size':row['source']['bytes']=True
+                    if mode=='missing-source':del row['source']
+                    receipt.write_text(json.dumps(row))
+                    error=subprocess.CalledProcessError(23,argv,output=b'original stdout',
+                        stderr=b'interface message missing: language=it key=show\noriginal stderr')
+                    errors.append(error);raise error
+                with patch.object(b,'timed_run',side_effect=run):
+                    if mode=='matching':
+                        with self.assertRaises(b.DeterministicBuildInputFailure) as failed:
+                            b.build_shard_with_retries(tool,command,shard,root/'failures','itwiktionary','20261001',0,2,
+                                lambda:checked.append(True),lambda:validated.append(True))
+                        self.assertIs(failed.exception.__cause__,errors[0])
+                        self.assertEqual(failed.exception.returncode,23)
+                        self.assertEqual(failed.exception.cmd,calls[0])
+                        self.assertEqual(Path(calls[0][0]).name,'dict-blob-build')
+                        self.assertNotIn('--',calls[0])
+                        self.assertEqual(failed.exception.output,errors[0].output)
+                        self.assertEqual(failed.exception.stderr,errors[0].stderr)
+                        self.assertEqual(len(calls),1);self.assertEqual(checked,[True]);self.assertEqual(validated,[])
+                        self.assertEqual((shard/'partial').read_bytes(),b'retained bytes')
+                        receipt=Path(failed.exception.failure_receipt)
+                        self.assertEqual(json.loads(receipt.read_text())['worker']['error_name'],'InterfaceMessageSnapshotMissing')
+                        self.assertEqual(json.loads((receipt.parent/'classification.json').read_text()),
+                            dict(deterministic_presentation=False,deterministic_build_input=True))
+                    else:
+                        self.assertEqual(b.build_shard_with_retries(tool,command,shard,root/'failures','itwiktionary','20261001',0,2,
+                            lambda:checked.append(True),lambda:validated.append(True)),2)
+                        self.assertEqual(len(calls),2);self.assertEqual(checked,[True,True]);self.assertEqual(validated,[True])
 
     def test_matching_presentation_failure_stops_and_preserves(self):
         self.exercise('deterministic')
@@ -273,7 +356,7 @@ class PresentationRetryPolicyTests(unittest.TestCase):
     def test_evidence_and_logging_write_errors_keep_typed_failure_and_identity_check(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);shard=root/'00000000';calls=[];checked=[];original=[];failed_writes=[]
-            command=['zig','build','build-blobs','--','dump',str(shard)]
+            tool=fixture_blob_tool(root);command=['dump',str(shard)]
             real_write_text=Path.write_text
             def write_text(path, text, *args, **kwargs):
                 if path.name in ('exit.json','classification.json'):
@@ -285,7 +368,7 @@ class PresentationRetryPolicyTests(unittest.TestCase):
                 receipt=Path(argv[argv.index('--failure-receipt')+1])
                 receipt.write_text(json.dumps(dict(schema='wikidict.blob-build.failure.v1',
                     error_name='UncompiledPresentation',failure_class='deterministic-presentation',
-                    invocation_id=argv[argv.index('--invocation-id')+1],invocation_args=argv[argv.index('--')+1:],
+                    invocation_id=argv[argv.index('--invocation-id')+1],invocation_args=tool_arguments(argv),
                     page=dict(ordinal=1,namespace=114,title='fixture',page_id=7,revision_id=9))))
                 error=subprocess.CalledProcessError(23,argv,output=b'original stdout',stderr=b'original stderr')
                 original.append(error)
@@ -295,7 +378,7 @@ class PresentationRetryPolicyTests(unittest.TestCase):
                  patch.object(b,'phase_event',wraps=b.phase_event) as event, \
                  patch('builtins.print',side_effect=OSError('simulated stderr error')):
                 with self.assertRaises(b.DeterministicPresentationFailure) as failed:
-                    b.build_shard_with_retries(command,shard,root/'failures','enwiktionary','20261001',0,2,
+                    b.build_shard_with_retries(tool,command,shard,root/'failures','enwiktionary','20261001',0,2,
                         lambda:checked.append(True),lambda:self.fail('failed builder cannot validate'))
             self.assertEqual(checked,[True]);self.assertEqual(len(calls),1)
             event.assert_called_once()
@@ -312,7 +395,7 @@ class PresentationRetryPolicyTests(unittest.TestCase):
     def test_coverage_evidence_write_error_keeps_original_coverage_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);shard=root/'00000000';checked=[];writes=[]
-            command=['zig','build','build-blobs','--','dump',str(shard)]
+            tool=fixture_blob_tool(root);command=['dump',str(shard)]
             coverage_error=ValueError('original invalid coverage')
             real_write_text=Path.write_text
             def write_text(path, text, *args, **kwargs):
@@ -325,7 +408,7 @@ class PresentationRetryPolicyTests(unittest.TestCase):
             stderr=io.StringIO()
             with patch.object(b,'timed_run',side_effect=run),patch.object(Path,'write_text',new=write_text),contextlib.redirect_stderr(stderr):
                 with self.assertRaises(ValueError) as failed:
-                    b.build_shard_with_retries(command,shard,root/'failures','enwiktionary','20261001',0,2,
+                    b.build_shard_with_retries(tool,command,shard,root/'failures','enwiktionary','20261001',0,2,
                         lambda:checked.append(True),validate)
             self.assertIs(failed.exception,coverage_error)
             self.assertEqual(len(checked),b.SHARD_RETRIES)
@@ -339,7 +422,7 @@ class PresentationRetryPolicyTests(unittest.TestCase):
     def test_changed_input_after_failure_preserves_receipt_and_bypasses_classification(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);shard=root/'00000000';calls=[]
-            command=['zig','build','build-blobs','--','dump',str(shard),'--start-page','0','--limit-pages','2']
+            tool=fixture_blob_tool(root);command=['dump',str(shard),'--start-page','0','--limit-pages','2']
             identity_error=ValueError('Page index identity changed')
             def run(argv, *args, **kwargs):
                 calls.append(argv);shard.mkdir();(shard/'partial').write_text('failed bytes')
@@ -347,14 +430,14 @@ class PresentationRetryPolicyTests(unittest.TestCase):
                 receipt.write_text(json.dumps(dict(schema='wikidict.blob-build.failure.v1',
                     error_name='UncompiledPresentation',failure_class='deterministic-presentation',
                     invocation_id=argv[argv.index('--invocation-id')+1],
-                    invocation_args=argv[argv.index('--')+1:],
+                    invocation_args=tool_arguments(argv),
                     page=dict(ordinal=1,namespace=114,title='fixture',page_id=7,revision_id=9))))
                 raise subprocess.CalledProcessError(1,argv)
             with patch.object(b,'timed_run',side_effect=run), \
-                 patch.object(b,'matching_presentation_failure') as classify:
+                 patch.object(b,'matching_build_failure') as classify:
                 def changed_identity(): raise identity_error
                 with self.assertRaises(ValueError) as failed:
-                    b.build_shard_with_retries(command,shard,root/'failures','enwiktionary','20261001',0,2,changed_identity,lambda:None)
+                    b.build_shard_with_retries(tool,command,shard,root/'failures','enwiktionary','20261001',0,2,changed_identity,lambda:None)
                 self.assertIs(failed.exception,identity_error)
                 classify.assert_not_called()
             self.assertEqual(len(calls),1)
@@ -366,7 +449,7 @@ class PresentationRetryPolicyTests(unittest.TestCase):
             self.assertEqual((shard/'partial').read_text(),'failed bytes')
     def template_capture(self, receipt, argv):
         capture=receipt.parent/'.presentation-first-failure';capture.mkdir()
-        args=argv[argv.index('--')+1:];identity=argv[argv.index('--invocation-id')+1]
+        args=tool_arguments(argv);identity=argv[argv.index('--invocation-id')+1]
         digest=hashlib.sha256()
         for arg in args:
             data=arg.encode();digest.update(len(data).to_bytes(8,'little'));digest.update(data)
@@ -393,7 +476,7 @@ class PresentationRetryPolicyTests(unittest.TestCase):
     def exercise_template_capture(self, change=None, identity_failure=False, no_capture=False):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);shard=root/'00000000';calls=[];captures=[];validated=[]
-            command=['zig','build','build-blobs','--','dump',str(shard),'--expander-root','bundle','--start-page','0','--limit-pages','2']
+            tool=fixture_blob_tool(root);command=['dump',str(shard),'--expander-root','bundle','--start-page','0','--limit-pages','2']
             def run(argv,*args,**kwargs):
                 calls.append(argv);shard.mkdir();(shard/'partial').write_text('retained failure bytes')
                 if len(calls)>1:return
@@ -407,14 +490,14 @@ class PresentationRetryPolicyTests(unittest.TestCase):
                 if identity_failure:raise ValueError('input identity changed')
             with patch.object(b,'timed_run',side_effect=run),patch.object(b,'phase_event') as event:
                 if identity_failure:
-                    with patch.object(b,'matching_presentation_failure') as classify:
+                    with patch.object(b,'matching_build_failure') as classify:
                         with self.assertRaisesRegex(ValueError,'input identity changed'):
-                            b.build_shard_with_retries(command,shard,root/'failures','bgwiktionary','20261001',0,2,check,lambda:None)
+                            b.build_shard_with_retries(tool,command,shard,root/'failures','bgwiktionary','20261001',0,2,check,lambda:None)
                         classify.assert_not_called()
                     self.assertEqual(len(calls),1)
                 elif change is None and not no_capture:
                     with self.assertRaises(b.DeterministicPresentationFailure) as failed:
-                        b.build_shard_with_retries(command,shard,root/'failures','bgwiktionary','20261001',0,2,check,lambda:validated.append(True))
+                        b.build_shard_with_retries(tool,command,shard,root/'failures','bgwiktionary','20261001',0,2,check,lambda:validated.append(True))
                     self.assertEqual(len(calls),1);self.assertEqual(validated,[])
                     self.assertEqual(failed.exception.failure_receipt,str(captures[0]))
                     self.assertEqual(failed.exception.returncode,1)
@@ -422,7 +505,7 @@ class PresentationRetryPolicyTests(unittest.TestCase):
                     self.assertEqual(json.loads((captures[0].parents[1]/'classification.json').read_text())['deterministic_presentation'],True)
                     self.assertEqual((shard/'partial').read_text(),'retained failure bytes')
                 else:
-                    self.assertEqual(b.build_shard_with_retries(command,shard,root/'failures','bgwiktionary','20261001',0,2,check,lambda:validated.append(True)),2)
+                    self.assertEqual(b.build_shard_with_retries(tool,command,shard,root/'failures','bgwiktionary','20261001',0,2,check,lambda:validated.append(True)),2)
                     self.assertEqual(len(calls),2);self.assertEqual(validated,[True])
 
     def test_complete_typed_template_capture_stops_first_identical_retry(self):
@@ -596,7 +679,7 @@ class FailedShardPayloadCleanupTests(unittest.TestCase):
                 (shard/'fallback-pages.jsonl').write_bytes(b'exact fallback')
             with patch.object(b,'timed_run',side_effect=run):
                 with self.assertRaises(ValueError) as failed:
-                    b.build_shard_with_retries(['zig','build','build-blobs','--','dump',str(shard)],shard,
+                    b.build_shard_with_retries(fixture_blob_tool(root),['dump',str(shard)],shard,
                         root/'failures','testwiktionary','20261001',0,2,lambda:None,
                         lambda:(_ for _ in ()).throw(error))
             self.assertIs(failed.exception,error)
@@ -621,7 +704,7 @@ class FailedShardPayloadCleanupTests(unittest.TestCase):
                     errors.append(error); raise error
                 with patch.object(b,'timed_run',side_effect=run):
                     with self.assertRaises(subprocess.CalledProcessError) as failed:
-                        b.build_shard_with_retries(['zig','build','build-blobs','--','dump',str(shard)],shard,
+                        b.build_shard_with_retries(fixture_blob_tool(root),['dump',str(shard)],shard,
                             root/'failures','testwiktionary','20261001',0,2,lambda:None,
                             lambda:self.fail('no validation after command failure'))
                 self.assertIs(failed.exception,errors[-1]); self.assertEqual(len(calls),b.SHARD_RETRIES)
@@ -637,19 +720,19 @@ class FailedShardPayloadCleanupTests(unittest.TestCase):
     def test_matching_failure_keeps_primary_error_and_archives_before_payload_removal(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);shard=root/'00000000';original=[];calls=[]
-            command=['zig','build','build-blobs','--','dump',str(shard),'--start-page','0','--limit-pages','2']
+            tool=fixture_blob_tool(root);command=['dump',str(shard),'--start-page','0','--limit-pages','2']
             def run(argv,*args,**kwargs):
                 calls.append(argv); (shard/'.spool').mkdir(parents=True); (shard/'languages').mkdir()
                 (shard/'.spool/lang-00.tmp').write_bytes(b'disposable'); (shard/'languages'/('a'*64+'.wikblb')).write_bytes(b'disposable blob')
                 (shard/'fallback-pages.jsonl').write_bytes(b'exact fallback')
                 receipt=Path(argv[argv.index('--failure-receipt')+1]); receipt.write_text(json.dumps(dict(
                     schema='wikidict.blob-build.failure.v1',error_name='UncompiledPresentation',failure_class='deterministic-presentation',
-                    invocation_id=argv[argv.index('--invocation-id')+1],invocation_args=argv[argv.index('--')+1:],
+                    invocation_id=argv[argv.index('--invocation-id')+1],invocation_args=tool_arguments(argv),
                     page=dict(ordinal=1,namespace=0,title='fixture',page_id=7,revision_id=9))))
                 error=subprocess.CalledProcessError(1,argv,output=b'original stdout',stderr=b'original stderr'); original.append(error); raise error
             with patch.object(b,'timed_run',side_effect=run):
                 with self.assertRaises(b.DeterministicPresentationFailure) as failed:
-                    b.build_shard_with_retries(command,shard,root/'failures','testwiktionary','20261001',0,2,lambda:None,lambda:self.fail('no validation on failed builder'))
+                    b.build_shard_with_retries(tool,command,shard,root/'failures','testwiktionary','20261001',0,2,lambda:None,lambda:self.fail('no validation on failed builder'))
             self.assertEqual(len(calls),1); self.assertIs(failed.exception.__cause__,original[0]); self.assertEqual(failed.exception.stderr,b'original stderr')
             evidence=Path(failed.exception.failure_receipt).parent
             self.assertFalse((shard/'.spool/lang-00.tmp').exists()); self.assertFalse((shard/'languages'/('a'*64+'.wikblb')).exists())
@@ -1349,7 +1432,7 @@ class SmallestFirstSchedulerTests(unittest.TestCase):
                 self.assertEqual([('aawiktionary', '20261001')], failures)
 
 
-class BuildTest(unittest.TestCase):
+class BuildTest(PreparedToolsFixture):
     def test_main_routes_interwiki_and_dated_auxiliary_snapshot_flags(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
@@ -1488,13 +1571,13 @@ class BuildTest(unittest.TestCase):
             cache=workspace/'input';cache.mkdir();(cache/'.complete.json').write_text(json.dumps({'source_pages':2}))
             events=[]
             def run(command):
-                if 'build-blobs' in command:
+                if blob_command(command,'build-blobs'):
                     self.assertNotIn('--shard-pages',command)
-                    dest=Path(command[command.index('--')+2]);start=int(command[command.index('--start-page')+1])
+                    dest=Path(tool_arguments(command)[1]);start=int(command[command.index('--start-page')+1])
                     if start: self.assertFalse((dest.parent/'00000000/aliases.wikblb').exists());self.assertTrue((dest.parent/'00000000/aliases.wikblb.xz').exists())
                     dest.mkdir();write_coverage(dest,command);(dest/'aliases.wikblb').write_bytes(b'WIKBLB08\x08alias')
                     events.append(('build',start))
-                elif 'verify-blobs' in command:events.append(('verify',Path(command[-1]).name))
+                elif blob_command(command,'verify-blobs'):events.append(('verify',Path(command[-1]).name))
             def encode(path,block_size,workers):
                 self.assertEqual((block_size,workers),(1024*1024,1));self.assertEqual(events[-1][0],'verify')
                 Path(str(path)+'.xz').write_bytes(lzma.compress(path.read_bytes()));events.append(('compress',path.parent.name))
@@ -1516,13 +1599,13 @@ class BuildTest(unittest.TestCase):
                 cache=workspace/'input';cache.mkdir();(cache/'.complete.json').write_text(json.dumps({'source_pages':1}))
                 staging=root/'staging';events=[];payload=b'WIKBLB08\x08alias'
                 def run(command):
-                    if 'build-blobs' in command:
-                        dest=Path(command[command.index('--')+2]);dest.mkdir();write_coverage(dest,command)
+                    if blob_command(command,'build-blobs'):
+                        dest=Path(tool_arguments(command)[1]);dest.mkdir();write_coverage(dest,command)
                         (dest/'aliases.wikblb').write_bytes(payload)
-                    elif 'merge-blobs' in command:
-                        args=command[command.index('--')+1:];self.assertEqual(args[0],'--compress-output');self.assertEqual(Path(args[1]),staging)
+                    elif blob_command(command,'merge-blobs'):
+                        args=tool_arguments(command);self.assertEqual(args[0],'--compress-output');self.assertEqual(Path(args[1]),staging)
                         staging.mkdir();write_namespace_coverage(staging,1);(staging/'aliases.wikblb.xz').write_bytes(lzma.compress(payload));events.append('merge')
-                    elif 'verify-blobs' in command and Path(command[-1])==staging:
+                    elif blob_command(command,'verify-blobs') and Path(command[-1])==staging:
                         events.append('verify')
                         if verify_failure:raise ValueError('merged verification failed')
                 def encode(path,block_size,workers):Path(str(path)+'.xz').write_bytes(lzma.compress(path.read_bytes()))
@@ -1553,10 +1636,10 @@ class BuildTest(unittest.TestCase):
             calls=[]
             def run(command):
                 calls.append(command)
-                if 'build-blobs' in command:
-                    dest=Path(command[command.index('--')+2]);dest.mkdir(exist_ok=True)
+                if blob_command(command,'build-blobs'):
+                    dest=Path(tool_arguments(command)[1]);dest.mkdir(exist_ok=True)
                     write_coverage(dest,command)
-                elif 'merge-blobs' in command:
+                elif blob_command(command,'merge-blobs'):
                     self.fail('Native merge must not start without admitted disk space')
             with patch.object(b,'run_checked',side_effect=run), \
                  patch('build_disk_limits.os.statvfs',return_value=SimpleNamespace(f_bavail=0,f_frsize=4096)):
@@ -1568,7 +1651,7 @@ class BuildTest(unittest.TestCase):
             self.assertEqual(json.loads((shard/'page-coverage.json').read_text())['pages_seen'],1)
             self.assertTrue((shard/'namespace-coverage.json').is_file())
             self.assertFalse((root/'staging').exists())
-            self.assertFalse(any('merge-blobs' in command for command in calls))
+            self.assertFalse(any(blob_command(command,'merge-blobs') for command in calls))
 
     def test_sharded_expansion_workers_do_not_widen_compiler_workers(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1584,15 +1667,15 @@ class BuildTest(unittest.TestCase):
                     exp.mkdir(parents=True,exist_ok=True)
                     (exp/'page-index.tsv').write_text('# index\n\np0\n')
                     (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
-                if 'build-blobs' in command:
-                    dest=Path(command[command.index('--')+2]);dest.mkdir(exist_ok=True);write_coverage(dest,command)
-                if 'merge-blobs' in command:
-                    dest=Path(command[command.index('--')+1]);dest.mkdir();write_coverage(dest)
+                if blob_command(command,'build-blobs'):
+                    dest=Path(tool_arguments(command)[1]);dest.mkdir(exist_ok=True);write_coverage(dest,command)
+                if blob_command(command,'merge-blobs'):
+                    dest=Path(tool_arguments(command)[0]);dest.mkdir();write_coverage(dest)
             with patch.object(b,'run_checked',side_effect=run):
                 b.build_sharded(root/'dump',root/'staging',workspace,root/'registry','zig',4,
                                 [{'wiki':'test','date':'20260901'}],123,8,expansion_timeout_ms=600000)
             compiler=next(c for c in calls if 'build-dictionary' in c)
-            blob=next(c for c in calls if 'build-blobs' in c)
+            blob=next(c for c in calls if blob_command(c,'build-blobs'))
             self.assertEqual(compiler[compiler.index('--llvm-workers')+1],'4')
             self.assertEqual(compiler[compiler.index('--parse-workers')+1],'4')
             self.assertEqual(compiler[compiler.index('--page-workers')+1],'4')
@@ -1682,13 +1765,13 @@ class BuildTest(unittest.TestCase):
             calls=[]
             def run(command):
                 calls.append(command)
-                if 'build-blobs' in command:
-                    dest=Path(command[command.index('--')+2]);dest.mkdir(exist_ok=True);write_coverage(dest,command)
-                if 'merge-blobs' in command:
-                    dest=Path(command[command.index('--')+1]);dest.mkdir();write_coverage(dest)
+                if blob_command(command,'build-blobs'):
+                    dest=Path(tool_arguments(command)[1]);dest.mkdir(exist_ok=True);write_coverage(dest,command)
+                if blob_command(command,'merge-blobs'):
+                    dest=Path(tool_arguments(command)[0]);dest.mkdir();write_coverage(dest)
             with patch.object(b,'run_checked',side_effect=run):
                 b.build_sharded(root/'dump',root/'staging',workspace,root/'registry','zig',8,[{'wiki':'test','date':'20260901'}],123)
-            builds=[c for c in calls if 'build-blobs' in c]
+            builds=[c for c in calls if blob_command(c,'build-blobs')]
             self.assertEqual(len(builds),1)
             self.assertEqual(builds[0][builds[0].index('--workers')+1],'4')
             self.assertEqual(builds[0][builds[0].index('--index-byte-offset')+1],'0')
@@ -1729,7 +1812,7 @@ class BuildTest(unittest.TestCase):
             calls=[]
             def run(command):
                 calls.append(command)
-                if 'verify-blobs' in command:
+                if blob_command(command,'verify-blobs'):
                     raise subprocess.CalledProcessError(137,command)
                 self.fail('No rebuild or merge should follow a verifier tool failure')
             with patch.object(b,'run_checked',side_effect=run):
@@ -1738,7 +1821,7 @@ class BuildTest(unittest.TestCase):
                                     [{'wiki':'test','date':'20260901'}],123)
             self.assertEqual((shard/'sentinel').read_text(),'retain')
             self.assertTrue((shard/'page-coverage.json').is_file())
-            self.assertFalse(any('build-blobs' in c or 'merge-blobs' in c for c in calls))
+            self.assertFalse(any(blob_command(c,'build-blobs') or blob_command(c,'merge-blobs') for c in calls))
             with patch.object(b,'require_index_identity',side_effect=ValueError('index changed')):
                 with self.assertRaisesRegex(ValueError,'index changed'):
                     b.build_sharded(root/'dump',root/'staging',workspace,root/'registry','zig',4,
@@ -1767,19 +1850,19 @@ class BuildTest(unittest.TestCase):
             calls=[]
             def run(command):
                 calls.append(command)
-                if 'build-blobs' in command:
-                    dest=Path(command[command.index('--')+2]);dest.mkdir()
+                if blob_command(command,'build-blobs'):
+                    dest=Path(tool_arguments(command)[1]);dest.mkdir()
                     write_coverage(dest,command)
-                elif 'verify-blobs' in command and str(shards/'00000002') in command:
+                elif blob_command(command,'verify-blobs') and str(shards/'00000002') in command:
                     raise subprocess.CalledProcessError(137,command)
-                elif 'merge-blobs' in command:
+                elif blob_command(command,'merge-blobs'):
                     self.fail('Merge must not run after a verifier failure')
             with patch.object(b,'SHARD_PAGES',1),patch.object(b,'run_checked',side_effect=run):
                 with self.assertRaises(subprocess.CalledProcessError):
                     b.build_sharded(root/'dump',root/'staging',workspace,root/'registry','zig',4,
                                     [{'wiki':'test','date':'20260901'}],123)
             self.assertEqual((shards/'00000002/sentinel').read_text(),'retain')
-            self.assertFalse(any('merge-blobs' in c for c in calls))
+            self.assertFalse(any(blob_command(c,'merge-blobs') for c in calls))
 
     def test_verified_publication_missing_coverage_preserves_staging(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2368,19 +2451,19 @@ class BuildTest(unittest.TestCase):
             merges=[]
             def run(command):
                 if 'build-dictionary' in command:
-                    dest=Path(command[command.index('--')+2]);exp=dest/'.bundle-expander';exp.mkdir(parents=True)
+                    dest=Path(tool_arguments(command)[1]);exp=dest/'.bundle-expander';exp.mkdir(parents=True)
                     (dest/'.incomplete').write_text('expander ready')
                     (exp/'page-index.tsv').write_text('0\n1\n')
                     (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
-                elif 'build-blobs' in command:
-                    dest=Path(command[command.index('--')+2]);dest.mkdir(parents=True,exist_ok=True)
+                elif blob_command(command,'build-blobs'):
+                    dest=Path(tool_arguments(command)[1]);dest.mkdir(parents=True,exist_ok=True)
                     write_coverage(dest,command)
-                elif 'merge-blobs' in command:
+                elif blob_command(command,'merge-blobs'):
                     merges.append(command)
                     if len(merges)==1:raise subprocess.CalledProcessError(1,command)
-                    dest=Path(command[command.index('--')+1]);dest.mkdir()
+                    dest=Path(tool_arguments(command)[0]);dest.mkdir()
                     (dest/'fallback-pages.jsonl').write_text('')
-                    if 'merge-blobs' in command:write_namespace_coverage(dest,sum(json.loads((Path(x)/'page-coverage.json').read_text())['pages_seen'] for x in command[command.index('--')+2:]))
+                    if blob_command(command,'merge-blobs'):write_namespace_coverage(dest,sum(json.loads((Path(x)/'page-coverage.json').read_text())['pages_seen'] for x in tool_arguments(command)[1:]))
             real_stage=b.stage_seekable_dump
             with patch.object(b,'PROJECT',root), \
                  patch.object(b,'SHARD_PAGES',1),patch.object(b,'source_fingerprint',return_value='source'), \
@@ -2410,31 +2493,39 @@ class BuildTest(unittest.TestCase):
             calls=[]
             def run(command):
                 calls.append(command)
-                step=next((x for x in ('build-dictionary','build-blobs','verify-blobs','merge-blobs') if x in command),None)
+                step=next((x for x in ('build-dictionary','build-blobs','verify-blobs','merge-blobs') if (x in command if x=='build-dictionary' else blob_command(command,x))),None)
                 if step=='build-dictionary':
-                    dest=Path(command[command.index('--')+2]);exp=dest/'.bundle-expander';exp.mkdir(parents=True)
+                    dest=Path(tool_arguments(command)[1]);exp=dest/'.bundle-expander';exp.mkdir(parents=True)
                     (dest/'.incomplete').write_text('expander ready')
                     (exp/'page-index.tsv').write_text('0\n1\n')
                     (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
                 elif step=='build-blobs':
-                    dest=Path(command[command.index('--')+2]);dest.mkdir(parents=True,exist_ok=True)
+                    dest=Path(tool_arguments(command)[1]);dest.mkdir(parents=True,exist_ok=True)
                     write_coverage(dest,command)
                     (dest/'fallback-pages.jsonl').write_text('')
-                    if 'merge-blobs' in command:write_namespace_coverage(dest,sum(json.loads((Path(x)/'page-coverage.json').read_text())['pages_seen'] for x in command[command.index('--')+2:]))
+                    if blob_command(command,'merge-blobs'):write_namespace_coverage(dest,sum(json.loads((Path(x)/'page-coverage.json').read_text())['pages_seen'] for x in tool_arguments(command)[1:]))
                     (dest/'languages.tsv').write_text('heading\n')
                 elif step=='merge-blobs':
-                    dest=Path(command[command.index('--')+1]);dest.mkdir(parents=True)
+                    dest=Path(tool_arguments(command)[0]);dest.mkdir(parents=True)
                     (dest/'fallback-pages.jsonl').write_text('')
-                    if 'merge-blobs' in command:write_namespace_coverage(dest,sum(json.loads((Path(x)/'page-coverage.json').read_text())['pages_seen'] for x in command[command.index('--')+2:]))
+                    if blob_command(command,'merge-blobs'):write_namespace_coverage(dest,sum(json.loads((Path(x)/'page-coverage.json').read_text())['pages_seen'] for x in tool_arguments(command)[1:]))
                     (dest/'languages.tsv').write_text('heading\n')
                     (dest/'merged.wikblb').write_bytes(b'WIKBLB08merged')
             with patch.object(b,'PROJECT',root),patch.object(b,'SHARD_PAGES',1),patch.object(b,'source_fingerprint',return_value='source'),patch.object(b.time,'time',return_value=123),patch.object(b,'run_checked',side_effect=run):
                 b.build([item],root,root/'output','zig',2,interwiki_snapshot=interwiki,
                         auxiliary_snapshots={'category-stats':category})
-            blob_calls=[c for c in calls if 'build-blobs' in c]
+            blob_calls=[c for c in calls if blob_command(c,'build-blobs')]
             expander_call=next(c for c in calls if 'build-dictionary' in c)
             self.assertTrue(calls)
-            self.assertTrue(all(command[1:4]==['build','-j1','-Doptimize=fast'] for command in calls))
+            bound_prefix=root/'output/testwiktionary/20260901.shards/test-blob-tools'
+            for command in calls:
+                if command[0]=='zig':
+                    self.assertEqual(command[1:4],['build','-j1','-Doptimize=fast'])
+                    self.assertIn('build-dictionary',command)
+                else:
+                    self.assertIn(Path(command[0]).name,b.BLOB_TOOL_NAMES)
+                    self.assertEqual(Path(command[0]).parent,bound_prefix)
+                    self.assertNotIn('--',command)
             self.assertIn('--extraction-cache-root',expander_call)
             self.assertIn('--verified-dump-sha256',expander_call)
             self.assertIn('--verified-index-sha256',expander_call)
@@ -2450,8 +2541,8 @@ class BuildTest(unittest.TestCase):
             self.assertEqual(blob_calls[0][blob_calls[0].index('--index-byte-offset')+1],'0')
             self.assertEqual(blob_calls[0][blob_calls[0].index('--shard-pages')+1],'1')
             self.assertEqual({c[c.index('--now-unix')+1] for c in blob_calls},{'123'})
-            self.assertEqual(sum('merge-blobs' in c for c in calls),1)
-            self.assertGreaterEqual(sum('verify-blobs' in c for c in calls),3)
+            self.assertEqual(sum(blob_command(c,'merge-blobs') for c in calls),1)
+            self.assertGreaterEqual(sum(blob_command(c,'verify-blobs') for c in calls),3)
             final=root/'output/testwiktionary/20260901'
             self.assertTrue((final/'complete.json').is_file())
             self.assertEqual(json.loads((final/'complete.json').read_text())['input_pages'],2)
@@ -2708,7 +2799,7 @@ class BuildTest(unittest.TestCase):
                     return real_run(command,**kwargs)
                 calls.append(command)
                 if 'build-dictionary' in command:
-                    dest=Path(command[command.index('--')+2]);dest.mkdir();(dest/'en.wikblb').write_bytes(b'WIKBLB08payload')
+                    dest=Path(tool_arguments(command)[1]);dest.mkdir();(dest/'en.wikblb').write_bytes(b'WIKBLB08payload')
                     write_coverage(dest)
                     coverage=json.loads((dest/'page-coverage.json').read_text());coverage.update(pages_seen=2,expected_input_pages=2)
                     (dest/'page-coverage.json').write_text(json.dumps(coverage))
@@ -2813,7 +2904,7 @@ class BuildTest(unittest.TestCase):
             (stale/'old').write_text('failed')
             def run(command,**kwargs):
                 if 'build-dictionary' in command:
-                    dest=Path(command[command.index('--')+2]);dest.mkdir();(dest/'fallback-pages.jsonl').write_text('')
+                    dest=Path(tool_arguments(command)[1]);dest.mkdir();(dest/'fallback-pages.jsonl').write_text('')
                     write_coverage(dest)
             with patch.object(b,'PROJECT',root),patch.object(b.subprocess,'run',side_effect=run):
                 b.build([item],root,root/'output','zig',2)
@@ -3639,7 +3730,7 @@ class VerifiedResumeCleanupOrderTests(unittest.TestCase):
                 self.assertFalse(workspace.exists());self.assertFalse(raw.exists())
 
 
-class ExternalRawShardTests(unittest.TestCase):
+class ExternalRawShardTests(PreparedToolsFixture):
     def test_owned_resume_source_reset_and_path_mismatch_preserve_input(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);work=root/'output/enwiktionary/20261001.shards';raw=root/'other/enwiktionary/20261001.raw-shards'
@@ -3718,21 +3809,21 @@ class ExternalRawShardTests(unittest.TestCase):
                 def run(command):
                     nonlocal failed
                     if 'build-dictionary' in command:
-                        dest=Path(command[command.index('--')+2]);self.assertEqual(dest,work/'expander')
+                        dest=Path(tool_arguments(command)[1]);self.assertEqual(dest,work/'expander')
                         exp=dest/'.bundle-expander';exp.mkdir(parents=True);(dest/'.incomplete').write_text('expander ready')
                         (exp/'page-index.tsv').write_text('0\n1\n');(exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
-                    elif 'build-blobs' in command:
-                        dest=Path(command[command.index('--')+2]);self.assertEqual(dest,raw)
+                    elif blob_command(command,'build-blobs'):
+                        dest=Path(tool_arguments(command)[1]);self.assertEqual(dest,raw)
                         dest.mkdir(parents=True,exist_ok=True);write_coverage(dest,command);builds.append(command)
-                    elif 'merge-blobs' in command:
-                        merges.append(command);self.assertEqual(Path(command[command.index('--')+1]),staging)
-                        shards=[Path(x) for x in command[command.index('--')+2:]]
+                    elif blob_command(command,'merge-blobs'):
+                        merges.append(command);self.assertEqual(Path(tool_arguments(command)[0]),staging)
+                        shards=[Path(x) for x in tool_arguments(command)[1:]]
                         self.assertTrue(all(x.parent==raw for x in shards))
                         self.assertTrue((work/'input/.complete.json').exists());self.assertTrue(raw.exists())
                         if failure=='merge' and not failed:failed=True;raise subprocess.CalledProcessError(1,command)
                         staging.mkdir();(staging/'fallback-pages.jsonl').write_text('')
                         write_namespace_coverage(staging,sum(json.loads((x/'page-coverage.json').read_text())['pages_seen'] for x in shards))
-                    elif 'verify-blobs' in command and Path(command[-1])==staging:
+                    elif blob_command(command,'verify-blobs') and Path(command[-1])==staging:
                         self.assertTrue(raw.exists())
                         if failure=='verify' and not failed:failed=True;raise subprocess.CalledProcessError(1,command)
                 with patch.object(b,'PROJECT',root),patch.object(b,'SHARD_PAGES',1), \
@@ -4056,7 +4147,7 @@ class PageCountRoutingTests(unittest.TestCase):
                 self.assertEqual(command[command.index('--llvm-workers')+1],str(llvm_workers or 1))
                 self.assertEqual(command[command.index('--parse-workers')+1],'1')
                 self.assertEqual(command[command.index('--page-workers')+1],str(expansion_workers or 1))
-                actual=Path(command[command.index('--')+1])
+                actual=Path(tool_arguments(command)[0])
                 calls.append(('one-shot',actual))
                 self.assertEqual(actual,dump)
                 self.assertTrue(actual.is_file())
@@ -4557,6 +4648,35 @@ class LoopMessageSelectionTests(unittest.TestCase):
         with patch.object(b,'PROJECT',self.project):
             return b.resolve_edition_snapshot_options(self.manifest,self.groups,self.downloads)[(self.wiki,self.date)]['auxiliary_snapshots']
 
+    def test_retained_source_resolves_unchanged_workspace_captures_with_full_validation(self):
+        expected=self.resolve()
+        source=self.project/'.tmp/retained';source.mkdir(parents=True)
+        with patch.object(b,'PROJECT',source):
+            with self.assertRaises(FileNotFoundError):
+                b.resolve_edition_snapshot_options(self.manifest,self.groups,self.downloads)
+            actual=b.resolve_edition_snapshot_options(self.manifest,self.groups,self.downloads,
+                                                       workspace=self.project)
+            self.assertEqual(actual[(self.wiki,self.date)]['auxiliary_snapshots'],expected)
+            # Same-path selection still replays authenticated capture bytes.
+            (self.root/'namespace-siteinfo.raw.json').write_bytes(b'corrupt selected authority')
+            with self.assertRaises(ValueError):
+                b.resolve_edition_snapshot_options(self.manifest,self.groups,self.downloads,
+                                                   workspace=self.project)
+
+    def test_retained_source_does_not_allow_capture_root_escape(self):
+        import copy
+        source=self.project/'.tmp/retained';source.mkdir(parents=True)
+        with tempfile.TemporaryDirectory() as external:
+            target=Path(external)
+            # A valid-looking identity must not let a symlink escape the workspace.
+            (target/'capture.complete.json').write_bytes((self.root/'capture.complete.json').read_bytes())
+            (self.project/'escaped').symlink_to(target,target_is_directory=True)
+            for selected in ('../outside',str(self.root),'escaped'):
+                manifest=copy.deepcopy(self.manifest)
+                manifest['auxiliary_capture_roots'][self.wiki]=selected
+                with self.subTest(selected=selected),patch.object(b,'PROJECT',source),self.assertRaises(ValueError):
+                    b.resolve_edition_snapshot_options(manifest,self.groups,self.downloads,workspace=self.project)
+
     def test_explicit_valid_pair_ignores_invalid_unused_default(self):
         old=self.collect('language-messages-loop-v1')
         (old/'interface-messages.tsv').write_bytes(b'invalid unused default')
@@ -4685,7 +4805,7 @@ class LoopMessageSelectionTests(unittest.TestCase):
                     self.resolve()
 
 
-class ExplicitExtractionCacheTests(unittest.TestCase):
+class ExplicitExtractionCacheTests(PreparedToolsFixture):
     def test_fresh_expander_command_uses_external_cache_and_new_input_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);workspace=root/'fresh-work';(workspace/'input').mkdir(parents=True)
@@ -4699,7 +4819,7 @@ class ExplicitExtractionCacheTests(unittest.TestCase):
                         b.build_sharded(root/'new-dump',root/'fresh-staging',workspace,root/'registry','zig',1,
                             [{'wiki':'testwiktionary','date':'20261001'}],123,extraction_cache_root=selected)
                 command=run.call_args.args[0]
-                self.assertEqual(command[command.index('--')+1:command.index('--')+3],
+                self.assertEqual(tool_arguments(command)[:2],
                                  [str(root/'new-dump'),str(workspace/'expander')])
                 self.assertEqual(command[command.index('--extraction-cache-root')+1],str(expected))
                 self.assertEqual(command[command.index('--verified-dump-sha256')+1],'c'*64)
@@ -4740,7 +4860,7 @@ class ExplicitExtractionCacheTests(unittest.TestCase):
                 self.assertEqual(done.exception.code,0)
             watchdog.assert_called_once_with(wall_seconds=7200,disk_paths=(root/'.tmp',output,cache))
 
-class ExplicitLlvmWorkerTests(unittest.TestCase):
+class ExplicitLlvmWorkerTests(PreparedToolsFixture):
     def test_invalid_llvm_workers_refuse_before_artifact_side_effects(self):
         root=Path('/unused-invalid-llvm-control')
         for value in (0,-1,5,True,1.5):
@@ -4794,3 +4914,275 @@ class ExplicitLlvmWorkerTests(unittest.TestCase):
             self.assertEqual(build.call_args.kwargs['llvm_workers'],2)
             with patch.object(b,'PROJECT',root),patch.object(sys,'argv',argv),patch.object(b,'safe_worker_budget',return_value=1),patch.object(b,'affinity_worker_budget',return_value=1):
                 with self.assertRaises(SystemExit):b.main()
+
+
+class PreparedBlobToolsTests(unittest.TestCase):
+    def fixture(self, root):
+        workspace=root/'work';workspace.mkdir()
+        compiler=root/'zig';compiler.write_bytes(b'fixture compiler');compiler.chmod(0o755)
+        identity=dict(source='qualified-source',zig_sha256=b.sha256_file(compiler))
+        return workspace,compiler,identity
+
+    def install(self, command):
+        self.assertEqual(command[1:4],['build','-j1','-Doptimize=fast'])
+        self.assertEqual(command[-1],'prepare-blob-tools')
+        self.assertNotIn('--',command)
+        prefix=Path(command[command.index('--prefix')+1]);(prefix/'bin').mkdir(parents=True,exist_ok=True)
+        for name in b.BLOB_TOOL_NAMES:
+            path=prefix/'bin'/name
+            path.write_bytes(('installed '+name).encode());path.chmod(0o755)
+
+    def test_prepare_binds_all_private_tools_and_direct_arguments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);workspace,compiler,identity=self.fixture(root);calls=[];phases=[]
+            with patch.object(b,'source_fingerprint',return_value=identity['source']),patch.object(b,'run_checked',side_effect=self.install),patch.object(b,'phase_event',side_effect=lambda edition,date,phase,event,**fields:phases.append((phase,event,fields))):
+                tools=b.prepare_blob_tools(workspace,str(compiler),'testwiktionary','20261001',identity)
+            completed=[fields for phase,event,fields in phases if phase=='blob_tools_prepare' and event=='end' and fields['status']=='success']
+            self.assertEqual(len(completed),1);record=completed[0]
+            self.assertEqual(record['source'],identity['source']);self.assertEqual(record['zig_sha256'],identity['zig_sha256'])
+            self.assertEqual(set(record['tools']),set(b.BLOB_TOOL_NAMES))
+            args=['dump with spaces','out','--','-literal','nonascii-\u00e9']
+            with patch.object(b,'run_checked',side_effect=lambda argv:calls.append(argv)):
+                for name,tool in tools.items():
+                    tool.run(args,'testwiktionary','20261001','fixture')
+                    self.assertEqual(calls[-1],[str(tool.path),*args])
+                    self.assertEqual(record['tools'][name]['sha256'],b.sha256_file(tool.path))
+                    self.assertEqual(record['tools'][name]['bytes'],tool.path.stat().st_size)
+                    self.assertEqual(tool.path.stat().st_mode&0o222,0)
+
+    def test_changed_source_or_toolchain_never_creates_success_binding(self):
+        for change in ('source','compiler','wrong-initial-source','wrong-initial-compiler'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);workspace,compiler,identity=self.fixture(root);calls=[];phases=[]
+                if change=='wrong-initial-source':identity['source']='other'
+                if change=='wrong-initial-compiler':identity['zig_sha256']='0'*64
+                def install(argv):
+                    calls.append(argv);self.install(argv)
+                    if change=='compiler':compiler.write_bytes(b'changed compiler')
+                values=['qualified-source','changed-source'] if change=='source' else ['qualified-source','qualified-source']
+                with patch.object(b,'source_fingerprint',side_effect=values),patch.object(b,'run_checked',side_effect=install),patch.object(b,'phase_event',side_effect=lambda edition,date,phase,event,**fields:phases.append((event,fields))):
+                    with self.assertRaisesRegex(ValueError,'source or compiler differs|Source or compiler changed'):
+                        b.prepare_blob_tools(workspace,str(compiler),'testwiktionary','20261001',identity)
+                self.assertEqual(phases[-1][1]['status'],'failure');self.assertNotIn('tools',phases[-1][1])
+                self.assertEqual(len(calls),0 if change.startswith('wrong-initial') else 1)
+
+    def test_invalid_or_redirected_install_never_chmods_external_or_binds_tools(self):
+        for kind in ('missing','symlink','hardlink','nonexecutable','directory','parent-symlink'):
+            with self.subTest(kind=kind),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);workspace,compiler,identity=self.fixture(root);phases=[]
+                external=root/'external';external.write_bytes(b'external bytes');external.chmod(0o755)
+                def install(argv):
+                    self.install(argv);folder=workspace/'native-blob-tools/bin';path=folder/b.BLOB_TOOL_NAMES[0]
+                    path.unlink()
+                    if kind=='symlink':path.symlink_to(external)
+                    elif kind=='hardlink':os.link(external,path)
+                    elif kind=='nonexecutable':path.write_bytes(b'not executable')
+                    elif kind=='directory':path.mkdir()
+                    elif kind=='parent-symlink':
+                        saved=root/'redirected-bin';folder.rename(saved);folder.symlink_to(saved,target_is_directory=True)
+                with patch.object(b,'source_fingerprint',return_value=identity['source']),patch.object(b,'run_checked',side_effect=install),patch.object(b,'phase_event',side_effect=lambda edition,date,phase,event,**fields:phases.append((event,fields))):
+                    with self.assertRaises((ValueError,OSError)):
+                        b.prepare_blob_tools(workspace,str(compiler),'testwiktionary','20261001',identity)
+                self.assertEqual(phases[-1][1]['status'],'failure');self.assertNotIn('tools',phases[-1][1])
+                self.assertEqual(external.read_bytes(),b'external bytes');self.assertEqual(external.stat().st_mode&0o777,0o755)
+
+    def test_bound_tool_replacement_and_write_are_rejected_before_execution(self):
+        for change in ('write','replace','chmod','symlink'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);tool=fixture_blob_tool(root);path=tool.path
+                if change=='write':
+                    path.chmod(0o755);path.write_bytes(b'changed content');path.chmod(0o555)
+                elif change=='replace':
+                    other=root/'replacement';other.write_bytes(path.read_bytes());other.chmod(0o555);os.replace(other,path)
+                elif change=='chmod':path.chmod(0o755)
+                else:
+                    other=root/'other';other.write_bytes(path.read_bytes());other.chmod(0o555);path.unlink();path.symlink_to(other)
+                with patch.object(b,'run_checked') as run:
+                    with self.assertRaises(ValueError):tool.run(['input'],'testwiktionary','20261001','fixture')
+                run.assert_not_called()
+
+    def test_existing_redirected_install_target_is_rejected_before_zig(self):
+        for kind in ('symlink','hardlink','directory','nonexecutable'):
+            with self.subTest(kind=kind),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);workspace,compiler,identity=self.fixture(root)
+                external=root/'external';external.write_bytes(b'external bytes');external.chmod(0o755)
+                target=workspace/'native-blob-tools/bin'/b.BLOB_TOOL_NAMES[0];target.parent.mkdir(parents=True)
+                if kind=='symlink':target.symlink_to(external)
+                elif kind=='hardlink':os.link(external,target)
+                elif kind=='directory':target.mkdir()
+                else:target.write_bytes(b'not executable')
+                with patch.object(b,'source_fingerprint',return_value=identity['source']),patch.object(b,'run_checked') as run:
+                    with self.assertRaises(ValueError):b.prepare_blob_tools(workspace,str(compiler),'testwiktionary','20261001',identity)
+                run.assert_not_called();self.assertEqual(external.read_bytes(),b'external bytes')
+                self.assertEqual(external.stat().st_mode&0o777,0o755)
+
+    def test_bound_tool_preserves_native_error_and_rejects_midrun_mutation(self):
+        for change in (False,True):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as tmp:
+                tool=fixture_blob_tool(Path(tmp));error=subprocess.CalledProcessError(7,[str(tool.path)],output=b'out',stderr=b'err')
+                def run(argv):
+                    if change:tool.path.chmod(0o755)
+                    raise error
+                with patch.object(b,'run_checked',side_effect=run):
+                    if change:
+                        with self.assertRaises(ValueError) as failed:tool.run(['exact native argument'],'testwiktionary','20261001','fixture')
+                        self.assertIs(failed.exception.__context__,error)
+                    else:
+                        with self.assertRaises(subprocess.CalledProcessError) as failed:tool.run(['exact native argument'],'testwiktionary','20261001','fixture')
+                        self.assertIs(failed.exception,error)
+                        self.assertEqual(failed.exception.output,b'out');self.assertEqual(failed.exception.stderr,b'err')
+
+    def test_ordinary_compressed_shards_use_one_bound_set_and_verify_before_retirement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);workspace,compiler,identity=self.fixture(root)
+            exp=workspace/'expander/.bundle-expander';exp.mkdir(parents=True)
+            (workspace/'expander/.incomplete').write_text('expander ready')
+            (exp/'page-index.tsv').write_text('p0\np1\n');(exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
+            cached=workspace/'input';cached.mkdir();(cached/'.complete.json').write_text(json.dumps({'source_pages':2}))
+            staging=root/'staging';calls=[];verified=set();payloads={}
+            def run(argv):
+                calls.append(argv)
+                if argv[-1]=='prepare-blob-tools':self.install(argv);return
+                self.assertNotIn('build',argv)
+                args=argv[1:];name=Path(argv[0]).name
+                self.assertEqual(Path(argv[0]).parent,workspace/'native-blob-tools/bin')
+                if name=='dict-blob-build':
+                    dest=Path(args[1]);dest.mkdir();write_coverage(dest,argv)
+                    payload=b'WIKBLB08\x08'+dest.name.encode();payloads[dest]=payload;(dest/'aliases.wikblb').write_bytes(payload)
+                elif name=='dict-blob-verify':
+                    dest=Path(args[0])
+                    if dest==staging:
+                        self.assertEqual(lzma.decompress((dest/'aliases.wikblb.xz').read_bytes()),b''.join(payloads.values()))
+                    else:self.assertEqual((dest/'aliases.wikblb').read_bytes(),payloads[dest])
+                    verified.add(dest)
+                elif name=='dict-blob-merge':
+                    self.assertEqual(args[0],'--compress-output');self.assertEqual(Path(args[1]),staging)
+                    self.assertEqual([Path(x) for x in args[2:]],list(payloads))
+                    for shard,payload in payloads.items():
+                        self.assertIn(shard,verified);self.assertTrue((shard/'.verified').is_file())
+                        self.assertFalse((shard/'aliases.wikblb').exists())
+                        self.assertEqual(lzma.decompress((shard/'aliases.wikblb.xz').read_bytes()),payload)
+                    staging.mkdir();write_namespace_coverage(staging,2)
+                    (staging/'aliases.wikblb.xz').write_bytes(lzma.compress(b''.join(payloads.values())))
+                else:self.fail('Unexpected tool '+name)
+            def compress(path,block_size,workers):
+                self.assertIn(path.parent,verified);self.assertEqual(workers,1)
+                Path(str(path)+'.xz').write_bytes(lzma.compress(path.read_bytes()))
+            def cleanup(path):
+                self.assertEqual(path,workspace);self.assertIn(staging,verified)
+                self.assertEqual((staging/b.VERIFIED_MARKER).read_text(),b.VERIFIED_CONTENT)
+                self.assertEqual(json.loads((staging/'page-coverage.json').read_text())['pages_seen'],2)
+            with patch.object(b,'source_fingerprint',return_value=identity['source']),patch.object(b,'run_checked',side_effect=run), \
+                 patch.object(b,'SHARD_PAGES',1),patch.object(b,'compress',side_effect=compress), \
+                 patch.object(b,'require_merge_disk_space',return_value={}),patch.object(b,'cleanup_shard_workspace',side_effect=cleanup):
+                b.build_sharded(root/'dump',staging,workspace,root/'registry',str(compiler),1,
+                    [{'wiki':'testwiktionary','date':'20261001'}],123,compress_shards=True)
+            self.assertEqual(sum(argv[-1]=='prepare-blob-tools' for argv in calls),1)
+            self.assertEqual([Path(argv[0]).name for argv in calls[1:]],
+                ['dict-blob-build','dict-blob-verify','dict-blob-build','dict-blob-verify','dict-blob-merge','dict-blob-verify'])
+
+
+class RetainedWorkspaceTests(unittest.TestCase):
+    @staticmethod
+    def identity(path):
+        st=path.stat()
+        return dict(path=str(path),device=st.st_dev,inode=st.st_ino,uid=st.st_uid,mode=st.st_mode & 0o7777)
+
+    @contextlib.contextmanager
+    def fixture(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace=Path(temporary)/'workspace';source=workspace/'.tmp/retained'
+            (source/'tools').mkdir(parents=True)
+            (workspace/'data/dumps').mkdir(parents=True)
+            for name,data in (('build.zig','bound graph'),('build.zig.zon','bound package'),
+                              ('tools/build_wiktionaries.py','bound builder')):
+                (source/name).write_text(data)
+            with patch.object(b,'PROJECT',source),patch.object(b,'__file__',str(source/'tools/build_wiktionaries.py')):
+                yield workspace,source,self.identity(workspace)
+
+    def test_workspace_binding_rejects_replacement_alias_and_wrong_source(self):
+        for change in ('inode','mode','owner','type','extra','relative','symlink','foreign-root','wrong-script'):
+            with self.subTest(change=change),self.fixture() as (workspace,source,spec):
+                if change=='inode':spec['inode']+=1
+                elif change=='mode':spec['mode']^=0o100
+                elif change=='owner':spec['uid']+=1
+                elif change=='type':spec['inode']=True
+                elif change=='extra':spec['unexpected']=1
+                elif change=='relative':spec['path']='workspace'
+                elif change=='symlink':
+                    alias=workspace.parent/'alias';alias.symlink_to(workspace,target_is_directory=True)
+                    spec['path']=str(alias)
+                elif change=='foreign-root':
+                    other=workspace.parent/'other';other.mkdir();spec=self.identity(other)
+                if change=='wrong-script':
+                    with patch.object(b,'__file__',str(workspace/'tools/build_wiktionaries.py')), self.assertRaises(ValueError):
+                        b.workspace_root(spec)
+                else:
+                    with self.assertRaises(ValueError):b.workspace_root(spec)
+        with self.fixture() as (workspace,source,spec):
+            self.assertEqual(b.workspace_root(spec),workspace)
+            self.assertEqual(b.workspace_root(),source)
+
+    def test_parent_holds_workspace_global_lock_through_original_supervisor(self):
+        for mode in ('watchdog','cgroup'):
+            for fail in (False,True):
+                with self.subTest(mode=mode,fail=fail),self.fixture() as (workspace,source,spec):
+                    shared=workspace/'.tmp/build-resources.lock';seen=[]
+                    failure=RuntimeError('original supervisor failure')
+                    def supervised(**options):
+                        seen.append(shared.stat().st_ino)
+                        with self.assertRaises(limits.ContainmentUnavailable):b.acquire_build_resource_lock(shared)
+                        if mode=='watchdog':
+                            self.assertEqual(options,dict(wall_seconds=7200,
+                                disk_paths=(workspace/'.tmp',workspace/'data/dictionaries')))
+                        else:self.assertEqual(options,{})
+                        if fail:raise failure
+                        return 0
+                    argv=['build_wiktionaries.py','--resource-mode',mode,
+                          '--workspace-root-spec',json.dumps(spec)]
+                    selected='supervise_watchdog' if mode=='watchdog' else 'supervise'
+                    with patch.object(sys,'argv',argv),patch.object(limits,'inside_watchdog',return_value=False), \
+                         patch.object(limits,'inside_envelope',return_value=False), \
+                         patch.object(limits,selected,side_effect=supervised),patch.object(b,'main') as main:
+                        if fail:
+                            with self.assertRaises(RuntimeError) as caught:b.cli()
+                            self.assertIs(caught.exception,failure)
+                        else:
+                            with self.assertRaises(SystemExit) as done:b.cli()
+                            self.assertEqual(done.exception.code,0)
+                        main.assert_not_called()
+                    self.assertEqual(seen,[shared.stat().st_ino])
+                    self.assertFalse((source/'.tmp/build-resources.lock').exists())
+                    with b.acquire_build_resource_lock(shared):pass
+
+    def test_child_rechecks_workspace_identity_before_entering_main(self):
+        with self.fixture() as (workspace,source,spec):
+            spec['inode']+=1
+            argv=['build_wiktionaries.py','--resource-mode=watchdog','--workspace-root-spec',json.dumps(spec)]
+            with patch.object(sys,'argv',argv),patch.object(limits,'inside_watchdog',return_value=True), \
+                 patch.object(limits,'supervise_watchdog') as supervisor,patch.object(b,'main') as main:
+                with self.assertRaisesRegex(SystemExit,'Workspace directory identity changed'):b.cli()
+                main.assert_not_called();supervisor.assert_not_called()
+            self.assertFalse((workspace/'.tmp/build-resources.lock').exists())
+
+    def test_workspace_defaults_reach_normal_builder_without_changing_source_cwd(self):
+        with self.fixture() as (workspace,source,spec):
+            downloads=workspace/'data/dumps'
+            write_test_manifest(downloads,{'files':[dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',
+                url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)]})
+            argv=['build_wiktionaries.py','--resource-mode=watchdog','--workspace-root-spec',json.dumps(spec),
+                  '--threads','1','--jobs','1']
+            with patch.object(sys,'argv',argv),patch.object(b,'safe_worker_budget',return_value=1), \
+                 patch.object(b,'build_groups',return_value=[]) as groups:
+                b.main()
+            self.assertEqual(groups.call_args.args[1:3],(downloads,workspace/'data/dictionaries'))
+            self.assertEqual(groups.call_args.args[4:],(1,1,None))
+            self.assertTrue(groups.call_args.kwargs['edition_options'])
+            before=b.source_fingerprint()
+            (workspace/'tools').mkdir();(workspace/'tools/later-edit.py').write_text('canonical-only edit')
+            self.assertEqual(b.source_fingerprint(),before)
+            with patch.object(b.subprocess,'run') as native:
+                b.run_checked(['zig','build','build-dictionary'])
+            native.assert_called_once_with(['zig','build','build-dictionary'],cwd=source,check=True)
+            (source/'build.zig').write_text('actual producer mutation')
+            self.assertNotEqual(b.source_fingerprint(),before)

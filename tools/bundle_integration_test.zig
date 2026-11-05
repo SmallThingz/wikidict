@@ -982,6 +982,7 @@ fn coldRetryProbe(h: *Harness, blob_builder: []const u8, verifier: []const u8, r
         \\    elif mode!='output-initial' and attempt==1: reply=failure(b'OutOfMemory')
         \\    elif mode=='oom': reply=failure(b'OutOfMemory')
         \\    elif mode=='semantic': reply=failure(b'ExpectedSemanticError')
+        \\    elif mode=='missing-input': reply=failure(b'InterfaceMessageSnapshotMissing')
         \\    elif mode=='skip': reply=b'\x02'
         \\    elif mode=='malformed': reply=b'\xff'
         \\    elif mode=='eof': break
@@ -1001,6 +1002,7 @@ fn coldRetryProbe(h: *Harness, blob_builder: []const u8, verifier: []const u8, r
         .{ .mode = "output", .expected = null },
         .{ .mode = "oom", .expected = error.OutOfMemory },
         .{ .mode = "semantic", .expected = error.ColdRetryFailed },
+        .{ .mode = "missing-input", .expected = error.InterfaceMessageSnapshotMissing },
         .{ .mode = "skip", .expected = error.ColdRetryFailed },
         .{ .mode = "malformed", .expected = error.ColdRetryFailed },
         .{ .mode = "truncated", .expected = error.ColdRetryFailed },
@@ -1018,6 +1020,10 @@ fn coldRetryProbe(h: *Harness, blob_builder: []const u8, verifier: []const u8, r
         if (case.expected) |err| {
             try std.testing.expectError(err, worker.expand(h.a, 17, transport_probe_identity, "retry-probe", input_source));
             try h.require(worker.child == null and worker.oom_retry_failed == 1, "failed cold retry is terminal and reaped");
+            if (std.mem.eql(u8, case.mode, "missing-input")) {
+                try std.testing.expectEqualStrings("expand", worker.last_failure.?.stage);
+                try std.testing.expectEqualStrings("InterfaceMessageSnapshotMissing", worker.last_failure.?.error_name);
+            }
         } else {
             const output = (try worker.expand(h.a, 17, transport_probe_identity, "retry-probe", input_source)).?;
             try std.testing.expectEqualStrings("==English==\n# recovered\n", output.source);
@@ -1110,6 +1116,54 @@ fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []con
         _ = try h.run(&.{ blob_builder, dump, failed_output, "--expander-root", root, "--workers", "1" }, 1);
         try h.require(!exists(h.io, try std.fs.path.join(h.a, &.{ failed_output, "page-coverage.json" })), "infrastructure failures cannot publish coverage");
     }
+
+    // Missing capture is not the captured upstream M or V-empty state. Preserve
+    // its framed error and stop before Writer can publish an empty fallback.
+    const missing_name = "InterfaceMessageSnapshotMissing";
+    const missing_detail = "original missing snapshot detail";
+    try writeFailureExpander(h, script, "expand", missing_name, missing_detail, false);
+    var missing_worker = expander.Worker.init(h.io, root, script, dump);
+    defer missing_worker.deinit();
+    try std.testing.expectError(error.InterfaceMessageSnapshotMissing, missing_worker.expand(h.a, 0, transport_probe_identity, "probe", source_text));
+    try h.require(missing_worker.child == null and missing_worker.generation == 1 and missing_worker.oom_retry_attempts == 0, "missing interface input is reaped without OOM replay");
+    try std.testing.expectEqualStrings(missing_name, missing_worker.last_failure.?.error_name);
+    try std.testing.expectEqualStrings(missing_detail, missing_worker.last_failure.?.detail);
+    const missing_output = try std.fs.path.join(h.a, &.{ dir, "missing-input-dictionary" });
+    const missing_receipt = try std.fs.path.join(h.a, &.{ dir, "missing-input.json" });
+    const invocation_id = "0123456789abcdef0123456789abcdef";
+    const missing_args = [_][]const u8{ dump, missing_output, "--expander-root", root, "--workers", "1", "--failure-receipt", missing_receipt, "--invocation-id", invocation_id };
+    const missing_command = try std.mem.concat(h.a, []const u8, &.{ &.{blob_builder}, &missing_args });
+    _ = try h.run(missing_command, 1);
+    for ([_][]const u8{ "page-coverage.json", "namespace-coverage.json", "complete.json" }) |marker|
+        try h.require(!exists(h.io, try std.fs.path.join(h.a, &.{ missing_output, marker })), "missing interface input cannot publish completion");
+    const missing_report = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(h.a, &.{ missing_output, "fallback-pages.jsonl" }), h.a, .limited(1024));
+    try std.testing.expectEqual(@as(usize, 0), missing_report.len);
+    const receipt_bytes = try std.Io.Dir.cwd().readFileAlloc(h.io, missing_receipt, h.a, .limited(64 * 1024));
+    const missing_parsed = try std.json.parseFromSlice(std.json.Value, h.a, receipt_bytes, .{});
+    defer missing_parsed.deinit();
+    const receipt_row = missing_parsed.value.object;
+    try std.testing.expectEqualStrings("wikidict.blob-build.failure.v1", receipt_row.get("schema").?.string);
+    try std.testing.expectEqualStrings(missing_name, receipt_row.get("error_name").?.string);
+    try std.testing.expectEqualStrings("deterministic-build-input", receipt_row.get("failure_class").?.string);
+    try std.testing.expectEqualStrings(invocation_id, receipt_row.get("invocation_id").?.string);
+    const saved_args = receipt_row.get("invocation_args").?.array.items;
+    try std.testing.expectEqual(missing_args.len, saved_args.len);
+    for (missing_args, saved_args) |expected, actual| try std.testing.expectEqualStrings(expected, actual.string);
+    const missing_page = receipt_row.get("page").?.object;
+    try std.testing.expectEqual(@as(i64, 0), missing_page.get("ordinal").?.integer);
+    try std.testing.expectEqual(@as(i64, 0), missing_page.get("namespace").?.integer);
+    try std.testing.expectEqualStrings("failure-page", missing_page.get("title").?.string);
+    try std.testing.expectEqual(@as(i64, 1), missing_page.get("page_id").?.integer);
+    try std.testing.expectEqual(@as(i64, 1), missing_page.get("revision_id").?.integer);
+    const missing_source = receipt_row.get("source").?.object;
+    try std.testing.expectEqual(@as(i64, @intCast(source_text.len)), missing_source.get("bytes").?.integer);
+    var source_hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source_text, &source_hash, .{});
+    try std.testing.expectEqualStrings(&std.fmt.bytesToHex(source_hash, .lower), missing_source.get("sha256").?.string);
+    const missing_remote = receipt_row.get("worker").?.object;
+    try std.testing.expectEqualStrings("expand", missing_remote.get("stage").?.string);
+    try std.testing.expectEqualStrings(missing_name, missing_remote.get("error_name").?.string);
+    try std.testing.expectEqualStrings(missing_detail, missing_remote.get("detail").?.string);
 
     // Real framed worker response, rather than a local allocator failure.
     // Rewriting the existing executable preserves its mode, as the old literal fixture did.

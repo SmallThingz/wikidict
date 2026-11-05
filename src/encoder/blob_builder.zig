@@ -12337,6 +12337,43 @@ test "retained TL abaka image headings preserve seven independently proved bodie
 }
 
 
+const CapturedBulgarianStyleTest = struct {
+    fn verify(profile: *const @import("table_style_profile.zig").Profile) !void {
+        // The exact captured CSS also has display rules 13/15/17/35. Their
+        // source IDs join the receipt, while the original paint rules stay exact.
+        try std.testing.expectEqualSlices(u32, &.{ 7, 8, 11, 13, 15, 17, 29, 35 }, profile.admitted_rule_numbers);
+        const paint_rule_numbers = [_]u32{ 7, 8, 8, 11, 29 };
+        try std.testing.expectEqual(paint_rule_numbers.len, profile.rules.len);
+        for (profile.rules, paint_rule_numbers) |rule, expected_number| try std.testing.expectEqual(expected_number, rule.number);
+        const cases = [_]struct { tag: []const u8, classes: []const u8 = "", id: []const u8 = "", declaration: ?[]const u8, uncertain: bool = false }{
+            .{ .tag = "div", .classes = "hidden-links", .declaration = "display: none;" },
+            .{ .tag = "form", .id = "mw-upload-form", .declaration = "display: none;" },
+            .{ .tag = "a", .classes = "fancy-btn", .declaration = "display: inline-block;" },
+            // Page-ancestor selectors are possible overrides, never proved hiding.
+            .{ .tag = "h1", .classes = "firstHeading", .declaration = "display: none;", .uncertain = true },
+            .{ .tag = "div", .id = "lastmod", .declaration = "display: none;", .uncertain = true },
+            .{ .tag = "div", .id = "siteSub", .declaration = "display: none;", .uncertain = true },
+            .{ .tag = "div", .id = "contentSub", .declaration = "display: none;", .uncertain = true },
+            .{ .tag = "h1", .id = "firstHeading", .declaration = "display: none;", .uncertain = true },
+            .{ .tag = "div", .classes = "hidden-links-extra", .declaration = null },
+            .{ .tag = "div", .classes = "Hidden-links", .declaration = null },
+            .{ .tag = "form", .id = "mw-upload-form-extra", .declaration = null },
+            .{ .tag = "a", .classes = "fancy-btn-extra", .declaration = null },
+            .{ .tag = "h2", .classes = "firstHeading", .declaration = null },
+        };
+        for (cases) |case| {
+            errdefer std.debug.print("BG captured display selector tag={s} classes={s} id={s}\n", .{ case.tag, case.classes, case.id });
+            var matches = profile.displayRules(case.tag, case.classes, case.id);
+            if (case.declaration) |declaration| {
+                const matched = matches.next() orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqual(case.uncertain, matched.uncertain);
+                try std.testing.expect(std.mem.indexOf(u8, matched.css, declaration) != null);
+            }
+            try std.testing.expect(matches.next() == null);
+        }
+    }
+};
+
 test "captured Bulgarian Belgrad retains computed heading bare parameters body table actions and codec" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -12362,7 +12399,7 @@ test "captured Bulgarian Belgrad retains computed heading bare parameters body t
     defer behavior.deinit();
     var styles = try @import("table_style_profile.zig").parseAlloc(a, css);
     defer styles.deinit();
-    try std.testing.expectEqualSlices(u32, &.{ 7, 8, 11, 29 }, styles.admitted_rule_numbers);
+    try CapturedBulgarianStyleTest.verify(&styles);
     const Fixture = struct {
         fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
             // Exact captured registry row: bg / български / Български / bg / Bulgarian / bul.
@@ -13414,7 +13451,7 @@ test "captured Bulgarian may retains computed subpage noun particle forms transl
     defer behavior.deinit();
     var styles = try @import("table_style_profile.zig").parseAlloc(a, css);
     defer styles.deinit();
-    try std.testing.expectEqualSlices(u32, &.{ 7, 8, 11, 29 }, styles.admitted_rule_numbers);
+    try CapturedBulgarianStyleTest.verify(&styles);
     const Fixture = struct {
         fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
             // Exact captured registry row: bg / български / Български / bg / Bulgarian / bul.
@@ -13646,4 +13683,337 @@ test "SL internal Writer preserves missing raw authority and the complete expand
         const report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(65536));
         try std.testing.expectEqual(!owned, std.mem.indexOf(u8, report, "missing_language_heading") != null);
     }
+}
+
+
+test "captured alarmowac retains bordered Polish flag occurrence and complete Polish body codec" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Complete retained p164655/r3372809; no re-expansion.
+    const raw = "== {{-pl-}} ==\n{{-verb-|pl}}\n{{Pn}}\n# [[allarmare]], [[dare]] [[l']] [[allarme]]\n# {{Fig}} [[allarmare]], [[mettere]] [[in]] [[apprensione]] <[[in]] [[allarme]]>, [[suscitare]] [[l']] [[allarme]]";
+    const expanded = "==  [[File:Flag_of_Poland.svg|border|40px]] [[polacco|Polacco]] ==\n===[[Image:Open_book_01.svg|30px|]]''[[verbo|Verbo]]''===\n[[Categoria:Verbi in polacco]] \n\n'''alarmować'''<small></small>\n# [[allarmare]], [[dare]] [[l']] [[allarme]]\n# <small>(''senso figurato'')</small> [[allarmare]], [[mettere]] [[in]] [[apprensione]] <[[in]] [[allarme]]>, [[suscitare]] [[l']] [[allarme]]";
+    const namespace_source = "# wikidict-namespace-registry-v1\n# wiki\titwiktionary\n# dump-date\t20261001\n# content-language\tit\n-2\tMedia\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n-1\tSpeciale\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\tDiscussione\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n2\tUtente\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n3\tDiscussioni utente\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n4\tWikizionario\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\tWZ\tWiktionary\n5\tDiscussioni Wikizionario\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWiktionary talk\n6\tFile\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\tImmagine\n7\tDiscussioni file\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDiscussioni immagine\tImage talk\n8\tMediaWiki\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n9\tDiscussioni MediaWiki\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n11\tDiscussioni template\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n12\tAiuto\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n13\tDiscussioni aiuto\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n14\tCategoria\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n15\tDiscussioni categoria\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n100\tAppendice\tAppendice\tcase-sensitive\t1\t0\t0\t\tsupplemental\tunclassified_subject_retained\n101\tDiscussioni appendice\tDiscussioni appendice\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\tModulo\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\tDiscussioni modulo\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\tEvento\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\tDiscussioni evento\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
+    try std.testing.expectEqual(@as(usize, 195), raw.len);
+    try std.testing.expectEqual(@as(usize, 377), expanded.len);
+    var source_hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(raw, &source_hash, .{});
+    try std.testing.expectEqualStrings("29a5d76bc461af34eed4922e0cf6cbf0e2bc0a0da420361c4ba09b67aecfcc26", &std.fmt.bytesToHex(source_hash, .lower));
+    std.crypto.hash.sha2.Sha256.hash(expanded, &source_hash, .{});
+    try std.testing.expectEqualStrings("5797eebb84b5d22dfa6f212e1b147e5b78109d80848c9da11bccc0437a092a97", &std.fmt.bytesToHex(source_hash, .lower));
+    var namespaces = try @import("namespace_registry").Registry.init(a, namespace_source);
+    defer namespaces.deinit();
+    const Authority = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            // Exact installed pl/polacco/Polacco row, not the edition's language.
+            for ([_][]const u8{ "polacco", "Polacco", "Polski", "polski", "pl", "Polish", "pol" }) |label|
+                if (std.mem.eql(u8, value, label)) return .{ .code = "pl", .heading = "polacco" };
+            return null;
+        }
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return (resolve(ctx, value) orelse return null).code;
+        }
+    };
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = Authority.get, .resolve_fn = Authority.resolve, .trusted_fn = Authority.resolve };
+    const reference = try std.mem.replaceOwned(u8, a, expanded, "<[[in]]", "&lt;[[in]]");
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/actual", .{tmp.sub_path});
+    const reference_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/reference", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    var reference_writer = try Writer.init(std.testing.io, a, reference_root);
+    defer reference_writer.deinit();
+    reference_writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "alarmować", expanded, raw, null);
+    try reference_writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "alarmować", reference, raw, null);
+    const stats = try writer.finish(codes);
+    const expected_stats = try reference_writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    try std.testing.expectEqual(stats.language_records, expected_stats.language_records);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "polacco"));
+    defer mapped.deinit();
+    var expected_mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, reference_root, "polacco"));
+    defer expected_mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const expected_blob = try blob_format.inspect(expected_mapped.bytes);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    var expected_index = try expected_blob.buildTrustedIndexAlloc(a);
+    defer expected_index.deinit(a);
+    const record = (try index.find("alarmować")).?;
+    const expected_record = (try expected_index.find("alarmować")).?;
+    try std.testing.expectEqualSlices(u8, expected_record.payload, record.payload);
+    const stored = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+    try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, stored));
+    try std.testing.expectEqualStrings("pl", stored.entry.language_code);
+    try std.testing.expectEqualStrings("polacco", stored.entry.language.?);
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.organization.lexemes.len);
+    const lexeme = stored.entry.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Verb", lexeme.kind);
+    try std.testing.expectEqual(@as(usize, 2), lexeme.definitions.len);
+    try std.testing.expectEqualStrings("Verbo", stored.entry.sections[lexeme.section].title);
+    try std.testing.expectEqual(@as(u8, 3), stored.entry.sections[lexeme.section].level);
+    try std.testing.expectEqual(@as(usize, 2), stored.entry.media.len);
+    var flag_image = false;
+    var book_image = false;
+    for (stored.entry.media) |item| {
+        flag_image = flag_image or std.mem.eql(u8, item.file, "Flag of Poland.svg");
+        book_image = book_image or std.mem.eql(u8, item.file, "Open book 01.svg");
+    }
+    try std.testing.expect(flag_image and book_image);
+    try std.testing.expectEqualStrings("DPRD", record.payload[0..4]);
+    var flag_occurrences: usize = 0;
+    var book_occurrences: usize = 0;
+    var definitions: usize = 0;
+    var figurative = false;
+    var headword = false;
+    var in_actions: usize = 0;
+    var alarm_actions: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| {
+        var text: std.ArrayList(u8) = .empty;
+        for (block.spans) |span| {
+            if (span.image) |image| {
+                try std.testing.expectEqualStrings("", span.text);
+                try std.testing.expectEqualStrings("", span.trail);
+                try std.testing.expect(image.height_px == null and image.alt == null and image.tooltip == null);
+                if (std.mem.eql(u8, image.file, "Flag of Poland.svg")) {
+                    flag_occurrences += 1;
+                    try std.testing.expect(image.border);
+                    try std.testing.expectEqual(@as(?u32, 40), image.width_px);
+                    try std.testing.expectEqual(@as(u8, 2), section.level);
+                    try std.testing.expectEqualStrings("Polacco", section.title);
+                    try std.testing.expectEqual(blobs.presentation_types.InlineKind.link, span.kind);
+                    try std.testing.expectEqualStrings("File:Flag of Poland.svg", span.target);
+                } else if (std.mem.eql(u8, image.file, "Open book 01.svg")) {
+                    book_occurrences += 1;
+                    try std.testing.expect(!image.border);
+                    try std.testing.expectEqual(@as(?u32, 30), image.width_px);
+                } else return error.TestUnexpectedResult;
+            }
+            try text.appendSlice(a, span.text);
+            if (span.bold and std.mem.eql(u8, span.text, "alarmować")) headword = true;
+            if (span.italic and std.mem.eql(u8, span.text, "senso figurato")) {
+                try std.testing.expectEqual(@as(?f32, 1.0 / 1.2), span.font_scale);
+                figurative = true;
+            }
+            if (block.kind == .definition and span.kind == .link) {
+                if (std.mem.eql(u8, span.target, "in")) in_actions += 1;
+                if (std.mem.eql(u8, span.target, "allarme")) alarm_actions += 1;
+            }
+        }
+        if (block.kind == .definition) {
+            const expected: []const u8 = if (definitions == 0) "allarmare, dare l' allarme" else "(senso figurato) allarmare, mettere in apprensione <in allarme>, suscitare l' allarme";
+            try std.testing.expectEqualStrings(expected, std.mem.trim(u8, text.items, " \t\r\n"));
+            definitions += 1;
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), flag_occurrences);
+    try std.testing.expectEqual(@as(usize, 1), book_occurrences);
+    try std.testing.expectEqual(@as(usize, 2), definitions);
+    try std.testing.expectEqual(@as(usize, 2), in_actions);
+    try std.testing.expectEqual(@as(usize, 3), alarm_actions);
+    try std.testing.expect(headword and figurative);
+}
+
+
+test "complete Finnish morphology appendix preserves supplemental body tables actions references and codec" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const title = "Liite:Viron kielen kielioppi/Sanamuotojen muodostaminen";
+    const source = "'''LUONNOS'''\n\nTämä esitys perustuu teoksen \"Eesti keele käsiraamat\" ['''EKKR'''] <sup>[http://www.eki.ee/books/ekk09/ EKI / ekk09]</sup> näkemykseen asiasta. Monia muitakin tapoja on.\n\nViron kirjakielen normin, \"Eesti õigekekeelsussõnaraamat\" esitys teemamuodoista ja analogiamuodoista: [http://www.eki.ee/dict/qs2013/qs2013.html '''ÕS 2013''' / PÕHIVORMID]\n\n== Työkaluja ==\n\n* '''Eesti keele süntesaator / EKI''' [http://www.filosoft.ee/gene_et/]\n: Viron sanojen taivutusmuotojen luonti.\n* '''Eesti keele morfanalüsaator / EKI''' [http://www.filosoft.ee/html_morf_et/]\n: Viron sanojen taivutusmuotojen rakenteen analysointi.\n\n== Sanamuotojen rakenne ==\n\n=== Alkumuoto ===\n\nViron kielen sana voi eri taivutusmuodoissa muuttua monin eri tavoin. Sanamuotojen perustaksi täytyy valita yksi kiinteä sanan tai sanan vartalon muoto, jonka perusteella esitetään säännöt sanan muiden muotojen muodostamiseksi. Tämä on '''alkumuoto'''  (''algvorm'')\n\n* Nominien alkumuoto on yksikön nominatiivi, esimerkiksi ''siil, mõte, kirjanik, .tantsijatar''\n\n* Verbien alkumuoto  on ''ma''-infinitiivin vartalo ennen infinitiivin tunnusta: ''ela(ma), näge(ma)'')\n\n; Lähteet\n* [http://www.eki.ee/books/ekk09/index.php?p=3&p1=2&id=120 EKKR M 18 Algvorm]\n* [[EKG]] osa 1, § 93 s.121\n\n=== Teemamuodot ja analogiamuodot ===\n \nMonet sanan taivutusmuodoista muodostuvat kaikissa sanoissa samojen perusteiden mukaan. Näiden \"johdettujen\" muotojen muodostamiseen ei kuitenkaan pelkkä sanan alkumuoto riitä. Lisäksi täytyy tietää  sanan '''teemamuodot''' (''põhivorm'') [\"perusmuoto\"]. \n\nSanojen kaikki taivutusmuodot koostuvat näistä teemamuodoista ja niiden perusteella johdettavista '''analogiamuodoista''' (''analoogiavorm'').\n\nAnalogiamuotojen johtamiseksi teemamuodoista täytyy tuntea kyseisen sanan tai sanan taivutustyypin muotojen muodostamiseen liittyvät '''säännöt''' ja tuntea '''poikkeukset'''.\n\n\n; Lähteet\n\n* [http://www.eki.ee/books/ekk09/index.php?p=3&p1=2&id=122 EKKR M 20 Põhivormid ja analoogiavormid]\n\n==== Nominien teemamuodot ====\n* yksikön nominatiivi (''ainsuse nimetav'')\n* yksikön genetiivi (''ainsuse omastav''\n* yksikön partitiivi (''ainsuse osastav'')\n* yksikön lyhyt illatiivi, aditiivi (''lühike ainsuse sisseütlev'')\n* monikon genetiivi (''mitmuse omastav'')\n* monikon partitiivi (''mitmuse osastav'')\n \nTeemamuotojen ja niiden vartaloiden perusteella voidaan muodostaa sanan kaikki sijamuodot:\n\n:: Yksikön nominatiivi → yksilöllinen\n:: Yksikön partitiivi → yksilöllinen\n:: Yksikön lyhyt illatiivi → yksilöllinen\n:: Yksikön genetiivi → yksikön sijamuodot ''sse''-illatiivista alkaen ja monikon nominatiivi\n:: Monikon genetiivi → ''de''-monikon muodot illatiivista alkaen\n:: Monikon partitiivi → vokaalimonikon muodot, muunnoksia voi esiintyä\n\nYksilöllisten teemamuotojen perusteella ei voi muodostaa muita muotoja.\n\n; Lähteet \n# [http://www.eki.ee/books/ekk09/index.php?p=3&p1=5&id=226 EKKR M 111 Analoogiaseosed käändsõna paradigmas]\n\n==== Verbien teemamuodot ====\n* Verbin taivutusmuodot, katso [http://www.eki.ee/dict/qs2013/qs2013.html ÕS 2013 Käändsõna vormistik]\n\n'''TEEMAMUODOT'''\n* ''ma''-infinitiivi [esim. '''lugema''']\n* ''da''-infinitiivi ['''lugeda''']\n* indikatiivin preesensin yksikön 3. persoona ['''loeb''']<sup>SVSSK</sup>\n* indikatiivin preesensin passiivi (kindla kõneviisi umbisikulise tegumoe olevik) ['''loetakse'''\n\n; Esimerkkejä\n\nTämän esityksen esimerkkiverbi '''lubama'''<br />\n: rakennesimerkkejä ''<elama, kinkima, vestlema, hüppama>''<br />\n\n\n* ''ma''-infinitiivi (''ma''-tegevusnimi) '''lubama'''\n: <esim. ''ela/ma, kinki/ma, vestle/ma>\n\n* ''da''-infinitiivi (''da''-tegevusnimi) '''lubada'''\n: <''ela/da, kinki/da, vestel/da, hüpa/ta''>\n\n* indikatiivin preesensin yksikön 3. persoonan muoto (kindla kõneviisi oleviku ainsuse 3. pööre) '''loeb'''\n: <''ela/b, kinki/b, vestle/b, hüppa/b''>\n\n* indikatiivin preesensin passiivi (kindla kõneviisi umbisikulise tegumoe olevik) '''lubatakse'''\n: <ela/takse, kingi/takse, veste/dakse'' > <br />[aikaisemmin passiivin partisiipin preesens, ''tud''-partisiippi '''lubatud'''>]\n\nTeemamuotojen ja niiden vartaloiden perusteella voidaan muodostaa verbien muut muodot:\n\n''' ''ma''-infinitiivi →'''\n:: ''ma''-infinitiivin sijamuodot (''käändevormid'')\n::: <''luba/mas, ela/mas, kinki/mas, vestle/mas>\n::: <''luba/mast, ela/mast, kinki/mast, vestle/mast''>\n::: <''luba/maks, ela/maks, kinki/maks, vestle/maks''>\n::: <''luba/mata, ela/mata, kinki/mata, vestle/mata''>\n:: aktiivin indikatiivin imperfekti (''isikulise tegumoe kindla kõneviisi lihtminevik'')<br />\n:::<''luba/sin, ela/sin, kinki/sin, vestle/sin''<\n:: kvotatiivin preesens (''kaudse kõneviisi olevik'') [epäsuoran tapaluokan preesens]<br />\n:::<''ela/vat, kinki/vat, vestle/vat'')\n:: aktiivin partisiipin preesens (''isikulise tegumoe oleviku kesksõna'') [''v''-partisiippi]\n:::<''ela/v, kinki/v, vestle/v''> <br />\n''' ''da''-infinitiivi →'''\n:: ''des''-muoto (''des''-vorm)\n::: <''ela/des, kinki/des, vestel/des''>\n:: imperatiivin yksikön 3. persoona (''käskiva kõneviisi ainsuse 3. pööre'')\n:: imperatiivin monikko (''käskiva kõneviisi mitmus'')\n:: jussiivin preesens (''möönva kõneviisi olevik'') [epäsuoran imperatiivin preesens]\n:: aktiivin partisiipin perfekti (''isikulise tegumoe mineviku kesksõna) [''nud''-partisiippi]\n:: konditionaalin perfekti (''tingiva kõneviisi minevik'')\n:: kvotatiivin perfekti (''kaudse kõneviisi minevik'')\n\n'''indikatiivin preesensin yksikön 3. persoona →'''\n:: muut indikatiivin preesensin muodot (''kindla kõneviisi oleviku pöörded'')\n:: imperatiivin yksikön 2. persoona (''käskiva kõneviisi ainsuse 2. pööre'')\n:: konditionaalin preesens (''tingiva kõneviisi olevik'')\n\n''' preesensin passiivi →'''\n:: muut passiivin muodot (''umbisikulise tegumoe vormid'')\n\nLisäksi on 27 epäsäännöllstä verbiä, joiden muodostamiseen edelläolevat teema- ja analogiamuodot eivät riitä: [[laskma]], [[pidama]], [[pesema]], [[kusema]], [[tegema]], [[nägema]], [[tulema]], [[panema]], [[sure­ma]], [[olema]], [[minema]] sekä 16 [[võima]]-, [[saama]]-, [[käima]]- ja [[jooma]]-tyyppien  verbiä.\n\n\n; Lähteet\n* [http://www.eki.ee/books/ekk09/index.php?p=3&p1=5&id=227 EKKR M 112 Analoogiaseosed pöördsõna paradigmas]\n\n== Esimerkkejä ==\n\n====== Nominien teemamuodot ja analogiamuodot ======\n\n;Lähde:\nEesti keele Käsiraamat '''[[:Liite:Lähteet#EKKR|EKKR]]'''\n\n; Selityksiä\n* [.] esimerkiksi [.jalg],  piste tavun edessä = III kestoaste\n\n{| class=\"wikitable\"\n|-\n| '''yksikön nominatiivi''' || '''.jalg''' || '''saabas''' || '''kala'''\n|}\n\n{| class=\"wikitable\"\n|-\n| '''yksikön genetiivi''' || '''jala''' || '''.saapa''' || '''kala'''\n|-\n| yksikön illatiivi || jala/sse || .saapa/sse || kala/sse\n|-\n| yksikön inessiivi || jala/s || .saapa/s || kala/s\n|-\n| yksikön elatiivi  || jala/st || .saapa/st || kala/st\n|-\n| yksikön allatiivi || jala/le || .saapa/le || kala/le\n|-\n| yksikön adessiivi || jala/l || .saapa/l || kala/l\n|-\n| yksikön ablatiivi || jala/lt  || .saapa/lt || kala/lt\n|-\n| yksikön translatiivi || jala /ks || .saapa/ks ||kala/ks\n|-\n| yksikön terminatiivi || jala/ni || .saapa/ni || kala/ni\n|-\n| yksikön essiivi || jala/na  || .saapa/na || kala/na\n|-\n| yksikön abessiivi || jala/ta || .saapa/ta || kala/ta\n|-\n| yksikön komitatiivi || jala/ga  || .saapa/ga || kala/ga\n|-\n| monikon nominatiivi || jala/d || .saapad ||kala/d\n|}\n\n{| class=\"wikitable\"\n|-\n| '''yksikön partitiivi''' || '''.jalga''' || '''saabast''' || '''kala'''\n|}\n\n{| class=\"wikitable\"\n|-\n| '''yksikön lyhyt illatiivi''' || '''.jalga''' ||   x  ||  x   \n|}\n\n{| class=\"wikitable\"\n|-\n| '''monikon genetiivi''' || .jalga/de || saabas/te || kala/de\n|-\n| monikon illatiivi || .jalga/desse || saabas/tesse ||kala/desse\n|-\n| monikon inessiivi || .jalga/des || saabas/tes || kala/des\n|-\n| monikon elatiivi || .jalga/dest || saabas/test ||kala/dest\n|-\n| monikon allatiivi || .jalga.dele || saabas/tele || kala/dele\n|-\n| monikon adessiivi || .jalga/del || saabas/tel || kala/del\n|-\n| monikon monikon ablatiivi || .jalga/delt || saabas/telt || kala/delt\n|-\n| monikon translatiivi || .jalga/deks || saabas/teks || kala/deks\n|-\n| monikon terminatiivi || .jalga/deni || saabas/teni || kala/deni\n|-\n| monikon essiivi || .jalga/dena || saabas/tena || kala/dena\n|-\n| monikon abessiivi || .jalga/deta || saabas/teta || kala/deta \n|-\n| monikon komitatiivi || .jalga/dega || saabas/tega || kala/dega\n|}\n\n{| class=\"wikitable\"\n|-\n| '''monikon partitiivi''' || '''.jalga''' <br /> '''.jalga/sid''' || '''.saapa/id''' || '''kalu''' <br /> '''kala/sid'''\n|-\n| vokaalimonikon illatiivi ||  x || .saapa/isse ||  x\n|-\n| vokaalimonikon inessiivi ||  x || .saapa/is ||  x\n|-\n| vokaalimonikon elatiivi ||   x || .saapa/ist ||  x\n|-\n| vokaalimonikon allatiivi ||  x || .saapa/ile ||  x\n|-\n| vokaalimonikon adessiivi ||  x || .saappa/il ||  x\n|-\n| vokaalimoniko ablatiivi ||  x || .saapa/ilt ||  x\n|-\n| vokaalimonikon translatiivi ||  x || .saapa/iks ||  x\n|-\n| vokaalimonikon terminatiivi ||  x || .saapa/ini ||  x\n|-\n| vokaalimonikon essiivi ||  x || .saapa/ina  ||  x\n|}\n\n===== Verbien teemamuodot ja analogiamuodot =====\n* Katso [https://docs.google.com/document/d/1rqPfqNBO7aRQPHTpG1KGaHvNMcA06iydtqdd_4omTRU/edit#heading=h.q56y9lhx2il3 Viron verbien teemamuodot ja analogiamuotojen muodostaminen]\n\n== Kirjallisuus ==\n* [[EKG]] '''Eesti keele grammatika'''. 1, Morfoloogia ; Sõnamoodustus / Mati Erelt ... [et al.] ; trükki toimetanud Mati Erelt ... [et al.]. – Tallinn : Eesti Teaduste Akadeemia Keele ja Kirjanduse Instituut, 1995. 659 s. – ISBN 9985-9002-2-7\n\n\n* [[:Liite:Lähteet#EKKR|EKKR]] '''Eesti keele käsiraamat''' / Mati Erelt, Tiiu Erelt, Kristiina Ross Tallinn : Eesti Keele Sihtasutus, 2007 (Tallinn : Pakett) 726 lk. – 21 cm ISBN/ISSN: 9789985792100<br />\n::Verkkoversio [http://www.eki.ee/books/ekk09/ Eesti keele käsiraamat]\n* '''Viron kielioppi''' / Hannu Remes : Werner Söderström Osakeyhtiö, Porvoo 1983 : ISBN 951-0-11982-2\n* [http://herkules.oulu.fi/isbn9789514291500/isbn9789514291500.pdf '''Muodot kontrastissa'''. Suomen ja viron vertailevaa taivutusmorfologiaa / Hannu Remes 2009 ISBN 978-951-42-9150-0 (PDF)] ladattava PDF";
+    const namespace_source = "# wikidict-namespace-registry-v1\n# wiki\tfiwiktionary\n# dump-date\t20261001\n# content-language\tfi\n-2\tMedia\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n-1\tToiminnot\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\tKeskustelu\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n2\tKäyttäjä\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n3\tKeskustelu käyttäjästä\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n4\tWikisanakirja\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\tWiktionary\n5\tKeskustelu Wikisanakirjasta\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWiktionary talk\n6\tTiedosto\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\tKuva\n7\tKeskustelu tiedostosta\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tImage talk\tKeskustelu kuvasta\n8\tJärjestelmäviesti\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n9\tKeskustelu järjestelmäviestistä\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n10\tMalline\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n11\tKeskustelu mallineesta\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n12\tOhje\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n13\tKeskustelu ohjeesta\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n14\tLuokka\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n15\tKeskustelu luokasta\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n100\tLiite\tLiite\tcase-sensitive\t1\t0\t0\t\tsupplemental\tunclassified_subject_retained\n101\tKeskustelu liitteestä\tKeskustelu liitteestä\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\tModuuli\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\tKeskustelu moduulista\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\tEvent\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\tEvent talk\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
+    try std.testing.expectEqual(@as(usize, 10225), source.len);
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    try std.testing.expectEqualStrings("aaf2e0d65bec4ae0436cd1691a9d592aaac864ac7a4511a95149dd59b50f0b1e", &std.fmt.bytesToHex(digest, .lower));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, "<esim. ''ela/ma, kinki/ma, vestle/ma>"));
+    const reference = try std.mem.replaceOwned(u8, a, source, "<esim.", "&lt;esim.");
+    var namespaces = try @import("namespace_registry").Registry.init(a, namespace_source);
+    defer namespaces.deinit();
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces };
+    var payloads: [2][]const u8 = undefined;
+    for ([_][]const u8{ source, reference }, 0..) |body, i| {
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/fi-morphology-{d}", .{ tmp.sub_path, i });
+        var writer = try Writer.init(std.testing.io, a, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 100, .kind = .supplemental }, title, body, source, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.supplemental_records);
+        try std.testing.expectEqual(@as(usize, 0), stats.language_records);
+        var mapped = try mmapPath(std.testing.io, try std.fs.path.join(a, &.{ root, "supplemental.wikblb" }));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        try std.testing.expect(blob.kind == .supplemental);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(title)) orelse return error.TestUnexpectedResult;
+        payloads[i] = try a.dupe(u8, record.payload);
+    }
+    try std.testing.expectEqualSlices(u8, payloads[1], payloads[0]);
+    const stored = try blobs.presentation_codec.decodeAlloc(a, payloads[0], title, .supplemental, null);
+    try std.testing.expectEqualSlices(u8, payloads[0], try blobs.presentation_codec.encodeAlloc(a, stored));
+    try std.testing.expectEqualStrings(title, stored.entry.title);
+    try std.testing.expect(stored.entry.language == null and stored.entry.language_code.len == 0);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.media.len);
+    const Scan = struct {
+        tables: usize = 0,
+        rows: usize = 0,
+        cells: usize = 0,
+        visible: std.ArrayList(u8) = .empty,
+        targets: std.ArrayList([]const u8) = .empty,
+        italic_example: bool = false,
+        bold_draft: bool = false,
+        fn spans(self: *@This(), allocator: std.mem.Allocator, values: []const blobs.presentation_types.Span) !void {
+            for (values) |span| {
+                try self.visible.appendSlice(allocator, span.text);
+                if (span.kind == .line_break) try self.visible.append(allocator, '\n');
+                if (span.kind == .link or span.kind == .external_link) try self.targets.append(allocator, span.target);
+                self.italic_example = self.italic_example or (span.italic and std.mem.indexOf(u8, span.text, "ela/ma, kinki/ma, vestle/ma") != null);
+                self.bold_draft = self.bold_draft or (span.bold and std.mem.eql(u8, span.text, "LUONNOS"));
+            }
+        }
+        fn blocks(self: *@This(), allocator: std.mem.Allocator, values: []const blobs.presentation_types.Block) anyerror!void {
+            for (values) |block| {
+                if (block.table) |table_value| {
+                    self.tables += 1;
+                    self.rows += table_value.rows.len;
+                    for (table_value.rows) |row| for (row.cells) |cell| {
+                        self.cells += 1;
+                        if (cell.blocks) |children| try self.blocks(allocator, children) else try self.spans(allocator, cell.spans);
+                    };
+                } else try self.spans(allocator, block.spans);
+                try self.visible.append(allocator, '\n');
+            }
+        }
+    };
+    var scan: Scan = .{};
+    for (stored.entry.sections) |section| try scan.blocks(a, section.blocks);
+    try std.testing.expectEqual(@as(usize, 6), scan.tables);
+    try std.testing.expectEqual(@as(usize, 38), scan.rows);
+    try std.testing.expectEqual(@as(usize, 152), scan.cells);
+    try std.testing.expect(scan.italic_example and scan.bold_draft);
+    for ([_][]const u8{ "<esim. ela/ma, kinki/ma, vestle/ma>", "<elama, kinkima, vestlema, hüppama>", "<ela/da, kinki/da, vestel/da, hüpa/ta>", "Verkkoversio", "978-951-42-9150-0" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, text) != null);
+    for ([_][]const u8{ "laskma", "pidama", "pesema", "kusema", "tegema", "nägema", "tulema", "panema", "olema", "minema", "võima", "saama", "käima", "jooma", "EKG", "Liite:Lähteet#EKKR", "http://www.eki.ee/books/ekk09/" }) |target| {
+        var found = false;
+        for (scan.targets.items) |actual| if (std.mem.eql(u8, actual, target)) { found = true; break; };
+        try std.testing.expect(found);
+    }
+}
+
+
+test "captured alarmowac preserves Polish owner verb senses both linked angles and complete codec body" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Complete retained p164655/r3372809; no re-expansion.
+    const raw = "== {{-pl-}} ==\n{{-verb-|pl}}\n{{Pn}}\n# [[allarmare]], [[dare]] [[l']] [[allarme]]\n# {{Fig}} [[allarmare]], [[mettere]] [[in]] [[apprensione]] <[[in]] [[allarme]]>, [[suscitare]] [[l']] [[allarme]]";
+    const expanded = "==  [[File:Flag_of_Poland.svg|border|40px]] [[polacco|Polacco]] ==\n===[[Image:Open_book_01.svg|30px|]]''[[verbo|Verbo]]''===\n[[Categoria:Verbi in polacco]] \n\n'''alarmować'''<small></small>\n# [[allarmare]], [[dare]] [[l']] [[allarme]]\n# <small>(''senso figurato'')</small> [[allarmare]], [[mettere]] [[in]] [[apprensione]] <[[in]] [[allarme]]>, [[suscitare]] [[l']] [[allarme]]";
+    const namespace_source = "# wikidict-namespace-registry-v1\n# wiki\titwiktionary\n# dump-date\t20261001\n# content-language\tit\n-2\tMedia\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n-1\tSpeciale\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\tDiscussione\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n2\tUtente\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n3\tDiscussioni utente\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n4\tWikizionario\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\tWZ\tWiktionary\n5\tDiscussioni Wikizionario\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWiktionary talk\n6\tFile\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\tImmagine\n7\tDiscussioni file\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDiscussioni immagine\tImage talk\n8\tMediaWiki\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n9\tDiscussioni MediaWiki\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n11\tDiscussioni template\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n12\tAiuto\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n13\tDiscussioni aiuto\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n14\tCategoria\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n15\tDiscussioni categoria\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n100\tAppendice\tAppendice\tcase-sensitive\t1\t0\t0\t\tsupplemental\tunclassified_subject_retained\n101\tDiscussioni appendice\tDiscussioni appendice\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\tModulo\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\tDiscussioni modulo\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\tEvento\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\tDiscussioni evento\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
+    try std.testing.expectEqual(@as(usize, 195), raw.len);
+    try std.testing.expectEqual(@as(usize, 377), expanded.len);
+    var namespaces = try @import("namespace_registry").Registry.init(a, namespace_source);
+    defer namespaces.deinit();
+    const Authority = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            // Exact installed pl/polacco/Polacco row, not the edition's language.
+            for ([_][]const u8{ "polacco", "Polacco", "Polski", "polski", "pl", "Polish", "pol" }) |label|
+                if (std.mem.eql(u8, value, label)) return .{ .code = "pl", .heading = "polacco" };
+            return null;
+        }
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return (resolve(ctx, value) orelse return null).code;
+        }
+    };
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = Authority.get, .resolve_fn = Authority.resolve, .trusted_fn = Authority.resolve };
+    const reference = try std.mem.replaceOwned(u8, a, expanded, "<[[in]]", "&lt;[[in]]");
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/actual", .{tmp.sub_path});
+    const reference_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/reference", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    var reference_writer = try Writer.init(std.testing.io, a, reference_root);
+    defer reference_writer.deinit();
+    reference_writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "alarmować", expanded, raw, null);
+    try reference_writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "alarmować", reference, raw, null);
+    const stats = try writer.finish(codes);
+    const expected_stats = try reference_writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    try std.testing.expectEqual(stats.language_records, expected_stats.language_records);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "polacco"));
+    defer mapped.deinit();
+    var expected_mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, reference_root, "polacco"));
+    defer expected_mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const expected_blob = try blob_format.inspect(expected_mapped.bytes);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    var expected_index = try expected_blob.buildTrustedIndexAlloc(a);
+    defer expected_index.deinit(a);
+    const record = (try index.find("alarmować")).?;
+    const expected_record = (try expected_index.find("alarmować")).?;
+    try std.testing.expectEqualSlices(u8, expected_record.payload, record.payload);
+    const stored = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+    try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, stored));
+    try std.testing.expectEqualStrings("pl", stored.entry.language_code);
+    try std.testing.expectEqualStrings("polacco", stored.entry.language.?);
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.organization.lexemes.len);
+    const lexeme = stored.entry.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Verb", lexeme.kind);
+    try std.testing.expectEqual(@as(usize, 2), lexeme.definitions.len);
+    try std.testing.expectEqualStrings("Verbo", stored.entry.sections[lexeme.section].title);
+    try std.testing.expectEqual(@as(u8, 3), stored.entry.sections[lexeme.section].level);
+    try std.testing.expectEqual(@as(usize, 2), stored.entry.media.len);
+    var flag_image = false;
+    var book_image = false;
+    for (stored.entry.media) |item| {
+        flag_image = flag_image or std.mem.eql(u8, item.file, "Flag of Poland.svg");
+        book_image = book_image or std.mem.eql(u8, item.file, "Open book 01.svg");
+    }
+    try std.testing.expect(flag_image and book_image);
+    var definitions: usize = 0;
+    var figurative: usize = 0;
+    var headword = false;
+    var in_actions: usize = 0;
+    var alarm_actions: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| {
+        var text: std.ArrayList(u8) = .empty;
+        for (block.spans) |span| {
+            try text.appendSlice(a, span.text);
+            if (span.bold and std.mem.eql(u8, span.text, "alarmować")) headword = true;
+            if (std.mem.eql(u8, span.text, "senso figurato")) {
+                // Authored <small> uses the numeric size contract, not the legacy flag.
+                try std.testing.expect(span.italic);
+                try std.testing.expect(!span.small);
+                try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001);
+                figurative += 1;
+            }
+            if (block.kind == .definition and span.kind == .link) {
+                if (std.mem.eql(u8, span.target, "in")) in_actions += 1;
+                if (std.mem.eql(u8, span.target, "allarme")) alarm_actions += 1;
+            }
+        }
+        if (block.kind == .definition) {
+            const expected: []const u8 = if (definitions == 0) "allarmare, dare l' allarme" else "(senso figurato) allarmare, mettere in apprensione <in allarme>, suscitare l' allarme";
+            try std.testing.expectEqualStrings(expected, std.mem.trim(u8, text.items, " \t\r\n"));
+            definitions += 1;
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 2), definitions);
+    try std.testing.expectEqual(@as(usize, 2), in_actions);
+    try std.testing.expectEqual(@as(usize, 3), alarm_actions);
+    try std.testing.expect(headword);
+    try std.testing.expectEqual(@as(usize, 1), figurative);
 }

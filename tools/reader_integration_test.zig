@@ -222,6 +222,55 @@ fn checkWriterCellRules(h: *Harness, bin: []const u8, dir: []const u8) !void {
     try h.require(first_rule < alal and alal < second_rule and second_rule < baat, "Reader plain rule and link order matches authored cells");
 }
 
+fn checkWriterImageBorder(h: *Harness, bin: []const u8, ffi_test: []const u8, dir: []const u8) !void {
+    const a = h.a;
+    const root = try std.fs.path.join(a, &.{ dir, "writer-image-border" });
+    const title = "image-border-contract";
+    // Marked synthetic source; the actual alarmowac full-page oracle is in blob_builder.
+    const authored = "== Image border contract ==\n[[File:Flag of Poland.svg|border|40px]] [[File:Open book 01.svg|30px]]\n[[File:Flag of Poland.svg|border|20px|alt=|link=]] [[File:Flag of Poland.svg|border|x25px|alt=Poland|link=https://example.test/]]";
+    var writer = try encoder.blob_builder.Writer.init(h.io, a, root);
+    defer writer.deinit();
+    try writer.addPage(a, .{ .id = 100, .kind = .supplemental }, title, authored, null);
+    const stats = try writer.finish(.{});
+    try h.require(stats.supplemental_records == 1 and stats.language_records == 0, "border fixture is supplemental without invented owner");
+    const blob_path = try std.fs.path.join(a, &.{ root, enc.blob_catalog.featureBlobFilename(.supplemental).? });
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(h.io, blob_path, a, .limited(1024 * 1024));
+    const blob = try enc.blob_format.inspect(bytes);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find(title)) orelse return error.AssertionFailed;
+    try h.require(std.mem.eql(u8, record.payload[0..4], "DPRD"), "ordinary Writer generated conditional DPRD");
+    const stored = try enc.presentation_codec.decodeAlloc(a, record.payload, title, .supplemental, null);
+    try h.require(std.mem.eql(u8, record.payload, try enc.presentation_codec.encodeAlloc(a, stored)), "border fixture full codec equality");
+    // Retained outputs are normal native-produced cross-client conformance inputs.
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = try std.fs.path.join(a, &.{ root, ".reader-fixture" }), .data = "Synthetic ordinary Writer image border conformance fixture.\n" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "image-border-contract.dprd" }), .data = record.payload });
+    const json = try h.run(&.{ bin, "lookup", title, "--root", root, "--kind", "supplemental", "--format", "json" }, 0);
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "image-border-contract.json" }), .data = json });
+    const entry = try h.entry(json);
+    var occurrences: usize = 0;
+    var bordered: usize = 0;
+    for (entry.object.get("sections").?.array.items) |section| for (section.object.get("blocks").?.array.items) |block| for (block.object.get("spans").?.array.items) |span| {
+        if (span.object.get("image")) |image| {
+            occurrences += 1;
+            if (image.object.get("border")) |border| {
+                try h.require(border == .bool and border.bool, "border JSON is true-only boolean");
+                bordered += 1;
+            }
+            if (occurrences == 1) {
+                try h.require(std.mem.eql(u8, image.object.get("file").?.string, "Flag of Poland.svg") and image.object.get("width_px").?.integer == 40, "flag content size remains40");
+                try h.require(std.mem.eql(u8, span.object.get("target").?.string, "File:Flag of Poland.svg"), "border preserves source action");
+            }
+            if (occurrences == 2) try h.require(image.object.get("border") == null and image.object.get("width_px").?.integer == 30, "book remains borderless30");
+        }
+    };
+    try h.require(occurrences == 4 and bordered == 3, "all image occurrences preserve individual border state");
+    const text = try h.run(&.{ bin, "lookup", title, "--root", root, "--kind", "supplemental", "--details" }, 0);
+    try h.require(std.mem.indexOf(u8, text, "[image]") != null and std.mem.indexOf(u8, text, "[[File:") == null, "terminal keeps honest image placeholder without source");
+    const ffi = try h.run(&.{ ffi_test, root, title, "--image-border" }, 0);
+    try h.require(std.mem.indexOf(u8, ffi, "FFI_IMAGE_BORDER_PASS") != null, "ABI8 reads genuine DPRD through supplemental lookup");
+}
+
 pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
@@ -236,6 +285,7 @@ pub fn main(init: std.process.Init) !void {
     try checkWriterCellRules(&h, bin, dir);
     const ux_python = init.environ_map.get("WIKIDICT_READER_UX_PYTHON") orelse "python3";
     const ffi_test = argv[2];
+    try checkWriterImageBorder(&h, bin, ffi_test, dir);
     const ffi_output = try h.run(&.{ ffi_test, root, "cat" }, 0);
     try h.require(std.mem.indexOf(u8, ffi_output, "FFI_INTEGRATION_PASS") != null, "data-only C ABI");
 

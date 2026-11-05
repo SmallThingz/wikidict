@@ -55,17 +55,32 @@ static int validate_records(void) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2 || argc > 4 || (argc == 4 && strcmp(argv[3], "--neutral") != 0)) {
-        fprintf(stderr, "usage: ffi-integration ROOT [WORD [--neutral]]\n");
+    if (argc < 2 || argc > 4 || (argc == 4 && strcmp(argv[3], "--neutral") != 0 && strcmp(argv[3], "--image-border") != 0)) {
+        fprintf(stderr, "usage: ffi-integration ROOT [WORD [--neutral|--image-border]]\n");
         return 2;
     }
     if (!validate_records()) return 1;
-    const int neutral = argc == 4;
+    const int neutral = argc == 4 && strcmp(argv[3], "--neutral") == 0;
+    const int image_border = argc == 4 && strcmp(argv[3], "--image-border") == 0;
     const char *word = argc >= 3 ? argv[2] : "mouse";
     dict_handle *handle = NULL;
     dict_status status = dict_open(argv[1], strlen(argv[1]), &handle);
     if (!require(status == DICT_OK && handle != NULL, "open")) return 1;
-    if (!require(DICT_ABI_VERSION == 7u && dict_abi_version() == DICT_ABI_VERSION, "ABI version")) return 1;
+    if (!require(DICT_ABI_VERSION == 8u && dict_abi_version() == DICT_ABI_VERSION, "ABI version")) return 1;
+    if (image_border) {
+        int ok = require(dict_select(handle, NULL, 0, "supplemental", 12) == DICT_OK, "border supplemental selection");
+        dict_buffer result = {0};
+        status = dict_lookup_json(handle, word, strlen(word), &result);
+        ok &= require(status == DICT_OK, "border lookup");
+        ok &= require(contains(&result, "\"border\": true"), "typed border retained by ABI8");
+        ok &= require(contains(&result, "\"width_px\": 40") && contains(&result, "\"width_px\": 30"), "content dimensions unchanged");
+        ok &= require(contains(&result, "File:Flag of Poland.svg") && contains(&result, "https://example.test/"), "image actions retained");
+        dict_buffer_free(handle, &result);
+        dict_close(handle);
+        if (!ok) return 1;
+        puts("FFI_IMAGE_BORDER_PASS: genuine DPRD, border, content geometry and actions");
+        return 0;
+    }
     if (neutral) {
         int ok = require(dict_select(handle, NULL, 0, "language", 8) == DICT_OK, "neutral selection without language");
         dict_buffer result = {0};

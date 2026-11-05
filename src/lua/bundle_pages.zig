@@ -1817,7 +1817,7 @@ test "provider structured entities preserve redirects missing records resolved t
     try tmp.dir.writeFile(io, .{ .sub_path = "wikibase-entity-terms.tsv", .data = terms_test_headers ++
         "Q1\tE\tQ1\t{\"label\":{\"value\":\"caf\\u00e9\",\"language\":\"fr\",\"source-language\":\"fr\"},\"description\":null}\nL9\tM\t\t\n" });
     try tmp.dir.writeFile(io, .{ .sub_path = "language-fallbacks.tsv", .data = fallback_test_headers ++ "en\t\nfr\tde\ten\n" });
-    try tmp.dir.writeFile(io, .{ .sub_path = "interface-messages.tsv", .data = message_test_headers ++ "en\tComma-separator\tV\t, \\t\n" ++ "en\tmissing\tM\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "interface-messages.tsv", .data = message_test_headers ++ "en\tComma-separator\tV\t, \\t\n" ++ "en\tmissing\tM\n" ++ "en\tempty\tV\t\n" });
     {
         var provider = try Provider.init(io, a, root, try lua_program.namespace_registry.englishTestRegistry(), "unused-dump.xml");
         defer provider.deinit();
@@ -1842,6 +1842,9 @@ test "provider structured entities preserve redirects missing records resolved t
         defer a.free(message.source.?);
         try std.testing.expectEqualStrings(", \t", message.source.?);
         try std.testing.expect((try api.interface_message.?(&provider, a, "en", "Missing")).?.source == null);
+        const empty_message = (try api.interface_message.?(&provider, a, "en", "Empty")).?;
+        defer a.free(empty_message.source.?);
+        try std.testing.expectEqualStrings("", empty_message.source.?);
         try std.testing.expectError(error.InterfaceMessageSnapshotMissing, api.interface_message.?(&provider, a, "en", "Unknown"));
     }
     try std.testing.checkAllAllocationFailures(a, struct {

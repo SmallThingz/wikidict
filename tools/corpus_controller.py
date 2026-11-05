@@ -544,9 +544,94 @@ class Lock:
         os.close(self.fd)  # Never unlink a lock inode.
 
 
+def bound_directory(spec, role):
+    require(isinstance(spec, dict) and set(spec) == {'path', 'device', 'inode', 'uid', 'mode'},
+            role + ' directory identity fields differ')
+    require(isinstance(spec['path'], str) and all(type(spec[key]) is int for key in ('device', 'inode', 'uid', 'mode')),
+            role + ' directory identity types differ')
+    path = Path(spec['path'])
+    require(path.is_absolute() and str(path) == os.path.normpath(str(path))
+            and not any(node.is_symlink() for node in (path, *path.parents)) and path.is_dir(),
+            role + ' directory is not canonical and regular')
+    actual = path.stat()
+    require((actual.st_dev, actual.st_ino, actual.st_uid, actual.st_mode & 0o7777)
+            == tuple(spec[key] for key in ('device', 'inode', 'uid', 'mode'))
+            and actual.st_uid == os.geteuid(), role + ' directory identity changed')
+    return path
+
+
+def source_roots(cfg):
+    frozen = cfg.get('source', {}).get('root')
+    if frozen is None:
+        require('workspace_root' not in cfg, 'Workspace override requires a bound retained source')
+        return ROOT, ROOT
+    source = bound_directory(frozen, 'Producer source')
+    workspace = bound_directory(cfg.get('workspace_root'), 'Workspace')
+    require(source == ROOT and Path(__file__).resolve().parents[1] == source,
+            'Controller must execute from the bound producer source')
+    require(source != workspace and source.is_relative_to(workspace / '.tmp'),
+            'Retained source must be inside the bound workspace temporary directory')
+    return source, workspace
+
+
+def resource_lock_paths(cfg):
+    _, workspace = source_roots(cfg)
+    return (workspace / 'data/build-resources/corpus-controller.lock',
+            workspace / '.tmp/build-resources.lock')
+
+
+def retained_source_membership(root):
+    """Enumerate source, excluding only ordinary generated runtime directories."""
+    names = set()
+    for parent, directories, files in os.walk(root, followlinks=False):
+        parent = Path(parent)
+        excluded = {'.tmp', '.zig-cache', 'zig-out'} if parent == root else set()
+        directories[:] = [name for name in directories if name not in excluded]
+        require('__pycache__' not in directories, 'Retained producer contains a Python bytecode cache')
+        require(not any((parent / name).is_symlink() for name in directories),
+                'Retained producer contains a source-directory symlink')
+        for name in files:
+            path = parent / name
+            require(not path.is_symlink() and path.is_file(), 'Retained producer contains an unsafe source file')
+            require(path.suffix not in ('.pyc', '.pyo'), 'Retained producer contains Python bytecode')
+            names.add(path.relative_to(root).as_posix())
+    return names
+
+
+def retained_bytecode_guard(path):
+    if path.suffix == '.py':
+        # -B prevents writes, not reads. Include an external pycache_prefix and
+        # helpers imported only by the future builder child, not this process.
+        from importlib.util import cache_from_source
+        cached = Path(cache_from_source(str(path)))
+        require(not cached.exists() and not cached.is_symlink(),
+                'Retained producer can consume unbound Python bytecode: ' + str(cached))
+
+
+def loaded_module_origins():
+    return {name: getattr(module, '__file__', None) for name, module in tuple(sys.modules.items())
+            if getattr(module, '__file__', None) is not None}
+
+
+def retained_import_guard(source, workspace, files, builder):
+    require(Path(builder.__file__).resolve() == source / 'tools/build_wiktionaries.py'
+            and builder.PROJECT == source, 'Builder import belongs to another producer root')
+    helper_names = {Path(name).stem for name in files
+                    if Path(name).parent.as_posix() == 'tools' and name.endswith('.py')}
+    for name, origin in loaded_module_origins().items():
+        path = Path(origin).absolute()
+        if name in helper_names or path.is_relative_to(workspace):
+            require(path.is_relative_to(source) and path.relative_to(source).as_posix() in files,
+                    'Loaded project helper is outside the bound producer inventory: ' + name)
+
+
 def source_guard(cfg):
-    if cfg.get('artifact_root') is not None:
-        validate_pipeline_paths(cfg, ROOT)
+    source, workspace = source_roots(cfg)
+    frozen = source != workspace
+    if cfg.get('artifact_root') is not None or frozen:
+        validate_pipeline_paths(cfg, workspace)
+    if frozen:
+        require(descriptor(cfg['compiler']['path']) == cfg['compiler'], 'Pinned compiler changed')
     import build_wiktionaries as builder
     timing = None
     try:
@@ -560,8 +645,9 @@ def source_guard(cfg):
     completed = False
     try:
         if timing is not None: timing.switch("source_guard_baseline")
-        head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+        head = None if frozen else subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
         inventory_ref = cfg['source'].get('inventory')
+        require(not frozen or inventory_ref is not None, 'Retained producer requires a qualified source inventory')
         if inventory_ref is None:
             dirty = subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=ROOT, text=True)
             require(not dirty and head == cfg['source']['head'], 'Qualified source must be clean and unchanged')
@@ -571,21 +657,29 @@ def source_guard(cfg):
             files, modes = inventory['files'], inventory['modes']
             require(isinstance(files, dict) and isinstance(modes, dict) and files and set(files) == set(modes),
                     'Producer inventory and modes differ')
-            tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
-            producer_paths = {name for name in tracked if name and not name.startswith('apps/')}
-            require(producer_paths == set(files), 'Tracked producer inventory changed')
-            untracked = subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard', '-z'], cwd=ROOT).decode().split('\0')
-            require(not any(name and not name.startswith('apps/') for name in untracked),
-                    'Untracked producer input requires explicit source qualification')
+            if frozen:
+                require(retained_source_membership(source) == set(files), 'Retained producer inventory changed')
+                retained_import_guard(source, workspace, files, builder)
+            else:
+                tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
+                producer_paths = {name for name in tracked if name and not name.startswith('apps/')}
+                require(producer_paths == set(files), 'Tracked producer inventory changed')
+                untracked = subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard', '-z'], cwd=ROOT).decode().split('\0')
+                require(not any(name and not name.startswith('apps/') for name in untracked),
+                        'Untracked producer input requires explicit source qualification')
             if timing is not None: timing.switch("source_guard_inventory")
             verified_files = verified_bytes = 0
             for name, reference in files.items():
                 relative = Path(name)
                 require(not relative.is_absolute() and '..' not in relative.parts and relative.as_posix() == name,
                         'Invalid producer inventory path')
-                path = ROOT / relative
+                path = source / relative
                 require(not any(node.is_symlink() for node in (path, *path.parents)) and path.is_file(),
                         'Producer input is not a regular non-symlink file')
+                require(not frozen or path.stat().st_nlink == 1,
+                        'Retained producer input shares a writable inode: ' + name)
+                if frozen:
+                    retained_bytecode_guard(path)
                 require(reference['path'] == str(path) and descriptor(path) == reference,
                         'Producer input bytes changed: ' + name)
                 require(type(modes[name]) is int and path.stat().st_mode & 0o7777 == modes[name],
@@ -601,6 +695,10 @@ def source_guard(cfg):
         if timing is not None: timing.count(files=1, bytes=cfg['manifest']['bytes'])
         result = dict(qualified_head=cfg['source']['head'], current_head=head,
                     producer_inventory=inventory_ref, apps_acceptance=False)
+        if frozen:
+            result.update(source_root=cfg['source']['root'], workspace_root=cfg['workspace_root'],
+                          source_mode='retained-inventory', current_head=None,
+                          canonical_worktree_consumed=False)
         completed = True
         return result
     finally:
@@ -1341,7 +1439,8 @@ def edition_cli_options(cfg, edition):
 def command(cfg, edition, workers, memory_limit_bytes=MEMORY_INITIAL):
     require(type(memory_limit_bytes) is int and memory_limit_bytes in (MEMORY_INITIAL, MEMORY),
             'Production memory budget must be 4 or 8 GiB')
-    argv = [sys.executable, '-B', str(ROOT / 'tools/build_wiktionaries.py'),
+    source, _ = source_roots(cfg)
+    argv = [sys.executable, '-B', str(source / 'tools/build_wiktionaries.py'),
         '--resource-mode', 'watchdog', '--compress-shards', '--watchdog-address-space', 'unlimited',
         '--watchdog-memory-limit-mib', str(memory_limit_bytes // 1024**2),
         '--cpu-admission', 'affinity', '--threads', str(workers), '--jobs', '1',
@@ -1351,6 +1450,8 @@ def command(cfg, edition, workers, memory_limit_bytes=MEMORY_INITIAL):
         '--zig', cfg['compiler']['path'], '--wikis', edition]
     if cfg.get('artifact_root') is not None:
         argv += ['--artifact-root-spec', json.dumps(cfg['artifact_root'], sort_keys=True, separators=(',', ':'))]
+    if cfg.get('workspace_root') is not None:
+        argv += ['--workspace-root-spec', json.dumps(cfg['workspace_root'], sort_keys=True, separators=(',', ':'))]
     argv += edition_cli_options(cfg, edition)
     return argv
 
@@ -1363,7 +1464,7 @@ def production_context(cfg):
     values = {key: cfg[key] for key in CONTEXT_KEYS}
     if cfg.get('artifact_root') is not None:
         values['artifact_root'] = cfg['artifact_root']
-    for key in ('campaign', 'edition_options', 'llvm_workers'):
+    for key in ('campaign', 'edition_options', 'llvm_workers', 'workspace_root'):
         if key in cfg: values[key] = cfg[key]
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
@@ -1380,7 +1481,7 @@ def load_history_transition(cfg):
     old = read_ref(transition['from_configuration'])
     require(old.get('armed') is True and old.get('production_manifest_transition') is None,
             'History transition requires one original armed configuration')
-    for key in (*CONTEXT_KEYS, 'state_directory', 'artifact_root', 'build_timeout_seconds'):
+    for key in (*CONTEXT_KEYS, 'state_directory', 'artifact_root', 'workspace_root', 'build_timeout_seconds'):
         if key != 'manifest':
             require(old.get(key) == cfg.get(key), 'History transition changes ' + key)
     require(transition['to_manifest'] == cfg['manifest']
@@ -1651,7 +1752,8 @@ def main(argv=None):
     cfg = read_json(args.config)
     require(cfg.get('armed') is True, 'Configuration remains unarmed')
     require(resource.getrlimit(resource.RLIMIT_AS) == (resource.RLIM_INFINITY, resource.RLIM_INFINITY), 'Controller requires inherited unlimited AS')
-    validate_pipeline_paths(cfg, ROOT)
+    _, workspace = source_roots(cfg)
+    validate_pipeline_paths(cfg, workspace)
     state = Path(cfg['state_directory'])
     require(not state.is_relative_to(Path(cfg['output'])) and not state.is_relative_to(Path(cfg['raw_shard_root'])), 'Receipts must be separate from build artifacts')
     require(descriptor(cfg['compiler']['path']) == cfg['compiler'], 'Pinned compiler changed')
@@ -1679,8 +1781,9 @@ def main(argv=None):
     state.mkdir(parents=True, exist_ok=True)
     (state / 'attempts').mkdir(exist_ok=True)
     with ExitStack() as stack:
-        locks = [stack.enter_context(Lock(ROOT / 'data/build-resources/corpus-controller.lock', True)),
-                 stack.enter_context(Lock(ROOT / '.tmp/build-resources.lock', False))]
+        controller_lock, build_lock = resource_lock_paths(cfg)
+        locks = [stack.enter_context(Lock(controller_lock, True)),
+                 stack.enter_context(Lock(build_lock, False))]
         rows = history(state, context, cfg)
         if campaign is not None:
             skipped = {row['edition'] for row in campaign['dispositions'] if row['status'] == 'skipped-published'}

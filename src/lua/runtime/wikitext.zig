@@ -2724,7 +2724,8 @@ pub const Expander = struct {
         const lookup = self.provider.interface_message orelse return error.InterfaceMessageSnapshotMissing;
         const language = self.runtime.namespace_catalog.?.content_language;
         const message = (try lookup(self.provider.ctx, self.runtime.allocator, language, "scribunto-common-timeout")) orelse return error.InterfaceMessageSnapshotMissing;
-        const source = message.source orelse return error.InterfaceMessageSnapshotMissing;
+        // Captured upstream absence is a semantic limitation, not uncaptured input.
+        const source = message.source orelse return error.UnsupportedScriptTimeoutMessage;
         return self.scribuntoErrorMarkup(module_name, source);
     }
 
@@ -6289,6 +6290,49 @@ test "date numbering attachment forwards captured identity errors and provider r
     try std.testing.expectError(error.DateNumberingSnapshotMissing, lookup(expander.host.ctx, "bn"));
 }
 
+test "expired script message distinguishes captured values from missing snapshot input" {
+    const State = enum { value, empty, missing, absent, failure };
+    const Messages = struct {
+        state: State = .value,
+        fn lookup(raw: ?*anyopaque, _: std.mem.Allocator, language: []const u8, key: []const u8) anyerror!?Provider.InterfaceMessage {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            try std.testing.expectEqualStrings("en", language);
+            try std.testing.expectEqualStrings("scribunto-common-timeout", key);
+            return switch (self.state) {
+                .value => .{ .source = "captured <limit> & detail" },
+                .empty => .{ .source = "" },
+                .missing => .{ .source = null },
+                .absent => null,
+                .failure => error.InterfaceMessageSnapshotMissing,
+            };
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    var messages: Messages = .{};
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = &messages, .get = TestProvider.get, .exists = TestProvider.exists, .interface_message = Messages.lookup } };
+    const invoke_args = try runtime.newTable();
+    // Exercise the real invoke recovery branch without spending ten seconds of CPU.
+    expander.script_cpu_budget.expired = true;
+    const text = try expander.invokeWithRecovery(null, "Module:Probe", "run", invoke_args, null, null, null);
+    try std.testing.expectEqualStrings("<strong class=\"error\"><span class=\"scribunto-error\">Lua error in Module:Probe: captured &lt;limit&gt; &amp; detail</span></strong>", text.error_markup);
+    messages.state = .empty;
+    const empty = try expander.invokeWithRecovery(null, "Module:Probe", "run", invoke_args, null, null, null);
+    try std.testing.expectEqualStrings("<strong class=\"error\"><span class=\"scribunto-error\">Lua error in Module:Probe: </span></strong>", empty.error_markup);
+    messages.state = .missing;
+    try std.testing.expectError(error.UnsupportedScriptTimeoutMessage, expander.invokeWithRecovery(null, "Module:Probe", "run", invoke_args, null, null, null));
+    for ([_]State{ .absent, .failure }) |state| {
+        messages.state = state;
+        try std.testing.expectError(error.InterfaceMessageSnapshotMissing, expander.invokeWithRecovery(null, "Module:Probe", "run", invoke_args, null, null, null));
+    }
+    expander.provider.interface_message = null;
+    try std.testing.expectError(error.InterfaceMessageSnapshotMissing, expander.invokeWithRecovery(null, "Module:Probe", "run", invoke_args, null, null, null));
+}
+
 test "int parser uses captured aliases and messages with child-frame expansion" {
     const aliases = rt.namespace_registry.magic_words;
     const Source = struct {
@@ -6310,6 +6354,7 @@ test "int parser uses captured aliases and messages with child-frame expansion" 
             if (std.mem.eql(u8, key, "format")) return .{ .source = "$1/$2|{{{1|none}}}|{{{x|none}}}" };
             if (std.mem.eql(u8, key, "nested")) return .{ .source = "{{#if:1|expanded|wrong}}" };
             if (std.mem.eql(u8, key, "known-absent")) return .{ .source = null };
+            if (std.mem.eql(u8, key, "known-empty")) return .{ .source = "" };
             return null;
         }
     };
@@ -6338,6 +6383,7 @@ test "int parser uses captured aliases and messages with child-frame expansion" 
     try std.testing.expectEqualStrings("expanded", try expander.expandFragment("Page", "{{int:nested}}", 1_670_803_200));
     try std.testing.expectEqualStrings("local value", try expander.expandFragment("Page", "{{int:local|value}}", 1_670_803_200));
     try std.testing.expectEqualStrings("⧼known-absent⧽", try expander.expandFragment("Page", "{{int:known-absent}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("AB", try expander.expandFragment("Page", "A{{int:known-empty}}B", 1_670_803_200));
     try std.testing.expectError(error.InterfaceMessageSnapshotMissing, expander.expandFragment("Page", "{{int:uncaptured}}", 1_670_803_200));
     try std.testing.expectEqualStrings("<nowiki>{{</nowiki>int:<nowiki>}}</nowiki>", try expander.expandFragment("Page", "{{int:}}", 1_670_803_200));
 }

@@ -3920,3 +3920,17 @@ test "default text exposes Croatian inline senses and details retain every local
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), witness));
     }
 }
+
+test "bordered image text projection stays honest while JSON retains decoration and action" {
+    const a = std.testing.allocator;
+    const spans = [_]model.Span{ .{ .text = "before " }, .{ .kind = .link, .target = "File:Flag of Poland.svg", .image = .{ .file = "Flag of Poland.svg", .width_px = 40, .alt = "Poland", .border = true } }, .{ .text = " after" } };
+    var out: std.Io.Writer.Allocating = .init(a);
+    defer out.deinit();
+    try spansText(&out.writer, &spans, false);
+    try std.testing.expectEqualStrings("before [image: Poland] after", out.written());
+    out.clearRetainingCapacity();
+    try std.json.Stringify.value(spans[1], .{}, &out.writer);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "\"border\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "\"width_px\":40") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "File:Flag of Poland.svg") != null);
+}

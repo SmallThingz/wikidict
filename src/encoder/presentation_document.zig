@@ -9033,3 +9033,41 @@ test "nonfloating image blocks preserve complete body actions cell ownership and
     try std.testing.expectEqual(@as(usize, 1), tables);
     try std.testing.expectEqual(@as(usize, 1), definitions);
 }
+
+test "class-hidden rows preserve complete compiled body references media and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try @import("table_style_profile.zig").parseAlloc(a, ".omit { display:none; }");
+    defer profile.deinit();
+    const source = "==English==\n===Noun===\n# visible meaning [[Sense|action]]\n" ++
+        "{|\n| first\n|- class=omit\n| <ref name=hidden>hidden definition [[Citation|source]]</ref>\n" ++
+        "{|\n| [[Hidden|invisible]]<ref>hidden anonymous</ref>[[File:Hidden.svg|15px|link=HiddenAsset]]\n|}\n" ++
+        "|-\n| kept<ref name=hidden/><ref>visible note</ref> [[Visible|visible]]\n|}\n<references/>";
+    const inline_source = try std.mem.replaceOwned(u8, a, source, "|- class=omit", "|- class=omit style='display:none!important'");
+    var reported: Fallbacks = .{};
+    var inline_report: Fallbacks = .{};
+    const bytes = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, "scope", .language, "English", "en", MissingText.untracked(source), null, .{}, null, null, null, &reported, null, &profile);
+    const inline_bytes = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, "scope", .language, "English", "en", MissingText.untracked(inline_source), null, .{}, null, null, null, &inline_report, null, &profile);
+    // Compare every serialized body/style/action/reference/media/organization
+    // field against the already supported explicit-inline visibility path.
+    try std.testing.expectEqualSlices(u8, inline_bytes, bytes);
+    const stored = try codec.decodeAlloc(a, bytes, "scope", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    try std.testing.expectEqual(@as(usize, 3), stored.entry.references.len);
+    try std.testing.expectEqualStrings("hidden", stored.entry.references[0].name);
+    var tables: usize = 0;
+    var visible_actions: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| if (block.table) |table| {
+        tables += 1;
+        try std.testing.expectEqual(@as(usize, 2), table.rows.len);
+        for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |span| {
+            try std.testing.expect(span.image == null);
+            try std.testing.expect(!std.mem.eql(u8, span.target, "Hidden") and !std.mem.eql(u8, span.target, "HiddenAsset"));
+            if (std.mem.eql(u8, span.target, "Visible")) visible_actions += 1;
+        };
+    };
+    try std.testing.expectEqual(@as(usize, 1), tables);
+    try std.testing.expectEqual(@as(usize, 1), visible_actions);
+    try std.testing.expect(!reported.unsupported_element and !reported.malformed_table);
+}

@@ -11,6 +11,8 @@ pub const InlineImage = struct {
     height_px: ?u32 = null,
     alt: ?[]const u8 = null,
     tooltip: ?[]const u8 = null,
+    /// MediaWiki border decoration; one logical pixel outside content dimensions.
+    border: bool = false,
 
     pub fn jsonStringify(self: InlineImage, jw: anytype) !void {
         try jw.beginObject();
@@ -21,6 +23,10 @@ pub const InlineImage = struct {
                 try jw.objectField(name);
                 try jw.write(value);
             }
+        }
+        if (self.border) {
+            try jw.objectField("border");
+            try jw.write(true);
         }
         try jw.endObject();
     }
@@ -723,4 +729,22 @@ test "inline image model validates joins inside nested cells and reference block
     try validateStored(stored, "nested", .supplemental, null);
     stored.entry.media = &.{};
     try std.testing.expectError(error.InvalidPresentation, validateStored(stored, "nested", .supplemental, null));
+}
+
+test "image border JSON defaults preserve legacy shape and reject nonboolean input" {
+    const a = std.testing.allocator;
+    var out: std.Io.Writer.Allocating = .init(a);
+    defer out.deinit();
+    try std.json.Stringify.value(InlineImage{ .file = "Flag.svg", .width_px = 40 }, .{}, &out.writer);
+    try std.testing.expectEqualStrings("{\"file\":\"Flag.svg\",\"width_px\":40}", out.written());
+    out.clearRetainingCapacity();
+    try std.json.Stringify.value(InlineImage{ .file = "Flag.svg", .width_px = 40, .border = true }, .{}, &out.writer);
+    try std.testing.expectEqualStrings("{\"file\":\"Flag.svg\",\"width_px\":40,\"border\":true}", out.written());
+    const parsed = try std.json.parseFromSlice(InlineImage, a, out.written(), .{});
+    defer parsed.deinit();
+    try std.testing.expect(parsed.value.border and parsed.value.width_px.? == 40);
+    for ([_][]const u8{ "{\"file\":\"Flag.svg\",\"border\":1}", "{\"file\":\"Flag.svg\",\"border\":\"true\"}", "{\"file\":\"Flag.svg\",\"border\":null}" }) |source| {
+        const invalid = std.json.parseFromSlice(InlineImage, a, source, .{});
+        if (invalid) |value| { value.deinit(); return error.TestUnexpectedResult; } else |_| {}
+    }
 }

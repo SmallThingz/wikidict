@@ -30,6 +30,9 @@ const speech = [_][]const u8{
     "Romanization", "Logogram",       "Determinative",
 };
 pub fn partOfSpeech(title: []const u8) ?[]const u8 {
+    // Retained it Template:-verb- p1951/r4007156 passes Sezione=verbo;
+    // Sezione voce p172588/r1880894 emits its exact ucfirst heading.
+    if (std.mem.eql(u8, title, "Verbo")) return "Verb";
     // Teamplaid:-ainm- p1960/r77514 emits this exact noun heading.
     // Scottish Gaelic noun term: en.wiktionary.org/wiki/noun#Translations.
     if (std.mem.eql(u8, title, "Ainmear")) return "Noun";
@@ -3218,4 +3221,12 @@ test "Croatian inline definition markers retain explicit senses and closed suppo
         .{ .kind = .text, .text = "generated error", .generated_diagnostic = true },
     };
     try std.testing.expectEqual(@as(?bool, false), croatianSense(.{ .kind = .indent, .list_path = ":", .spans = &diagnostics }));
+}
+
+
+test "Italian source verb label remains exact and supplies no unknown heading classification" {
+    try std.testing.expectEqualStrings("Verb", partOfSpeech("Verbo").?);
+    for ([_][]const u8{ "verbo", "VERBO", "Verbo sconosciuto", "polacco", "Italiano" }) |label|
+        try std.testing.expect(partOfSpeech(label) == null);
+    try std.testing.expectEqualStrings("Noun", partOfSpeech("Noun").?);
 }

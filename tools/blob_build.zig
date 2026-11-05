@@ -199,21 +199,25 @@ fn writeFirstPresentationFailure(err: anyerror, context: FirstFailureCaptureCont
     try writeDiagnosticJson(context.io, a, root, "capture.json", row, 64 * 1024);
 }
 
-fn writePresentationFailure(context: FailureReceiptContext, job: ExpansionJob) !void {
-    const bytes = try std.json.Stringify.valueAlloc(context.a, .{
-        .schema = "wikidict.blob-build.failure.v1",
-        .error_name = "UncompiledPresentation",
-        .failure_class = "deterministic-presentation",
-        .invocation_id = context.invocation_id,
-        .invocation_args = context.invocation_args,
-        .page = .{ .ordinal = job.ordinal, .namespace = job.ns.id, .title = job.title, .page_id = job.page_id, .revision_id = job.revision_id },
-    }, .{});
+fn writeFailureReceipt(context: FailureReceiptContext, value: anytype) !void {
+    const bytes = try std.json.Stringify.valueAlloc(context.a, value, .{});
     defer context.a.free(bytes);
     if (bytes.len > 64 * 1024) return error.FailureReceiptTooLarge;
     var file = try std.Io.Dir.cwd().createFile(context.io, context.path, .{ .exclusive = true });
     defer file.close(context.io);
     try file.writeStreamingAll(context.io, bytes);
     try file.sync(context.io);
+}
+
+fn writePresentationFailure(context: FailureReceiptContext, job: ExpansionJob) !void {
+    try writeFailureReceipt(context, .{
+        .schema = "wikidict.blob-build.failure.v1",
+        .error_name = "UncompiledPresentation",
+        .failure_class = "deterministic-presentation",
+        .invocation_id = context.invocation_id,
+        .invocation_args = context.invocation_args,
+        .page = .{ .ordinal = job.ordinal, .namespace = job.ns.id, .title = job.title, .page_id = job.page_id, .revision_id = job.revision_id },
+    });
 }
 
 fn recordPresentationFailure(err: anyerror, job: ExpansionJob) anyerror {
@@ -223,6 +227,34 @@ fn recordPresentationFailure(err: anyerror, job: ExpansionJob) anyerror {
         // Receipt failure cannot replace the original Writer error. A missing or
         // partial receipt keeps the caller's existing transient retry policy.
         diagnostics.printLine("presentation failure receipt unavailable: error={s}\n", .{@errorName(receipt_error)});
+    };
+    return err;
+}
+
+fn writeMissingInterfaceMessageFailure(context: FailureReceiptContext, job: ExpansionJob, failure: bundle_expander.Failure) !void {
+    const source_sha256 = try auditHash(context.a, job.source);
+    defer context.a.free(source_sha256);
+    try writeFailureReceipt(context, .{
+        .schema = "wikidict.blob-build.failure.v1",
+        .error_name = "InterfaceMessageSnapshotMissing",
+        .failure_class = "deterministic-build-input",
+        .invocation_id = context.invocation_id,
+        .invocation_args = context.invocation_args,
+        .page = .{ .ordinal = job.ordinal, .namespace = job.ns.id, .title = job.title, .page_id = job.page_id, .revision_id = job.revision_id },
+        .source = .{ .bytes = job.source.len, .sha256 = source_sha256 },
+        .worker = failure,
+    });
+}
+
+fn recordExpansionFailure(err: anyerror, job: ExpansionJob, failure: ?bundle_expander.Failure) anyerror {
+    if (err != error.InterfaceMessageSnapshotMissing) return err;
+    const precise = failure orelse return err;
+    if (!std.mem.eql(u8, precise.stage, "expand") or !std.mem.eql(u8, precise.error_name, "InterfaceMessageSnapshotMissing")) return err;
+    const context = failure_receipt_context orelse return err;
+    // Persist the worker's typed detail and page/source identity before slot arena
+    // cleanup. The inherited stderr retains the provider's language/key log.
+    writeMissingInterfaceMessageFailure(context, job, precise) catch |receipt_error| {
+        diagnostics.printLine("build input failure receipt unavailable: error={s}\n", .{@errorName(receipt_error)});
     };
     return err;
 }
@@ -1301,7 +1333,8 @@ const ExpansionSlot = struct {
                 "page expansion failed title={s} ordinal={d} ns={d} source_bytes={d} error={s}\n",
                 .{ self.job.title, self.job.ordinal, self.job.ns.id, self.job.source.len, @errorName(err) },
             );
-            const fallback_reason = (try expansionFallbackReasonAlloc(self.arena.allocator(), err, self.worker.last_failure)) orelse return err;
+            const fallback_reason = (try expansionFallbackReasonAlloc(self.arena.allocator(), err, self.worker.last_failure)) orelse
+                return recordExpansionFailure(err, self.job, self.worker.last_failure);
             // Retain explicitly recoverable expansion failures with their exact
             // audit cause. Operational deadlines propagate through the classifier
             // above rather than masquerading as successfully encoded empty pages.
@@ -1625,6 +1658,59 @@ test "presentation failure receipt round trips exact invocation and page identit
     const after = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(64 * 1024));
     defer a.free(after);
     try std.testing.expectEqualSlices(u8, bytes, after);
+}
+
+test "missing interface input receipt preserves exact source and worker evidence without replacing the error" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/failure.json", .{tmp.sub_path});
+    defer a.free(path);
+    const args = [_][]const u8{ "dump", "out", "--failure-receipt", path, "--invocation-id", "0123456789abcdef0123456789abcdef" };
+    const context: FailureReceiptContext = .{ .io = io, .a = a, .path = path, .invocation_id = args[args.len - 1], .invocation_args = &args };
+    const job: ExpansionJob = .{ .index_offset = 7, .ordinal = 12, .ns = .{ .id = 0, .kind = .language }, .title = "quoted \"input\"", .source = "{{int:Show}}\n", .page_id = 34, .revision_id = 56 };
+    const failure: bundle_expander.Failure = .{ .stage = "expand", .error_name = "InterfaceMessageSnapshotMissing", .detail = "retained worker detail\n" };
+    failure_receipt_context = context;
+    defer failure_receipt_context = null;
+    // Neither a semantic fallback nor an unbound local error produces this receipt.
+    try std.testing.expect(recordExpansionFailure(error.ExpansionFailed, job, failure) == error.ExpansionFailed);
+    try std.testing.expect(recordExpansionFailure(error.InterfaceMessageSnapshotMissing, job, null) == error.InterfaceMessageSnapshotMissing);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(64 * 1024)));
+    try std.testing.expect(recordExpansionFailure(error.InterfaceMessageSnapshotMissing, job, failure) == error.InterfaceMessageSnapshotMissing);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(64 * 1024));
+    defer a.free(bytes);
+    const parsed = try std.json.parseFromSlice(std.json.Value, a, bytes, .{});
+    defer parsed.deinit();
+    const row = parsed.value.object;
+    try std.testing.expectEqualStrings("wikidict.blob-build.failure.v1", row.get("schema").?.string);
+    try std.testing.expectEqualStrings("InterfaceMessageSnapshotMissing", row.get("error_name").?.string);
+    try std.testing.expectEqualStrings("deterministic-build-input", row.get("failure_class").?.string);
+    try std.testing.expectEqualStrings(context.invocation_id, row.get("invocation_id").?.string);
+    const actual_args = row.get("invocation_args").?.array.items;
+    try std.testing.expectEqual(args.len, actual_args.len);
+    for (args, actual_args) |expected, actual| try std.testing.expectEqualStrings(expected, actual.string);
+    const page = row.get("page").?.object;
+    try std.testing.expectEqual(@as(i64, 12), page.get("ordinal").?.integer);
+    try std.testing.expectEqual(@as(i64, 0), page.get("namespace").?.integer);
+    try std.testing.expectEqualStrings(job.title, page.get("title").?.string);
+    try std.testing.expectEqual(@as(i64, 34), page.get("page_id").?.integer);
+    try std.testing.expectEqual(@as(i64, 56), page.get("revision_id").?.integer);
+    const source_row = row.get("source").?.object;
+    try std.testing.expectEqual(@as(i64, @intCast(job.source.len)), source_row.get("bytes").?.integer);
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(job.source, &hash, .{});
+    try std.testing.expectEqualStrings(&std.fmt.bytesToHex(hash, .lower), source_row.get("sha256").?.string);
+    const worker_row = row.get("worker").?.object;
+    try std.testing.expectEqualStrings(failure.stage, worker_row.get("stage").?.string);
+    try std.testing.expectEqualStrings(failure.error_name, worker_row.get("error_name").?.string);
+    try std.testing.expectEqualStrings(failure.detail, worker_row.get("detail").?.string);
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "{{int:Show}}") == null);
+    // Exclusive receipt failure cannot replace the typed build-input error or its evidence.
+    try std.testing.expect(recordExpansionFailure(error.InterfaceMessageSnapshotMissing, job, failure) == error.InterfaceMessageSnapshotMissing);
+    const after_bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(64 * 1024));
+    defer a.free(after_bytes);
+    try std.testing.expectEqualSlices(u8, bytes, after_bytes);
 }
 
 test "blob shard options preserve explicit byte offset and page limit" {
@@ -2555,7 +2641,8 @@ test "operational expansion timeouts cannot become successful empty pages" {
     try std.testing.expect((try expansionFallbackReasonAlloc(a, error.Timeout, null)) == null);
     try std.testing.expect((try expansionFallbackReasonAlloc(a, error.StartupTimeout, null)) == null);
     try std.testing.expect((try expansionFallbackReasonAlloc(a, error.OutOfMemory, null)) == null);
-    inline for (.{ "OutOfMemory", "Timeout" }) |name| {
+    try std.testing.expect((try expansionFallbackReasonAlloc(a, error.InterfaceMessageSnapshotMissing, null)) == null);
+    inline for (.{ "OutOfMemory", "Timeout", "InterfaceMessageSnapshotMissing" }) |name| {
         try std.testing.expect((try expansionFallbackReasonAlloc(a, error.ExpansionFailed, .{
             .stage = "expand",
             .error_name = name,
@@ -2569,6 +2656,11 @@ test "operational expansion timeouts cannot become successful empty pages" {
     })).?;
     defer a.free(semantic);
     try std.testing.expectEqualStrings("expansion_error:expand:NotImplemented", semantic);
+    const captured_missing = (try expansionFallbackReasonAlloc(a, error.ExpansionFailed, .{
+        .stage = "expand", .error_name = "UnsupportedScriptTimeoutMessage", .detail = "",
+    })).?;
+    defer a.free(captured_missing);
+    try std.testing.expectEqualStrings("expansion_error:expand:UnsupportedScriptTimeoutMessage", captured_missing);
     const recoverable = (try expansionFallbackReasonAlloc(a, error.ExpansionFailed, null)).?;
     defer a.free(recoverable);
     try std.testing.expectEqualStrings("expansion_error:ExpansionFailed", recoverable);
