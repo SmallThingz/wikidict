@@ -248,6 +248,66 @@ class ReadingLayoutTest {
         assertEquals("English", readingRows(listOf(owner)).first().headingBlock!!.spans.single().text)
     }
 
+    @Test fun anchoredOwnerHeadingKeepsItsLabelContentsAndDestinationAfterSharedPrefix() {
+        // Model the retained mnw ost prefix/authored-L2 shape. The anchor is an
+        // explicit test identity, not a claim about an observed serialized record.
+        val language = "သွဳဒေန်"
+        val prefix = Block("paragraph", 0, listOf(Span("text", "ဗဵုရံၚ်ဝေါဟာ:", italic = true),
+            Span("text", " "), Span("link", "Ost", target = "Ost", bold = true)))
+        val body = Block("paragraph", 0, listOf(Span("text", "Authored owner body")))
+        val sections = listOf(Section(2, language, listOf(prefix)),
+            Section(2, language, listOf(body), anchor = "authored-owner"))
+        val entry = Entry("ost", emptyList(), "language", language, "sv", sections, emptyList())
+        val rows = entry.readingRows
+        val headings = rows.filter { it.heading != null }
+        assertEquals(listOf("Overview", language), headings.map {
+            sectionHeadingLabel(it.heading!!, entry.language, it.headingBlock)
+        })
+        assertEquals(listOf("heading-1"), headings.filter { sectionInContents(it.heading!!, entry.language) }.map { it.key })
+        assertEquals(listOf("heading-0", "block-0-0", "heading-1", "block-1-0"), rows.map { it.key })
+        assertEquals("heading-1", headingScrollKey(entry, "#authored-owner"))
+        assertNull(headingScrollKey(entry, "#$language")) // Duplicate titles do not invent a fragment destination.
+        assertEquals(listOf(body), visibleReadingRows(rows, setOf("heading-0")).mapNotNull { it.block })
+        assertEquals(listOf(prefix), visibleReadingRows(rows, setOf("heading-1")).mapNotNull { it.block })
+        assertEquals(listOf(prefix, body), visibleReadingRows(rows, emptySet()).mapNotNull { it.block })
+        assertEquals(sections, entry.sections)
+        assertEquals(listOf(prefix.spans, body.spans), rows.mapNotNull { it.block?.spans })
+    }
+
+    @Test fun ownerHeadingPresentationKeepsEmptyAnchorFallbackRichSpansAndExplicitEmptyHeadings() {
+        val language = "English"
+        val plain = Section(2, language, emptyList())
+        assertEquals("Overview", sectionHeadingLabel(plain, language, null))
+        assertFalse(sectionInContents(plain, language))
+        assertFalse(sectionHeadingVisible(plain, language))
+        assertFalse(sectionHeadingVisible(plain.copy(blocks = listOf(Block("blank", 0, emptyList()))), language))
+        val legacy = Entry("Legacy", emptyList(), "language", language, "en", listOf(plain), emptyList())
+        assertEquals("heading-0", headingScrollKey(legacy, "#English"))
+        for (anchored in listOf(plain.copy(anchor = "English"), plain.copy(anchorFallback = "English"))) {
+            assertEquals(language, sectionHeadingLabel(anchored, language, null))
+            assertTrue(sectionInContents(anchored, language))
+            assertTrue(sectionHeadingVisible(anchored, language))
+            assertEquals("heading-0", headingScrollKey(legacy.copy(sections = listOf(anchored)), "#English"))
+        }
+        val span = Span("link", language, target = "language", italic = true, explanation = "Authored title")
+        val rich = Block("heading", 0, listOf(span), level = 2)
+        val section = plain.copy(blocks = listOf(rich))
+        val row = readingRows(listOf(section)).single()
+        assertSame(rich, row.headingBlock)
+        assertEquals(listOf(span), row.headingBlock!!.spans)
+        assertEquals(language, sectionHeadingLabel(section, language, row.headingBlock))
+        assertFalse(sectionInContents(section, language)) // Keep the legacy empty-anchor menu policy.
+        assertTrue(sectionHeadingVisible(section, language))
+        val ordinary = plain.copy(title = "Usage notes")
+        assertEquals("Usage notes", sectionHeadingLabel(ordinary, language, null))
+        assertTrue(sectionInContents(ordinary, language))
+        assertTrue(sectionHeadingVisible(ordinary, language))
+        assertEquals(language, sectionHeadingLabel(plain, null, null))
+        assertTrue(sectionInContents(plain, null))
+        assertFalse(sectionInContents(plain.copy(title = "", anchor = "empty"), language))
+        assertFalse(sectionHeadingVisible(plain.copy(title = "", anchor = "empty"), language))
+    }
+
     @Test fun denseListsAreLazyWithoutLosingTextOrLinkSemantics() {
         val spans = (0 until 330).flatMap { index -> listOf(Span("text", "• "), Span("link", "word $index", target = "word $index", italic = true), Span("line_break", "\n")) }
         val rows = readingRows(listOf(Section(3, "Derived terms", listOf(Block("paragraph", 0, spans)))))

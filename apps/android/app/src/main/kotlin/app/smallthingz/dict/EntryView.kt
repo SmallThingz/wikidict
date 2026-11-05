@@ -229,7 +229,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                             IconButton(onClick = { contents = true }) { Icon(Icons.AutoMirrored.Filled.List, "Sections", Modifier.size(22.dp)) }
                             DropdownMenu(contents, { contents = false }, Modifier.heightIn(max = 340.dp)) {
                                 entry.readingRows.forEach { row -> row.heading?.let { section ->
-                                    if (section.title.isNotBlank() && section.title != entry.language) DropdownMenuItem(text = { Text(section.title) }, onClick = {
+                                    if (sectionInContents(section, entry.language)) DropdownMenuItem(text = { Text(section.title) }, onClick = {
                                         onNavigate()
                                         contents = false
                                         val referenceHeading = row.key == metadataReferenceHeadingKey(entry)
@@ -293,9 +293,9 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             items(visibleRows, key = { it.key }, contentType = { if (it.heading != null) "heading" else it.block?.kind }) { row ->
                 Column(Modifier.animateItem()) {
                 row.heading?.let { section ->
-                    if (section.title.isNotBlank() && (section.title != entry.language || section.blocks.any { it.kind != "blank" })) {
+                    if (sectionHeadingVisible(section, entry.language)) {
                         val richHeading = row.headingBlock
-                        val label = if (richHeading == null && section.title == entry.language) "Overview" else section.title
+                        val label = sectionHeadingLabel(section, entry.language, richHeading)
                         val angle by animateFloatAsState(if (folded[row.key] == true) { if (LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl) 90f else -90f } else 0f, label = "Section fold")
                         val toggle = { folded[row.key] = folded[row.key] != true }
                         val headingModifier = if (richHeading == null) Modifier.clickable(onClick = toggle) else Modifier

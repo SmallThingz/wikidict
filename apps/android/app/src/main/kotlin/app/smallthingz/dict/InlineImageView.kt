@@ -62,13 +62,17 @@ internal fun inlineImagePixels(image: InlineImage, intrinsicWidth: Long, intrins
     originalMime: String? = null): InlineImagePixels? {
     require(intrinsicWidth > 0 && intrinsicHeight > 0 && density.isFinite() && density > 0f)
     val mime = originalMime?.substringBefore(';')?.trim()?.lowercase()
-    if (image.widthPx == null && image.heightPx != null && (mime?.startsWith("image/") != true || mime == "image/svg+xml")) return null
+    val heightOnly = image.widthPx == null && image.heightPx != null
+    if (heightOnly && mime?.startsWith("image/") != true) return null
+    val vectorHeightOnly = heightOnly && mime == "image/svg+xml"
     fun rounded(value: Double) = floor(value + 0.5)
     val requestedWidth = image.widthPx?.toDouble() ?: intrinsicWidth.toDouble()
     val requestedHeight = image.heightPx?.toDouble()
     val cssWidth: Double
     val cssHeight: Double
-    if (requestedHeight != null && requestedWidth * intrinsicHeight > requestedHeight * intrinsicWidth) {
+    // Height-only SVGs are not limited by their natural width. Use original
+    // dimensions, never the dimensions of the cached raster thumbnail.
+    if (requestedHeight != null && (vectorHeightOnly || requestedWidth * intrinsicHeight > requestedHeight * intrinsicWidth)) {
         val ideal = intrinsicWidth.toDouble() * requestedHeight / intrinsicHeight
         val up = ceil(ideal)
         cssWidth = (if (rounded(up * intrinsicHeight / intrinsicWidth) > requestedHeight) floor(ideal) else up).coerceAtLeast(1.0)

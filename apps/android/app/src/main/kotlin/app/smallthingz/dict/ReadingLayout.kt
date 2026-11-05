@@ -129,6 +129,16 @@ internal fun poemParagraphs(text: String, spans: List<Pair<Span, IntRange>>): Li
 }
 
 
+internal fun sectionHeadingLabel(section: Section, language: String?, richHeading: Block?): String =
+    if (richHeading == null && section.title == language && section.anchor.isEmpty() && section.anchorFallback.isEmpty())
+        "Overview" else section.title
+
+internal fun sectionInContents(section: Section, language: String?): Boolean =
+    section.title.isNotBlank() && (section.title != language || section.anchor.isNotEmpty() || section.anchorFallback.isNotEmpty())
+
+internal fun sectionHeadingVisible(section: Section, language: String?): Boolean =
+    sectionInContents(section, language) || (section.title.isNotBlank() && section.blocks.any { it.kind != "blank" })
+
 /** The first typed heading may carry actions, span presentation, or explicit nesting metadata. */
 internal fun sectionHeadingCompanion(section: Section): Block? {
     val block = section.blocks.firstOrNull() ?: return null

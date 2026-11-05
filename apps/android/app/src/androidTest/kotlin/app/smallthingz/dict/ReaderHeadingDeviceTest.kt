@@ -57,6 +57,39 @@ class ReaderHeadingDeviceTest {
         }
     }
 
+    @Test fun authoredOwnerHeadingAppearsInSectionsAndUnfoldsWithoutOpeningSharedPrefix() {
+        val language = "သွဳဒေန်"
+        val entry = Entry("Owner heading fixture", emptyList(), "language", language, "sv", listOf(
+            Section(2, language, listOf(Block("paragraph", 0, listOf(Span("text", "Shared prefix body"))))),
+            Section(2, language, listOf(Block("paragraph", 0, listOf(Span("text", "Authored owner body")))), anchor = "authored-owner"),
+        ), emptyList())
+        val authoredHeading = hasText(language) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading)
+        try {
+            compose.activityRule.scenario.onActivity { activity ->
+                activity.setContent { MaterialTheme {
+                    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                        EntryView(entry, false, {}, settings = AppSettings(collapseOtherSections = true,
+                            allowImages = false, allowAudio = false))
+                    }
+                } }
+            }
+            compose.onNodeWithText("Overview").assertIsDisplayed().assertHasClickAction()
+            compose.onNode(authoredHeading).assertIsDisplayed().assertHasClickAction()
+            compose.onNodeWithText("Shared prefix body").assertDoesNotExist()
+            compose.onNodeWithText("Authored owner body").assertDoesNotExist()
+            compose.onNodeWithContentDescription("Sections").performClick()
+            compose.onNode(hasText("Overview") and hasAnyAncestor(isPopup())).assertDoesNotExist()
+            compose.onNode(hasText(language) and hasAnyAncestor(isPopup())).assertIsDisplayed().performClick()
+            compose.onNode(authoredHeading).assertIsDisplayed().assertHasClickAction()
+            compose.onNodeWithText("Authored owner body").assertIsDisplayed()
+            compose.onNodeWithText("Shared prefix body").assertDoesNotExist()
+            compose.onNode(authoredHeading).performClick()
+            compose.onNodeWithText("Authored owner body").assertDoesNotExist()
+        } finally {
+            compose.activityRule.scenario.onActivity { it.setContent {} }
+        }
+    }
+
     private fun captureOwnedHeading(name: String) {
         require(name == "reader-heading-expanded.png")
         compose.onNodeWithText("Ordinary usage body").assertIsDisplayed()
