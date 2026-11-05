@@ -30,6 +30,25 @@ const speech = [_][]const u8{
     "Romanization", "Logogram",       "Determinative",
 };
 pub fn partOfSpeech(title: []const u8) ?[]const u8 {
+    // Teamplaid:-ainm- p1960/r77514 emits this exact noun heading.
+    // Scottish Gaelic noun term: en.wiktionary.org/wiki/noun#Translations.
+    if (std.mem.eql(u8, title, "Ainmear")) return "Noun";
+    // Exact EU Txantiloi:Izena p4768/r408565 and Adjektiboa p4771/r408576.
+    // Grammar terms: en.wiktionary.org/wiki/izen (oldid92930614), /wiki/adjective.
+    // These labels organize an existing record; they never supply its owner.
+    if (std.mem.eql(u8, title, "Izena")) return "Noun";
+    if (std.mem.eql(u8, title, "Adjektiboa")) return "Adjective";
+    // Retained ca Mòdul:lema/plantilles p273800/r2695731 maps nom to
+    // substantius and adj to adjectius; the captured catalán headings use
+    // these exact labels. Classify POS only, retaining the supplied owner.
+    if (std.mem.eql(u8, title, "Nom")) return "Noun";
+    if (std.mem.eql(u8, title, "Adjectiu")) return "Adjective";
+    // Exact LI medisch p1482/r843548 and ich p1545/r929752 POS labels.
+    // Language/variety ownership remains independently supplied by the caller.
+    if (std.mem.eql(u8, title, "Bieveugelik naamwaord")) return "Adjective";
+    if (std.mem.eql(u8, title, "Biewaord")) return "Adverb";
+    if (std.mem.eql(u8, title, "Persuunlik veurnaamwaord") or
+        std.mem.eql(u8, title, "Persuuenlik veurnaamwaord")) return "Pronoun";
     // Retained თარგი:-noun- p3473/r7298 emits this exact noun heading.
     // Linked H5 category headings keep the same semantic label; no owner inference.
     if (std.mem.eql(u8, title, "არსებითი სახელი")) return "Noun";
@@ -99,7 +118,14 @@ const PendingSense = struct {
     quotations: std.ArrayList(usize) = .empty,
     notes: std.ArrayList(usize) = .empty,
 };
-fn analyze(a: A, kind: []const u8, index: usize, etymology: ?usize, blocks: []const wiki.Block) !Lexeme {
+// Colon-indented numbered meanings retain their original list_item block.
+// Only an explicit POS (or its already-proved immediate lemma) lends sense
+// structure; inferred paragraph/morphology POS does not broaden this rule.
+fn lexicalDefinition(block: wiki.Block, declared_pos: bool) bool {
+    return block.kind == .definition or (declared_pos and block.kind == .list_item and
+        std.mem.eql(u8, block.list_path, ":#"));
+}
+fn analyze(a: A, kind: []const u8, index: usize, etymology: ?usize, blocks: []const wiki.Block, declared_pos: bool) !Lexeme {
     var pending: std.ArrayList(PendingSense) = .empty;
     var intro: std.ArrayList(usize) = .empty;
     var other: std.ArrayList(usize) = .empty;
@@ -113,7 +139,7 @@ fn analyze(a: A, kind: []const u8, index: usize, etymology: ?usize, blocks: []co
             depth += 1;
         }
         depth = @min(depth, stack.len - 1);
-        if (block.kind == .definition) {
+        if (lexicalDefinition(block, declared_pos)) {
             depth = @max(1, depth);
             if (depth >= stack_len) @memset(stack[stack_len..depth], no_sense);
             var parent: ?usize = null;
@@ -216,9 +242,10 @@ fn sloveneHeadwordPart(block: wiki.Block) ?[]const u8 {
         if (span.generated_diagnostic or span.self_link or
             span.flags.code or span.role != .normal) return null;
         if (span.provenance != .parsed) {
-            // The captured SL headword emits &#32; after its parsed POS link.
-            // This spacing supplies no headword, POS, action or owner authority.
-            if (result != null and span.provenance == .entity_literal and
+            // SL emits &#32; after the POS, or outside italics after the
+            // parsed noun headword/comma. Spacing supplies no marker authority.
+            if ((result != null or (word and comma and !span.flags.italic and !span.flags.bold)) and
+                span.provenance == .entity_literal and
                 span.kind == .text and span.target.len == 0 and span.text.len != 0 and
                 std.mem.trim(u8, span.text, " \t").len == 0) continue;
             return null;
@@ -291,7 +318,7 @@ fn offsetBlockIndices(a: A, indices: []const usize, offset: usize) ![]const usiz
     return result;
 }
 fn analyzeMarkedParagraph(a: A, marker: MarkedParagraphPart, index: usize, etymology: ?usize, blocks: []const wiki.Block) !Lexeme {
-    var lexical = try analyze(a, marker.kind, index, etymology, blocks[marker.first..marker.end]);
+    var lexical = try analyze(a, marker.kind, index, etymology, blocks[marker.first..marker.end], false);
     const senses = try a.dupe(Sense, lexical.definitions);
     for (senses) |*sense| {
         sense.block += marker.first;
@@ -318,11 +345,26 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
     var origin: ?usize = null;
     var current_language: []const u8 = owner orelse "";
     var active: ?usize = null;
+    var active_level: u8 = 0;
     var related: std.ArrayList(usize) = .empty;
+    var lemma_parent: ?struct { level: u8, kind: []const u8 } = null;
     for (sections, 0..) |section, i| {
-        const named_kind: ?[]const u8 = if (unclassified and section.level == 2) null else partOfSpeech(section.title) orelse if (unclassified) null else morphologySiblingPart(sections, i, owner);
+        const declared_kind = if (unclassified and section.level == 2) null else partOfSpeech(section.title);
+        const named_kind = declared_kind orelse if (unclassified) null else morphologySiblingPart(sections, i, owner);
         const paragraph_part = if (named_kind == null and !unclassified) markedParagraphPart(section.blocks, owner, section.level) else null;
-        const kind: ?[]const u8 = named_kind orelse if (paragraph_part) |marker| marker.kind else null;
+        const own_kind: ?[]const u8 = named_kind orelse if (paragraph_part) |marker| marker.kind else null;
+        const lemma = std.mem.eql(u8, section.title, "Lemma") or std.mem.eql(u8, section.title, "Neet-lemma");
+        const nested_kind: ?[]const u8 = if (own_kind == null) nested: {
+            const parent = lemma_parent orelse break :nested null;
+            break :nested if (lemma and section.level > parent.level and section.level - parent.level == 1) parent.kind else null;
+        } else null;
+        const kind = own_kind orelse nested_kind;
+        // Parsed morphology/paragraph evidence is scoped to its own section.
+        // Only an authored POS heading can lend its kind to adjacent immediate
+        // Lemma/Neet-lemma children; other/deeper/owner boundaries end that scope.
+        if (declared_kind) |declared| {
+            lemma_parent = .{ .level = section.level, .kind = declared };
+        } else if (nested_kind == null) lemma_parent = null;
         // Modèl:-etim- p1091/r219080 emits this exact localized heading.
         // Exact MY source heading for inherited/derived material in retained
         // p2617/r939601 and origin statements in p122417/r905431,p124492/r907881.
@@ -337,8 +379,7 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
             if (owner == null and !unclassified and kind == null and !etymology) current_language = section.title;
         }
         if (active) |previous| {
-            const parent = sections[lexemes.items[previous].section];
-            if (kind == null and !etymology and section.level > parent.level) {
+            if (kind == null and !etymology and section.level > active_level) {
                 try related.append(a, i);
                 continue;
             }
@@ -347,11 +388,32 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
         }
         if (etymology) origin = i;
         if (kind) |name| {
+            // Preserve parent body addresses without duplicating an empty POS
+            // lexeme whose first immediate lemma contains the actual senses.
+            const next_is_lemma = if (i + 1 < sections.len) child: {
+                const following = sections[i + 1];
+                if (!(following.level > section.level and following.level - section.level == 1 and
+                    (std.mem.eql(u8, following.title, "Lemma") or std.mem.eql(u8, following.title, "Neet-lemma")))) break :child false;
+                // An independently classified child does not borrow this POS.
+                const following_named: ?[]const u8 = if (unclassified and following.level == 2) null else
+                    partOfSpeech(following.title) orelse if (unclassified) null else morphologySiblingPart(sections, i + 1, owner);
+                const following_paragraph = if (following_named == null and !unclassified)
+                    markedParagraphPart(following.blocks, owner, following.level) else null;
+                break :child following_named == null and following_paragraph == null;
+            } else false;
+            const has_senses = for (section.blocks) |block| {
+                if (lexicalDefinition(block, declared_kind != null)) break true;
+            } else false;
+            if (declared_kind != null and next_is_lemma and !has_senses) {
+                try other.append(a, i);
+                continue;
+            }
             active = lexemes.items.len;
+            active_level = if (nested_kind != null) section.level - 1 else section.level;
             var lexical = if (paragraph_part) |marker|
                 try analyzeMarkedParagraph(a, marker, i, origin, section.blocks)
             else
-                try analyze(a, name, i, origin, section.blocks);
+                try analyze(a, name, i, origin, section.blocks, declared_kind != null or nested_kind != null);
             lexical.language = current_language;
             try lexemes.append(a, lexical);
         } else try other.append(a, i);
@@ -2015,4 +2077,779 @@ test "SL parsed POS admits only trailing entity whitespace without lending liter
     for ([_]?[]const u8{ null, "", "Unclassified" }) |owner|
         try std.testing.expect(markedParagraphPart(blocks, owner, 2) == null);
     try std.testing.expect(markedParagraphPart(blocks, "Independent owner", 3) == null);
+}
+
+
+test "nested lemma senses keep local indices and stop inheritance at unrelated boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sense = [_]wiki.Block{ .{ .kind = .paragraph }, .{ .kind = .definition, .list_path = "#" }, .{ .kind = .example, .list_path = "#:" } };
+    const sections = [_]Section{
+        .{ .title = "Mofers", .level = 2 },
+        .{ .title = "Persuuenlik veurnaamwaord", .level = 3 },
+        .{ .title = "Lemma", .level = 4, .blocks = &sense },
+        .{ .title = "Unrelated support", .level = 4, .blocks = &sense },
+        .{ .title = "Neet-lemma", .level = 4, .blocks = &sense },
+        .{ .title = "Other language", .level = 2 },
+        .{ .title = "Lemma", .level = 4, .blocks = &sense },
+        .{ .title = "Pronoun", .level = 3 },
+        .{ .title = "Lemma", .level = 5, .blocks = &sense },
+        .{ .title = "Lemma", .level = 4, .blocks = &sense },
+        .{ .title = "Unknown POS", .level = 3 },
+        .{ .title = "Lemma", .level = 4, .blocks = &sense },
+    };
+    const result = try buildOwned(a, &sections, "Independently supplied owner");
+    try std.testing.expectEqual(@as(usize, 2), result.lexemes.len);
+    const lexical = result.lexemes[0];
+    try std.testing.expectEqualStrings("Pronoun", lexical.kind);
+    try std.testing.expectEqualStrings("Independently supplied owner", lexical.language);
+    try std.testing.expectEqual(@as(usize, 2), lexical.section);
+    try std.testing.expectEqual(@as(usize, 1), lexical.definitions.len);
+    try std.testing.expectEqual(@as(usize, 1), lexical.definitions[0].block);
+    try std.testing.expectEqualSlices(usize, &.{2}, lexical.definitions[0].examples);
+    try std.testing.expectEqualSlices(usize, &.{3, 4}, lexical.related_sections);
+    try std.testing.expectEqual(@as(usize, 7), result.lexemes[1].section);
+    try std.testing.expectEqual(@as(usize, 0), result.lexemes[1].definitions.len);
+    try std.testing.expectEqualSlices(usize, &.{8, 9}, result.lexemes[1].related_sections);
+    // An unresolved H2 POS is not a language or lemma-parent declaration.
+    const unowned_sections = [_]Section{ .{ .title = "Noun", .level = 2 }, .{ .title = "Lemma", .level = 3, .blocks = &sense } };
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &unowned_sections)).lexemes.len);
+    try std.testing.expect(partOfSpeech("Unknown POS") == null);
+    try std.testing.expect(partOfSpeech("persuuenlik veurnaamwaord") == null);
+    // A literal protected pseudo-heading remains paragraph content.
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "control" } };
+    const blocks = try renderer.renderBody("<nowiki>===Persuuenlik veurnaamwaord===\n====Lemma====\n# not a sense</nowiki>");
+    const protected = [_]Section{.{ .title = "Unknown", .level = 2, .blocks = blocks }};
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &protected)).lexemes.len);
+}
+
+test "retained LI Reader bodies reorganize lemma senses without changing sections or codec content" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const types = encoder.presentation_types;
+    const Section = struct { title: []const u8, level: u8, anchor: []const u8 = "", anchor_fallback: []const u8 = "", blocks: []const wiki.Block = &.{} };
+    const Page = struct { entries: []const struct { sections: []const Section } };
+    const TypedPage = struct { entries: []const types.Entry };
+    // Exact complete normal Reader JSON, not reconstructed expanded wikitext.
+    const cases = .{
+        .{ @embedFile("li-medisch-reader.json"), "medisch", "Mofers", "li", @as(usize, 1), @as(usize, 8), @as(usize, 2), @as(usize, 2), @as(usize, 0) },
+        .{ @embedFile("li-ich-reader.json"), "ich", "Algemein Gesjreve Limburgs", "li", @as(usize, 1), @as(usize, 3), @as(usize, 1), @as(usize, 0), @as(usize, 0) },
+        .{ @embedFile("li-ich-reader.json"), "ich", "Mofers", "li", @as(usize, 3), @as(usize, 9), @as(usize, 1), @as(usize, 1), @as(usize, 1) },
+        .{ @embedFile("li-ik-reader.json"), "ik", "Nederlands", "nl", @as(usize, 0), @as(usize, 3), @as(usize, 1), @as(usize, 1), @as(usize, 0) },
+    };
+    inline for (cases) |case| {
+        const parsed = try std.json.parseFromSlice(Page, a, case[0], .{ .ignore_unknown_fields = true });
+        const typed = try std.json.parseFromSlice(TypedPage, a, case[0], .{ .ignore_unknown_fields = true });
+        const before = typed.value.entries[0];
+        const sections = parsed.value.entries[0].sections[case[4]..case[5]];
+        const result = try buildOwned(a, sections, case[2]);
+        try std.testing.expectEqual(case[6], result.lexemes.len);
+        var senses: usize = 0; var examples: usize = 0;
+        for (result.lexemes) |lexical| {
+            try std.testing.expectEqualStrings(case[2], lexical.language);
+            for (lexical.definitions) |sense| {
+                senses += 1; examples += sense.examples.len;
+                try std.testing.expect(sense.form == null);
+                try std.testing.expectEqual(wiki.Kind.definition, sections[lexical.section].blocks[sense.block].kind);
+            }
+        }
+        try std.testing.expectEqual(case[7], senses);
+        try std.testing.expectEqual(case[8], examples);
+        // Reader JSON is already the typed semantic body. The compiler-shaped
+        // parse above supplies layout indices only: its Span.flags cannot read
+        // the JSON's top-level style fields and must never serialize that body.
+        var expected: types.Stored = .{ .entry = before };
+        expected.entry.language = case[2];
+        expected.entry.language_code = case[3];
+        expected.entry.sections = before.sections[case[4]..case[5]];
+        const organization_json = try std.json.Stringify.valueAlloc(a, result, .{});
+        const organization = try std.json.parseFromSlice(types.Layout, a, organization_json, .{});
+        expected.entry.organization = organization.value;
+        const bytes = try encoder.presentation_codec.encodeAlloc(a, expected);
+        const stored = try encoder.presentation_codec.decodeAlloc(a, bytes, case[1], .language, .{ .code = case[3], .heading = case[2] });
+        try std.testing.expectEqualStrings(case[2], stored.entry.language.?);
+        try std.testing.expectEqualStrings(case[3], stored.entry.language_code);
+        try std.testing.expectEqualDeep(expected, stored);
+        try std.testing.expectEqualDeep(before.sections[case[4]..case[5]], stored.entry.sections);
+        try std.testing.expectEqualDeep(before.display_title, stored.entry.display_title);
+        try std.testing.expectEqualDeep(before.references, stored.entry.references);
+        try std.testing.expectEqualDeep(before.media, stored.entry.media);
+        try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, stored));
+        if (std.mem.eql(u8, case[1], "ich") and std.mem.eql(u8, case[2], "Mofers")) {
+            try std.testing.expectEqual(@as(usize, 2), result.lexemes[0].section);
+            try std.testing.expectEqualSlices(usize, &.{3, 4, 5}, result.lexemes[0].related_sections);
+            try std.testing.expectEqual(@as(usize, 1), result.lexemes[0].definitions[0].block);
+            try std.testing.expectEqualSlices(usize, &.{2}, result.lexemes[0].definitions[0].examples);
+        }
+    }
+}
+
+
+
+test "LI lemma inheritance composes with section-local KAA and SL POS evidence without scope leakage" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "mixed-source-control" } };
+    const morphology = try renderer.renderBody("''atlıq'', a-baq\n");
+    const kaa = try renderer.renderBody("# KAA meaning [[Target]]\n");
+    const sl = try renderer.renderBody("''word, [[glagol]]''\n\n'''Pomeni:'''\n\n# bounded SL meaning\n#: SL example\n\n'''Sources:'''\n\n# bibliography\n");
+    const child = try renderer.renderBody("'''ich'''\n# LI child sense\n#: ''LI child example''\n");
+    const unrelated = try renderer.renderBody("# must remain supporting body\n");
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "First region", .level = 2 },
+        .{ .title = "Morfologiyalıq hám sintaksislik qásiyetleri", .level = 3, .blocks = morphology },
+        .{ .title = "Leksikalıq mánileri", .level = 3, .blocks = kaa },
+        .{ .title = "Lemma", .level = 4, .blocks = unrelated },
+        .{ .title = "SL region", .level = 2, .blocks = sl },
+        .{ .title = "Lemma", .level = 3, .blocks = unrelated },
+        .{ .title = "Mofers", .level = 2 },
+        .{ .title = "Persuuenlik veurnaamwaord", .level = 3 },
+        .{ .title = "Lemma", .level = 4, .blocks = child },
+        .{ .title = "Unrelated", .level = 4, .blocks = unrelated },
+        .{ .title = "Neet-lemma", .level = 4, .blocks = unrelated },
+        .{ .title = "Later owner", .level = 2 },
+        .{ .title = "Lemma", .level = 4, .blocks = unrelated },
+    };
+    const result = try buildOwned(a, &sections, "Independently supplied owner");
+    try std.testing.expectEqual(@as(usize, 3), result.lexemes.len);
+    for (result.lexemes, [_][]const u8{ "Noun", "Verb", "Pronoun" }, [_]usize{ 2, 4, 8 }) |lexical, kind, index| {
+        try std.testing.expectEqualStrings(kind, lexical.kind);
+        try std.testing.expectEqualStrings("Independently supplied owner", lexical.language);
+        try std.testing.expectEqual(index, lexical.section);
+        try std.testing.expectEqual(@as(usize, 1), lexical.definitions.len);
+        try std.testing.expect(lexical.etymology == null and lexical.definitions[0].form == null);
+    }
+    try std.testing.expectEqualSlices(usize, &.{3}, result.lexemes[0].related_sections);
+    try std.testing.expectEqualSlices(usize, &.{5}, result.lexemes[1].related_sections);
+    try std.testing.expectEqualSlices(usize, &.{9, 10}, result.lexemes[2].related_sections);
+    const sl_sense = result.lexemes[1].definitions[0];
+    try std.testing.expectEqualStrings("bounded SL meaning", sl[sl_sense.block].spans[0].text);
+    try std.testing.expectEqual(@as(usize, 1), sl_sense.examples.len);
+    try std.testing.expectEqualStrings("SL example", sl[sl_sense.examples[0]].spans[0].text);
+    try std.testing.expectEqualStrings("bibliography", sl[result.lexemes[1].other_blocks[result.lexemes[1].other_blocks.len - 1]].spans[0].text);
+    const li_sense = result.lexemes[2].definitions[0];
+    try std.testing.expectEqual(@as(usize, 1), li_sense.block);
+    try std.testing.expectEqualSlices(usize, &.{2}, li_sense.examples);
+    try std.testing.expectEqualSlices(usize, &.{0, 1, 6, 7, 11, 12}, result.other_sections);
+    // Neither a paragraph marker nor morphology evidence is an authored POS
+    // heading for a later Lemma; only its own section obtains that kind.
+    const codec = @import("blob_encoder").presentation_codec;
+    const bytes = try codec.encodeBuildAlloc(a, &.{}, &sections, result, &.{}, &.{});
+    const baseline = try codec.encodeBuildAlloc(a, &.{}, &sections, Layout{ .lexemes = &.{}, .other_sections = &.{} }, &.{}, &.{});
+    var stored = try codec.decodeAlloc(a, bytes, "mixed-source-control", .language, .{ .heading = "Independently supplied owner", .code = "li" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    const original = try codec.decodeAlloc(a, baseline, "mixed-source-control", .language, .{ .heading = "Independently supplied owner", .code = "li" });
+    try std.testing.expectEqualDeep(original.entry.sections, stored.entry.sections);
+    stored.entry.organization = original.entry.organization;
+    try std.testing.expectEqualSlices(u8, baseline, try codec.encodeAlloc(a, stored));
+}
+
+test "declared POS and direct senses retain precedence when parsed profiles and lemma children coexist" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "precedence-control" } };
+    const marked = try renderer.renderBody("''word, [[glagol]]''\n\n'''Pomeni:'''\n\n# direct first\n\n'''Sources:'''\n\n# direct second\n");
+    const sense = try renderer.renderBody("# child sense\n");
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const declared = [_]Section{
+        .{ .title = "Noun", .level = 2, .blocks = marked },
+        .{ .title = "Lemma", .level = 3, .blocks = sense },
+    };
+    const explicit = try buildOwned(a, &declared, "Known owner");
+    try std.testing.expectEqual(@as(usize, 2), explicit.lexemes.len);
+    try std.testing.expectEqualStrings("Noun", explicit.lexemes[0].kind);
+    try std.testing.expectEqualStrings("Noun", explicit.lexemes[1].kind);
+    try std.testing.expectEqual(@as(usize, 2), explicit.lexemes[0].definitions.len);
+    try std.testing.expectEqual(@as(usize, 1), explicit.lexemes[1].definitions.len);
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &declared)).lexemes.len);
+    // A child with its own SL proof does not inherit this empty parent. Keep
+    // both the authored Noun and the independently bounded Verb analysis.
+    const independent_child = [_]Section{
+        .{ .title = "Noun", .level = 1 },
+        .{ .title = "Lemma", .level = 2, .blocks = marked },
+    };
+    const independent = try buildOwned(a, &independent_child, "Known owner");
+    try std.testing.expectEqual(@as(usize, 2), independent.lexemes.len);
+    try std.testing.expectEqualStrings("Noun", independent.lexemes[0].kind);
+    try std.testing.expectEqual(@as(usize, 0), independent.lexemes[0].section);
+    try std.testing.expectEqual(@as(usize, 0), independent.lexemes[0].definitions.len);
+    try std.testing.expectEqualStrings("Verb", independent.lexemes[1].kind);
+    try std.testing.expectEqual(@as(usize, 1), independent.lexemes[1].section);
+    try std.testing.expectEqual(@as(usize, 1), independent.lexemes[1].definitions.len);
+    const children = [_]Section{
+        .{ .title = "Mofers", .level = 2 },
+        .{ .title = "Persuuenlik veurnaamwaord", .level = 3, .blocks = sense },
+        .{ .title = "Lemma", .level = 4, .blocks = sense },
+        .{ .title = "Neet-lemma", .level = 4, .blocks = sense },
+        .{ .title = "Support", .level = 4, .blocks = sense },
+        .{ .title = "Lemma", .level = 4, .blocks = sense },
+        .{ .title = "Unknown POS", .level = 3 },
+        .{ .title = "Lemma", .level = 4, .blocks = sense },
+    };
+    const result = try buildOwned(a, &children, "Mofers");
+    try std.testing.expectEqual(@as(usize, 3), result.lexemes.len);
+    for (result.lexemes, 1..) |lexical, section_index| {
+        try std.testing.expectEqual(section_index, lexical.section);
+        try std.testing.expectEqualStrings("Pronoun", lexical.kind);
+        try std.testing.expectEqualStrings("Mofers", lexical.language);
+        try std.testing.expectEqual(@as(usize, 1), lexical.definitions.len);
+        try std.testing.expectEqual(@as(usize, 0), lexical.definitions[0].block);
+        try std.testing.expect(lexical.definitions[0].form == null);
+    }
+    try std.testing.expectEqualSlices(usize, &.{4, 5}, result.lexemes[2].related_sections);
+    try std.testing.expectEqualSlices(usize, &.{0, 6, 7}, result.other_sections);
+}
+
+
+
+test "SL noun template entity spacing follows a parsed headword and comma" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "oko" } };
+    // Predloga:samostalnik p17834/r170902 emits this selected noun convention.
+    // This is parsed source evidence, not a reconstruction of Reader provenance.
+    const prefix = "''oko'',&#32;[[samostalnik]] [[srednji|srednjega]] [[spol]]a, '''oko''' dv '''očesi''' mn '''očesa''' posebna mn '''oči'''";
+    const body = prefix ++ "\n\n'''Pomeni:'''\n\n# [[človek|človeški]] ali [[žival]]ski [[organ]], ki omogoča [[vid]].\n";
+    const blocks = try renderer.renderBody(body);
+    try std.testing.expectEqualStrings("oko", blocks[0].spans[0].text);
+    try std.testing.expect(blocks[0].spans[0].provenance == .parsed and blocks[0].spans[0].flags.italic);
+    try std.testing.expectEqualStrings(",", blocks[0].spans[1].text);
+    try std.testing.expect(blocks[0].spans[1].provenance == .parsed);
+    try std.testing.expectEqualStrings(" ", blocks[0].spans[2].text);
+    try std.testing.expect(blocks[0].spans[2].provenance == .entity_literal);
+    try std.testing.expectEqualStrings("Noun", sloveneHeadwordPart(blocks[0]).?);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block };
+    const sections = [_]Section{.{ .title = "Independent supplied owner", .level = 2, .blocks = blocks }};
+    const organization = try buildOwned(a, &sections, "Independent supplied owner");
+    try std.testing.expectEqual(@as(usize, 1), organization.lexemes.len);
+    const noun = organization.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqualStrings("Independent supplied owner", noun.language);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+    try std.testing.expectEqual(@as(usize, 2), noun.definitions[0].block);
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &sections)).lexemes.len);
+    try std.testing.expect(markedParagraphPart(blocks, null, 2) == null);
+    try std.testing.expect(markedParagraphPart(blocks, "", 2) == null);
+    try std.testing.expect(markedParagraphPart(blocks, "Unclassified", 2) == null);
+    try std.testing.expect(markedParagraphPart(blocks, "Independent supplied owner", 3) == null);
+    const multiple = try renderer.renderBody("''oko'',&#32;&#32;[[samostalnik]]");
+    try std.testing.expectEqualStrings("Noun", sloveneHeadwordPart(multiple[0]).?);
+    // Numeric LF/HT references normalize to ordinary entity-literal space.
+    for ([_][]const u8{ "''oko'',&#10;[[samostalnik]]", "''oko'',&#9;[[samostalnik]]" }) |source| {
+        const normalized = try renderer.renderBody(source);
+        try std.testing.expectEqualStrings(" ", normalized[0].spans[2].text);
+        try std.testing.expect(normalized[0].spans[2].provenance == .entity_literal);
+        try std.testing.expectEqualStrings("Noun", sloveneHeadwordPart(normalized[0]).?);
+    }
+    const post_pos = try renderer.renderBody("''word, [[glagol]]'',&#32;[[nedovršen]]");
+    try std.testing.expectEqualStrings("Verb", sloveneHeadwordPart(post_pos[0]).?);
+}
+
+test "SL pre-POS entity whitespace never supplies headword comma POS or protected authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "oko" } };
+    for ([_][]const u8{
+        "&#32;''oko'', [[samostalnik]]",
+        "''oko''&#32;[[samostalnik]]",
+        "''oko''&#32;, [[samostalnik]]",
+        "''&#111;ko'',&#32;[[samostalnik]]",
+        "''oko''&#44;&#32;[[samostalnik]]",
+        "''oko'',&#120;[[samostalnik]]",
+        "''oko'',&nbsp;[[samostalnik]]",
+        "''oko'',<nowiki> </nowiki>[[samostalnik]]",
+        "''oko'',<code>&#32;</code>[[samostalnik]]",
+        "''oko'',&#32;[[samostalnik|&#115;amostalnik]]",
+        "''oko'',&#32;[[samostalnik|<nowiki>samostalnik</nowiki>]]",
+        "''word,&#32;[[glagol]]''",
+        "''oko'','''&#32;'''[[samostalnik]]",
+    }) |source| {
+        const blocks = try renderer.renderBody(source);
+        try std.testing.expect(sloveneHeadwordPart(blocks[0]) == null);
+    }
+    const blocks = try renderer.renderBody("''oko'',&#32;[[samostalnik]]\n\n'''Pomeni:'''\n\n# organ");
+    const mutated = try a.dupe(wiki.Span, blocks[0].spans);
+    var headword = blocks[0];
+    headword.spans = mutated;
+    for ([_]usize{ 0, 1, 3 }) |index| {
+        const original = mutated[index];
+        mutated[index].provenance = .entity_literal;
+        try std.testing.expect(sloveneHeadwordPart(headword) == null);
+        mutated[index] = original;
+    }
+    const original_space = mutated[2];
+    mutated[2].text = "\n";
+    try std.testing.expect(sloveneHeadwordPart(headword) == null);
+    mutated[2] = original_space;
+    for ([_]wiki.Provenance{ .protected_literal, .entity_literal }) |provenance| {
+        const original = mutated[2];
+        mutated[2].provenance = provenance;
+        mutated[2].generated_diagnostic = true;
+        try std.testing.expect(sloveneHeadwordPart(headword) == null);
+        mutated[2] = original;
+    }
+}
+
+
+
+test "complete observed Native10 SL oko adds noun organization preserving all saved body fields and codec" {
+    const types = @import("blob_encoder").presentation_types;
+    const codec = @import("blob_encoder").presentation_codec;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Complete saved normal Reader entry f0a68262. Reader omits source provenance
+    // and some Stored fields; this proves its complete observable graph, not a
+    // full expanded capture or normal-loader rerun. Parse the exact headword
+    // convention separately to avoid inventing parsed provenance for its entity.
+    const observed_json =
+        \\{"organization":{"lexemes":[],"other_sections":[0,1]},"title":"oko","display_title":[],"kind":"language","language":"slovenščina","language_code":"sl","sections":[{"level":2,"title":"Slovenščina","anchor":"Slovenščina","anchor_fallback":"Sloven.C5.A1.C4.8Dina","blocks":[{"kind":"heading","depth":0,"spans":[{"kind":"text","text":"","target":"","trail":"","language":"","classes":"wikidict-media wikidict-media-file-466c6167206f6620536c6f76656e69612e737667","direction":"","explanation":"","foreground":null,"image":{"file":"Flag of Slovenia.svg","width_px":50},"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" Slovenščina","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":2,"anchor":"Slovenščina","anchor_fallback":"Sloven.C5.A1.C4.8Dina","table":null},{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"oko","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":",","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"samostalnik","target":"samostalnik","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"srednjega","target":"srednji","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"spol","target":"spol","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"a","target":"spol","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"oko","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" dv ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"očesi","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" mn ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"očesa","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" posebna mn ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"oči","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"Pomeni:","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"definition","depth":1,"spans":[{"kind":"link","text":"človeški","target":"človek","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ali ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"žival","target":"žival","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"ski","target":"žival","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"organ","target":"organ","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ki omogoča ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"vid","target":"vid","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":".","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"#","number":"1","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"Besedne zveze:","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"indent","depth":1,"spans":[{"kind":"link","text":"mačje oko","target":"mačje oko","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"tigrovo oko","target":"tigrovo oko","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"tretje oko","target":"tretje oko","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":":","number":"","level":0,"anchor":"","anchor_fallback":"","table":null}]},{"level":4,"title":"Prevodi","anchor":"Prevodi","anchor_fallback":"","blocks":[{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"anatomija","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"table","depth":0,"spans":[],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":{"caption":[],"rows":[{"cells":[{"spans":[{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Angleško: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"eye","target":"eye","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(en)","target":"https://en.wiktionary.org/wiki/eye","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Baskovsko: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"begi","target":"begi","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(eu)","target":"https://eu.wiktionary.org/wiki/begi","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Francosko: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"œil","target":"œil","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"m","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(fr)","target":"https://fr.wiktionary.org/wiki/%C5%93il","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Galicijsko: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"ollo","target":"ollo","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"m","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(gl)","target":"https://gl.wiktionary.org/wiki/ollo","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Italijansko: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"occhio","target":"occhio","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"m","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(it)","target":"https://it.wiktionary.org/wiki/occhio","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#ffffe0"},{"spans":[],"header":false,"colspan":1,"rowspan":1,"background":null},{"spans":[{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Katalonsko: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"ull","target":"ull","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"m","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(ca)","target":"https://ca.wiktionary.org/wiki/ull","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Latinsko: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"oculus","target":"oculus","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", i, ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"m","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(la)","target":"https://la.wiktionary.org/wiki/oculus","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Nemško: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"Auge","target":"Auge","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(de)","target":"https://de.wiktionary.org/wiki/Auge","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Portugalsko: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"olho","target":"olho","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"m","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(pt)","target":"https://pt.wiktionary.org/wiki/olho","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"• ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"Špansko: ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"ojo","target":"ojo","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"m","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"external_link","text":"(es)","target":"https://es.wiktionary.org/wiki/ojo","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"|}","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#ffffe0"}]}],"geometry":{"border":0,"cell_spacing":null,"cell_padding":null,"width":{"unit":"percent","value":100}}}},{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"[malformed table]","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"Rime:","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"indent","depth":1,"spans":[{"kind":"link","text":"meso","target":"meso","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":", ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"pero","target":"pero","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":":","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"paragraph","depth":0,"spans":[{"kind":"text","text":"Zunanje povezave:","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":null},{"kind":"table","depth":0,"spans":[],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":{"caption":[],"rows":[{"cells":[{"spans":[{"kind":"link","text":"","target":"File:Wikipedia-logo.png","trail":"","language":"","classes":"wikidict-media wikidict-media-file-57696b6970656469612d6c6f676f2e706e67","direction":"","explanation":"","foreground":null,"image":{"file":"Wikipedia-logo.png","width_px":20,"alt":"Commons","tooltip":"Commons"},"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":null},{"spans":[{"kind":"external_link","text":"oko","target":"https://sl.wikipedia.org/wiki/oko","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" – članek v Wikipediji","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":null}]}],"geometry":{"border":0,"cell_spacing":1,"cell_padding":null,"width":null}}}]}],"preamble_spans":[],"references":[],"media":[{"file":"Flag of Slovenia.svg","kind":"image","caption":"Flag of Slovenia.svg"},{"file":"Wikipedia-logo.png","kind":"image","caption":"Commons"}],"redirect":null,"alias":null}
+    ;
+    const before = (try std.json.parseFromSlice(types.Entry, a, observed_json, .{})).value;
+    try std.testing.expectEqualStrings("oko", before.title);
+    try std.testing.expectEqualStrings("sl", before.language_code);
+    try std.testing.expectEqualStrings("slovenščina", before.language.?);
+    try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "oko" } };
+    const headword = try renderer.renderBody("''oko'',&#32;[[samostalnik]] [[srednji|srednjega]] [[spol]]a, '''oko''' dv '''očesi''' mn '''očesa''' posebna mn '''oči'''");
+    try std.testing.expect(headword[0].spans[2].provenance == .entity_literal);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block };
+    const sections = try a.alloc(Section, before.sections.len);
+    for (before.sections, sections, 0..) |source_section, *section, section_index| {
+        const blocks = try a.alloc(wiki.Block, source_section.blocks.len);
+        for (source_section.blocks, blocks, 0..) |source_block, *block, block_index| {
+            const spans = try a.alloc(wiki.Span, source_block.spans.len);
+            for (source_block.spans, spans) |source_span, *span| {
+                try std.testing.expectEqualStrings("", source_span.trail);
+                span.* = .{
+                    .kind = std.meta.stringToEnum(@TypeOf(span.kind), @tagName(source_span.kind)).?,
+                    .text = source_span.text, .target = source_span.target,
+                    .language = source_span.language, .classes = source_span.classes,
+                    .direction = source_span.direction, .explanation = source_span.explanation,
+                    .foreground = source_span.foreground, .background = source_span.background,
+                    .font_scale = source_span.font_scale, .font_scale_basis = source_span.font_scale_basis,
+                    .role = std.meta.stringToEnum(@TypeOf(span.role), @tagName(source_span.role)).?,
+                    .flags = .{
+                        .bold = source_span.bold, .italic = source_span.italic,
+                        .code = source_span.code, .small = source_span.small,
+                        .superscript = source_span.superscript, .subscript = source_span.subscript,
+                        .strike = source_span.strike, .underline = source_span.underline,
+                    },
+                };
+            }
+            block.* = .{
+                .kind = std.meta.stringToEnum(wiki.Kind, @tagName(source_block.kind)).?,
+                .depth = source_block.depth, .spans = spans,
+                .list_path = source_block.list_path, .number = source_block.number,
+                .level = source_block.level, .anchor = source_block.anchor,
+                .anchor_fallback = source_block.anchor_fallback,
+            };
+            if (section_index == 0 and block_index == 1) {
+                try std.testing.expectEqual(source_block.spans.len, headword[0].spans.len);
+                for (source_block.spans, headword[0].spans) |saved, parsed| {
+                    try std.testing.expectEqualStrings(saved.text, parsed.text);
+                    try std.testing.expectEqualStrings(saved.target, parsed.target);
+                    try std.testing.expectEqual(saved.bold, parsed.flags.bold);
+                    try std.testing.expectEqual(saved.italic, parsed.flags.italic);
+                }
+                block.spans = headword[0].spans;
+            }
+        }
+        section.* = .{ .title = source_section.title, .level = source_section.level, .blocks = blocks };
+    }
+    const organization = try buildOwned(a, sections, before.language.?);
+    try std.testing.expectEqual(@as(usize, 1), organization.lexemes.len);
+    const noun = organization.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqualStrings(before.language.?, noun.language);
+    try std.testing.expectEqual(@as(usize, 0), noun.section);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+    const sense = noun.definitions[0];
+    try std.testing.expectEqual(@as(usize, 3), sense.block);
+    try std.testing.expect(sense.parent == null and sense.form == null);
+    try std.testing.expectEqual(@as(usize, 0), sense.examples.len);
+    try std.testing.expectEqual(@as(usize, 0), sense.quotations.len);
+    try std.testing.expectEqual(@as(usize, 0), sense.notes.len);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, noun.introduction);
+    try std.testing.expectEqualSlices(usize, &.{ 4, 5 }, noun.other_blocks);
+    try std.testing.expectEqualSlices(usize, &.{1}, noun.related_sections);
+    try std.testing.expectEqual(@as(usize, 0), organization.other_sections.len);
+    var text: std.ArrayList(u8) = .empty;
+    for (before.sections[0].blocks[sense.block].spans) |span| try text.appendSlice(a, span.text);
+    try std.testing.expectEqualStrings("človeški ali živalski organ, ki omogoča vid.", text.items);
+    const bytes = try codec.encodeBuildAlloc(a, before.display_title, before.sections, organization, before.references, before.media);
+    const stored = try codec.decodeAlloc(a, bytes, before.title, before.kind, .{ .heading = before.language.?, .code = before.language_code });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    try std.testing.expectEqualDeep(before.sections, stored.entry.sections);
+    try std.testing.expectEqualDeep(before.display_title, stored.entry.display_title);
+    try std.testing.expectEqualDeep(before.references, stored.entry.references);
+    try std.testing.expectEqualDeep(before.media, stored.entry.media);
+    var normalized = stored;
+    normalized.entry.organization = before.organization;
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, .{ .entry = before }), try codec.encodeAlloc(a, normalized));
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, sections)).lexemes.len);
+}
+
+
+test "Catalan POS labels preserve supplied owners and do not classify unknown languages" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const body = [_]wiki.Block{
+        .{ .kind = .paragraph },
+        .{ .kind = .definition, .list_path = "#" },
+        .{ .kind = .example, .list_path = "#:" },
+    };
+    const sections = [_]Section{
+        .{ .title = "Independently supplied language", .level = 2 },
+        .{ .title = "Nom", .level = 3, .blocks = &body },
+        .{ .title = "Related", .level = 4 },
+        .{ .title = "Adjectiu", .level = 3, .blocks = &body },
+        .{ .title = "Unknown POS", .level = 3, .blocks = &body },
+    };
+    const result = try buildOwned(a, &sections, "French");
+    try std.testing.expectEqual(@as(usize, 2), result.lexemes.len);
+    try std.testing.expectEqualStrings("Noun", result.lexemes[0].kind);
+    try std.testing.expectEqualStrings("Adjective", result.lexemes[1].kind);
+    for (result.lexemes, [_]usize{ 1, 3 }) |lexical, section| {
+        try std.testing.expectEqualStrings("French", lexical.language);
+        try std.testing.expectEqual(section, lexical.section);
+        try std.testing.expectEqual(@as(usize, 1), lexical.definitions.len);
+        try std.testing.expectEqual(@as(usize, 1), lexical.definitions[0].block);
+        try std.testing.expectEqualSlices(usize, &.{2}, lexical.definitions[0].examples);
+        try std.testing.expect(lexical.definitions[0].form == null);
+    }
+    try std.testing.expectEqualSlices(usize, &.{2}, result.lexemes[0].related_sections);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 4 }, result.other_sections);
+    for ([_][]const u8{ "nom", "NOM", "adjectiu", "Adjectiu desconegut", "Unknown POS" }) |unknown|
+        try std.testing.expect(partOfSpeech(unknown) == null);
+    // An unresolved L2 can be a language boundary, not a POS declaration.
+    const unresolved = [_]Section{
+        .{ .title = "Nom", .level = 2, .blocks = &body },
+        .{ .title = "Adjectiu", .level = 2, .blocks = &body },
+    };
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &unresolved)).lexemes.len);
+    // Nested POS organization is allowed without inventing an owner.
+    const unowned = try buildUnclassified(a, &sections);
+    try std.testing.expectEqual(@as(usize, 2), unowned.lexemes.len);
+    for (unowned.lexemes) |lexical| try std.testing.expectEqualStrings("", lexical.language);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "control" } };
+    const protected = try renderer.renderBody("<nowiki>===Nom===\n# not a structured definition\n===Adjectiu===</nowiki>");
+    const literal = [_]Section{.{ .title = "Unknown", .level = 2, .blocks = protected }};
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &literal)).lexemes.len);
+}
+
+test "retained catalan three owned bodies gain exact noun adjective senses without changing Stored content" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const types = encoder.presentation_types;
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const Page = struct { entries: []const struct { sections: []const Section } };
+    const TypedPage = struct { entries: []const types.Entry };
+    const cases = .{
+        .{ @embedFile("ca-catalan-ast-reader.json"), "Asturian", "ast", @as(usize, 1) },
+        .{ @embedFile("ca-catalan-gl-reader.json"), "Galician", "gl", @as(usize, 3) },
+        .{ @embedFile("ca-catalan-es-reader.json"), "Spanish", "es", @as(usize, 3) },
+    };
+    inline for (cases) |case| {
+        // The compiler view supplies layout indices only; it never serializes
+        // the Reader body's top-level style flags. Retain the typed Entry.
+        const projected = try std.json.parseFromSlice(Page, a, case[0], .{ .ignore_unknown_fields = true });
+        const typed = try std.json.parseFromSlice(TypedPage, a, case[0], .{ .ignore_unknown_fields = true });
+        const before = typed.value.entries[0];
+        try std.testing.expectEqualStrings("catalán", before.title);
+        try std.testing.expectEqualStrings(case[1], before.language.?);
+        try std.testing.expectEqualStrings(case[2], before.language_code);
+        try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+        const sections = projected.value.entries[0].sections;
+        const layout = try buildOwned(a, sections, before.language.?);
+        try std.testing.expectEqual(case[3], layout.lexemes.len);
+        for (layout.lexemes, 0..) |lexical, index| {
+            try std.testing.expectEqualStrings(case[1], lexical.language);
+            try std.testing.expectEqualStrings(if (case[3] == 3 and index == 0) "Adjective" else "Noun", lexical.kind);
+            try std.testing.expectEqual(index + 1, lexical.section);
+            try std.testing.expect(lexical.etymology == null);
+            try std.testing.expectEqual(@as(usize, 1), lexical.definitions.len);
+            try std.testing.expectEqual(@as(usize, 1), lexical.definitions[0].block);
+            try std.testing.expectEqual(@as(usize, 0), lexical.definitions[0].examples.len);
+            try std.testing.expect(lexical.definitions[0].form == null);
+            try std.testing.expectEqual(wiki.Kind.definition, sections[lexical.section].blocks[lexical.definitions[0].block].kind);
+            try std.testing.expectEqualSlices(usize, &.{0}, lexical.introduction);
+            try std.testing.expectEqual(@as(usize, 0), lexical.related_sections.len);
+        }
+        if (std.mem.eql(u8, case[2], "es")) {
+            try std.testing.expectEqualSlices(usize, &.{ 0, 4, 5 }, layout.other_sections);
+        } else try std.testing.expectEqualSlices(usize, &.{0}, layout.other_sections);
+        const organization_json = try std.json.Stringify.valueAlloc(a, layout, .{});
+        const organization = try std.json.parseFromSlice(types.Layout, a, organization_json, .{});
+        var expected: types.Stored = .{ .entry = before };
+        expected.entry.organization = organization.value;
+        const encoded = try encoder.presentation_codec.encodeAlloc(a, expected);
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, encoded, before.title, before.kind, .{ .code = case[2], .heading = case[1] });
+        try std.testing.expectEqualDeep(expected, decoded);
+        try std.testing.expectEqualDeep(before.sections, decoded.entry.sections);
+        try std.testing.expectEqualDeep(before.display_title, decoded.entry.display_title);
+        try std.testing.expectEqualDeep(before.preamble_spans, decoded.entry.preamble_spans);
+        try std.testing.expectEqualDeep(before.references, decoded.entry.references);
+        try std.testing.expectEqualDeep(before.media, decoded.entry.media);
+        try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    }
+}
+
+
+test "Basque POS labels retain independent owners and reject unknown boundary labels" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const body = [_]wiki.Block{ .{ .kind = .indent, .list_path = ":" }, .{ .kind = .list_item, .list_path = ":#" } };
+    const sections = [_]Section{
+        .{ .title = "Independent owner", .level = 2 },
+        .{ .title = "Izena", .level = 3, .blocks = &body },
+        .{ .title = "Support", .level = 4, .blocks = &body },
+        .{ .title = "Adjektiboa", .level = 3, .blocks = &body },
+        .{ .title = "Unknown", .level = 3, .blocks = &body },
+    };
+    const result = try buildOwned(a, &sections, "French");
+    try std.testing.expectEqual(@as(usize, 2), result.lexemes.len);
+    for (result.lexemes, [_]usize{ 1, 3 }, [_][]const u8{ "Noun", "Adjective" }) |lexeme, section, kind| {
+        try std.testing.expectEqualStrings("French", lexeme.language);
+        try std.testing.expectEqualStrings(kind, lexeme.kind);
+        try std.testing.expectEqual(section, lexeme.section);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.definitions[0].block);
+        try std.testing.expect(lexeme.definitions[0].parent == null and lexeme.definitions[0].form == null);
+    }
+    try std.testing.expectEqualSlices(usize, &.{2}, result.lexemes[0].related_sections);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 4 }, result.other_sections);
+    for ([_][]const u8{ "izena", "IZENA", "adjektiboa", "Adjektiboa unknown" }) |label|
+        try std.testing.expect(partOfSpeech(label) == null);
+    const ambiguous = [_]Section{.{ .title = "Izena", .level = 2, .blocks = &body }};
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &ambiguous)).lexemes.len);
+    const unowned = try buildUnclassified(a, &sections);
+    try std.testing.expectEqual(@as(usize, 2), unowned.lexemes.len);
+    for (unowned.lexemes) |lexeme| try std.testing.expectEqualStrings("", lexeme.language);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "control" } };
+    const literal = try renderer.renderBody("<nowiki>===Izena===\n:# literal, not a sense</nowiki>");
+    const protected = [_]Section{.{ .title = "Unknown", .level = 2, .blocks = literal }};
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &protected)).lexemes.len);
+}
+
+test "indented numbered meanings require declared POS and retain lemma scope barriers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const blocks = [_]wiki.Block{
+        .{ .kind = .list_item, .list_path = ":*" },
+        .{ .kind = .paragraph, .list_path = ":#" },
+        .{ .kind = .list_item, .list_path = "*#" },
+        .{ .kind = .list_item, .list_path = ":#" },
+        .{ .kind = .list_item, .list_path = ":#" },
+    };
+    try std.testing.expectEqual(@as(usize, 0), (try analyze(a, "Noun", 0, null, &blocks, false)).definitions.len);
+    const explicit = try analyze(a, "Noun", 0, null, &blocks, true);
+    try std.testing.expectEqual(@as(usize, 2), explicit.definitions.len);
+    try std.testing.expectEqual(@as(usize, 3), explicit.definitions[0].block);
+    try std.testing.expectEqual(@as(usize, 4), explicit.definitions[1].block);
+    for (explicit.definitions) |sense| try std.testing.expect(sense.parent == null);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const meaning = [_]wiki.Block{.{ .kind = .list_item, .list_path = ":#" }};
+    const sections = [_]Section{
+        .{ .title = "Owner", .level = 2 },
+        .{ .title = "Noun", .level = 3, .blocks = &meaning },
+        .{ .title = "Lemma", .level = 4, .blocks = &meaning },
+        .{ .title = "Unrelated", .level = 3 },
+        .{ .title = "Neet-lemma", .level = 4, .blocks = &meaning },
+        .{ .title = "Later owner", .level = 2 },
+        .{ .title = "Lemma", .level = 3, .blocks = &meaning },
+    };
+    const scoped = try buildOwned(a, &sections, "Supplied owner");
+    try std.testing.expectEqual(@as(usize, 2), scoped.lexemes.len);
+    for (scoped.lexemes, [_]usize{ 1, 2 }) |lexeme, section| {
+        try std.testing.expectEqual(section, lexeme.section);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+        try std.testing.expectEqual(@as(usize, 0), lexeme.definitions[0].block);
+        try std.testing.expectEqualStrings("Supplied owner", lexeme.language);
+    }
+    try std.testing.expectEqualSlices(usize, &.{ 0, 3, 4, 5, 6 }, scoped.other_sections);
+}
+
+test "retained Basque five owned records gain six senses with complete Stored codec parity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const types = encoder.presentation_types;
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const Page = struct { entries: []const struct { sections: []const Section } };
+    const TypedPage = struct { entries: []const types.Entry };
+    const cases = .{
+        .{ @embedFile("eu-dwa-ht-reader.json"), "dwa", "Haitiko kreolera", "ht", "Noun", @as(usize, 3) },
+        .{ @embedFile("eu-dwa-csb-reader.json"), "dwa", "Kashubian", "csb", "Adjective", @as(usize, 2) },
+        .{ @embedFile("eu-dwa-pl-reader.json"), "dwa", "poloniera", "pl", "Adjective", @as(usize, 2) },
+        .{ @embedFile("eu-ama-eu-reader.json"), "ama", "euskara", "eu", "Noun", @as(usize, 4) },
+        .{ @embedFile("eu-ama-gn-reader.json"), "ama", "guaraniera", "gn", "Noun", @as(usize, 3) },
+    };
+    inline for (cases) |case| {
+        const projected = try std.json.parseFromSlice(Page, a, case[0], .{ .ignore_unknown_fields = true });
+        const typed = try std.json.parseFromSlice(TypedPage, a, case[0], .{ .ignore_unknown_fields = true });
+        const before = typed.value.entries[0];
+        try std.testing.expectEqualStrings(case[1], before.title);
+        try std.testing.expectEqualStrings(case[2], before.language.?);
+        try std.testing.expectEqualStrings(case[3], before.language_code);
+        try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+        const sections = projected.value.entries[0].sections;
+        const layout = try buildOwned(a, sections, before.language.?);
+        const basque = std.mem.eql(u8, case[3], "eu");
+        try std.testing.expectEqual(@as(usize, if (basque) 2 else 1), layout.lexemes.len);
+        for (layout.lexemes, 0..) |lexeme, n| {
+            try std.testing.expectEqualStrings(case[2], lexeme.language);
+            try std.testing.expectEqualStrings(case[4], lexeme.kind);
+            try std.testing.expectEqual(case[5] + n * 4, lexeme.section);
+            try std.testing.expect(lexeme.etymology == null);
+            try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+            const sense = lexeme.definitions[0];
+            try std.testing.expectEqual(@as(usize, if (basque) 0 else 1), sense.block);
+            try std.testing.expect(sense.parent == null and sense.form == null);
+            try std.testing.expectEqual(@as(usize, 0), sense.examples.len);
+            try std.testing.expectEqual(@as(usize, 0), sense.notes.len);
+            if (basque) {
+                try std.testing.expectEqualSlices(usize, &.{1}, sense.quotations);
+                try std.testing.expectEqual(wiki.Kind.definition, sections[lexeme.section].blocks[sense.block].kind);
+            } else {
+                try std.testing.expectEqual(@as(usize, 0), sense.quotations.len);
+                try std.testing.expectEqual(wiki.Kind.list_item, sections[lexeme.section].blocks[sense.block].kind);
+                try std.testing.expectEqualStrings(":#", sections[lexeme.section].blocks[sense.block].list_path);
+            }
+        }
+        if (std.mem.eql(u8, case[3], "pl")) try std.testing.expectEqualSlices(usize, &.{3}, layout.lexemes[0].related_sections);
+        if (basque) {
+            try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 3, 5, 6, 7, 9, 10, 11 }, layout.other_sections);
+            for (layout.lexemes) |lexeme| try std.testing.expectEqual(@as(usize, 0), lexeme.related_sections.len);
+        } else if (std.mem.eql(u8, case[3], "csb") or std.mem.eql(u8, case[3], "pl")) {
+            try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, layout.other_sections);
+        } else try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, layout.other_sections);
+        const organization_json = try std.json.Stringify.valueAlloc(a, layout, .{});
+        const organization = try std.json.parseFromSlice(types.Layout, a, organization_json, .{});
+        var expected: types.Stored = .{ .entry = before };
+        expected.entry.organization = organization.value;
+        const encoded = try encoder.presentation_codec.encodeAlloc(a, expected);
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, encoded, before.title, before.kind, .{ .code = case[3], .heading = case[2] });
+        try std.testing.expectEqualDeep(expected, decoded);
+        try std.testing.expectEqualDeep(before.sections, decoded.entry.sections);
+        try std.testing.expectEqualDeep(before.display_title, decoded.entry.display_title);
+        try std.testing.expectEqualDeep(before.preamble_spans, decoded.entry.preamble_spans);
+        try std.testing.expectEqualDeep(before.references, decoded.entry.references);
+        try std.testing.expectEqualDeep(before.media, decoded.entry.media);
+        try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    }
+}
+
+
+test "Gaelic noun label preserves independent owner and unresolved boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const body = [_]wiki.Block{.{ .kind = .definition, .list_path = "#" }};
+    const sections = [_]Section{
+        .{ .title = "Independent", .level = 2 },
+        .{ .title = "Ainmear", .level = 3, .blocks = &body },
+        .{ .title = "Unknown", .level = 3, .blocks = &body },
+    };
+    const owned = try buildOwned(a, &sections, "French");
+    try std.testing.expectEqual(@as(usize, 1), owned.lexemes.len);
+    try std.testing.expectEqualStrings("Noun", owned.lexemes[0].kind);
+    try std.testing.expectEqualStrings("French", owned.lexemes[0].language);
+    try std.testing.expectEqual(@as(usize, 1), owned.lexemes[0].section);
+    try std.testing.expectEqual(@as(usize, 1), owned.lexemes[0].definitions.len);
+    for ([_][]const u8{ "ainmear", "AINMEAR", "Ainmear1", "Ainmear unknown" }) |label|
+        try std.testing.expect(partOfSpeech(label) == null);
+    const ambiguous = [_]Section{.{ .title = "Ainmear", .level = 2, .blocks = &body }};
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &ambiguous)).lexemes.len);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "control" } };
+    const literal = try renderer.renderBody("<nowiki>===Ainmear===\n# literal</nowiki>");
+    const protected = [_]Section{.{ .title = "Unknown", .level = 2, .blocks = literal }};
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &protected)).lexemes.len);
+}
+
+test "retained Gaelic six records preserve nested senses support errors and full Stored codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const types = encoder.presentation_types;
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const Page = struct { entries: []const struct { sections: []const Section } };
+    const TypedPage = struct { entries: []const types.Entry };
+    const cases = .{
+        .{ @embedFile("gd-cat-en-reader.json"), "cat", "Beurla", "en", @as(usize, 2) },
+        .{ @embedFile("gd-cat-gd-reader.json"), "cat", "Gàidhlig", "gd", @as(usize, 10) },
+        .{ @embedFile("gd-cat-ga-reader.json"), "cat", "Gàidhlig na h-Èireann", "ga", @as(usize, 1) },
+        .{ @embedFile("gd-cat-support-reader.json"), "cat", "Unclassified", "", @as(usize, 0) },
+        .{ @embedFile("gd-cu-gd-reader.json"), "cù", "Gàidhlig", "gd", @as(usize, 3) },
+        .{ @embedFile("gd-cu-support-reader.json"), "cù", "Unclassified", "", @as(usize, 0) },
+    };
+    inline for (cases) |case| {
+        const projected = try std.json.parseFromSlice(Page, a, case[0], .{ .ignore_unknown_fields = true });
+        const typed = try std.json.parseFromSlice(TypedPage, a, case[0], .{ .ignore_unknown_fields = true });
+        const before = typed.value.entries[0];
+        try std.testing.expectEqualStrings(case[1], before.title);
+        try std.testing.expectEqualStrings(case[2], before.language.?);
+        try std.testing.expectEqualStrings(case[3], before.language_code);
+        try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+        const sections = projected.value.entries[0].sections;
+        const layout = if (case[3].len == 0) try buildUnclassified(a, sections) else try buildOwned(a, sections, case[2]);
+        try std.testing.expectEqual(@as(usize, if (case[4] == 0) 0 else 1), layout.lexemes.len);
+        if (case[4] != 0) {
+            const lexical = layout.lexemes[0];
+            try std.testing.expectEqualStrings("Noun", lexical.kind);
+            try std.testing.expectEqualStrings(case[2], lexical.language);
+            try std.testing.expectEqual(@as(usize, 3), lexical.section);
+            try std.testing.expect(lexical.etymology == null);
+            try std.testing.expectEqual(case[4], lexical.definitions.len);
+            try std.testing.expectEqualSlices(usize, &.{0}, lexical.introduction);
+            try std.testing.expectEqual(@as(usize, 0), lexical.related_sections.len);
+            const block_indices: []const usize = if (case[4] == 10) &.{ 1, 3, 4, 5, 6, 7, 8, 9, 10, 11 } else if (case[4] == 3) &.{ 1, 2, 4 } else if (case[4] == 2) &.{ 1, 2 } else &.{1};
+            for (lexical.definitions, block_indices, 0..) |sense, block, index| {
+                try std.testing.expectEqual(block, sense.block);
+                try std.testing.expectEqual(wiki.Kind.definition, sections[3].blocks[block].kind);
+                const parent: ?usize = if (case[4] != 10 or index == 0) null else if (index == 3 or index == 4) 2 else 0;
+                try std.testing.expectEqual(parent, sense.parent);
+                if (case[4] == 10 and index == 0) try std.testing.expectEqualSlices(usize, &.{2}, sense.examples) else try std.testing.expectEqual(@as(usize, 0), sense.examples.len);
+                try std.testing.expectEqual(@as(usize, 0), sense.quotations.len);
+                try std.testing.expectEqual(@as(usize, 0), sense.notes.len);
+                try std.testing.expect(sense.form == null);
+            }
+            if (case[4] == 3) try std.testing.expectEqualSlices(usize, &.{3}, lexical.other_blocks) else try std.testing.expectEqual(@as(usize, 0), lexical.other_blocks.len);
+        }
+        if (case[4] == 0) {
+            try std.testing.expectEqualSlices(usize, &.{0}, layout.other_sections);
+        } else if (case[4] == 3) {
+            try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 4, 5, 6 }, layout.other_sections);
+        } else if (case[4] == 1) {
+            try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 4, 5 }, layout.other_sections);
+        } else try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, layout.other_sections);
+        const organization_json = try std.json.Stringify.valueAlloc(a, layout, .{});
+        const organization = try std.json.parseFromSlice(types.Layout, a, organization_json, .{});
+        var expected: types.Stored = .{ .entry = before };
+        expected.entry.organization = organization.value;
+        const encoded = try encoder.presentation_codec.encodeAlloc(a, expected);
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, encoded, before.title, before.kind, .{ .code = case[3], .heading = case[2] });
+        try std.testing.expectEqualDeep(expected, decoded);
+        try std.testing.expectEqualDeep(before.sections, decoded.entry.sections);
+        try std.testing.expectEqualDeep(before.display_title, decoded.entry.display_title);
+        try std.testing.expectEqualDeep(before.preamble_spans, decoded.entry.preamble_spans);
+        try std.testing.expectEqualDeep(before.references, decoded.entry.references);
+        try std.testing.expectEqualDeep(before.media, decoded.entry.media);
+        try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    }
 }

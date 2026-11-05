@@ -51,6 +51,7 @@ fn normalizeName(a: std.mem.Allocator, raw: []const u8) !?[]const u8 {
         const len = std.unicode.utf8ByteSequenceLength(raw[pos]) catch return null;
         if (pos + len > raw.len) return null;
         const cp = std.unicode.utf8Decode(raw[pos .. pos + len]) catch return null;
+        if (cp == 0xfffd) return null;
         if (isBidiOverride(cp)) {
             pos += len;
             continue;
@@ -702,6 +703,8 @@ fn hasNamedCharacterReference(text: []const u8) bool {
 }
 
 pub fn validTitleBody(runtime: *rt.Context, spec: namespace_lib.Spec, text_with_fragment: []const u8) bool {
+    // Matched TitleParser rejects replacement characters before splitting #.
+    if (std.mem.indexOf(u8, text_with_fragment, "\u{fffd}") != null) return false;
     const hash = std.mem.indexOfScalar(u8, text_with_fragment, '#');
     const text = if (hash) |at| text_with_fragment[0..at] else text_with_fragment;
     if (text.len == 0) return spec.id == 0 and hash != null;
@@ -2029,4 +2032,23 @@ test "current redirect rejects inconsistent or unknown explicit interwiki metada
     try std.testing.expectEqualStrings("StringExpected", runtime.aotErrorName().?);
     try std.testing.expect(host.page_identity_failure == null);
     runtime.clearAotErrorName();
+}
+
+test "title constructors reject replacement characters before fragment splitting" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    const mw = try runtime.newNativeNamespace(.mw);
+    try installForTest(&runtime, mw);
+    const titles = mw.rawGet(.{ .string = "title" }).?.table;
+    for ([_][]const u8{ "antiquit\u{fffd}", "Good#\u{fffd}", "#\u{fffd}", "File:Bad\u{fffd}.svg" }) |text| {
+        const made = try callField(&runtime, .{ .table = titles }, "new", &.{.{ .string = text }});
+        defer rt.freeResults(made);
+        try std.testing.expect(made.len == 1 and made[0] == .nil);
+    }
+    const valid = try callField(&runtime, .{ .table = titles }, "new", &.{.{ .string = "antiquité#section" }});
+    defer rt.freeResults(valid);
+    try std.testing.expect(valid.len == 1 and valid[0] == .table);
+    try std.testing.expectEqualStrings("section", (try runtime.getIndex(valid[0], .{ .string = "fragment" })).string);
 }

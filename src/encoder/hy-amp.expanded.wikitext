@@ -1,0 +1,30 @@
+{{-hy-}''}
+<div class="ոչhiddenStructure">
+<h3>[[Պատկեր:Megaphone.svg|20px]] Արտասանություն</h3>
+[[միջազգային հնչյունական այբուբեն|ՄՀԱ]]: [<span style="font-family:Arial Unicode MS,Lucida Sans Unicode,MS Mincho,Arial,sans-serif; text-decoration:none;">'''<big>ampropatsets</big>'''</span>]
+</div>
+
+[[վանկ|վանկեր]]՝ '''ամպ•րո•պա•ծեծ•&nbsp;'''
+
+== Բացատրությունը ==
+* ամպրեպից ծեծված <span class="example-fullblock ">&#9670;&nbsp;<span class="example-block" style="color:darkgreen">Տեսավ նա նա այն ուղին, որով անցել էր քարավանը մեր <span class="example-select" style="background-color:#EDF0FF"><b>ամպրոպածեծ</b></span>: </span></span> [[:w:Նաիրի Զարյան|(Նաիրի Զարյան)]][[Կատեգորիա:Քաղվածք/Նաիրի Զարյան]] 
+
+{| class="mw-collapsible mw-collapsed wikitable collapsed" style="margin: 0 0 0.2em;"
+| style="background-color: #CBECFF; text-align:left; border-right:0; font-size: 95%; font-weight: bold; padding-left:5px;" width="100%" class="block-head"| Թարգմանություններ
+! style="background-color: #CBECFF; font-size:smaller; border-left:0;" class="block-head"| 
+|-
+| colspan=2 bgcolor="#EEF9FF" class="block-body"|<div class="multicol" style="-moz-column-count:2; -webkit-column-count:2; column-count:2; font-size: 95%;">
+* [[անգլերեն]]՝ [[agravanman]]
+* [[գերմաներեն]]՝ 
+* [[դանիերեն]]՝ 
+* [[էսպերանտո]]՝ 
+* [[իսպաներեն]]՝ 
+* [[իտալերեն]]՝ 
+* [[հոլանդերեն]]՝ 
+* [[հունարեն]]՝ 
+* [[շվեդերեն]]՝ 
+* [[պորտուգալերեն]]՝ 
+* [[ռուսերեն]]՝ 
+* [[վրացերեն]]՝ 
+* [[ֆրանսերեն]]՝ 
+|}

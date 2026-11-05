@@ -2884,7 +2884,10 @@ pub const Expander = struct {
             return err;
         };
         try cpu_scope.finish();
-        const owned = try page_a.dupe(u8, text);
+        // Scribunto's #invoke hook cleans the returned wikitext, not Lua's
+        // internal byte strings. Reuse the immutable namespace NFC backend.
+        const catalog = child.namespace_catalog orelse return error.MissingNamespaceCatalog;
+        const owned = try ustring_lib.cleanInvokeTextAlloc(page_a, catalog, text);
         completed = true;
         return owned;
     }
@@ -8468,4 +8471,102 @@ test "nested frame parser invoke uses pristine page templates and retains caller
     // the caller's template flags; inspect that live baseline after cleanup.
     try std.testing.expectEqual(@as(usize, 0), expander.page_template_rejected.len);
     try std.testing.expect(!runtime.module_template_rejected[1]);
+}
+
+test "invoke cleanup preserves the captured Orto byte API defect as valid rendered source" {
+    // antikité p73940/r415175 invokes Modele:Orto p50674/r224673.
+    // Its exact template body calls Ortografeyes.init. This focused module
+    // excerpt uses the real Unicode-find and byte-sub/gsub APIs from the
+    // authenticated module p50672/r431540 lines106-120, followed by the
+    // link spelling from Riscrijhaedje p56446/r405607 lines378-390.
+    const Case = struct {
+        fn lookup(_: ?*const anyopaque, title: []const u8) ?u32 {
+            return if (std.mem.eql(u8, title, "Module:Ortografeyes")) 0 else null;
+        }
+        fn moduleName(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return if (id == 0) "Module:Ortografeyes" else null;
+        }
+        fn exists(_: ?*anyopaque, title: []const u8) !bool {
+            return std.mem.eql(u8, title, "Template:Orto");
+        }
+        fn template(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            return if (std.mem.eql(u8, title, "Template:Orto"))
+                "<includeonly>{{#invoke:Ortografeyes|init}}</includeonly><noinclude>{{doc|lua=Ortografeyes}}<noinclude>"
+            else
+                null;
+        }
+        fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            const exports = try ctx.newTable();
+            try exports.rawSet(ctx.allocator, .{ .string = "init" }, try ctx.makeFunctionKnown(1, run, &.{}));
+            // Separate synthetic control: normalize only after returned Lua
+            // strings are concatenated, never each internal byte value.
+            try exports.rawSet(ctx.allocator, .{ .string = "nfd" }, try ctx.makeFunctionKnown(2, nfd, &.{}));
+            const result = try std.heap.smp_allocator.alloc(Value, 1);
+            result[0] = .{ .table = exports };
+            return result;
+        }
+        fn nfd(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            const result = try std.heap.smp_allocator.alloc(Value, 2);
+            result[0] = .{ .string = "e" };
+            result[1] = .{ .string = "\u{301}" };
+            return result;
+        }
+        fn run(ctx: *rt.Context, _: rt.Captures, args: []const Value) ![]const Value {
+            if (args.len != 1 or args[0] != .table) return error.FrameExpected;
+            try std.testing.expect(ctx.current_frame == args[0].table);
+            const get_parent = try ctx.getIndex(args[0], .{ .string = "getParent" });
+            const parents = try ctx.callValue(get_parent, &.{args[0]});
+            defer rt.freeResults(parents);
+            try std.testing.expect(parents.len == 1 and parents[0] == .table);
+            const parent_args = try ctx.getIndex(parents[0], .{ .string = "args" });
+            const word = "antiquité (antikité)";
+            const refs = try ctx.getIndex(parent_args, .{ .string = word });
+            try std.testing.expect(refs == .string);
+            try std.testing.expectEqualStrings("E1,E34", refs.string);
+            const mw = ctx.getGlobal(23).table;
+            const unicode = mw.rawGet(.{ .string = "ustring" }).?.table;
+            const find = unicode.rawGet(.{ .string = "find" }).?;
+            const found = try ctx.callValue(find, &.{ .{ .string = word }, .{ .string = " %([^%)][^%)]" } });
+            defer rt.freeResults(found);
+            try std.testing.expect(found.len >= 2 and found[0] == .number);
+            try std.testing.expectEqual(@as(f64, 10), found[0].number);
+            const strings = ctx.getGlobal(18).table;
+            const sub = strings.rawGet(.{ .string = "sub" }).?;
+            const prefix = try ctx.callValue(sub, &.{ .{ .string = word }, .{ .number = 1 }, .{ .number = found[0].number - 1 } });
+            defer rt.freeResults(prefix);
+            // Lua byte strings must remain byte strings inside the module.
+            try std.testing.expectEqualSlices(u8, "antiquit\xc3", prefix[0].string);
+            try std.testing.expect(!std.unicode.utf8ValidateSlice(prefix[0].string));
+            const suffix = try ctx.callValue(sub, &.{ .{ .string = word }, .{ .number = found[0].number + 2 } });
+            defer rt.freeResults(suffix);
+            const strip = strings.rawGet(.{ .string = "gsub" }).?;
+            const tail = try ctx.callValue(strip, &.{ suffix[0], .{ .string = "%)$" }, .{ .string = "" } });
+            defer rt.freeResults(tail);
+            try std.testing.expectEqualStrings("(antikité", tail[0].string);
+            const text = try std.fmt.allocPrint(ctx.allocator, "[[{s}#Walon-Feller|{s}]] ( [[{s}#Walon-Feller|{s}]] )", .{
+                prefix[0].string, prefix[0].string, tail[0].string, tail[0].string,
+            });
+            const result = try std.heap.smp_allocator.alloc(Value, 1);
+            result[0] = .{ .string = text };
+            return result;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+    defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{ rt.stabilize(Case.root), rt.stabilize(Case.run), rt.stabilize(Case.nfd) };
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, Case.lookup, Case.moduleName);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .get = Case.template, .exists = Case.exists }, .install_scribunto = installTestInvoke };
+    const text = try expander.expandFragment("antikité", "{{Orto| antiquité (antikité) = E1,E34 }}", 1_670_803_200);
+    try std.testing.expectEqualStrings("[[antiquit\u{fffd}#Walon-Feller|antiquit\u{fffd}]] ( [[(antikité#Walon-Feller|(antikité]] )", text);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(text));
+    // The source's defective spelling and opening parenthesis are not repaired.
+    try std.testing.expect(std.mem.indexOf(u8, text, "[[antiquité#") == null);
+    try std.testing.expectEqualStrings("é", try expander.expandFragment("NFC boundary control", "{{#invoke:Ortografeyes|nfd}}", 1_670_803_200));
 }

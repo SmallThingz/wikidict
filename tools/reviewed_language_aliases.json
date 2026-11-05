@@ -297,6 +297,35 @@
       "observed_date": "2026-11-04",
       "evidence": "The directly retrieved Basque Wikipedia page Kaxubiera identifies ISO 639-2 and ISO 639-3 as csb and exposes permanent revision 10723575. Independently the directly retrieved Wikidata Q33690 page exposes revision 2556431925, Wikimedia language code csb and euwiki sitelink Kaxubiera. These are public-page observations with displayed revisions, not authenticated historical dump/API captures. The separately authenticated EU Template:-csb- p6501/r409504 emits exactly Kaxubiera; neither its title nor its flag alone supplies code authority. The selected dd3a2be0 language-names snapshot lacks this label.",
       "rationale": "Install only this exact independently attested label for already installed csb through existing reviewed-alias conflict checks. Keep preferred Kashubian display unchanged. No case folding, flag/edition/template-name inference, collision override or fabricated upstream API row. This is reviewed editorial build data; it grants no new source-banner equivalence. The physical decorated heading also needs the separately reviewed neutral-border parser correction."
+    },
+    {
+      "id": "li-nederlandjs-exact-p26592-r905227-v1",
+      "code": "nl",
+      "alias": "Nederlandjs",
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://li.wiktionary.org/w/index.php?title=Nederlandjs&oldid=905227",
+      "evidence": "Authenticated selected dump page26592/revision905227 defines the language of Netherlands, Flanders and Suriname and explicitly gives Nederlands as a spelling variant. The same publication-pinned ordinary registry registers nl preferred Nederlands.",
+      "rationale": "Exact language-name alias only; preserve normal preferred Nederlands. No edition, POS, code-spelling or fuzzy normalization inference."
+    },
+    {
+      "id": "li-mofers-variety-p131871-r958780-v1",
+      "code": "li",
+      "alias": "Mofers",
+      "preserve_heading": true,
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://li.wiktionary.org/w/index.php?title=Mofers&oldid=958780",
+      "evidence": "Authenticated selected dump page131871/revision958780 explicitly defines Mofers as the Limburgish dialect spoken in Montfort; the separate surname sense is not authority. Current ich p1545/r929752 has a distinct Mofers region and AGL comparison link ich#Mofers.",
+      "rationale": "Preserve exact variety owner heading Mofers and installed parent code li; do not call Mofers a new ISO language or merge it with the AGL written variety."
+    },
+    {
+      "id": "li-agl-variety-p101567-r983499-v1",
+      "code": "li",
+      "alias": "Algemein Gesjreve Limburgs",
+      "preserve_heading": true,
+      "authority_kind": "reviewed_public_reference",
+      "url": "https://li.wiktionary.org/w/index.php?title=Algemein_Gesjreve_Limburgs&oldid=983499",
+      "evidence": "Authenticated selected dump page101567/revision983499 names Algemeen Geschreven Limburgs/AGL and synonym Limburgse sjrieftaal; current ich p1545/r929752 supplies this separate written-variety section before Mofers. Installed ordinary code li has preferred Limburgs.",
+      "rationale": "Preserve exact written-variety heading and installed parent code li, independently from Mofers; no edition default or new code."
     }
   ]
 }

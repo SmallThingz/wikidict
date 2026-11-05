@@ -17,7 +17,7 @@ const Value = union(enum) {
     unsupported,
 };
 const Declaration = struct { property: Property, value: Value, important: bool, order: u32, affects_font_basis: bool = false };
-const Selector = struct { target: Target, mask: Scope, specificity: u32, unsupported: bool };
+const Selector = struct { target: Target, mask: Scope, ancestor_mask: Scope = 0, specificity: u32, unsupported: bool };
 const Rule = struct { selector: Selector, declarations: []const Declaration, number: u32 };
 const Priority = struct {
     important: bool = false,
@@ -56,6 +56,7 @@ pub const Profile = struct {
     arena: std.heap.ArenaAllocator,
     rules: []const Rule,
     classes: []const []const u8,
+    ancestor_classes: []const []const u8 = &.{},
     admitted_rule_numbers: []const u32,
     has_unsupported_rules: bool,
     globally_unresolved: bool = false,
@@ -89,7 +90,24 @@ pub const Profile = struct {
         return false;
     }
 
-    fn cascade(self: *const Profile, a: std.mem.Allocator, target: Target, scope: Scope, legacy_bg: ?[]const u8, inline_css: []const u8) !Winners {
+    pub fn ancestorScope(self: *const Profile, names: []const u8) Scope {
+        var result: Scope = 0;
+        var tokens = std.mem.tokenizeAny(u8, names, " \t\r\n\x0c");
+        while (tokens.next()) |token| {
+            for (self.ancestor_classes, 0..) |name, i| if (std.mem.eql(u8, token, name)) {
+                result |= @as(Scope, 1) << @intCast(i);
+            };
+        }
+        return result;
+    }
+
+    pub fn hasAncestorCellRule(self: *const Profile, scope: Scope, header: bool) bool {
+        const target: Target = if (header) .th else .td;
+        for (self.rules) |rule| if (rule.selector.target == target and rule.selector.ancestor_mask & scope != 0) return true;
+        return false;
+    }
+
+    fn cascade(self: *const Profile, a: std.mem.Allocator, target: Target, scope: Scope, ancestor_scope: Scope, legacy_bg: ?[]const u8, inline_css: []const u8) !Winners {
         var winners: Winners = .{};
         if (legacy_bg) |raw| if (try canonicalColorAlloc(a, raw)) |color| {
             winners.add(.{ .property = .background, .value = .{ .color = color }, .important = false, .order = 0 }, 0, false);
@@ -98,6 +116,7 @@ pub const Profile = struct {
             const selector = rule.selector;
             if (selector.target != target and !(selector.target == .cell and (target == .th or target == .td))) continue;
             if (selector.mask != 0 and selector.mask & scope == 0) continue;
+            if (selector.ancestor_mask != 0 and selector.ancestor_mask & ancestor_scope == 0) continue;
             if (selector.unsupported) winners.selector_unresolved = true;
             for (rule.declarations) |declaration| winners.add(declaration, selector.specificity, selector.unsupported or !representedProperty(target, declaration.property));
         }
@@ -115,7 +134,7 @@ pub const Profile = struct {
         if (self.globally_unresolved or inline_css.len > max_css_bytes) return .{ .style = null, .scope = inherited_scope | self.classScope(classes), .unresolved = true, .background_specified = true, .margin_basis_unresolved = true, .descendant_style_unresolved = true };
         const own_scope = self.classScope(classes);
         if (self.hasUnindexedClass(classes)) return .{ .style = null, .scope = inherited_scope | own_scope, .unresolved = true, .background_specified = true, .margin_basis_unresolved = true, .descendant_style_unresolved = true };
-        const winners = try self.cascade(a, .table, own_scope, legacy_bg, inline_css);
+        const winners = try self.cascade(a, .table, own_scope, 0, legacy_bg, inline_css);
         var style: types.TableStyle = .{};
         if (winners.value(.background)) |value| if (value == .color) {
             style.background = value.color;
@@ -141,8 +160,12 @@ pub const Profile = struct {
     }
 
     pub fn resolveCell(self: *const Profile, a: std.mem.Allocator, scope: Scope, header: bool, legacy_bg: ?[]const u8, inline_css: []const u8) std.mem.Allocator.Error!CellResolution {
+        return self.resolveCellWithAncestors(a, scope, 0, header, legacy_bg, inline_css);
+    }
+
+    pub fn resolveCellWithAncestors(self: *const Profile, a: std.mem.Allocator, scope: Scope, ancestor_scope: Scope, header: bool, legacy_bg: ?[]const u8, inline_css: []const u8) std.mem.Allocator.Error!CellResolution {
         if (self.globally_unresolved or inline_css.len > max_css_bytes) return .{ .style = null, .background = null, .background_specified = true, .unresolved = true, .padding_basis_unresolved = true };
-        const winners = try self.cascade(a, if (header) .th else .td, scope, legacy_bg, inline_css);
+        const winners = try self.cascade(a, if (header) .th else .td, scope, ancestor_scope, legacy_bg, inline_css);
         var style: types.CellStyle = .{};
         if (winners.value(.border)) |value| if (value == .border) {
             style.border = value.border;
@@ -162,6 +185,7 @@ const Builder = struct {
     a: std.mem.Allocator,
     rules: std.ArrayList(Rule) = .empty,
     classes: std.ArrayList([]const u8) = .empty,
+    ancestor_classes: std.ArrayList([]const u8) = .empty,
     numbers: std.ArrayList(u32) = .empty,
     number: u32 = 0,
     declaration_order: u32 = 0,
@@ -170,14 +194,35 @@ const Builder = struct {
 
     fn classBit(self: *Builder, name: []const u8) !Scope {
         for (self.classes.items, 0..) |prior, i| if (std.mem.eql(u8, prior, name)) return @as(Scope, 1) << @intCast(i);
-        if (self.classes.items.len == 64) return error.StyleProfileLimit;
+        if (self.classes.items.len + self.ancestor_classes.items.len == 64) return error.StyleProfileLimit;
         try self.classes.append(self.a, try self.a.dupe(u8, name));
         return @as(Scope, 1) << @intCast(self.classes.items.len - 1);
+    }
+
+    fn ancestorClassBit(self: *Builder, name: []const u8) !Scope {
+        for (self.ancestor_classes.items, 0..) |prior, i| if (std.mem.eql(u8, prior, name)) return @as(Scope, 1) << @intCast(i);
+        if (self.classes.items.len + self.ancestor_classes.items.len == 64) return error.StyleProfileLimit;
+        try self.ancestor_classes.append(self.a, try self.a.dupe(u8, name));
+        return @as(Scope, 1) << @intCast(self.ancestor_classes.items.len - 1);
     }
 
     fn selector(self: *Builder, raw: []const u8, conditional: bool) !?Selector {
         const text = trim(raw);
         if (text.len == 0) return null;
+        // A complete, single class-qualified descendant selector has a proved
+        // necessary ancestor condition. Keep its declarations unsupported on a
+        // match; do not turn an absent class into a wildcard over every cell.
+        // This namespace is separate from table.class: DIV.X is not TABLE.X.
+        if (text[0] == '.' and text.len > 1 and
+            (std.ascii.isAlphabetic(text[1]) or text[1] == '_' or text[1] == '-'))
+        {
+            const end = identifierEnd(text, 1);
+            if (end < text.len and std.ascii.isWhitespace(text[end])) {
+                const tail = trim(text[end..]);
+                const target: ?Target = if (std.mem.eql(u8, tail, "td")) .td else if (std.mem.eql(u8, tail, "th")) .th else null;
+                if (target) |cell| return .{ .target = cell, .mask = 0, .ancestor_mask = try self.ancestorClassBit(text[1..end]), .specificity = 100, .unsupported = true };
+            }
+        }
         // Only table.class and its whitespace-separated th/td descendants are admitted.
         if (std.mem.startsWith(u8, text, "table.")) {
             const end = identifierEnd(text, 6);
@@ -299,7 +344,7 @@ pub fn parseAlloc(a: std.mem.Allocator, css: []const u8) !Profile {
     var builder: Builder = .{ .a = arena.allocator() };
     try builder.parse(css, false, 0, true);
     try builder.parse(css, false, 0, false);
-    return .{ .arena = arena, .rules = builder.rules.items, .classes = builder.classes.items, .admitted_rule_numbers = builder.numbers.items, .has_unsupported_rules = builder.unsupported, .globally_unresolved = builder.globally_unresolved };
+    return .{ .arena = arena, .rules = builder.rules.items, .classes = builder.classes.items, .ancestor_classes = builder.ancestor_classes.items, .admitted_rule_numbers = builder.numbers.items, .has_unsupported_rules = builder.unsupported, .globally_unresolved = builder.globally_unresolved };
 }
 
 fn isConditionalGroup(prelude: []const u8) bool {
@@ -1075,5 +1120,51 @@ test "finite profile limits and incomplete stylesheets fail honestly" {
     try std.testing.expectError(error.InvalidStyleProfile, parseAlloc(a, "@unknown { unclosed"));
     css.clearRetainingCapacity();
     for (0..max_rules + 1) |_| try css.appendSlice(a, "table.a{margin:0}");
+    try std.testing.expectError(error.StyleProfileLimit, parseAlloc(a, css.items));
+}
+
+
+test "class descendant CSS requires its separate ancestor scope and preserves cascade uncertainty" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, ".Talk-Notice td { background: inherit; }");
+    defer profile.deinit();
+    const unrelated = try profile.resolveCellWithAncestors(a, 0, profile.ancestorScope("Talk-Notices Other"), false, "#FFFFE0", "");
+    try std.testing.expectEqualStrings("#ffffe0", unrelated.background.?);
+    try std.testing.expect(!unrelated.unresolved);
+    const matching = try profile.resolveCellWithAncestors(a, 0, profile.ancestorScope("Other Talk-Notice"), false, "#FFFFE0", "");
+    try std.testing.expect(matching.unresolved and matching.background_specified and matching.background == null);
+    const header = try profile.resolveCellWithAncestors(a, 0, profile.ancestorScope("Talk-Notice"), true, "#FFFFE0", "");
+    try std.testing.expectEqualStrings("#ffffe0", header.background.?);
+    const override = try profile.resolveCellWithAncestors(a, 0, profile.ancestorScope("Talk-Notice"), false, "#FFFFE0", "background-color:#123456 !important");
+    try std.testing.expectEqualStrings("#123456", override.background.?);
+    // Matching selector status stays partial even when an independent inline
+    // declaration wins this property. No unsupported inheritance is evaluated.
+    try std.testing.expect(override.unresolved);
+    var conditional = try parseAlloc(a, "@media screen { .X th { background:#123456; } }");
+    defer conditional.deinit();
+    const conditional_match = try conditional.resolveCellWithAncestors(a, 0, conditional.ancestorScope("X"), true, "#ffffe0", "");
+    try std.testing.expect(conditional_match.unresolved and conditional_match.background == null);
+}
+
+test "generic CSS ancestry cannot satisfy a table qualified selector" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, "table.X td { background:#123456; } .X th { background:inherit; }");
+    defer profile.deinit();
+    const bare = try profile.resolveTable(a, 0, "", null, "");
+    const div_x_cell = try profile.resolveCellWithAncestors(a, bare.scope, profile.ancestorScope("X"), false, "#ffffe0", "");
+    try std.testing.expectEqualStrings("#ffffe0", div_x_cell.background.?);
+    const table_x = try profile.resolveTable(a, 0, "X", null, "");
+    const table_x_cell = try profile.resolveCellWithAncestors(a, table_x.scope, profile.ancestorScope("X"), false, "#ffffe0", "");
+    try std.testing.expectEqualStrings("#123456", table_x_cell.background.?);
+    const div_x_header = try profile.resolveCellWithAncestors(a, bare.scope, profile.ancestorScope("X"), true, "#ffffe0", "");
+    try std.testing.expect(div_x_header.background == null and div_x_header.unresolved);
+    // The combined class capacity stays 64. Do not silently make an unindexed
+    // scoped selector unconditional when the finite profile is exhausted.
+    var css: std.ArrayList(u8) = .empty;
+    for (0..65) |i| try css.appendSlice(a, try std.fmt.allocPrint(a, ".class{d} td {{ background:inherit; }}\n", .{i}));
     try std.testing.expectError(error.StyleProfileLimit, parseAlloc(a, css.items));
 }

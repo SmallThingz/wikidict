@@ -488,3 +488,106 @@ pub fn elapsed(start: ?u64) u64 {
     const after = cpuNow() orelse return 0;
     return after -| before;
 }
+
+// Shared parent profiling primitives; process CPU remains separate below.
+// Process CPU would charge concurrent protocol threads to the consumer too.
+pub fn threadCpuNow() ?u64 {
+    var ts: std.posix.timespec = undefined;
+    if (std.posix.errno(std.posix.system.clock_gettime(.THREAD_CPUTIME_ID, &ts)) != .SUCCESS) return null;
+    const seconds = std.math.cast(u64, ts.sec) orelse return null;
+    const nanos = std.math.cast(u64, ts.nsec) orelse return null;
+    return std.math.add(u64, std.math.mul(u64, seconds, std.time.ns_per_s) catch return null, nanos) catch null;
+}
+
+pub const PhaseStamp = struct {
+    cpu_ns: ?u64,
+    wall_ns: i128,
+
+    pub fn now(io: std.Io) PhaseStamp {
+        return .{ .cpu_ns = threadCpuNow(), .wall_ns = std.Io.Clock.awake.now(io).toNanoseconds() };
+    }
+};
+
+pub const PhaseTotals = struct {
+    calls: u64 = 0,
+    cpu_ns: u64 = 0,
+    wall_ns: u64 = 0,
+    cpu_clock_misses: u64 = 0,
+
+    pub fn record(self: *PhaseTotals, started: PhaseStamp, stopped: PhaseStamp) void {
+        self.calls +|= 1;
+        self.wall_ns +|= std.math.cast(u64, @max(0, stopped.wall_ns - started.wall_ns)) orelse std.math.maxInt(u64);
+        if (started.cpu_ns) |before| {
+            if (stopped.cpu_ns) |after| {
+                self.cpu_ns +|= after -| before;
+                return;
+            }
+        }
+        self.cpu_clock_misses +|= 1;
+    }
+
+    pub fn merge(self: *PhaseTotals, other: PhaseTotals) void {
+        self.calls +|= other.calls;
+        self.cpu_ns +|= other.cpu_ns;
+        self.wall_ns +|= other.wall_ns;
+        self.cpu_clock_misses +|= other.cpu_clock_misses;
+    }
+
+    pub fn cpuStatus(self: PhaseTotals) []const u8 {
+        if (self.calls == 0) return "unmeasured";
+        if (self.cpu_clock_misses == self.calls) return "unavailable";
+        return if (self.cpu_clock_misses == 0) "available" else "partial";
+    }
+
+    pub fn log(self: PhaseTotals, phase: []const u8) void {
+        printLine("parent phase profile: phase={s} calls={d} thread_cpu_ns={d} wall_ns={d} cpu_clock_misses={d} wall_semantics=sum-of-calls\n", .{
+            phase, self.calls, self.cpu_ns, self.wall_ns, self.cpu_clock_misses,
+        });
+    }
+};
+
+
+// Enabled only around synchronous parent consumption; protocol workers use
+// separate thread-local state. Uncovered consumer work remains in the aggregate.
+pub const ConsumePhase = enum { presentation, codec, spool };
+pub const ConsumePhaseTotals = struct {
+    totals: [3]PhaseTotals = @splat(.{}),
+    active: ?ConsumePhase = null,
+    started: ?PhaseStamp = null,
+    fn phase(self: *ConsumePhaseTotals, io: std.Io, next: ?ConsumePhase) void {
+        if (self.active == next) return;
+        const now = PhaseStamp.now(io);
+        if (self.active) |active_phase| self.totals[@intFromEnum(active_phase)].record(self.started.?, now);
+        self.active = next;
+        self.started = if (next != null) now else null;
+    }
+    pub fn merge(self: *ConsumePhaseTotals, other: ConsumePhaseTotals) void {
+        for (&self.totals, other.totals) |*total, value| total.merge(value);
+    }
+    pub fn log(self: ConsumePhaseTotals) void {
+        const phase_info = @typeInfo(ConsumePhase).@"enum";
+        inline for (phase_info.field_names, phase_info.field_values) |field_name, field_value| {
+            const total = self.totals[field_value];
+            printLine("parent consume phase profile: phase={s} segments={d} thread_cpu_ns={d} thread_cpu_status={s} wall_ns={d} cpu_clock_misses={d} wall_semantics=exclusive-sum-of-scoped-intervals\n", .{
+                field_name, total.calls, total.cpu_ns, total.cpuStatus(), total.wall_ns, total.cpu_clock_misses,
+            });
+        }
+    }
+};
+pub const ConsumeContext = struct { io: std.Io, totals: *ConsumePhaseTotals };
+threadlocal var parent_consume_context: ?ConsumeContext = null;
+pub fn setParentConsumeProfile(context: ?ConsumeContext) ?ConsumeContext {
+    const previous = parent_consume_context;
+    parent_consume_context = context;
+    return previous;
+}
+pub const ConsumeScope = struct { context: ConsumeContext, previous: ?ConsumePhase };
+pub fn beginConsumePhase(phase: ConsumePhase) ?ConsumeScope {
+    const context = parent_consume_context orelse return null;
+    const previous = context.totals.active;
+    context.totals.phase(context.io, phase);
+    return .{ .context = context, .previous = previous };
+}
+pub fn endConsumePhase(scope: ?ConsumeScope) void {
+    if (scope) |value| value.context.totals.phase(value.context.io, value.previous);
+}

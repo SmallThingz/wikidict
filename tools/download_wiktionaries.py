@@ -512,7 +512,8 @@ def append_reviewed_language_aliases(text):
     rows = []
     for record in document["records"]:
         values = [record[key] for key in ("code", "alias", "id")]
-        if (record.get("authority_kind") != "reviewed_public_reference" or
+        if (type(record.get("preserve_heading", False)) is not bool or
+                record.get("authority_kind") != "reviewed_public_reference" or
                 not record.get("url", "").startswith("https://") or
                 any(not value or any(ch in value for ch in "\t\r\n\x00") for value in values) or
                 record["id"] in seen):

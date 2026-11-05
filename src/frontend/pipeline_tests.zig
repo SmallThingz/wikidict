@@ -212,3 +212,77 @@ test "language inventory rejects an incomplete build before output and preserves
         try std.testing.expectEqual(@as(usize, 0), value.get("accounting").?.array.items.len);
     }
 }
+
+
+
+test "Writer catalog and normal Reader keep two headings with one parent code independently selectable" {
+    const builder = @import("encoder").blob_builder;
+    const store = @import("store.zig");
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    // The ordinary registry/marker proof is exercised by the tools controls.
+    // This fixed callback isolates the public Writer/catalog/Reader contract.
+    const Varieties = struct {
+        fn resolve(_: ?*const anyopaque, label: []const u8) ?builder.ResolvedLanguage {
+            if (std.mem.eql(u8, label, "Mofers")) return .{ .code = "li", .heading = "Mofers" };
+            if (std.mem.eql(u8, label, "Algemein Gesjreve Limburgs")) return .{ .code = "li", .heading = "Algemein Gesjreve Limburgs" };
+            return null;
+        }
+        fn get(ctx: ?*const anyopaque, label: []const u8) ?[]const u8 {
+            return if (resolve(ctx, label)) |value| value.code else null;
+        }
+    };
+    const codes: builder.LanguageCodes = .{ .get_fn = Varieties.get, .resolve_fn = Varieties.resolve, .trusted_fn = Varieties.resolve, .strong_fn = Varieties.resolve };
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/li-reader", .{tmp.sub_path});
+    var writer = try builder.Writer.init(io, a, root); defer writer.deinit();
+    writer.language_codes = codes;
+    const source = "==Algemein Gesjreve Limburgs==\n===Persuunlik veurnaamwaord===\n'''ich'''\n* Mofers: [[ich#Mofers|ich]]\n" ++
+        "==Mofers==\n===Persuuenlik veurnaamwaord===\n====Lemma====\n'''ich'''\n# spraeker of sjriever\n#: ''Ich zing dit leed veur dich.''\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ich", source, source, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
+    const labels = [_][]const u8{ "Algemein Gesjreve Limburgs", "Mofers" };
+    const first_path = try store.pathAlloc(a, root, .language, labels[0]);
+    const second_path = try store.pathAlloc(a, root, .language, labels[1]);
+    try std.testing.expect(!std.mem.eql(u8, first_path, second_path));
+    for ([_][]const u8{ "", "ich" }) |query| {
+        var json: std.Io.Writer.Allocating = .init(a); defer json.deinit();
+        try @import("languages.zig").write(io, a, a, .{ .root = root, .query = query, .format = .json }, &json.writer);
+        const parsed = try std.json.parseFromSlice(std.json.Value, a, json.written(), .{}); defer parsed.deinit();
+        const obj = parsed.value.object;
+        try std.testing.expectEqual(@as(i64, 2), obj.get("heading_count").?.integer);
+        try std.testing.expectEqual(@as(i64, 2), obj.get("language_count").?.integer);
+        try std.testing.expectEqual(@as(usize, 2), obj.get("accounting").?.array.items.len);
+        for (obj.get("accounting").?.array.items, labels) |item, label| {
+            try std.testing.expectEqualStrings(label, item.object.get("heading").?.string);
+            try std.testing.expectEqualStrings("li", item.object.get("code").?.string);
+            try std.testing.expectEqual(@as(i64, 1), item.object.get("records").?.integer);
+        }
+    }
+    for (labels, 0..) |label, i| {
+        var db = try store.Store.open(io, a, root, .language, label); defer db.deinit();
+        try std.testing.expectEqualStrings(label, db.metadata().?.heading);
+        try std.testing.expectEqualStrings("li", db.metadata().?.code);
+        var raw = try db.recordAlloc(a, (try db.find("ich")).?); defer raw.deinit();
+        var doc = try model.fromRecord(a, raw.record); defer doc.deinit();
+        try std.testing.expectEqualStrings(label, doc.entry.language.?);
+        try std.testing.expectEqualStrings("li", doc.entry.language_code);
+        try std.testing.expectEqualStrings(label, doc.entry.sections[0].title);
+        for (doc.entry.sections) |section| try std.testing.expect(!std.mem.eql(u8, section.title, labels[1 - i]));
+        try std.testing.expectEqual(@as(usize, 1), doc.entry.organization.lexemes.len);
+        try std.testing.expectEqual(i, doc.entry.organization.lexemes[0].definitions.len);
+        var text: std.Io.Writer.Allocating = .init(a); defer text.deinit();
+        try output.entryText(&text.writer, doc.entry, false);
+        try std.testing.expect(std.mem.indexOf(u8, text.written(), if (i == 0) "Mofers: ich" else "Ich zing dit leed veur dich.") != null);
+        var json: std.Io.Writer.Allocating = .init(a); defer json.deinit();
+        try output.json(&json.writer, .{ .operation = .lookup, .query = "ich", .kind = .language, .language = label, .record_count = 1, .total_matches = 1, .entries = &.{doc.entry} });
+        const parsed = try std.json.parseFromSlice(std.json.Value, a, json.written(), .{}); defer parsed.deinit();
+        const entry = parsed.value.object.get("entries").?.array.items[0].object;
+        try std.testing.expectEqualStrings(label, entry.get("language").?.string);
+        try std.testing.expectEqualStrings("li", entry.get("language_code").?.string);
+        const stored = try enc.presentation_codec.decodeAlloc(a, raw.record.payload(), "ich", .language, db.metadata());
+        try std.testing.expectEqualSlices(u8, raw.record.payload(), try enc.presentation_codec.encodeAlloc(a, stored));
+    }
+}

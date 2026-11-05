@@ -1,0 +1,4167 @@
+{
+  "schema": "dict.results.v1",
+  "operation": "lookup",
+  "query": "medisch",
+  "kind": "language",
+  "language": "Unclassified",
+  "match_mode": "exact-utf8",
+  "record_count": 110610,
+  "total_matches": 1,
+  "offset": 0,
+  "has_more": false,
+  "matches": [],
+  "entries": [
+    {
+      "organization": {
+        "lexemes": [],
+        "other_sections": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7
+        ]
+      },
+      "title": "medisch",
+      "display_title": [
+        {
+          "kind": "text",
+          "text": "medisch",
+          "target": "",
+          "trail": "",
+          "language": "",
+          "classes": "",
+          "direction": "",
+          "explanation": "",
+          "foreground": null,
+          "bold": false,
+          "italic": false,
+          "code": false,
+          "small": false,
+          "superscript": false,
+          "subscript": false,
+          "strike": false,
+          "underline": false,
+          "role": "headword"
+        }
+      ],
+      "kind": "language",
+      "language": "Unclassified",
+      "language_code": "",
+      "sections": [
+        {
+          "level": 2,
+          "title": "Unclassified",
+          "anchor": "",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 2,
+          "title": "Mofers",
+          "anchor": "Mofers",
+          "anchor_fallback": "",
+          "blocks": []
+        },
+        {
+          "level": 3,
+          "title": "Bieveugelik naamwaord",
+          "anchor": "Bieveugelik_naamwaord",
+          "anchor_fallback": "",
+          "blocks": []
+        },
+        {
+          "level": 4,
+          "title": "Lemma",
+          "anchor": "Lemma",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "medisch",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " /mé:dis/",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "definition",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "(",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "synoniem",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ")  anger waord veur ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "genaeskundig",
+                  "target": "genaeskundig",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "#",
+              "number": "1",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "term",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Aafbraeking",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ";",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "list_item",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "me-disch",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 4,
+          "title": "Verbuging",
+          "anchor": "Verbuging",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "table",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": {
+                "caption": [],
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "spans": [],
+                        "header": true,
+                        "colspan": 2,
+                        "rowspan": 3,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "inkelvaad",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 5,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "mieëvaad",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 3,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "predikatief",
+                            "target": "predikatief",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 4,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "mannelik",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "vrouwelik",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 2,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "ónziejig",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "geslechtelik",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "ónziejig",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "radikaal",
+                            "target": "radikaal",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "liaison",
+                            "target": "liaison",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "radikaal",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "liaison",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "radikaal",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "liaison",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "radikaal",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "liaison",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "positief",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 2,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "sjrif",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medische",
+                            "target": "medische",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medischen",
+                            "target": "medischen",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medische",
+                            "target": "medische",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "medisch",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medische",
+                            "target": "medische",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "medisch",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "medisch",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "IPA",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:dise/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:disen/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:dise/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:dis/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:diz/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:dise/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:dis/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:diz/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:dis/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:diz/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "kómparatief",
+                            "target": "kómparatief",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 2,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "sjrif",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medischere",
+                            "target": "medischere",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medischeren",
+                            "target": "medischeren",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medischer",
+                            "target": "medischer",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medischer",
+                            "target": "medischer",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medischer",
+                            "target": "medischer",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medischer",
+                            "target": "medischer",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medischert",
+                            "target": "medischert",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "IPA",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:disərə/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:disərən/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:disər/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:disər/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:disər/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:disər/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:disər̥t/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:disərd/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "superlatief",
+                            "target": "superlatief",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 2,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "sjrif",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medischste",
+                            "target": "medischste",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medischsten",
+                            "target": "medischsten",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medischste",
+                            "target": "medischste",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medischste",
+                            "target": "medischste",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medischste",
+                            "target": "medischste",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medischste",
+                            "target": "medischste",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medischste",
+                            "target": "medischste",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "IPA",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:diste/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:disten/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:diste/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:diste/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:diste/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:diste/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:diste/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "partitief",
+                            "target": "partitief",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 2,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "sjrif",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [],
+                        "header": false,
+                        "colspan": 8,
+                        "rowspan": 2,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medischs",
+                            "target": "medischs",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "IPA",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:dis/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:diz/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  }
+                ],
+                "geometry": {
+                  "border": 1,
+                  "cell_spacing": 0,
+                  "cell_padding": 4,
+                  "width": null
+                }
+              }
+            },
+            {
+              "kind": "table",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": {
+                "caption": [],
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "spans": [],
+                        "header": true,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "inkelvaad",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "mieëvaad",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "flexieadverbiaal",
+                            "target": "flexieadverbiaal",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "line_break",
+                            "text": "\n",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "(positief)",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 2,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "sjrif",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "(wie) ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "medischs",
+                            "target": "medischs",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " (toe)",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "(wie) medisch (geer)",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "IPA",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/wì: mé:dis tú:/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/wì: mé:dis ʝ̊é:r/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "flexieadverbiaal",
+                            "target": "flexieadverbiaal",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "line_break",
+                            "text": "\n",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "(kómparatief)",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 2,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "sjrif",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "(wie) ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "medischers",
+                            "target": "medischers",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " (toe)",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "(wie) ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "medischertj",
+                            "target": "medischertj",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " (geer)",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "IPA",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/wì: mé:disər̥s tú:/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/wì: mé:disər̥c ʝ̊é:r/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  }
+                ],
+                "geometry": {
+                  "border": 1,
+                  "cell_spacing": 0,
+                  "cell_padding": 4,
+                  "width": null
+                }
+              }
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "Biewaord",
+          "anchor": "Biewaord",
+          "anchor_fallback": "",
+          "blocks": []
+        },
+        {
+          "level": 4,
+          "title": "Neet-lemma",
+          "anchor": "Neet-lemma",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "medisch",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " /mé:dis/",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "definition",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "(",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "neet-lemma",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ") op 'n ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "[↑",
+                  "target": "#Bieveugelik naamwaord",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "]",
+                  "target": "#Bieveugelik naamwaord",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " meneer",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "#",
+              "number": "1",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "term",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Aafbraeking",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ";",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "list_item",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "me-disch",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 4,
+          "title": "Verbuging",
+          "anchor": "Verbuging_2",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "table",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": {
+                "caption": [],
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "spans": [],
+                        "header": true,
+                        "colspan": 2,
+                        "rowspan": 2,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "adverbiaal",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "radikaal",
+                            "target": "radikaal",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "liaison",
+                            "target": "liaison",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "positief",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 2,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "sjrif",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "medisch",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "IPA",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:dis/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:diz/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "kómparatief",
+                            "target": "kómparatief",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 2,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "sjrif",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medischer",
+                            "target": "medischer",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "IPA",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:disər/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "superlatief",
+                            "target": "superlatief",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 2,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "sjrif",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "medischste",
+                            "target": "medischste",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "IPA",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/mé:diste/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  }
+                ],
+                "geometry": {
+                  "border": 1,
+                  "cell_spacing": 0,
+                  "cell_padding": 4,
+                  "width": null
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "preamble_spans": [],
+      "references": [],
+      "media": [],
+      "redirect": null,
+      "alias": null
+    }
+  ]
+}

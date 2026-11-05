@@ -129,15 +129,51 @@ class ReviewedRegistryAdmissionTests(unittest.TestCase):
 
 
 class CombinedReviewedRecordsTest(unittest.TestCase):
-    def test_all_eleven_records_share_current_document_digest(self):
+    def test_all_twenty_seven_records_share_current_document_digest(self):
         raw = Path(producer.__file__).with_name('reviewed_language_aliases.json').read_bytes()
         document = json.loads(raw)
-        self.assertEqual([(r['code'], r['alias']) for r in document['records']], [('ur', 'اُردو'), ('ar', 'arabsczi'), ('sq', 'albańsczi'), ('ru', 'rusczi'), ('sr', 'serbsczi'), ('pl', 'pòlsczi'), ('ja', 'japòńsczi'), ('hsb', 'górnosorbsczi'), ('cs', 'czesczi'), ('ko', 'kòrejańsczi'), ('en', 'anielsczi')])
-        rows = ''.join(code + '\tRegistered ' + code + '\n' for code in ['ur', 'ar', 'sq', 'ru', 'sr', 'pl', 'ja', 'hsb', 'cs', 'ko', 'en'])
+        self.assertEqual([(r['code'], r['alias']) for r in document['records']], [('ur', 'اُردو'), ('ar', 'arabsczi'), ('sq', 'albańsczi'), ('ru', 'rusczi'), ('sr', 'serbsczi'), ('pl', 'pòlsczi'), ('ja', 'japòńsczi'), ('hsb', 'górnosorbsczi'), ('cs', 'czesczi'), ('ko', 'kòrejańsczi'), ('en', 'anielsczi'), ('nl', 'Нидерландӣ'), ('nl', 'hòlandzczi'), ('su', 'Basa Sunda'), ('co', 'còrsu'), ('co', 'Còrsu'), ('kok', 'कोंकणी'), ('mr', 'मराठी भाषा'), ('et', 'Estonyano'), ('pl', 'Polones'), ('nan', 'Bân-lâm-gí'), ('nan', 'Tâi-oân-ōe'), ('hsb', 'hornjoserbšćina'), ('csb', 'Kaxubiera'), ('nl', 'Nederlandjs'), ('li', 'Mofers'), ('li', 'Algemein Gesjreve Limburgs')])
+        rows = ''.join(code + '\tRegistered ' + code + '\n' for code in ['ur', 'ar', 'sq', 'ru', 'sr', 'pl', 'ja', 'hsb', 'cs', 'ko', 'en', 'nl', 'su', 'co', 'kok', 'mr', 'et', 'nan', 'csb', 'li'])
         digest = hashlib.sha256(raw).hexdigest()
         expected = rows + ''.join('# reviewed-alias\t' + r['code'] + '\t' + r['alias'] + '\t' + r['id'] + '\t' + digest + '\n' for r in document['records'])
         self.assertEqual(producer.append_reviewed_language_aliases(rows), expected)
 
+
+
+
+class ReviewedVarietyProfileTests(unittest.TestCase):
+    def test_variety_profile_preserves_installed_parent_and_exact_digest(self):
+        path = Path(producer.__file__).with_name('reviewed_language_aliases.json')
+        raw = path.read_bytes()
+        document = json.loads(raw)
+        selected = [r for r in document['records'] if r['id'] in {
+            'li-mofers-variety-p131871-r958780-v1',
+            'li-agl-variety-p101567-r983499-v1',
+            'li-nederlandjs-exact-p26592-r905227-v1',
+        }]
+        self.assertEqual(len(selected), 3)
+        self.assertEqual({(r['code'], r['alias'], r.get('preserve_heading', False)) for r in selected}, {
+            ('li', 'Mofers', True), ('li', 'Algemein Gesjreve Limburgs', True), ('nl', 'Nederlandjs', False),
+        })
+        rows = '# mediawiki\nli\tLimburgs\nnl\tNederlands\n'
+        rendered = producer.append_reviewed_language_aliases(rows)
+        self.assertTrue(rendered.startswith(rows))
+        for record in selected:
+            self.assertIn('# reviewed-alias\t' + '\t'.join([record['code'], record['alias'], record['id'], hashlib.sha256(raw).hexdigest()]) + '\n', rendered)
+        missing = producer.append_reviewed_language_aliases('fr\tFrench\n')
+        self.assertNotIn('# reviewed-alias\tli\t', missing)
+        for invalid in ('true', 'false', 0, 1, None, []):
+            changed = copy.deepcopy(document)
+            next(r for r in changed['records'] if r['id'] == 'li-mofers-variety-p131871-r958780-v1')['preserve_heading'] = invalid
+            with patch.object(Path, 'read_bytes', return_value=json.dumps(changed).encode()):
+                with self.assertRaises(ValueError):
+                    producer.append_reviewed_language_aliases(rows)
+        changed = copy.deepcopy(document)
+        next(r for r in changed['records'] if r['id'] == 'li-mofers-variety-p131871-r958780-v1')['preserve_heading'] = False
+        with patch.object(Path, 'read_bytes', return_value=json.dumps(document).encode()):
+            original_profile = producer.append_reviewed_language_aliases(rows)
+        with patch.object(Path, 'read_bytes', return_value=json.dumps(changed).encode()):
+            self.assertNotEqual(producer.append_reviewed_language_aliases(rows), original_profile)
 
 if __name__ == '__main__':
     unittest.main()

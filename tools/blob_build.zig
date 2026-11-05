@@ -5,6 +5,13 @@ const encoder = @import("encoder");
 const xml_decode = @import("xml_decode");
 const dump_source = @import("wikimedia_dump");
 const language_registry = @import("language_registry.zig");
+
+// Keep registry controls discoverable when this root is filtered to registry tests.
+comptime {
+    if (@import("builtin").is_test) {
+        _ = language_registry;
+    }
+}
 const source_language_banner = @import("source_language_banner.zig");
 const source_category_language = @import("source_category_language.zig");
 const source_table_styles = @import("source_table_styles.zig");
@@ -15,55 +22,8 @@ const max_worker_count: usize = 8;
 
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 
-// Process CPU would charge concurrent protocol threads to the consumer too.
-fn parentThreadCpuNow() ?u64 {
-    var ts: std.posix.timespec = undefined;
-    if (std.posix.errno(std.posix.system.clock_gettime(.THREAD_CPUTIME_ID, &ts)) != .SUCCESS) return null;
-    const seconds = std.math.cast(u64, ts.sec) orelse return null;
-    const nanos = std.math.cast(u64, ts.nsec) orelse return null;
-    return std.math.add(u64, std.math.mul(u64, seconds, std.time.ns_per_s) catch return null, nanos) catch null;
-}
-
-const ParentProfileStamp = struct {
-    cpu_ns: ?u64,
-    wall_ns: i128,
-
-    fn now(io: std.Io) ParentProfileStamp {
-        return .{ .cpu_ns = parentThreadCpuNow(), .wall_ns = std.Io.Clock.awake.now(io).toNanoseconds() };
-    }
-};
-
-const ParentPhaseTotals = struct {
-    calls: u64 = 0,
-    cpu_ns: u64 = 0,
-    wall_ns: u64 = 0,
-    cpu_clock_misses: u64 = 0,
-
-    fn record(self: *ParentPhaseTotals, started: ParentProfileStamp, stopped: ParentProfileStamp) void {
-        self.calls +|= 1;
-        self.wall_ns +|= std.math.cast(u64, @max(0, stopped.wall_ns - started.wall_ns)) orelse std.math.maxInt(u64);
-        if (started.cpu_ns) |before| {
-            if (stopped.cpu_ns) |after| {
-                self.cpu_ns +|= after -| before;
-                return;
-            }
-        }
-        self.cpu_clock_misses +|= 1;
-    }
-
-    fn merge(self: *ParentPhaseTotals, other: ParentPhaseTotals) void {
-        self.calls +|= other.calls;
-        self.cpu_ns +|= other.cpu_ns;
-        self.wall_ns +|= other.wall_ns;
-        self.cpu_clock_misses +|= other.cpu_clock_misses;
-    }
-
-    fn log(self: ParentPhaseTotals, phase: []const u8) void {
-        diagnostics.printLine("parent phase profile: phase={s} calls={d} thread_cpu_ns={d} wall_ns={d} cpu_clock_misses={d} wall_semantics=sum-of-calls\n", .{
-            phase, self.calls, self.cpu_ns, self.wall_ns, self.cpu_clock_misses,
-        });
-    }
-};
+const ParentProfileStamp = diagnostics.PhaseStamp;
+const ParentPhaseTotals = diagnostics.PhaseTotals;
 
 const Options = struct {
     start_page: usize = 0,
@@ -162,7 +122,7 @@ fn invocationArgumentsHash(a: std.mem.Allocator, args: []const []const u8) ![]co
 }
 
 fn captureFirstPresentationFailure(err: anyerror, job: ExpansionJob, expanded: bundle_expander.Expansion) void {
-    if (err != error.UncompiledPresentation and err != error.UncompiledTemplate and err != error.InvalidPreContext and err != error.InvalidHeadingProjection) return;
+    if (err != error.UncompiledPresentation and err != error.UncompiledTemplate and err != error.InvalidPreContext and err != error.InvalidHeadingProjection and err != error.RenderLimit) return;
     const context = if (first_failure_capture_context) |*value| value else return;
     if (context.attempted) return;
     context.attempted = true;
@@ -1291,6 +1251,7 @@ const ExpansionSlot = struct {
     profile_enabled: bool = false,
     protocol_profile: ParentPhaseTotals = .{},
     consumer_profile: ParentPhaseTotals = .{},
+    consumer_phase_profile: diagnostics.ConsumePhaseTotals = .{},
 
     fn threadMain(self: *ExpansionSlot) void {
         defer self.worker.deinit();
@@ -1365,6 +1326,10 @@ const ExpansionSlot = struct {
             const compiled = blk: {
                 const profile_start = if (self.profile_enabled) ParentProfileStamp.now(self.io) else null;
                 defer if (profile_start) |started| self.consumer_profile.record(started, ParentProfileStamp.now(self.io));
+                const previous_profile = if (self.profile_enabled)
+                    diagnostics.setParentConsumeProfile(.{ .io = self.io, .totals = &self.consumer_phase_profile })
+                else null;
+                defer if (self.profile_enabled) { _ = diagnostics.setParentConsumeProfile(previous_profile); };
                 break :blk try consumeExpandedPage(writer, self.job, expanded, self.arena.allocator(), audit);
             };
             if (compiled and audit == null and self.job.alias_record == null)
@@ -1490,12 +1455,15 @@ const ExpansionPool = struct {
         if (self.profile_enabled) {
             var consumer: ParentPhaseTotals = .{};
             var protocol: ParentPhaseTotals = .{};
+            var consume_phases: diagnostics.ConsumePhaseTotals = .{};
             for (self.slots) |slot| {
                 consumer.merge(slot.consumer_profile);
                 protocol.merge(slot.protocol_profile);
+                consume_phases.merge(slot.consumer_phase_profile);
             }
             // Protocol wall includes child wait and overlaps consumer/peer calls.
             consumer.log("expanded-consume-compile-encode-spool");
+            consume_phases.log();
             protocol.log("worker-protocol-including-child-wait");
             self.finish_profile.log("writer-finish");
         }
@@ -7189,6 +7157,10 @@ test "audit refuses nonpresentation errors without mutating records or scratch w
         error.Timeout, error.ExpansionWorkerDied, error.InvalidPoemMetadata, error.InvalidPresentation,
         error.RenderLimit, error.PageIndexChanged, error.AuditReportLimitExceeded }) |err| {
         try std.testing.expect(!auditablePresentationError(err));
+        // RenderLimit is first-failure capture eligible, but remains fatal to audit
+        // continuation and never receives a deterministic-presentation receipt.
+        if (err == error.RenderLimit)
+            try std.testing.expect(recordPresentationFailure(err, job) == error.RenderLimit);
         try std.testing.expectError(err, audit.recordFailure(err, job, .{ .source = job.source }));
         try std.testing.expectError(err, consumePresentationFailure(&writer, job, .{ .source = job.source }, a, &audit, err));
         try std.testing.expectEqual(@as(usize, 0), audit.compile_attempts);
@@ -8732,6 +8704,104 @@ test "normal Writer exact reviewed Upper Sorbian template argument separates phy
     }
 }
 
+test "RenderLimit capture preserves exact payload and propagation without retry reclassification" {
+    const F = FirstFailureControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    inline for (.{ "complete", "missing-marker", "existing-capture" }) |mode| {
+        const root = try auditControlFreshRoot(a, "render-limit-capture-" ++ mode);
+        defer std.Io.Dir.cwd().deleteTree(F.io, root) catch {};
+        const capture_root = try std.fs.path.join(a, &.{ root, ".presentation-first-failure" });
+        if (comptime std.mem.eql(u8, mode, "existing-capture")) try F.marker(a, root);
+        if (comptime std.mem.eql(u8, mode, "existing-capture"))
+            try std.Io.Dir.cwd().writeFile(F.io, .{ .sub_path = capture_root, .data = "retained first capture" });
+        try std.testing.expect(first_failure_capture_context == null and failure_receipt_context == null);
+        var capture_context = F.context(a, root);
+        if (comptime std.mem.eql(u8, mode, "complete")) capture_context.failure_evidence_root = root;
+        first_failure_capture_context = capture_context;
+        defer first_failure_capture_context = null;
+        const receipt = try std.fs.path.join(a, &.{ root, "outer-failure.json" });
+        failure_receipt_context = .{ .io = F.io, .a = a, .path = receipt,
+            .invocation_id = F.context(a, root).invocation_id.?, .invocation_args = &F.args };
+        defer failure_receipt_context = null;
+        const job: ExpansionJob = .{ .ordinal = 23, .index_offset = 19,
+            .ns = .{ .id = 0, .kind = .language }, .title = "Synthetic render limit failure",
+            .source = "raw {{fixture|x}}\n[[target|label]]", .page_id = 31, .revision_id = 47,
+            .index_line = "exact synthetic index row" };
+        const expanded: bundle_expander.Expansion = .{ .source = "expanded {{unexpanded|x}}\n[[target|label]]",
+            .display_title = "display fixture", .poem_metadata = "[]", .missing_dependency_metadata = "{}" };
+        var writer = try encoder.blob_builder.Writer.init(F.io, a, try std.fs.path.join(a, &.{ root, "writer" }));
+        defer writer.deinit();
+        try std.testing.expect(!auditablePresentationError(error.RenderLimit));
+        captureFirstPresentationFailure(error.OutOfMemory, job, expanded);
+        try std.testing.expect(!first_failure_capture_context.?.attempted);
+        try std.testing.expectError(error.RenderLimit, consumePresentationFailure(&writer, job, expanded, a, null, error.RenderLimit));
+        try std.testing.expect(first_failure_capture_context.?.attempted);
+        try std.testing.expect(recordPresentationFailure(error.RenderLimit, job) == error.RenderLimit);
+        try F.absent(receipt);
+        if (comptime std.mem.eql(u8, mode, "complete")) {
+            const row = try F.manifest(a, root);
+            try std.testing.expect(row.object.get("record_complete").?.bool and row.object.get("diagnostic_only").?.bool);
+            try std.testing.expect(!row.object.get("publication_created").?.bool and !row.object.get("semantic_acceptance").?.bool);
+            try std.testing.expectEqualStrings("RenderLimit", row.object.get("error_name").?.string);
+            try std.testing.expectEqualStrings(job.title, row.object.get("title").?.string);
+            try std.testing.expectEqual(@as(i64, 23), row.object.get("ordinal").?.integer);
+            try std.testing.expectEqual(@as(i64, 19), row.object.get("index_offset").?.integer);
+            try std.testing.expectEqual(@as(i64, 31), row.object.get("page_id").?.integer);
+            try std.testing.expectEqual(@as(i64, 47), row.object.get("revision_id").?.integer);
+            try F.payload(a, row, "raw_source", job.source, 256 * 1024);
+            try F.payload(a, row, "expanded", expanded.source, 2 * 1024 * 1024);
+            try F.payload(a, row, "index_row", job.index_line, 256 * 1024);
+            try F.payload(a, row, "display_title", expanded.display_title.?, 256 * 1024);
+            try F.payload(a, row, "poem_metadata", expanded.poem_metadata.?, 256 * 1024);
+            try F.payload(a, row, "missing_dependency_metadata", expanded.missing_dependency_metadata.?, 256 * 1024);
+            const path = try std.fs.path.join(a, &.{ capture_root, "capture.json" });
+            const before = try std.Io.Dir.cwd().readFileAlloc(F.io, path, a, .limited(64 * 1024));
+            captureFirstPresentationFailure(error.UncompiledPresentation, job, .{ .source = "replacement" });
+            const after = try std.Io.Dir.cwd().readFileAlloc(F.io, path, a, .limited(64 * 1024));
+            try std.testing.expectEqualSlices(u8, before, after);
+        } else if (comptime std.mem.eql(u8, mode, "existing-capture")) {
+            const bytes = try std.Io.Dir.cwd().readFileAlloc(F.io, capture_root, a, .limited(64));
+            try std.testing.expectEqualStrings("retained first capture", bytes);
+        } else try F.absent(capture_root);
+        try F.noPublication(a, root);
+    }
+}
+
+test "RenderLimit capture retains bounded truncated payloads and original error" {
+    const F = FirstFailureControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const root = try auditControlFreshRoot(a, "render-limit-truncated");
+    defer std.Io.Dir.cwd().deleteTree(F.io, root) catch {};
+    const raw = try a.alloc(u8, 256 * 1024 + 1); @memset(raw, 'r');
+    const expanded = try a.alloc(u8, 2 * 1024 * 1024 + 1); @memset(expanded, 'e');
+    var context = F.context(a, root); context.failure_evidence_root = root;
+    try std.testing.expect(first_failure_capture_context == null and failure_receipt_context == null);
+    first_failure_capture_context = context; defer first_failure_capture_context = null;
+    const job: ExpansionJob = .{ .ordinal = 4, .index_offset = 0, .ns = .{ .id = 0, .kind = .language },
+        .title = "truncated RenderLimit", .source = raw, .index_line = "exact retained index row" };
+    var writer = try encoder.blob_builder.Writer.init(F.io, a, try std.fs.path.join(a, &.{ root, "writer" }));
+    defer writer.deinit();
+    try std.testing.expectError(error.RenderLimit, consumePresentationFailure(&writer, job, .{ .source = expanded }, a, null, error.RenderLimit));
+    const row = try F.manifest(a, root);
+    try std.testing.expect(row.object.get("record_complete").?.bool);
+    try std.testing.expectEqualStrings("RenderLimit", row.object.get("error_name").?.string);
+    try std.testing.expectEqual(@as(i64, 4 * 1024 * 1024), row.object.get("payload_limit_bytes").?.integer);
+    try F.payload(a, row, "raw_source", raw, 256 * 1024);
+    try F.payload(a, row, "expanded", expanded, 2 * 1024 * 1024);
+    try F.payload(a, row, "index_row", job.index_line, 256 * 1024);
+    try std.testing.expect(row.object.get("raw_source").?.object.get("truncated").?.bool);
+    try std.testing.expect(row.object.get("expanded").?.object.get("truncated").?.bool);
+    var retained: i64 = 0;
+    inline for (.{ "raw_source", "expanded", "display_title", "poem_metadata", "missing_dependency_metadata", "index_row", "alias_record" }) |field|
+        retained += row.object.get(field).?.object.get("retained_bytes").?.integer;
+    try std.testing.expect(retained <= 4 * 1024 * 1024);
+    try std.testing.expect(!auditablePresentationError(error.RenderLimit));
+    try std.testing.expect(recordPresentationFailure(error.RenderLimit, job) == error.RenderLimit);
+    try F.noPublication(a, root);
+}
+
 
 const SqCapturedPreferredTest = struct {
     const rows = "# content-language\tsq\n# mediawiki\nsq\tshqip\tShqip\tsq\tAlbanian\nen\tanglisht\tAnglisht\tEnglish\n";
@@ -9001,5 +9071,134 @@ test "normal Writer registered middle flag decoration preserves Gaelic before En
             document.MissingText.untracked(source), null, .{}, &namespaces, null, &options, .{}, &fallbacks, null, &.{}, &observation, &projection, .{ .heading = owner, .code = code });
         const expected = try encoder.presentation_codec.decodeAlloc(a, payload, title, .language, .{ .heading = owner, .code = code });
         try std.testing.expectEqualDeep(expected, stored);
+    }
+}
+
+
+const LiVarietyWriterTest = struct {
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tfrwiktionary\n# dump-date\t20261001\n# content-language\tfr\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n";
+    const registry_text = "# content-language\tfr\n# mediawiki\nfr\tFrench\nli\tLimburgs\nnl\tNederlands\n";
+    fn marker(a: std.mem.Allocator, code_value: []const u8, label: []const u8, id: []const u8) ![]u8 {
+        var hash: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(@embedFile("reviewed_language_aliases.json"), &hash, .{});
+        return std.fmt.allocPrint(a, "# reviewed-alias\t{s}\t{s}\t{s}\t{s}\n", .{ code_value, label, id, std.fmt.bytesToHex(hash, .lower) });
+    }
+    fn load(io: std.Io, a: std.mem.Allocator, root: []const u8, ns: *const namespace_registry.Registry, reviewed: bool) !language_registry.Registry {
+        try std.Io.Dir.cwd().createDirPath(io, root);
+        const text = if (reviewed) try std.mem.concat(a, u8, &.{ registry_text,
+            try marker(a, "li", "Mofers", "li-mofers-variety-p131871-r958780-v1"),
+            try marker(a, "li", "Algemein Gesjreve Limburgs", "li-agl-variety-p101567-r983499-v1"),
+            try marker(a, "nl", "Nederlandjs", "li-nederlandjs-exact-p26592-r905227-v1"),
+        }) else registry_text;
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = text });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "" });
+        return loadLanguageRegistry(io, a, root, ns);
+    }
+    fn entry(io: std.Io, a: std.mem.Allocator, output: []const u8, owner: []const u8, title: []const u8) !encoder.presentation_types.Entry {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename(owner, &filename) });
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(1024 * 1024));
+        const blob = try encoder.blob_format.inspect(bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(owner, metadata.heading);
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find(title)).?;
+        const stored = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings(owner, stored.entry.language.?);
+        try std.testing.expectEqualStrings(metadata.code, stored.entry.language_code);
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, stored));
+        return stored.entry;
+    }
+    fn full(a: std.mem.Allocator, title: []const u8, source: []const u8, ns: *const namespace_registry.Registry) !encoder.presentation_types.Entry {
+        const bytes = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, title, .language, "Unclassified", "", source, null, .{}, ns, null);
+        return (try encoder.presentation_codec.decodeAlloc(a, bytes, title, .language, .{ .code = "", .heading = "Unclassified" })).entry;
+    }
+};
+
+test "Writer keeps reviewed LI varieties separate while preserving complete authored sections" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io; const F = LiVarietyWriterTest;
+    var ns = try namespace_registry.Registry.init(a, F.namespaces); defer ns.deinit();
+    const input = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/li-input", .{tmp.sub_path});
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/li-output", .{tmp.sub_path});
+    var registry = try F.load(io, a, input, &ns, true); defer registry.deinit();
+    const codes = languageCodes(&registry, &ns);
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    writer.language_codes = codes;
+    // Authored ich labels/structure and lexical witnesses, with a finite synthetic
+    // table and prefix. This is not a captured Worker expansion of the page.
+    const source = "[[ich|prefix]]\n==Algemein Gesjreve Limburgs==\n===Persuunlik veurnaamwaord===\n'''ich'''\n* Mofers: [[ich#Mofers|ich]]\n" ++
+        "==Mofers==\n===Persuuenlik veurnaamwaord===\n====Lemma====\n'''ich'''\n# verwies nao de ''spraeker'' of de sjriever zelf\n#: ''Ich zing dit leed veur dich.''\n" ++
+        "====Grammaer====\n[[miener]]\n====Taofel====\n{|\n! Persoean !! nominatief\n|-\n| ieëste || [[ich]]\n|}\n";
+    const dutch = "==Nederlandjs==\n===Persuuenlik veurnaamwaord===\n====Lemma====\n'''ik'''\n# [[ich]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ich", source, source, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ik", dutch, dutch, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_blobs);
+    const prefix = try F.entry(io, a, output, "Unclassified", "ich");
+    const agl = try F.entry(io, a, output, "Algemein Gesjreve Limburgs", "ich");
+    const mofers = try F.entry(io, a, output, "Mofers", "ich");
+    const nl = try F.entry(io, a, output, "Nederlands", "ik");
+    try std.testing.expectEqualStrings("", prefix.language_code);
+    try std.testing.expectEqualStrings("li", agl.language_code);
+    try std.testing.expectEqualStrings("li", mofers.language_code);
+    try std.testing.expectEqualStrings("nl", nl.language_code);
+    const full = try F.full(a, "ich", source, &ns);
+    try std.testing.expectEqual(@as(usize, 8), full.sections.len);
+    try std.testing.expectEqualDeep(full.sections[0..1], prefix.sections);
+    try std.testing.expectEqualDeep(full.sections[1..3], agl.sections);
+    try std.testing.expectEqualDeep(full.sections[3..], mofers.sections);
+    try std.testing.expectEqualDeep((try F.full(a, "ik", dutch, &ns)).sections, nl.sections);
+    try std.testing.expectEqual(@as(usize, 0), prefix.organization.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 1), agl.organization.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 0), agl.organization.lexemes[0].definitions.len);
+    const lexical = mofers.organization.lexemes[0];
+    try std.testing.expectEqual(@as(usize, 1), mofers.organization.lexemes.len);
+    try std.testing.expectEqualStrings("Mofers", lexical.language);
+    try std.testing.expectEqualStrings("Pronoun", lexical.kind);
+    try std.testing.expectEqual(@as(usize, 2), lexical.section);
+    try std.testing.expectEqual(@as(usize, 1), lexical.definitions.len);
+    try std.testing.expectEqual(@as(usize, 1), lexical.definitions[0].block);
+    try std.testing.expectEqualSlices(usize, &.{2}, lexical.definitions[0].examples);
+    try std.testing.expect(lexical.definitions[0].form == null);
+    try std.testing.expectEqualSlices(usize, &.{3, 4}, lexical.related_sections);
+    try std.testing.expectEqual(@as(usize, 1), nl.organization.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 1), nl.organization.lexemes[0].definitions.len);
+}
+
+test "Writer declines absent reviewed variety proof and raw rendered variety disagreement" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io; const F = LiVarietyWriterTest;
+    var ns = try namespace_registry.Registry.init(a, F.namespaces); defer ns.deinit();
+    const input = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/negative-input", .{tmp.sub_path});
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/negative-output", .{tmp.sub_path});
+    var registry = try F.load(io, a, input, &ns, true); defer registry.deinit();
+    var absent = try F.load(io, a, try std.fs.path.join(a, &.{ input, "absent" }), &ns, false); defer absent.deinit();
+    const codes = languageCodes(&registry, &ns);
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    writer.language_codes = codes;
+    const body = "\n===Persuuenlik veurnaamwaord===\n====Lemma====\n# [[ich]]\n";
+    const mismatch = "==Mofers==" ++ body;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "mismatch", mismatch, "==Algemein Gesjreve Limburgs==" ++ body, null);
+    const protected = "<nowiki>==Mofers==\n===Persuuenlik veurnaamwaord===\n====Lemma====\n# literal</nowiki>\n[[retained]]\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "protected", protected, protected, null);
+    writer.language_codes = languageCodes(&absent, &ns);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "missing-proof", mismatch, mismatch, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 3), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    for ([_]struct { title: []const u8, source: []const u8 }{
+        .{ .title = "mismatch", .source = mismatch }, .{ .title = "protected", .source = protected }, .{ .title = "missing-proof", .source = mismatch },
+    }) |case| {
+        const actual = try F.entry(io, a, output, "Unclassified", case.title);
+        try std.testing.expectEqualStrings("", actual.language_code);
+        try std.testing.expectEqualDeep((try F.full(a, case.title, case.source, &ns)).sections, actual.sections);
+        if (std.mem.eql(u8, case.title, "protected")) try std.testing.expectEqual(@as(usize, 0), actual.organization.lexemes.len);
     }
 }

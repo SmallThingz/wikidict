@@ -1,0 +1,117 @@
+{
+  "schema": "dict.results.v1",
+  "operation": "lookup",
+  "query": "catalán",
+  "kind": "language",
+  "language": "Asturian",
+  "match_mode": "exact-utf8",
+  "record_count": 347,
+  "total_matches": 1,
+  "offset": 0,
+  "has_more": false,
+  "matches": [],
+  "entries": [
+    {
+      "organization": {
+        "lexemes": [],
+        "other_sections": [
+          0,
+          1
+        ]
+      },
+      "title": "catalán",
+      "display_title": [],
+      "kind": "language",
+      "language": "Asturian",
+      "language_code": "ast",
+      "sections": [
+        {
+          "level": 2,
+          "title": "Asturià",
+          "anchor": "Asturià",
+          "anchor_fallback": "Asturi.C3.A0",
+          "blocks": []
+        },
+        {
+          "level": 3,
+          "title": "Nom",
+          "anchor": "Nom",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "catalán",
+                  "target": "",
+                  "trail": "",
+                  "language": "ast",
+                  "classes": "Latn headword",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "headword"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "definition",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "català",
+                  "target": "català",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "#",
+              "number": "1",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        }
+      ],
+      "preamble_spans": [],
+      "references": [],
+      "media": [],
+      "redirect": null,
+      "alias": null
+    }
+  ]
+}

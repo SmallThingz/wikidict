@@ -1,6 +1,7 @@
 const missing_dependency = @import("missing_dependency");
 const MissingText = missing_dependency.Text;
 const std = @import("std");
+const consume_diagnostics = @import("build_diagnostics");
 const blobs = @import("blob_encoder");
 const blob_format = blobs.blob_format;
 const blob_catalog = blobs.blob_catalog;
@@ -135,6 +136,8 @@ const SpoolFile = struct {
         title: []const u8,
         payload: []const u8,
     ) !void {
+        const spool_phase = consume_diagnostics.beginConsumePhase(.spool);
+        defer consume_diagnostics.endConsumePhase(spool_phase);
         const key_len = std.math.cast(u32, key.len) orelse return error.RecordTooBig;
         const title_len = std.math.cast(u32, title.len) orelse return error.RecordTooBig;
         const payload_len = std.math.cast(u32, payload.len) orelse return error.RecordTooBig;
@@ -2319,6 +2322,7 @@ fn freeObservedScopes(a: std.mem.Allocator, scopes: []const presentation_documen
     for (scopes) |scope| {
         a.free(scope.target);
         a.free(scope.attributes.classes);
+        a.free(scope.attributes.css_ancestor_classes);
         a.free(scope.attributes.language);
         a.free(scope.attributes.direction);
         a.free(scope.attributes.explanation);
@@ -2330,6 +2334,24 @@ fn freeObservedScopes(a: std.mem.Allocator, scopes: []const presentation_documen
 fn freePreObservation(a: std.mem.Allocator, observation: presentation_document.PreObservation) void {
     freeObservedScopes(a, observation.scopes);
     a.free(observation.refused_link_openings);
+}
+
+test "CSS ancestor observations release owned classes on success and allocation failure" {
+    const Case = struct {
+        fn run(a: std.mem.Allocator) !void {
+            const source = "<div class=\"First\">first body</div>\n<div class=\"Second\">second body</div>";
+            const observation = try presentation_document.observePreScopesAlloc(a, "CSS ownership", source, .{}, null, null, null, .{}, null);
+            defer freePreObservation(a, observation);
+            try std.testing.expectEqual(@as(usize, 2), observation.scopes.len);
+            for (observation.scopes, [_][]const u8{ "First", "Second" }, [_][]const u8{ "first body", "second body" }) |scope, classes, body| {
+                try std.testing.expect(scope.kind == .css_block and scope.matched);
+                try std.testing.expectEqualStrings(classes, scope.attributes.css_ancestor_classes);
+                try std.testing.expectEqualStrings(body, source[scope.body_start..scope.body_end]);
+            }
+        }
+    };
+    // Multiple scopes exercise unwind after an earlier observation was retained.
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Case.run, .{});
 }
 
 fn linkOpeningsAlloc(a: std.mem.Allocator, scopes: []const presentation_document.ObservedPreScope, refused_link_openings: []const usize) ![]const usize {
@@ -2563,7 +2585,9 @@ fn ownerSourceFragmentsWithMissingAlloc(a: std.mem.Allocator, tracked: MissingTe
 
 fn groupIndex(groups: []PageLanguageGroup, language: ResolvedLanguage) ?usize {
     for (groups, 0..) |group, index| {
-        if (std.mem.eql(u8, group.language.code, language.code)) return index;
+        // Distinct reviewed varieties share a parent code, not a record owner.
+        if (std.mem.eql(u8, group.language.code, language.code) and
+            std.mem.eql(u8, group.language.heading, language.heading)) return index;
     }
     return null;
 }
@@ -3160,7 +3184,13 @@ fn processMain(
         var resolved: ?ResolvedLanguage = ang_continuation;
         if (resolved == null and raw_aligned) resolved = resolveSection(codes, raw_sections.items[index]);
         if (ang_continuation == null) if (resolved) |raw_language| if (boundaryLanguage(codes, section)) |rendered_language| {
-            if (!std.mem.eql(u8, raw_language.code, rendered_language.code) and
+            if (std.mem.eql(u8, raw_language.code, rendered_language.code) and
+                !std.mem.eql(u8, raw_language.heading, rendered_language.heading))
+            {
+                // Matching parent codes do not authorize a changed variety.
+                resolved = .{ .code = "", .heading = "Unclassified" };
+                fallbacks.unresolved_language_heading = true;
+            } else if (!std.mem.eql(u8, raw_language.code, rendered_language.code) and
                 !corroboratedEqualsDeclaration(codes, raw_sections.items[index], section, raw_language.code, rendered_language.code) and
                 !corroboratedAnHyphenMarker(codes, raw_sections.items[index], section))
             {
@@ -12249,6 +12279,624 @@ test "retained TL abaka image headings preserve seven independently proved bodie
     try std.testing.expectEqual(ImageHeadingAbakaExpanded.len, consumed);
 }
 
+
+test "captured Bulgarian Belgrad retains computed heading bare parameters body table actions and codec" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact p662/r1135263 raw886/d4b7ff96 and expanded1882/dec114d1.
+    // The literal-reference arm changes only four proved unresolved invocations.
+    const raw = "{{-bg-}}\n{{Съществително собствено име|\n  ID = Белград\n| ЗНАЧЕНИЕ =\n# Името на [[столица]]та на [[Сърбия]] и на държавната общност Сърбия и [[Черна гора]], а преди — на [[Югославия]].\n| ТИП = 197\n| СРИЧКИ = Бел·град\n| ЕТИМОЛОГИЯ = \n| ИЗРАЗИ = \n| ПРЕВОД1 = \n* английски: [[Belgrade]]\n* есперанто: [[Beogrado]]\n* италиански: [[Belgrado]] ''ж.р.''\n* немски: [[Belgrad]]\n* полски: Belgrad\n| ПРЕВОД2 = \n* руски: Белград\n* сръбски: [[Београд]]\n* хърватски: [[Beograd]]\n* холандски: Belgrado\n* {{fi}}: [[Belgrad]]\n* френски: Belgrade\n| СИНОНИМИ = \n| СРОДНИ ДУМИ = \n| ПРОИЗВОДНИ ДУМИ = \n| ДРУГИ = \n}}";
+    const expanded = "<div style=\"clear:both;\"></div>\n== [[:bg:w:Български език|Български]] ==\n[[Категория:Думи в българския език]]\n=== Съществително собствено име, <i>{{-{{{РОД}}}}}</i>, <i>[[Уикиречник:Български/Типове думи/197|тип 197]]</i> ===\n# Името на [[столица]]та на [[Сърбия]] и на държавната общност Сърбия и [[Черна гора]], а преди — на [[Югославия]].\n==== Етимология ====\n\n==== Фразеологични изрази ====\n\n==== Превод ====\n\n<div class=\"NavFrame mw-collapsible  \">\n<div class=\"NavHead\" style=\"background:#ece7ff;\nborder-bottom:1px solid #b8b0d9;\nfont-weight:bold;\"></div>\n<div class=\"NavContent mw-collapsible-content\">\n{| style=\"margin:0 auto 0.3em auto; width:100%; background: #fcfbff;\" cellspacing=\"0\" class=\"translations\"\n|-\n|valign=\"top\" style=\"text-align:left; width:48%; background: #f7f8ff;\"|\n\n* английски: [[Belgrade]]\n* есперанто: [[Beogrado]]\n* италиански: [[Belgrado]] ''ж.р.''\n* немски: [[Belgrad]]\n* полски: Belgrad\n|width=\"1%\"|\n|width=\"48%\" valign=\"top\" style=\"text-align:left; background: #f7f8ff;\"|\n* руски: Белград\n* сръбски: [[Београд]]\n* хърватски: [[Beograd]]\n* холандски: Belgrado\n* фински: [[Belgrad]]\n* френски: Belgrade\n|}</div></div>\n==== Сродни думи ====\n\n\n\n==== Производни думи ====\n\n==== Надсловия ====\n{{{НАДСЛОВИЯ}}}\n==== Подсловия ====\n{{{ПОДСЛОВИЯ}}}\n==== Източници ====\n{{{ИЗТОЧНИЦИ}}}\n==== Други ====\n \n\n[[Категория:Съществителни имена в българския език]] __БЕЗ_РЕДАКТИРАНЕ_НА_РАЗДЕЛИ__";
+    const reference = "<div style=\"clear:both;\"></div>\n== [[:bg:w:Български език|Български]] ==\n[[Категория:Думи в българския език]]\n=== Съществително собствено име, <i><nowiki>{{-{{{РОД}}}}}</nowiki></i>, <i>[[Уикиречник:Български/Типове думи/197|тип 197]]</i> ===\n# Името на [[столица]]та на [[Сърбия]] и на държавната общност Сърбия и [[Черна гора]], а преди — на [[Югославия]].\n==== Етимология ====\n\n==== Фразеологични изрази ====\n\n==== Превод ====\n\n<div class=\"NavFrame mw-collapsible  \">\n<div class=\"NavHead\" style=\"background:#ece7ff;\nborder-bottom:1px solid #b8b0d9;\nfont-weight:bold;\"></div>\n<div class=\"NavContent mw-collapsible-content\">\n{| style=\"margin:0 auto 0.3em auto; width:100%; background: #fcfbff;\" cellspacing=\"0\" class=\"translations\"\n|-\n|valign=\"top\" style=\"text-align:left; width:48%; background: #f7f8ff;\"|\n\n* английски: [[Belgrade]]\n* есперанто: [[Beogrado]]\n* италиански: [[Belgrado]] ''ж.р.''\n* немски: [[Belgrad]]\n* полски: Belgrad\n|width=\"1%\"|\n|width=\"48%\" valign=\"top\" style=\"text-align:left; background: #f7f8ff;\"|\n* руски: Белград\n* сръбски: [[Београд]]\n* хърватски: [[Beograd]]\n* холандски: Belgrado\n* фински: [[Belgrad]]\n* френски: Belgrade\n|}</div></div>\n==== Сродни думи ====\n\n\n\n==== Производни думи ====\n\n==== Надсловия ====\n<nowiki>{{{НАДСЛОВИЯ}}}</nowiki>\n==== Подсловия ====\n<nowiki>{{{ПОДСЛОВИЯ}}}</nowiki>\n==== Източници ====\n<nowiki>{{{ИЗТОЧНИЦИ}}}</nowiki>\n==== Други ====\n \n\n[[Категория:Съществителни имена в българския език]] __БЕЗ_РЕДАКТИРАНЕ_НА_РАЗДЕЛИ__";
+    const namespace_source = "# wikidict-namespace-registry-v1\n# wiki\tbgwiktionary\n# dump-date\t20261001\n# content-language\tbg\n-2\tМедия\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n-1\tСпециални\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\tБеседа\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n2\tПотребител\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n3\tПотребител беседа\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n4\tУикиречник\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\tWiktionary\n5\tУикиречник беседа\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWiktionary talk\n6\tФайл\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\tКартинка\n7\tФайл беседа\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tImage talk\tКартинка беседа\n8\tМедияУики\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n9\tМедияУики беседа\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n10\tШаблон\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n11\tШаблон беседа\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n12\tПомощ\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n13\tПомощ беседа\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n14\tКатегория\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n15\tКатегория беседа\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n100\tСловоформи\tСловоформи\tcase-sensitive\t1\t0\t0\t\tsupplemental\tunclassified_subject_retained\n101\tСловоформи беседа\tСловоформи беседа\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\tМодул\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\tМодул беседа\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\tEvent\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\tEvent talk\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
+    const behavior_source = "# wikidict-behavior-switches-v1\n# wiki\tbgwiktionary\n# dump-date\t20261001\n# content-language\tbg\n# namespace-registry-sha256\t3073f847fc908ae17052f632ced7ed61a98afa040055f83a756a844da2af659b\narchivedtalk\t0\t__ARCHIVEDTALK__\ndisambiguation\t1\t__DISAMBIG__\nexpectedUnconnectedPage\t1\t__EXPECTED_UNCONNECTED_PAGE__\nexpectshortpage\t1\t__EXPECTSHORTPAGE__\nexpectunusedcategory\t1\t__EXPECTUNUSEDCATEGORY__\nexpectunusedtemplate\t1\t__EXPECTUNUSEDTEMPLATE__\nexpectwithoutscans\t0\t__EXPECTWITHOUTSCANS__\nforcetoc\t0\t__FORCETOC__\nforcetoc\t0\t__СЪССЪДЪРЖАНИЕ__\nhiddencat\t1\t__HIDDENCAT__\nhiddencat\t1\t__СКРИТАКАТЕГОРИЯ__\nindex\t1\t__INDEX__\nindex\t1\t__ИНДЕКСИРАНЕ__\nkeeptitle\t1\t__KEEPTITLE__\nnewsectionlink\t1\t__NEWSECTIONLINK__\nnewsectionlink\t1\t__ВРЪЗКА_ЗА_НОВ_РАЗДЕЛ__\nnocontentconvert\t0\t__NOCC__\nnocontentconvert\t0\t__NOCONTENTCONVERT__\nnoeditsection\t0\t__NOEDITSECTION__\nnoeditsection\t0\t__БЕЗ_РЕДАКТИРАНЕ_НА_РАЗДЕЛИ__\nnogallery\t0\t__NOGALLERY__\nnogallery\t0\t__БЕЗГАЛЕРИЯ__\nnoglobal\t1\t__NOGLOBAL__\nnoindex\t1\t__NOINDEX__\nnoindex\t1\t__БЕЗИНДЕКСИРАНЕ__\nnomediaviewercarousel\t0\t__NOMEDIAVIEWERCAROUSEL__\nnonewsectionlink\t1\t__NONEWSECTIONLINK__\nnotalk\t0\t__NOTALK__\nnotitleconvert\t0\t__NOTC__\nnotitleconvert\t0\t__NOTITLECONVERT__\nnotoc\t0\t__NOTOC__\nnotoc\t0\t__БЕЗСЪДЪРЖАНИЕ__\nstaticredirect\t1\t__STATICREDIRECT__\ntoc\t0\t__TOC__\ntoc\t0\t__СЪДЪРЖАНИЕ__\n";
+    const css = "h3, h4 { padding-top: 0; padding-bottom: 0; }\nh4 { font-size: 1.1em; }\n\n#extraCharsWrapper {\n\tmargin: 0.5em 0; \n\tline-height: 1.8em;\n}\n\n.trans-table {\n\tbackground-color: white;\n\tpadding: 0;\n\tborder: 0;\n\twidth: 100%;\n\tclear: both;\n}\n.trans-table-left, .trans-table-right { padding: 0; width: 50%; }\n\n.forms-table {\n\tbackground-color: white;\n\tborder: thin solid silver;\n\tmargin-left: 1em;\n\tfloat: right;\n}\n.forms-table th { background-color: #e0e3e6; }\n.forms-table th, .forms-table td { padding-left: .5em; padding-right: .5em; }\n\n.edit-cell {\n\tbackground-color: #e8e8e8;\n\ttext-align: center;\n\topacity: .10;\n}\n\n.entry {\n\tbackground-color: #fcfcec;\n\tborder: thin dashed silver;\n\tpadding: .5em;\n\tmargin: 0 0 1em 0;\n}\n.entry table { background-color: inherit; }\n\n.detached { float: none; }\n.hidden-links { display: none; }\n\n#loadIndicator {\n\tposition: absolute;\n\ttop: 6em;\n\tleft: 20%;\n\tfloat: left;\n\tcolor: black;\n\tbackground-color: #CCDDEE;\n\tfont-size: 2em;\n\tpadding: 0.5em;\n\tborder: solid thin #006699;\n}\n\n/* скриване на формуляра за качване */\n#mw-upload-form { display: none; }\n\n/* съобщения за блокиране на беседи */\n.user-block {\n\tpadding: 5px;\n\tborder: 1px solid #A9A9A9;\n\tbackground-color: #FFEFD5;\n}\n\n/* copied from https://foundation.wikimedia.org/wiki/Template:Social_accounts */\n.fancy-btn {\n\tbackground-color: #3366bb;\n\tbackground-image: linear-gradient(to bottom, #3670c8, #3366bb);\n\tborder: 1px solid #3366bb;\n\tborder-radius: 3px;\n\tcolor: #fff;\n\tdisplay: inline-block;\n\tline-height: 1;\n\tpadding: 0.7em;\n\ttext-align: center;\n\ttext-shadow: 0 -1px 0 rgba(0, 0, 0, 0.25);\n\tfont-size: 1.4em;\n\tmin-width: 200px;\n\tmargin: 4px;\n}\n\n.fancy-btn:hover {\n\topacity: 0.9;\n}\n\n/* EditToolbar gadget styles */\n\n.custom-toolbar {\n\tclear: both;\n\tmargin-bottom: 0.2em;\n\tline-height: 1.9em;\n}\n.custom-toolbar select {\n\tmargin-right: 0.5em;\n}\n.buttonlinks a {\n\tcolor: #333333;\n\tbackground-color: #E0EEF7;\n\tbackground: linear-gradient(to bottom, #F4F9FB, #E0EEF7);\n\tfont-size: 0.9em;\n\ttext-decoration: none;\n\tborder: 1px solid #e0e0e0;\n\tpadding: 0.1em;\n}\n.buttonlinks a:hover, .buttonlinks a:active {\n\tcolor: #000000;\n\tborder-color: #c0c0c0;\n}\n\n/* elements which are doing something... */\n.working {\n\tbackground: url(//upload.wikimedia.org/wikipedia/commons/3/32/Loader3.gif) right center no-repeat;\n}\n/* contents are currently loaded */\n.loading:before {\n\tcontent: url(//upload.wikimedia.org/wikipedia/commons/thumb/c/cd/Vector_Loading_fallback.gif/16px-Vector_Loading_fallback.gif);\n}\n/* A working element has done its job */\n.done:before {\n\tcontent: url(//upload.wikimedia.org/wikipedia/commons/thumb/f/fb/Yes_check.svg/16px-Yes_check.svg.png);\n}\n/* A working element that hadn’t been so lucky */\n.not-done:before,\n.fail:before {\n\tcontent: url(//upload.wikimedia.org/wikipedia/commons/thumb/b/ba/Red_x.svg/16px-Red_x.svg.png);\n}\n\ndiv.NavHead {\n        font-weight: bold;\n        background-color: #e2e4c0;\n        padding-left: 10px;\n        min-height: 1.6em;\n}\n        \ndiv.NavFrame {\n        border: 1px solid #e2e4c0;\n        margin: 0 0 -1px 0;\n        width: 100%;\n        padding: 2px;\n        font-size: 95%;\n}\n\ntable.infobox th {\n    background-color: #e2e4c0;\n}\n\n/* Страница с документация на шаблон */\n.template-documentation {\n\tclear: both;\n\tmargin: 1em 0 0 0;\n\tborder: 1px solid #aaa;\n\tbackground-color: #eaf1f4;\n\tpadding: 5px;\n}\n\n/*\n\tШаблони за Messagebox\n\tИзползват се например от [[МедияУики:Gadget-QuickLinks.js]].\n*/\n.messagebox {\n\tborder: 1px solid #aaaaaa;\n\tbackground-color: #f9f9f9;\n\twidth: 80%;\n\tmargin: 0 auto 1em auto;\n\tpadding: .2em;\n}\n.messagebox.merge {\n\tborder: 1px solid #c0b8cc;\n\tbackground-color: #f0e5ff;\n\ttext-align: center;\n}\n.messagebox.cleanup {\n\tborder: 1px solid #9f9fff;\n\tbackground-color: #efefff;\n\ttext-align: center;\n}\n.messagebox.standard-talk {\n\tborder: 1px solid #c0c090;\n\tbackground-color: #f8eaba;\n\tmargin: 4px auto;\n}\n\n/* Без заглавие (заглавка първо ниво) за началната страница */\n.page-Уикиречник_Начална_страница h1.firstHeading,\n.page-Уикиречник_Начална_страница #lastmod,\n.page-Уикиречник_Начална_страница #siteSub,\n.page-Уикиречник_Начална_страница #contentSub,\n.page-Уикиречник_Начална_страница #firstHeading {\n\tdisplay: none; /* NOT important */\n}";
+    // Keep the exact authored cellspacing and unindexed class visible in this control.
+    // The caller projects authored legacy spacing separately from partial CSS.
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, expanded, "cellspacing=\"0\""));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, expanded, "class=\"translations\""));
+    var namespaces = try @import("namespace_registry").Registry.init(a, namespace_source);
+    defer namespaces.deinit();
+    try namespaces.attachInterwikiMap("# interwiki-magic\t1\nbg\t1\t1\t0\t0\thttps://bg.wiktionary.org/wiki/$1\t1\nw\t1\t0\t0\t0\thttps://bg.wikipedia.org/wiki/$1\t0\n");
+    var behavior = try @import("namespace_registry").behavior_switches.Registry.init(a, behavior_source, "bgwiktionary", "20261001", "bg", namespaces.source_sha256);
+    defer behavior.deinit();
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, css);
+    defer styles.deinit();
+    try std.testing.expectEqualSlices(u32, &.{ 7, 8, 11, 29 }, styles.admitted_rule_numbers);
+    const Fixture = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            // Exact captured registry row: bg / български / Български / bg / Bulgarian / bul.
+            if (std.mem.eql(u8, value, "Български") or std.mem.eql(u8, value, "български") or std.mem.eql(u8, value, "bg"))
+                return .{ .code = "bg", .heading = "български" };
+            return null;
+        }
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return (resolve(ctx, value) orelse return null).code;
+        }
+        fn trail(_: ?*const anyopaque, cp: u21) bool {
+            // Exact captured linktrail character class, without guessing by edition.
+            return (cp >= 'a' and cp <= 'z') or std.mem.indexOfScalar(u21, &.{ 'а','б','в','г','д','е','ж','з','и','й','к','л','м','н','о','п','р','с','т','у','ф','х','ц','ч','ш','щ','ъ','ы','ь','э','ю','я' }, cp) != null;
+        }
+    };
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .behavior_switches = &behavior, .table_styles = &styles, .get_fn = Fixture.get, .resolve_fn = Fixture.resolve, .trusted_fn = Fixture.resolve, .link_trail = .{ .contains_fn = Fixture.trail } };
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/source", .{tmp.sub_path});
+    const reference_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/literal-reference", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    var literal_writer = try Writer.init(std.testing.io, a, reference_root);
+    defer literal_writer.deinit();
+    literal_writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "Белград", expanded, raw, null);
+    try literal_writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "Белград", reference, raw, null);
+    const stats = try writer.finish(codes);
+    const literal_stats = try literal_writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), literal_stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "български"));
+    defer mapped.deinit();
+    var literal_mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, reference_root, "български"));
+    defer literal_mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const literal_blob = try blob_format.inspect(literal_mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    var literal_index = try literal_blob.buildTrustedIndexAlloc(a);
+    defer literal_index.deinit(a);
+    const record = (try index.find("Белград")).?;
+    const literal_record = (try literal_index.find("Белград")).?;
+    try std.testing.expectEqualSlices(u8, literal_record.payload, record.payload);
+    const stored = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, stored));
+    try std.testing.expectEqualStrings("bg", stored.entry.language_code);
+    try std.testing.expectEqualStrings("български", stored.entry.language.?);
+    try std.testing.expectEqual(@as(usize, 11), stored.entry.sections.len);
+    const Scan = struct {
+        visible: std.ArrayList(u8) = .empty,
+        targets: std.ArrayList([]const u8) = .empty,
+        labels: std.ArrayList(std.ArrayList(u8)) = .empty,
+        kinds: std.ArrayList(bool) = .empty,
+        prior_action: ?usize = null,
+        tables: usize = 0,
+        definitions: usize = 0,
+        italic_computed: bool = false,
+        italic_type: bool = false,
+        italic_gender_label: bool = false,
+        fn dumpSpans(values: []const blobs.presentation_types.Span, remaining: *usize) void {
+            for (values) |span| {
+                if (remaining.* == 0) return;
+                remaining.* -= 1;
+                std.debug.print("BG final span text={s} kind={s} target={s} italic={} classes={s}\n", .{ span.text[0..@min(span.text.len, 128)], @tagName(span.kind), span.target[0..@min(span.target.len, 96)], span.italic, span.classes[0..@min(span.classes.len, 48)] });
+            }
+        }
+        fn dumpBlocks(values: []const blobs.presentation_types.Block, remaining: *usize) void {
+            for (values) |block| {
+                if (remaining.* == 0) return;
+                remaining.* -= 1;
+                std.debug.print("BG final block kind={s} path={s} number={s}\n", .{ @tagName(block.kind), block.list_path, block.number });
+                dumpSpans(block.spans, remaining);
+                if (block.table) |value| dumpTable(value, remaining);
+            }
+        }
+        fn dumpTable(value: blobs.presentation_types.Table, remaining: *usize) void {
+            if (remaining.* == 0) return;
+            remaining.* -= 1;
+            std.debug.print("BG final table style={any} geometry={any} rows={d}\n", .{ value.style, value.geometry, value.rows.len });
+            dumpSpans(value.caption, remaining);
+            for (value.rows, 0..) |row, ri| for (row.cells, 0..) |cell, ci| {
+                if (remaining.* == 0) return;
+                remaining.* -= 1;
+                std.debug.print("BG final cell row={d} col={d} background={any}\n", .{ ri, ci, cell.background });
+                if (cell.blocks) |inner| dumpBlocks(inner, remaining)
+                else if (cell.nested_table) |nested| dumpTable(nested, remaining)
+                else dumpSpans(cell.spans, remaining);
+            };
+        }
+        fn spans(self: *@This(), allocator: std.mem.Allocator, values: []const blobs.presentation_types.Span) anyerror!void {
+            for (values) |span| {
+                errdefer std.debug.print("BG failing span text={s} kind={s} target={s} italic={} classes={s}\n", .{ span.text[0..@min(span.text.len, 192)], @tagName(span.kind), span.target[0..@min(span.target.len, 192)], span.italic, span.classes });
+                try self.visible.appendSlice(allocator, span.text);
+                if (span.kind == .line_break) try self.visible.append(allocator, '\n');
+                try std.testing.expect(std.mem.indexOf(u8, span.text, "[missing parameter]") == null);
+                if (std.mem.indexOf(u8, span.text, "{{-{{{РОД}}}}}") != null) {
+                    self.italic_computed = span.italic;
+                    try std.testing.expect(span.kind == .text and span.target.len == 0);
+                }
+                if (std.mem.eql(u8, span.text, "тип 197")) self.italic_type = span.italic;
+                if (std.mem.eql(u8, span.text, "ж.р.")) self.italic_gender_label = span.italic;
+                if (span.kind == .link or span.kind == .external_link) {
+                    try std.testing.expect(std.mem.indexOf(u8, span.target, "{{") == null);
+                    if (self.prior_action) |at| {
+                        if (std.mem.eql(u8, self.targets.items[at], span.target) and self.kinds.items[at] == (span.kind == .external_link)) {
+                            try self.labels.items[at].appendSlice(allocator, span.text);
+                            continue;
+                        }
+                    }
+                    try self.targets.append(allocator, span.target);
+                    try self.kinds.append(allocator, span.kind == .external_link);
+                    var label: std.ArrayList(u8) = .empty;
+                    try label.appendSlice(allocator, span.text);
+                    try self.labels.append(allocator, label);
+                    self.prior_action = self.targets.items.len - 1;
+                } else self.prior_action = null;
+            }
+        }
+        fn blocks(self: *@This(), allocator: std.mem.Allocator, values: []const blobs.presentation_types.Block) anyerror!void {
+            for (values) |block| {
+                self.prior_action = null;
+                if (block.kind == .definition) {
+                    self.definitions += 1;
+                    var text: std.ArrayList(u8) = .empty;
+                    for (block.spans) |span| try text.appendSlice(allocator, span.text);
+                    try std.testing.expectEqualStrings("Името на столицата на Сърбия и на държавната общност Сърбия и Черна гора, а преди — на Югославия.", text.items);
+                    try std.testing.expectEqualStrings("#", block.list_path);
+                    try std.testing.expectEqualStrings("1", block.number);
+                }
+                try self.spans(allocator, block.spans);
+                if (block.table) |child_table| try self.table(allocator, child_table);
+            }
+        }
+        fn table(self: *@This(), allocator: std.mem.Allocator, value: blobs.presentation_types.Table) anyerror!void {
+            self.tables += 1;
+            try std.testing.expectEqual(@as(usize, 1), value.rows.len);
+            try std.testing.expectEqual(@as(usize, 3), value.rows[0].cells.len);
+            errdefer std.debug.print("BG table paint: style={any} geometry={any} backgrounds={any}/{any}/{any}\n", .{ value.style, value.geometry, value.rows[0].cells[0].background, value.rows[0].cells[1].background, value.rows[0].cells[2].background });
+            // Unindexed translations/ancestor CSS suppresses new typed style;
+            // legacy authored table paint still reaches the empty central cell.
+            try std.testing.expectEqual(true, value.style == null);
+            // The wiki-table caller projects only legacy attributes after parsing.
+            // Authored zero spacing is present; width:100% is CSS, not legacy width.
+            const geometry = value.geometry orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualDeep(@as(blobs.presentation_types.TableGeometry, .{ .cell_spacing = 0 }), geometry);
+            try std.testing.expectEqualStrings("#f7f8ff", value.rows[0].cells[0].background orelse return error.TestUnexpectedResult);
+            try std.testing.expectEqualStrings("#fcfbff", value.rows[0].cells[1].background orelse return error.TestUnexpectedResult);
+            try std.testing.expectEqualStrings("#f7f8ff", value.rows[0].cells[2].background orelse return error.TestUnexpectedResult);
+            try self.spans(allocator, value.caption);
+            for (value.rows) |row| for (row.cells) |cell| {
+                self.prior_action = null;
+                if (cell.blocks) |inner| try self.blocks(allocator, inner)
+                else if (cell.nested_table) |nested| try self.table(allocator, nested)
+                else try self.spans(allocator, cell.spans);
+            };
+        }
+    };
+    const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(4096));
+    var scan: Scan = .{};
+    errdefer {
+        // One failure exposes final representation before any oracle is changed.
+        // Bound empty blocks/tables/cells as well as displayed spans.
+        var remaining: usize = 128;
+        for (stored.entry.sections) |section| {
+            if (remaining == 0) break;
+            std.debug.print("BG final section level={d} title={s}\n", .{ section.level, section.title[0..@min(section.title.len, 96)] });
+            Scan.dumpBlocks(section.blocks, &remaining);
+        }
+        std.debug.print("BG final fallback report: {s}\n", .{report[0..@min(report.len, 2048)]});
+    }
+    for (stored.entry.sections) |section| try scan.blocks(a, section.blocks);
+    try std.testing.expectEqual(@as(usize, 1), scan.tables);
+    try std.testing.expectEqual(@as(usize, 1), scan.definitions);
+    {
+        errdefer std.debug.print("BG italic witnesses: computed={} type={} gender_label={}\n", .{ scan.italic_computed, scan.italic_type, scan.italic_gender_label });
+        try std.testing.expect(scan.italic_computed and scan.italic_type and scan.italic_gender_label);
+    }
+    for ([_][]const u8{ "{{-{{{РОД}}}}}", "{{{НАДСЛОВИЯ}}}", "{{{ПОДСЛОВИЯ}}}", "{{{ИЗТОЧНИЦИ}}}" }) |literal|
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, scan.visible.items, literal));
+    for ([_][]const u8{ "английски:", "есперанто:", "италиански:", "немски:", "полски:", "руски:", "сръбски:", "хърватски:", "холандски:", "фински:", "френски:" }) |label| {
+        errdefer std.debug.print("BG required language label={s}\n", .{label});
+        try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, label) != null);
+    }
+    const targets = [_][]const u8{ "https://bg.wikipedia.org/wiki/%D0%91%D1%8A%D0%BB%D0%B3%D0%B0%D1%80%D1%81%D0%BA%D0%B8_%D0%B5%D0%B7%D0%B8%D0%BA", "Уикиречник:Български/Типове думи/197", "столица", "Сърбия", "Черна гора", "Югославия", "Belgrade", "Beogrado", "Belgrado", "Belgrad", "Београд", "Beograd", "Belgrad" };
+    const labels = [_][]const u8{ "Български", "тип 197", "столицата", "Сърбия", "Черна гора", "Югославия", "Belgrade", "Beogrado", "Belgrado", "Belgrad", "Београд", "Beograd", "Belgrad" };
+    try std.testing.expectEqual(@as(usize, 13), scan.targets.items.len);
+    for (targets, labels, 0..) |target, label, i| {
+        errdefer std.debug.print("BG action{d}: expected {s} -> {s}\n", .{ i, label, target });
+        try std.testing.expectEqualStrings(target, scan.targets.items[i]);
+        try std.testing.expectEqualStrings(label, scan.labels.items[i].items);
+        try std.testing.expectEqual(i == 0, scan.kinds.items[i]);
+    }
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.media.len);
+    {
+        errdefer std.debug.print("BG behavior-switch source survived visible text\n", .{});
+        try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, "__БЕЗ_РЕДАКТИРАНЕ_НА_РАЗДЕЛИ__") == null);
+    }
+    {
+        errdefer std.debug.print("BG missing_template report witness: {s}\n", .{report[0..@min(report.len, 1024)]});
+        try std.testing.expect(std.mem.indexOf(u8, report, "missing_template") != null);
+    }
+    {
+        errdefer std.debug.print("BG unresolved_table_style report witness: {s}\n", .{report[0..@min(report.len, 1024)]});
+        try std.testing.expect(std.mem.indexOf(u8, report, "unresolved_table_style") != null);
+    }
+}
+
+test "parent consume attribution preserves ordinary Writer payload and statistics" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const normal_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/consume-normal", .{tmp.sub_path});
+    const profiled_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/consume-profiled", .{tmp.sub_path});
+    const codes = TestLanguages.codes();
+    var normal = try Writer.init(std.testing.io, a, normal_root);
+    defer normal.deinit();
+    var profiled = try Writer.init(std.testing.io, a, profiled_root);
+    defer profiled.deinit();
+    normal.language_codes = codes;
+    profiled.language_codes = codes;
+    const source = "==English==\n===Noun===\n# A '''bold''' [[cat|child]].\n";
+    try normal.addExpandedPage(a, .{ .id = 0, .kind = .language }, "entry", source, source, null);
+    var totals: consume_diagnostics.ConsumePhaseTotals = .{};
+    {
+        const previous = consume_diagnostics.setParentConsumeProfile(.{ .io = std.testing.io, .totals = &totals });
+        defer { _ = consume_diagnostics.setParentConsumeProfile(previous); }
+        try profiled.addExpandedPage(a, .{ .id = 0, .kind = .language }, "entry", source, source, null);
+        try std.testing.expect(totals.active == null);
+    }
+    try std.testing.expect(consume_diagnostics.beginConsumePhase(.codec) == null);
+    try std.testing.expectEqualDeep(try normal.finish(codes), try profiled.finish(codes));
+    const first = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try languageBlobPathAlloc(a, normal_root, "English"), a, .limited(1024 * 1024));
+    const second = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try languageBlobPathAlloc(a, profiled_root, "English"), a, .limited(1024 * 1024));
+    try std.testing.expectEqualSlices(u8, first, second);
+    inline for (.{ consume_diagnostics.ConsumePhase.presentation, consume_diagnostics.ConsumePhase.codec, consume_diagnostics.ConsumePhase.spool }) |phase|
+        try std.testing.expect(totals.totals[@intFromEnum(phase)].calls != 0);
+}
+
+test "parent consume attribution retains Writer errors and restores active scopes" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/consume-error", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = TestLanguages.codes();
+    var totals: consume_diagnostics.ConsumePhaseTotals = .{};
+    {
+        const previous = consume_diagnostics.setParentConsumeProfile(.{ .io = std.testing.io, .totals = &totals });
+        defer { _ = consume_diagnostics.setParentConsumeProfile(previous); }
+        const source = "==English==\n# before |} after\n";
+        try std.testing.expectError(error.UncompiledPresentation, writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "entry", source, source, null));
+        try std.testing.expect(totals.active == null);
+    }
+    try std.testing.expect(consume_diagnostics.beginConsumePhase(.spool) == null);
+    try std.testing.expect(totals.totals[@intFromEnum(consume_diagnostics.ConsumePhase.presentation)].calls != 0);
+    try std.testing.expectEqual(@as(u64, 0), totals.totals[@intFromEnum(consume_diagnostics.ConsumePhase.codec)].calls);
+    try std.testing.expectEqual(@as(u64, 0), totals.totals[@intFromEnum(consume_diagnostics.ConsumePhase.spool)].calls);
+    try std.testing.expectEqual(@as(usize, 0), writer.stats.language_records);
+}
+
+
+test "authenticated Kannada empty-link source pages retain full body actions style and codec" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Fixture = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "ಕನ್ನಡ") or std.mem.eql(u8, value, "Kannada"))
+                return .{ .code = "kn", .heading = "Kannada" };
+            return null;
+        }
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return (resolve(ctx, value) orelse return null).code;
+        }
+    };
+    // Exact template-free authored p926/r203551, p929/r678134, p909/r692956.
+    // Compile source directly: no historical/current expansion is invented.
+    // The nowiki arm is an independent literal-display reference, not producer output.
+    const Action = struct { text: []const u8, target: []const u8, external: bool };
+    const cases = [_]struct {
+        title: []const u8, source: []const u8, reference: []const u8,
+        blocks: []const []const u8, actions: []const Action, bold: []const []const u8,
+        definitions: usize, examples: usize, sections: usize, empty_literal: ?[]const u8,
+    }{
+        .{
+            .title = "ಅವಸಾನ",
+            .source = "==ಕನ್ನಡ==\n===ನಾಮಪದ===\n'''ಅವಸಾನ'''\n# [[ ಅಂತ್ಯ]],[[ ಮುಕ್ತಾಯ]]\n# [[ ಸಾವು]]\n\n====ಅನುವಾದ====\n* English: [[ ]], [[:en: ]]\n[[ವರ್ಗ:ನಾಮಪದಗಳು]]",
+            .reference = "==ಕನ್ನಡ==\n===ನಾಮಪದ===\n'''ಅವಸಾನ'''\n# [[ ಅಂತ್ಯ]],[[ ಮುಕ್ತಾಯ]]\n# [[ ಸಾವು]]\n\n====ಅನುವಾದ====\n* English: <nowiki>[[ ]]</nowiki>, [[:en: ]]\n[[ವರ್ಗ:ನಾಮಪದಗಳು]]",
+            .blocks = &.{ "ಅವಸಾನ", "ಅಂತ್ಯ,ಮುಕ್ತಾಯ", "ಸಾವು", "English: [[ ]], en: " },
+            .actions = &.{
+                .{ .text = "ಅಂತ್ಯ", .target = "ಅಂತ್ಯ", .external = false },
+                .{ .text = "ಮುಕ್ತಾಯ", .target = "ಮುಕ್ತಾಯ", .external = false },
+                .{ .text = "ಸಾವು", .target = "ಸಾವು", .external = false },
+                .{ .text = "en: ", .target = "https://en.wiktionary.org/wiki/", .external = true },
+            },
+            .bold = &.{ "ಅವಸಾನ" }, .definitions = 2, .examples = 0, .sections = 3,
+            .empty_literal = "[[ ]]",
+        },
+        .{
+            .title = "ದೃಷ್ಟಾಂತ",
+            .source = "==ಕನ್ನಡ==\n===ನಾಮಪದ===\n'''ದೃಷ್ಟಾಂತ'''\n# [[ಉದಾಹರಣೆ]], [[ನಿದರ್ಶನ]], [[ಎತ್ತುಗೆ]]\n\n====ಅನುವಾದ====\n* English: [[example]], [[:en: example]]\n*ತೆಲುಗು:[[:te:దృష్టాంతము|దృష్టాంతము]](ದೃಷ್ಟಾಂತಮು)\n[[ವರ್ಗ: ನಾಮಪದಗಳು]]\n\n===ನಾಮಪದ===\n'''ದೃಷ್ಟಾಂತ'''\n# [[ ಪ್ರತ್ಯಕ್ಷವಾಗಿ ಕಂಡುದು]]\n# [[ ಸ್ಪಷ್ಟವಾದ ಗುರುತು]],[[ ಸ್ಪಷ್ಟವಾದ ಚಿಹ್ನೆ]]\n# [[ ಕಾವ್ಯದಲ್ಲಿ ಅರ್ಥಾಲಂಕಾರದ ಒಂದು ಭೇದ]]\n#:______________\n====ಅನುವಾದ====\n* English: [[]], [[:en: ]]\n*ತೆಲುಗು:[[:te:దృష్టాంతము|దృష్టాంతము]](ದೃಷ್ಟಾಂತಮು)\n[[ವರ್ಗ: ನಾಮಪದಗಳು]]",
+            .reference = "==ಕನ್ನಡ==\n===ನಾಮಪದ===\n'''ದೃಷ್ಟಾಂತ'''\n# [[ಉದಾಹರಣೆ]], [[ನಿದರ್ಶನ]], [[ಎತ್ತುಗೆ]]\n\n====ಅನುವಾದ====\n* English: [[example]], [[:en: example]]\n*ತೆಲುಗು:[[:te:దృష్టాంతము|దృష్టాంతము]](ದೃಷ್ಟಾಂತಮು)\n[[ವರ್ಗ: ನಾಮಪದಗಳು]]\n\n===ನಾಮಪದ===\n'''ದೃಷ್ಟಾಂತ'''\n# [[ ಪ್ರತ್ಯಕ್ಷವಾಗಿ ಕಂಡುದು]]\n# [[ ಸ್ಪಷ್ಟವಾದ ಗುರುತು]],[[ ಸ್ಪಷ್ಟವಾದ ಚಿಹ್ನೆ]]\n# [[ ಕಾವ್ಯದಲ್ಲಿ ಅರ್ಥಾಲಂಕಾರದ ಒಂದು ಭೇದ]]\n#:______________\n====ಅನುವಾದ====\n* English: <nowiki>[[]]</nowiki>, [[:en: ]]\n*ತೆಲುಗು:[[:te:దృష్టాంతము|దృష్టాంతము]](ದೃಷ್ಟಾಂತಮು)\n[[ವರ್ಗ: ನಾಮಪದಗಳು]]",
+            .blocks = &.{ "ದೃಷ್ಟಾಂತ", "ಉದಾಹರಣೆ, ನಿದರ್ಶನ, ಎತ್ತುಗೆ", "English: example, en: example", "ತೆಲುಗು:దృష్టాంతము(ದೃಷ್ಟಾಂತಮು)", "ದೃಷ್ಟಾಂತ", "ಪ್ರತ್ಯಕ್ಷವಾಗಿ ಕಂಡುದು", "ಸ್ಪಷ್ಟವಾದ ಗುರುತು,ಸ್ಪಷ್ಟವಾದ ಚಿಹ್ನೆ", "ಕಾವ್ಯದಲ್ಲಿ ಅರ್ಥಾಲಂಕಾರದ ಒಂದು ಭೇದ", "______________", "English: [[]], en: ", "ತೆಲುಗು:దృష్టాంతము(ದೃಷ್ಟಾಂತಮು)" },
+            .actions = &.{
+                .{ .text = "ಉದಾಹರಣೆ", .target = "ಉದಾಹರಣೆ", .external = false },
+                .{ .text = "ನಿದರ್ಶನ", .target = "ನಿದರ್ಶನ", .external = false },
+                .{ .text = "ಎತ್ತುಗೆ", .target = "ಎತ್ತುಗೆ", .external = false },
+                .{ .text = "example", .target = "example", .external = false },
+                .{ .text = "en: example", .target = "https://en.wiktionary.org/wiki/example", .external = true },
+                .{ .text = "దృష్టాంతము", .target = "https://te.wiktionary.org/wiki/%E0%B0%A6%E0%B1%83%E0%B0%B7%E0%B1%8D%E0%B0%9F%E0%B0%BE%E0%B0%82%E0%B0%A4%E0%B0%AE%E0%B1%81", .external = true },
+                .{ .text = "ಪ್ರತ್ಯಕ್ಷವಾಗಿ ಕಂಡುದು", .target = "ಪ್ರತ್ಯಕ್ಷವಾಗಿ ಕಂಡುದು", .external = false },
+                .{ .text = "ಸ್ಪಷ್ಟವಾದ ಗುರುತು", .target = "ಸ್ಪಷ್ಟವಾದ ಗುರುತು", .external = false },
+                .{ .text = "ಸ್ಪಷ್ಟವಾದ ಚಿಹ್ನೆ", .target = "ಸ್ಪಷ್ಟವಾದ ಚಿಹ್ನೆ", .external = false },
+                .{ .text = "ಕಾವ್ಯದಲ್ಲಿ ಅರ್ಥಾಲಂಕಾರದ ಒಂದು ಭೇದ", .target = "ಕಾವ್ಯದಲ್ಲಿ ಅರ್ಥಾಲಂಕಾರದ ಒಂದು ಭೇದ", .external = false },
+                .{ .text = "en: ", .target = "https://en.wiktionary.org/wiki/", .external = true },
+                .{ .text = "దృష్టాంతము", .target = "https://te.wiktionary.org/wiki/%E0%B0%A6%E0%B1%83%E0%B0%B7%E0%B1%8D%E0%B0%9F%E0%B0%BE%E0%B0%82%E0%B0%A4%E0%B0%AE%E0%B1%81", .external = true },
+            },
+            .bold = &.{ "ದೃಷ್ಟಾಂತ", "ದೃಷ್ಟಾಂತ" }, .definitions = 4, .examples = 1, .sections = 5,
+            .empty_literal = "[[]]",
+        },
+        .{
+            .title = "ನಾಸ್ತಿಕ",
+            .source = "==ಕನ್ನಡ==\n===ನಾಮಪದ===\n'''ನಿರೀಶ್ವರವಾದಿ'''\n\n# ದೇವರ [[ಅಸ್ತಿತ್ವ]] ನಂಬದ [[ವ್ಯಕ್ತಿ]].\n# [[ನಿರೀಶ್ವರ]], [[ನಿರೀಶ್ವರವಾದಿ]], [[ಪಾಖಂಡ]], [[ಚಾರ್ವಾಕ]]\n\n====ಅನುವಾದ====\n* English: [[atheist]], [[:en: atheist]]\n*Telugu:[[:te:నాస్థికం|నాస్థికం]]\n\n==ವಿರುದ್ಧಾರ್ಥಕ ಪದ==\n[[ಆಸ್ತಿಕ]]\n\n[[ವರ್ಗ: ನಾಮಪದಗಳು]]",
+            .reference = "==ಕನ್ನಡ==\n===ನಾಮಪದ===\n'''ನಿರೀಶ್ವರವಾದಿ'''\n\n# ದೇವರ [[ಅಸ್ತಿತ್ವ]] ನಂಬದ [[ವ್ಯಕ್ತಿ]].\n# [[ನಿರೀಶ್ವರ]], [[ನಿರೀಶ್ವರವಾದಿ]], [[ಪಾಖಂಡ]], [[ಚಾರ್ವಾಕ]]\n\n====ಅನುವಾದ====\n* English: [[atheist]], [[:en: atheist]]\n*Telugu:[[:te:నాస్థికం|నాస్థికం]]\n\n==ವಿರುದ್ಧಾರ್ಥಕ ಪದ==\n[[ಆಸ್ತಿಕ]]\n\n[[ವರ್ಗ: ನಾಮಪದಗಳು]]",
+            .blocks = &.{ "ನಿರೀಶ್ವರವಾದಿ", "ದೇವರ ಅಸ್ತಿತ್ವ ನಂಬದ ವ್ಯಕ್ತಿ.", "ನಿರೀಶ್ವರ, ನಿರೀಶ್ವರವಾದಿ, ಪಾಖಂಡ, ಚಾರ್ವಾಕ", "English: atheist, en: atheist", "Telugu:నాస్థికం", "ಆಸ್ತಿಕ" },
+            .actions = &.{
+                .{ .text = "ಅಸ್ತಿತ್ವ", .target = "ಅಸ್ತಿತ್ವ", .external = false },
+                .{ .text = "ವ್ಯಕ್ತಿ", .target = "ವ್ಯಕ್ತಿ", .external = false },
+                .{ .text = "ನಿರೀಶ್ವರ", .target = "ನಿರೀಶ್ವರ", .external = false },
+                .{ .text = "ನಿರೀಶ್ವರವಾದಿ", .target = "ನಿರೀಶ್ವರವಾದಿ", .external = false },
+                .{ .text = "ಪಾಖಂಡ", .target = "ಪಾಖಂಡ", .external = false },
+                .{ .text = "ಚಾರ್ವಾಕ", .target = "ಚಾರ್ವಾಕ", .external = false },
+                .{ .text = "atheist", .target = "atheist", .external = false },
+                .{ .text = "en: atheist", .target = "https://en.wiktionary.org/wiki/atheist", .external = true },
+                .{ .text = "నాస్థికం", .target = "https://te.wiktionary.org/wiki/%E0%B0%A8%E0%B0%BE%E0%B0%B8%E0%B1%8D%E0%B0%A5%E0%B0%BF%E0%B0%95%E0%B0%82", .external = true },
+                .{ .text = "ಆಸ್ತಿಕ", .target = "ಆಸ್ತಿಕ", .external = false },
+            },
+            .bold = &.{ "ನಿರೀಶ್ವರವಾದಿ" }, .definitions = 2, .examples = 0, .sections = 4,
+            .empty_literal = null,
+        },
+    };
+    // Required namespace rows and both interwiki rows are exact captured KN data.
+    var namespaces = try @import("namespace_registry").Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tknwiktionary\n# dump-date\t20261001\n# content-language\tkn\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "10\tಟೆಂಪ್ಲೇಟು\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tವರ್ಗ\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n");
+    defer namespaces.deinit();
+    try namespaces.attachInterwikiMap("# interwiki-magic\t1\nen\t1\t0\t0\t0\thttps://en.wiktionary.org/wiki/$1\t1\nte\t1\t0\t0\t0\thttps://te.wiktionary.org/wiki/$1\t1\n");
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = Fixture.get, .resolve_fn = Fixture.resolve, .trusted_fn = Fixture.resolve };
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/source", .{tmp.sub_path});
+    const reference_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/literal-reference", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    var reference_writer = try Writer.init(std.testing.io, a, reference_root);
+    defer reference_writer.deinit();
+    reference_writer.language_codes = codes;
+    for (cases) |case| {
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, case.title, case.source, case.source, null);
+        try reference_writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, case.title, case.reference, case.reference, null);
+    }
+    const stats = try writer.finish(codes);
+    const reference_stats = try reference_writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 3), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 3), reference_stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "Kannada"));
+    defer mapped.deinit();
+    var reference_mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, reference_root, "Kannada"));
+    defer reference_mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const reference_blob = try blob_format.inspect(reference_mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("kn", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    var reference_index = try reference_blob.buildTrustedIndexAlloc(a);
+    defer reference_index.deinit(a);
+    for (cases) |case| {
+        errdefer std.debug.print("KN complete source witness: {s}\n", .{case.title});
+        const record = (try index.find(case.title)).?;
+        const expected = (try reference_index.find(case.title)).?;
+        try std.testing.expectEqualSlices(u8, expected.payload, record.payload);
+        const stored = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, stored));
+        try std.testing.expectEqualStrings("Kannada", stored.entry.language.?);
+        try std.testing.expectEqualStrings("kn", stored.entry.language_code);
+        try std.testing.expectEqual(case.sections, stored.entry.sections.len);
+        var block_index: usize = 0;
+        var action_index: usize = 0;
+        var bold_index: usize = 0;
+        var definitions: usize = 0;
+        var examples: usize = 0;
+        var literal_count: usize = 0;
+        for (stored.entry.sections) |section| {
+            var ordinal: usize = 0;
+            for (section.blocks) |block| {
+                var text: std.ArrayList(u8) = .empty;
+                for (block.spans) |span| {
+                    try text.appendSlice(a, span.text);
+                    try std.testing.expect(std.mem.indexOf(u8, span.text, "[malformed link]") == null);
+                    if (std.mem.indexOf(u8, span.text, "[[") != null or std.mem.indexOf(u8, span.text, "]]") != null) {
+                        try std.testing.expect(span.kind == .text and span.target.len == 0);
+                    }
+                    if (span.bold) {
+                        try std.testing.expect(bold_index < case.bold.len);
+                        try std.testing.expectEqualStrings(case.bold[bold_index], span.text);
+                        bold_index += 1;
+                    }
+                    if (span.kind == .link or span.kind == .external_link) {
+                        try std.testing.expect(action_index < case.actions.len);
+                        const action = case.actions[action_index];
+                        try std.testing.expectEqualStrings(action.text, span.text);
+                        try std.testing.expectEqualStrings(action.target, span.target);
+                        try std.testing.expectEqual(action.external, span.kind == .external_link);
+                        action_index += 1;
+                    }
+                }
+                try std.testing.expect(block_index < case.blocks.len);
+                try std.testing.expectEqualStrings(case.blocks[block_index], text.items);
+                block_index += 1;
+                if (case.empty_literal) |literal| literal_count += std.mem.count(u8, text.items, literal);
+                if (block.kind == .definition) {
+                    ordinal += 1;
+                    definitions += 1;
+                    try std.testing.expectEqualStrings("#", block.list_path);
+                    try std.testing.expectEqual(@as(u8, 1), block.depth);
+                    try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "{d}", .{ordinal}), block.number);
+                }
+                if (block.kind == .example) {
+                    examples += 1;
+                    try std.testing.expectEqualStrings("#:", block.list_path);
+                    try std.testing.expectEqual(@as(u8, 2), block.depth);
+                    try std.testing.expectEqualStrings("______________", text.items);
+                }
+                try std.testing.expect(block.table == null);
+            }
+        }
+        try std.testing.expectEqual(case.blocks.len, block_index);
+        try std.testing.expectEqual(case.actions.len, action_index);
+        try std.testing.expectEqual(case.bold.len, bold_index);
+        try std.testing.expectEqual(case.definitions, definitions);
+        try std.testing.expectEqual(case.examples, examples);
+        try std.testing.expectEqual(@as(usize, if (case.empty_literal != null) 1 else 0), literal_count);
+        try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+        try std.testing.expectEqual(@as(usize, 0), stored.entry.media.len);
+    }
+    const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(4096));
+    var lines = std.mem.tokenizeScalar(u8, report, '\n');
+    var literal_rows: usize = 0;
+    while (lines.next()) |line| {
+        const parsed = try std.json.parseFromSlice(std.json.Value, a, line, .{});
+        var literal = false;
+        for (parsed.value.object.get("reasons").?.array.items) |reason|
+            if (std.mem.eql(u8, reason.string, "literal_markup")) { literal = true; };
+        const title = parsed.value.object.get("title").?.string;
+        if (std.mem.eql(u8, title, "ನಾಸ್ತಿಕ")) try std.testing.expect(!literal);
+        if (literal) {
+            literal_rows += 1;
+            try std.testing.expect(std.mem.eql(u8, title, "ಅವಸಾನ") or std.mem.eql(u8, title, "ದೃಷ್ಟಾಂತ"));
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 2), literal_rows);
+}
+
+
+test "captured houslista preserves complete Czech table references styles and actions through Writer" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Fixture = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Čeština") or std.mem.eql(u8, value, "cs")) return .{ .code = "cs", .heading = "Čeština" };
+            return null;
+        }
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return (resolve(ctx, value) orelse return null).code;
+        }
+    };
+    // Exact p31907/r130857 ordinal26894: raw860/b5c03426, expanded1753/d3b0d87a.
+    // One raw pnom ref is duplicated into two expanded, anonymous occurrences.
+    const raw = "== Čeština ==\n\n=== Výslovnosť ===\n* {{IPA|ɦɔʊ̯slɪsta}}\n\n=== Delenie ===\n* hou-s-li-s-ta\n\n=== Podstatné meno ===\n* ''rod mužský životný''\n\n==== Skloňovanie ====\n{{Podstatné meno (cs)\n  | snom = houslista\n  | sgen = houslisty\n  | sdat = houslistovi\n  | saku = houslistu\n  | svok = houslisto\n  | slok = houslistovi\n  | sinš = houslistou\n  | pnom = houslisté / houslisti<ref>Varianta ''houslisti'' je hovorová.</ref>\n  | pgen = houslistů\n  | pdat = houslistům\n  | paku = houslisty\n  | pvok = houslisté\n  | plok = houslistech\n  | pinš = houslisty\n}}\n\n==== Význam ====\n# [[huslista]]\n\n==== Príbuzné slová ====\n* [[housle]]\n* [[houslistka]]\n* [[houslový]]\n* [[houslař]]\n* [[housličky]]\n* [[hudec]]\n* [[housti]]\n\n== Poznámky ==\n<references />\n\n== Externé odkazy ==\n* {{IJP|houslista|2018-09-30}}\n\n[[Kategória:České podstatné mená]]";
+    const original = "== Čeština ==\n\n=== Výslovnosť ===\n* [[:w:sk:Medzinárodná fonetická abeceda|IPA]]: <span title=\"Toto je prepis výslovnosti pomocou medzinárodnej fonetickej abecedy IPA.\" class=\"IPA\">[ɦɔʊ̯slɪsta]</span>\n\n=== Delenie ===\n* hou-s-li-s-ta\n\n=== Podstatné meno ===\n* ''rod mužský životný''\n\n==== Skloňovanie ====\n{| class=\"inflection declension wikitable\"\n|-\n! ▼ Pád ╲ Číslo ►\n! Singulár\n! Plurál\n|-\n! Nominatív\n| houslista\n| [[houslisté / houslisti<ref>Varianta ''houslisti'' je hovorová.</ref>#Čeština|houslisté / houslisti<ref>Varianta ''houslisti'' je hovorová.</ref>]]\n|-\n! Genitív\n| [[houslisty#Čeština|houslisty]]\n| [[houslistů#Čeština|houslistů]]\n|-\n! Datív\n| [[houslistovi#Čeština|houslistovi]]\n| [[houslistům#Čeština|houslistům]]\n|-\n! Akuzatív\n| [[houslistu#Čeština|houslistu]]\n| [[houslisty#Čeština|houslisty]]\n|-\n! Vokatív\n| [[houslisto#Čeština|houslisto]]\n| [[houslisté#Čeština|houslisté]]\n|-\n! Lokál\n| [[houslistovi#Čeština|houslistovi]]\n| [[houslistech#Čeština|houslistech]]\n|-\n! Inštrumentál\n| [[houslistou#Čeština|houslistou]]\n| [[houslisty#Čeština|houslisty]]\n|}[[Kategória:Monitoring:Podstatné meno (cs)/Viac tvarov v jednom parametri]]\n\n==== Význam ====\n# [[huslista]]\n\n==== Príbuzné slová ====\n* [[housle]]\n* [[houslistka]]\n* [[houslový]]\n* [[houslař]]\n* [[housličky]]\n* [[hudec]]\n* [[housti]]\n\n== Poznámky ==\n<references />\n\n== Externé odkazy ==\n* <cite class=\"citácia\" > ''Internetová jazyková příručka'' <nowiki>[</nowiki>online<nowiki>]</nowiki>.    Ústav pro jazyk český Akademie věd České republiky, [cit.  2018-09-30].  Heslo [https://prirucka.ujc.cas.cz/?id=houslista houslista].      </cite>\n\n[[Kategória:České podstatné mená]]";
+    const reference = "== Čeština ==\n\n=== Výslovnosť ===\n* [[:w:sk:Medzinárodná fonetická abeceda|IPA]]: <span title=\"Toto je prepis výslovnosti pomocou medzinárodnej fonetickej abecedy IPA.\" class=\"IPA\">[ɦɔʊ̯slɪsta]</span>\n\n=== Delenie ===\n* hou-s-li-s-ta\n\n=== Podstatné meno ===\n* ''rod mužský životný''\n\n==== Skloňovanie ====\n{| class=\"inflection declension wikitable\"\n|-\n! ▼ Pád ╲ Číslo ►\n! Singulár\n! Plurál\n|-\n! Nominatív\n| houslista\n| <nowiki>[[</nowiki>houslisté / houslisti<ref>Varianta ''houslisti'' je hovorová.</ref><nowiki>#Čeština|houslisté / houslisti</nowiki><ref>Varianta ''houslisti'' je hovorová.</ref><nowiki>]]</nowiki>\n|-\n! Genitív\n| [[houslisty#Čeština|houslisty]]\n| [[houslistů#Čeština|houslistů]]\n|-\n! Datív\n| [[houslistovi#Čeština|houslistovi]]\n| [[houslistům#Čeština|houslistům]]\n|-\n! Akuzatív\n| [[houslistu#Čeština|houslistu]]\n| [[houslisty#Čeština|houslisty]]\n|-\n! Vokatív\n| [[houslisto#Čeština|houslisto]]\n| [[houslisté#Čeština|houslisté]]\n|-\n! Lokál\n| [[houslistovi#Čeština|houslistovi]]\n| [[houslistech#Čeština|houslistech]]\n|-\n! Inštrumentál\n| [[houslistou#Čeština|houslistou]]\n| [[houslisty#Čeština|houslisty]]\n|}[[Kategória:Monitoring:Podstatné meno (cs)/Viac tvarov v jednom parametri]]\n\n==== Význam ====\n# [[huslista]]\n\n==== Príbuzné slová ====\n* [[housle]]\n* [[houslistka]]\n* [[houslový]]\n* [[houslař]]\n* [[housličky]]\n* [[hudec]]\n* [[housti]]\n\n== Poznámky ==\n<references />\n\n== Externé odkazy ==\n* <cite class=\"citácia\" > ''Internetová jazyková příručka'' <nowiki>[</nowiki>online<nowiki>]</nowiki>.    Ústav pro jazyk český Akademie věd České republiky, [cit.  2018-09-30].  Heslo [https://prirucka.ujc.cas.cz/?id=houslista houslista].      </cite>\n\n[[Kategória:České podstatné mená]]";
+    try std.testing.expectEqual(@as(usize, 860), raw.len);
+    try std.testing.expectEqual(@as(usize, 1753), original.len);
+    var namespaces = try @import("namespace_registry").Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tskwiktionary\n# dump-date\t20261001\n# content-language\tsk\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "6\tSúbor\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\tObrázok\n" ++
+        "10\tŠablóna\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tKategória\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n");
+    defer namespaces.deinit();
+    try namespaces.attachInterwikiMap("# interwiki-magic\t1\nw\t1\t0\t0\t0\thttps://sk.wikipedia.org/wiki/$1\t0\n");
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = Fixture.get, .resolve_fn = Fixture.resolve, .trusted_fn = Fixture.resolve, .strong_fn = Fixture.resolve };
+    var actual_payload: ?[]const u8 = null;
+    for ([_][]const u8{ original, reference }, 0..) |source, case_index| {
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/case-{d}", .{tmp.sub_path, case_index});
+        var writer = try Writer.init(std.testing.io, a, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "houslista", source, raw, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+        if (case_index == 0) try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "Čeština"));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings("cs", metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("houslista")).?;
+        if (case_index == 0) actual_payload = try a.dupe(u8, record.payload) else try std.testing.expectEqualSlices(u8, actual_payload.?, record.payload);
+        const stored = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, stored));
+        try std.testing.expectEqualStrings("cs", stored.entry.language_code);
+        try std.testing.expectEqual(@as(usize, 2), stored.entry.references.len);
+        for (stored.entry.references, 0..) |ref, ref_index| {
+            try std.testing.expect(ref.kind == .note and ref.name.len == 0);
+            try std.testing.expectEqual(ref_index + 1, ref.number);
+            var note: std.ArrayList(u8) = .empty;
+            var italic: usize = 0;
+            for (ref.spans) |span| {
+                try note.appendSlice(a, span.text);
+                if (std.mem.eql(u8, span.text, "houslisti")) {
+                    try std.testing.expect(span.italic);
+                    italic += 1;
+                }
+            }
+            try std.testing.expectEqualStrings("Varianta houslisti je hovorová.", note.items);
+            try std.testing.expectEqual(@as(usize, 1), italic);
+        }
+        var tables: usize = 0;
+        var navigation_actions: usize = 0;
+        var reference_markers: usize = 0;
+        var gender_italic = false;
+        for (stored.entry.sections) |section| for (section.blocks) |block| {
+            if (block.table) |table| {
+                tables += 1;
+                try std.testing.expectEqual(@as(usize, 8), table.rows.len);
+                for (table.rows, 0..) |row, row_index| {
+                    try std.testing.expectEqual(@as(usize, 3), row.cells.len);
+                    for (row.cells, 0..) |cell, column| {
+                        try std.testing.expectEqual(row_index == 0 or column == 0, cell.header);
+                        for (cell.spans) |span| if (span.kind == .link or span.kind == .external_link) {
+                            if (std.mem.startsWith(u8, span.target, "#reference-")) {
+                                reference_markers += 1;
+                                try std.testing.expect(span.superscript);
+                            } else navigation_actions += 1;
+                        };
+                    }
+                }
+                var nominative: std.ArrayList(u8) = .empty;
+                for (table.rows[1].cells[2].spans) |span| try nominative.appendSlice(a, span.text);
+                try std.testing.expectEqualStrings("[[houslisté / houslisti[1]#Čeština|houslisté / houslisti[2]]]", nominative.items);
+            }
+            for (block.spans) |span| {
+                if (std.mem.eql(u8, span.text, "rod mužský životný")) {
+                    try std.testing.expect(span.italic);
+                    gender_italic = true;
+                }
+                if (span.kind == .link or span.kind == .external_link) {
+                    if (std.mem.startsWith(u8, span.target, "#reference-")) reference_markers += 1 else navigation_actions += 1;
+                }
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), tables);
+        try std.testing.expectEqual(@as(usize, 22), navigation_actions);
+        try std.testing.expectEqual(@as(usize, 2), reference_markers);
+        try std.testing.expect(gender_italic);
+        try std.testing.expectEqual(@as(usize, 0), stored.entry.media.len);
+        for ([_][]const u8{ "Výslovnosť", "Delenie", "Podstatné meno", "Skloňovanie", "Význam", "Príbuzné slová", "Poznámky", "Externé odkazy", "hou-s-li-s-ta", "[ɦɔʊ̯slɪsta]", "Internetová jazyková příručka", "https://prirucka.ujc.cas.cz/?id=houslista" }) |text|
+            try std.testing.expect(std.mem.indexOf(u8, record.payload, text) != null);
+    }
+}
+
 test "retained Danish POS labels remain support vocabulary rather than unknown language peer evidence" {
     // The existing unknown-peer recovery veto consumes the same POS authority.
     // These labels cannot create an owner merely by appearing beside one.
@@ -12327,4 +12975,363 @@ test "registered middle alignment is neutral only once and cannot authorize hori
     var localized = codes; localized.image_options = &options;
     try std.testing.expect(resolveSection(localized, ImageHeadingTestLanguages.section("==[[File:Flag.svg|vertical-middle]] Tagalog==\n# body\n")) != null);
     try std.testing.expect(imageLanguageLabel(localized, ImageHeadingTestLanguages.section("==[[File:Flag.svg|middle]] Tagalog==\n# body\n")) == null);
+}
+
+test "captured polopate explicit label preserves complete Czech body citations actions and codec" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Complete retained p3581/r1378526, ordinal539, ns0. These are not expansions
+    // synthesized for the test. The original failed capture remains immutable.
+    const raw = "== čeština ==\n\n=== výslovnost ===\n* {{IPA|ˈpɔ.lɔ.pa.cɛ}}\n\n=== dělení ===\n* po-lo-pa-tě\n\n=== etymologie ===\nNovější univerbizovaná varianta k slovnímu spojení [[po lopatě]].<ref>{{IJP|polopatě_1||2021-02-09}}</ref> Dávat někomu poučení po lopatě je míněno jako ve velikých dávkách a naplno tam, kde by chytrému stačilo napovědět a jen troškou mu pomoct.<ref>{{Machek\n  |vydání=5\n  |heslo=lopata\n  |strany=339\n}}</ref>\n\n=== varianty ===\n* [[po lopatě]]\n\n=== příslovce ===\n* ''způsobu''\n\n==== význam ====\n# [[snadno]] [[pochopitelně]]; [[zjednodušeně]]{{Doplňte zdroj|20260304162254}}, [[názorně]], [[pomaleji]], [[nadmíru]] [[obšírně]]\n#* {{Příklad|cs|Vysvětlím ti to naposledy, úplně polopatě. Jestli to nepochopíš, tak běž raději dělat vrátného.}}\n\n==== synonyma ====\n# [[polopaticky]], [[jednoduše]], [[triviálně]], [[názorně]]\n\n==== antonyma ====\n# [[složitě]], [[komplikovaně]]\n\n== poznámky ==\n<references />\n\n[[Kategorie:Česká příslovce]]";
+    const original = "== čeština ==\n\n=== výslovnost ===\n* [[Wikislovník:Výslovnost|IPA]]: <span title=\"Toto je transkripce výslovnosti pomocí mezinárodní fonetické abecedy IPA.\" class=\"IPA\" >[ˈpɔ.lɔ.pa.cɛ]</span>\n\n=== dělení ===\n* po-lo-pa-tě\n\n=== etymologie ===\nNovější univerbizovaná varianta k slovnímu spojení [[po lopatě]].<ref><cite class=\"citace\" > ''Internetová jazyková příručka''.     [[:W:cs:Ústav pro jazyk český Akademie věd České republiky|Ústav pro jazyk český]], 2008-, [cit.  2021-02-09].  Heslo [https://prirucka.ujc.cas.cz/?id=polopat%C4%9B_1 polopatě].      </cite>[[Kategorie:Monitoring:Citace elektronické monografie/datum vydání/(chybný formát)]]</ref> Dávat někomu poučení po lopatě je míněno jako ve velikých dávkách a naplno tam, kde by chytrému stačilo napovědět a jen troškou mu pomoct.<ref><cite class=\"citace\" id=\"Reference-Machek-2010\">[[w:Václav Machek (jazykovědec)|MACHEK, Václav]]. ''Etymologický slovník jazyka českého''.  5. vyd.  Praha : Nakladatelství Lidové noviny, 2010. 866 s.  Fotoreprint 3.&nbsp;vyd. z&nbsp;roku&nbsp;1971.  [[w:ISBN|ISBN]]&nbsp;[[Special:BookSources/978-80-7422-048-7|978-80-7422-048-7]].   Heslo „lopata“, s.&nbsp;339. </cite></ref>\n\n=== varianty ===\n* [[po lopatě]]\n\n=== příslovce ===\n* ''způsobu''\n\n==== význam ====\n# [[snadno]] [[pochopitelně]]; [[zjednodušeně]]&lrm;<sup dir=\"ltr\" class=\"Šablona__Doplňte_zdroj\" style=\"border: 2px solid #<strong class=\"error\">Expression error: UnrecognisedPunctuation</strong>;\">[[Wikislovník:Ověřitelnost|<span title=\"Je potřeba doložit zdroj předchozího tvrzení nebo citace. Označeno <strong class=\"error\">Time error: InvalidDate</strong> SE(L)Č.\">zdroj?</span>]]</sup>[[Kategorie:Údržba:Doplnit zdroj| 20260304162254polopatě]], [[názorně]], [[pomaleji]], [[nadmíru]] [[obšírně]]\n#* <span class=\"usageexample\">Vysvětlím ti to naposledy, úplně polopatě. Jestli to nepochopíš, tak běž raději dělat vrátného.</span>\n\n==== synonyma ====\n# [[polopaticky]], [[jednoduše]], [[triviálně]], [[názorně]]\n\n==== antonyma ====\n# [[složitě]], [[komplikovaně]]\n\n== poznámky ==\n<references />\n\n[[Kategorie:Česká příslovce]]";
+    for ([_]struct { bytes: []const u8, size: usize, hash: []const u8 }{
+        .{ .bytes = raw, .size = 1020, .hash = "d274a3da2ee40234fd715023117e90848cbea10a251b919ef44f4782c0d39529" },
+        .{ .bytes = original, .size = 2215, .hash = "9eb68e83be379042028d88d3d6c14f1e60739f27c296aab902ed89eb2940d664" },
+    }) |fixture| {
+        try std.testing.expectEqual(fixture.size, fixture.bytes.len);
+        var hash: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(fixture.bytes, &hash, .{});
+        try std.testing.expectEqualStrings(fixture.hash, &std.fmt.bytesToHex(hash, .lower));
+    }
+    // Independent reference changes only the rejected opening byte in the real
+    // explicit label; child strong/error styling and the original action remain.
+    const needle = "[[Wikislovník:Ověřitelnost|<span title=";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, original, needle));
+    const reference = try std.mem.replaceOwned(u8, a, original, needle, "[[Wikislovník:Ověřitelnost|&lt;span title=");
+    try std.testing.expectEqual(original.len + 3, reference.len);
+    // Explicit supplied fixture authority: exact cs/čeština row110 in the
+    // retained registry23; no edition-default or template-provider inference.
+    const Fixture = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "čeština") or std.mem.eql(u8, value, "cs"))
+                return .{ .code = "cs", .heading = "čeština" };
+            return null;
+        }
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return (resolve(ctx, value) orelse return null).code;
+        }
+    };
+    // Required exact namespace/alias rows from the retained CS catalog; a
+    // deliberately foreign content language proves ownership is supplied.
+    var namespaces = try @import("namespace_registry").Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tcswiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "-1\tSpeciální\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "4\tWikislovník\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWS\tWT\tWiktionary\n" ++
+        "6\tSoubor\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\tObrázok\n" ++
+        "10\tŠablona\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tKategorie\tCategory\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n");
+    defer namespaces.deinit();
+    try namespaces.attachInterwikiMap("# interwiki-magic\t1\nw\t1\t0\t0\t0\thttps://cs.wikipedia.org/wiki/$1\t0\n");
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = Fixture.get, .resolve_fn = Fixture.resolve, .trusted_fn = Fixture.resolve, .strong_fn = Fixture.resolve };
+    var original_payload: ?[]const u8 = null;
+    for ([_][]const u8{ original, reference }, 0..) |source, case_index| {
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/case-{d}", .{ tmp.sub_path, case_index });
+        var writer = try Writer.init(std.testing.io, a, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "polopatě", source, raw, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+        var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "čeština"));
+        defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings("cs", metadata.code);
+        try std.testing.expectEqualStrings("čeština", metadata.heading);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find("polopatě")).?;
+        if (case_index == 0) original_payload = try a.dupe(u8, record.payload) else
+            try std.testing.expectEqualSlices(u8, original_payload.?, record.payload);
+        const stored = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, stored));
+        try std.testing.expectEqualStrings("cs", stored.entry.language_code);
+        try std.testing.expectEqualStrings("čeština", stored.entry.language.?);
+        try std.testing.expectEqual(@as(usize, 2), stored.entry.references.len);
+        try std.testing.expectEqual(@as(usize, 0), stored.entry.media.len);
+        const headings = [_][]const u8{ "výslovnost", "dělení", "etymologie", "varianty", "příslovce", "význam", "synonyma", "antonyma", "poznámky" };
+        var found_headings: [headings.len]bool = @splat(false);
+        const targets = [_][]const u8{ "Wikislovník:Výslovnost", "po lopatě", "snadno", "pochopitelně", "zjednodušeně", "názorně", "pomaleji", "nadmíru", "obšírně", "polopaticky", "jednoduše", "triviálně", "složitě", "komplikovaně" };
+        var found_targets: [targets.len]bool = @splat(false);
+        var visible: std.ArrayList(u8) = .empty;
+        var label: std.ArrayList(u8) = .empty;
+        var time_error = false;
+        var expression_error = false;
+        var ipa = false;
+        var example = false;
+        for (stored.entry.sections) |section| {
+            for (headings, 0..) |heading, i| {
+                if (std.mem.eql(u8, section.title, heading)) found_headings[i] = true;
+            }
+            for (section.blocks) |block| {
+                try std.testing.expect(block.table == null);
+                var block_text: std.ArrayList(u8) = .empty;
+                for (block.spans) |span| {
+                    if (span.kind == .line_break) try block_text.append(a, '\n') else try block_text.appendSlice(a, span.text);
+                    for (targets, 0..) |target, i| {
+                        if (span.kind == .link and std.mem.eql(u8, span.target, target)) found_targets[i] = true;
+                    }
+                    if (span.kind == .link and std.mem.eql(u8, span.target, "Wikislovník:Ověřitelnost")) {
+                        try label.appendSlice(a, span.text);
+                        try std.testing.expect(span.explanation.len == 0);
+                        if (std.mem.eql(u8, span.text, "Time error: InvalidDate")) {
+                            time_error = true;
+                            try std.testing.expect(span.bold and std.mem.eql(u8, span.classes, "error"));
+                        }
+                    }
+                    if (std.mem.eql(u8, span.text, "Expression error: UnrecognisedPunctuation")) {
+                        expression_error = true;
+                        try std.testing.expect(span.bold and std.mem.eql(u8, span.classes, "error"));
+                        try std.testing.expect(span.kind == .text and span.target.len == 0);
+                    }
+                    if (std.mem.eql(u8, span.text, "[ˈpɔ.lɔ.pa.cɛ]")) {
+                        ipa = true;
+                        try std.testing.expect(std.mem.indexOf(u8, span.classes, "IPA") != null);
+                    }
+                    if (std.mem.indexOf(u8, span.text, "Vysvětlím ti to naposledy") != null) {
+                        example = true;
+                        try std.testing.expect(std.mem.indexOf(u8, span.classes, "usageexample") != null);
+                        try std.testing.expect(block.kind == .quotation and std.mem.eql(u8, block.list_path, "#*"));
+                    }
+                }
+                try visible.appendSlice(a, block_text.items);
+                try visible.append(a, '\n');
+            }
+        }
+        for (found_headings) |found| try std.testing.expect(found);
+        for (found_targets) |found| try std.testing.expect(found);
+        try std.testing.expect(time_error and expression_error and ipa and example);
+        try std.testing.expectEqualStrings("<span title=\"Je potřeba doložit zdroj předchozího tvrzení nebo citace. Označeno Time error: InvalidDate SE(L)Č.\">zdroj?", label.items);
+        for ([_][]const u8{
+            "Novější univerbizovaná varianta k slovnímu spojení po lopatě.",
+            "Dávat někomu poučení po lopatě je míněno jako ve velikých dávkách a naplno tam, kde by chytrému stačilo napovědět a jen troškou mu pomoct.",
+            "po-lo-pa-tě", "způsobu", "snadno pochopitelně; zjednodušeně",
+            "Vysvětlím ti to naposledy, úplně polopatě. Jestli to nepochopíš, tak běž raději dělat vrátného.",
+            "polopaticky, jednoduše, triviálně, názorně", "složitě, komplikovaně",
+        }) |text| try std.testing.expect(std.mem.indexOf(u8, visible.items, text) != null);
+        const Notes = struct {
+            a: std.mem.Allocator,
+            text: std.ArrayList(u8) = .empty,
+            external: usize = 0,
+            book: bool = false,
+            fn spans(self: *@This(), values: anytype) !void {
+                for (values) |span| {
+                    if (span.kind == .line_break) try self.text.append(self.a, '\n') else try self.text.appendSlice(self.a, span.text);
+                    if (span.kind == .external_link) self.external += 1;
+                    if (span.kind == .link and std.mem.eql(u8, span.target, "Special:BookSources/978-80-7422-048-7")) self.book = true;
+                }
+            }
+            fn blocks(self: *@This(), values: anytype) !void {
+                for (values) |block| {
+                    try std.testing.expect(block.table == null);
+                    try self.spans(block.spans);
+                }
+            }
+        };
+        var notes: Notes = .{ .a = a };
+        for (stored.entry.references, 0..) |ref, i| {
+            try std.testing.expect(ref.kind == .note and ref.name.len == 0);
+            try std.testing.expectEqual(i + 1, ref.number);
+            if (ref.blocks) |blocks| try notes.blocks(blocks) else try notes.spans(ref.spans);
+            try notes.text.append(a, '\n');
+        }
+        try std.testing.expect(notes.book);
+        try std.testing.expectEqual(@as(usize, 4), notes.external);
+        for ([_][]const u8{ "Internetová jazyková příručka", "Ústav pro jazyk český", "MACHEK, Václav", "Etymologický slovník jazyka českého", "978-80-7422-048-7", "Heslo „lopata“, s." }) |text|
+            try std.testing.expect(std.mem.indexOf(u8, notes.text.items, text) != null);
+    }
+}
+
+test "captured Korean girl preserves piped IPA brackets full body actions owner and codec" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact retained p5847/r4030704, ordinal3044; no recapture or expansion.
+    // The reference protects only the original NZ outer '[' byte.
+    // The selected BG defaultless-parameter repair preserves both authored {{{4}}} fragments.
+    const raw = "== 영어 ==\n=== 다른 단어 ===\n* gyrle : 사어\n* gal : 사어\n* guhrl, gurl : 비표준어\n* grrrl, grrl : 슬랭\n\n=== 발음 ===\n* 영국 : {{IPA|en|/ɡɜːl/|/ɡɛəl/|qual2=obsolete}}\n* 미국 : {{IPA|en|/ɡɝl/}}\n* [[파일:En-us-girl.ogg|Audio (US)]]\n* 뉴질랜드 : {{IPA|en|/ɡɵːl/|[ɡʏw]}}\n\n=== 명사 ===\n# 여자 어린이, 어린 여성\n# 어린 암컷\n# 젊고 매력적인 여자.\n# (일반적이지 않은 카드 게임에서) 여왕\n# 내성적이다\n# 여자친구\n# 딸\n# (사어인 영국 방언) 두 살 된 노루박.\n# (유치한) 암컷(나무, 유전자 등)\n# 약하거나 감성적인 남자\n\n==== 기타 ====\n* 성인의 성인 여성에게 'girl' 이라고 부르는 것은 맥락과 감성에 따라 칭찬이나 모욕으로 여겨질 수 있다.\n\n[[분류:영어 명사]]\n[[분류:영어 사람]]";
+    const expanded = "== 영어 ==\n=== 다른 단어 ===\n* gyrle : 사어\n* gal : 사어\n* guhrl, gurl : 비표준어\n* grrrl, grrl : 슬랭\n\n=== 발음 ===\n* 영국 : <dl><dd>'''[[위키낱말사전:국제 음성 기호|<span style=\"color: #000\">IPA</span>]]''' <span style=\"color: #000; font-size: 120%;\">[<span class=\"IPA\">[[도움말:IPA 발음 듣기|en]]</span>]</span>(/ɡɜːl/), <span style=\"color: #000; font-size: 120%;\">[<span class=\"IPA\">[[도움말:IPA 발음 듣기|/ɡɛəl/]]</span>]</span>({{{4}}})</dd></dl>\n* 미국 : <dl><dd>'''[[위키낱말사전:국제 음성 기호|<span style=\"color: #000\">IPA</span>]]''' <span style=\"color: #000; font-size: 120%;\">[<span class=\"IPA\">[[도움말:IPA 발음 듣기|en]]</span>]</span>(/ɡɝl/)</dd></dl>\n* [[파일:En-us-girl.ogg|Audio (US)]]\n* 뉴질랜드 : <dl><dd>'''[[위키낱말사전:국제 음성 기호|<span style=\"color: #000\">IPA</span>]]''' <span style=\"color: #000; font-size: 120%;\">[<span class=\"IPA\">[[도움말:IPA 발음 듣기|en]]</span>]</span>(/ɡɵːl/), <span style=\"color: #000; font-size: 120%;\">[<span class=\"IPA\">[[도움말:IPA 발음 듣기|[ɡʏw]]]</span>]</span>({{{4}}})</dd></dl>\n\n=== 명사 ===\n# 여자 어린이, 어린 여성\n# 어린 암컷\n# 젊고 매력적인 여자.\n# (일반적이지 않은 카드 게임에서) 여왕\n# 내성적이다\n# 여자친구\n# 딸\n# (사어인 영국 방언) 두 살 된 노루박.\n# (유치한) 암컷(나무, 유전자 등)\n# 약하거나 감성적인 남자\n\n==== 기타 ====\n* 성인의 성인 여성에게 'girl' 이라고 부르는 것은 맥락과 감성에 따라 칭찬이나 모욕으로 여겨질 수 있다.\n\n[[분류:영어 명사]]\n[[분류:영어 사람]]";
+    const reference = "== 영어 ==\n=== 다른 단어 ===\n* gyrle : 사어\n* gal : 사어\n* guhrl, gurl : 비표준어\n* grrrl, grrl : 슬랭\n\n=== 발음 ===\n* 영국 : <dl><dd>'''[[위키낱말사전:국제 음성 기호|<span style=\"color: #000\">IPA</span>]]''' <span style=\"color: #000; font-size: 120%;\">[<span class=\"IPA\">[[도움말:IPA 발음 듣기|en]]</span>]</span>(/ɡɜːl/), <span style=\"color: #000; font-size: 120%;\">[<span class=\"IPA\">[[도움말:IPA 발음 듣기|/ɡɛəl/]]</span>]</span>({{{4}}})</dd></dl>\n* 미국 : <dl><dd>'''[[위키낱말사전:국제 음성 기호|<span style=\"color: #000\">IPA</span>]]''' <span style=\"color: #000; font-size: 120%;\">[<span class=\"IPA\">[[도움말:IPA 발음 듣기|en]]</span>]</span>(/ɡɝl/)</dd></dl>\n* [[파일:En-us-girl.ogg|Audio (US)]]\n* 뉴질랜드 : <dl><dd>'''[[위키낱말사전:국제 음성 기호|<span style=\"color: #000\">IPA</span>]]''' <span style=\"color: #000; font-size: 120%;\">[<span class=\"IPA\">[[도움말:IPA 발음 듣기|en]]</span>]</span>(/ɡɵːl/), <span style=\"color: #000; font-size: 120%;\"><nowiki>[</nowiki><span class=\"IPA\">[[도움말:IPA 발음 듣기|[ɡʏw]]]</span>]</span>({{{4}}})</dd></dl>\n\n=== 명사 ===\n# 여자 어린이, 어린 여성\n# 어린 암컷\n# 젊고 매력적인 여자.\n# (일반적이지 않은 카드 게임에서) 여왕\n# 내성적이다\n# 여자친구\n# 딸\n# (사어인 영국 방언) 두 살 된 노루박.\n# (유치한) 암컷(나무, 유전자 등)\n# 약하거나 감성적인 남자\n\n==== 기타 ====\n* 성인의 성인 여성에게 'girl' 이라고 부르는 것은 맥락과 감성에 따라 칭찬이나 모욕으로 여겨질 수 있다.\n\n[[분류:영어 명사]]\n[[분류:영어 사람]]";
+    const namespace_source = "# wikidict-namespace-registry-v1\n# wiki\tkowiktionary\n# dump-date\t20261001\n# content-language\tko\n-2\t미디어\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n-1\t특수\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\t특\t특수기능\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\t토론\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n2\t사용자\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n3\t사용자토론\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n4\t위키낱말사전\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\tWiktionary\t낱\n5\t위키낱말사전토론\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWiktionary talk\n6\t파일\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\t그림\n7\t파일토론\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tImage talk\t그림토론\n8\t미디어위키\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n9\t미디어위키토론\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tMediaWiki토론\n10\t틀\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n11\t틀토론\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n12\t도움말\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n13\t도움말토론\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n14\t분류\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n15\t분류토론\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n100\t부록\t부록\tcase-sensitive\t1\t0\t0\t\tsupplemental\tunclassified_subject_retained\n101\t부록 토론\t부록 토론\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\t모듈\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\t모듈토론\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\t행사\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\t행사토론\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
+    const behavior_source = "# wikidict-behavior-switches-v1\n# wiki\tkowiktionary\n# dump-date\t20261001\n# content-language\tko\n# namespace-registry-sha256\t997e7acd4dcb54387f0920260f99e79fd1f6fade0e5d9b43d7e263f25ad54bbb\narchivedtalk\t0\t__ARCHIVEDTALK__\ndisambiguation\t1\t__DISAMBIG__\nexpectedUnconnectedPage\t1\t__EXPECTED_UNCONNECTED_PAGE__\nexpectshortpage\t1\t__EXPECTSHORTPAGE__\nexpectunusedcategory\t1\t__EXPECTUNUSEDCATEGORY__\nexpectunusedtemplate\t1\t__EXPECTUNUSEDTEMPLATE__\nexpectwithoutscans\t0\t__EXPECTWITHOUTSCANS__\nforcetoc\t0\t__FORCETOC__\nforcetoc\t0\t__목차보임__\nforcetoc\t0\t__목차표시__\nhiddencat\t1\t__HIDDENCAT__\nhiddencat\t1\t__숨은분류__\nindex\t1\t__INDEX__\nindex\t1\t__색인__\nkeeptitle\t1\t__KEEPTITLE__\nnewsectionlink\t1\t__NEWSECTIONLINK__\nnewsectionlink\t1\t__새글쓰기__\nnewsectionlink\t1\t__새문단쓰기__\nnocontentconvert\t0\t__NOCC__\nnocontentconvert\t0\t__NOCONTENTCONVERT__\nnocontentconvert\t0\t__내변안함__\nnocontentconvert\t0\t__내변없음__\nnocontentconvert\t0\t__내용변환안함__\nnocontentconvert\t0\t__내용변환없음__\nnoeditsection\t0\t__NOEDITSECTION__\nnoeditsection\t0\t__단락편집숨김__\nnoeditsection\t0\t__문단편집숨김__\nnoeditsection\t0\t__부분편집숨김__\nnogallery\t0\t__NOGALLERY__\nnogallery\t0\t__갤러리숨김__\nnogallery\t0\t__화랑숨김__\nnoglobal\t1\t__NOGLOBAL__\nnoindex\t1\t__NOINDEX__\nnoindex\t1\t__색인거부__\nnoindex\t1\t__색인안함__\nnomediaviewercarousel\t0\t__NOMEDIAVIEWERCAROUSEL__\nnonewsectionlink\t1\t__NONEWSECTIONLINK__\nnonewsectionlink\t1\t__새글쓰기숨기기__\nnonewsectionlink\t1\t__새문단쓰기숨기기__\nnotalk\t0\t__NOTALK__\nnotitleconvert\t0\t__NOTC__\nnotitleconvert\t0\t__NOTITLECONVERT__\nnotitleconvert\t0\t__제목변환안함__\nnotitleconvert\t0\t__제목변환없음__\nnotitleconvert\t0\t__제변안함__\nnotitleconvert\t0\t__제변없음__\nnotoc\t0\t__NOTOC__\nnotoc\t0\t__목차숨김__\nstaticredirect\t1\t__STATICREDIRECT__\nstaticredirect\t1\t__넘겨주기고정__\ntoc\t0\t__TOC__\ntoc\t0\t__목차__\n";
+    const image_source = "# wikidict-image-options-v1\n# wiki\tkowiktionary\n# dump-date\t20261001\n# content-language\tko\n# namespace-registry-sha256\t997e7acd4dcb54387f0920260f99e79fd1f6fade0e5d9b43d7e263f25ad54bbb\n# behavior-switches-sha256\t2053111cda2559dcb0f772fc47df3f994e854523f058263b1c67704e0d28576a\nimg_left\t1\t\"왼쪽\"\nimg_left\t1\t\"left\"\nimg_right\t1\t\"오른쪽\"\nimg_right\t1\t\"right\"\nimg_center\t1\t\"가운데\"\nimg_center\t1\t\"center\"\nimg_center\t1\t\"centre\"\nimg_none\t1\t\"없음\"\nimg_none\t1\t\"none\"\nimg_baseline\t1\t\"밑줄\"\nimg_baseline\t1\t\"baseline\"\nimg_sub\t1\t\"아래첨자\"\nimg_sub\t1\t\"sub\"\nimg_super\t1\t\"위첨자\"\nimg_super\t1\t\"super\"\nimg_super\t1\t\"sup\"\nimg_top\t1\t\"위\"\nimg_top\t1\t\"top\"\nimg_text_top\t1\t\"글자위\"\nimg_text_top\t1\t\"텍스트위\"\nimg_text_top\t1\t\"text-top\"\nimg_middle\t1\t\"중간\"\nimg_middle\t1\t\"middle\"\nimg_bottom\t1\t\"아래\"\nimg_bottom\t1\t\"bottom\"\nimg_text_bottom\t1\t\"글자아래\"\nimg_text_bottom\t1\t\"텍스트아래\"\nimg_text_bottom\t1\t\"text-bottom\"\nimg_thumbnail\t1\t\"섬네일\"\nimg_thumbnail\t1\t\"썸네일\"\nimg_thumbnail\t1\t\"축소판\"\nimg_thumbnail\t1\t\"thumb\"\nimg_thumbnail\t1\t\"thumbnail\"\nimg_framed\t1\t\"프레임\"\nimg_framed\t1\t\"frame\"\nimg_framed\t1\t\"framed\"\nimg_framed\t1\t\"enframed\"\nimg_frameless\t1\t\"프레임없음\"\nimg_frameless\t1\t\"frameless\"\nimg_border\t1\t\"테두리\"\nimg_border\t1\t\"border\"\nimg_manualthumb\t1\t\"섬네일=$1\"\nimg_manualthumb\t1\t\"썸네일=$1\"\nimg_manualthumb\t1\t\"축소판=$1\"\nimg_manualthumb\t1\t\"thumbnail=$1\"\nimg_manualthumb\t1\t\"thumb=$1\"\nimg_upright\t1\t\"위오른쪽\"\nimg_upright\t1\t\"위오른쪽=$1\"\nimg_upright\t1\t\"upright\"\nimg_upright\t1\t\"upright=$1\"\nimg_upright\t1\t\"upright $1\"\nimg_link\t1\t\"링크=$1\"\nimg_link\t1\t\"link=$1\"\nimg_alt\t1\t\"대체글=$1\"\nimg_alt\t1\t\"alt=$1\"\nimg_class\t1\t\"클래스=$1\"\nimg_class\t1\t\"class=$1\"\nimg_width\t1\t\"$1픽셀\"\nimg_width\t1\t\"$1px\"\nimg_page\t1\t\"문서=$1\"\nimg_page\t1\t\"page=$1\"\nimg_page\t1\t\"page $1\"\nimg_lang\t1\t\"언어=$1\"\nimg_lang\t1\t\"lang=$1\"\nimg_lossy\t1\t\"lossy=$1\"\ntimedmedia_thumbtime\t0\t\"thumbtime=$1\"\ntimedmedia_starttime\t0\t\"시작=$1\"\ntimedmedia_starttime\t0\t\"start=$1\"\ntimedmedia_endtime\t0\t\"끝=$1\"\ntimedmedia_endtime\t0\t\"end=$1\"\ntimedmedia_disablecontrols\t0\t\"disablecontrols=$1\"\ntimedmedia_loop\t0\t\"loop\"\ntimedmedia_muted\t0\t\"muted\"\n";
+    var namespaces = try @import("namespace_registry").Registry.init(a, namespace_source);
+    defer namespaces.deinit();
+    var behavior = try @import("namespace_registry").behavior_switches.Registry.init(a, behavior_source, "kowiktionary", "20261001", "ko", namespaces.source_sha256);
+    defer behavior.deinit();
+    var behavior_sha256: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_sha256, .{});
+    var image_options = try @import("namespace_registry").image_options.Registry.init(a, image_source, "kowiktionary", "20261001", "ko", namespaces.source_sha256, behavior_sha256);
+    defer image_options.deinit();
+    const Fixture = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            // Exact installed row: en / 영어 / English / en / eng.
+            if (std.mem.eql(u8, value, "영어") or std.mem.eql(u8, value, "English") or std.mem.eql(u8, value, "en") or std.mem.eql(u8, value, "eng"))
+                return .{ .code = "en", .heading = "영어" };
+            return null;
+        }
+        fn get(ctx: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return (resolve(ctx, value) orelse return null).code;
+        }
+    };
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .behavior_switches = &behavior, .image_options = &image_options, .get_fn = Fixture.get, .resolve_fn = Fixture.resolve, .trusted_fn = Fixture.resolve };
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/captured", .{tmp.sub_path});
+    const reference_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/literal-reference", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    var literal_writer = try Writer.init(std.testing.io, a, reference_root);
+    defer literal_writer.deinit();
+    literal_writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "girl", expanded, raw, null);
+    try literal_writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "girl", reference, raw, null);
+    const stats = try writer.finish(codes);
+    const literal_stats = try literal_writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), literal_stats.language_records);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "영어"));
+    defer mapped.deinit();
+    var literal_mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, reference_root, "영어"));
+    defer literal_mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const literal_blob = try blob_format.inspect(literal_mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    var literal_index = try literal_blob.buildTrustedIndexAlloc(a);
+    defer literal_index.deinit(a);
+    const record = (try index.find("girl")).?;
+    const literal_record = (try literal_index.find("girl")).?;
+    try std.testing.expectEqualSlices(u8, literal_record.payload, record.payload);
+    const stored = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, stored));
+    try std.testing.expectEqualStrings("en", stored.entry.language_code);
+    try std.testing.expectEqualStrings("영어", stored.entry.language.?);
+    const section_titles = [_][]const u8{ "영어", "다른 단어", "발음", "명사", "기타" };
+    const levels = [_]u8{ 2, 3, 3, 3, 4 };
+    try std.testing.expectEqual(section_titles.len, stored.entry.sections.len);
+    for (stored.entry.sections, section_titles, levels) |section, title, level| {
+        try std.testing.expectEqualStrings(title, section.title);
+        try std.testing.expectEqual(level, section.level);
+    }
+    const Scan = struct {
+        visible: std.ArrayList(u8) = .empty,
+        targets: std.ArrayList([]const u8) = .empty,
+        labels: std.ArrayList(std.ArrayList(u8)) = .empty,
+        prior_action: ?usize = null,
+        definitions: usize = 0,
+        bold_ipa: usize = 0,
+        styled_ipa: [5]bool = @splat(false),
+        audio_explanation: bool = false,
+        fn spans(self: *@This(), allocator: std.mem.Allocator, values: []const blobs.presentation_types.Span) anyerror!void {
+            for (values) |span| {
+                try self.visible.appendSlice(allocator, span.text);
+                if (span.kind == .line_break) try self.visible.append(allocator, '\n');
+                try std.testing.expect(std.mem.indexOf(u8, span.text, "[missing parameter]") == null);
+                try std.testing.expect(std.mem.indexOf(u8, span.text, "[malformed link]") == null);
+                if (span.kind == .link) {
+                    var at: usize = undefined;
+                    if (self.prior_action) |previous| {
+                        if (std.mem.eql(u8, self.targets.items[previous], span.target)) {
+                            at = previous;
+                        } else {
+                            at = self.targets.items.len;
+                            try self.targets.append(allocator, span.target);
+                            try self.labels.append(allocator, .empty);
+                        }
+                    } else {
+                        at = self.targets.items.len;
+                        try self.targets.append(allocator, span.target);
+                        try self.labels.append(allocator, .empty);
+                    }
+                    try self.labels.items[at].appendSlice(allocator, span.text);
+                    self.prior_action = at;
+                    if (std.mem.eql(u8, span.target, "File:En-us-girl.ogg")) {
+                        try std.testing.expectEqualStrings("Audio (US)", span.explanation);
+                        try std.testing.expectEqualStrings("wikidict-media wikidict-media-file-456e2d75732d6769726c2e6f6767", span.classes);
+                        self.audio_explanation = true;
+                    }
+                    if (std.mem.eql(u8, span.text, "IPA")) {
+                        self.bold_ipa += 1;
+                        try std.testing.expect(span.bold);
+                        try std.testing.expectEqualStrings("#000000", span.foreground.?);
+                    }
+                    const style_at: ?usize = switch (at) { 1 => 0, 2 => 1, 4 => 2, 7 => 3, 8 => 4, else => null };
+                    if (style_at) |i| {
+                        self.styled_ipa[i] = true;
+                        try std.testing.expectEqualStrings("IPA", span.classes);
+                        try std.testing.expectApproxEqAbs(@as(f32, 1.2), span.font_scale.?, 0.000001);
+                        try std.testing.expectEqualStrings("#000000", span.foreground.?);
+                    }
+                } else {
+                    try std.testing.expect(span.kind != .external_link);
+                    self.prior_action = null;
+                }
+            }
+        }
+        fn blocks(self: *@This(), allocator: std.mem.Allocator, values: []const blobs.presentation_types.Block) anyerror!void {
+            const meanings = [_][]const u8{
+                "여자 어린이, 어린 여성", "어린 암컷", "젊고 매력적인 여자.", "(일반적이지 않은 카드 게임에서) 여왕", "내성적이다", "여자친구", "딸", "(사어인 영국 방언) 두 살 된 노루박.", "(유치한) 암컷(나무, 유전자 등)", "약하거나 감성적인 남자",
+            };
+            for (values) |block| {
+                self.prior_action = null;
+                try std.testing.expect(block.table == null);
+                if (block.kind == .definition) {
+                    errdefer std.debug.print("KO definition index={d}\n", .{self.definitions});
+                    try std.testing.expect(self.definitions < meanings.len);
+                    var text: std.ArrayList(u8) = .empty;
+                    for (block.spans) |span| try text.appendSlice(allocator, span.text);
+                    try std.testing.expectEqualStrings(meanings[self.definitions], text.items);
+                    try std.testing.expectEqualStrings("#", block.list_path);
+                    try std.testing.expectEqualStrings(try std.fmt.allocPrint(allocator, "{d}", .{self.definitions + 1}), block.number);
+                    self.definitions += 1;
+                }
+                try self.spans(allocator, block.spans);
+            }
+        }
+    };
+    var scan: Scan = .{};
+    for (stored.entry.sections) |section| try scan.blocks(a, section.blocks);
+    try std.testing.expectEqual(@as(usize, 10), scan.definitions);
+    try std.testing.expectEqual(@as(usize, 3), scan.bold_ipa);
+    try std.testing.expect(scan.audio_explanation);
+    for (scan.styled_ipa, 0..) |found, i| {
+        errdefer std.debug.print("KO IPA style group index={d}\n", .{i});
+        try std.testing.expect(found);
+    }
+    const targets = [_][]const u8{
+        "위키낱말사전:국제 음성 기호", "도움말:IPA 발음 듣기", "도움말:IPA 발음 듣기",
+        "위키낱말사전:국제 음성 기호", "도움말:IPA 발음 듣기", "File:En-us-girl.ogg",
+        "위키낱말사전:국제 음성 기호", "도움말:IPA 발음 듣기", "도움말:IPA 발음 듣기",
+    };
+    // Unframed audio retains its authored caption as a tooltip, not visible
+    // body text; the independent explanation check above survives the codec.
+    const labels = [_][]const u8{ "IPA", "en", "/ɡɛəl/", "IPA", "en", "En-us-girl.ogg", "IPA", "en", "[ɡʏw]" };
+    try std.testing.expectEqual(targets.len, scan.targets.items.len);
+    for (targets, labels, 0..) |target, label, i| {
+        errdefer std.debug.print("KO action index={d}, label={s}, target={s}\n", .{ i, label, target });
+        try std.testing.expectEqualStrings(target, scan.targets.items[i]);
+        try std.testing.expectEqualStrings(label, scan.labels.items[i].items);
+    }
+    for ([_][]const u8{
+        "gyrle : 사어", "gal : 사어", "guhrl, gurl : 비표준어", "grrrl, grrl : 슬랭",
+        "영국 :", "미국 :", "뉴질랜드 :", "/ɡɜːl/", "/ɡɝl/", "/ɡɵːl/", "[[ɡʏw]]",
+        "성인의 성인 여성에게 'girl' 이라고 부르는 것은 맥락과 감성에 따라 칭찬이나 모욕으로 여겨질 수 있다.",
+    }) |text| {
+        errdefer std.debug.print("KO required visible text={s}\n", .{text});
+        try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, text) != null);
+    }
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, scan.visible.items, "{{{4}}}"));
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.media.len);
+    try std.testing.expectEqualStrings("En-us-girl.ogg", stored.entry.media[0].file);
+    try std.testing.expectEqualStrings("En-us-girl.ogg", stored.entry.media[0].caption);
+    try std.testing.expectEqual(blobs.presentation_types.MediaKind.audio, stored.entry.media[0].kind);
 }

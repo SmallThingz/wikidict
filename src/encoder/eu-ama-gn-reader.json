@@ -1,0 +1,320 @@
+{
+  "schema": "dict.results.v1",
+  "operation": "lookup",
+  "query": "ama",
+  "kind": "language",
+  "language": "guaraniera",
+  "match_mode": "exact-utf8",
+  "record_count": 343,
+  "total_matches": 1,
+  "offset": 0,
+  "has_more": false,
+  "matches": [],
+  "entries": [
+    {
+      "organization": {
+        "lexemes": [],
+        "other_sections": [
+          0,
+          1,
+          2,
+          3
+        ]
+      },
+      "title": "ama",
+      "display_title": [],
+      "kind": "language",
+      "language": "guaraniera",
+      "language_code": "gn",
+      "sections": [
+        {
+          "level": 2,
+          "title": "Guaraniera",
+          "anchor": "Guaraniera",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "preformatted",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "Ahoskera",
+          "anchor": "Ahoskera_2",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "list_item",
+              "depth": 2,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "/",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "Oraindik ez daukagu hitz honen ahoskera. Lagun ezazu jartzen.",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "/",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ":*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "Jatorria",
+          "anchor": "Jatorria_2",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "list_item",
+              "depth": 2,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "/",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "Oraindik ez daukagu hitz honen jatorria. Lagun ezazu jartzen.",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "/",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ":*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "Izena",
+          "anchor": "Izena_3",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "indent",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "ama",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ":",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "list_item",
+              "depth": 2,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "euri",
+                  "target": "euri",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ".",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ":#",
+              "number": "1",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        }
+      ],
+      "preamble_spans": [],
+      "references": [],
+      "media": [
+        {
+          "file": "Guarani flag.svg",
+          "kind": "image",
+          "caption": "Guarani flag.svg"
+        }
+      ],
+      "redirect": null,
+      "alias": null
+    }
+  ]
+}

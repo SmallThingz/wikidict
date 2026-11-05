@@ -76,6 +76,7 @@ pub const Registry = struct {
     arabic_articleless_names: std.StringHashMapUnmanaged(?DerivedPreferredName) = .empty,
     local_aliases: std.StringHashMapUnmanaged(?[]const u8) = .empty,
     reviewed_aliases: std.StringHashMapUnmanaged([]const u8) = .empty,
+    reviewed_varieties: std.StringHashMapUnmanaged(void) = .empty,
     source_banners: std.StringHashMapUnmanaged(?SourceLanguageBanner) = .empty,
     source_paragraphs: std.StringHashMapUnmanaged(?SourceLanguageParagraph) = .empty,
     content_code: ?[]const u8 = null,
@@ -103,6 +104,7 @@ pub const Registry = struct {
         self.arabic_articleless_names.deinit(self.arena.allocator());
         self.local_aliases.deinit(self.arena.allocator());
         self.reviewed_aliases.deinit(self.arena.allocator());
+        self.reviewed_varieties.deinit(self.arena.allocator());
         self.source_banners.deinit(self.arena.allocator());
         self.source_paragraphs.deinit(self.arena.allocator());
         self.arena.deinit();
@@ -127,7 +129,12 @@ pub const Registry = struct {
         const code_value = self.code(value) orelse return null;
         return .{
             .code = code_value,
-            .heading = self.headings.get(code_value) orelse value,
+            // An explicitly reviewed variety retains its own display identity
+            // and the installed parent code. Ordinary aliases still canonicalize.
+            .heading = if (self.reviewed_varieties.contains(value) and self.isTrustedReviewed(value, code_value))
+                self.reviewed_varieties.getKey(value).?
+            else
+                self.headings.get(code_value) orelse value,
         };
     }
 
@@ -936,14 +943,19 @@ pub const Registry = struct {
         if (!std.mem.eql(u8, digest, &std.fmt.bytesToHex(hash, .lower))) return error.InvalidLanguageRegistry;
         const parsed = try std.json.parseFromSlice(struct {
             schema: []const u8,
-            records: []const struct { id: []const u8, code: []const u8, alias: []const u8, authority_kind: []const u8 },
+            records: []const struct { id: []const u8, code: []const u8, alias: []const u8, authority_kind: []const u8, preserve_heading: bool = false },
         }, self.arena.allocator(), evidence, .{ .ignore_unknown_fields = true });
         defer parsed.deinit();
         if (!std.mem.eql(u8, parsed.value.schema, "wikidict.reviewed-language-aliases.v1")) return error.InvalidLanguageRegistry;
         var matches: usize = 0;
+        var preserve_heading = false;
         for (parsed.value.records) |record| {
             if (std.mem.eql(u8, reference, record.id) and std.mem.eql(u8, code_value, record.code) and
-                std.mem.eql(u8, name, record.alias) and std.mem.eql(u8, record.authority_kind, "reviewed_public_reference")) matches += 1;
+                std.mem.eql(u8, name, record.alias) and std.mem.eql(u8, record.authority_kind, "reviewed_public_reference"))
+            {
+                matches += 1;
+                preserve_heading = record.preserve_heading;
+            }
         }
         if (matches != 1 or !validLocalHeading(name) or !self.codes.contains(code_value)) return error.InvalidLanguageRegistry;
         if (self.ambiguous.contains(name)) return;
@@ -954,6 +966,7 @@ pub const Registry = struct {
         }
         const owned = self.arena.allocator();
         try self.reviewed_aliases.put(owned, try owned.dupe(u8, name), try owned.dupe(u8, code_value));
+        if (preserve_heading) try self.reviewed_varieties.put(owned, try owned.dupe(u8, name), {});
     }
 
     /// Import an explicit dump-local label without changing canonical headings
@@ -3593,4 +3606,74 @@ test "reviewed exact Basque Kashubian heading preserves preferred owner and live
     try std.testing.expectEqualStrings("pl", conflict.resolveTrusted("Kaxubiera").?.code);
     try registry.addLocalAlias("Kaxubiera", "pl");
     try std.testing.expect(registry.resolveTrusted("Kaxubiera") == null);
+}
+
+
+const LiReviewedOwnerTest = struct {
+    fn marker(a: std.mem.Allocator, code_value: []const u8, name: []const u8, id: []const u8) ![]u8 {
+        var hash: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(@embedFile("reviewed_language_aliases.json"), &hash, .{});
+        return std.fmt.allocPrint(a, "# reviewed-alias\t{s}\t{s}\t{s}\t{s}\n", .{code_value, name, id, std.fmt.bytesToHex(hash, .lower)});
+    }
+};
+
+test "reviewed LI varieties retain distinct headings with one installed parent code" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var value = Registry.empty(a); defer value.deinit();
+    try value.addTsv("# content-language\tfr\n# mediawiki\nfr\tFrench\nli\tLimburgs\n");
+    try std.testing.expect(value.resolveTrusted("Mofers") == null);
+    try std.testing.expect(value.resolveTrusted("Algemein Gesjreve Limburgs") == null);
+    const first = try LiReviewedOwnerTest.marker(a, "li", "Mofers", "li-mofers-variety-p131871-r958780-v1");
+    const second = try LiReviewedOwnerTest.marker(a, "li", "Algemein Gesjreve Limburgs", "li-agl-variety-p101567-r983499-v1");
+    try value.addTsv(first); try value.addTsv(second);
+    for ([_][]const u8{ "Mofers", "Algemein Gesjreve Limburgs" }) |label| {
+        try std.testing.expectEqualStrings("li", value.resolve(label).?.code);
+        try std.testing.expectEqualStrings(label, value.resolve(label).?.heading);
+        try std.testing.expectEqualStrings(label, value.resolveTrusted(label).?.heading);
+        try std.testing.expect(value.resolveSourceTrusted(label) == null);
+    }
+    try std.testing.expectEqualStrings("Limburgs", value.resolve("li").?.heading);
+    try std.testing.expect(value.resolveTrusted("mofers") == null);
+    try std.testing.expect(value.resolveTrusted("Moferts") == null);
+    // Strong authority retains the already reviewed exact variety display too.
+    try value.addLua("return { [\"Mofers\"] = \"li\" }");
+    try std.testing.expectEqualStrings("Mofers", value.resolveStrong("Mofers").?.heading);
+    try std.testing.expectEqualStrings("Algemein Gesjreve Limburgs", value.resolveTrusted("Algemein Gesjreve Limburgs").?.heading);
+}
+
+test "reviewed LI varieties reject missing parent and live conflicting owners" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const marker = try LiReviewedOwnerTest.marker(a, "li", "Mofers", "li-mofers-variety-p131871-r958780-v1");
+    var absent = Registry.empty(a); defer absent.deinit();
+    try absent.addTsv("fr\tFrench\tli\n");
+    try std.testing.expectError(error.InvalidLanguageRegistry, absent.addTsv(marker));
+    var collision = Registry.empty(a); defer collision.deinit();
+    try collision.addTsv("# mediawiki\nli\tLimburgs\nfr\tMofers\n");
+    try collision.addTsv(marker);
+    try std.testing.expectEqualStrings("fr", collision.resolveTrusted("Mofers").?.code);
+    try std.testing.expect(!collision.reviewed_varieties.contains("Mofers"));
+    var late = Registry.empty(a); defer late.deinit();
+    try late.addTsv("li\tLimburgs\nfr\tFrench\n"); try late.addTsv(marker);
+    try late.addLocalAlias("Mofers", "fr");
+    try std.testing.expect(late.resolveTrusted("Mofers") == null);
+    var ambiguous = Registry.empty(a); defer ambiguous.deinit();
+    try ambiguous.addTsv("li\tLimburgs\nfr\tFrench\n"); try ambiguous.addTsv(marker);
+    try ambiguous.addLocalAlias("Mofers", "li"); try ambiguous.addLocalAlias("Mofers", "fr");
+    try std.testing.expect(ambiguous.resolveTrusted("Mofers") == null);
+}
+
+test "reviewed Nederlandjs alias keeps ordinary Dutch preferred name" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var value = Registry.empty(a); defer value.deinit();
+    try value.addTsv("# content-language\tfr\n# mediawiki\nfr\tFrench\nnl\tNederlands\n");
+    const marker = try LiReviewedOwnerTest.marker(a, "nl", "Nederlandjs", "li-nederlandjs-exact-p26592-r905227-v1");
+    try value.addTsv(marker);
+    try std.testing.expectEqualStrings("nl", value.resolveTrusted("Nederlandjs").?.code);
+    try std.testing.expectEqualStrings("Nederlands", value.resolveTrusted("Nederlandjs").?.heading);
+    try std.testing.expect(value.resolveSourceTrusted("Nederlandjs") == null);
+    try std.testing.expect(value.resolveTrusted("nederlandjs") == null);
+    try std.testing.expect(!value.reviewed_varieties.contains("Nederlandjs"));
 }

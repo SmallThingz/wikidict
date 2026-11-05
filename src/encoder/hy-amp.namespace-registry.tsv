@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	hywiktionary
+# dump-date	20261001
+# content-language	hy
+-2	Մեդիա	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Սպասարկող	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Քննարկում	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	Մասնակից	User	first-letter	1	0	0		compile_only	standard_build_input
+3	Մասնակցի քննարկում	User talk	first-letter	1	0	0		compile_only	discussion_namespace
+4	Վիքիբառարան	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	Վիքիբառարանի քննարկում	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	Պատկեր	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image
+7	Պատկերի քննարկում	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	MediaWiki քննարկում	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	Կաղապար	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Կաղապարի քննարկում	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	Օգնություն	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Օգնության քննարկում	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	Կատեգորիա	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Կատեգորիայի քննարկում	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Մոդուլ	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Մոդուլի քննարկում	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

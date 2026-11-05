@@ -10,6 +10,63 @@ fn patternCache(runtime: *rt.Context) ?*PatternCache {
 
 const Value = rt.Value;
 
+// Scribunto cleans successful #invoke output after concatenating Lua return values.
+// Internal Lua strings and byte-oriented string functions deliberately stay unchanged.
+pub fn cleanInvokeTextAlloc(a: std.mem.Allocator, catalog: *const rt.namespace_registry.Registry, source: []const u8) ![]u8 {
+    const plain_ascii = for (source) |c| {
+        if (c >= 128 or invokeDisallowedAscii(c)) break false;
+    } else true;
+    if (plain_ascii) return a.dupe(u8, source);
+
+    const scratch_a = std.heap.smp_allocator;
+    var cleaned: std.ArrayList(u8) = .empty;
+    defer cleaned.deinit(scratch_a);
+    var changed = false;
+    var copied: usize = 0;
+    var pos: usize = 0;
+    while (pos < source.len) {
+        const start = pos;
+        const head = source[pos];
+        pos += 1;
+        var valid = !invokeDisallowedAscii(head);
+        if (head >= 128) {
+            // UtfNormal 4 consumes a complete syntactic prefix, including obsolete
+            // 5/6-byte sequences; an offending non-continuation starts a new unit.
+            const tails: usize = if (head < 0xc0) 0 else if (head < 0xe0) 1 else if (head < 0xf0) 2 else if (head < 0xf8) 3 else if (head < 0xfc) 4 else if (head < 0xfe) 5 else 0;
+            var left = tails;
+            while (left > 0 and pos < source.len and source[pos] >= 0x80 and source[pos] < 0xc0) : (left -= 1) pos += 1;
+            valid = tails > 0 and left == 0;
+            if (valid and pos - start <= 4) {
+                const cp: ?u21 = std.unicode.utf8Decode(source[start..pos]) catch null;
+                valid = if (cp) |value| value != 0xfffe and value != 0xffff else false;
+            } else valid = false;
+        }
+        if (!valid) {
+            try cleaned.appendSlice(scratch_a, source[copied..start]);
+            try cleaned.appendSlice(scratch_a, "\xef\xbf\xbd");
+            copied = pos;
+            changed = true;
+        }
+    }
+    if (changed) try cleaned.appendSlice(scratch_a, source[copied..]);
+    const valid_source = if (changed) cleaned.items else source;
+    var normalization_storage: [512]i32 = undefined;
+    const normalized = catalog.mapper.nfcInto(valid_source, &normalization_storage) catch |err| switch (err) {
+        error.NoSpaceLeft => {
+            const large = try catalog.mapper.nfcAlloc(scratch_a, valid_source);
+            defer scratch_a.free(large);
+            return a.dupe(u8, large);
+        },
+        else => return err,
+    };
+    return a.dupe(u8, normalized);
+}
+
+fn invokeDisallowedAscii(c: u8) bool {
+    return c < 0x20 and c != '\t' and c != '\n' and c != '\r';
+}
+
+
 fn one(result_buffer: ?[]Value, value: Value) ![]const Value {
     const out = try rt.returnBuffer(result_buffer, 1);
     rt.storeReturn(out, 0, value);
@@ -824,4 +881,51 @@ test "nested Unicode replacement matching cannot invalidate outer cache metadata
     try std.testing.expectEqual(@as(usize, 8), probe.calls);
     try std.testing.expectEqual(@as(usize, 2), cache.entry_count);
     try std.testing.expect(cache.hits >= 7);
+}
+
+test "invoke cleanup consumes malformed UTF8 prefixes and preserves valid byte APIs" {
+    const a = std.testing.allocator;
+    const catalog = try rt.namespace_registry.englishTestRegistry();
+    const cases = [_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "ASCII\t\n\r", .expected = "ASCII\t\n\r" },
+        .{ .source = "antiquit\xc3", .expected = "antiquit\xef\xbf\xbd" },
+        .{ .source = "\xe2\x82X\xc3\xa9", .expected = "\xef\xbf\xbdX\xc3\xa9" },
+        .{ .source = "\xe2\x82\xc3\xa9", .expected = "\xef\xbf\xbd\xc3\xa9" },
+        .{ .source = "\x80\x81", .expected = "\xef\xbf\xbd\xef\xbf\xbd" },
+        .{ .source = "\xc0\xaf\xed\xa0\x80\xf4\x90\x80\x80", .expected = "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd" },
+        .{ .source = "\xf8\x88\x80\x80\x80\xfc\x84\x80\x80\x80\x80", .expected = "\xef\xbf\xbd\xef\xbf\xbd" },
+        .{ .source = "\xfe\xff", .expected = "\xef\xbf\xbd\xef\xbf\xbd" },
+        .{ .source = "\x00\x08\x0b\x0c\x0e\x1f", .expected = "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd" },
+        .{ .source = "\xef\xbf\xbe\xef\xbf\xbf", .expected = "\xef\xbf\xbd\xef\xbf\xbd" },
+        .{ .source = "e\xcc\x81", .expected = "\xc3\xa9" },
+        .{ .source = "\xc3\xa9\xf0\x9f\x98\x80", .expected = "\xc3\xa9\xf0\x9f\x98\x80" },
+    };
+    for (cases) |case| {
+        const result = try cleanInvokeTextAlloc(a, catalog, case.source);
+        defer a.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+        try std.testing.expect(std.unicode.utf8ValidateSlice(result));
+    }
+    // The existing byte primitive is not a text-cleanup boundary.
+    const source = "antiquit\xc3\xa9";
+    try std.testing.expect(!std.unicode.utf8ValidateSlice(source[0..9]));
+}
+
+test "invoke cleanup normalizes large results and propagates destination allocation failures" {
+    const a = std.testing.allocator;
+    const catalog = try rt.namespace_registry.englishTestRegistry();
+    var source: [1800]u8 = undefined;
+    var expected: [1200]u8 = undefined;
+    for (0..600) |i| {
+        @memcpy(source[i * 3 ..][0..3], "e\xcc\x81");
+        @memcpy(expected[i * 2 ..][0..2], "\xc3\xa9");
+    }
+    const result = try cleanInvokeTextAlloc(a, catalog, &source);
+    defer a.free(result);
+    try std.testing.expectEqualStrings(&expected, result);
+    var storage: [0]u8 = .{};
+    var failing = std.heap.FixedBufferAllocator.init(&storage);
+    try std.testing.expectError(error.OutOfMemory, cleanInvokeTextAlloc(failing.allocator(), catalog, "ASCII"));
+    try std.testing.expectError(error.OutOfMemory, cleanInvokeTextAlloc(failing.allocator(), catalog, "\xc3"));
+    try std.testing.expectError(error.OutOfMemory, cleanInvokeTextAlloc(failing.allocator(), catalog, &source));
 }
