@@ -41,7 +41,7 @@ data class Span(
 enum class FontScaleBasis { Context, NormalBody }
 
 data class InlineImage(val file: String, val widthPx: Long? = null, val heightPx: Long? = null,
-    val alt: String? = null, val tooltip: String? = null) {
+    val alt: String? = null, val tooltip: String? = null, val border: Boolean = false) {
     init {
         require(file.isNotEmpty() && validInlineImageString(file) && file.first() != ' ' && file.last() != ' ' &&
             file.none { it.code < 32 || it.code == 127 || it.code in 0x80..0x9f || it in "[]{}<>|#_" }) { "Invalid inline image file" }

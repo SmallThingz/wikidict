@@ -55,6 +55,7 @@ class BlobDecoderTest {
             span.image?.let { image -> fields["image"] = linkedMapOf<String, Any?>("file" to image.file).also { values ->
                 image.widthPx?.let { values["width_px"] = it }; image.heightPx?.let { values["height_px"] = it }
                 image.alt?.let { values["alt"] = it }; image.tooltip?.let { values["tooltip"] = it }
+                if (image.border) values["border"] = true
             } }
         }
     private fun producerStyleLength(value: StyleLength): Map<String, Any?> = linkedMapOf(
@@ -109,7 +110,7 @@ class BlobDecoderTest {
 
     /** Configured producer case is a separate required run of the existing conformance target. */
     private fun requiredProducerConformance(version: Char) {
-        require(version in "789BC")
+        require(version in "789BCD")
         val prefix = "WIKBLB_DPR$version"
         fun name(suffix: String) = "${prefix}_$suffix"
         val fixtureTitle = when (version) {
@@ -117,6 +118,7 @@ class BlobDecoderTest {
             '8' -> "cell-heading-regression"
             '9' -> "DPR9 reference fragments"
             'B' -> "DPRB font scale basis"
+            'D' -> "image-border-contract"
             else -> "נספח:שיבושי הגייה/תבנית"
         }
         require(producerEnvironment(name("REQUIRED")) == "1")
@@ -128,7 +130,8 @@ class BlobDecoderTest {
         producerInput(name("SOURCE_FACTS"))
         producerInput(name("CASE"))
         val wantedTitle = titleFile.readBytes().decodeToString(throwOnInvalidSequence = true)
-        require(wantedTitle == fixtureTitle || version == 'C' && wantedTitle == "skakavica")
+        require(wantedTitle == fixtureTitle || version == 'C' && wantedTitle == "skakavica" ||
+            version == 'D' && wantedTitle == "alarmować")
         var selected: Entry? = null
         var selectedOffset = -1L
         var selectedLength = -1
@@ -214,6 +217,17 @@ class BlobDecoderTest {
                 require(images.all { it.widthPx == 15L && it.heightPx == null })
             }
         }
+        if (version == 'D') {
+            val entry = checkNotNull(selected)
+            require(entry.inlineImages.any { it.border } && entry.inlineImages.any { !it.border })
+            if (wantedTitle == "alarmować") {
+                require(entry.languageCode == "pl")
+                val flag = entry.inlineImages.single { it.file == "Flag of Poland.svg" }
+                val book = entry.inlineImages.single { it.file == "Open book 01.svg" }
+                require(flag.border && flag.widthPx == 40L && flag.heightPx == null)
+                require(!book.border && book.widthPx == 30L && book.heightPx == null)
+            }
+        }
         val output = File(producerEnvironment(name("ACTUAL"))).canonicalFile
         require(output.parentFile.isDirectory && output.createNewFile()) { "Use a fresh owned output path" }
         output.writeText(producerJson(linkedMapOf(
@@ -255,8 +269,19 @@ class BlobDecoderTest {
         }
     }
 
+    @Test fun producerImageProjectionOmitsFalseBorderAndRetainsTrueWithoutLosingNullableFields() {
+        val plain = InlineImage("Controlled.svg", 40, alt = "", tooltip = "Detail")
+        val span = Span("link", "", "File:Controlled.svg", image = plain)
+        val expected = linkedMapOf<String, Any?>("file" to "Controlled.svg", "width_px" to 40L,
+            "alt" to "", "tooltip" to "Detail")
+        assertEquals(expected, producerSpan(span)["image"])
+        assertEquals(expected + ("border" to true), producerSpan(span.copy(image = plain.copy(border = true)))["image"])
+        assertFalse(producerJson(producerSpan(span)).contains("\"border\""))
+        assertTrue(producerJson(producerSpan(span.copy(image = plain.copy(border = true)))).contains("\"border\":true"))
+    }
+
     @Test fun everyRealCorpusRecordDecodesDirectly() {
-        val requiredVersions = "789BC".filter { System.getenv("WIKBLB_DPR${it}_REQUIRED") != null }
+        val requiredVersions = "789BCD".filter { System.getenv("WIKBLB_DPR${it}_REQUIRED") != null }
         if (requiredVersions.isNotEmpty()) {
             require(requiredVersions.length == 1) { "Select exactly one required producer case" }
             requiredProducerConformance(requiredVersions.single())

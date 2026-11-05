@@ -8,9 +8,9 @@ class ReferenceBlockTest {
     private data class Item(val id: Long, val spans: List<Span> = emptyList(), val blocks: List<Block>? = null,
         val kind: ReferenceKind = ReferenceKind.Note, val presence: Int? = null)
 
-    // Independent literal B/C writer. C adds only a presence and optional ordered
-    // block list after each reference's existing span list.
-    private class Wire(val styles: Boolean) {
+    // Independent literal B/C/D writer. D adds only the image border flag;
+    // C and D retain the optional ordered reference blocks and table styles.
+    private class Wire(val styles: Boolean, val imageBorders: Boolean = false) {
         val out = ByteArrayOutputStream()
         fun byte(n: Int) { out.write(n) }
         fun u32(n: Long) { repeat(4) { byte((n ushr (it * 8)).toInt() and 255) } }
@@ -18,9 +18,10 @@ class ReferenceBlockTest {
         fun image(value: InlineImage?) {
             if (!styles) { require(value == null); return }
             byte(if (value == null) 0 else 1); if (value == null) return
+            require(imageBorders || !value.border)
             string(value.file)
             byte((if (value.widthPx != null) 1 else 0) or (if (value.heightPx != null) 2 else 0) or
-                (if (value.alt != null) 4 else 0) or (if (value.tooltip != null) 8 else 0))
+                (if (value.alt != null) 4 else 0) or (if (value.tooltip != null) 8 else 0) or (if (value.border) 16 else 0))
             value.widthPx?.let(::u32); value.heightPx?.let(::u32); value.alt?.let(::string); value.tooltip?.let(::string)
         }
         fun length(value: StyleLength) { byte(if (value.unit == StyleLengthUnit.Px) 0 else 1); u32(value.value.toRawBits().toLong()) }
@@ -85,7 +86,7 @@ class ReferenceBlockTest {
         }
     }
     private fun fixture(version: Char, items: List<Item>, sections: List<Section> = emptyList(),
-        display: List<Span> = emptyList(), preamble: List<Span> = emptyList(), media: List<Media> = emptyList()): ByteArray = Wire(version == 'C').apply {
+        display: List<Span> = emptyList(), preamble: List<Span> = emptyList(), media: List<Media> = emptyList()): ByteArray = Wire(version in "CD", version == 'D').apply {
         out.write("DPR$version".toByteArray(Charsets.US_ASCII))
         spans(display); u32(sections.size.toLong())
         sections.forEach { byte(it.level); string(it.title); string(it.anchor); string(it.anchorFallback); blocks(it.blocks) }
@@ -95,7 +96,7 @@ class ReferenceBlockTest {
             byte(if (item.kind == ReferenceKind.Note) 0 else 1); u32(item.id)
             if (item.kind == ReferenceKind.Note) { u32(1); string("") }
             string("notes"); spans(item.spans)
-            if (version == 'C') {
+            if (version in "CD") {
                 byte(item.presence ?: if (item.blocks == null) 0 else 1)
                 item.blocks?.let(::blocks)
             }
@@ -284,6 +285,65 @@ class ReferenceBlockTest {
         assertEquals(setOf("Vraagteken-2.svg", "X mark.svg", "Yes check.svg"), inlineMediaFiles(entry))
         assertEquals("Body preferred caption", entry.media.first().caption)
         assertEquals(repeated, entry.sections.single().blocks[2].table!!.rows[0][1].blocks!!.single().spans.single())
+    }
+
+    @Test fun dprdBorderIsOccurrenceLocalAcrossEverySpanSinkAndPreservesCompleteFields() {
+        // Synthetic wire fixture; actual Italian Writer output is a separate conformance input.
+        val plain = Span("link", "", "File:Controlled.svg", image = InlineImage("Controlled.svg", 40))
+        val bordered = plain.copy(explanation = "Source detail", foreground = "#123456", background = "#abcdef",
+            fontScale = 0f, fontScaleBasis = FontScaleBasis.NormalBody, bold = true, small = true,
+            image = plain.image!!.copy(alt = "", tooltip = "Authored tooltip", border = true))
+        val internal = bordered.copy(target = "Target#Section")
+        val external = bordered.copy(kind = "external_link", target = "https://example.org/x")
+        val unlinked = bordered.copy(kind = "text", target = "", image = bordered.image!!.copy(tooltip = ""))
+        val px = StyleLength(StyleLengthUnit.Px, 1f)
+        val nested = Table(listOf(plain), listOf(listOf(Cell(listOf(unlinked), false, 1, 1))))
+        val table = Table(listOf(bordered), listOf(listOf(
+            Cell(listOf(external), false, 1, 1, style = CellStyle(border = StyleBorder.Solid(px, "#123456"))),
+            Cell(emptyList(), false, 1, 1, blocks = listOf(Block("paragraph", 0, listOf(internal)))),
+            Cell(emptyList(), false, 1, 1, nestedTable = nested))), style = TableStyle(background = "#abcdef"))
+        val sections = listOf(Section(3, "Heading", listOf(
+            Block("heading", 0, listOf(bordered), level = 3, anchor = "Heading"),
+            Block("paragraph", 0, listOf(plain, unlinked)), Block("table", 0, emptyList(), table = table)), "Heading"))
+        val referenceBlocks = listOf(Block("table", 0, emptyList(), table = table), Block("paragraph", 0, listOf(bordered)))
+        val media = listOf(Media("Controlled.svg", "image", "Catalogue remains independent"))
+        val entry = decode(fixture('D', listOf(Item(1, spans = listOf(external)),
+            Item(2, blocks = referenceBlocks, kind = ReferenceKind.Fragment)), sections,
+            display = listOf(bordered), preamble = listOf(plain, unlinked), media = media))
+        assertEquals(listOf(bordered), entry.displayTitle)
+        assertEquals(listOf(plain, unlinked), entry.preamble)
+        assertEquals(sections, entry.sections)
+        assertEquals(listOf(external), entry.references[0].spans)
+        assertEquals(referenceBlocks, entry.references[1].blocks)
+        assertEquals(ReferenceKind.Fragment, entry.references[1].kind)
+        assertEquals(media, entry.media)
+        val occurrences = inlineImageOccurrences(entry)
+        assertEquals(18, occurrences.size)
+        assertEquals(14, occurrences.count { it.border })
+        assertEquals(4, occurrences.count { !it.border })
+        assertTrue(occurrences.all { it.widthPx == 40L && it.heightPx == null })
+        assertEquals(setOf("Controlled.svg"), inlineMediaFiles(entry))
+    }
+
+    @Test fun dprdRejectsUnknownBitsTruncationAndBorderFlagInOlderPayload() {
+        val image = InlineImage("Controlled.svg", 40, alt = "", tooltip = "", border = true)
+        val span = Span("link", "", "File:Controlled.svg", image = image)
+        val media = listOf(Media(image.file, "image", "Independent caption"))
+        val valid = fixture('D', emptyList(), display = listOf(span), media = media)
+        assertEquals(image, decode(valid).displayTitle.single().image)
+        for (length in valid.indices) assertThrows(Exception::class.java) { decode(valid.copyOf(length)) }
+        val marker = Wire(true, true).apply { string(image.file) }.out.toByteArray()
+        val at = valid.indices.first { it + marker.size <= valid.size && valid.copyOfRange(it, it + marker.size).contentEquals(marker) }
+        val flags = at + marker.size
+        for (unknown in listOf(0x20, 0x40, 0x80, 0xe0)) {
+            val bad = valid.copyOf(); bad[flags] = (bad[flags].toInt() or unknown).toByte()
+            assertThrows(Exception::class.java) { decode(bad) }
+        }
+        val old = valid.copyOf(); old[3] = 'C'.code.toByte()
+        assertThrows(Exception::class.java) { decode(old) }
+        val unbordered = span.copy(image = image.copy(border = false))
+        assertEquals(decode(fixture('C', emptyList(), display = listOf(unbordered), media = media)),
+            decode(fixture('D', emptyList(), display = listOf(unbordered), media = media)))
     }
 
     @Test fun dprcInlineImagesRejectMalformedFramingDedicatedTextAndMissingOrAmbiguousAssets() {

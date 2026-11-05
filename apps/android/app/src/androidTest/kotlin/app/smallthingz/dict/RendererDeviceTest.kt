@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
@@ -273,17 +274,18 @@ class RendererDeviceTest {
         val queries = java.util.Collections.synchronizedList(mutableListOf<String>())
         val opened = mutableListOf<String>()
         val links = mutableListOf<String>()
+        val forceFailure = java.util.concurrent.atomic.AtomicBoolean()
         val metadata = """{"query":{"pages":[{"imageinfo":[{"url":"https://fixture.invalid/controlled.png","descriptionurl":"https://commons.wikimedia.org/wiki/File:Different_asset_description","width":100,"height":300,"mime":"image/png"}]}]}}""".toByteArray()
         val cache = MediaCache(context, metadata = { query ->
             val attempt = metadataCalls.incrementAndGet(); queries += query
-            if (attempt == 1) throw java.io.IOException("Controlled first image request failure")
+            if (attempt == 1 || forceFailure.get()) throw java.io.IOException("Controlled image request failure")
             metadata
         },
             openMedia = { downloads.incrementAndGet(); java.io.ByteArrayInputStream(png) }, directory = directory)
         val file = "File:Controlled.png"
-        val first = Span("link", "", "File:File:Controlled.png", fontScale = 0f, small = true, image = InlineImage(file, 15))
+        val first = Span("link", "", "File:File:Controlled.png", fontScale = 0f, small = true, image = InlineImage(file, 15, border = true))
         val second = Span("link", "", "Target", fontScale = 0f, image = InlineImage(file, 30, alt = "Body alternative", tooltip = "Body tooltip"))
-        val unlinked = Span("text", "", image = InlineImage(file, 20, alt = "Unlinked alternative", tooltip = "Unlinked details"))
+        val unlinked = Span("text", "", image = InlineImage(file, 20, alt = "Unlinked alternative", tooltip = "Unlinked details", border = true))
         val heading = Block("heading", 0, listOf(Span("text", "Heading "), first), level = 3, anchor = "Heading")
         val legacyCatalogue = Span("link", "Legacy caption", first.target, classes = "wikidict-media")
         val entry = Entry("Inline image control", emptyList(), "language", "English", "en", listOf(Section(3, "Heading",
@@ -326,6 +328,21 @@ class RendererDeviceTest {
                 val nodes = compose.onAllNodes(images, useUnmergedTree = true).fetchSemanticsNodes(atLeastOneRootRequired = false)
                 nodes.size == 3 && nodes.all { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.StateDescription) == "Image unavailable" }
             }
+            val failedImage = compose.onAllNodes(images, useUnmergedTree = true)[0].captureToImage().asAndroidBitmap()
+            try {
+                var left = failedImage.width; var top = failedImage.height; var right = -1; var bottom = -1
+                for (y in 0 until failedImage.height) for (x in 0 until failedImage.width) {
+                    val pixel = failedImage.getPixel(x, y)
+                    if (kotlin.math.abs(android.graphics.Color.red(pixel) - 234) <= 2 &&
+                        kotlin.math.abs(android.graphics.Color.green(pixel) - 236) <= 2 &&
+                        kotlin.math.abs(android.graphics.Color.blue(pixel) - 240) <= 2) {
+                        left = minOf(left, x); top = minOf(top, y); right = maxOf(right, x); bottom = maxOf(bottom, y)
+                    }
+                }
+                assertTrue("The failed-state marker must preserve the compiled outside border", right >= left && bottom >= top)
+                assertEquals(17f * displayDensity, (right - left + 1).toFloat(), 2f)
+                assertEquals(17f * displayDensity, (bottom - top + 1).toFloat(), 2f)
+            } finally { failedImage.recycle() }
             // Retry/details on an unlinked image must be reachable without inventing a link.
             val manager = checkNotNull(inputModeManager.get())
             compose.runOnIdle {
@@ -350,19 +367,33 @@ class RendererDeviceTest {
             compose.onAllNodesWithText("Body alternative").assertCountEquals(0)
             val firstNode = compose.onAllNodes(images, useUnmergedTree = true)[0]
             assertNull(firstNode.fetchSemanticsNode().config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription))
-            assertEquals(15f * displayDensity, firstNode.fetchSemanticsNode().boundsInRoot.width, 1f)
+            assertEquals(17f * displayDensity, firstNode.fetchSemanticsNode().boundsInRoot.width, 1f)
             val captured = firstNode.captureToImage().asAndroidBitmap()
             try {
                 var left = captured.width; var top = captured.height; var right = -1; var bottom = -1
+                var borderLeft = captured.width; var borderTop = captured.height; var borderRight = -1; var borderBottom = -1
                 for (y in 0 until captured.height) for (x in 0 until captured.width) {
                     val pixel = captured.getPixel(x, y)
                     if (android.graphics.Color.red(pixel) > 240 && android.graphics.Color.green(pixel) < 15 && android.graphics.Color.blue(pixel) < 15) {
                         left = minOf(left, x); top = minOf(top, y); right = maxOf(right, x); bottom = maxOf(bottom, y)
                     }
+                    if (kotlin.math.abs(android.graphics.Color.red(pixel) - 234) <= 2 &&
+                        kotlin.math.abs(android.graphics.Color.green(pixel) - 236) <= 2 &&
+                        kotlin.math.abs(android.graphics.Color.blue(pixel) - 240) <= 2) {
+                        borderLeft = minOf(borderLeft, x); borderTop = minOf(borderTop, y)
+                        borderRight = maxOf(borderRight, x); borderBottom = maxOf(borderBottom, y)
+                    }
                 }
                 assertTrue("Zero-font image must contain actual visible bitmap ink", right >= left && bottom >= top)
                 assertEquals(15f * displayDensity, (right - left + 1).toFloat(), 2f)
                 assertEquals(45f * displayDensity, (bottom - top + 1).toFloat(), 2f)
+                assertTrue("The compiled border must paint outside the unchanged bitmap", borderLeft < left && borderTop < top && borderRight > right && borderBottom > bottom)
+                assertEquals(17f * displayDensity, (borderRight - borderLeft + 1).toFloat(), 2f)
+                assertEquals(47f * displayDensity, (borderBottom - borderTop + 1).toFloat(), 2f)
+                assertEquals(displayDensity, (left - borderLeft).toFloat(), 1f)
+                assertEquals(displayDensity, (top - borderTop).toFloat(), 1f)
+                assertEquals(displayDensity, (borderRight - right).toFloat(), 1f)
+                assertEquals(displayDensity, (borderBottom - bottom).toFloat(), 1f)
             } finally { captured.recycle() }
             firstNode.performClick()
             compose.runOnIdle { assertEquals(opened[0], opened[1]); assertTrue(links.isEmpty()) }
@@ -389,6 +420,75 @@ class RendererDeviceTest {
             compose.onNodeWithTag("entry-scroll").performScrollToIndex(0)
             compose.waitForIdle()
             assertEquals(2, metadataCalls.get()); assertEquals(1, downloads.get())
+
+            // The outside border must not give long fallback text extra wrapping width.
+            // A controlled narrow WindowInfo exercises the normal measurement path
+            // within the real window; no foreign display or app state is changed.
+            val longAlt = "Long alternative near a wrapping boundary. ".repeat(8)
+            val longImage = InlineImage(file, 15, alt = longAlt, tooltip = "Fallback details", border = true)
+            val fallbackSettings = mutableStateOf(settings.value.copy(allowImages = false))
+            val fallbackEntry = Entry("Fallback image control", emptyList(), "language", "English", "en",
+                listOf(Section(2, "English", listOf(Block("paragraph", 0,
+                    listOf(Span("text", "", image = longImage)))))), emptyList(),
+                media = listOf(Media(file, "image", "")), edition = "hewiktionary-20261001")
+            val expectedLayout = java.util.concurrent.atomic.AtomicReference<androidx.compose.ui.text.TextLayoutResult>()
+            forceFailure.set(true)
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                DictTheme("light") {
+                    val density = LocalDensity.current
+                    val actualWindow = androidx.compose.ui.platform.LocalWindowInfo.current
+                    val narrowWindow = remember(actualWindow, density.density) {
+                        object : androidx.compose.ui.platform.WindowInfo by actualWindow {
+                            override val containerSize = androidx.compose.ui.unit.IntSize(
+                                (180f * density.density).toInt(), actualWindow.containerSize.height)
+                        }
+                    }
+                    val style = androidx.compose.material3.MaterialTheme.typography.bodyLarge
+                    val measured = androidx.compose.ui.text.rememberTextMeasurer().measure(
+                        androidx.compose.ui.text.AnnotatedString(longAlt),
+                        style = androidx.compose.material3.LocalTextStyle.current.merge(style),
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        constraints = androidx.compose.ui.unit.Constraints(maxWidth = narrowWindow.containerSize.width,
+                            maxHeight = MaxComputedFontPixels.toInt()))
+                    SideEffect { expectedLayout.set(measured) }
+                    CompositionLocalProvider(LocalInlineImageCache provides cache,
+                        androidx.compose.ui.platform.LocalWindowInfo provides narrowWindow) {
+                        // The ordinary reader supplies private media/settings/edition locals
+                        // and retains its inert 12.dp side gutter for input-mode restoration.
+                        EntryView(fallbackEntry, false, {}, settings = fallbackSettings.value)
+                    }
+                }
+            } }
+            fun assertFallbackLayout(state: String) {
+                compose.waitUntil(15000) {
+                    val nodes = compose.onAllNodes(images, useUnmergedTree = true).fetchSemanticsNodes(atLeastOneRootRequired = false)
+                    nodes.size == 1 && nodes.single().config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.StateDescription) == state
+                }
+                val expected = checkNotNull(expectedLayout.get())
+                assertTrue("The alternative must actually wrap", expected.lineCount > 1)
+                val text = compose.onNodeWithText(longAlt, useUnmergedTree = true)
+                val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                text.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                val actual = layouts.single()
+                assertEquals(expected.size, actual.size)
+                assertEquals(expected.size.width, actual.layoutInput.constraints.maxWidth)
+                assertEquals(expected.size.height, actual.layoutInput.constraints.maxHeight)
+                assertEquals(expected.lineCount, actual.lineCount)
+                for (line in 0 until expected.lineCount) {
+                    assertEquals(expected.getLineEnd(line), actual.getLineEnd(line))
+                    assertEquals(expected.isLineEllipsized(line), actual.isLineEllipsized(line))
+                }
+                val outer = compose.onAllNodes(images, useUnmergedTree = true)[0].fetchSemanticsNode().boundsInRoot
+                val inner = text.fetchSemanticsNode().boundsInRoot
+                assertEquals(expected.size.width + 2f * displayDensity, outer.width, 1f)
+                assertEquals(displayDensity, inner.left - outer.left, 1f)
+                assertEquals(displayDensity, outer.right - inner.right, 1f)
+            }
+            assertFallbackLayout("Images disabled")
+            assertEquals(2, metadataCalls.get()); assertEquals(1, downloads.get())
+            compose.runOnIdle { fallbackSettings.value = fallbackSettings.value.copy(allowImages = true) }
+            assertFallbackLayout("Image unavailable")
+            assertEquals(3, metadataCalls.get()); assertEquals(1, downloads.get())
         } catch (problem: Throwable) {
             primaryFailure = problem
             throw problem

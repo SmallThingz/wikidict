@@ -74,6 +74,50 @@ class InlineImageTest {
         assertNull(logo.widthPx)
     }
 
+    @Test fun outsideBorderPreservesContentDimensionsZeroFontActionsAndAlternativeStates() {
+        // Controlled intrinsic ratio, not fetched metadata for the Italian flag.
+        val image = InlineImage("Controlled.svg", 40, alt = "", tooltip = "Authored detail", border = true)
+        val span = Span("link", "", "File:Controlled.svg", fontScale = 0f, small = true, image = image)
+        for (density in listOf(1f, 1.5f, 2f)) {
+            for (mime in listOf("image/svg+xml", "image/png")) {
+                val content = checkNotNull(inlineImagePixels(image, 100, 50, density, mime))
+                assertEquals(InlineImagePixels(40f * density, 20f * density), content)
+                assertEquals(content, inlineImagePixels(image.copy(border = false), 100, 50, density, mime))
+                assertEquals(content, inlineImagePixels(span.image!!, 100, 50, density, mime))
+                assertEquals(content, inlineImageOuterPixels(content, false, density))
+                val outer = inlineImageOuterPixels(content, true, density)
+                assertEquals(InlineImagePixels(42f * density, 22f * density), outer)
+                val font = Density(density, 2f)
+                with(font) { assertEquals(outer.width, outer.width.toSp().toPx(), 0f) }
+                for (metrics in listOf(InlineImageFontMetrics(-16, 4, 8f, 0), InlineImageFontMetrics(0, 0, 0f, 0))) {
+                    val height = inlineImageReservedHeight(metrics, outer.height).toInt()
+                    val top = inlineImageDrawTop(metrics, outer.height, height)
+                    assertTrue(top >= 0f && top + outer.height <= height)
+                    assertEquals(inlineImageDrawTop(metrics, content.height, height), top + density, 0f)
+                }
+            }
+        }
+        val huge = checkNotNull(inlineImagePixels(image.copy(widthPx = 0xffff_ffffL), 100, 50, 3f, "image/svg+xml"))
+        assertEquals(MaxComputedFontPixels, huge.width, 0f)
+        assertEquals(MaxComputedFontPixels + 6f, inlineImageOuterPixels(huge, true, 3f).width, 0f)
+        for (bad in listOf(0f, -1f, Float.NaN, Float.POSITIVE_INFINITY)) {
+            assertThrows(IllegalArgumentException::class.java) { inlineImageOuterPixels(InlineImagePixels(40f, 20f), true, bad) }
+            assertThrows(IllegalArgumentException::class.java) { inlineImageOuterPixels(InlineImagePixels(bad, 20f), true, 1f) }
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            inlineImageOuterPixels(InlineImagePixels(40f, 20f), true, Float.MAX_VALUE)
+        }
+        assertEquals("https://it.wiktionary.org/wiki/File%3AControlled.svg", inlineImageLinkUrl(span, "itwiktionary-20261001"))
+        assertNull(inlineImageLinkUrl(span.copy(kind = "text", target = ""), "itwiktionary-20261001"))
+        for (state in listOf(InlineImageAssetState.Disabled, InlineImageAssetState.Loading, InlineImageAssetState.Failed)) {
+            assertNull(inlineImageFallbackText(image, state))
+            assertNull(inlineImageFallbackText(image.copy(alt = null), state))
+            assertEquals("Alternative", inlineImageFallbackText(image.copy(alt = "Alternative"), state))
+        }
+        assertEquals("", span.image!!.alt)
+        assertEquals("Authored detail", span.image!!.tooltip)
+    }
+
     @Test fun canonicalAssetActionsCaptionOwnershipAndEgyptianOffsetsStayIndependent() {
         val image = InlineImage("File:Opaque.svg", 15)
         val span = Span("link", "", "File:File:Opaque.svg", image = image)

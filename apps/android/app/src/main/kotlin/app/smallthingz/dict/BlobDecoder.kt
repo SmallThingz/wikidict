@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2-DPRC decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2-DPRD decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
@@ -13,12 +13,13 @@ object BlobDecoder {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val magicVersion = r.byte()
-        require(magicVersion in 50..57 || magicVersion in 65..67) { "Unsupported presentation format" }
-        val version = if (magicVersion in 65..67) 57 else magicVersion
-        r.fontScales = magicVersion in 65..67
-        r.fontScaleBases = magicVersion in 66..67
-        r.tableStyles = magicVersion == 67
-        r.inlineImages = magicVersion == 67
+        require(magicVersion in 50..57 || magicVersion in 65..68) { "Unsupported presentation format" }
+        val version = if (magicVersion in 65..68) 57 else magicVersion
+        r.fontScales = magicVersion in 65..68
+        r.fontScaleBases = magicVersion in 66..68
+        r.tableStyles = magicVersion in 67..68
+        r.inlineImages = magicVersion in 67..68
+        r.imageBorders = magicVersion == 68
         r.explanations = version >= 51
         r.colors = version >= 52
         r.anchors = version >= 53
@@ -49,7 +50,7 @@ object BlobDecoder {
             r.indices(blocks); r.indices(blocks); r.indices(sections.size)
         }
         r.indices(sections.size)
-        val references = List(r.count(if (magicVersion == 67) 14 else if (version >= 57) 13 else 20)) {
+        val references = List(r.count(if (r.inlineImages) 14 else if (version >= 57) 13 else 20)) {
             val referenceKind = if (version < 57) ReferenceKind.Note else when (r.byte()) {
                 0 -> ReferenceKind.Note
                 1 -> ReferenceKind.Fragment
@@ -65,7 +66,7 @@ object BlobDecoder {
             } else null
             val group = r.string()
             val spans = r.spans()
-            val blocks = if (magicVersion == 67 && r.presence()) List(r.count(25)) { r.block() } else null
+            val blocks = if (r.inlineImages && r.presence()) List(r.count(25)) { r.block() } else null
             Reference(number, groupNumber, group, spans, referenceKind, blocks)
         }
         val media = List(r.count(9)) { Media(r.string(), r.enum(listOf("image", "audio")), r.string()) }
@@ -88,6 +89,7 @@ object BlobDecoder {
         var fontScaleBases = false
         var tableStyles = false
         var inlineImages = false
+        var imageBorders = false
         fun byte(): Int { require(buffer.remaining() >= 1); return buffer.get().toInt() and 255 }
         fun u16(): Int { require(buffer.remaining() >= 2); return buffer.short.toInt() and 65535 }
         fun u32(): Long { require(buffer.remaining() >= 4); return buffer.int.toLong() and 0xffffffffL }
@@ -133,9 +135,10 @@ object BlobDecoder {
             val fontScale = rawScale?.takeUnless { it == 1f && basis == FontScaleBasis.Context }
             val image = if (inlineImages && presence()) {
                 val file = string(); val flags = byte()
-                require(flags and 0xf0 == 0) { "Unknown inline image flags" }
+                require(flags and (if (imageBorders) 0xe0 else 0xf0) == 0) { "Unknown inline image flags" }
                 InlineImage(file, if (flags and 1 != 0) u32() else null, if (flags and 2 != 0) u32() else null,
-                    if (flags and 4 != 0) string() else null, if (flags and 8 != 0) string() else null)
+                    if (flags and 4 != 0) string() else null, if (flags and 8 != 0) string() else null,
+                    border = flags and 0x10 != 0)
             } else null
             Span(kind, text, target, trail, language, classes, direction,
                 bold=f and 1 != 0, italic=f and 2 != 0, code=f and 4 != 0, small=f and 8 != 0,

@@ -8,6 +8,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -55,6 +56,16 @@ import kotlin.math.floor
 internal const val InlineImageReplacement = "\ufffc"
 internal data class InlineImagePixels(val width: Float, val height: Float)
 internal data class InlineImageFontMetrics(val ascent: Int, val descent: Int, val xHeight: Float, val baselineShift: Int)
+
+/** The authored image size excludes its one-logical-pixel outside border. */
+internal fun inlineImageOuterPixels(content: InlineImagePixels, bordered: Boolean, density: Float): InlineImagePixels {
+    require(density.isFinite() && density > 0f && content.width.isFinite() && content.width > 0f &&
+        content.height.isFinite() && content.height > 0f)
+    if (!bordered) return content
+    return InlineImagePixels(content.width + 2f * density, content.height + 2f * density).also {
+        require(it.width.isFinite() && it.height.isFinite())
+    }
+}
 
 /** MediaWiki's client dimensions use positive half-away rounding. The physical
  * 960px cache thumbnail is not the original SVG's natural size. */
@@ -238,8 +249,9 @@ internal fun compiledInlineImageContent(spans: List<Span>, annotated: AnnotatedS
                         ?: baseSize.coerceAtLeast(1f)
                     InlineImagePixels(side, side)
                 }
-            val reserved = inlineImageReservedHeight(metrics, pixels.height)
-            result["compiled-image-$index"] = InlineTextContent(Placeholder(with(density) { pixels.width.toSp() },
+            val outer = inlineImageOuterPixels(pixels, image.border, density.density)
+            val reserved = inlineImageReservedHeight(metrics, outer.height)
+            result["compiled-image-$index"] = InlineTextContent(Placeholder(with(density) { outer.width.toSp() },
                 with(density) { reserved.toSp() }, PlaceholderVerticalAlign.TextCenter)) {
                 InlineImageOccurrence(span, pixels, metrics, occurrenceState, fallback, fallbackStyle, edition, onLink, placeholderColor) {
                     owner.retry(image.file)
@@ -258,6 +270,9 @@ private fun InlineImageOccurrence(span: Span, pixels: InlineImagePixels, metrics
     state: InlineImageAssetState, fallback: String?, fallbackStyle: TextStyle,
     edition: String, onLink: (String) -> Unit, placeholderColor: Color, retry: () -> Unit) {
     val image = checkNotNull(span.image)
+    val density = LocalDensity.current.density
+    val borderWidth = if (image.border) density else 0f
+    val outer = inlineImageOuterPixels(pixels, image.border, density)
     val ready = when (state) { is InlineImageAssetState.Ready -> state; is InlineImageAssetState.GeometryUnavailable -> state.resource; else -> null }
     val uri = LocalUriHandler.current
     var menu by remember { mutableStateOf(false) }
@@ -285,21 +300,31 @@ private fun InlineImageOccurrence(span: Span, pixels: InlineImagePixels, metrics
             is InlineImageAssetState.Ready -> ""
         }) + if (unresolvedSource) " Image link source unavailable" else ""
     }, contentAlignment = Alignment.Center) {
-        if (fallback != null) Text(fallback, style = fallbackStyle, overflow = TextOverflow.Ellipsis)
-        else Canvas(Modifier.fillMaxSize()) {
+        if (fallback == null || image.border) Canvas(Modifier.fillMaxSize()) {
             drawIntoCanvas { target ->
                 val canvas = target.nativeCanvas
-                val top = inlineImageDrawTop(metrics, pixels.height, size.height.toInt())
-                val bounds = RectF(0f, top, pixels.width, top + pixels.height)
+                val top = if (fallback != null) (size.height - outer.height) / 2f
+                    else inlineImageDrawTop(metrics, outer.height, size.height.toInt())
+                val bounds = RectF(borderWidth, top + borderWidth, borderWidth + pixels.width,
+                    top + borderWidth + pixels.height)
                 val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-                if (state is InlineImageAssetState.Ready) canvas.drawBitmap(state.decoded.bitmap, null, bounds, paint)
-                else {
+                if (fallback == null && state is InlineImageAssetState.Ready) canvas.drawBitmap(state.decoded.bitmap, null, bounds, paint)
+                else if (fallback == null) {
                     paint.color = placeholderColor.toArgb(); paint.style = Paint.Style.STROKE; paint.strokeWidth = 1f
                     canvas.drawRect(bounds, paint)
                     canvas.drawLine(bounds.left, bounds.top, bounds.right, bounds.bottom, paint)
                 }
+                if (image.border) {
+                    paint.color = 0xffeaecf0.toInt(); paint.style = Paint.Style.STROKE; paint.strokeWidth = borderWidth
+                    val half = borderWidth / 2f
+                    canvas.drawRect(RectF(half, top + half, outer.width - half, top + outer.height - half), paint)
+                }
             }
         }
+        if (fallback != null) Text(fallback, style = fallbackStyle, overflow = TextOverflow.Ellipsis,
+            modifier = if (image.border) with(LocalDensity.current) {
+                Modifier.requiredSize(pixels.width.toDp(), pixels.height.toDp())
+            } else Modifier)
         DropdownMenu(menu, { menu = false }) {
             if (state is InlineImageAssetState.GeometryUnavailable) DropdownMenuItem(text = { Text("Image size unavailable") }, enabled = false, onClick = {})
             image.tooltip?.takeIf { it.isNotEmpty() }?.let { tooltip ->
