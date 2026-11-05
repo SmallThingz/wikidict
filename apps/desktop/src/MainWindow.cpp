@@ -22,6 +22,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QFocusEvent>
 #include <QFontDatabase>
 #include <QFutureWatcher>
 #include <QGridLayout>
@@ -1597,6 +1598,21 @@ void MainWindow::updateReaderLayout() {
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == learningFocusCue_) {
+        if (event->type() == QEvent::FocusIn) {
+            // Qt clears the window cue before delivering this activation focus.
+            if (static_cast<QFocusEvent *>(event)->reason() == Qt::ActiveWindowFocusReason
+                && isActiveWindow() && focusWidget() == learningFocusCue_) {
+                setAttribute(Qt::WA_KeyboardFocusChange);
+                learningFocusCue_->update();
+            }
+            learningFocusCue_.clear();
+        } else if (event->type() == QEvent::KeyPress || event->type() == QEvent::MouseButtonPress
+            || (event->type() == QEvent::FocusOut
+                && static_cast<QFocusEvent *>(event)->reason() != Qt::ActiveWindowFocusReason)) {
+            learningFocusCue_.clear();
+        }
+    }
     if (watched == readerContent_ && event->type() == QEvent::Resize) {
         if (readerSplit_ && !compactNavigation_ && width() >= 720) {
             wideSplitterState_ = readerSplit_->saveState();
@@ -2885,6 +2901,9 @@ void MainWindow::showRandomWord() {
     } catch (const std::exception &error) { reportError(QStringLiteral("Random word"), error); }
 }
 void MainWindow::showLearningDialog(int tab) {
+    learningFocusCue_.clear();
+    const QPointer<QWidget> focusOpener = focusWidget();
+    const bool keyboardFocus = testAttribute(Qt::WA_KeyboardFocusChange);
     // A resize while this modal is open must leave its eventual focus opener
     // visible, rather than switching away from the sidebar on Close.
     if (!compactNavigation_) {
@@ -3303,6 +3322,20 @@ void MainWindow::showLearningDialog(int tab) {
         }
     });
     dialog.exec();
+    // Modal activation restores the child focus with ActiveWindowFocusReason,
+    // which clears Qt's keyboard-focus cue. Preserve it when navigation was
+    // keyboard-driven before or inside the dialog, without moving child focus.
+    if ((keyboardFocus || dialog.testAttribute(Qt::WA_KeyboardFocusChange))
+        && focusOpener && focusWidget() == focusOpener) {
+        setAttribute(Qt::WA_KeyboardFocusChange);
+        focusOpener->update();
+        // The parent may receive activation focus only after exec has returned.
+        // Do not keep a token once that activation has already completed.
+        if (!isActiveWindow() || QApplication::focusWidget() != focusOpener) {
+            learningFocusCue_ = focusOpener;
+            focusOpener->installEventFilter(this);
+        }
+    }
 }
 
 void MainWindow::applyTheme() {

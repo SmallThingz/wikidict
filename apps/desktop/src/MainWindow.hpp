@@ -2,6 +2,7 @@
 
 #include <QJsonObject>
 #include <QMainWindow>
+#include <QPointer>
 #include <QSet>
 #include <QVector>
 #include <memory>
@@ -99,6 +100,7 @@ private:
     QString originRoot_;
     QString originEdition_;
     LearningStore learning_;
+    QPointer<QWidget> learningFocusCue_;
     QLineEdit *search_ = nullptr;
     QListWidget *results_ = nullptr;
     QComboBox *language_ = nullptr;

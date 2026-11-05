@@ -40,6 +40,7 @@
 #include <QMessageBox>
 #include <QMenu>
 #include <QStatusBar>
+#include <QStyleOption>
 #include <QPalette>
 #include <QPointer>
 #include <QProgressBar>
@@ -1547,6 +1548,123 @@ private slots:
         QCOMPARE(window.sections_, sections);
         QTRY_VERIFY(window.back_->geometry().top() <= window.sections_->geometry().bottom());
         QTRY_VERIFY(window.sections_->geometry().top() <= window.back_->geometry().bottom());
+    }
+
+    void learningDialogRetainsKeyboardFocusCue_data() {
+        QTest::addColumn<bool>("keyboardOpen");
+        QTest::addColumn<bool>("keyboardClose");
+        QTest::addColumn<bool>("activateBeforeReturn");
+        QTest::newRow("keyboard-close") << true << true << false;
+        QTest::newRow("mouse-close") << false << false << false;
+        QTest::newRow("mouse-open-keyboard-close") << false << true << false;
+        QTest::newRow("keyboard-close-already-active") << true << true << true;
+    }
+
+    void learningDialogRetainsKeyboardFocusCue() {
+        QFETCH(bool, keyboardOpen);
+        QFETCH(bool, keyboardClose);
+        QFETCH(bool, activateBeforeReturn);
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.resize(1000, 700);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.activateWindow();
+        window.search_->setFocus(Qt::MouseFocusReason);
+        QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(window.search_));
+        QPushButton *saved = nullptr;
+        for (auto *button : window.searchPane_->findChildren<QPushButton *>())
+            if (button->text() == QStringLiteral("Saved")) saved = button;
+        QVERIFY(saved && saved->isVisible());
+        const QByteArray entryBefore = window.currentJson_;
+        const QString queryBefore = window.search_->text();
+        const auto historyKeys = [&] {
+            QStringList keys;
+            for (const SavedWord &word : window.learning_.history()) keys.append(word.key);
+            return keys;
+        };
+        const QStringList historyBefore = historyKeys();
+        if (keyboardOpen) {
+            for (int step = 0; step < 32 && QApplication::focusWidget() != saved; ++step) {
+                QWidget *focused = QApplication::focusWidget(); QVERIFY(focused);
+                QTest::keyClick(focused, Qt::Key_Tab);
+            }
+            QCOMPARE(QApplication::focusWidget(), static_cast<QWidget *>(saved));
+            QStyleOption before;
+            before.initFrom(saved);
+            QVERIFY(before.state.testFlag(QStyle::State_KeyboardFocusChange));
+        }
+        bool closed = false;
+        QTimer::singleShot(0, &window, [&] {
+            QPointer<QDialog> dialog = window.findChild<QDialog *>(QStringLiteral("learningDialog"));
+            auto cleanup = qScopeGuard([&] { if (dialog && dialog->isVisible()) dialog->reject(); });
+            QVERIFY(dialog && dialog == QApplication::activeModalWidget());
+            auto *tabs = dialog->findChild<QTabWidget *>(QStringLiteral("learningDialogTabs"));
+            auto *box = dialog->findChild<QDialogButtonBox *>(QStringLiteral("learningDialogButtons"));
+            QVERIFY(tabs && box);
+            QPushButton *close = box->button(QDialogButtonBox::Close); QVERIFY(close);
+            if (keyboardClose) {
+                QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(tabs->tabBar()));
+                QTest::keyClick(tabs->tabBar(), Qt::Key_Tab, Qt::ShiftModifier);
+                QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(close));
+                QTest::keyClick(close, Qt::Key_Space);
+            } else {
+                QTest::mouseClick(close, Qt::LeftButton);
+            }
+            QVERIFY(!dialog->isVisible());
+            if (activateBeforeReturn) {
+                window.activateWindow();
+                QTRY_VERIFY(window.isActiveWindow());
+                QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(saved));
+            }
+            closed = true;
+        });
+        if (keyboardOpen) QTest::keyClick(saved, Qt::Key_Space);
+        else QTest::mouseClick(saved, Qt::LeftButton);
+        QVERIFY(closed);
+        // Check the remembered opener immediately after the modal returns,
+        // then check again after any deferred parent-window activation.
+        QCOMPARE(window.focusWidget(), static_cast<QWidget *>(saved));
+        QStyleOption returned;
+        returned.initFrom(saved);
+        QCOMPARE(returned.state.testFlag(QStyle::State_KeyboardFocusChange), keyboardOpen || keyboardClose);
+        // A real compositor can reactivate the parent after exec returns. The
+        // offscreen platform needs that normal Qt activation supplied explicitly;
+        // do not repair child focus or set the cue in the fixture.
+        qInfo() << "FOCUS_CUE_PARENT_ACTIVE_AFTER_EXEC" << window.isActiveWindow();
+        if (QGuiApplication::platformName() == QStringLiteral("offscreen") && !window.isActiveWindow())
+            QTimer::singleShot(0, &window, [&window] { window.activateWindow(); });
+        QTRY_VERIFY(window.isActiveWindow());
+        QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(saved));
+        QStyleOption activated;
+        activated.initFrom(saved);
+        QCOMPARE(activated.state.testFlag(QStyle::State_KeyboardFocusChange), keyboardOpen || keyboardClose);
+        if (activateBeforeReturn) {
+            // A click which keeps child focus must not leave a stale token to
+            // restore a keyboard cue on an unrelated later activation.
+            QVERIFY(window.meta_->isVisible());
+            QCOMPARE(window.meta_->focusPolicy(), Qt::NoFocus);
+            QTest::mouseClick(window.meta_, Qt::LeftButton);
+            QCOMPARE(QApplication::focusWidget(), static_cast<QWidget *>(saved));
+            QWidget other;
+            other.show();
+            other.activateWindow();
+            QTRY_VERIFY(other.isActiveWindow());
+            window.activateWindow();
+            QTRY_VERIFY(window.isActiveWindow());
+            QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(saved));
+            QStyleOption reactivated;
+            reactivated.initFrom(saved);
+            QVERIFY(!reactivated.state.testFlag(QStyle::State_KeyboardFocusChange));
+        }
+        // A subsequent genuine mouse focus change must cancel any pending cue.
+        QTest::mouseClick(window.search_, Qt::LeftButton);
+        QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(window.search_));
+        QStyleOption mouseFocused;
+        mouseFocused.initFrom(window.search_);
+        QVERIFY(!mouseFocused.state.testFlag(QStyle::State_KeyboardFocusChange));
+        QCOMPARE(window.currentJson_, entryBefore);
+        QCOMPARE(window.search_->text(), queryBefore);
+        QCOMPARE(historyKeys(), historyBefore);
     }
 
     void learningDialogTracksNarrowAvailableGeometry() {
