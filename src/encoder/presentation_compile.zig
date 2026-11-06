@@ -3066,6 +3066,7 @@ pub const Renderer = struct {
     heading_source: ?[]const u8 = null,
     // Enabled only by the full-page heading observation, never by a reader.
     page_html_heading_openings: ?*std.ArrayList(usize) = null,
+    page_wiki_heading_openings: ?*std.ArrayList(usize) = null,
     fallbacks: @import("presentation_fallback.zig").Report = .{},
     a: A,
     context: Context,
@@ -8564,6 +8565,18 @@ pub const Renderer = struct {
         const boundary = std.mem.indexOfAnyPos(u8, input, cursor, "<>\r\n") orelse return true;
         return input[boundary] != '>';
     }
+    // Sanitizer splits on each raw '<' before wiki-link parsing. These
+    // source-local name fragments cannot be a registered HTML tag: either
+    // the name is unfinished, or a wiki delimiter is part of the tag name.
+    // No attribute, closing-tag, or complete HTML grammar is admitted here.
+    fn wikiDelimitedHtmlName(input: []const u8, at: usize) bool {
+        if (at >= input.len or input[at] != '<') return false;
+        var cursor = at + 1;
+        if (cursor >= input.len or !std.ascii.isAlphabetic(input[cursor])) return false;
+        while (cursor < input.len and (std.ascii.isAlphanumeric(input[cursor]) or input[cursor] == '-')) : (cursor += 1) {}
+        return cursor == input.len or input[cursor] == '#' or starts(input[cursor..], "]]");
+    }
+
     fn hasExplicitWikiLabel(self: *const Renderer, style: Style) bool {
         const label = self.explicit_wiki_label orelse return false;
         return (style.kind == .link or style.kind == .external_link) and
@@ -9605,6 +9618,62 @@ pub const Renderer = struct {
         return try self.plainWithMagicLinks(plain_text[emitted..], style, tail);
     }
 
+    // A lone visible close brace followed only by hidden category membership
+    // cannot make the following opener a physical table control. Keep that raw
+    // opener literal; do not synthesize a table or exempt arbitrary inline syntax.
+    fn categoryPrefixedLiteralTableOpening(self: *const Renderer, input: []const u8, plain_text: []const u8, at: usize) bool {
+        const base = @intFromPtr(input.ptr);
+        const ptr = @intFromPtr(plain_text.ptr);
+        if (ptr < base or ptr - base > input.len or plain_text.len > input.len - (ptr - base) or
+            at + 2 > plain_text.len or !starts(plain_text[at..], "{|")) return false;
+        const marker = ptr - base + at;
+        var line_start = marker;
+        while (line_start != 0 and input[line_start - 1] != '\n' and input[line_start - 1] != '\r') line_start -= 1;
+        const prefix = input[line_start..marker];
+        if (prefix.len < 6 or prefix[0] != '}') return false;
+        var cursor: usize = 1;
+        var categories: usize = 0;
+        while (cursor < prefix.len) {
+            if (!starts(prefix[cursor..], "[[")) return false;
+            const end = std.mem.indexOfPos(u8, prefix, cursor + 2, "]]" ) orelse return false;
+            const target = prefix[cursor + 2 .. end];
+            if (target.len == 0 or target[0] == ':' or std.mem.indexOfAny(u8, target, "[]{}<>|&\r\n") != null or
+                self.namespaceOfTarget(target) != 14) return false;
+            cursor = end + 2;
+            categories += 1;
+        }
+        return categories != 0;
+    }
+    fn categoryPrefixedLiteralTableOpeningInDomain(self: *const Renderer, input: []const u8, plain_text: []const u8, at: usize) bool {
+        if (!self.categoryPrefixedLiteralTableOpening(input, plain_text, at)) return false;
+        var domain = self.inline_source_domain;
+        var remaining: usize = max_depth + 1;
+        while (domain) |current| {
+            if (remaining == 0 or !self.categoryPrefixedLiteralTableOpening(current.source, plain_text, at)) return false;
+            remaining -= 1;
+            domain = current.parent;
+        }
+        return true;
+    }
+    fn literalCategoryPrefixedTableOpenings(self: *Renderer, input: []const u8, plain_text: []const u8, style: Style, tail: []const u8) Error!?usize {
+        if (style.provenance != .parsed or style.code or style.preserve_whitespace or
+            style.kind != .text or style.target.len != 0 or style.self_link_target != null) return null;
+        var emitted: usize = 0;
+        var search: usize = 0;
+        var found = false;
+        while (std.mem.indexOfPos(u8, plain_text, search, "{|")) |at| {
+            search = at + 2;
+            if (!self.categoryPrefixedLiteralTableOpeningInDomain(input, plain_text, at)) continue;
+            _ = try self.plainWithMagicLinks(plain_text[emitted..at], style, "");
+            try self.protectedLiteral(plain_text[at .. at + 2], style);
+            self.fallbacks.literal_markup = true;
+            self.fallbacks.malformed_table = true;
+            emitted = at + 2;
+            found = true;
+        }
+        if (!found) return null;
+        return try self.plainWithMagicLinks(plain_text[emitted..], style, tail);
+    }
     fn literalPlainTableTails(self: *Renderer, input: []const u8, plain_text: []const u8, style: Style, tail: []const u8) Error!?usize {
         if (style.provenance != .parsed or style.code or style.preserve_whitespace or
             style.kind != .text or style.target.len != 0 or style.self_link_target != null) return null;
@@ -9810,6 +9879,15 @@ pub const Renderer = struct {
                         continue;
                     }
                     if (s.provenance == .parsed and interruptedUnregisteredHtmlName(input, it.cursor)) {
+                        self.fallbacks.literal_markup = true;
+                        try self.protectedLiteral("<", s);
+                        it.cursor += 1;
+                        continue;
+                    }
+                    if (s.provenance == .parsed and s.kind == .text and s.target.len == 0 and
+                        s.self_link_target == null and !s.missing_nonaction and
+                        wikiDelimitedHtmlName(input, it.cursor))
+                    {
                         self.fallbacks.literal_markup = true;
                         try self.protectedLiteral("<", s);
                         it.cursor += 1;
@@ -10047,6 +10125,8 @@ pub const Renderer = struct {
                     diagnostic.self_link_target = null;
                     try self.generatedDiagnostic("[malformed link] ", diagnostic);
                     self.fallbacks.literal_markup = true;
+                } else if (try self.literalCategoryPrefixedTableOpenings(input, token.text, s, input[it.cursor..])) |consumed| {
+                    it.cursor += consumed;
                 } else if (try self.literalPlainTableTails(input, token.text, s, input[it.cursor..])) |consumed| {
                     it.cursor += consumed;
                 } else if (try self.malformedPlain(prepared_missing, token.text, s, input[it.cursor..], depth)) |consumed| {
@@ -12629,6 +12709,16 @@ pub const Renderer = struct {
             }
             if (heading) |h| {
                 try self.bodyRawBlock(&blocks, input, h.title, &body_quotes, .heading, "", "", h.level);
+                if (h.level == 2 and self.body_depth == 1 and !anchored_inline and
+                    !self.in_reference and !self.pre_block and !self.parsed_pre and
+                    self.body_link_target.len == 0 and end == physical_end and
+                    (start == 0 or input[start - 1] == '\n'))
+                {
+                    if (self.page_wiki_heading_openings) |openings| if (self.heading_source) |root| {
+                        if (input.ptr == root.ptr and input.len == root.len)
+                            try openings.append(self.a, start);
+                    };
+                }
                 @memset(&counts, 0);
                 continue;
             }
@@ -43732,4 +43822,120 @@ test "extended catalog preserves heading promotion above128 at the final capacit
     try std.testing.expectEqualStrings("body", r.media.items[128].caption);
     try std.testing.expectEqual(presentation_types.max_media_assets, r.media.items.len);
     try std.testing.expect(!r.fallbacks.render_limit);
+}
+
+test "wiki-delimited HTML name fragments retain literal angles and independent navigation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, reference: []const u8 }{
+        .{ .source = "<span#x|<b>word</b>> [[Next|next]]", .reference = "&lt;span#x|<b>word</b>> [[Next|next]]" },
+        .{ .source = "[[<span#Anchor|<span]] [[Next|next]]", .reference = "[[&lt;span#Anchor|&lt;span]] [[Next|next]]" },
+        .{ .source = "'''<ruby#Anchor|word>''' [[Next|next]]", .reference = "'''&lt;ruby#Anchor|word&gt;''' [[Next|next]]" },
+        .{ .source = "<templatestyles]] [[Next|next]]", .reference = "&lt;templatestyles]] [[Next|next]]" },
+    };
+    for (cases) |case| {
+        var actual: Renderer = .{ .a = a, .context = .{} };
+        var reference: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try actual.renderBody(case.source);
+        const expected = try reference.renderBody(case.reference);
+        try JaHtmlInterruptedLinkFixture.sameStored(a, &actual, blocks, &reference, expected);
+        try std.testing.expect(actual.fallbacks.literal_markup);
+        var next_links: usize = 0;
+        var bold_child: usize = 0;
+        for (blocks) |block_value| for (block_value.spans) |span| {
+            if (std.mem.eql(u8, span.text, "word") and span.flags.bold and span.target.len == 0) bold_child += 1;
+            if (std.mem.eql(u8, span.target, "Next")) {
+                next_links += 1;
+                try std.testing.expectEqualStrings("next", span.text);
+                try std.testing.expect(span.kind == .link and !span.flags.bold);
+            }
+            try std.testing.expect(std.mem.indexOfAny(u8, span.target, "<>") == null);
+        };
+        try std.testing.expectEqual(@as(usize, 1), next_links);
+        if (starts(case.source, "<span#x|")) try std.testing.expectEqual(@as(usize, 1), bold_child);
+    }
+}
+
+test "wiki-delimited name proof leaves valid HTML attributes protected input and parsed guards strict" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "<span>", "</span>", "<span class=x>", "<span title='#x'>", "<span/>", "<span|x>", "<span\n", "<1span#x>", "<" }) |source|
+        try std.testing.expect(!Renderer.wikiDelimitedHtmlName(source, 0));
+    var valid: Renderer = .{ .a = a, .context = .{} };
+    const valid_spans = try valid.parseSpans("<span style='font-weight:bold'>[[Target|kept]]</span>", .{});
+    var kept = false;
+    for (valid_spans) |span| if (std.mem.eql(u8, span.target, "Target")) {
+        kept = true;
+        try std.testing.expect(span.kind == .link and span.flags.bold);
+    };
+    try std.testing.expect(kept and !valid.fallbacks.literal_markup);
+    var protected: Renderer = .{ .a = a, .context = .{} };
+    const protected_spans = try protected.parseSpans("<nowiki><span#x|[[Target]]</nowiki>", .{});
+    try std.testing.expectEqualStrings("<span#x|[[Target]]", try flattened(a, protected_spans));
+    for (protected_spans) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
+    var inherited: Renderer = .{ .a = a, .context = .{} };
+    const inherited_spans = try inherited.parseSpans("<span#x", .{ .kind = .link, .target = "Outer" });
+    for (inherited_spans) |span| try std.testing.expect(span.provenance == .parsed);
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("<span#x>"));
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("<span>"));
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("[[uncompiled]]"));
+}
+
+test "category-prefixed nonleading table opener retains source literal actions and styles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").french_test_fixture); defer ns.deinit();
+    const source = "}[[Catégorie:Ancien]]{| class=wikitable [[Target|label]] ''kept''";
+    var renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns } };
+    const spans = try renderer.parseSpans(source, .{});
+    try std.testing.expectEqualStrings("}{| class=wikitable label kept", try flattened(a, spans));
+    try std.testing.expect(renderer.fallbacks.literal_markup and renderer.fallbacks.malformed_table);
+    try std.testing.expect(!renderer.fallbacks.missing_template);
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "Target"));
+    var literal = false; var italic = false;
+    for (spans) |span| {
+        if (std.mem.eql(u8, span.text, "{|")) {
+            try std.testing.expect(span.provenance == .protected_literal and span.kind == .text and span.target.len == 0);
+            literal = true;
+        }
+        if (std.mem.eql(u8, span.text, "kept") and span.flags.italic) italic = true;
+    }
+    try std.testing.expect(literal and italic);
+    const marker = std.mem.indexOf(u8, source, "{|").?;
+    try std.testing.expect(renderer.categoryPrefixedLiteralTableOpening(source, source, marker));
+    const detached = try a.dupe(u8, source);
+    try std.testing.expect(!renderer.categoryPrefixedLiteralTableOpening(source, detached, marker));
+    const containing = "<b>}[[Catégorie:Ancien]]{|</b>";
+    const child = containing[3 .. containing.len - 4];
+    const child_marker = std.mem.indexOf(u8, child, "{|").?;
+    const outer_domain: InlineSourceDomain = .{ .source = containing, .parent = null };
+    var nested: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns }, .inline_source_domain = &outer_domain };
+    try std.testing.expect(nested.categoryPrefixedLiteralTableOpening(child, child, child_marker));
+    try std.testing.expect(!nested.categoryPrefixedLiteralTableOpeningInDomain(child, child, child_marker));
+    var unknown_namespace: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expect(!unknown_namespace.categoryPrefixedLiteralTableOpening(source, source, marker));
+    for ([_][]const u8{
+        "{|", "before {|", "}{|", "[[Catégorie:Ancien]]{|", "}}[[Catégorie:Ancien]]{|",
+        "x}[[Catégorie:Ancien]]{|", "}[[Unknown:Ancien]]{|", "}[[:Catégorie:Ancien]]{|",
+        "}[[Catégorie:Ancien|sort]]{|", "}[[Catégorie:Ancien]] {|", "}[[Catégorie:Ancien]]\n{|",
+        "<nowiki>}[[Catégorie:Ancien]]{|</nowiki>", "<span title=\"}[[Catégorie:Ancien]]{|\">",
+        "[[Outer|}[[Catégorie:Ancien]]{|]]", "{{Outer|}[[Catégorie:Ancien]]{|}}",
+    }) |negative| {
+        const at = std.mem.indexOf(u8, negative, "{|").?;
+        try std.testing.expect(!renderer.categoryPrefixedLiteralTableOpening(negative, negative, at));
+    }
+    for ([_]Style{ .{ .kind = .link, .target = "Outer" }, .{ .code = true }, .{ .preserve_whitespace = true }, .{ .provenance = .protected_literal } }) |style| {
+        try std.testing.expect((try renderer.literalCategoryPrefixedTableOpenings(source, source, style, "")) == null);
+    }
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(source));
+    const document = @import("presentation_document.zig");
+    try std.testing.expectError(error.UncompiledPresentation, document.compileAlloc(a, "guard", .supplemental, null, "", "before {| after", null));
+    try std.testing.expectError(error.UncompiledTemplate, document.compileAlloc(a, "guard", .supplemental, null, "", "{{unexpanded|body}}", null));
+    // A genuine physical table remains a table; category removal is not a table rewrite.
+    var table: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns } };
+    const blocks = try table.renderBody("{| class=wikitable\n| [[Target|cell]]\n|}");
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expect(blocks[0].kind == .table);
 }

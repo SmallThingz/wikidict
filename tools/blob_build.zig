@@ -311,6 +311,8 @@ fn mmapPath(io: std.Io, path: []const u8) !Mapped {
         @as([]align(std.heap.page_size_min) const u8, &.{})
     else
         try std.posix.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, file.handle, 0);
+    errdefer if (bytes.len != 0) std.posix.munmap(bytes);
+    if (captured_writer_inputs) |inputs| try inputs.mapped(path, file);
     return .{ .bytes = bytes, .identity = identity };
 }
 
@@ -413,11 +415,8 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
             found = true;
             const module_path = try std.fmt.allocPrint(a, "{s}/modules/{d}.lua", .{ expander_root, parsed.value.page_id });
             defer a.free(module_path);
-            const source = try std.Io.Dir.cwd().readFileAlloc(io, module_path, a, .limited(64 * 1024 * 1024));
+            const source = try readLanguageMetadataSource(io, a, module_path, 64 * 1024 * 1024, parsed.value.sha256);
             defer a.free(source);
-            var digest: [32]u8 = undefined;
-            std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
-            if (!std.mem.eql(u8, parsed.value.sha256, &std.fmt.bytesToHex(digest, .lower))) return error.LanguageSourceIdentityMismatch;
             if (module.nom_names) try out.addNomLanguageDataLua(source) else if (module.local_names) try out.addLocalNamesLua(source) else
                 try loadCanonicalNameModule(io, a, expander_root, namespaces, manifest.bytes, parsed.value.page_id, source, &out);
         }
@@ -479,11 +478,8 @@ fn loadCanonicalNameModule(io: std.Io, a: std.mem.Allocator, root: []const u8, n
         count += 1;
         const path = try std.fmt.allocPrint(a, "{s}/modules/{d}.lua", .{ root, selected });
         defer a.free(path);
-        const source = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(64 * 1024 * 1024));
+        const source = try readLanguageMetadataSource(io, a, path, 64 * 1024 * 1024, &expected);
         errdefer a.free(source);
-        var digest: [32]u8 = undefined;
-        std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
-        if (!std.mem.eql(u8, &expected, &std.fmt.bytesToHex(digest, .lower))) return error.LanguageSourceIdentityMismatch;
         if (owned_source) |bytes| a.free(bytes);
         owned_source = source;
         current = source;
@@ -523,11 +519,8 @@ fn loadPositionalLanguageModules(io: std.Io, a: std.mem.Allocator, root: []const
     if (provider_count != 1) return error.DuplicateLanguageMetadataModule;
     const provider_path = try std.fmt.allocPrint(a, "{s}/modules/{d}.lua", .{ root, page });
     defer a.free(provider_path);
-    const provider_source = try std.Io.Dir.cwd().readFileAlloc(io, provider_path, a, .limited(64 * 1024 * 1024));
+    const provider_source = try readLanguageMetadataSource(io, a, provider_path, 64 * 1024 * 1024, &provider_digest);
     defer a.free(provider_source);
-    var hash: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(provider_source, &hash, .{});
-    if (!std.mem.eql(u8, &provider_digest, &std.fmt.bytesToHex(hash, .lower))) return error.LanguageSourceIdentityMismatch;
     const provider_proof = (try language_registry.Registry.provePositionalLanguageProvider(a, provider_source)) orelse return;
     var names: std.StringHashMap(void) = .init(a);
     defer {
@@ -547,10 +540,8 @@ fn loadPositionalLanguageModules(io: std.Io, a: std.mem.Allocator, root: []const
         names.put(owned_name, {}) catch |err| { a.free(owned_name); return err; };
         const path = try std.fmt.allocPrint(a, "{s}/modules/{d}.lua", .{ root, parsed.value.page_id });
         defer a.free(path);
-        const source = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(2 * 1024 * 1024));
+        const source = try readLanguageMetadataSource(io, a, path, 2 * 1024 * 1024, parsed.value.sha256);
         defer a.free(source);
-        std.crypto.hash.sha2.Sha256.hash(source, &hash, .{});
-        if (!std.mem.eql(u8, parsed.value.sha256, &std.fmt.bytesToHex(hash, .lower))) return error.LanguageSourceIdentityMismatch;
         try registry.addPositionalLanguageDataLua(source, provider_proof, title.text);
     }
 }
@@ -578,11 +569,8 @@ fn loadNamedLanguageModules(io: std.Io, a: std.mem.Allocator, root: []const u8, 
             continue;
         const path = try std.fmt.allocPrint(a, "{s}/modules/{d}.lua", .{ root, parsed.value.page_id });
         defer a.free(path);
-        const source = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(2 * 1024 * 1024));
+        const source = try readLanguageMetadataSource(io, a, path, 2 * 1024 * 1024, parsed.value.sha256);
         defer a.free(source);
-        var digest: [32]u8 = undefined;
-        std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
-        if (!std.mem.eql(u8, parsed.value.sha256, &std.fmt.bytesToHex(digest, .lower))) return error.LanguageSourceIdentityMismatch;
         try registry.addLanguageDataLua(source, kind);
     }
 }
@@ -650,7 +638,7 @@ fn loadLiteralLanguageTemplates(io: std.Io, a: std.mem.Allocator, root: []const 
         else => return err,
     };
     defer index.deinit();
-    var templates = (try dump_source.TemplateSource.open(io, a, root, index.bytes)) orelse return;
+    var templates = (try openLanguageTemplateSource(io, a, root, index.bytes)) orelse return;
     defer templates.deinit();
     const index_kind = dump_source.pageIndexKind(index.bytes);
     var rows = std.mem.splitScalar(u8, index.bytes, '\n');
@@ -748,7 +736,7 @@ fn loadSourceLanguageBanners(io: std.Io, a: std.mem.Allocator, root: []const u8,
         };
         if (!name_table and !registry.codes.contains(code)) continue;
         if (templates == null) {
-            templates = (try dump_source.TemplateSource.open(io, a, root, index.bytes)) orelse return;
+            templates = (try openLanguageTemplateSource(io, a, root, index.bytes)) orelse return;
             const behavior_path = try std.fs.path.join(a, &.{ root, "behavior-switches.tsv" }); defer a.free(behavior_path);
             const bytes = std.Io.Dir.cwd().readFileAlloc(io, behavior_path, a, .limited(1024 * 1024)) catch |err| switch (err) { error.FileNotFound => null, else => return err };
             defer if (bytes) |value| a.free(value);
@@ -861,7 +849,7 @@ fn loadSourceEquivalentLanguageTemplates(io: std.Io, a: std.mem.Allocator, root:
             if (!std.mem.eql(u8, before, trusted.code)) owner.value_ptr.* = null;
         }
         const wrapper = rows.items[terminal];
-        if (templates == null) templates = (try dump_source.TemplateSource.open(io, a, root, index.bytes)) orelse return;
+        if (templates == null) templates = (try openLanguageTemplateSource(io, a, root, index.bytes)) orelse return;
         const raw = (try templates.?.lookup(wrapper.ordinal, wrapper.row.page_id, wrapper.row.revision_id)) orelse return error.MissingLanguageTemplateSource;
         if (raw.len > 4096) continue;
         const decoded = if (wrapper.row.source_needs_decode) try xml_decode.decodeSinglePassAlloc(a, raw) else null; defer if (decoded) |value| a.free(value);
@@ -2214,6 +2202,8 @@ fn runContinuous(
 pub fn main(init: std.process.Init) !void {
     const a = std.heap.smp_allocator;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
+    if (args.len > 1 and std.mem.eql(u8, args[1], "--captured-page"))
+        return runCapturedWriterCli(init, args);
     if (args.len < 3) {
         diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N] [--audit-presentation-errors [--audit-expanded-bytes N]]\n", .{});
         return error.Usage;
@@ -15562,4 +15552,1443 @@ test "normal Writer retained DE Polish states preserves193 flags whole tables re
         try std.testing.expect(!std.mem.eql(u8, reason, "render_limit"));
     }
     try std.testing.expect(unsupported);
+}
+
+// Optional request-lifetime observer. Ordinary builds retain their normal reads.
+threadlocal var captured_writer_inputs: ?*CapturedWriterInputs = null;
+const CapturedWriterInputs = struct {
+    const Record = struct {
+        path: []const u8,
+        role: []const u8,
+        identity: ?CapturedWriterSourceFileIdentity,
+        sha256: ?[]const u8 = null,
+        error_name: ?[]const u8 = null,
+        file: ?std.Io.File = null,
+    };
+    io: std.Io,
+    a: std.mem.Allocator,
+    records: std.ArrayList(Record) = .empty,
+
+    fn deinit(self: *CapturedWriterInputs) void {
+        for (self.records.items) |record| {
+            if (record.file) |file| file.close(self.io);
+            self.a.free(record.path);
+            self.a.free(record.role);
+            if (record.sha256) |value| self.a.free(value);
+            if (record.error_name) |value| self.a.free(value);
+        }
+        self.records.deinit(self.a);
+    }
+    fn find(self: *const CapturedWriterInputs, path: []const u8) ?usize {
+        for (self.records.items, 0..) |record, i| if (std.mem.eql(u8, record.path, path)) return i;
+        return null;
+    }
+    fn hold(self: *CapturedWriterInputs, path: []const u8, role: []const u8) !usize {
+        if (!std.fs.path.isAbsolute(path)) return error.InvalidCapturedWriterPath;
+        if (self.find(path)) |index| return index;
+        var open_error: ?anyerror = null;
+        const file: ?std.Io.File = std.Io.Dir.cwd().openFile(self.io, path, .{}) catch |err| failed: {
+            open_error = err;
+            break :failed null;
+        };
+        var adopted = false;
+        errdefer { if (!adopted) { if (file) |value| value.close(self.io); } }
+        const identity = if (file) |value| try capturedWriterSourceFileIdentity(value) else null;
+        const owned_path = try self.a.dupe(u8, path);
+        errdefer if (!adopted) self.a.free(owned_path);
+        const owned_role = try self.a.dupe(u8, role);
+        errdefer if (!adopted) self.a.free(owned_role);
+        const owned_error = if (open_error) |err| try self.a.dupe(u8, @errorName(err)) else null;
+        errdefer { if (!adopted) { if (owned_error) |value| self.a.free(value); } }
+        try self.records.append(self.a, .{ .path = owned_path, .role = owned_role, .identity = identity, .file = file, .error_name = owned_error });
+        adopted = true;
+        // The record owns its allocations and handle before propagating an open
+        // failure. FileNotFound remains an observable optional-input state.
+        if (open_error) |err| if (err != error.FileNotFound) return err;
+        return self.records.items.len - 1;
+    }
+    fn checkRecord(self: *CapturedWriterInputs, index: usize) !void {
+        const record = self.records.items[index];
+        if (record.identity) |before| {
+            const held = try capturedWriterSourceFileIdentity(record.file.?);
+            const path = try capturedWriterSourcePathIdentity(self.io, record.path);
+            if (!std.meta.eql(before, held) or !std.meta.eql(before, path)) return error.CapturedWriterInputsChanged;
+        } else {
+            if (std.Io.Dir.cwd().access(self.io, record.path, .{})) |_| return error.CapturedWriterUnexpectedDependency else |err| switch (err) {
+                error.FileNotFound => {},
+                else => return err,
+            }
+        }
+    }
+    fn verify(self: *CapturedWriterInputs) !void {
+        for (0..self.records.items.len) |i| try self.checkRecord(i);
+    }
+    fn acceptBytes(self: *CapturedWriterInputs, index: usize, bytes: []const u8) !void {
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+        try self.acceptDigest(index, bytes.len, digest);
+    }
+    fn acceptDigest(self: *CapturedWriterInputs, index: usize, length: usize, hash: [32]u8) !void {
+        try self.checkRecord(index);
+        const record = &self.records.items[index];
+        const identity = record.identity orelse return error.CapturedWriterFileMissing;
+        if (identity.size != length) return error.CapturedWriterInputsChanged;
+        const digest = try self.a.dupe(u8, &std.fmt.bytesToHex(hash, .lower));
+        errdefer self.a.free(digest);
+        if (record.sha256) |old| {
+            if (!std.mem.eql(u8, old, digest)) return error.CapturedWriterInputsChanged;
+            self.a.free(digest);
+        } else record.sha256 = digest;
+    }
+    fn fail(self: *CapturedWriterInputs, index: usize, err: anyerror) !void {
+        const record = &self.records.items[index];
+        const replacement = try self.a.dupe(u8, @errorName(err));
+        if (record.error_name) |old| self.a.free(old);
+        record.error_name = replacement;
+    }
+    fn pin(self: *CapturedWriterInputs, expected: CapturedWriterFile) !void {
+        const index = try self.hold(expected.path, "request-input");
+        const record = &self.records.items[index];
+        const identity = record.identity orelse return error.CapturedWriterFileMissing;
+        if (identity.size != expected.bytes) return error.CapturedWriterFileMismatch;
+        if (record.sha256 == null) {
+            var hash = std.crypto.hash.sha2.Sha256.init(.{});
+            var buffer: [65536]u8 = undefined;
+            var offset: u64 = 0;
+            while (true) {
+                const n = try record.file.?.readPositionalAll(self.io, &buffer, offset);
+                if (n == 0) break;
+                hash.update(buffer[0..n]);
+                offset = try std.math.add(u64, offset, n);
+            }
+            if (offset != identity.size) return error.CapturedWriterInputsChanged;
+            var digest: [32]u8 = undefined;
+            hash.final(&digest);
+            record.sha256 = try self.a.dupe(u8, &std.fmt.bytesToHex(digest, .lower));
+        }
+        try self.checkRecord(index);
+        if (!std.mem.eql(u8, record.sha256.?, expected.sha256)) return error.CapturedWriterFileMismatch;
+    }
+    fn mapped(self: *CapturedWriterInputs, path: []const u8, file: std.Io.File) !void {
+        const index = try self.hold(path, "normal-mapped-input");
+        const held = self.records.items[index].identity orelse return error.CapturedWriterFileMissing;
+        if (!std.meta.eql(held, try capturedWriterSourceFileIdentity(file))) return error.CapturedWriterInputsChanged;
+        try self.checkRecord(index);
+    }
+    fn exportRecords(self: *CapturedWriterInputs, output: []const u8) !void {
+        const PublicRecord = struct { path: []const u8, role: []const u8, identity: ?CapturedWriterSourceFileIdentity, sha256: ?[]const u8, error_name: ?[]const u8 };
+        const rows = try self.a.alloc(PublicRecord, self.records.items.len);
+        defer self.a.free(rows);
+        for (self.records.items, rows) |record, *row| row.* = .{ .path = record.path, .role = record.role, .identity = record.identity, .sha256 = record.sha256, .error_name = record.error_name };
+        try writeDiagnosticJson(self.io, self.a, output, "consumed-inputs.json", .{ .schema = "wikidict.captured-writer.consumed-inputs.v1", .inputs = rows }, 2 * 1024 * 1024);
+    }
+};
+
+fn readLanguageMetadataSource(io: std.Io, a: std.mem.Allocator, path: []const u8, limit: usize, expected: []const u8) ![]u8 {
+    const observed = if (captured_writer_inputs) |inputs| try inputs.hold(path, "normal-language-module") else null;
+    const source = std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(limit)) catch |err| {
+        if (observed) |index| captured_writer_inputs.?.fail(index, err) catch {};
+        return err;
+    };
+    errdefer a.free(source);
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &hash, .{});
+    if (observed) |index| try captured_writer_inputs.?.acceptDigest(index, source.len, hash);
+    if (!std.mem.eql(u8, expected, &std.fmt.bytesToHex(hash, .lower))) {
+        if (observed) |index| captured_writer_inputs.?.fail(index, error.LanguageSourceIdentityMismatch) catch {};
+        return error.LanguageSourceIdentityMismatch;
+    }
+    return source;
+}
+
+fn openLanguageTemplateSource(io: std.Io, a: std.mem.Allocator, root: []const u8, index: []const u8) !?dump_source.TemplateSource {
+    var observed: [2]?usize = .{ null, null };
+    if (captured_writer_inputs) |inputs| {
+        inline for (.{ "template-source.idx", "template-source.bin" }, 0..) |name, i| {
+            const path = try std.fs.path.join(a, &.{ root, name });
+            defer a.free(path);
+            observed[i] = try inputs.hold(path, "normal-template-sidecar");
+        }
+    }
+    var result = dump_source.TemplateSource.open(io, a, root, index) catch |err| {
+        if (captured_writer_inputs) |inputs| for (observed) |slot| if (slot) |i| inputs.fail(i, err) catch {};
+        return err;
+    };
+    errdefer if (result) |*value| value.deinit();
+    if (captured_writer_inputs) |inputs| {
+        if (result) |value| {
+            try inputs.acceptBytes(observed[0].?, value.index.bytes);
+            try inputs.acceptBytes(observed[1].?, value.data.bytes);
+        } else for (observed) |slot| if (slot) |i| try inputs.checkRecord(i);
+    }
+    return result;
+}
+
+const CapturedWriterFile = struct { path: []const u8, bytes: usize, sha256: []const u8 };
+const CapturedWriterRequest = struct {
+    schema: []const u8,
+    source_fingerprint: []const u8,
+    expander_root: []const u8,
+    wiki: []const u8,
+    date: []const u8,
+    content_language: []const u8,
+    // Exact retained capture receipt, authenticated by the opportunity owner.
+    capture_receipt: CapturedWriterFile,
+    original_error_name: []const u8,
+    // Fixed normal input roles only. Actual module/template reads are observed
+    // during the unchanged normal loader; unused module bodies are not scanned.
+    dependencies: []const CapturedWriterFile,
+    absent_dependencies: []const []const u8 = &.{},
+    // The retained normal dump and SourceReceipt are required in this mode.
+    // They provide ordinary source-backed owner/style inputs, never defaults.
+    source_category_dump: ?struct { path: []const u8 } = null,
+    source_category_identity: ?CapturedWriterFile = null,
+    // A separately derived normal registry profile preserves original page/source inputs.
+    language_registry_root: ?[]const u8 = null,
+    language_registry_manifest: ?CapturedWriterFile = null,
+    language_registry_lineage: ?CapturedWriterFile = null,
+    page: struct {
+        title: []const u8,
+        namespace: u32,
+        page_id: u64,
+        revision_id: u64,
+        ordinal: u64,
+        index_offset: u64,
+        // Only already-dispatched, nonredirect page replies are supported.
+        // Alias/site-metadata routing is a different ordinary entry contract.
+        ordinary_page_reply: bool,
+        raw_encoding: enum { decoded_wikitext, xml_encoded_once },
+        raw: CapturedWriterFile,
+        expanded: CapturedWriterFile,
+        index_row: CapturedWriterFile,
+        display_title: ?CapturedWriterFile = null,
+        poem_metadata: ?CapturedWriterFile = null,
+        missing_dependency_metadata: ?CapturedWriterFile = null,
+        unsupported_parser_function: bool,
+    },
+};
+
+fn capturedWriterCheckFile(io: std.Io, a: std.mem.Allocator, value: CapturedWriterFile) !void {
+    if (!std.fs.path.isAbsolute(value.path) or value.sha256.len != 64) return error.InvalidCapturedWriterFile;
+    if (captured_writer_inputs) |inputs| return inputs.pin(value);
+    const stamp = try auditFileStamp(io, a, value.path);
+    defer if (stamp.sha256) |bytes| a.free(bytes);
+    const identity_value = stamp.identity orelse return error.CapturedWriterFileMissing;
+    if (identity_value.size != value.bytes or !std.mem.eql(u8, stamp.sha256 orelse return error.CapturedWriterFileMissing, value.sha256)) return error.CapturedWriterFileMismatch;
+}
+fn capturedWriterRead(io: std.Io, a: std.mem.Allocator, value: CapturedWriterFile, limit: usize) ![]const u8 {
+    if (value.bytes > limit) return error.CapturedWriterPayloadLimit;
+    try capturedWriterCheckFile(io, a, value);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, value.path, a, .limited(limit));
+    errdefer a.free(bytes);
+    if (bytes.len != value.bytes or !std.mem.eql(u8, try auditHash(a, bytes), value.sha256)) return error.CapturedWriterFileMismatch;
+    return bytes;
+}
+fn capturedWriterOptional(io: std.Io, a: std.mem.Allocator, value: ?CapturedWriterFile) !?[]const u8 {
+    return if (value) |present| try capturedWriterRead(io, a, present, 4 * 1024 * 1024) else null;
+}
+fn capturedWriterCheckInputs(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRequest) !void {
+    try capturedWriterCheckFile(io, a, request.capture_receipt);
+    if (request.language_registry_root) |profile_root| {
+        if (!std.fs.path.isAbsolute(profile_root)) return error.InvalidCapturedWriterRegistryProfile;
+        try capturedWriterCheckFile(io, a, request.language_registry_manifest orelse return error.InvalidCapturedWriterRegistryProfile);
+        try capturedWriterCheckFile(io, a, request.language_registry_lineage orelse return error.InvalidCapturedWriterRegistryProfile);
+        try capturedWriterRequireSourceDependency(request, try std.fs.path.join(a, &.{ profile_root, "language-registry.tsv" }));
+    } else if (request.language_registry_manifest != null or request.language_registry_lineage != null) return error.InvalidCapturedWriterRegistryProfile;
+    if ((request.source_category_dump == null) != (request.source_category_identity == null)) return error.InvalidCapturedWriterCategoryInputs;
+    if (request.source_category_identity) |value| try capturedWriterCheckFile(io, a, value);
+    if (request.dependencies.len == 0 or request.dependencies.len > 128) return error.InvalidCapturedWriterDependencies;
+    for (request.dependencies) |value| try capturedWriterCheckFile(io, a, value);
+    for (request.absent_dependencies) |path| {
+        if (!std.fs.path.isAbsolute(path)) return error.InvalidCapturedWriterFile;
+        if (captured_writer_inputs) |inputs| _ = try inputs.hold(path, "declared-absent-input");
+        if (std.Io.Dir.cwd().access(io, path, .{})) |_| return error.CapturedWriterUnexpectedDependency else |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        }
+    }
+    try capturedWriterCheckFile(io, a, request.page.raw);
+    try capturedWriterCheckFile(io, a, request.page.expanded);
+    try capturedWriterCheckFile(io, a, request.page.index_row);
+    inline for (.{ "display_title", "poem_metadata", "missing_dependency_metadata" }) |field|
+        if (@field(request.page, field)) |value| try capturedWriterCheckFile(io, a, value);
+}
+
+pub fn runCapturedWriterDiagnostic(io: std.Io, a: std.mem.Allocator, request_path: []const u8, output_root: []const u8, compiled_source_fingerprint: []const u8) !void {
+    if (!std.fs.path.isAbsolute(request_path) or !std.fs.path.isAbsolute(output_root)) return error.InvalidCapturedWriterPath;
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, request_path, a, .limited(2 * 1024 * 1024));
+    defer a.free(bytes);
+    const parsed = try std.json.parseFromSlice(CapturedWriterRequest, a, bytes, .{});
+    defer parsed.deinit();
+    const request = parsed.value;
+    if (!std.mem.eql(u8, request.schema, "wikidict.captured-writer.request.v2") or
+        !std.mem.eql(u8, request.source_fingerprint, compiled_source_fingerprint) or
+        !std.fs.path.isAbsolute(request.expander_root) or !request.page.ordinary_page_reply or
+        request.page.page_id == 0 or request.page.revision_id == 0 or request.page.title.len == 0 or
+        !std.unicode.utf8ValidateSlice(request.page.title)) return error.InvalidCapturedWriterRequest;
+    if (captured_writer_inputs != null) return error.CapturedWriterAlreadyActive;
+    // createDir refuses an existing output, preserving every prior diagnosis.
+    try std.Io.Dir.cwd().createDir(io, output_root, .default_dir);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ output_root, "captured-request.json" }), .data = bytes });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ output_root, ".diagnostic-only" }), .data = "captured Writer diagnostic; not a corpus publication\n" });
+    var inputs: CapturedWriterInputs = .{ .io = io, .a = a };
+    defer inputs.deinit();
+    captured_writer_inputs = &inputs;
+    defer captured_writer_inputs = null;
+    var stage: []const u8 = "input-authentication";
+    try writeDiagnosticJson(io, a, output_root, "diagnostic-result.json", .{ .schema = "wikidict.captured-writer.result.v1", .complete = false, .diagnostic_only = true, .semantic_acceptance = false }, 64 * 1024);
+    capturedWriterRun(io, a, request, output_root, &stage) catch |err| {
+        var input_integrity_after = true;
+        var integrity_error: ?[]const u8 = null;
+        inputs.verify() catch |secondary| {
+            input_integrity_after = false;
+            integrity_error = @errorName(secondary);
+            diagnostics.printLine("captured Writer input integrity failed: original={s} integrity={s}\n", .{ @errorName(err), @errorName(secondary) });
+        };
+        inputs.exportRecords(output_root) catch |export_error| {
+            diagnostics.printLine("captured Writer dependency export failed: {s}\n", .{@errorName(export_error)});
+        };
+        writeDiagnosticJson(io, a, output_root, "diagnostic-result.json", .{
+            .schema = "wikidict.captured-writer.result.v1", .complete = true, .passed = false,
+            .stage = stage, .error_name = @errorName(err), .input_integrity_after = input_integrity_after, .integrity_error = integrity_error, .failed_field = @as(?[]const u8, null),
+            .failed_field_available = false, .title = request.page.title,
+            .page_id = request.page.page_id, .revision_id = request.page.revision_id,
+            .source_fingerprint = compiled_source_fingerprint, .diagnostic_only = true,
+            .publication_created = false, .semantic_acceptance = false,
+        }, 64 * 1024) catch |diagnostic_error| {
+            diagnostics.printLine("captured Writer result unavailable: original={s} diagnostic={s}\n", .{ @errorName(err), @errorName(diagnostic_error) });
+        };
+        return err;
+    };
+    try writeDiagnosticJson(io, a, output_root, "diagnostic-result.json", .{
+        .schema = "wikidict.captured-writer.result.v1", .complete = true, .passed = true, .input_integrity_after = true,
+        .title = request.page.title, .page_id = request.page.page_id,
+        .revision_id = request.page.revision_id, .source_fingerprint = compiled_source_fingerprint,
+        .diagnostic_only = true, .publication_created = false, .semantic_acceptance = false,
+    }, 64 * 1024);
+}
+
+const CapturedWriterSourceOrigin = struct { dump_path: []const u8, expander_root: []const u8 };
+const CapturedWriterSourceFileIdentity = struct { device_major: u32, device_minor: u32, inode: u64, size: u64, mtime_ns: i128, ctime_ns: i128 };
+const CapturedWriterSourceIdentity = struct { version: u32, source: CapturedWriterSourceFileIdentity, indexes: [3]?CapturedWriterSourceFileIdentity, namespace_sha256: [32]u8, redirects_sha256: ?[32]u8 };
+fn capturedWriterSourceFileIdentity(file: std.Io.File) !CapturedWriterSourceFileIdentity {
+    const linux = std.os.linux;
+    var stat: linux.Statx = undefined;
+    if (linux.statx(file.handle, "", linux.AT.EMPTY_PATH, linux.STATX.BASIC_STATS, &stat) != 0 or !stat.mask.INO or !stat.mask.SIZE or !stat.mask.MTIME or !stat.mask.CTIME or !stat.mask.TYPE or (stat.mode & linux.S.IFMT) != linux.S.IFREG) return error.SourceStatFailed;
+    return .{ .device_major = stat.dev_major, .device_minor = stat.dev_minor, .inode = stat.ino, .size = stat.size,
+        .mtime_ns = @as(i128, stat.mtime.sec) * std.time.ns_per_s + stat.mtime.nsec,
+        .ctime_ns = @as(i128, stat.ctime.sec) * std.time.ns_per_s + stat.ctime.nsec };
+}
+fn capturedWriterSourcePathIdentity(io: std.Io, path: []const u8) !CapturedWriterSourceFileIdentity {
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    return capturedWriterSourceFileIdentity(file);
+}
+fn capturedWriterRequireSourceDependency(request: CapturedWriterRequest, path: []const u8) !void {
+    for (request.dependencies) |file| if (std.mem.eql(u8, file.path, path)) return;
+    return error.UnpinnedCapturedWriterSourceDependency;
+}
+fn capturedWriterRequireSourceAbsence(request: CapturedWriterRequest, path: []const u8) !void {
+    for (request.absent_dependencies) |file| if (std.mem.eql(u8, file, path)) return;
+    return error.UnpinnedCapturedWriterSourceDependency;
+}
+// Match extraction modules.sourceReceipt: all three indexed identities, zeroed
+// index ctime, full source ctime, namespace digest and optional redirects hash.
+fn capturedWriterSourceSnapshot(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRequest, source: CapturedWriterSourceFileIdentity, kind: dump_source.PageIndexKind, namespace_sha256: [32]u8) !CapturedWriterSourceIdentity {
+    var indexes: [3]?CapturedWriterSourceFileIdentity = .{ null, null, null };
+    const names = [_][]const u8{ "page-index.tsv", dump_source.page_title_index_filename, "dump-streams.tsv" };
+    for (names, 0..) |name, i| {
+        const path = try std.fs.path.join(a, &.{ request.expander_root, name });
+        if (std.Io.Dir.cwd().access(io, path, .{})) |_| {
+            const observed = try captured_writer_inputs.?.hold(path, "source-receipt-index");
+            indexes[i] = captured_writer_inputs.?.records.items[observed].identity orelse return error.MissingCapturedWriterSourceIndex;
+            indexes[i].?.ctime_ns = 0;
+        } else |err| switch (err) {
+            error.FileNotFound => {
+                if (i != 2 or dump_source.isMultistream(kind)) return error.MissingCapturedWriterSourceIndex;
+                _ = try captured_writer_inputs.?.hold(path, "absent-source-index");
+            },
+            else => return err,
+        }
+    }
+    const redirects_path = try std.fs.path.join(a, &.{ request.expander_root, "transclusion-redirects.tsv" });
+    var redirects_sha256: ?[32]u8 = null;
+    if (std.Io.Dir.cwd().access(io, redirects_path, .{})) |_| {
+        try capturedWriterRequireSourceDependency(request, redirects_path);
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, redirects_path, a, .limited(16 * 1024 * 1024));
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+        redirects_sha256 = digest;
+    } else |err| switch (err) {
+        error.FileNotFound => try capturedWriterRequireSourceAbsence(request, redirects_path),
+        else => return err,
+    }
+    return .{ .version = 2, .source = source, .indexes = indexes, .namespace_sha256 = namespace_sha256, .redirects_sha256 = redirects_sha256 };
+}
+fn capturedWriterValidateCategoryContext(request: CapturedWriterRequest, origin: CapturedWriterSourceOrigin, identity_path: []const u8, snapshot: CapturedWriterSourceIdentity, actual: CapturedWriterSourceIdentity) !void {
+    const dump = request.source_category_dump orelse return error.InvalidCapturedWriterCategoryInputs;
+    const identity = request.source_category_identity orelse return error.InvalidCapturedWriterCategoryInputs;
+    if (!std.fs.path.isAbsolute(dump.path) or !std.mem.eql(u8, dump.path, origin.dump_path) or
+        !std.mem.eql(u8, request.expander_root, origin.expander_root) or !std.mem.eql(u8, identity.path, identity_path) or
+        snapshot.version != 2 or !std.meta.eql(snapshot, actual)) return error.CapturedWriterSourceContextMismatch;
+}
+
+fn capturedWriterRun(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRequest, output_root: []const u8, stage: *[]const u8) !void {
+    try capturedWriterCheckInputs(io, a, request);
+    const receipt_bytes = try capturedWriterRead(io, a, request.capture_receipt, 2 * 1024 * 1024);
+    const receipt = try std.json.parseFromSlice(CapturedWriterReceipt, a, receipt_bytes, .{ .ignore_unknown_fields = true });
+    defer receipt.deinit();
+    try capturedWriterJoinReceipt(a, request, receipt.value);
+    try capturedWriterRequireNormalRoles(io, a, request);
+    const root = request.expander_root;
+    stage.* = "namespace-loader";
+    var namespaces = try namespace_registry.Registry.load(io, a, root);
+    defer namespaces.deinit();
+    if (!std.mem.eql(u8, namespaces.wiki, request.wiki) or !std.mem.eql(u8, namespaces.dump_date, request.date) or
+        !std.mem.eql(u8, namespaces.content_language, request.content_language)) return error.CapturedWriterEditionMismatch;
+    const interwiki_path = try std.fs.path.join(a, &.{ root, "interwiki-map.tsv" });
+    const interwiki_bytes = std.Io.Dir.cwd().readFileAlloc(io, interwiki_path, a, .limited(4 * 1024 * 1024)) catch |err| switch (err) { error.FileNotFound => null, else => return err };
+    defer if (interwiki_bytes) |value| a.free(value);
+    if (interwiki_bytes) |value| try namespaces.attachInterwikiMap(value);
+    stage.* = "page-identity";
+    var page_index = try mmapPath(io, try std.fs.path.join(a, &.{ root, "page-index.tsv" }));
+    defer page_index.deinit();
+    const offset = std.math.cast(usize, request.page.index_offset) orelse return error.InvalidPageIndex;
+    if (offset >= page_index.bytes.len or (offset != 0 and page_index.bytes[offset - 1] != '\n')) return error.InvalidPageIndex;
+    const end = std.mem.indexOfScalarPos(u8, page_index.bytes, offset, '\n') orelse page_index.bytes.len;
+    const line = page_index.bytes[offset..end];
+    const page = try dump_source.parsePageIndexLine(dump_source.pageIndexKind(page_index.bytes), line);
+    const retained_row = try capturedWriterRead(io, a, request.page.index_row, 1024 * 1024);
+    if (!std.mem.eql(u8, retained_row, line)) return error.CapturedWriterPageMismatch;
+    if (page.ns != request.page.namespace or page.page_id != request.page.page_id or page.revision_id != request.page.revision_id or
+        !std.mem.eql(u8, page.title, request.page.title) or !page.has_source or page.redirect != null) return error.CapturedWriterPageMismatch;
+    var title_index = try mmapPath(io, try std.fs.path.join(a, &.{ root, dump_source.page_title_index_filename }));
+    defer title_index.deinit();
+    const titles = try dump_source.PageTitleIndex.init(title_index.bytes);
+    if (titles.page_index_size != page_index.bytes.len or titles.kind != dump_source.pageIndexKind(page_index.bytes)) return error.PageTitleIndexMismatch;
+    const row = (try titles.lookup(page_index.bytes, page.title)) orelse return error.InvalidPageTitleIndex;
+    if (dump_source.pageRowRefOrdinal(row) != request.page.ordinal or dump_source.pageRowRefOffset(row) != offset) return error.CapturedWriterPageMismatch;
+    // Declared before Writer: its destructor therefore runs after Writer's,
+    // while the page/title maps, namespace and registry still remain alive.
+    var category_dump: ?dump_source.SourceReader = null;
+    defer if (category_dump) |*value| value.deinit();
+    var category_context: ?source_category_language.Context = null;
+    var category_identity: ?CapturedWriterSourceIdentity = null;
+    if (request.source_category_dump) |input| {
+        stage.* = "category-source-context";
+        const capture_bytes = try capturedWriterRead(io, a, request.capture_receipt, 2 * 1024 * 1024);
+        const capture = try std.json.parseFromSlice(struct { input: CapturedWriterSourceOrigin }, a, capture_bytes, .{ .ignore_unknown_fields = true });
+        defer capture.deinit();
+        const identity_file = request.source_category_identity orelse return error.InvalidCapturedWriterCategoryInputs;
+        const identity_path = try std.fs.path.join(a, &.{ root, "extraction-source.json" });
+        const identity_bytes = try capturedWriterRead(io, a, identity_file, 64 * 1024);
+        const snapshot = try std.json.parseFromSlice(CapturedWriterSourceIdentity, a, identity_bytes, .{});
+        defer snapshot.deinit();
+        const kind = dump_source.pageIndexKind(page_index.bytes);
+        const streams = try std.fs.path.join(a, &.{ root, "dump-streams.tsv" });
+        if (dump_source.isMultistream(kind)) _ = try captured_writer_inputs.?.hold(streams, "source-receipt-streams");
+        category_dump = try dump_source.SourceReader.open(io, a, a, input.path, kind, if (dump_source.isMultistream(kind)) streams else null);
+        try captured_writer_inputs.?.mapped(input.path, category_dump.?.file);
+        const actual = try capturedWriterSourceSnapshot(io, a, request, try capturedWriterSourceFileIdentity(category_dump.?.file), kind, namespaces.source_sha256);
+        try capturedWriterValidateCategoryContext(request, capture.value.input, identity_path, snapshot.value, actual);
+        category_identity = snapshot.value;
+        try writeDiagnosticJson(io, a, output_root, "category-source-context.json", .{
+            .enabled = true, .dump = input, .identity = identity_file,
+            .capture = request.capture_receipt, .page_index_size = page_index.bytes.len,
+            .original_source_identity = snapshot.value.source, .owner_semantic_acceptance = false,
+        }, 64 * 1024);
+    }
+    stage.* = "language-loader";
+    stage.* = "site-profile-loader";
+    const site_mainpage = try loadSiteMainPage(io, a, root, &namespaces);
+    defer if (site_mainpage) |site| a.free(site.title);
+    stage.* = "language-loader";
+    const language_root = request.language_registry_root orelse root;
+    try writeDiagnosticJson(io, a, output_root, "normal-loader-selection.json", .{
+        .original_expander_root = root, .language_registry_root = language_root,
+        .derived_registry_manifest = request.language_registry_manifest,
+        .derived_registry_lineage = request.language_registry_lineage,
+    }, 64 * 1024);
+    var registry = try loadLanguageRegistry(io, a, language_root, &namespaces);
+    defer registry.deinit();
+    stage.* = "behavior-loader";
+    const behavior_path = try std.fs.path.join(a, &.{ root, "behavior-switches.tsv" });
+    const behavior_bytes = std.Io.Dir.cwd().readFileAlloc(io, behavior_path, a, .limited(1024 * 1024)) catch |err| switch (err) { error.FileNotFound => null, else => return err };
+    defer if (behavior_bytes) |value| a.free(value);
+    var behavior: ?namespace_registry.behavior_switches.Registry = if (behavior_bytes) |value| try namespace_registry.behavior_switches.Registry.init(a, value, namespaces.wiki, namespaces.dump_date, namespaces.content_language, namespaces.source_sha256) else null;
+    defer if (behavior) |*value| value.deinit();
+    stage.* = "image-loader";
+    const image_path = try std.fs.path.join(a, &.{ root, "image-options.tsv" });
+    const image_bytes = std.Io.Dir.cwd().readFileAlloc(io, image_path, a, .limited(1024 * 1024)) catch |err| switch (err) { error.FileNotFound => null, else => return err };
+    defer if (image_bytes) |value| a.free(value);
+    if (image_bytes != null and behavior_bytes == null) return error.ImageIdentityMismatch;
+    var behavior_digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(behavior_bytes orelse "", &behavior_digest, .{});
+    var images: ?namespace_registry.image_options.Registry = if (image_bytes) |value| try namespace_registry.image_options.Registry.init(a, value, namespaces.wiki, namespaces.dump_date, namespaces.content_language, namespaces.source_sha256, behavior_digest) else null;
+    defer if (images) |*value| value.deinit();
+    var codes = languageCodes(&registry, &namespaces);
+    codes.behavior_switches = if (behavior) |*value| value else null;
+    codes.image_options = if (images) |*value| value else null;
+
+    if (category_dump != null) {
+        category_context = .{ .allocator = a, .registry = &registry, .namespace_catalog = &namespaces,
+            .source = &category_dump.?, .page_index = page_index.bytes, .title_index = titles };
+        codes.source_category_ctx = &category_context.?;
+        codes.source_category_fn = source_category_language.Context.callback;
+    }
+    // The ordinary source and its authenticated indexes outlive profile and Writer.
+    // These exact captures require the normal source-backed owner/style route.
+    if (category_dump == null) return error.MissingCapturedWriterNormalSource;
+    stage.* = "table-style-loader";
+    const stylesheet_path = try std.fs.path.join(a, &.{ root, "stylesheet-imports.json" });
+    const stylesheet_snapshot = std.Io.Dir.cwd().readFileAlloc(io, stylesheet_path, a, .limited(2 * 1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+    defer if (stylesheet_snapshot) |bytes| a.free(bytes);
+    if (stylesheet_snapshot != null) {
+        try capturedWriterRequireSourceDependency(request, stylesheet_path);
+    } else try capturedWriterRequireSourceAbsence(request, stylesheet_path);
+    var table_styles = try source_table_styles.loadWithImports(a, &namespaces, &category_dump.?, page_index.bytes, titles, stylesheet_snapshot);
+    defer if (table_styles) |*authority| authority.deinit();
+    codes.table_styles = if (table_styles) |*authority| &authority.profile else null;
+    const spec = namespaces.byId(std.math.cast(i32, page.ns) orelse return error.InvalidNamespace) orelse return error.InvalidNamespace;
+    const role = compiledKind(spec) orelse return error.CapturedWriterCompileOnlyPage;
+    if (!std.mem.eql(u8, @tagName(role), receipt.value.namespace_kind)) return error.CapturedWriterCaptureMismatch;
+    const raw_file = try capturedWriterRead(io, a, request.page.raw, 8 * 1024 * 1024);
+    const raw = raw_file;
+    const expanded: bundle_expander.Expansion = .{
+        .source = try capturedWriterRead(io, a, request.page.expanded, 8 * 1024 * 1024),
+        .display_title = try capturedWriterOptional(io, a, request.page.display_title),
+        .poem_metadata = try capturedWriterOptional(io, a, request.page.poem_metadata),
+        .missing_dependency_metadata = try capturedWriterOptional(io, a, request.page.missing_dependency_metadata),
+        .unsupported_parser_function = request.page.unsupported_parser_function,
+    };
+    stage.* = "writer-init";
+    const data_root = try std.fs.path.join(a, &.{ output_root, "data" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, data_root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    writer.stats.pages_seen = 1;
+    try writer.namespace_coverage.input(a, page.ns, spec.name, role, page.has_source);
+    const before = writer.stats.fallback_pages;
+    stage.* = "writer-add-strict-presentation";
+    // This is the exact ordinary consumer, including reason/phase handling and
+    // Writer-owned strict semantic validation. No audit swallowing of errors.
+    _ = try consumeExpandedPage(&writer, .{
+        .ordinal = request.page.ordinal, .index_offset = request.page.index_offset,
+        .ns = .{ .id = page.ns, .kind = role }, .title = page.title,
+        .source = raw, .page_id = page.page_id, .revision_id = page.revision_id,
+        .index_line = line,
+    }, expanded, a, null);
+    try writer.namespace_coverage.outcome(page.ns, if (writer.stats.fallback_pages != before) .fallback else .expanded);
+    stage.* = "writer-finish";
+    const stats = try writer.finish(codes);
+    stage.* = "stored-export-and-codec";
+    const records = try capturedWriterExportCurrent(io, a, output_root, request.page.title);
+    try capturedWriterRequireRecords(records.len);
+    stage.* = "input-reauthentication";
+    try captured_writer_inputs.?.verify();
+    if (category_dump) |*value| {
+        const actual = try capturedWriterSourceSnapshot(io, a, request, try capturedWriterSourceFileIdentity(value.file), dump_source.pageIndexKind(page_index.bytes), namespaces.source_sha256);
+        if (!std.meta.eql(category_identity.?, actual)) return error.CapturedWriterSourceContextMismatch;
+    }
+    try writeDiagnosticJson(io, a, output_root, "writer-stats.json", stats, 64 * 1024);
+    try captured_writer_inputs.?.exportRecords(output_root);
+}
+
+
+// Retained-page diagnostic Stored export. This is a loader/export
+// helper only; it never reconstructs or manually serializes presentation fields.
+const CapturedWriterCurrentStored = struct {
+    const e = @import("encoder");
+    const A = std.mem.Allocator;
+    const Stored = e.presentation_types.Stored;
+    const Kind = e.blob_format.BlobKind;
+
+    pub const Record = struct {
+        owner: []const u8,
+        kind: Kind,
+        title: []const u8,
+        language: ?e.blob_format.LanguageMetadata,
+        blob_record_count: usize,
+        stored: Stored,
+    };
+
+    fn completeStoredJson(a: A, stored: Stored) ![]u8 {
+        var json: std.Io.Writer.Allocating = .init(a);
+        errdefer json.deinit();
+        try std.json.Stringify.value(stored, .{}, &json.writer);
+        return json.toOwnedSlice();
+    }
+
+    pub fn decodeRecord(a: A, blob: e.blob_format.BlobView, record: e.blob_format.RecordView) !Stored {
+        const language = if (blob.kind == .language) try blob.languageMetadata() else null;
+        const stored = try e.presentation_codec.decodeAlloc(a, record.payload, record.title, blob.kind, language);
+        const encoded = try e.presentation_codec.encodeAlloc(a, stored);
+        defer a.free(encoded);
+        if (!std.mem.eql(u8, encoded, record.payload)) return error.CodecRoundtripMismatch;
+        const again = try e.presentation_codec.decodeAlloc(a, encoded, record.title, blob.kind, language);
+        const original_json = try completeStoredJson(a, stored);
+        defer a.free(original_json);
+        const roundtrip_json = try completeStoredJson(a, again);
+        defer a.free(roundtrip_json);
+        if (!std.mem.eql(u8, original_json, roundtrip_json)) return error.CodecRoundtripMismatch;
+        return stored;
+    }
+
+    fn addBlob(io: std.Io, a: A, path: []const u8, owner: []const u8, expected_kind: Kind, expected_heading: ?[]const u8, title: []const u8, optional: bool, out: *std.ArrayList(Record)) !void {
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(256 * 1024 * 1024)) catch |err| {
+            if (optional and err == error.FileNotFound) return;
+            return err;
+        };
+        const blob = try e.blob_format.inspect(bytes);
+        if (blob.kind != expected_kind) return error.BlobKindMismatch;
+        try blob.validate();
+        const language = if (blob.kind == .language) try blob.languageMetadata() else null;
+        if (expected_heading) |heading| {
+            if (language == null or !std.mem.eql(u8, heading, language.?.heading)) return error.CatalogOwnerMismatch;
+        }
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        if (try index.find(title)) |record| {
+            if (blob.kind == .alias) return error.SelectedAliasRequiresAliasCodec;
+            if (!std.mem.eql(u8, record.title, title)) return error.SelectedTitleMismatch;
+            try out.append(a, .{
+                .owner = owner,
+                .kind = blob.kind,
+                .title = record.title,
+                .language = language,
+                .blob_record_count = index.recordCount(),
+                .stored = try decodeRecord(a, blob, record),
+            });
+        }
+    }
+
+    // `a` must retain all loaded blob/catalog bytes and decoded slices until the
+    // caller finishes using the returned records; the capture tests use an arena.
+    pub fn load(io: std.Io, a: A, data_root: []const u8, title: []const u8) ![]Record {
+        var out: std.ArrayList(Record) = .empty;
+        errdefer out.deinit(a);
+        const catalog_path = try std.fs.path.join(a, &.{ data_root, e.blob_catalog.manifest_filename });
+        const catalog = try std.Io.Dir.cwd().readFileAlloc(io, catalog_path, a, .limited(16 * 1024 * 1024));
+        var seen: std.StringHashMap(void) = .init(a);
+        defer seen.deinit();
+        var iterator = try e.blob_catalog.Iterator.init(catalog);
+        while (try iterator.next()) |owner| {
+            const slot = try seen.getOrPut(owner.heading);
+            if (slot.found_existing) return error.DuplicateCatalogOwner;
+            var filename: [e.blob_catalog.language_blob_filename_len]u8 = undefined;
+            try addBlob(io, a, try std.fs.path.join(a, &.{ data_root, e.blob_catalog.language_directory, e.blob_catalog.languageBlobFilename(owner.heading, &filename) }), owner.heading, .language, owner.heading, title, false, &out);
+        }
+        for (std.meta.tags(Kind)) |kind| {
+            if (kind == .language) continue;
+            const filename = e.blob_catalog.featureBlobFilename(kind) orelse return error.InvalidFeatureBlobKind;
+            try addBlob(io, a, try std.fs.path.join(a, &.{ data_root, filename }), filename, kind, null, title, true, &out);
+        }
+        std.mem.sort(Record, out.items, {}, struct {
+            fn less(_: void, left: Record, right: Record) bool {
+                if (left.kind != right.kind) return @backingInt(left.kind) < @backingInt(right.kind);
+                return std.mem.order(u8, left.owner, right.owner) == .lt;
+            }
+        }.less);
+        return out.toOwnedSlice(a);
+    }
+};
+
+// Called after ordinary Writer.finish and before terminal diagnostic success.
+// Complete Stored export precedes every capture-specific semantic assertion.
+fn capturedWriterExportCurrent(io: std.Io, a: std.mem.Allocator, output_root: []const u8, title: []const u8) ![]CapturedWriterCurrentStored.Record {
+    const records = try CapturedWriterCurrentStored.load(io, a, try std.fs.path.join(a, &.{ output_root, "data" }), title);
+    var json: std.Io.Writer.Allocating = .init(a);
+    defer json.deinit();
+    try std.json.Stringify.value(.{
+        .schema = "wikidict.captured-current-stored.v1",
+        .selected_title = title,
+        .full_export = records.len != 0,
+        .codec_roundtrip = records.len != 0,
+        .semantic_acceptance = false,
+        .records = records,
+    }, .{ .whitespace = .indent_2 }, &json.writer);
+    try json.writer.writeByte('\n');
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = try std.fs.path.join(a, &.{ output_root, "complete-stored-records.json" }),
+        .data = json.written(),
+    });
+    return records;
+}
+
+const CapturedWriterReceipt = struct {
+    schema: []const u8,
+    record_complete: bool,
+    diagnostic_only: bool,
+    publication_created: bool,
+    semantic_acceptance: bool,
+    error_name: []const u8,
+    ordinal: u64,
+    index_offset: u64,
+    namespace: u32,
+    namespace_kind: []const u8,
+    page_id: u64,
+    revision_id: u64,
+    title: []const u8,
+    title_bytes: usize,
+    title_truncated: bool,
+    title_sha256: []const u8,
+    alias: bool,
+    unsupported_parser_function: bool,
+    input: CapturedWriterSourceOrigin,
+    raw_source: AuditPayload,
+    expanded: AuditPayload,
+    display_title: AuditPayload,
+    poem_metadata: AuditPayload,
+    missing_dependency_metadata: AuditPayload,
+    index_row: AuditPayload,
+    alias_record: AuditPayload,
+};
+
+fn capturedWriterJoinPayload(actual: AuditPayload, requested: ?CapturedWriterFile, required: bool) !void {
+    if (!actual.present) {
+        if (required or requested != null or actual.bytes != 0 or actual.retained_bytes != 0 or actual.path != null or actual.sha256 != null or actual.truncated or actual.unretained) return error.CapturedWriterCaptureMismatch;
+        return;
+    }
+    if (actual.truncated or actual.unretained or actual.retained_bytes != actual.bytes) return error.CapturedWriterIncompleteCapture;
+    const file = requested orelse return error.CapturedWriterCaptureMismatch;
+    if (actual.bytes != file.bytes or !std.mem.eql(u8, actual.sha256 orelse return error.CapturedWriterCaptureMismatch, file.sha256)) return error.CapturedWriterCaptureMismatch;
+    if (actual.path) |path| {
+        if (!std.mem.eql(u8, path, file.path)) return error.CapturedWriterCaptureMismatch;
+    } else if (actual.bytes != 0) return error.CapturedWriterIncompleteCapture;
+}
+
+fn capturedWriterJoinReceipt(a: std.mem.Allocator, request: CapturedWriterRequest, capture: CapturedWriterReceipt) !void {
+    if (!std.mem.eql(u8, capture.schema, "wikidict.presentation-first-failure.v1") or !capture.record_complete or
+        !capture.diagnostic_only or capture.publication_created or capture.semantic_acceptance or capture.alias or capture.title_truncated or
+        capture.title_bytes != capture.title.len or capture.page_id != request.page.page_id or capture.revision_id != request.page.revision_id or
+        capture.ordinal != request.page.ordinal or capture.index_offset != request.page.index_offset or capture.namespace != request.page.namespace or
+        !std.mem.eql(u8, capture.title, request.page.title) or capture.unsupported_parser_function != request.page.unsupported_parser_function or
+        capture.error_name.len == 0 or !std.mem.eql(u8, capture.error_name, request.original_error_name) or
+        !std.mem.eql(u8, capture.input.expander_root, request.expander_root)) return error.CapturedWriterCaptureMismatch;
+    const title_hash = try auditHash(a, capture.title);
+    defer a.free(title_hash);
+    if (!std.mem.eql(u8, title_hash, capture.title_sha256)) return error.CapturedWriterCaptureMismatch;
+    // The ordinary failure sink stores ExpansionJob.source after XML decoding.
+    if (request.page.raw_encoding != .decoded_wikitext) return error.CapturedWriterRawEncodingMismatch;
+    try capturedWriterJoinPayload(capture.raw_source, request.page.raw, true);
+    try capturedWriterJoinPayload(capture.expanded, request.page.expanded, true);
+    try capturedWriterJoinPayload(capture.display_title, request.page.display_title, false);
+    try capturedWriterJoinPayload(capture.poem_metadata, request.page.poem_metadata, false);
+    try capturedWriterJoinPayload(capture.missing_dependency_metadata, request.page.missing_dependency_metadata, false);
+    try capturedWriterJoinPayload(capture.index_row, request.page.index_row, true);
+    try capturedWriterJoinPayload(capture.alias_record, null, false);
+    const dump = request.source_category_dump orelse return error.MissingCapturedWriterNormalSource;
+    if (!std.mem.eql(u8, capture.input.dump_path, dump.path)) return error.CapturedWriterCaptureMismatch;
+}
+
+fn capturedWriterRequireNormalRole(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRequest, root: []const u8, name: []const u8, required: bool) !void {
+    const path = try std.fs.path.join(a, &.{ root, name });
+    defer a.free(path);
+    if (std.Io.Dir.cwd().access(io, path, .{})) |_| {
+        try capturedWriterRequireSourceDependency(request, path);
+    } else |err| switch (err) {
+        error.FileNotFound => {
+            if (required) return error.CapturedWriterFileMissing;
+            try capturedWriterRequireSourceAbsence(request, path);
+        },
+        else => return err,
+    }
+}
+
+fn capturedWriterRequireNormalRoles(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRequest) !void {
+    try capturedWriterRequireNormalRole(io, a, request, request.expander_root, "namespace-registry.tsv", true);
+    inline for (.{ "interwiki-map.tsv", "behavior-switches.tsv", "image-options.tsv", "stylesheet-imports.json", "namespace-siteinfo.raw.json" }) |name|
+        try capturedWriterRequireNormalRole(io, a, request, request.expander_root, name, false);
+    const language_root = request.language_registry_root orelse request.expander_root;
+    try capturedWriterRequireNormalRole(io, a, request, language_root, "manifest.jsonl", true);
+    inline for (.{ "language-registry.tsv", "language-names.tsv", "behavior-switches.tsv" }) |name|
+        try capturedWriterRequireNormalRole(io, a, request, language_root, name, false);
+    if (request.language_registry_root) |profile| {
+        try capturedWriterJoinRegistryDerivation(io, a, request, profile);
+        // A normal registry substitution changes only its derived registry. All
+        // other loader inputs remain the original retained source identities.
+        inline for (.{ "manifest.jsonl", "language-names.tsv", "behavior-switches.tsv", "page-index.tsv", "page-title-index.bin", "template-source.idx", "template-source.bin" }) |name| {
+            const original = try std.fs.path.join(a, &.{ request.expander_root, name });
+            defer a.free(original);
+            const selected = try std.fs.path.join(a, &.{ profile, name });
+            defer a.free(selected);
+            const left = capturedWriterSourcePathIdentity(io, original) catch |err| switch (err) {
+                error.FileNotFound => null,
+                else => return err,
+            };
+            const right = capturedWriterSourcePathIdentity(io, selected) catch |err| switch (err) {
+                error.FileNotFound => null,
+                else => return err,
+            };
+            if (!std.meta.eql(left, right)) return error.CapturedWriterRegistryProfileSourceMismatch;
+        }
+    }
+}
+
+fn capturedWriterRequireRecords(count: usize) !void {
+    if (count == 0) return error.CapturedWriterNoRecords;
+}
+
+fn runCapturedWriterCli(init: std.process.Init, args: []const []const u8) !void {
+    if (args.len != 4) return error.Usage;
+    const fingerprint = @import("captured_writer_options").source_fingerprint;
+    if (fingerprint.len != 64) return error.CapturedWriterSourceBindingRequired;
+    for (fingerprint) |byte| if (!std.ascii.isHex(byte)) return error.CapturedWriterSourceBindingRequired;
+    // One request per process: all borrowed loader and Stored data live through
+    // export, while ordinary Writer/source destructors retain their normal order.
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+    try runCapturedWriterDiagnostic(init.io, arena.allocator(), args[2], args[3], fingerprint);
+}
+
+const CapturedWriterRegistryRow = struct {
+    wiki: []const u8, date: []const u8, name: []const u8, content_language: []const u8,
+    size: usize, sha256: []const u8,
+};
+
+fn capturedWriterDependency(request: CapturedWriterRequest, path: []const u8) !CapturedWriterFile {
+    var found: ?CapturedWriterFile = null;
+    for (request.dependencies) |file| if (std.mem.eql(u8, file.path, path)) {
+        if (found != null) return error.InvalidCapturedWriterDependencies;
+        found = file;
+    };
+    return found orelse error.UnpinnedCapturedWriterSourceDependency;
+}
+
+// Match the maintained normal derivation's upstream projection exactly. The
+// ordinary Registry still validates the selected reviewed markers itself.
+fn capturedWriterNextUpstream(source: []const u8, cursor: *usize) ?[]const u8 {
+    while (cursor.* < source.len) {
+        const start = cursor.*;
+        const end = std.mem.indexOfScalarPos(u8, source, start, '\n') orelse source.len;
+        cursor.* = if (end < source.len) end + 1 else end;
+        const line = source[start..cursor.*];
+        if (!std.mem.startsWith(u8, line, "# reviewed-alias")) return line;
+    }
+    return null;
+}
+
+fn capturedWriterCheckRegistryUpstream(original: []const u8, selected: []const u8, expected: []const u8) !void {
+    var before: usize = 0; var after: usize = 0;
+    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+    while (true) {
+        const left = capturedWriterNextUpstream(original, &before);
+        const right = capturedWriterNextUpstream(selected, &after);
+        if ((left == null) != (right == null)) return error.CapturedWriterRegistryUpstreamMismatch;
+        const line = left orelse break;
+        if (!std.mem.eql(u8, line, right.?)) return error.CapturedWriterRegistryUpstreamMismatch;
+        hash.update(line);
+    }
+    var digest: [32]u8 = undefined;
+    hash.final(&digest);
+    if (!std.mem.eql(u8, expected, &std.fmt.bytesToHex(digest, .lower))) return error.CapturedWriterRegistryUpstreamMismatch;
+}
+
+fn capturedWriterRegistryRowMatches(request: CapturedWriterRequest, row: CapturedWriterRegistryRow, file: CapturedWriterFile) bool {
+    return std.mem.eql(u8, row.wiki, request.wiki) and std.mem.eql(u8, row.date, request.date) and
+        std.mem.eql(u8, row.content_language, request.content_language) and std.mem.eql(u8, row.name, "language-registry.tsv") and
+        row.size == file.bytes and std.mem.eql(u8, row.sha256, file.sha256);
+}
+
+fn capturedWriterJoinRegistryDerivation(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRequest, profile: []const u8) !void {
+    const selected_path = try std.fs.path.join(a, &.{ profile, "language-registry.tsv" });
+    defer a.free(selected_path);
+    const selected_file = try capturedWriterDependency(request, selected_path);
+    const manifest_file = request.language_registry_manifest orelse return error.InvalidCapturedWriterRegistryProfile;
+    const manifest_bytes = try capturedWriterRead(io, a, manifest_file, 2 * 1024 * 1024);
+    defer a.free(manifest_bytes);
+    const manifest = try std.json.parseFromSlice([]const CapturedWriterRegistryRow, a, manifest_bytes, .{ .ignore_unknown_fields = true });
+    defer manifest.deinit();
+    var selected_rows: usize = 0;
+    for (manifest.value) |row| if (std.mem.eql(u8, row.wiki, request.wiki) and std.mem.eql(u8, row.name, "language-registry.tsv")) {
+        if (!capturedWriterRegistryRowMatches(request, row, selected_file)) return error.CapturedWriterRegistryDerivationMismatch;
+        selected_rows += 1;
+    };
+    if (selected_rows != 1) return error.CapturedWriterRegistryDerivationMismatch;
+    const lineage_file = request.language_registry_lineage orelse return error.InvalidCapturedWriterRegistryProfile;
+    const lineage_bytes = try capturedWriterRead(io, a, lineage_file, 2 * 1024 * 1024);
+    defer a.free(lineage_bytes);
+    // This is the existing normal registry derivation receipt shape, not a
+    // substitute capture or an authorization to rewrite upstream names.
+    const Lineage = struct {
+        status: []const u8, rows: CapturedWriterFile, source: CapturedWriterFile,
+        source_row: CapturedWriterRegistryRow, target: CapturedWriterFile,
+        upstream_sha256: []const u8, upstream_preferred_names_preserved: bool,
+        original_bytes_inodes_preserved: bool,
+    };
+    const parsed = try std.json.parseFromSlice(Lineage, a, lineage_bytes, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    const lineage = parsed.value;
+    if (!std.mem.eql(u8, lineage.status, "PASS") or !lineage.upstream_preferred_names_preserved or !lineage.original_bytes_inodes_preserved or
+        lineage.rows.bytes != manifest_file.bytes or !std.mem.eql(u8, lineage.rows.sha256, manifest_file.sha256) or !std.mem.eql(u8, lineage.rows.path, manifest_file.path) or
+        lineage.target.bytes != selected_file.bytes or !std.mem.eql(u8, lineage.target.sha256, selected_file.sha256) or
+        !capturedWriterRegistryRowMatches(request, lineage.source_row, lineage.source)) return error.CapturedWriterRegistryDerivationMismatch;
+    try capturedWriterCheckFile(io, a, lineage.target);
+    const source = try capturedWriterRead(io, a, lineage.source, 32 * 1024 * 1024);
+    defer a.free(source);
+    const original_path = try std.fs.path.join(a, &.{ request.expander_root, "language-registry.tsv" });
+    defer a.free(original_path);
+    try capturedWriterCheckFile(io, a, .{ .path = original_path, .bytes = lineage.source.bytes, .sha256 = lineage.source.sha256 });
+    const selected = try capturedWriterRead(io, a, selected_file, 32 * 1024 * 1024);
+    defer a.free(selected);
+    try capturedWriterCheckRegistryUpstream(source, selected, lineage.upstream_sha256);
+}
+
+const CapturedWriterCliTest = struct {
+    const fingerprint = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const raw = "==English==\n===Noun===\n# '''bold''' [[Target|label]] <ref>note</ref>\n<references/>\n";
+    fn put(io: std.Io, a: std.mem.Allocator, root: []const u8, name: []const u8, bytes: []const u8) !CapturedWriterFile {
+        const path = try std.fs.path.join(a, &.{ root, name });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+        return .{ .path = path, .bytes = bytes.len, .sha256 = try auditHash(a, bytes) };
+    }
+    fn payload(file: CapturedWriterFile) AuditPayload {
+        return .{ .present = true, .bytes = file.bytes, .sha256 = file.sha256, .path = file.path, .retained_bytes = file.bytes };
+    }
+    fn fixture(io: std.Io, a: std.mem.Allocator, root: []const u8) !CapturedWriterRequest {
+        const ns = try put(io, a, root, "namespace-registry.tsv", namespace_registry.english_test_fixture);
+        var namespaces = try namespace_registry.Registry.init(a, namespace_registry.english_test_fixture);
+        defer namespaces.deinit();
+        const registry = try put(io, a, root, "language-registry.tsv", "# content-language\ten\n# mediawiki\nen\tEnglish\ten\n");
+        const manifest = try put(io, a, root, "manifest.jsonl", "");
+        const dump = try put(io, a, root, "pages.xml", raw);
+        const source = try put(io, a, root, "raw.wikitext", raw);
+        const expanded = try put(io, a, root, "expanded.wikitext", raw);
+        const row = try std.fmt.allocPrint(a, "0\t{d}\tcaptured CLI\t\t1\t2\t2026-10-01T00:00:00Z\tAuthor\twikitext\t0\t1\t0\n", .{raw.len});
+        const index = try put(io, a, root, "page-index.tsv", row);
+        const retained_row = try put(io, a, root, "index-row.tsv", row[0 .. row.len - 1]);
+        const title_index = try std.fs.path.join(a, &.{ root, dump_source.page_title_index_filename });
+        try dump_source.buildPageTitleIndex(io, a, index.path, title_index);
+        const capture: CapturedWriterReceipt = .{
+            .schema = "wikidict.presentation-first-failure.v1", .record_complete = true,
+            .diagnostic_only = true, .publication_created = false, .semantic_acceptance = false, .error_name = "UncompiledPresentation",
+            .ordinal = 0, .index_offset = 0, .namespace = 0, .namespace_kind = "language",
+            .page_id = 1, .revision_id = 2, .title = "captured CLI", .title_bytes = "captured CLI".len,
+            .title_truncated = false, .title_sha256 = try auditHash(a, "captured CLI"), .alias = false,
+            .unsupported_parser_function = false, .input = .{ .dump_path = dump.path, .expander_root = root },
+            .raw_source = payload(source), .expanded = payload(expanded), .display_title = .{ .present = false },
+            .poem_metadata = .{ .present = false }, .missing_dependency_metadata = .{ .present = false },
+            .index_row = payload(retained_row), .alias_record = .{ .present = false },
+        };
+        const capture_file = try put(io, a, root, "capture.json", try std.json.Stringify.valueAlloc(a, capture, .{}));
+        const absence_names = [_][]const u8{ "interwiki-map.tsv", "behavior-switches.tsv", "image-options.tsv", "stylesheet-imports.json", "language-names.tsv", "transclusion-redirects.tsv", "namespace-siteinfo.raw.json" };
+        const absences = try a.alloc([]const u8, absence_names.len);
+        for (absence_names, absences) |name, *path| path.* = try std.fs.path.join(a, &.{ root, name });
+        const dependencies = try a.dupe(CapturedWriterFile, &.{ ns, registry, manifest });
+        var request: CapturedWriterRequest = .{
+            .schema = "wikidict.captured-writer.request.v2", .source_fingerprint = fingerprint,
+            .expander_root = root, .wiki = try a.dupe(u8, namespaces.wiki), .date = try a.dupe(u8, namespaces.dump_date), .content_language = try a.dupe(u8, namespaces.content_language),
+            .capture_receipt = capture_file, .original_error_name = "UncompiledPresentation", .dependencies = dependencies, .absent_dependencies = absences,
+            .source_category_dump = .{ .path = dump.path },
+            .page = .{ .title = "captured CLI", .namespace = 0, .page_id = 1, .revision_id = 2, .ordinal = 0, .index_offset = 0,
+                .ordinary_page_reply = true, .raw_encoding = .decoded_wikitext, .raw = source, .expanded = expanded,
+                .index_row = retained_row, .unsupported_parser_function = false },
+        };
+        // Controlled fixture receipt uses the SAME normal physical identity shape.
+        // This is not an external corpus receipt or a claimed previous failure.
+        var inputs: CapturedWriterInputs = .{ .io = io, .a = a };
+        defer inputs.deinit();
+        const previous = captured_writer_inputs;
+        captured_writer_inputs = &inputs;
+        defer captured_writer_inputs = previous;
+        const snapshot = try capturedWriterSourceSnapshot(io, a, request, try capturedWriterSourcePathIdentity(io, dump.path), .raw_xml, namespaces.source_sha256);
+        request.source_category_identity = try put(io, a, root, "extraction-source.json", try std.json.Stringify.valueAlloc(a, snapshot, .{}));
+        return request;
+    }
+    fn receipt(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRequest) !CapturedWriterReceipt {
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, request.capture_receipt.path, a, .limited(1024 * 1024));
+        const parsed = try std.json.parseFromSlice(CapturedWriterReceipt, a, bytes, .{});
+        return parsed.value;
+    }
+    fn execute(io: std.Io, a: std.mem.Allocator, root: []const u8, request: CapturedWriterRequest, output_name: []const u8) !void {
+        const file = try put(io, a, root, "request.json", try std.json.Stringify.valueAlloc(a, request, .{}));
+        try runCapturedWriterDiagnostic(io, a, file.path, try std.fs.path.join(a, &.{ root, output_name }), fingerprint);
+    }
+};
+
+test "captured page receipt joins every source phase identity and rejects incomplete input" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.Io.Dir.cwd().realPathFileAlloc(io, try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}), a);
+    const request = try CapturedWriterCliTest.fixture(io, a, root);
+    const receipt = try CapturedWriterCliTest.receipt(io, a, request);
+    try capturedWriterJoinReceipt(a, request, receipt);
+    inline for (.{ "page_id", "revision_id", "ordinal", "index_offset", "namespace" }) |field| {
+        var altered = receipt; @field(altered, field) += 1;
+        try std.testing.expectError(error.CapturedWriterCaptureMismatch, capturedWriterJoinReceipt(a, request, altered));
+    }
+    var altered = receipt; altered.title = "different";
+    try std.testing.expectError(error.CapturedWriterCaptureMismatch, capturedWriterJoinReceipt(a, request, altered));
+    altered = receipt; altered.unsupported_parser_function = true;
+    try std.testing.expectError(error.CapturedWriterCaptureMismatch, capturedWriterJoinReceipt(a, request, altered));
+    altered = receipt; altered.error_name = "RenderLimit";
+    try std.testing.expectError(error.CapturedWriterCaptureMismatch, capturedWriterJoinReceipt(a, request, altered));
+    altered = receipt; altered.record_complete = false;
+    try std.testing.expectError(error.CapturedWriterCaptureMismatch, capturedWriterJoinReceipt(a, request, altered));
+    altered = receipt; altered.expanded.truncated = true;
+    try std.testing.expectError(error.CapturedWriterIncompleteCapture, capturedWriterJoinReceipt(a, request, altered));
+    altered = receipt; altered.raw_source.present = false;
+    try std.testing.expectError(error.CapturedWriterCaptureMismatch, capturedWriterJoinReceipt(a, request, altered));
+    altered = receipt; altered.expanded.sha256 = request.page.raw.sha256[0..63];
+    try std.testing.expectError(error.CapturedWriterCaptureMismatch, capturedWriterJoinReceipt(a, request, altered));
+    inline for (.{ "display_title", "poem_metadata", "missing_dependency_metadata" }) |field| {
+        var sidecar = request; @field(sidecar.page, field) = request.page.raw;
+        try std.testing.expectError(error.CapturedWriterCaptureMismatch, capturedWriterJoinReceipt(a, sidecar, receipt));
+    }
+    var encoded = request; encoded.page.raw_encoding = .xml_encoded_once;
+    try std.testing.expectError(error.CapturedWriterRawEncodingMismatch, capturedWriterJoinReceipt(a, encoded, receipt));
+}
+
+test "captured page normal Writer exports whole Stored codec and preserves output refusal" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.Io.Dir.cwd().realPathFileAlloc(io, try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}), a);
+    const request = try CapturedWriterCliTest.fixture(io, a, root);
+    try CapturedWriterCliTest.execute(io, a, root, request, "result");
+    const output = try std.fs.path.join(a, &.{ root, "result" });
+    const records = try CapturedWriterCurrentStored.load(io, a, try std.fs.path.join(a, &.{ output, "data" }), request.page.title);
+    try std.testing.expectEqual(@as(usize, 1), records.len);
+    try std.testing.expectEqualStrings("en", records[0].stored.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 1), records[0].stored.entry.references.len);
+    var bold = false; var link = false;
+    for (records[0].stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (std.mem.eql(u8, span.text, "bold")) bold = span.bold;
+        if (std.mem.eql(u8, span.text, "label")) link = span.kind == .link and std.mem.eql(u8, span.target, "Target");
+    };
+    try std.testing.expect(bold and link);
+    const terminal = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ output, "diagnostic-result.json" }), a, .limited(65536));
+    const status = try std.json.parseFromSlice(struct { complete: bool, passed: bool, semantic_acceptance: bool }, a, terminal, .{ .ignore_unknown_fields = true });
+    try std.testing.expect(status.value.complete and status.value.passed and !status.value.semantic_acceptance);
+    try std.testing.expectError(error.PathAlreadyExists, CapturedWriterCliTest.execute(io, a, root, request, "result"));
+    try std.testing.expectError(error.CapturedWriterNoRecords, capturedWriterRequireRecords(0));
+}
+
+test "captured page observer records only consumed modules including refused providers and missing reads" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.Io.Dir.cwd().realPathFileAlloc(io, try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}), a);
+    const module = try CapturedWriterCliTest.put(io, a, root, "provider.lua", "return {}\n");
+    _ = try CapturedWriterCliTest.put(io, a, root, "unused.lua", "unconsumed bytes\n");
+    var inputs: CapturedWriterInputs = .{ .io = io, .a = a }; defer inputs.deinit();
+    const previous = captured_writer_inputs; captured_writer_inputs = &inputs; defer captured_writer_inputs = previous;
+    const source = try readLanguageMetadataSource(io, a, module.path, 64 * 1024 * 1024, module.sha256);
+    try std.testing.expect((try language_registry.Registry.provePositionalLanguageProvider(a, source)) == null);
+    try std.testing.expectEqual(@as(usize, 1), inputs.records.items.len);
+    try std.testing.expectEqualStrings(module.sha256, inputs.records.items[0].sha256.?);
+    const missing = try std.fs.path.join(a, &.{ root, "missing.lua" });
+    try std.testing.expectError(error.FileNotFound, readLanguageMetadataSource(io, a, missing, 64, module.sha256));
+    try std.testing.expectEqualStrings("FileNotFound", inputs.records.items[1].error_name.?);
+    try inputs.verify();
+    _ = try CapturedWriterCliTest.put(io, a, root, "missing.lua", "appeared");
+    try std.testing.expectError(error.CapturedWriterUnexpectedDependency, inputs.verify());
+}
+
+
+test "captured page rejects rehashed source receipt and index changes before normal Writer" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.Io.Dir.cwd().realPathFileAlloc(io, try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}), a);
+    var request = try CapturedWriterCliTest.fixture(io, a, root);
+    var wrong_source = request;
+    wrong_source.source_fingerprint = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    try std.testing.expectError(error.InvalidCapturedWriterRequest, CapturedWriterCliTest.execute(io, a, root, wrong_source, "wrong-source"));
+    const identity = request.source_category_identity.?;
+    const identity_bytes = try std.Io.Dir.cwd().readFileAlloc(io, identity.path, a, .limited(65536));
+    const parsed = try std.json.parseFromSlice(CapturedWriterSourceIdentity, a, identity_bytes, .{});
+    var changed = parsed.value; changed.source.inode += 1;
+    request.source_category_identity = try CapturedWriterCliTest.put(io, a, root, "extraction-source.json", try std.json.Stringify.valueAlloc(a, changed, .{}));
+    try std.testing.expectError(error.CapturedWriterSourceContextMismatch, CapturedWriterCliTest.execute(io, a, root, request, "bad-receipt"));
+    request.source_category_identity = try CapturedWriterCliTest.put(io, a, root, "extraction-source.json", identity_bytes);
+    var receipt = try CapturedWriterCliTest.receipt(io, a, request);
+    const row = try std.Io.Dir.cwd().readFileAlloc(io, request.page.index_row.path, a, .limited(65536));
+    request.page.index_row = try CapturedWriterCliTest.put(io, a, root, "index-row.tsv", try std.fmt.allocPrint(a, "{s}\n", .{row}));
+    receipt.index_row = CapturedWriterCliTest.payload(request.page.index_row);
+    request.capture_receipt = try CapturedWriterCliTest.put(io, a, root, "capture.json", try std.json.Stringify.valueAlloc(a, receipt, .{}));
+    try std.testing.expectError(error.CapturedWriterPageMismatch, CapturedWriterCliTest.execute(io, a, root, request, "bad-row"));
+}
+
+test "captured page preserves normal phase failure and refuses undeclared styles" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.Io.Dir.cwd().realPathFileAlloc(io, try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}), a);
+    var request = try CapturedWriterCliTest.fixture(io, a, root);
+    var receipt = try CapturedWriterCliTest.receipt(io, a, request);
+    request.page.missing_dependency_metadata = try CapturedWriterCliTest.put(io, a, root, "missing.json", "{}");
+    receipt.missing_dependency_metadata = CapturedWriterCliTest.payload(request.page.missing_dependency_metadata.?);
+    request.capture_receipt = try CapturedWriterCliTest.put(io, a, root, "capture.json", try std.json.Stringify.valueAlloc(a, receipt, .{}));
+    try std.testing.expectError(error.InvalidMissingDependencyMetadata, CapturedWriterCliTest.execute(io, a, root, request, "bad-phase"));
+    const terminal = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ root, "bad-phase", "diagnostic-result.json" }), a, .limited(65536));
+    const status = try std.json.parseFromSlice(struct { complete: bool, passed: bool, semantic_acceptance: bool, error_name: []const u8, stage: []const u8 }, a, terminal, .{ .ignore_unknown_fields = true });
+    try std.testing.expect(status.value.complete and !status.value.passed and !status.value.semantic_acceptance);
+    try std.testing.expectEqualStrings("InvalidMissingDependencyMetadata", status.value.error_name);
+    try std.testing.expectEqualStrings("writer-add-strict-presentation", status.value.stage);
+    // Present conversion metadata must use the same ordinary site loader. An
+    // empty enabled profile is rejected before the captured missing-phase error.
+    const site_value = .{ .schema = "wikidict.site-info.v2", .wiki = request.wiki, .date = request.date,
+        .content_language = request.content_language, .namespace_registry_sha256 = try auditHash(a, namespace_registry.english_test_fixture),
+        .query = .{ .general = .{ .wikiid = request.wiki, .lang = request.content_language, .mainpage = "Other page", .langconversion = true, .variants = [_]u8{} } } };
+    const site_file = try CapturedWriterCliTest.put(io, a, root, "namespace-siteinfo.raw.json", try std.json.Stringify.valueAlloc(a, site_value, .{}));
+    var dependencies: std.ArrayList(CapturedWriterFile) = .empty;
+    try dependencies.appendSlice(a, request.dependencies);
+    try dependencies.append(a, site_file);
+    request.dependencies = try dependencies.toOwnedSlice(a);
+    var absences: std.ArrayList([]const u8) = .empty;
+    for (request.absent_dependencies) |path| if (!std.mem.eql(u8, path, site_file.path)) try absences.append(a, path);
+    request.absent_dependencies = try absences.toOwnedSlice(a);
+    try std.testing.expectError(error.InvalidLanguageConversionProfile, CapturedWriterCliTest.execute(io, a, root, request, "bad-conversion"));
+    const bad_conversion = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ root, "bad-conversion", "diagnostic-result.json" }), a, .limited(65536));
+    const conversion_status = try std.json.parseFromSlice(struct { stage: []const u8, error_name: []const u8 }, a, bad_conversion, .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqualStrings("site-profile-loader", conversion_status.value.stage);
+    try std.testing.expectEqualStrings("InvalidLanguageConversionProfile", conversion_status.value.error_name);
+    _ = try CapturedWriterCliTest.put(io, a, root, "stylesheet-imports.json", "{}");
+    try std.testing.expectError(error.CapturedWriterUnexpectedDependency, CapturedWriterCliTest.execute(io, a, root, request, "undeclared-style"));
+}
+
+test "captured page derived registry joins normal lineage while preserving all upstream rows" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.Io.Dir.cwd().realPathFileAlloc(io, try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}), a);
+    var request = try CapturedWriterCliTest.fixture(io, a, root);
+    const original = try capturedWriterDependency(request, try std.fs.path.join(a, &.{ root, "language-registry.tsv" }));
+    const upstream = try std.Io.Dir.cwd().readFileAlloc(io, original.path, a, .limited(65536));
+    const selected_root = try std.fs.path.join(a, &.{ root, "derived" });
+    try std.Io.Dir.cwd().createDir(io, selected_root, .default_dir);
+    const selected = try CapturedWriterCliTest.put(io, a, selected_root, "language-registry.tsv", upstream);
+    request.dependencies = try a.dupe(CapturedWriterFile, &.{request.dependencies[0], request.dependencies[2], selected});
+    request.language_registry_root = selected_root;
+    const row: CapturedWriterRegistryRow = .{ .wiki = request.wiki, .date = request.date, .name = "language-registry.tsv", .content_language = request.content_language, .size = selected.bytes, .sha256 = selected.sha256 };
+    request.language_registry_manifest = try CapturedWriterCliTest.put(io, a, root, "derived-rows.json", try std.json.Stringify.valueAlloc(a, [_]CapturedWriterRegistryRow{row}, .{}));
+    const lineage = .{ .status = "PASS", .rows = request.language_registry_manifest.?, .source = original, .source_row = row, .target = selected,
+        .upstream_sha256 = original.sha256, .upstream_preferred_names_preserved = true, .original_bytes_inodes_preserved = true };
+    request.language_registry_lineage = try CapturedWriterCliTest.put(io, a, root, "derived-lineage.json", try std.json.Stringify.valueAlloc(a, lineage, .{}));
+    var inputs: CapturedWriterInputs = .{ .io = io, .a = a }; defer inputs.deinit();
+    const previous = captured_writer_inputs; captured_writer_inputs = &inputs; defer captured_writer_inputs = previous;
+    try capturedWriterJoinRegistryDerivation(io, a, request, selected_root);
+    var wrong = row; wrong.wiki = "differentwiktionary";
+    const wrong_rows = try CapturedWriterCliTest.put(io, a, root, "wrong-rows.json", try std.json.Stringify.valueAlloc(a, [_]CapturedWriterRegistryRow{wrong}, .{}));
+    var mismatched = request; mismatched.language_registry_manifest = wrong_rows;
+    try std.testing.expectError(error.CapturedWriterRegistryDerivationMismatch, capturedWriterJoinRegistryDerivation(io, a, mismatched, selected_root));
+    try std.testing.expectError(error.CapturedWriterRegistryUpstreamMismatch, capturedWriterCheckRegistryUpstream(upstream, "en\tInvented preferred name\n", original.sha256));
+    const historical = try std.fmt.allocPrint(a, "{s}# reviewed-alias\told marker\n", .{upstream});
+    const current = try std.fmt.allocPrint(a, "{s}# reviewed-alias\tcurrent marker\n", .{upstream});
+    // This tests projection only. The normal Registry independently validates
+    // marker authority and rejects these deliberately non-authoritative strings.
+    try capturedWriterCheckRegistryUpstream(historical, current, original.sha256);
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try std.testing.expectError(error.InvalidLanguageRegistry, registry.addTsv(current));
+}
+
+test "normal Writer retained FR Lakta Vojo keeps literal malformed table full body and unresolved owner" {
+    const F = struct {
+        const title = "Lakta Vojo";
+        const raw = @embedFile("testdata/fr-lakta-vojo/page.raw.wikitext");
+        const source = @embedFile("testdata/fr-lakta-vojo/page.expanded.wikitext");
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+    };
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    try F.hash(F.raw, "7e6257791dfd6a19e1f0d3c5eef4ca12aa21959f470010039a8346872b2341f7");
+    try F.hash(F.source, "24073d975f8428ae7d405c41811a1e01e88706faae1143738c60729884d9a8ea");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, "{|"));
+    const control = try std.mem.replaceOwned(u8, a, F.source, "{|", "<nowiki>{|</nowiki>");
+    // This is a normal Writer/resolver fixture with deliberately absent eo
+    // authority. It must not guess the owner from the edition or source marker.
+    // It does not impersonate the failed producer's complete normal loader.
+    var ns = try namespace_registry.Registry.init(a, namespace_registry.french_test_fixture); defer ns.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv("# mediawiki\nfr\tfrançais\tFrançais\tfr\n");
+    const codes = languageCodes(&registry, &ns);
+    try std.testing.expect(codes.resolve("eo") == null);
+    var roots: [2][]const u8 = undefined;
+    for ([_][]const u8{ F.source, control }, 0..) |source, i| {
+        roots[i] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/fr-lakta-vojo-{d}", .{tmp.sub_path, i});
+        var writer = try encoder.blob_builder.Writer.init(io, a, roots[i]); defer writer.deinit(); writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, F.title, source, F.raw, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    }
+    const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], "Unclassified", F.title);
+    const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], "Unclassified", F.title);
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expect(actual.kind == .language);
+    try std.testing.expectEqualStrings("", actual.language_code);
+    try std.testing.expectEqualStrings("Unclassified", actual.language.?);
+    const stored: encoder.presentation_types.Stored = .{ .entry = actual };
+    const bytes = try encoder.presentation_codec.encodeAlloc(a, stored);
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, F.title, .language, .{ .heading = "Unclassified", .code = "" });
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    var visible: std.ArrayList(u8) = .empty; var definitions: usize = 0;
+    var bold = false; var italic = false; var meaning = false; var hypernym = false; var inflection = false;
+    for (actual.sections) |section| {
+        try visible.appendSlice(a, section.title);
+        for (section.blocks) |block| {
+            try std.testing.expect(block.table == null);
+            if (block.kind == .definition) definitions += 1;
+            for (block.spans) |span| {
+                try visible.appendSlice(a, span.text); try visible.appendSlice(a, span.trail);
+                if (std.mem.eql(u8, span.text, F.title) and span.bold) bold = true;
+                if (std.mem.eql(u8, span.text, "lakta") and span.italic) italic = true;
+                if (span.kind == .link and std.mem.eql(u8, span.target, "Voie lactée")) meaning = true;
+                if (span.kind == .link and std.mem.eql(u8, span.target, "galaksio")) hypernym = true;
+                if (span.kind == .link and std.mem.eql(u8, span.target, "Laktan Vojon#eo")) inflection = true;
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), definitions);
+    try std.testing.expect(bold and italic and meaning and hypernym and inflection);
+    for ([_][]const u8{ "Espéranto", "Étymologie", "Nom propre", "Hyperonymes", "Prononciation", "}{| class=\"wikitable flextable\"", "Nominatif", "Accusatif", "voir le modèle", "|}", "Astronomie", "France (Toulouse)", "Prononciation ?" }) |text| {
+        errdefer std.debug.print("FR Writer missing body witness={s}\n", .{text});
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, text) != null);
+    }
+    try std.testing.expectEqual(@as(usize, 0), actual.references.len);
+    try std.testing.expectEqual(@as(usize, 1), actual.media.len);
+    try std.testing.expectEqualStrings("LL-Q143 (epo)-Lepticed7-Lakta Vojo.wav", actual.media[0].file);
+}
+
+// Private/unrun synthetic normal-loader -> Writer -> codec controls.
+// These do not substitute for the captured dictionary's missing expanded source.
+const SimpleFormatCase = struct {
+    wiki: []const u8 = "simplewiktionary",
+    registry: []const u8 = simpleFormatRegistry,
+    raw: []const u8,
+    expanded: []const u8,
+    trusted_callback: bool = true,
+    ambiguous_english: bool = false,
+    code: []const u8 = "en",
+    owner: []const u8 = "English",
+    lexemes: usize = 1,
+    fallback: bool = false,
+    extra_reasons: []const []const u8 = &.{},
+    media: usize = 0,
+    tables: usize = 0,
+};
+const simpleFormatRegistry = "# content-language\ten\n# mediawiki\nen\tEnglish\ten\teng\nde\tGerman\tde\tdeu\nmul\tTranslingual\tmul\n";
+const simpleFormatMeaning = "# Definition '''bold''' [[target|label]] and ''italic''.\n" ++
+    "#: ''First '''example''' with [[one]].''\n#: ''Second [[two]].''\n#: ''Third [[three]].''\n";
+fn simpleFormatWriterControl(case: SimpleFormatCase) !void {
+    var checkpoint: []const u8 = "setup";
+    errdefer std.debug.print("SIMPLE failure checkpoint={s} wiki={s} owner={s} code={s} raw={s} expanded={s}\n", .{ checkpoint, case.wiki, case.owner, case.code, case.raw, case.expanded });
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const namespace_bytes = try std.fmt.allocPrint(a,
+        "# wikidict-namespace-registry-v1\n# wiki\t{s}\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tFile\tFile\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tmedia\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n", .{case.wiki});
+    var namespaces = try namespace_registry.Registry.init(a, namespace_bytes);
+    defer namespaces.deinit();
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = case.registry });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "\n" });
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces);
+    defer registry.deinit();
+    checkpoint = "registry-authority";
+    try std.testing.expectEqual(case.ambiguous_english, registry.isAmbiguous("English"));
+    if (case.ambiguous_english) {
+        try std.testing.expect(registry.resolve("English") == null);
+        try std.testing.expect(registry.resolveTrusted("English") == null);
+    }
+    var codes = languageCodes(&registry, &namespaces);
+    if (!case.trusted_callback) codes.trusted_fn = null;
+    const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    checkpoint = "add-expanded";
+    try writer.addExpandedPageWithReasons(a, .{ .id = 0, .kind = .language }, "synthetic-simple-format", case.expanded, case.raw, null, case.extra_reasons);
+    checkpoint = "finish";
+    const stats = try writer.finish(codes);
+    checkpoint = "stats-records";
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    checkpoint = "stats-fallback";
+    try std.testing.expectEqual(@as(usize, if (case.fallback) 1 else 0), stats.fallback_pages);
+    var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+    var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ output, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(case.owner, &filename) }));
+    defer mapped.deinit();
+    const blob = try encoder.blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    checkpoint = "metadata-code";
+    try std.testing.expectEqualStrings(case.code, metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("synthetic-simple-format")) orelse return error.TestUnexpectedResult;
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    try std.testing.expectEqualStrings(case.code, decoded.entry.language_code);
+    checkpoint = "lexemes";
+    try std.testing.expectEqual(case.lexemes, decoded.entry.organization.lexemes.len);
+    // The ownership decision must not rewrite or lose any normal typed body.
+    checkpoint = "whole-document-reference";
+    const whole_payload = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, record.title, .language, case.owner, case.code, case.expanded, null, .{}, &namespaces, null);
+    const whole = try encoder.presentation_codec.decodeAlloc(a, whole_payload, record.title, .language, metadata);
+    checkpoint = "whole-sections";
+    try std.testing.expectEqualDeep(whole.entry.sections, decoded.entry.sections);
+    checkpoint = "whole-media";
+    try std.testing.expectEqualDeep(whole.entry.media, decoded.entry.media);
+    checkpoint = "media-count";
+    try std.testing.expectEqual(case.media, decoded.entry.media.len);
+    var tables: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| {
+        if (block.kind == .table) tables += 1;
+    };
+    checkpoint = "tables";
+    try std.testing.expectEqual(case.tables, tables);
+    checkpoint = "codec";
+    try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    checkpoint = "lexeme-contents";
+    for (decoded.entry.organization.lexemes) |lexeme| {
+        try std.testing.expectEqualStrings(case.owner, lexeme.language);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+        try std.testing.expectEqual(@as(usize, 3), lexeme.definitions[0].examples.len);
+    }
+}
+
+test "SIMPLE physical POS format supplies trusted English and preserves typed body" {
+    const noun = "=== Pronunciation ===\n* /sample/\n== Noun ==\n" ++
+        "{|\n| Singular || Plural\n|-\n| '''sample''' || [[samples]]\n|}\n[[File:Example.jpg|thumb|A '''sample''' image.]]\n" ++ simpleFormatMeaning ++
+        "=== Related words ===\n* [[relation]]\n";
+    try simpleFormatWriterControl(.{ .raw = noun, .expanded = noun, .media = 1, .tables = 1 });
+    const two = "== Noun ==\n" ++ simpleFormatMeaning ++ "== Verb ==\n" ++ simpleFormatMeaning;
+    try simpleFormatWriterControl(.{ .raw = two, .expanded = two, .lexemes = 2 });
+    // Classification never suppresses a diagnostic supplied by normal expansion.
+    try simpleFormatWriterControl(.{ .raw = noun, .expanded = noun, .fallback = true, .extra_reasons = &.{"rendered_lua_error"}, .media = 1, .tables = 1 });
+}
+
+test "SIMPLE format does not replace foreign Translingual unknown or missing trust" {
+    const noun = "== Noun ==\n" ++ simpleFormatMeaning;
+    try simpleFormatWriterControl(.{ .wiki = "enwiktionary", .raw = noun, .expanded = noun, .code = "", .owner = "Unclassified", .lexemes = 0, .fallback = true });
+    try simpleFormatWriterControl(.{ .trusted_callback = false, .raw = noun, .expanded = noun, .code = "", .owner = "Unclassified", .lexemes = 0, .fallback = true });
+    // A foreign ordinary alias cannot displace an existing canonical owner.
+    try simpleFormatWriterControl(.{ .registry = "# content-language\ten\n# mediawiki\nen\tEnglish\ten\nde\tGerman\tEnglish\tde\n", .raw = noun, .expanded = noun });
+    // Here English is an ordinary alias of two distinct canonical owners, so
+    // the normal loader must establish actual ambiguity before Writer runs.
+    try simpleFormatWriterControl(.{ .registry = "# content-language\ten\n# mediawiki\nen\tAnglais\tEnglish\ten\nde\tGerman\tEnglish\tde\n", .ambiguous_english = true, .raw = noun, .expanded = noun, .code = "", .owner = "Unclassified", .lexemes = 0, .fallback = true });
+    // Localized aliases introduced for other editions cannot extend this format rule.
+    for ([_][]const u8{ "Nom", "Izena", "Zelfstandig naamwoord" }) |label| {
+        const localized = try std.fmt.allocPrint(std.testing.allocator, "== {s} ==\n{s}", .{label, simpleFormatMeaning});
+        defer std.testing.allocator.free(localized);
+        try simpleFormatWriterControl(.{ .raw = localized, .expanded = localized, .code = "", .owner = "Unclassified", .lexemes = 0, .fallback = true });
+    }
+    const german = "== German ==\n=== Noun ===\n" ++ simpleFormatMeaning;
+    try simpleFormatWriterControl(.{ .raw = german, .expanded = german, .code = "de", .owner = "German" });
+    const translingual = "== Translingual ==\n=== Noun ===\n" ++ simpleFormatMeaning;
+    try simpleFormatWriterControl(.{ .raw = translingual, .expanded = translingual, .code = "mul", .owner = "Translingual" });
+    const mixed = "== Unknown language ==\nUnknown region.\n" ++ noun;
+    try simpleFormatWriterControl(.{ .raw = mixed, .expanded = mixed, .code = "", .owner = "Unclassified", .lexemes = 0, .fallback = true });
+}
+
+test "SIMPLE physical POS proof rejects projection protected nested and changed roots" {
+    const noun = "== Noun ==\n" ++ simpleFormatMeaning;
+    const sources = [_][]const u8{
+        "<nowiki>\n== Noun ==\n</nowiki>\n" ++ simpleFormatMeaning,
+        "{{box|\n== Noun ==\n}}\n" ++ simpleFormatMeaning,
+        "{|\n|\n== Noun ==\n|}\n" ++ simpleFormatMeaning,
+        "<div>\n== Noun ==\n</div>\n" ++ simpleFormatMeaning,
+        "<h2>Noun</h2>\n" ++ simpleFormatMeaning,
+        "__NOTOC__== Noun ==\n" ++ simpleFormatMeaning,
+        "== Verb ==\n" ++ simpleFormatMeaning,
+    };
+    // Expanded ordinary POS text cannot lend root authority to another domain.
+    for (sources) |raw| try simpleFormatWriterControl(.{ .raw = raw, .expanded = noun, .code = "", .owner = "Unclassified", .lexemes = 0, .fallback = true });
+    // Matching raw/rendered bytes are not a substitute for root-domain proof.
+    // The final changed-POS case is excluded because Verb is a valid root POS.
+    for (sources[0 .. sources.len - 1]) |wrapped| {
+        const case: SimpleFormatCase = .{ .raw = wrapped, .expanded = wrapped, .code = "", .owner = "Unclassified", .lexemes = 0, .fallback = true, .tables = if (std.mem.startsWith(u8, wrapped, "{|")) 1 else 0 };
+        // Optional raw proof may decline an unexpanded template. The mandatory
+        // expanded input must still reject that unresolved template.
+        if (std.mem.startsWith(u8, wrapped, "{{box|"))
+            try std.testing.expectError(error.UncompiledTemplate, simpleFormatWriterControl(case))
+        else
+            try simpleFormatWriterControl(case);
+    }
+}
+
+test "normal site loader accepts retained global conversion switch without content variants" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const raw = @embedFile("testdata/tn-conversion-profile/namespace-siteinfo.raw.json");
+    const ns_raw = @embedFile("testdata/tn-conversion-profile/namespace-registry.tsv");
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(raw, &digest, .{});
+    try std.testing.expectEqualStrings("0041302a48c3234d8f1594bbfbc631ca1407aa3f01ef64f59ed9fe92f71b3ac8", &std.fmt.bytesToHex(digest, .lower));
+    std.crypto.hash.sha2.Sha256.hash(ns_raw, &digest, .{});
+    try std.testing.expectEqualStrings("4e2a809d7d4e448524b6e526c8f37d24201efc2e5813155be781ba421c4ee2ec", &std.fmt.bytesToHex(digest, .lower));
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "namespace-registry.tsv" }), .data = ns_raw });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "namespace-siteinfo.raw.json" }), .data = raw });
+    var namespaces = try namespace_registry.Registry.load(io, a, root); defer namespaces.deinit();
+    // The actual capture has the global switch true but no content variants.
+    // The ordinary loader must neither reject it nor invent a conversion profile.
+    const source = try std.json.parseFromSlice(std.json.Value, a, raw, .{}); defer source.deinit();
+    const general = source.value.object.get("query").?.object.get("general").?;
+    try std.testing.expect(general.object.get("langconversion").?.bool);
+    try std.testing.expect(general.object.get("variants") == null);
+    const site = (try loadSiteMainPage(io, a, root, &namespaces)) orelse return error.TestUnexpectedResult;
+    defer a.free(site.title);
+    try std.testing.expectEqualStrings("Tsebe ya konokono", site.title);
+    try std.testing.expectEqualStrings("tn", namespaces.content_language);
+    try std.testing.expect(namespaces.language_conversion == null);
+    try std.testing.expectEqualDeep(digest, namespaces.source_sha256);
+    var raw_digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(raw, &raw_digest, .{});
+    try std.testing.expectEqualDeep(raw_digest, site.digest);
+}
+
+test "absent conversion variants do not admit malformed present profiles or wrong identities" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const raw = @embedFile("testdata/tn-conversion-profile/namespace-siteinfo.raw.json");
+    const ns_raw = @embedFile("testdata/tn-conversion-profile/namespace-registry.tsv");
+    const anchor = "\"langconversion\": true,";
+    try std.testing.expect(std.mem.indexOf(u8, raw, anchor) != null);
+    const invalid = [_][]const u8{
+        "\"langconversion\": \"true\",",
+        "\"langconversion\": true, \"variants\": null,",
+        "\"langconversion\": true, \"variants\": {},",
+        "\"langconversion\": true, \"variants\": [],",
+        "\"langconversion\": true, \"variants\": [{\"code\":\"\"}],",
+        "\"langconversion\": true, \"variants\": [{\"code\":\"x|y\"}],",
+        "\"langconversion\": true, \"variants\": [{\"code\":\"x\"},{\"code\":\"x\"}],",
+    };
+    for (invalid) |replacement| {
+        const bad = try std.mem.replaceOwned(u8, a, raw, anchor, replacement);
+        var namespaces = try namespace_registry.Registry.init(a, ns_raw); defer namespaces.deinit();
+        try std.testing.expectError(error.InvalidLanguageConversionProfile, namespaces.attachLanguageConversion(bad));
+        try std.testing.expect(namespaces.language_conversion == null);
+    }
+    for ([_]struct { before: []const u8, after: []const u8 }{
+        .{ .before = "tnwiktionary", .after = "differentwiktionary" },
+        .{ .before = "20261001", .after = "20260901" },
+        .{ .before = "4e2a809d7d4e448524b6e526c8f37d24201efc2e5813155be781ba421c4ee2ec", .after = "0e2a809d7d4e448524b6e526c8f37d24201efc2e5813155be781ba421c4ee2ec" },
+        .{ .before = "\"lang\": \"tn\"", .after = "\"lang\": \"en\"" },
+    }) |edit| {
+        const bad = try std.mem.replaceOwned(u8, a, raw, edit.before, edit.after);
+        try std.testing.expect(!std.mem.eql(u8, raw, bad));
+        var namespaces = try namespace_registry.Registry.init(a, ns_raw); defer namespaces.deinit();
+        try std.testing.expectError(error.InvalidLanguageConversionProfile, namespaces.attachLanguageConversion(bad));
+        try std.testing.expect(namespaces.language_conversion == null);
+    }
+    var cleared = try namespace_registry.Registry.init(a, ns_raw); defer cleared.deinit();
+    cleared.language_conversion = &.{"previous-profile"};
+    try cleared.attachLanguageConversion(raw);
+    try std.testing.expect(cleared.language_conversion == null);
 }

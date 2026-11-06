@@ -503,6 +503,61 @@ fn valueConfirmsLanguage(codes: LanguageCodes, value_source: []const u8, wanted:
     return std.mem.eql(u8, resolved.code, wanted);
 }
 
+// SIMPLE's published entry-format policy uses English POS headings instead of
+// language headings. This requires independently trusted English and exact raw
+// and expanded physical POS roots; content-language alone grants no owner.
+fn simpleEnglishPosCandidate(codes: LanguageCodes, raw: []const language_source.Section, rendered: []const language_source.Section, aligned: bool) ?ResolvedLanguage {
+    const namespaces = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, namespaces.wiki, "simplewiktionary") or
+        !aligned or raw.len == 0 or raw.len != rendered.len) return null;
+    const trusted = codes.trusted_fn orelse return null;
+    const english = trusted(codes.ctx, "English") orelse return null;
+    if (!std.mem.eql(u8, english.code, "en")) return null;
+    for (raw, rendered) |authored, expanded| {
+        // Cheap candidates only: renderer-established root scope is checked
+        // separately before this authority can be used for an unresolved page.
+        if (!language_source.literalL2Section(authored, null) or
+            !language_source.literalL2Section(expanded, null)) return null;
+        const raw_pos = @import("presentation_layout.zig").partOfSpeech(authored.heading) orelse return null;
+        const expanded_pos = @import("presentation_layout.zig").partOfSpeech(expanded.heading) orelse return null;
+        // Localized POS aliases added for other editions organize existing
+        // owners; they are not additional SIMPLE format declarations.
+        if (!@import("blob_encoder").part_kind.named(authored.heading, raw_pos) or
+            !@import("blob_encoder").part_kind.named(expanded.heading, expanded_pos)) return null;
+        if (!std.mem.eql(u8, raw_pos, expanded_pos) or
+            codes.isLanguageBoundary(authored.heading) or codes.isLanguageBoundary(expanded.heading) or
+            codes.resolve(authored.heading) != null or codes.resolve(expanded.heading) != null) return null;
+    }
+    return english;
+}
+
+fn simpleRawProofUnavailable(err: anyerror) anyerror!?presentation_document.HeadingObservation {
+    // Only optional UNEXPANDED raw observation uses this narrow boundary.
+    switch (err) {
+        error.RenderLimit, error.UncompiledTemplate => return null,
+        else => return err,
+    }
+}
+fn simpleRawHeadingProof(a: std.mem.Allocator, codes: LanguageCodes, title: []const u8, raw: []const u8) !?presentation_document.HeadingObservation {
+    const references = presentation_document.referenceDefinitionsAlloc(a, raw) catch |err| return simpleRawProofUnavailable(err);
+    const observed = presentation_document.observeHeadingAnchorsWithWikiScopeAlloc(
+        a, title, MissingText.untracked(raw), codes.link_trail, codes.namespace_catalog,
+        codes.behavior_switches, codes.image_options, references, null, true,
+    ) catch |err| return simpleRawProofUnavailable(err);
+    // Soft limits also decline the proof. Opaque raw template tokens do not
+    // establish ownership, but their presence alone is not a traversal limit.
+    return if (observed.page_wiki_scope_complete) observed else null;
+}
+fn simpleApplyRootScope(source: []const u8, sections: []language_source.Section, openings: []const usize) void {
+    const scopes: language_source.LinkHeadingScopes = .{ .source = source, .openings = openings };
+    for (sections) |*section| {
+        section.root_wiki_heading = false;
+        const start = std.math.sub(usize, @intFromPtr(section.source.ptr), @intFromPtr(source.ptr)) catch continue;
+        if (start <= source.len and section.source.len <= source.len - start)
+            section.root_wiki_heading = scopes.admits(source, start);
+    }
+}
+
 fn sourceConfirmsLanguage(codes: LanguageCodes, source: []const u8, wanted: []const u8) bool {
     const limit = @min(source.len, 4096);
     var search: usize = 0;
@@ -3412,7 +3467,12 @@ fn processMain(
     // Reserve heading IDs in the original semantic page order before owners
     // regroup repeated language sections or omit another owner's headings.
     // Reuse early observation when present; never render a second heading pass.
-    const heading_observation = early_heading_observation orelse try presentation_document.observeHeadingAnchorsAlloc(
+    // Preserve early HTML and raw-conflict exits; only candidates request the
+    // extra root evidence during this existing mandatory expanded observation.
+    const simple_pos_candidate = if (early_heading_observation == null and std.mem.eql(u8, source, source_raw))
+        simpleEnglishPosCandidate(codes, raw_sections.items, page_sections.items, raw_aligned and !sections.mixed_levels and !raw_conflicts.present)
+    else null;
+    const heading_observation = early_heading_observation orelse try presentation_document.observeHeadingAnchorsWithWikiScopeAlloc(
         heading_arena.allocator(),
         title,
         source_missing,
@@ -3422,6 +3482,7 @@ fn processMain(
         codes.image_options,
         reference_context,
         poem_phase,
+        simple_pos_candidate != null,
     );
 
     var groups: std.ArrayList(PageLanguageGroup) = .empty;
@@ -3536,13 +3597,27 @@ fn processMain(
     }
 
     if (groups.items.len == 0) {
+        const simple_support: ?ResolvedLanguage = simple: {
+            const english = simple_pos_candidate orelse break :simple null;
+            const raw = raw_source orelse break :simple null;
+            if (!heading_observation.page_wiki_scope_complete) break :simple null;
+            simpleApplyRootScope(source, page_sections.items, heading_observation.page_wiki_openings);
+            for (page_sections.items) |section| if (!section.root_wiki_heading) break :simple null;
+            // Identical bytes reuse observed offsets under raw's own identity.
+            // Otherwise this optional raw observation cannot suppress real errors.
+            const raw_headings = if (std.mem.eql(u8, raw, source)) heading_observation else
+                (try simpleRawHeadingProof(heading_arena.allocator(), codes, title, raw)) orelse break :simple null;
+            simpleApplyRootScope(raw, raw_sections.items, raw_headings.page_wiki_openings);
+            for (raw_sections.items) |section| if (!section.root_wiki_heading) break :simple null;
+            break :simple english;
+        };
         // Arbitrary unknown headings cannot inherit a page-wide category.
         // Captured edition-local support forms require corroborated raw and
         // expanded category authority and preserve the whole entry body.
         const support = amharicSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items) orelse
             arabicMeaningsSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items) orelse
             assameseSupportLanguage(codes, source, raw_source) orelse
-            (try teluguSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items));
+            (try teluguSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items)) orelse simple_support;
         const explicit = if (page_sections.items.len == 0)
             (try slovenianSupportCategoryLanguage(codes, title, source, raw_source, raw_sections.items, page_sections.items)) orelse
                 rawPrefixParagraphLanguage(codes, raw_source, source, raw_sections.items, page_sections.items) orelse
@@ -3593,7 +3668,7 @@ fn processMain(
             break :native language;
         };
         const language = explicit orelse native_default orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" };
-        const payload = try presentation_document.compileReportedWithOptionsAndPhasesAndTableStylesAlloc(
+        const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(
             page_allocator,
             title,
             .language,
@@ -3605,8 +3680,17 @@ fn processMain(
             codes.namespace_catalog,
             codes.behavior_switches,
             codes.image_options,
+            .{},
             fallbacks,
             poem_phase,
+            &.{},
+            null,
+            &.{},
+            // Only the independently proved SIMPLE format owner lends layout
+            // authority here; other unsectioned/support policies are unchanged.
+            if (simple_support) |simple| if (std.mem.eql(u8, simple.code, language.code) and
+                std.mem.eql(u8, simple.heading, language.heading))
+                .{ .heading = simple.heading, .code = simple.code } else null else null,
             codes.table_styles,
         );
         try spools.appendLanguage(page_allocator, language.heading, title, payload);
@@ -14715,4 +14799,51 @@ test "categorized decorated language links require independent trusted agreement
     try std.testing.expect(resolveCategorizedDecoratedLinkHeading(codes, heading) == null);
     codes.namespace_catalog = null;
     try std.testing.expect(resolveCategorizedDecoratedLinkHeading(codes, heading) == null);
+}
+
+// Append to private src/encoder/blob_builder.zig after the ordered patches.
+// Error-boundary controls are explicitly injected; no real render limit or
+// allocation failure has been executed by authoring this source.
+test "SIMPLE optional raw proof declines only unavailable proof and propagates allocation" {
+    try std.testing.expect((try simpleRawProofUnavailable(error.RenderLimit)) == null);
+    try std.testing.expect((try simpleRawProofUnavailable(error.UncompiledTemplate)) == null);
+    for ([_]anyerror{
+        error.OutOfMemory,
+        error.InvalidPreContext,
+        error.InvalidMissingDependencyCopy,
+        error.InvalidLiteralProvenance,
+        error.LiteralProvenanceLimit,
+        error.InvalidHeadingProjection,
+    }) |err| try std.testing.expectError(err, simpleRawProofUnavailable(err));
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const source = "== Noun ==\n# Meaning [[target]].\n";
+    const proof = (try simpleRawHeadingProof(arena.allocator(), .{}, "synthetic-simple-proof", source)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(usize, &.{0}, proof.page_wiki_openings);
+    var failed = std.testing.FailingAllocator.init(arena.allocator(), .{ .fail_index = 0 });
+    try std.testing.expectError(error.OutOfMemory, simpleRawHeadingProof(failed.allocator(), .{}, "synthetic-simple-proof", source));
+}
+
+// Append to private blob_builder.zig. Real observer paths, still unrun.
+test "SIMPLE root proof refuses soft render limit while raw templates supply no authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const opaque_template = "== Noun ==\n{{unexpanded-headword}}\n# Meaning.\n";
+    const ordinary = (try simpleRawHeadingProof(a, .{}, "synthetic-simple-proof", opaque_template)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(ordinary.page_wiki_scope_complete);
+    try std.testing.expectEqualSlices(usize, &.{0}, ordinary.page_wiki_openings);
+
+    // Current renderer's body-depth limit is 48. Matched ordinary DIV bodies
+    // recurse through that real path and mark render_limit without throwing.
+    var deep: std.ArrayList(u8) = .empty;
+    try deep.appendSlice(a, "== Noun ==\n# Meaning.\n");
+    for (0..64) |_| try deep.appendSlice(a, "<div>\n");
+    try deep.appendSlice(a, "inside\n");
+    for (0..64) |_| try deep.appendSlice(a, "</div>\n");
+    const references = try presentation_document.referenceDefinitionsAlloc(a, deep.items);
+    const mandatory = try presentation_document.observeHeadingAnchorsWithWikiScopeAlloc(a, "synthetic-simple-proof", MissingText.untracked(deep.items), .{}, null, null, null, references, null, true);
+    try std.testing.expect(!mandatory.page_wiki_scope_complete);
+    try std.testing.expect((try simpleRawHeadingProof(a, .{}, "synthetic-simple-proof", deep.items)) == null);
 }

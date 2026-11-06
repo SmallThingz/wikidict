@@ -10,6 +10,7 @@ pub const Section = struct {
     heading: []const u8,
     source: []const u8,
     hyphen_marker: bool = false,
+    root_wiki_heading: bool = false,
 };
 
 /// A language declaration remains a boundary even when its label is unknown.
@@ -146,7 +147,7 @@ pub const LinkHeadingScopes = struct {
     source: []const u8,
     openings: []const usize,
 
-    fn admits(self: LinkHeadingScopes, source: []const u8, opening: usize) bool {
+    pub fn admits(self: LinkHeadingScopes, source: []const u8, opening: usize) bool {
         if (source.ptr != self.source.ptr or source.len != self.source.len) return false;
         var low: usize = 0;
         var high = self.openings.len;

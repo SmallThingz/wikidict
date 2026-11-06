@@ -165,6 +165,9 @@ pub fn build(b: *std.Build) void {
         .{ .name = "bundle_protocol", .module = bundle_protocol_mod },
         .{ .name = "build_diagnostics", .module = build_diagnostics_mod },
     });
+    const captured_writer_options = b.addOptions();
+    captured_writer_options.addOption([]const u8, "source_fingerprint", b.option([]const u8, "captured-source-fingerprint", "Exact immutable source binding for retained-page diagnostics") orelse "");
+    blob_build_exe.root_module.addOptions("captured_writer_options", captured_writer_options);
     blob_build_exe.root_module.link_libc = true;
     blob_build_exe.root_module.linkSystemLibrary("bz2", .{});
     blob_build_exe.root_module.linkSystemLibrary("zstd", .{});
@@ -182,10 +185,12 @@ pub fn build(b: *std.Build) void {
     blob_verify_exe.root_module.addImport("xz", blob_xz_mod);
     blob_verify_exe.root_module.link_libc = true;
 
+    const prepare_captured_writer = b.step("prepare-captured-writer", "Prepare the existing blob tool for authenticated retained-page diagnostics");
     const prepare_blob_tools = b.step("prepare-blob-tools", "Prepare native blob build, merge and verification tools");
     for ([_]*std.Build.Step.Compile{ blob_build_exe, blob_merge_exe, blob_verify_exe }) |artifact| {
         const install = b.addInstallArtifact(artifact, .{});
         prepare_blob_tools.dependOn(&install.step);
+        if (artifact == blob_build_exe) prepare_captured_writer.dependOn(&install.step);
     }
 
     const llvm_obj = b.addObject(.{
@@ -346,6 +351,7 @@ pub fn build(b: *std.Build) void {
         .test_runner = .{ .path = test_runner, .mode = .simple },
     };
     const blob_build_tests = b.addTest(blob_build_test_options);
+    blob_build_tests.root_module.addOptions("captured_writer_options", captured_writer_options);
     blob_build_tests.root_module.linkSystemLibrary("bz2", .{});
     blob_build_tests.root_module.linkSystemLibrary("zstd", .{});
     blob_build_tests.root_module.addImport("namespace_registry", namespace_registry_test_mod);

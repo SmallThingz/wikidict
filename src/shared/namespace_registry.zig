@@ -147,7 +147,12 @@ pub const Registry = struct {
             self.language_conversion = null;
             return;
         }
-        const variants = general.object.get("variants") orelse return error.InvalidLanguageConversionProfile;
+        // ApiQuerySiteinfo exposes the global enable switch independently of
+        // whether this content language's converter has any variants.
+        const variants = general.object.get("variants") orelse {
+            self.language_conversion = null;
+            return;
+        };
         if (variants != .array or variants.array.items.len == 0) return error.InvalidLanguageConversionProfile;
         var codes: std.ArrayList([]const u8) = .empty;
         for (variants.array.items) |variant| {

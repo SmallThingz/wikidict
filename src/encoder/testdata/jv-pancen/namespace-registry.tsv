@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	jvwiktionary
+# dump-date	20261001
+# content-language	jv
+-2	Médhia	Media	case-sensitive	0	0	0		compile_only	virtual_namespace	Medhia	Media
+-1	Mirunggan	Special	first-letter	0	0	0		compile_only	virtual_namespace	Astamiwa
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Parembugan	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Bicara	Dhiskusi
+2	Naraguna	User	first-letter	1	0	0		compile_only	standard_build_input	Panganggo
+3	Parembugan Naraguna	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Bicara Pengguna	Dhiskusi Panganggo	Parembugan Panganggo
+4	Wikisastra	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	Parembugan Wikisastra	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Dhiskusi Wikisastra	Wiktionary talk
+6	Barkas	File	case-sensitive	0	0	0		compile_only	standard_build_input	Gambar	Image
+7	Parembugan Barkas	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Dhiskusi Gambar	Gambar Dhiskusi	Gambar Pembicaraan	Image talk	Parembugan Gambar	Pembicaraan Gambar
+8	MédhiaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input	MedhiaWiki	MediaWiki
+9	Parembugan MédhiaWiki	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	Dhiskusi MediaWiki	MediaWiki Dhiskusi	MediaWiki Pembicaraan	Parembugan MedhiaWiki	Parembugan MediaWiki
+10	Cithakan	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Parembugan Cithakan	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Cithakan Dhiskusi	Dhiskusi Cithakan	Templat Pembicaraan
+12	Pitulung	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Parembugan Pitulung	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Bantuan Pembicaraan	Dhiskusi Pitulung	Pitulung Dhiskusi
+14	Kategori	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Parembugan Kategori	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Dhiskusi Kategori	Kategori Dhiskusi	Kategori Pembicaraan
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Modhul	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Parembugan Modhul	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Acara	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Pembicaraan Acara	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

@@ -1,0 +1,25 @@
+== <span class='sectionlangue' id='eo'>[[Portail:Espéranto|Espéranto]]</span>[[Catégorie:espéranto]] ==
+=== <span class="titreetym" title="">Étymologie</span> ===
+: [[Catégorie:Compositions en espéranto]]Composé de <bdi lang="eo" xml:lang="eo" class="lang-eo">[[lakta#eo|''lakta'']]</bdi> («&nbsp;lacté&nbsp;»)&#32;et de <bdi lang="eo" xml:lang="eo" class="lang-eo">[[vojo#eo|''vojo'']]</bdi> («&nbsp;voie&nbsp;»).
+
+=== <span class="titredef" id="eo-nom-pr-1">Nom propre</span><span id="eo-nom-pr" style="font-size:0;"></span>[[Catégorie:Noms propres en espéranto]] ===
+}[[Catégorie:Mots en espéranto utilisant un modèle désuet]]{| class="wikitable flextable"
+! Cas
+! Singulier
+|-
+! Nominatif
+| '''<span lang="eo" xml:lang="eo" class="lang-eo"><bdi>Lakta Vojo</bdi></span>'''<br />[[Annexe:Prononciation/espéranto|<span class="API" title="Prononciation API">\ˈlak.ta ˈvo.jo\</span>]]
+|-
+! Accusatif
+| <bdi lang="eo" xml:lang="eo" class="lang-eo">[[Laktan Vojon#eo|Laktan Vojon]]</bdi><br />[[Annexe:Prononciation/espéranto|<span class="API" title="Prononciation API">\ˈlak.tan ˈvo.jon\</span>]]
+|-
+! colspan=2 style="font-size:10px; height:11px;" | [[:Modèle:eo-rég-sing-v|voir le modèle]]
+|}
+'''Lakta Vojo''' [[Annexe:Prononciation/espéranto|<span class="API" title="Prononciation API">\ˈlak.ta ˈvo.jo\</span>]]
+# ''(<span title="L’astronomie est la science de l’observation des astres." id="eo-astronomie">Astronomie</span>)''[[Catégorie:Lexique en espéranto de l’astronomie]] [[Voie lactée]].
+
+==== <span class="titrehyper" title="Mots dont le sens est plus générique que « Lakta Vojo »">Hyperonymes</span> ====
+* [[galaksio]]
+
+=== <span class="titrepron" title="">Prononciation</span> ===
+* <span class="audio-pronunciation"><span class="audio-region" data-region="France (Toulouse)">France (Toulouse)</span>&nbsp;: écouter «&nbsp;<span lang="eo" class="audio-word" data-word="Lakta Vojo">Lakta Vojo</span>[[Catégorie:Prononciations audio en espéranto]] <span class="audio-ipa" data-ipa=""><span title="Prononciation à préciser">[<small><span class="plainlinks stubedit">[//fr.wiktionary.org/w/index.php?title=Lakta_Vojo&action=edit Prononciation ?]</span></small>]</span>[[Catégorie:Wiktionnaire:Prononciations phonétiques manquantes en espéranto]]</span>&nbsp;» <span class="audio-file" data-file="LL-Q143 (epo)-Lepticed7-Lakta Vojo.wav">[[File:LL-Q143 (epo)-Lepticed7-Lakta Vojo.wav]]</span></span>

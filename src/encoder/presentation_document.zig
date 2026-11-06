@@ -302,6 +302,9 @@ pub const HeadingAnchor = struct { source_offset: usize, anchor: []const u8, anc
 pub const HeadingObservation = struct {
     items: []const HeadingAnchor = &.{},
     page_html_openings: []const usize = &.{},
+    page_wiki_openings: []const usize = &.{},
+    // Opt-in evidence only; ordinary observation grants no wiki-root proof.
+    page_wiki_scope_complete: bool = false,
     page_html_source: ?[]const u8 = null,
 };
 
@@ -321,6 +324,7 @@ const WorkSection = struct {
 const Work = struct {
     sections: []const WorkSection,
     page_html_openings: []const usize = &.{},
+    page_wiki_openings: []const usize = &.{},
     references: []const compiler.Reference,
     media: []const compiler.media_types.Media,
     media_caption_spans: []const []const compiler.Span,
@@ -558,11 +562,14 @@ fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, 
     };
 }
 
-fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile) !Work {
+fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, observe_wiki_scope: bool) !Work {
     var html_openings: std.ArrayList(usize) = .empty;
     defer html_openings.deinit(a);
+    var wiki_openings: std.ArrayList(usize) = .empty;
+    defer wiki_openings.deinit(a);
     var renderer: compiler.Renderer = .{ .a = a, .context = .{ .title = title, .language = if (language.len == 0) "English" else language, .link_trail = link_trail, .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .image_options = image_options, .table_styles = table_styles, .poem_phase = poem_phase } };
     if (fragments.len == 0) renderer.page_html_heading_openings = &html_openings;
+    if (fragments.len == 0 and observe_wiki_scope) renderer.page_wiki_heading_openings = &wiki_openings;
     renderer.context.citations = reference_context.citations;
     renderer.context.content_conversion = try compiler.pageContentConversion(a, source.bytes, .{ .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .content_conversion = reference_context.content_conversion });
     renderer.context.external_links_prepared = reference_context.citations != null;
@@ -588,13 +595,17 @@ fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, so
         renderer.heading_source = null;
         try builder.consume(try rendered.toOwnedSlice(a));
     }
-    return .{ .sections = try builder.sections.toOwnedSlice(a), .page_html_openings = try html_openings.toOwnedSlice(a), .references = try renderer.finishReferences(), .media = try renderer.media.toOwnedSlice(a), .media_caption_spans = try renderer.media_caption_spans.toOwnedSlice(a), .rendered_templates = renderer.rendered_templates, .unresolved_templates = renderer.unresolved_templates, .fallbacks = renderer.fallbacks };
+    return .{ .sections = try builder.sections.toOwnedSlice(a), .page_html_openings = try html_openings.toOwnedSlice(a), .page_wiki_openings = try wiki_openings.toOwnedSlice(a), .references = try renderer.finishReferences(), .media = try renderer.media.toOwnedSlice(a), .media_caption_spans = try renderer.media_caption_spans.toOwnedSlice(a), .rendered_templates = renderer.rendered_templates, .unresolved_templates = renderer.unresolved_templates, .fallbacks = renderer.fallbacks };
 }
 
 pub fn observeHeadingAnchorsAlloc(a: A, title: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase) !HeadingObservation {
+    return observeHeadingAnchorsWithWikiScopeAlloc(a, title, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, false);
+}
+
+pub fn observeHeadingAnchorsWithWikiScopeAlloc(a: A, title: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, observe_wiki_scope: bool) !HeadingObservation {
     const observation_phase = consume_diagnostics.beginConsumePhase(.heading_observation);
     defer consume_diagnostics.endConsumePhase(observation_phase);
-    const work = try workWithHeadingOffsetsAlloc(a, title, "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, &.{}, null);
+    const work = try workWithHeadingOffsetsAlloc(a, title, "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, &.{}, null, observe_wiki_scope);
     var registry: heading_ids.Registry = .{};
     defer registry.deinit(a);
     var result: std.ArrayList(HeadingAnchor) = .empty;
@@ -605,7 +616,7 @@ pub fn observeHeadingAnchorsAlloc(a: A, title: []const u8, source: MissingText, 
         if (section.is_heading) try observe.add(section.heading_source_offset, section.heading_authored_id, section.title_spans);
         try walk.blocks(&observe, section.blocks, 0);
     }
-    return .{ .items = try result.toOwnedSlice(a), .page_html_openings = work.page_html_openings, .page_html_source = source.bytes };
+    return .{ .items = try result.toOwnedSlice(a), .page_html_openings = work.page_html_openings, .page_wiki_openings = work.page_wiki_openings, .page_wiki_scope_complete = observe_wiki_scope and !work.fallbacks.render_limit, .page_html_source = source.bytes };
 }
 
 fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, fallbacks: ?*Fallbacks, poem_phase: ?*const PoemPhase) ![]const compiler.Span {
@@ -960,7 +971,7 @@ pub fn compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(
     }
 
     const work = if (heading_observation != null)
-        try workWithHeadingOffsetsAlloc(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments, table_styles)
+        try workWithHeadingOffsetsAlloc(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments, table_styles, false)
     else
         try workAllocWithMissingFragments(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments, table_styles);
     if (fallbacks) |report| {
@@ -5018,7 +5029,7 @@ test "prepared citation owner copies share temporal bodies and body probes retai
         const copy = try a.dupe(u8, slice);
         const fragments = [_]SourceFragment{.{ .source = copy }};
         const plain = try workAllocWithPoemFragments(a, "entry", "", copy, .{}, null, null, null, definitions, prepared.poem_phase, &fragments);
-        const headings = try workWithHeadingOffsetsAlloc(a, "entry", "", MissingText.untracked(copy), .{}, null, null, null, definitions, prepared.poem_phase, &fragments, null);
+        const headings = try workWithHeadingOffsetsAlloc(a, "entry", "", MissingText.untracked(copy), .{}, null, null, null, definitions, prepared.poem_phase, &fragments, null, false);
         for ([_]Work{ plain, headings }) |work| {
             try std.testing.expectEqual(@as(usize, 1), work.references.len);
             try std.testing.expectEqualStrings("note", @tagName(work.references[0].kind));
@@ -9559,4 +9570,126 @@ test "retained ataujia Cite opener preserves complete document and real bibliogr
         try std.testing.expect(std.mem.indexOf(u8, note_text.items, piece) != null);
     // Whole byte/Stored equality above covers every section, table cell, inline
     // style, media occurrence, action and reference; no field projection used.
+}
+
+test "retained JV pancen malformed headword preserves complete compiled page body styles actions media and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = @embedFile("testdata/jv-pancen/page.expanded.wikitext");
+    const raw = @embedFile("testdata/jv-pancen/page.raw.wikitext");
+    const reference = @embedFile("testdata/jv-pancen/page.reference.wikitext");
+    const ns_bytes = @embedFile("testdata/jv-pancen/namespace-registry.tsv");
+    const behavior_bytes = @embedFile("testdata/jv-pancen/behavior-switches.tsv");
+    const image_bytes = @embedFile("testdata/jv-pancen/image-options.tsv");
+    const title = "ꦥꦚ꧀ꦕꦺꦤ꧀";
+    try std.testing.expectEqual(@as(usize, 152), raw.len);
+    try std.testing.expectEqual(@as(usize, 5977), source.len);
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    try std.testing.expectEqualStrings("d0d91ce718ca3ece3d51f245ba60f28bca42318fb52d2728e9e9b32b95e56a68", &std.fmt.bytesToHex(digest, .lower));
+    var ns = try @import("namespace_registry").Registry.init(a, ns_bytes);
+    defer ns.deinit();
+    var ns_hash: [32]u8 = undefined;
+    var behavior_hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(ns_bytes, &ns_hash, .{});
+    std.crypto.hash.sha2.Sha256.hash(behavior_bytes, &behavior_hash, .{});
+    var behavior = try @import("namespace_registry").behavior_switches.Registry.init(a, behavior_bytes, "jvwiktionary", "20261001", "jv", ns_hash);
+    defer behavior.deinit();
+    var images = try @import("namespace_registry").image_options.Registry.init(a, image_bytes, "jvwiktionary", "20261001", "jv", ns_hash, behavior_hash);
+    defer images.deinit();
+    // This page-level codec control supplies the independently retained code
+    // named by raw {{basa|jv-java}} and Modhul:bahasa. It does not claim normal
+    // Writer language discovery or change the installed language registry.
+    const language = "Javanese (Javanese script)";
+    const code = "jv-java";
+    const actual_bytes = try compileReportedWithOptionsAlloc(a, title, .language, language, code, source, null, .{}, &ns, &behavior, &images, null);
+    const expected_bytes = try compileReportedWithOptionsAlloc(a, title, .language, language, code, reference, null, .{}, &ns, &behavior, &images, null);
+    try std.testing.expectEqualSlices(u8, expected_bytes, actual_bytes);
+    const actual = try blobs.presentation_codec.decodeAlloc(a, actual_bytes, title, .language, .{ .code = code, .heading = language });
+    const expected = try blobs.presentation_codec.decodeAlloc(a, expected_bytes, title, .language, .{ .code = code, .heading = language });
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqualStrings(code, actual.entry.language_code);
+    try std.testing.expectEqualStrings(language, actual.entry.language.?);
+    try std.testing.expectEqualSlices(u8, actual_bytes, try blobs.presentation_codec.encodeAlloc(a, actual));
+    var lexical_links: usize = 0;
+    var alternative_links: usize = 0;
+    var searches: usize = 0;
+    var errors: usize = 0;
+    var visible: std.ArrayList(u8) = .empty;
+    for (actual.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.target, "ꦥꦚ꧀ꦕꦶ")) {
+            lexical_links += 1;
+            try std.testing.expect(span.kind == .link);
+        }
+        if (std.mem.eql(u8, span.target, "pancèn#ꦧꦱꦗꦮ")) {
+            alternative_links += 1;
+            try std.testing.expectEqualStrings("pancèn", span.text);
+            try std.testing.expect(!span.bold);
+        }
+        if (span.kind == .external_link and std.mem.startsWith(u8, span.target, "http://jv.wiktionary.org/w/index.php?title=Special:Search&search=")) searches += 1;
+        if (std.mem.indexOf(u8, span.text, "Time error: InvalidDate") != null) {
+            errors += 1;
+            try std.testing.expect(span.bold);
+        }
+        try std.testing.expect(std.mem.indexOfAny(u8, span.target, "<>") == null);
+    };
+    try std.testing.expectEqual(@as(usize, 1), lexical_links);
+    try std.testing.expectEqual(@as(usize, 1), alternative_links);
+    try std.testing.expectEqual(@as(usize, 2), searches);
+    try std.testing.expectEqual(@as(usize, 2), errors);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "<span") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Kacocogna karo") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Delengen uga") != null);
+    try std.testing.expect(actual.entry.media.len >= 2);
+}
+
+test "retained FR Lakta Vojo literal nonleading opener preserves complete body and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = @embedFile("testdata/fr-lakta-vojo/page.expanded.wikitext");
+    try std.testing.expectEqual(@as(usize, 2459), source.len);
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    try std.testing.expectEqualStrings("24073d975f8428ae7d405c41811a1e01e88706faae1143738c60729884d9a8ea", &std.fmt.bytesToHex(digest, .lower));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, "{|"));
+    const control = try std.mem.replaceOwned(u8, a, source, "{|", "<nowiki>{|</nowiki>");
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").french_test_fixture); defer ns.deinit();
+    var report: Fallbacks = .{}; var reference_report: Fallbacks = .{};
+    // Renderer-only fixture: no independently loaded owner is fabricated here.
+    const actual = try compileReportedWithOptionsAlloc(a, "Lakta Vojo", .language, "Unclassified", "", source, null, .{}, &ns, null, null, &report);
+    const expected = try compileReportedWithOptionsAlloc(a, "Lakta Vojo", .language, "Unclassified", "", control, null, .{}, &ns, null, null, &reference_report);
+    try std.testing.expectEqualSlices(u8, expected, actual);
+    const stored = try codec.decodeAlloc(a, actual, "Lakta Vojo", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqualDeep(try codec.decodeAlloc(a, expected, "Lakta Vojo", .language, .{ .code = "", .heading = "Unclassified" }), stored);
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, stored));
+    try std.testing.expect(report.literal_markup and report.malformed_table and !report.missing_template);
+    try std.testing.expectEqualStrings("", stored.entry.language_code);
+    try std.testing.expectEqualStrings("Unclassified", stored.entry.language.?);
+    var visible: std.ArrayList(u8) = .empty;
+    var bold_title = false; var italic_lakta = false; var definition = false;
+    const targets = [_][]const u8{ "lakta#eo", "vojo#eo", "Laktan Vojon#eo", "Voie lactée", "galaksio", "File:LL-Q143 (epo)-Lepticed7-Lakta Vojo.wav" };
+    var found: [targets.len]bool = @splat(false);
+    for (stored.entry.sections) |section| {
+        try visible.appendSlice(a, section.title);
+        for (section.blocks) |block| {
+            try std.testing.expect(block.table == null);
+            if (block.kind == .definition) definition = true;
+            for (block.spans) |span| {
+                try visible.appendSlice(a, span.text); try visible.appendSlice(a, span.trail);
+                if (std.mem.eql(u8, span.text, "Lakta Vojo") and span.bold) bold_title = true;
+                if (std.mem.eql(u8, span.text, "lakta") and span.italic) italic_lakta = true;
+                for (targets, 0..) |target, i| if (span.kind == .link and std.mem.eql(u8, span.target, target)) { found[i] = true; };
+            }
+        }
+    }
+    try std.testing.expect(bold_title and italic_lakta and definition);
+    for (found) |present| try std.testing.expect(present);
+    for ([_][]const u8{ "Espéranto", "Étymologie", "Nom propre", "Hyperonymes", "Prononciation", "}{| class=\"wikitable flextable\"", "Cas", "Singulier", "Nominatif", "Accusatif", "colspan=2 style=\"font-size:10px; height:11px;\"", "voir le modèle", "|}", "Astronomie", "France (Toulouse)", "Prononciation ?" }) |text| {
+        errdefer std.debug.print("FR Lakta Vojo missing body witness={s}\n", .{text});
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, text) != null);
+    }
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.media.len);
+    try std.testing.expectEqualStrings("LL-Q143 (epo)-Lepticed7-Lakta Vojo.wav", stored.entry.media[0].file);
 }

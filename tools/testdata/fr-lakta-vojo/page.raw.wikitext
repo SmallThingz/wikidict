@@ -1,0 +1,14 @@
+== {{langue|eo}} ==
+=== {{S|étymologie}} ===
+: {{composé de|m=1|lang=eo|lakta|sens1=lacté|vojo|sens2=voie}}.
+
+=== {{S|nom propre|eo}} ===
+{{eo-rég-sing2|Lakta|Vojo|ˈlak.ta|ˈvo.jo}}
+'''Lakta Vojo''' {{pron|ˈlak.ta ˈvo.jo|eo}}
+# {{lexique|astronomie|eo}} [[Voie lactée]].
+
+==== {{S|hyperonymes}} ====
+* [[galaksio]]
+
+=== {{S|prononciation}} ===
+* {{écouter|lang=eo|France (Toulouse)||audio=LL-Q143 (epo)-Lepticed7-Lakta Vojo.wav}}
