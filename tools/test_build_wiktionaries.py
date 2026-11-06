@@ -477,9 +477,9 @@ class PresentationRetryPolicyTests(unittest.TestCase):
                           truncated=False,unretained=False)
         return capture/'capture.json',row
 
-    def exercise_template_capture(self, change=None, identity_failure=False, no_capture=False):
+    def exercise_template_capture(self, change=None, identity_failure=False, no_capture=False, *, error_name='UncompiledTemplate'):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);shard=root/'00000000';calls=[];captures=[];validated=[]
+            root=Path(tmp);shard=root/'00000000';calls=[];captures=[];validated=[];original=[]
             tool=fixture_blob_tool(root);command=['dump',str(shard),'--expander-root','bundle','--start-page','0','--limit-pages','2']
             def run(argv,*args,**kwargs):
                 calls.append(argv);shard.mkdir();(shard/'partial').write_text('retained failure bytes')
@@ -487,9 +487,11 @@ class PresentationRetryPolicyTests(unittest.TestCase):
                 receipt=Path(argv[argv.index('--failure-receipt')+1])
                 if not no_capture:
                     path,row=self.template_capture(receipt,argv)
+                    row['error_name']=error_name
                     if change:change(row,path,receipt)
                     path.write_text(json.dumps(row));captures.append(path)
-                raise subprocess.CalledProcessError(1,argv,stderr='UncompiledTemplate')
+                failure=subprocess.CalledProcessError(1,argv,output=b'original stdout',stderr=error_name)
+                original.append(failure);raise failure
             def check():
                 if identity_failure:raise ValueError('input identity changed')
             with patch.object(b,'timed_run',side_effect=run),patch.object(b,'phase_event') as event:
@@ -505,7 +507,11 @@ class PresentationRetryPolicyTests(unittest.TestCase):
                     self.assertEqual(len(calls),1);self.assertEqual(validated,[])
                     self.assertEqual(failed.exception.failure_receipt,str(captures[0]))
                     self.assertEqual(failed.exception.returncode,1)
-                    self.assertEqual(event.call_args.kwargs['error_name'],'UncompiledTemplate')
+                    self.assertEqual(event.call_args.kwargs['error_name'],error_name)
+                    self.assertIs(failed.exception.__cause__,original[0])
+                    self.assertEqual(failed.exception.cmd,original[0].cmd)
+                    self.assertEqual(failed.exception.output,original[0].output)
+                    self.assertEqual(failed.exception.stderr,original[0].stderr)
                     self.assertEqual(json.loads((captures[0].parents[1]/'classification.json').read_text())['deterministic_presentation'],True)
                     self.assertEqual((shard/'partial').read_text(),'retained failure bytes')
                 else:
@@ -555,10 +561,50 @@ class PresentationRetryPolicyTests(unittest.TestCase):
             root=Path(tmp)/'invocation';root.mkdir();capture=root/'.presentation-first-failure';capture.mkdir()
             os.mkfifo(capture/'capture.json')
             with patch.object(Path,'open',side_effect=AssertionError('nonregular capture opened')):
-                self.assertFalse(b.matching_template_capture(root/'failure.json','invocation',['dump','output'],0,2))
+                self.assertFalse(b.matching_presentation_capture(root/'failure.json','invocation',['dump','output'],0,2))
 
     def test_template_capture_changed_input_precedes_any_classification(self):
         self.exercise_template_capture(identity_failure=True)
+
+    def test_complete_heading_projection_capture_stops_first_identical_retry(self):
+        self.exercise_template_capture(error_name='InvalidHeadingProjection')
+
+    def test_heading_projection_capture_requires_current_invocation_and_page_context(self):
+        changes=[lambda r,p,f:r.update(invocation_id='stale'),
+                 lambda r,p,f:r.update(invocation_args_sha256='0'*64),
+                 lambda r,p,f:r.update(invocation_args_hash_framing='joined strings'),
+                 lambda r,p,f:r.update(ordinal=2),
+                 lambda r,p,f:r.update(title_sha256='0'*64),
+                 lambda r,p,f:r['input'].update(dump_path='other'),
+                 lambda r,p,f:r['input'].update(expander_root='other')]
+        for change in changes:
+            with self.subTest(change=change):
+                self.exercise_template_capture(change,error_name='InvalidHeadingProjection')
+
+    def test_heading_projection_capture_requires_complete_unchanged_payload(self):
+        for fields in [dict(record_complete=False),dict(diagnostic_only=False),
+                       dict(publication_created=True),dict(semantic_acceptance=True)]:
+            with self.subTest(fields=fields):
+                self.exercise_template_capture(lambda r,p,f:r.update(fields),error_name='InvalidHeadingProjection')
+        for fields in [dict(truncated=True),dict(unretained=True),dict(bytes=3*1024*1024),
+                       dict(sha256='0'*64),dict(retained_bytes=0)]:
+            with self.subTest(payload=fields):
+                self.exercise_template_capture(lambda r,p,f:r['expanded'].update(fields),error_name='InvalidHeadingProjection')
+        self.exercise_template_capture(lambda r,p,f:Path(r['raw_source']['path']).write_bytes(b'changed'),
+                                       error_name='InvalidHeadingProjection')
+        self.exercise_template_capture(lambda r,p,f:Path(r['index_row']['path']).unlink(),
+                                       error_name='InvalidHeadingProjection')
+
+    def test_heading_projection_capture_never_classifies_exit_stderr_or_unknown_receipt(self):
+        self.exercise_template_capture(no_capture=True,error_name='InvalidHeadingProjection')
+        self.exercise_template_capture(lambda r,p,f:f.write_text(json.dumps(dict(error_name='OtherFailure'))),
+                                       error_name='InvalidHeadingProjection')
+        for error in ('OutOfMemory','RenderLimit','InvalidPreContext','OtherFailure'):
+            with self.subTest(error=error):
+                self.exercise_template_capture(lambda r,p,f:r.update(error_name=error),error_name='InvalidHeadingProjection')
+
+    def test_heading_projection_capture_changed_input_precedes_classification(self):
+        self.exercise_template_capture(identity_failure=True,error_name='InvalidHeadingProjection')
 
 class FailedShardPayloadCleanupTests(unittest.TestCase):
     def fixture(self, root):

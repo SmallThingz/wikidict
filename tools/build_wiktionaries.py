@@ -1762,46 +1762,47 @@ def write_failure_evidence(path, row):
             pass
 
 
-def matching_template_capture(receipt, invocation_id, invocation_args, start, limit):
+def matching_presentation_capture(receipt, invocation_id, invocation_args, start, limit):
     """Verify the complete typed capture used when no outer failure receipt exists."""
     root=receipt.parent/'.presentation-first-failure'
     capture=root/'capture.json'
     try:
-        if receipt.is_symlink() or receipt.parent.name!=invocation_id or root.is_symlink() or capture.is_symlink():return False
-        if not stat.S_ISREG(capture.lstat().st_mode):return False
+        if receipt.is_symlink() or receipt.parent.name!=invocation_id or root.is_symlink() or capture.is_symlink():return None
+        if not stat.S_ISREG(capture.lstat().st_mode):return None
         with capture.open('rb') as stream:
-            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):return False
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):return None
             raw=stream.read(64*1024+1)
-        if len(raw)>64*1024:return False
+        if len(raw)>64*1024:return None
         row=json.loads(raw)
         if (not isinstance(row,dict) or row.get('schema')!='wikidict.presentation-first-failure.v1'
                 or row.get('record_complete') is not True or row.get('diagnostic_only') is not True
                 or row.get('publication_created') is not False or row.get('semantic_acceptance') is not False
-                or row.get('error_name')!='UncompiledTemplate' or row.get('invocation_id')!=invocation_id):return False
+                or row.get('error_name') not in ('UncompiledTemplate','InvalidHeadingProjection')
+                or row.get('invocation_id')!=invocation_id):return None
         digest=hashlib.sha256()
         for arg in invocation_args:
             encoded=arg.encode('utf-8');digest.update(len(encoded).to_bytes(8,'little'));digest.update(encoded)
         if (row.get('invocation_args_hash_framing')!='each argv item: u64 little-endian byte length then exact bytes'
-                or row.get('invocation_args_sha256')!=digest.hexdigest()):return False
+                or row.get('invocation_args_sha256')!=digest.hexdigest()):return None
         title=row.get('title')
         if (type(row.get('ordinal')) is not int or not start<=row['ordinal']<start+limit
                 or type(row.get('namespace')) is not int or row['namespace']<0
                 or type(row.get('page_id')) is not int or row['page_id']<0
                 or type(row.get('revision_id')) is not int or row['revision_id']<0
-                or not isinstance(title,str) or not title or row.get('title_truncated') is not False):return False
+                or not isinstance(title,str) or not title or row.get('title_truncated') is not False):return None
         title_bytes=title.encode('utf-8')
-        if type(row.get('title_bytes')) is not int or row['title_bytes']!=len(title_bytes) or row.get('title_sha256')!=hashlib.sha256(title_bytes).hexdigest():return False
+        if type(row.get('title_bytes')) is not int or row['title_bytes']!=len(title_bytes) or row.get('title_sha256')!=hashlib.sha256(title_bytes).hexdigest():return None
         context=row.get('input')
         if (not isinstance(context,dict) or len(invocation_args)<2
                 or context.get('dump_path')!=invocation_args[0]
                 or type(context.get('start_page')) is not int or context['start_page']!=start
                 or type(context.get('requested_limit')) is not int or context['requested_limit']!=limit
-                or row.get('payload_limit_bytes')!=4*1024*1024):return False
+                or row.get('payload_limit_bytes')!=4*1024*1024):return None
         # Hash framing binds every argument; also check the captured source role.
         flag='--expander-root'
-        if invocation_args.count(flag)!=1:return False
+        if invocation_args.count(flag)!=1:return None
         index=invocation_args.index(flag)+1
-        if index>=len(invocation_args) or context.get('expander_root')!=invocation_args[index]:return False
+        if index>=len(invocation_args) or context.get('expander_root')!=invocation_args[index]:return None
         payloads=(('raw_source','raw.wikitext',256*1024,True),('expanded','expanded.wikitext',2*1024*1024,True),
                   ('display_title','display-title.wikitext',256*1024,False),('poem_metadata','poem.json',256*1024,False),
                   ('missing_dependency_metadata','missing-dependency.json',256*1024,False),
@@ -1810,23 +1811,23 @@ def matching_template_capture(receipt, invocation_id, invocation_args, start, li
         for key,suffix,maximum,required in payloads:
             part=row.get(key)
             if (not isinstance(part,dict) or part.get('truncated') is not False or part.get('unretained') is not False
-                    or type(part.get('bytes')) is not int or type(part.get('retained_bytes')) is not int):return False
+                    or type(part.get('bytes')) is not int or type(part.get('retained_bytes')) is not int):return None
             if part.get('present') is False:
-                if required or part['bytes']!=0 or part['retained_bytes']!=0 or part.get('path') is not None or part.get('sha256') is not None:return False
+                if required or part['bytes']!=0 or part['retained_bytes']!=0 or part.get('path') is not None or part.get('sha256') is not None:return None
                 continue
             size=part['bytes'];path=root/('failure-00000001-'+suffix)
             if (part.get('present') is not True or not 0<=size<=maximum or part['retained_bytes']!=size
-                    or part.get('path')!=str(path) or path.is_symlink()):return False
-            if not stat.S_ISREG(path.lstat().st_mode):return False
+                    or part.get('path')!=str(path) or path.is_symlink()):return None
+            if not stat.S_ISREG(path.lstat().st_mode):return None
             with path.open('rb') as stream:
                 info=os.fstat(stream.fileno())
-                if not stat.S_ISREG(info.st_mode) or info.st_size!=size:return False
+                if not stat.S_ISREG(info.st_mode) or info.st_size!=size:return None
                 data=stream.read(size+1)
-            if len(data)!=size or hashlib.sha256(data).hexdigest()!=part.get('sha256'):return False
+            if len(data)!=size or hashlib.sha256(data).hexdigest()!=part.get('sha256'):return None
             retained+=size
-        return retained<=4*1024*1024
+        return row['error_name'] if retained<=4*1024*1024 else None
     except (OSError,ValueError,TypeError,KeyError,UnicodeError,AttributeError):
-        return False
+        return None
 
 
 def matching_build_failure(path, invocation_id, invocation_args, start, limit):
@@ -1862,8 +1863,9 @@ def matching_build_failure(path, invocation_id, invocation_args, start, limit):
                 and type(page.get('revision_id')) is int and page['revision_id'] >= 0):
             return row['error_name'],path
     except FileNotFoundError:
-        if matching_template_capture(path,invocation_id,invocation_args,start,limit):
-            return 'UncompiledTemplate',path.parent/'.presentation-first-failure'/'capture.json'
+        captured_error=matching_presentation_capture(path,invocation_id,invocation_args,start,limit)
+        if captured_error is not None:
+            return captured_error,path.parent/'.presentation-first-failure'/'capture.json'
     except (OSError, ValueError, TypeError):
         pass
     return None

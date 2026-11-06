@@ -420,7 +420,7 @@ def live_zig_observation(command):
             "target": target.group(1), "flags": list(LEAF_CONTRACT_FLAGS)}
 
 
-def value_leaf_identity(llvm_dir, project_root, zig):
+def value_leaf_identity(llvm_dir, project_root, zig, *, observe_zig=True):
     """Bind exact consumed BC bytes plus conservative live source/tool observations.
 
     The pipeline may be an older cached binary with paired worker/leaf artifacts.
@@ -435,9 +435,11 @@ def value_leaf_identity(llvm_dir, project_root, zig):
         path = project_root / name
         regular(path)
         sources.append([name, sha256(path)])
-    return {"bitcode": [bitcode.stat().st_size, sha256(bitcode)],
-            "live_source_observations": sources,
-            "live_zig_observation": live_zig_observation(zig)}
+    identity = {"bitcode": [bitcode.stat().st_size, sha256(bitcode)],
+                "live_source_observations": sources}
+    if observe_zig:
+        identity["live_zig_observation"] = live_zig_observation(zig)
+    return identity
 
 
 def read_object_plan(llvm_dir):
@@ -495,7 +497,10 @@ def object_identity(llvm_dir, clang, project_root, flags, zig="zig"):
         "program_bc": [program_bc.stat().st_size, sha256(program_bc)],
         "clang": clang_identity(clang, flags),
         "flags": flags,
-        "value_leaf": value_leaf_identity(llvm_dir, project_root, zig),
+        # Only optimized Lua batches use the live tool observation in their keys.
+        # Exact leaf bytes remain bound and rechecked at publication for every plan.
+        "value_leaf": value_leaf_identity(llvm_dir, project_root, zig,
+            observe_zig=any(mode in ("-O1", "-O2") for mode, *_ in plans)),
     }
 
 

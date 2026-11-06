@@ -336,6 +336,100 @@ class ObjectCacheTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.publish(root)
 
+    def nonimporting_llvm(self, name, with_batch):
+        if not with_batch:
+            return self.zero_llvm(name)
+        root = self.llvm(name)
+        (root / "batch-plan.tsv").write_text(
+            "# dict-llvm-batch-plan-v1\n"
+            "-O0\tmodule_batch_o0_000000.bc\t1\t1\t1\t5\n")
+        (root / "module_batch_o2_000000.bc").unlink()
+        return root
+
+    def test_nonimporting_plans_reuse_existing_objects_without_live_zig(self):
+        first = self.seed()  # Mixed plan records the full legacy live observation.
+        original = cache.read_marker(first / ".object-identity.json")["identity"]
+        outputs = []
+        for with_batch in (False, True):
+            with self.subTest(with_batch=with_batch), mock.patch.object(
+                    cache, "live_zig_observation", side_effect=AssertionError("unused Zig probe")):
+                output = self.nonimporting_llvm("no-zig-" + str(with_batch), with_batch)
+                self.assertEqual(0, self.probe(output))
+                self.assertEqual("11\n" if with_batch else "1\n",
+                                 (output / ".object-hits").read_text())
+                snapshot = cache.read_marker(output / ".object-identity.json")["identity"]
+                self.assertEqual({key: value for key, value in original["value_leaf"].items()
+                                  if key != "live_zig_observation"}, snapshot["value_leaf"])
+                entries = dict(cache.object_entries(snapshot))
+                self.assertEqual(self.entries["program.o"], entries["program.o"])
+                self.assertEqual(b"program.o", (output / "program.o").read_bytes())
+                if with_batch:
+                    self.assertEqual(self.entries[self.names[1]], entries[self.names[0]])
+                    self.assertEqual(self.names[1].encode(), (output / self.names[0]).read_bytes())
+                outputs.append(output)
+        # Publication prunes unused keys; prove both restorations before either prune.
+        for output in outputs:
+            self.assertEqual(0, self.publish(output))
+
+    def test_nonimporting_plans_keep_leaf_and_publication_guards(self):
+        with mock.patch.object(cache, "live_zig_observation",
+                               side_effect=AssertionError("unused Zig probe")):
+            for with_batch in (False, True):
+                for missing in ("value_leaf.bc", cache.LIVE_LEAF_SOURCE_PATHS[0]):
+                    with self.subTest(with_batch=with_batch, missing=missing):
+                        output = self.nonimporting_llvm("missing-" + str(with_batch) +
+                                                       "-" + Path(missing).name, with_batch)
+                        path = output / missing if missing == "value_leaf.bc" else self.project / missing
+                        original = path.read_bytes()
+                        path.unlink()
+                        try:
+                            with self.assertRaises((ValueError, FileNotFoundError)):
+                                self.probe(output)
+                        finally:
+                            path.write_bytes(original)
+                        self.assertFalse((output / ".object-identity.json").exists())
+                        self.assertFalse((output / ".object-hits").exists())
+                for changed in ("value_leaf.bc", "program.meta", "batch-plan.tsv", "clang"):
+                    with self.subTest(with_batch=with_batch, changed=changed):
+                        output = self.nonimporting_llvm("changed-" + str(with_batch) +
+                                                       "-" + changed, with_batch)
+                        self.assertEqual(cache.MISS, self.probe(output))
+                        snapshot = cache.read_marker(output / ".object-identity.json")["identity"]
+                        for name in cache.object_names(snapshot):
+                            (output / name).write_bytes(name.encode())
+                        if changed == "clang":
+                            with mock.patch.object(cache, "clang_identity",
+                                                   return_value=dict(self.tool, version="changed Clang")):
+                                with self.assertRaisesRegex(ValueError, "native target"):
+                                    self.publish(output)
+                        else:
+                            (output / changed).write_bytes(b"changed during compilation")
+                            with self.assertRaisesRegex(ValueError, "changed during compilation"):
+                                self.publish(output)
+                        self.assertFalse((self.root / "objects").exists())
+
+    def test_optimized_batches_require_full_live_zig_observation_before_restore(self):
+        for mode in ("-O1", "-O2"):
+            with self.subTest(mode=mode):
+                output = self.llvm("optimized-" + mode)
+                plan = output / "batch-plan.tsv"
+                plan.write_text(plan.read_text().replace("-O2\t", mode + "\t"))
+                with mock.patch.object(cache, "live_zig_observation",
+                                       side_effect=ValueError("Zig observation unavailable")):
+                    with self.assertRaisesRegex(ValueError, "Zig observation unavailable"):
+                        self.probe(output)
+                self.assertFalse((output / ".object-identity.json").exists())
+                self.assertFalse((output / ".object-hits").exists())
+                self.assertFalse(any((output / name).exists() for name in self.names))
+                self.assertEqual(cache.MISS, self.probe(output))
+                snapshot = cache.read_marker(output / ".object-identity.json")["identity"]
+                full_leaf = cache.value_leaf_identity(output, self.project, "zig")
+                self.assertEqual(full_leaf, snapshot["value_leaf"])
+                entries = dict(cache.object_entries(snapshot))
+                self.assertEqual(full_leaf, entries[self.names[0]]["value_leaf"])
+                self.assertNotIn("value_leaf", entries[self.names[1]])
+                self.assertNotIn("value_leaf", entries["program.o"])
+
     def test_round_trip_corruption_is_local_and_can_be_repaired(self):
         self.seed()
         second = self.llvm("second")
