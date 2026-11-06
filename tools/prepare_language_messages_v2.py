@@ -25,7 +25,6 @@ import prepare_language_messages as legacy
 SCHEMA = 'wikidict.language-messages-capture.v2'
 COMPLETE_SCHEMA = 'wikidict.language-messages-complete.v1'
 COMPLETE_PROFILE = 'allmessages-local-plain-v1'
-COMPLETE_API_CORE = '115ff4de72eec9482447f6ad2a93444f3f78fddd'
 COMPLETE_RESPONSE_BYTES = 16 * 1024 * 1024
 COMPLETE_TOTAL_BYTES = 128 * 1024 * 1024
 COMPLETE_MAX_ROWS = 250000
@@ -209,7 +208,10 @@ def complete_response(url, timeout):
 def complete_source_contract(root, prefix=''):
     receipts = evidence.decode(evidence.small(Path(root) / (prefix + 'source-receipts01.json')))
     core = receipts.get('core') if isinstance(receipts, dict) else None
-    if core != COMPLETE_API_CORE:
+    # The reviewed semantics are pinned by both PHP files below. An unchanged
+    # implementation may occur at another core revision; retain that revision
+    # in source URLs and require it on every API response, without restamping it.
+    if not isinstance(core, str) or re.fullmatch(r'[a-f0-9]{40}', core) is None:
         raise ValueError('Invalid complete-message API source revision')
     records = receipts.get('sources')
     if not isinstance(records, list) or len(records) != len(COMPLETE_SOURCE_PINS):

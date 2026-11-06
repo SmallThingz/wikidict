@@ -375,7 +375,7 @@ class MessageV2Test(unittest.TestCase):
 
 
 class CompleteTransport:
-    core = capture.COMPLETE_API_CORE
+    core = '115ff4de72eec9482447f6ad2a93444f3f78fddd'
 
     def __init__(self, mutate=None):
         self.calls = []
@@ -543,13 +543,50 @@ class CompleteMessageTest(unittest.TestCase):
         for name in names: self.assertIn(('bn\t'+name+'\tV\tsynthetic '+name+'\n').encode(), raw)
         capture.verify(args.output)
 
-    def test_coherently_changed_core_receipt_does_not_claim_unreviewed_epoch(self):
+    def test_identical_source_bytes_at_another_core_preserve_both_epochs(self):
+        path = self.sources / 'source-receipts01.json'; value = json.loads(path.read_bytes())
+        old = value['core']; value['core'] = '0470f6c99a6456a366635bf25a517a1f951de6f5'
+        previous, _, _ = self.collect('previous-core')
+        previous_bytes = {p.name: p.read_bytes() for p in previous.output.iterdir()}
+        for source in value['sources']: source['url'] = source['url'].replace(old, value['core'])
+        path.write_bytes(capture.evidence.encoded(value))
+        self.assertEqual(capture.complete_source_contract(self.sources), value['core'])
+        with mock.patch.object(CompleteTransport, 'core', value['core']):
+            current, _, records = self.collect('current-core')
+        self.assertEqual(records['interface-messages']['api_core'], value['core'])
+        self.assertEqual(capture.verify(current.output), records)
+        self.assertEqual(capture.verify(previous.output)['interface-messages']['api_core'], old)
+        self.assertEqual(previous_bytes, {p.name: p.read_bytes() for p in previous.output.iterdir()})
+
+    def test_revision_shape_url_join_and_resealed_changed_source_are_rejected(self):
+        path = self.sources / 'source-receipts01.json'; original = json.loads(path.read_bytes())
+        for core in (None, 1, 'A' * 40, 'a' * 39, 'a' * 41, '../source'):
+            value = copy.deepcopy(original); value['core'] = core
+            path.write_bytes(capture.evidence.encoded(value))
+            with self.subTest(core=core), self.assertRaisesRegex(ValueError, 'source revision'):
+                capture.complete_source_contract(self.sources)
+        value = copy.deepcopy(original); value['core'] = 'b' * 40
+        path.write_bytes(capture.evidence.encoded(value))
+        with self.assertRaisesRegex(ValueError, 'source identity'):
+            capture.complete_source_contract(self.sources)
+        for source in value['sources']:
+            source['url'] = source['url'].replace(original['core'], value['core'])
+        source = value['sources'][0]; changed = b'<?php /* changed semantics */'
+        (self.sources / source['file']).write_bytes(changed)
+        source.update(bytes=len(changed), sha256=capture.evidence.digest(changed))
+        path.write_bytes(capture.evidence.encoded(value))
+        with self.assertRaisesRegex(ValueError, 'source identity'):
+            capture.complete_source_contract(self.sources)
+
+    def test_same_source_new_revision_requires_matching_api_responses(self):
         path = self.sources / 'source-receipts01.json'; value = json.loads(path.read_bytes())
         old = value['core']; value['core'] = 'b' * 40
         for source in value['sources']: source['url'] = source['url'].replace(old, value['core'])
         path.write_bytes(capture.evidence.encoded(value))
-        with self.assertRaisesRegex(ValueError, 'source revision'): self.collect('unreviewed-core')
-        self.assertFalse((self.base / 'unreviewed-core').exists())
+        with self.assertRaisesRegex(ValueError, 'API source revision changed'):
+            self.collect('response-core-mismatch')
+        self.assertFalse((self.base / 'response-core-mismatch' / capture.COMPLETE).exists())
+        self.assertTrue((self.base / 'response-core-mismatch' / (capture.PREFIX + 'failure.json')).exists())
 
     def test_resealed_query_receipt_raw_coverage_tsv_and_provenance_refused(self):
         for mode in ('query', 'receipt', 'raw', 'coverage', 'tsv', 'producer', 'source', 'requests'):
