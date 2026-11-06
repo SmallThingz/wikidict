@@ -1076,5 +1076,92 @@ class InterleavedPreparationTests(unittest.TestCase):
                 exec(trial['code'], ns)
 
 
+
+class DiagnosticPreparationPlanTests(unittest.TestCase):
+    def plan(self, selected, stage):
+        cfg, proof, expectation = PreparationFailFastTests().fixture()
+        cfg['groups'] = [group for group in cfg['groups'] if group['id'] in selected]
+        SupportedRootSubsetTests().bind_selection(cfg, proof)
+        cfg['execution_stage'] = stage
+        proof['compile_time_filtered_preparation'] = any(group['compile_time_filtered'] for group in cfg['groups'])
+        return cfg, proof, expectation
+
+    def test_tools_only_full_and_diagnostic_use_truthful_unfiltered_aggregate(self):
+        for stage in ('full', 'focused-diagnostic'):
+            cfg, proof, expectation = self.plan(['tools'], stage)
+            commands = []
+            result = PreparationFailFastTests().execute_prefix(cfg, proof, expectation, commands)
+            self.assertFalse(proof['compile_time_filtered_preparation'])
+            self.assertEqual(result['prepared_names'], ('tools',))
+            self.assertEqual(result['prepare_filters'], {'tools': []})
+            self.assertEqual(result['prepare_discovery'], {'tools': []})
+            self.assertEqual([name for name, _ in commands],
+                             ['reviewed-language-aliases', 'focused-prepare-tools'])
+            self.assertEqual(commands[-1][1][-1], '-Dprepare-test-group=tools')
+            self.assertFalse(any(arg.startswith('-Dprepare-test-filter') for arg in commands[-1][1]))
+
+    def test_unknown_preparation_stage_refuses_before_commands(self):
+        for stage in ('unknown', 'focused_diagnostic', 'tail', 'support-tail', None):
+            cfg, proof, expectation = self.plan(['tools'], stage)
+            commands = []
+            with self.subTest(stage=stage), self.assertRaises(AssertionError):
+                PreparationFailFastTests().execute_prefix(cfg, proof, expectation, commands)
+            self.assertEqual(commands, [])
+
+    def test_misreported_or_nonboolean_aggregate_refuses_for_both_stages(self):
+        for stage in ('full', 'focused-diagnostic'):
+            for roots, wrong in ((['tools'], True), (['tools'], 0), (['tools'], None),
+                                 (['encoder_compile', 'tools'], False),
+                                 (['encoder_compile', 'tools'], 1), (['encoder_compile', 'tools'], None)):
+                cfg, proof, expectation = self.plan(roots, stage)
+                proof['compile_time_filtered_preparation'] = wrong
+                commands = []
+                with self.subTest(stage=stage, roots=roots, wrong=wrong), self.assertRaises(AssertionError):
+                    PreparationFailFastTests().execute_prefix(cfg, proof, expectation, commands)
+                self.assertEqual(commands, [])
+            cfg, proof, expectation = self.plan(['encoder_compile', 'tools'], stage)
+            commands = []
+            result = PreparationFailFastTests().execute_prefix(cfg, proof, expectation, commands)
+            self.assertTrue(proof['compile_time_filtered_preparation'])
+            self.assertEqual(result['prepared_names'], ('encoder_compile', 'tools'))
+
+    def test_diagnostic_retains_per_root_counter_discovery_and_metadata_predicates(self):
+        for defect in ('root', 'origin', 'filters', 'external', 'discovery', 'counter', 'count', 'full-graph', 'target', 'tracing'):
+            cfg, proof, expectation = self.plan(['tools'], 'focused-diagnostic')
+            group = cfg['groups'][0]
+            if defect == 'root': group['physical_root'] = 'encoder_compile'
+            elif defect == 'origin': group['compile_filter_origin'] = 'fixed-normal-encoder-partition'
+            elif defect == 'filters': group['compile_filter_names'] = ['blob_build.test.']
+            elif defect == 'external': group['external_compile_filter_names'] = ['tools.test.selected']
+            elif defect == 'discovery':
+                group['compiled_only_discovery_names'] = ['unselected discovery']
+                proof['prepared_discovery_filters']['tools'] = ['unselected discovery']
+            elif defect == 'counter':
+                group['compiled_expected_occurrences'] *= 2
+                group['compiled_expected_count'] *= 2
+                proof['prepared_expected_occurrences']['tools'] = list(group['compiled_expected_occurrences'])
+            elif defect == 'count': group['compiled_expected_count'] += 1
+            elif defect == 'full-graph': proof['full_normal_partitioned_graph_required'] = False
+            elif defect == 'target': proof['prepare_target'] = 'other'
+            else: proof['prepare_test_error_tracing'] = True
+            proof['groups'] = copy.deepcopy(cfg['groups'])
+            commands = []
+            with self.subTest(defect=defect), self.assertRaises(AssertionError):
+                PreparationFailFastTests().execute_prefix(cfg, proof, expectation, commands)
+            self.assertEqual(commands, [])
+
+
+    def test_tail_still_requires_authenticated_prior_full_execution_stage(self):
+        helper = CurrentTailRecoveryTests(); self.addCleanup(helper.doCleanups)
+        value = helper.fixture(); namespace = value['namespace']
+        prior_cfg = value['objects']['configuration']
+        prior_cfg['execution_stage'] = 'focused-diagnostic'
+        ordered, cases = qualification.bound_focus_plan(prior_cfg, namespace['group_binding'], Path(namespace['group_binding']['cwd']))
+        qualification.validate_preparation_plan(prior_cfg, namespace['group_binding'], namespace['expect'], ordered, cases)
+        with self.assertRaises(AssertionError):
+            exec(value['code'], namespace)
+        self.assertEqual(value['commands'], [])
+
+
 if __name__ == '__main__':
     unittest.main()

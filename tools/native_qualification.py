@@ -80,7 +80,7 @@ def bound_focus_plan(cfg, binding, source_root):
 def validate_preparation_plan(cfg, group_binding, expect, ordered_groups, focus_cases):
     """Reject inconsistent preparation data before any qualification command."""
     prepared_names=tuple(group_binding['prepared_groups']);selected_ids=[group['id']for group in cfg['groups']]
-    assert cfg['execution_stage']=='full' and cfg['focused_expected']>0
+    assert cfg['execution_stage'] in ('full','focused-diagnostic') and cfg['focused_expected']>0
     normal_modes={
      'encoder_compile':('encoder_compile',['presentation_compile.test.','encoder root imports bundle-time presentation modules'],['root.test.encoder root imports bundle-time presentation modules']),
      'encoder_document':('encoder_document',['presentation_document.test.','encoder root imports bundle-time presentation modules'],['root.test.encoder root imports bundle-time presentation modules']),
@@ -92,7 +92,7 @@ def validate_preparation_plan(cfg, group_binding, expect, ordered_groups, focus_
      'tools':('blob_build_tests',[],[]),
     }
     assert prepared_names==tuple(name for name in normal_modes if name in selected_ids) and selected_ids==list(prepared_names) and cfg['focused_expected']==len(focus_cases)
-    assert group_binding['compile_time_filtered_preparation'] is True and group_binding['prepare_target']=='prepare-tests' and group_binding['prepared_relative_directory']=='bin/wikidict-tests'
+    assert group_binding['compile_time_filtered_preparation'] is any(group['compile_time_filtered'] for group in cfg['groups']) and group_binding['prepare_target']=='prepare-tests' and group_binding['prepared_relative_directory']=='bin/wikidict-tests'
     assert group_binding['prepare_test_error_tracing'] is False and group_binding['full_normal_partitioned_graph_required'] is True
     assert expect['expected']['logical_expected_groups']==23 and expect['expected']['expected_groups']==26 and expect['expected']['logical_global_occurrences_equal_physical'] is True
     all_roots={root['root']:root['expected_occurrences'] for root in expect['expected']['groups']}
@@ -389,6 +389,7 @@ if __name__ == '__main__':
           assert closed['full_native_pass'] and closed['bundle_pipeline_pass'] and closed['full_actual_passed_tests']==cfg['full_native_expected'] and closed['required_test_occurrences']==sum(expect['required_test_counts'].values())
           for key in ('private_manifest','private_source_binding','retained_source','retained_cache','compiler','runtime_python','python_bin','canonical_runtime_inputs','runtime_helpers','dynamic_helper','dynamic_state','helper','expectation','focused_groups','groups','focused_expected','focused_distinct_names','saved_expected','full_native_expected','groups_expected','reader_expected_checks','bundle_expected_checks','metadata_python_reuse','metadata_python_expected','install_root'):
            assert cfg[key]==prior_cfg[key],key
+          assert prior_cfg['execution_stage']=='full'
           prior_ordered,prior_cases=bound_focus_plan(prior_cfg,group_binding,private)
           prepared_names,_,prepare_discovery=validate_preparation_plan(prior_cfg,group_binding,expect,prior_ordered,prior_cases)
           execution_plan=prior.get('focused_execution_plan','prepare-all-then-focus.v1')
