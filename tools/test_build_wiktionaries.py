@@ -4998,6 +4998,40 @@ class LoopMessageSelectionTests(unittest.TestCase):
 
 
 class ExplicitExtractionCacheTests(PreparedToolsFixture):
+    def test_unsharded_command_uses_workspace_cache_by_default_and_preserves_override(self):
+        for explicit in (False,True):
+            with self.subTest(explicit=explicit),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);folder=root/'testwiktionary/20260901'
+                write_namespace_fixture(folder)
+                name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+                data=bz2.compress(b'<mediawiki><page></page></mediawiki>')
+                (folder/name).write_bytes(data)
+                item=dict(wiki='testwiktionary',date='20260901',name=name,
+                    url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,
+                    size=len(data),sha1=hashlib.sha1(data).hexdigest())
+                workspace=root/'output/testwiktionary/20260901.shards'
+                cache=root/'external-cache';cache.mkdir()
+                options={'extraction_cache_root':cache} if explicit else {}
+                with patch.object(b,'PROJECT',root), \
+                     patch.object(b,'timed_run',side_effect=RuntimeError('stop before native execution')) as run:
+                    with self.assertRaisesRegex(RuntimeError,'stop before native execution'):
+                        b.build_locked([item],root,root/'output',sys.executable,1,**options)
+                run.assert_called_once()
+                command=run.call_args.args[0]
+                self.assertEqual(run.call_args.args[3],'dictionary_build')
+                self.assertEqual(tool_arguments(command)[:2],[str(workspace/'input/pages.xml.zst'),
+                    str(root/'output/testwiktionary/20260901.building')])
+                self.assertNotIn('--expander-only',command)
+                expected=cache if explicit else workspace/'input/extraction-cache'
+                self.assertEqual(command[command.index('--extraction-cache-root')+1],str(expected))
+                staged=json.loads((workspace/'input/.complete.json').read_text())
+                self.assertEqual(staged['source_pages'],1)
+                for flag,key in (('--verified-dump-sha256','dump_sha256'),
+                                 ('--verified-index-sha256','index_sha256')):
+                    self.assertEqual(command[command.index(flag)+1],staged[key])
+                self.assertEqual(staged['dump_sha256'],b.sha256_file(workspace/'input/pages.xml.zst'))
+                self.assertEqual(staged['index_sha256'],b.sha256_file(workspace/'input/pages-index.txt.bz2'))
+
     def test_fresh_expander_command_uses_external_cache_and_new_input_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);workspace=root/'fresh-work';(workspace/'input').mkdir(parents=True)
