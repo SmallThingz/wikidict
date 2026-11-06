@@ -399,7 +399,7 @@ class PreparationFailFastTests(unittest.TestCase):
         from types import SimpleNamespace
         source = ast.parse(Path(qualification.__file__).read_text())
         branches = [node.orelse for node in ast.walk(source) if isinstance(node, ast.If)
-                    and ast.unparse(node.test) == "cfg['execution_stage'] == 'support-tail'"]
+                    and ast.unparse(node.test) == "cfg['execution_stage'] == 'tail'"]
         self.assertEqual(len(branches), 1)
         block = branches[0]
         end = next(index for index, node in enumerate(block) if isinstance(node, ast.For)
@@ -407,7 +407,11 @@ class PreparationFailFastTests(unittest.TestCase):
         argv_functions = [node for node in ast.walk(source) if isinstance(node, ast.FunctionDef)
                           and node.name == 'prepare_tests_argv']
         self.assertEqual(len(argv_functions), 1)
-        prefix = compile(ast.Module(body=copy.deepcopy(argv_functions + block[:end + 1]),
+        stage_guards = [node for node in ast.walk(source) if isinstance(node, ast.Assert)
+                        and isinstance(node.test, ast.Compare)
+                        and ast.unparse(node.test.left) == "cfg['execution_stage']"]
+        self.assertEqual(len(stage_guards), 1)
+        prefix = compile(ast.Module(body=copy.deepcopy(argv_functions + stage_guards + block[:end + 1]),
                                     type_ignores=[]), str(qualification.__file__), 'exec')
         cfg = copy.deepcopy(cfg)
         cfg.setdefault('runtime_python', {'sha256': 'python'})
@@ -659,6 +663,24 @@ class BlobEncoderPreparationTests(unittest.TestCase):
             with self.subTest(defect=defect), self.assertRaises(AssertionError):
                 PreparationFailFastTests().execute_prefix(cfg, proof, expectation, commands)
             self.assertEqual(commands, [])
+
+
+class RetiredContinuationTests(unittest.TestCase):
+    def test_retired_support_tail_refuses_before_commands_and_full_still_prepares(self):
+        cfg, proof, expectation = PreparationFailFastTests().fixture()
+        cfg['execution_stage'] = 'support-tail'
+        cfg['support_reuse'] = {'historical_metadata_must_not_be_consumed': True}
+        commands = []
+        with self.assertRaises(AssertionError):
+            PreparationFailFastTests().execute_prefix(cfg, proof, expectation, commands)
+        self.assertEqual(commands, [])
+        cfg['execution_stage'] = 'full'
+        commands = []
+        result = PreparationFailFastTests().execute_prefix(cfg, proof, expectation, commands)
+        ordered, _ = qualification.bound_focus_plan(cfg, proof, Path(proof['cwd']))
+        self.assertEqual([name for name, _ in commands], ['reviewed-language-aliases'] +
+                         ['focused-prepare-' + group['id'] for group in ordered])
+        self.assertEqual(result['prepared_names'], tuple(group['id'] for group in cfg['groups']))
 
 
 if __name__ == '__main__':

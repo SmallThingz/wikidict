@@ -192,7 +192,7 @@ if __name__ == '__main__':
         group_binding=read(cfg['focused_groups'])
         ordered_groups,focus_cases=bound_focus_plan(cfg,group_binding,private)
         assert cfg['full_native_expected']==expect['expected']['expected_total'] and cfg['groups_expected']==expect['expected']['expected_groups'] and cfg['bundle_expected_checks']>0
-        if cfg['execution_stage'] not in ('tail','support-tail'):
+        if cfg['execution_stage']!='tail':
          validate_preparation_plan(cfg,group_binding,expect,ordered_groups,focus_cases)
         def source_guard():
          global observed_core_provenance
@@ -371,7 +371,7 @@ if __name__ == '__main__':
          guard();dynamic['validate'](ds);command=w['execute'](out,label,argv,private);so=(out/(label+'.stdout')).read_text(errors='replace');se=(out/(label+'.stderr')).read_text(errors='replace');result['phases'].append(dict(name=label,command=command,stdout=ref(out/(label+'.stdout')),stderr=ref(out/(label+'.stderr'))));save();guard();assert command['status']=='exited' and command['returncode']==0,(label,command);return so,se
         save()
         try:
-         assert cfg['execution_stage'] in ('full','tail','focused-diagnostic','support-tail')
+         assert cfg['execution_stage'] in ('full','tail','focused-diagnostic')
          if cfg['execution_stage']=='tail':
           reuse=cfg['tail_reuse'];prior_cfg=read(reuse['configuration']);prior=read(reuse['result']);closed=read(reuse['closure']);released=read(reuse['release'])
           assert released['closure']==reuse['closure'] and released['cleanup_proven'] and released['source_guard'] and released['locks_free']
@@ -400,85 +400,6 @@ if __name__ == '__main__':
           for installed in prior['installed'].values():auth(installed)
           cli=prior['installed']['bin/wikidict'];dynamic['validate'](ds,binary=cli['path'])
           result.update(execution_stage='tail',selected_current_count=0,focused_current_execution=False,full_native_current_execution=False,bundle_pipeline_current_execution=False,inherited_qualification=reuse,focused_qualified=True,focused_inherited_count=len(selected),native_inventory=native,grouped_inventory=grouped,required_test_counts=actual,reader_markers=prior['reader_markers'],metadata_python=prior['metadata_python'],installed=prior['installed'],cli_ffi_install_pass=True,full_native_pass=True,bundle_pipeline_pass=True)
-          save()
-         elif cfg['execution_stage']=='support-tail':
-          from collections import Counter
-          reuse=cfg['support_reuse'];assert reuse==expect['support_continuation']
-          prior_cfg=read(reuse['configuration']);prior=read(reuse['result']);closed=read(reuse['closure']);released=read(reuse['release'])
-          assert released['closure']==reuse['closure'] and released['cleanup_proven'] and released['source_custody_released']
-          assert closed['result']==reuse['result'] and closed['configuration']==reuse['configuration'] and closed['source_guard'] and closed['cleanup_proven'] and closed['locks_free']
-          assert not closed['full_native_pass'] and closed['full_command_pass'] and closed['full_native_executed']==2640 and closed['full_native_expected']==2646 and not closed['tails_executed']
-          assert prior['source_guard_after'] and prior['cli_ffi_install_pass'] and not prior['full_native_pass'] and not prior['bundle_pipeline_pass'] and not prior['bundle_pass']
-          for key in ('source','expected_head','retained_source','retained_cache','compiler','runtime_python','python_bin','canonical_runtime_inputs','runtime_helpers','dynamic_helper','dynamic_state','helper','full_native_expected','groups_expected','bundle_expected_checks','install_root'):
-           assert cfg[key]==prior_cfg[key],key
-          old_manifest=read(prior_cfg['private_manifest']);assert set(old_manifest)==set(private_manifest) and len(private_manifest)==453
-          changed=[name for name in private_manifest if old_manifest[name]!=private_manifest[name]];assert changed==['src/encoder/root.zig']
-          materialization=read(reuse['materialization']);assert materialization['baseline_manifest']==prior_cfg['private_manifest'] and materialization['private_manifest']==cfg['private_manifest']
-          assert materialization['prior_closure']==reuse['closure'] and materialization['prior_release']==reuse['release'] and materialization['changed_paths']==changed and materialization['ast_passed'] and materialization['ast_children_reaped'] and not materialization['production_changed']
-          before=auth(reuse['root_before']).read_text();after=(private/changed[0]).read_text()
-          assert reuse['root_before']['sha256']==old_manifest[changed[0]]['sha256'] and reuse['root_before']['bytes']==old_manifest[changed[0]]['bytes']
-          anchor='    _ = presentation_document;'+chr(10);addition='    _ = @import("presentation_heading_anchors.zig");'+chr(10)
-          assert before.count(anchor)==1 and after==before.replace(anchor,anchor+addition,1)
-          assert before.count('test "encoder root imports bundle-time presentation modules" {')==1 and before.index(anchor)>before.index('test "encoder root imports bundle-time presentation modules" {')
-          assert old_manifest[changed[0]]['mode']==private_manifest[changed[0]]['mode']
-          old_expect=read(prior_cfg['expectation']);assert old_expect['required_test_counts']==expect['required_test_counts']
-          wanted={g['root']:Counter(g['expected_occurrences'])for g in expect['expected']['groups']}
-          assert wanted=={g['root']:Counter(g['expected_occurrences'])for g in old_expect['expected']['groups']}
-          assert len(wanted)==26 and sum(sum(c.values())for c in wanted.values())==2646 and cfg['full_native_expected']==2646
-          assert reuse['support_root']=='encoder_support' and reuse['prior_support_count']==123 and reuse['current_support_count']==129 and reuse['retained_group_count']==25 and reuse['retained_test_count']==2517 and reuse['prior_actual_count']==2640
-          support=wanted['encoder_support'];assert sum(support.values())==129 and set(support.values())=={1}
-          assert tuple(group_binding['prepared_groups'])==('encoder_support',) and len(cfg['groups'])==1 and cfg['focused_expected']==129
-          group=cfg['groups'][0];assert group['id']==group['prepared_group']=='encoder_support' and Counter(group['test_names'])==support
-          assert group['compile_time_filtered'] is True and group['compile_filter_origin']=='fixed-normal-encoder-partition' and not group['external_compile_filter_names']
-          assert group_binding['compile_time_filtered_preparation'] is True and group_binding['prepare_test_error_tracing'] is False and group_binding['full_normal_partitioned_graph_required'] is True
-          assert group['compiled_only_discovery_names']==group_binding['prepared_discovery_filters'].get('encoder_support',[])
-          assert [p['name']for p in prior['phases']]==['focused-prepare-encoder_compile','focused-prepare-encoder_document','focused-prepare-tools','cli-ffi-install','full-native-suite']
-          for p in prior['phases']:
-           assert p['command']['status']=='exited' and p['command']['returncode']==0;auth(p['stdout']);auth(p['stderr'])
-          assert len(prior['focused_tests'])==14 and prior['focused_qualified']
-          for row in prior['focused_tests']:
-           assert row['passed'] and row['command']['status']=='exited' and row['command']['returncode']==0;auth(row['stdout']);auth(row['stderr']);auth(row['binary'])
-          full=prior['phases'][-1];so=auth(full['stdout']).read_text(errors='replace');se=auth(full['stderr']).read_text(errors='replace')
-          native=w['classify'](so,se,standalone=False);assert native['passed'] and native['status_count']==2640
-          def observed_groups(stdout,stderr):
-           observed=[]
-           for stream in (stdout,stderr):
-            pending=[]
-            for line in w['ANSI'].sub('',stream).splitlines():
-             status=w['STATUS'].fullmatch(line);summary=w['SUMMARY'].fullmatch(line)
-             if status:
-              kind,name=status.groups();assert kind=='ok' and chr(65533) not in name;pending.append(name)
-             elif summary:
-              counts=list(map(int,summary.groups()));assert counts==[len(pending),0,0,0,0] and pending;observed.append(Counter(pending));pending=[]
-             else:assert not line.startswith(('ok ','error ','skip ','leak ','crash ','pass:'))
-            assert not pending
-           return observed
-          observed=observed_groups(so,se);assert len(observed)==26
-          missing=Counter({name:count for name,count in support.items()if name.startswith('presentation_heading_anchors.test.')});assert len(missing)==sum(missing.values())==6
-          old_support=support-missing;assert sum(old_support.values())==123 and observed.count(old_support)==1
-          signature=lambda c:tuple(sorted(c.items()))
-          retained=list(observed);retained.remove(old_support);assert len(retained)==25 and sum(sum(c.values())for c in retained)==2517
-          assert Counter(map(signature,retained))==Counter(signature(c)for root,c in wanted.items()if root!='encoder_support')
-          text=w['ANSI'].sub('',so+chr(10)+se);lines=text.splitlines();prefix='CLI_SWATCH_PTY_PASS child summary/report: ';summaries=[json.loads(line[len(prefix):])for line in lines if line.startswith(prefix)];assert len(summaries)==1;summary=summaries[0]
-          rp=pathlib.Path(summary['report']);relative_report=rp.relative_to(cache/'local');assert rp.is_absolute() and rp.resolve()==rp and rp.is_file() and not rp.is_symlink()
-          assert len(relative_report.parts)==3 and re.fullmatch(r'reader-integration-[0-9]+',relative_report.parts[0]) and re.fullmatch(r'reader-ux-[A-Za-z0-9_-]+',relative_report.parts[1]) and relative_report.parts[2]=='report.json'
-          assert ref(rp)==reuse['reader_report'];report=read(reuse['reader_report']);contract=dict(observed_child_summary=summary,child_report=reuse['reader_report'],marker_lines=[dict(line=i,text=line)for i,line in enumerate(lines,1)if any(m in line for m in ('CLI_SWATCH_PTY_PASS','CLI_ANCHORED_PARENT_PTY_PASS','STORAGE_INTEGRATION_PASS','READER_INTEGRATION_PASS checks=47'))])
-          marks=ev['markers'](text,contract,report)
-          for installed in prior['installed'].values():auth(installed)
-          cli=prior['installed']['bin/wikidict'];dynamic['validate'](ds,binary=cli['path'])
-          metadata=read(cfg['metadata_python_reuse']);assert metadata['current_manifest']==cfg['private_manifest'] and prior['metadata_python']['passed'] and prior['metadata_python']['executed']==cfg['metadata_python_expected']==8
-          for name,row in metadata['dependency_files'].items():
-           assert old_manifest[name]==private_manifest[name] and row['reference']['path']==str(private/name);path=auth(row['reference']);assert not path.is_symlink() and stat.S_IMODE(path.stat().st_mode)==row['mode']
-          prepared_prefix=out/'prepared-tests';assert not prepared_prefix.exists();argv=prepare_tests_argv(args,cache,prepared_prefix,w['native_build_argv'])
-          assert not any(arg.startswith('-Dprepare-test-filter') or arg.startswith('-Dprepare-test-error-tracing')for arg in argv)
-          execute('support-prepare',argv+['-Dprepare-test-group=encoder_support']);prepared_dir=prepared_prefix/group_binding['prepared_relative_directory'];assert {p.name for p in prepared_dir.iterdir()}=={'encoder_support'}
-          binary=ref(prepared_dir/'encoder_support');assert not Path(binary['path']).is_symlink() and os.access(binary['path'],os.X_OK)
-          nout,nerr=execute('support-129',[binary['path'],'--jobs','1']);auth(binary);current=observed_groups(nout,nerr);assert current==[support]
-          combined=retained+current;assert Counter(map(signature,combined))==Counter(map(signature,wanted.values()))
-          totals=Counter()
-          for counter in combined:totals.update(counter)
-          actual={name:sum(n for full_name,n in totals.items()if full_name.endswith('.test.'+name))for name in expect['required_test_counts']};assert actual==expect['required_test_counts'] and sum(actual.values())==655
-          result.update(execution_stage='support-tail',qualification_scope='source-bound composite25 retained groups plus current support129 and current tails',focused_current_execution=False,focused_inherited_count=14,focused_qualified=True,full_native_current_execution=False,full_native_pass=True,native_inventory=dict(passed=True,source_bound_composite=True,current_tests=129,retained_tests=2517,total_tests=2646),grouped_inventory=dict(passed=True,source_bound_composite=True,retained_groups=25,current_groups=1,expected_groups=26,exact_grouped_names_and_multiplicity=True),required_test_counts=actual,reader_markers=marks,reader_current_execution=False,metadata_python=dict(prior['metadata_python'],current_execution=False,source_bound_reuse=cfg['metadata_python_reuse']),installed=prior['installed'],cli_ffi_install_pass=True,installed_current_execution=False,support_binary=binary,support_actual_names=sorted(support),support_current_passed=129,inherited_qualification=reuse,original_inventory_failure_preserved=True)
           save()
          else:
           prepared_names,prepare_filters,prepare_discovery=validate_preparation_plan(cfg,group_binding,expect,ordered_groups,focus_cases)
