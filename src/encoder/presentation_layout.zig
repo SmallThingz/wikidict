@@ -639,14 +639,27 @@ fn hasSlovakMeaningChild(sections: anytype, index: usize) bool {
     return false;
 }
 
-// Endrika:-fomba fiteny- p1265960/r3477595 explicitly declares this exact
-// lexical type through -déf-. Preserve its authored kind: no English POS or
-// language follows from the label. Only an already owned, source-shaped entry
-// with a bold headword and direct definition is organized by this rule.
+// Exact authored kinds, without guessing an English POS or language. The
+// retained ET -'d p111377/r936737 uses four numbered form sections and Morfeem;
+// Mall:-tegusõnavorm- p24234/r484850 independently declares the form heading.
+// MG Endrika:-fomba fiteny- p1265960/r3477595 supplies the existing lexical kind.
+fn authoredLexicalKind(title: []const u8) ?[]const u8 {
+    for ([_][]const u8{ "Fomba fiteny", "Tegusõnavorm", "Morfeem" }) |name|
+        if (std.mem.eql(u8, title, name)) return name;
+    const prefix = "Tegusõnavorm (";
+    if (!std.mem.startsWith(u8, title, prefix) or !std.mem.endsWith(u8, title, ")")) return null;
+    const number = title[prefix.len .. title.len - 1];
+    if (number.len == 0 or number[0] == '0') return null;
+    for (number) |digit| if (!std.ascii.isDigit(digit)) return null;
+    return "Tegusõnavorm";
+}
+
+// Only an independently owned, source-shaped entry with a parsed bold
+// headword and immediate direct definition lends its authored lexical kind.
 fn ownedAuthoredLexicalPart(section: anytype, owner: ?[]const u8) ?[]const u8 {
     const language = owner orelse return null;
-    if (language.len == 0 or std.mem.eql(u8, language, "Unclassified") or
-        section.level != 3 or !std.mem.eql(u8, section.title, "Fomba fiteny")) return null;
+    if (language.len == 0 or std.mem.eql(u8, language, "Unclassified") or section.level != 3) return null;
+    const kind = authoredLexicalKind(section.title) orelse return null;
     var headword = false;
     for (section.blocks) |block| {
         if (block.kind == .heading) {
@@ -675,7 +688,7 @@ fn ownedAuthoredLexicalPart(section: anytype, owner: ?[]const u8) ?[]const u8 {
             if (span.provenance != .parsed or span.generated_diagnostic or span.flags.code) return null;
             visible = visible or std.mem.trim(u8, span.text, " \t\r\n").len != 0;
         }
-        return if (visible) section.title else null;
+        return if (visible) kind else null;
     }
     return null;
 }
@@ -4079,4 +4092,154 @@ test "retained MG liska normal Reader body gains only source declared organizati
     original.entry.organization = before.organization;
     try std.testing.expectEqualDeep(types.Stored{ .entry = before }, original);
     try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, decoded));
+}
+
+test "ET authored form and morpheme sections require owned parsed lexical bodies" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "control" } };
+    const body = try renderer.renderBody("'''term'''\n# Definition [[target|label]].\n#:: ''Example [[example]].''\n");
+    const support = try renderer.renderBody("* [[support]]\n");
+    for ([_][]const u8{ "Tegusõnavorm", "Tegusõnavorm (1)", "Tegusõnavorm (24)", "Morfeem" }) |heading| {
+        const sections = [_]Section{
+            .{ .title = "French", .level = 2 },
+            .{ .title = heading, .level = 3, .blocks = body },
+            .{ .title = "Sõnad", .level = 4, .blocks = support },
+            .{ .title = "Unrelated support", .level = 3, .blocks = body },
+        };
+        const layout = try buildOwned(a, &sections, "French");
+        try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+        const lexeme = layout.lexemes[0];
+        try std.testing.expectEqualStrings(if (std.mem.eql(u8, heading, "Morfeem")) "Morfeem" else "Tegusõnavorm", lexeme.kind);
+        try std.testing.expectEqualStrings("French", lexeme.language);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.section);
+        try std.testing.expect(lexeme.etymology == null);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.definitions[0].block);
+        try std.testing.expect(lexeme.definitions[0].parent == null and lexeme.definitions[0].form == null);
+        try std.testing.expectEqualSlices(usize, &.{2}, lexeme.definitions[0].examples);
+        try std.testing.expectEqualSlices(usize, &.{0}, lexeme.introduction);
+        try std.testing.expectEqualSlices(usize, &.{2}, lexeme.related_sections);
+        try std.testing.expectEqualSlices(usize, &.{ 0, 3 }, layout.other_sections);
+        try std.testing.expect(partOfSpeech(heading) == null);
+        try std.testing.expectEqual(@as(usize, 0), (try build(a, &sections)).lexemes.len);
+        try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &sections)).lexemes.len);
+        for ([_][]const u8{ "", "Unclassified" }) |owner|
+            try std.testing.expectEqual(@as(usize, 0), (try buildOwned(a, &sections, owner)).lexemes.len);
+        for ([_]u8{ 2, 4 }) |level| {
+            var negative = sections;
+            negative[1].level = level;
+            try std.testing.expectEqual(@as(usize, 0), (try buildOwned(a, &negative, "French")).lexemes.len);
+        }
+        for ([_][]const u8{
+            "# Definition without headword\n",
+            "term\n# Definition\n",
+            "'''term'''\n* Support\n",
+            "'''term'''\n## Nested without direct sense\n",
+            "'''term'''\nSupport\n# Definition\n",
+            "'''term'''\n==== Intervening heading ====\n# Definition\n",
+            "<nowiki>'''term'''</nowiki>\n# Definition\n",
+            "'''term'''\n# <nowiki>protected definition</nowiki>\n",
+            "'''term'''\n# <code>code definition</code>\n",
+        }) |source| {
+            var negative = sections;
+            negative[1].blocks = try renderer.renderBody(source);
+            errdefer std.debug.print("ET authored-kind negative heading={s} source={s}\n", .{ heading, source });
+            try std.testing.expectEqual(@as(usize, 0), (try buildOwned(a, &negative, "French")).lexemes.len);
+        }
+    }
+    for ([_][]const u8{
+        "tegusõnavorm", "Tegusõnavormid", "Tegusõnavorm ()", "Tegusõnavorm (0)",
+        "Tegusõnavorm (01)", "Tegusõnavorm (1a)", "Tegusõnavorm (1) extra", "Tegusõnavorm 1",
+        "Tegusõnavorm (١)", "morfeem", "Morfeemid", "Morfeem (1)", "Sõnad",
+    }) |heading| {
+        const sections = [_]Section{.{ .title = heading, .level = 3, .blocks = body }};
+        try std.testing.expectEqual(@as(usize, 0), (try buildOwned(a, &sections, "French")).lexemes.len);
+    }
+}
+
+test "ET retained contraction document gains five lexemes preserving complete Reader body and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const document = @import("presentation_document.zig");
+    const types = encoder.presentation_types;
+    const raw = @embedFile("testdata/et-contraction/source.raw.wikitext");
+    const source = @embedFile("testdata/et-contraction/source.static-template-derived.wikitext");
+    const reader = @embedFile("testdata/et-contraction/reader83.json");
+    const Verify = struct {
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+    };
+    try Verify.hash(raw, "d2b8076f92369f678708d1687a899cb0fd7c99cc5b281e6c9b8f109b78685a73");
+    try Verify.hash(source, "461148811ee181cb22fd82b9fbe64a06f076e7afc29657df856affc93090a838");
+    try Verify.hash(reader, "2c2c607ee58d2c4e323cd31da3d2f1413c531b2978a3e591ea6b6e0912086f3e");
+    const namespace_source = @embedFile("testdata/et-contraction/namespace-registry.tsv");
+    try Verify.hash(namespace_source, "f1f1c1bf54d442da19ac9031eedd8f43d6b0225c85636cd793ea2e3a10cd9045");
+    var namespaces = try @import("namespace_registry").Registry.init(a, namespace_source);
+    defer namespaces.deinit();
+    const parsed = try std.json.parseFromSlice(struct { entries: []const types.Entry }, a, reader, .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.entries.len);
+    const before = parsed.value.entries[0];
+    try std.testing.expectEqualStrings("-'d", before.title);
+    try std.testing.expectEqualStrings("inglise", before.language.?);
+    try std.testing.expectEqualStrings("en", before.language_code);
+    try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+    // The fixture substitutes only the authenticated constant Mall:-en- leaf,
+    // applying its noinclude/includeonly and lowercase ASCII PAGENAME. It is a
+    // static source-derived fixture, not a claimed captured expander output.
+    // The JSON is only the complete Stored oracle: no compiler spans or parsed
+    // provenance are projected from it. Normal document APIs parse every byte.
+    const payload = try document.compileClassifiedWithHeadingAnchorsAlloc(
+        a, before.title, .language, "inglise", "en", document.MissingText.untracked(source),
+        null, .{}, &namespaces, null, null, .{}, null, null, &.{}, null, &.{},
+        .{ .heading = "inglise", .code = "en" },
+    );
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, payload, before.title, .language, .{ .heading = "inglise", .code = "en" });
+    const layout = decoded.entry.organization;
+    try std.testing.expectEqual(@as(usize, 5), layout.lexemes.len);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, layout.other_sections);
+    const sections = [_]usize{ 2, 4, 6, 8, 10 };
+    const sense_counts = [_]usize{ 1, 1, 2, 1, 2 };
+    for (layout.lexemes, sections, sense_counts, 0..) |lexeme, section, count, i| {
+        try std.testing.expectEqualStrings(if (i == 4) "Morfeem" else "Tegusõnavorm", lexeme.kind);
+        try std.testing.expectEqualStrings("inglise", lexeme.language);
+        try std.testing.expectEqual(section, lexeme.section);
+        try std.testing.expectEqual(count, lexeme.definitions.len);
+        try std.testing.expect(lexeme.etymology == null);
+        try std.testing.expectEqualSlices(usize, &.{0}, lexeme.introduction);
+        try std.testing.expectEqual(@as(usize, 0), lexeme.other_blocks.len);
+        if (i < 4) try std.testing.expectEqualSlices(usize, &.{section + 1}, lexeme.related_sections)
+        else try std.testing.expectEqual(@as(usize, 0), lexeme.related_sections.len);
+        for (lexeme.definitions) |sense| {
+            try std.testing.expect(sense.parent == null and sense.form == null);
+            try std.testing.expectEqual(@as(usize, 0), sense.notes.len);
+        }
+    }
+    for (layout.lexemes) |lexeme| try std.testing.expectEqual(@as(usize, 1), lexeme.definitions[0].block);
+    try std.testing.expectEqual(@as(usize, 4), layout.lexemes[2].definitions[1].block);
+    try std.testing.expectEqual(@as(usize, 5), layout.lexemes[4].definitions[1].block);
+    try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, layout.lexemes[0].definitions[0].examples);
+    try std.testing.expectEqualSlices(usize, &.{2}, layout.lexemes[1].definitions[0].examples);
+    try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, layout.lexemes[2].definitions[0].examples);
+    try std.testing.expectEqualSlices(usize, &.{}, layout.lexemes[2].definitions[1].examples);
+    try std.testing.expectEqualSlices(usize, &.{}, layout.lexemes[3].definitions[0].examples);
+    try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, layout.lexemes[4].definitions[0].examples);
+    try std.testing.expectEqualSlices(usize, &.{6}, layout.lexemes[4].definitions[1].examples);
+    try std.testing.expectEqualSlices(usize, &.{4}, layout.lexemes[4].definitions[0].quotations);
+    for (layout.lexemes[0..4]) |lexeme| for (lexeme.definitions) |sense|
+        try std.testing.expectEqual(@as(usize, 0), sense.quotations.len);
+    try std.testing.expectEqual(@as(usize, 0), layout.lexemes[4].definitions[1].quotations.len);
+    // Restore organization only; every original field must match the published
+    // Reader entry, including source's unclosed italic and all 27 link actions.
+    var restored = decoded;
+    restored.entry.organization = before.organization;
+    try std.testing.expectEqualDeep(types.Stored{ .entry = before }, restored);
+    try std.testing.expectEqualSlices(u8, payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
 }

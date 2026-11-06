@@ -34,3 +34,5 @@ tools/testdata/de-polish-states/page.expanded.wikitext -whitespace
 tools/testdata/de-polish-states/page.raw.wikitext -whitespace
 tools/testdata/sr-admiral/raw.wikitext -whitespace
 tools/testdata/sr-admiral/expanded.wikitext -whitespace
+src/encoder/testdata/et-contraction/source.raw.wikitext -whitespace
+src/encoder/testdata/et-contraction/source.static-template-derived.wikitext -whitespace

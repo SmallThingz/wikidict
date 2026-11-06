@@ -1,0 +1,58 @@
+<br style="clear:both;" />
+
+==Inglise==
+[[Kategooria:Inglise|-'d]]
+===Tegusõnavorm (1)===
+''' -'d'''
+
+# ''kõnekeeles'': Kasutatakse abitegusõnavormi ''[[would]]'' lühendkujuna.
+#:: ''[[I]]'d [[go]]'' = ''I would go'' 
+#:: ''[[you]]'d go'' =  ''you would go'' 
+
+====Sõnad====
+*[[he'd]]
+*[[I'd]]
+*[[she'd]]
+*[[you'd]]
+
+===Tegusõnavorm (2)===
+''' -'d'''
+
+# ''kõnekeeles'': Kasutatakse abitegusõnavormi ''[[should]]'' lühendkujuna.
+#:: ''[[I]]'d [[go]]'' = ''I would go'' 
+
+====Sõnad====
+*[[I'd]]
+
+===Tegusõnavorm (3)===
+''' -'d'''
+
+# ''kõnekeeles'': Kasutatakse abitegusõnavormi ''[[had]]'' lühendkujuna.
+#:: ''[[I]]'d [[gone]]'' = ''I had gone'' 
+#:: ''[[you]]'d gone'' =  ''you had gone''
+# ''murdes'': Kasutatakse tegusõnavormi ''[[had]]'' lühendkujuna.
+
+====Sõnad====
+*[[he'd]]
+*[[I'd]]
+*[[she'd]]
+*[[you'd]]
+
+===Tegusõnavorm (4)===
+''' -'d'''
+
+# ''slängis'': Kasutatakse abitegusõnavormi ''[[did]]'' lühendkujuna.
+
+====Sõnad====
+*[[where'd]]
+*[[why'd]]
+
+===Morfeem===
+''' '-d'''
+
+# ''luulekeeles'': Kasutatakse tegusõna lihtmineviku ja mineviku kesksõna moodustamiseks. Seda kirjapilti kasutatakse ainult juhul, kui see morfeem hääldub ilma täishäälikuta. 
+#:: ''[[remember'd]]
+#:'''Variandid''':
+#:*[[-ed]]
+# Kasutatakse tegusõna lihtmineviku ja mineviku kesksõna moodustamiseks, kui sõna on kirjutatud suurtähtedega.
+#:: ''[[OK'd]]'' – kiitis heaks
