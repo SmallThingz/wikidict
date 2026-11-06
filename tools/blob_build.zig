@@ -17160,9 +17160,34 @@ test "normal Writer retained SR admiral compiles linked conversion scopes with c
     var registry = language_registry.Registry.empty(a); defer registry.deinit();
     try registry.addTsv(@embedFile("testdata/sr-admiral/language-registry.tsv"));
     var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images;
-    // Exact ordinary snapshot authority only, with no fabricated Serbian alias.
-    // Full source-template/module ownership and captured Common.css loading are
-    // separate ordinary captured-page obligations; all inline CSS stays exact.
+    // Preserve the old TSV-only result as a complete body reference. Adding the
+    // exact consumed canonical module must preserve every field across the
+    // existing owner/prefix partition. No lexical kind is inferred.
+    const baseline_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/sr-no-canonical", .{tmp.sub_path});
+    {
+        var baseline_writer = try encoder.blob_builder.Writer.init(io, a, baseline_root);
+        defer baseline_writer.deinit();
+        baseline_writer.language_codes = codes;
+        try baseline_writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "адмирал", F.source, F.raw, null);
+        const baseline_stats = try baseline_writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), baseline_stats.language_records);
+    }
+    const baseline = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, baseline_root, "Unclassified", "адмирал");
+    try std.testing.expectEqualStrings("", baseline.language_code);
+    try std.testing.expectEqual(@as(usize, 0), baseline.organization.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 4), baseline.sections.len);
+    try std.testing.expectEqualStrings("Unclassified", baseline.sections[0].title);
+    try std.testing.expectEqualStrings("адмирал (српски)", baseline.sections[1].title);
+    try std.testing.expectEqualStrings("Преводи", baseline.sections[2].title);
+    try std.testing.expectEqualStrings("Референце", baseline.sections[3].title);
+    const canonical_names = @embedFile("testdata/sr-admiral/canonical-names.lua");
+    try F.hash(canonical_names, "0479382440ba3f37eac2b6c01aea1d02d78c98bca3ac08aca8f3e48fbfc204fc");
+    try registry.addLua(canonical_names);
+    const owner = registry.resolveStrong("Српски") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("sr", owner.code);
+    try std.testing.expectEqualStrings("Српски", owner.heading);
+    // Captured Common.css loading remains a genuine full-loader obligation.
+    // These existing fixture profiles and every body/style/action guard stay exact.
     var roots: [2][]const u8 = undefined;
     var stats: [2]encoder.blob_builder.BuildStats = undefined;
     var manifests: [2][]const u8 = undefined;
@@ -17175,7 +17200,7 @@ test "normal Writer retained SR admiral compiles linked conversion scopes with c
         stats[i] = try writer.finish(codes);
         manifests[i] = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[i], encoder.blob_catalog.manifest_filename }), a, .limited(64 * 1024));
     }
-    try std.testing.expect(stats[0].language_records > 0);
+    try std.testing.expectEqual(@as(usize, 2), stats[0].language_records);
     try std.testing.expectEqual(stats[1].language_records, stats[0].language_records);
     var actual_it = try encoder.blob_catalog.Iterator.init(manifests[0]);
     var expected_it = try encoder.blob_catalog.Iterator.init(manifests[1]);
@@ -17186,6 +17211,30 @@ test "normal Writer retained SR admiral compiles linked conversion scopes with c
         try std.testing.expectEqualStrings(expected_item.heading, item.heading);
         const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], item.heading, "адмирал");
         const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], expected_item.heading, "адмирал");
+        // Existing policy isolates the meaningful page prefix when a later
+        // unresolved H2 (References) remains within the sole named owner.
+        try std.testing.expect(actual.kind == .language);
+        try std.testing.expectEqual(@as(usize, 0), actual.organization.lexemes.len);
+        var expected_owned = baseline;
+        if (std.mem.eql(u8, item.heading, owner.heading)) {
+            try std.testing.expectEqualStrings(owner.heading, actual.language.?);
+            try std.testing.expectEqualStrings(owner.code, actual.language_code);
+            expected_owned.language = owner.heading;
+            expected_owned.language_code = owner.code;
+            expected_owned.sections = baseline.sections[1..];
+            expected_owned.organization.other_sections = &.{ 0, 1, 2 };
+        } else {
+            try std.testing.expectEqualStrings("Unclassified", item.heading);
+            try std.testing.expectEqualStrings("Unclassified", actual.language.?);
+            try std.testing.expectEqualStrings("", actual.language_code);
+            expected_owned.sections = baseline.sections[0..1];
+            expected_owned.organization.other_sections = &.{0};
+            // The exact prefix is only bold headword plus controls/newlines:
+            // all source references and media occur after the language heading.
+            expected_owned.references = &.{};
+            expected_owned.media = &.{};
+        }
+        try std.testing.expectEqualDeep(expected_owned, actual);
         try std.testing.expectEqualDeep(expected, actual);
         // Serialize the complete stored Entry, including every semantic and
         // presentation field, and decode under the same actual owner metadata.
@@ -17223,4 +17272,101 @@ test "normal Writer retained SR admiral compiles linked conversion scopes with c
     const actual_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[0], "fallback-pages.jsonl" }), a, .limited(64 * 1024));
     const expected_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[1], "fallback-pages.jsonl" }), a, .limited(64 * 1024));
     try std.testing.expectEqualStrings(expected_report, actual_report);
+}
+
+test "normal Writer retained HY ten preserves single-brace fields complete body actions styles and codec" {
+    const F = struct {
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const raw = @embedFile("testdata/hy-ten49/raw.wikitext");
+    const source = @embedFile("testdata/hy-ten49/expanded.wikitext");
+    try F.hash(raw, "4ff58573c07ea5cc5644b428ffa6134a0b441567476ee6920343f3bd9cbb31df");
+    try F.hash(source, "e1b0f71f051756a1ad46855a18b7f9d7d37a623eaf3157f801d77fbf892e8a81");
+    const namespace_source = @embedFile("testdata/hy-ten49/namespace-registry.tsv");
+    try F.hash(namespace_source, "f1980966359ac894f6d28622336e17120a6ca90efbb4f6c2ff6df70af03230bf");
+    var namespaces = try namespace_registry.Registry.init(a, namespace_source);
+    defer namespaces.deinit();
+    const interwiki_source = @embedFile("testdata/hy-ten49/interwiki-map.tsv");
+    try F.hash(interwiki_source, "975f47fa4d7f0867bbebe73753639a33fc21a773a75893850e724755236655d1");
+    try namespaces.attachInterwikiMap(interwiki_source);
+    // This compiler/body control supplies no language authority. The captured
+    // producer's complete module/template/Common.css loader remains separate.
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    const codes = languageCodes(&registry, &namespaces);
+    const malformed = "{բրբռ|Խտջ|Մղր|||||}";
+    const transparent = "{բրբռ|Խտջ|Մղր||||<nowiki>|}</nowiki>";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, malformed));
+    const reference = try std.mem.replaceOwned(u8, a, source, malformed, transparent);
+    var roots: [2][]const u8 = undefined;
+    for ([_][]const u8{ source, reference }, 0..) |expanded, i| {
+        roots[i] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/hy-ten-{d}", .{ tmp.sub_path, i });
+        var writer = try encoder.blob_builder.Writer.init(io, a, roots[i]);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "տեն", expanded, raw, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    }
+    const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], "Unclassified", "տեն");
+    const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], "Unclassified", "տեն");
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expect(actual.kind == .language);
+    try std.testing.expectEqualStrings("Unclassified", actual.language.?);
+    try std.testing.expectEqualStrings("", actual.language_code);
+    const stored: encoder.presentation_types.Stored = .{ .entry = actual };
+    const bytes = try encoder.presentation_codec.encodeAlloc(a, stored);
+    try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, .{ .entry = expected }), bytes);
+    try std.testing.expectEqualDeep(stored, try encoder.presentation_codec.decodeAlloc(a, bytes, "տեն", .language, .{ .heading = "Unclassified", .code = "" }));
+    try std.testing.expectEqual(@as(usize, 0), actual.references.len);
+    try std.testing.expectEqual(@as(usize, 0), actual.media.len);
+    try std.testing.expectEqual(@as(usize, 3), actual.sections.len);
+    for (actual.sections, [_][]const u8{ "Հայերեն բարբառային բառ", "Արտահայտություններ", "Աղբյուրներ" }) |section, title|
+        try std.testing.expectEqualStrings(title, section.title);
+    var visible: std.ArrayList(u8) = .empty;
+    var links: usize = 0;
+    var green: [3]bool = @splat(false);
+    var targets: [5]bool = @splat(false);
+    var bold_headword = false;
+    for (actual.sections) |section| for (section.blocks) |block| {
+        try std.testing.expect(block.table == null);
+        for (block.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            try visible.appendSlice(a, span.trail);
+            if (span.bold and std.mem.indexOf(u8, span.text, "տեն") != null) bold_headword = true;
+            for ([_][]const u8{ "Գետինը տեն ա։", "Տենից պատի պաստառները փչացել են։", "Թութունը ծակվորի մեջ տեն կառնու։" }, 0..) |text, i| {
+                if (std.mem.indexOf(u8, span.text, text) == null) continue;
+                try std.testing.expectEqualStrings("#006400", span.foreground orelse return error.TestUnexpectedResult);
+                green[i] = true;
+            }
+            if (span.target.len == 0) continue;
+            links += 1;
+            if (span.kind == .link and std.mem.eql(u8, span.target, "վանկ") and std.mem.eql(u8, span.text, "վանկեր")) targets[0] = true;
+            if (span.kind == .external_link and std.mem.eql(u8, span.target, "https://hy.wikipedia.org/wiki/%D5%84%E2%80%A4%D5%80%D5%A1%D5%B3%D5%B5%D5%A1%D5%B6") and std.mem.eql(u8, span.text, "(Մ․Հաճյան)")) {
+                if (!targets[1]) targets[1] = true else { try std.testing.expect(!targets[2]); targets[2] = true; }
+            }
+            if (span.kind == .external_link and std.mem.eql(u8, span.target, "https://hy.wikipedia.org/wiki/%D5%8D%D5%BF%D5%A5%D6%83%D5%A1%D5%B6%D5%B8%D5%BD_%D5%84%D5%A1%D5%AC%D5%AD%D5%A1%D5%BD%D5%B5%D5%A1%D5%B6%D6%81") and std.mem.eql(u8, span.text, "(Ստեփանոս Մալխասյանց)")) targets[3] = true;
+            if (span.kind == .external_link and std.mem.eql(u8, span.target, "http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=48&query=%D5%BF%D5%A5%D5%B6") and std.mem.eql(u8, span.text, "Հայոց լեզվի բարբառային բառարան")) targets[4] = true;
+        }
+    };
+    try std.testing.expect(bold_headword);
+    for (green) |found| try std.testing.expect(found);
+    try std.testing.expectEqual(@as(usize, 5), links);
+    for (targets) |found| try std.testing.expect(found);
+    for ([_][]const u8{ "{{բրբռ|Խտջ||||||}", malformed, "խոնավ", "խոնավություն", "տեն առնել - խոնավանալ", "Հրաչյա Աճառյանի անվան լեզվի ինստիտուտ", "Նաիրի", "ՀՀ Գիտությունների ազգային ակադեմիա", "2001-2002", "2792" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, text) != null);
+    const actual_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[0], "fallback-pages.jsonl" }), a, .limited(64 * 1024));
+    const expected_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[1], "fallback-pages.jsonl" }), a, .limited(64 * 1024));
+    try std.testing.expectEqualStrings(expected_report, actual_report);
+    try std.testing.expect(std.mem.indexOf(u8, actual_report, "literal_markup") != null);
 }

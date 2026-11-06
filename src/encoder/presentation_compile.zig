@@ -9549,6 +9549,52 @@ pub const Renderer = struct {
         for (body) |byte| if (byte < 0x20 or byte == 0x7f) return false;
         return true;
     }
+    // A single-brace, same-line group of plain pipe-separated fields is visible
+    // authored text. It is neither a template opener nor a physical table close.
+    fn literalSingleBraceFieldsTail(input: []const u8, plain_text: []const u8, at: usize) bool {
+        const base = @intFromPtr(input.ptr);
+        const ptr = @intFromPtr(plain_text.ptr);
+        if (ptr < base or ptr - base > input.len or plain_text.len > input.len - (ptr - base) or
+            at + 2 > plain_text.len or !starts(plain_text[at..], "|}")) return false;
+        const marker = ptr - base + at;
+        if (marker + 2 < input.len and input[marker + 2] == '}') return false;
+        var opening = marker;
+        while (opening != 0) {
+            opening -= 1;
+            if (input[opening] == '{') break;
+            if (input[opening] == '}' or input[opening] == '\r' or input[opening] == '\n') return false;
+        }
+        if (input[opening] != '{' or (opening != 0 and (input[opening - 1] == '{' or input[opening - 1] == '-'))) return false;
+        var before = opening;
+        while (before != 0) {
+            before -= 1;
+            if (input[before] == '\r' or input[before] == '\n') break;
+            if (input[before] == '{' or input[before] == '}') return false;
+        }
+        const body = input[opening + 1 .. marker];
+        if (std.mem.indexOfAny(u8, body, "[]{}<>&'\"\r\n") != null or !std.unicode.utf8ValidateSlice(body)) return false;
+        var fields = std.mem.splitScalar(u8, body, '|');
+        const name = fields.next() orelse return false;
+        if (!literalBareParameterName(name)) return false;
+        var nonempty_argument = false;
+        while (fields.next()) |field| {
+            if (field.len == 0) continue;
+            if (!literalBareParameterName(field)) return false;
+            nonempty_argument = true;
+        }
+        return nonempty_argument;
+    }
+    fn literalSingleBraceFieldsTailInDomain(self: *const Renderer, input: []const u8, plain_text: []const u8, at: usize) bool {
+        if (!literalSingleBraceFieldsTail(input, plain_text, at)) return false;
+        var domain = self.inline_source_domain;
+        var remaining: usize = max_depth + 1;
+        while (domain) |current| {
+            if (remaining == 0 or !literalSingleBraceFieldsTail(current.source, plain_text, at)) return false;
+            remaining -= 1;
+            domain = current.parent;
+        }
+        return true;
+    }
     fn literalDisplayFormulaTableTailInDomain(self: *const Renderer, input: []const u8, plain_text: []const u8, at: usize) bool {
         if (!literalDisplayFormulaTableTail(input, plain_text, at)) return false;
         var domain = self.inline_source_domain;
@@ -9683,7 +9729,8 @@ pub const Renderer = struct {
         while (std.mem.indexOfPos(u8, plain_text, search, "|}")) |at| {
             search = at + 2;
             if (!self.ordinaryInlineTableTailInDomain(input, plain_text, at) and
-                !self.literalDisplayFormulaTableTailInDomain(input, plain_text, at)) continue;
+                !self.literalDisplayFormulaTableTailInDomain(input, plain_text, at) and
+                !self.literalSingleBraceFieldsTailInDomain(input, plain_text, at)) continue;
             _ = try self.plainWithMagicLinks(plain_text[emitted..at], style, "");
             try self.protectedLiteral(plain_text[at .. at + 2], style);
             emitted = at + 2;
@@ -44045,4 +44092,63 @@ test "manual linked conversion refuses incomplete nested and rule bearing scopes
     try std.testing.expectError(error.UncompiledPresentation, missing.parseSpans("-{[[Target|label]]}-", .{}));
     try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("-{[[Target|label]]}-"));
     try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("|}"));
+}
+
+test "single-brace plain fields retain literal closer without table or template admission" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const document = @import("presentation_document.zig");
+    const codec = @import("blob_encoder").presentation_codec;
+    const source = "{բրբռ|Խտջ|Մղր|||||} body [[Target|label]] <i>tail</i>";
+    const marker = std.mem.indexOf(u8, source, "|}").?;
+    try std.testing.expect(Renderer.literalSingleBraceFieldsTail(source, source, marker));
+    const control = try std.mem.replaceOwned(u8, a, source, "|}", "<nowiki>|}</nowiki>");
+    const actual = try document.compileAlloc(a, "control", .language, "Unclassified", "", source, null);
+    const expected = try document.compileAlloc(a, "control", .language, "Unclassified", "", control, null);
+    try std.testing.expectEqualSlices(u8, expected, actual);
+    const decoded = try codec.decodeAlloc(a, actual, "control", .language, .{ .heading = "Unclassified", .code = "" });
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, decoded));
+    var renderer: Renderer = .{ .a = a, .context = .{ .title = "control" } };
+    const spans = try renderer.parseSpans(source, .{});
+    try std.testing.expectEqualStrings("{բրբռ|Խտջ|Մղր|||||} body label tail", try flattened(a, spans));
+    var link = false;
+    var italic = false;
+    for (spans) |span| {
+        if (std.mem.eql(u8, span.target, "Target") and std.mem.eql(u8, span.text, "label")) link = true;
+        if (span.flags.italic and std.mem.eql(u8, span.text, "tail")) italic = true;
+    }
+    try std.testing.expect(link and italic);
+    try std.testing.expect(!renderer.fallbacks.malformed_table);
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(source));
+    try std.testing.expectError(error.UncompiledPresentation, document.compileAlloc(a, "raw guard", .language, "Unclassified", "", "before |} after", null));
+    try std.testing.expectError(error.UncompiledTemplate, document.compileAlloc(a, "template guard", .language, "Unclassified", "", "{{name|value|}}", null));
+    for ([_][]const u8{
+        "{name|}", "{name||}", "{|value|}", "{{name|value|}", "{name|value|}}",
+        "{outer {name|value|}", "-{name|value|}-", "{name|value\n|}",
+        "{name|[[Target]]|}", "{name|<i>value</i>|}", "{name|&amp;|}",
+        "{name|'value'|}", "{name|spaced value|}", "before |} after",
+    }) |unsupported| {
+        const at = std.mem.indexOf(u8, unsupported, "|}").?;
+        try std.testing.expect(!Renderer.literalSingleBraceFieldsTail(unsupported, unsupported, at));
+    }
+    const copied = try a.dupe(u8, source);
+    try std.testing.expect(!Renderer.literalSingleBraceFieldsTail(source, copied, marker));
+    const parent = "{outer " ++ source;
+    const child = parent["{outer ".len..];
+    const domain: InlineSourceDomain = .{ .source = parent, .parent = null };
+    const nested: Renderer = .{ .a = a, .context = .{}, .inline_source_domain = &domain };
+    try std.testing.expect(Renderer.literalSingleBraceFieldsTail(child, child, marker));
+    try std.testing.expect(!nested.literalSingleBraceFieldsTailInDomain(child, child, marker));
+    for ([_]Style{
+        .{ .kind = .link, .target = "Target" }, .{ .self_link_target = "control" },
+        .{ .code = true }, .{ .preserve_whitespace = true }, .{ .provenance = .protected_literal },
+    }) |style| {
+        var protected: Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expect((try protected.literalPlainTableTails(source, source, style, "")) == null);
+    }
+    var table_renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try table_renderer.renderBody("{|\n| cell\n|}");
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expect(blocks[0].table != null and !table_renderer.fallbacks.malformed_table);
 }

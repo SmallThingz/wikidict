@@ -1,0 +1,14 @@
+<h1>Հայերեն բարբառային բառ</h1>
+
+[[Կատեգորիա:Հայերեն բարբառային բառեր|տեն]][[Կատեգորիա:Բառեր «Հայոց լեզվի բարբառային բառարան» գրքից|տեն]]
+[[վանկ|վանկեր]]՝ '''տեն&nbsp;'''
+# {{բրբռ|Խտջ||||||} խոնավ <span class="example-fullblock ">&#9670;&nbsp;<span class="example-block" style="color:darkgreen">Գետինը տեն ա։ </span></span> [[:w:Մ․Հաճյան|(Մ․Հաճյան)]][[Կատեգորիա:Քաղվածք/Մ․Հաճյան]] 
+# {բրբռ|Խտջ|Մղր|||||} խոնավություն <span class="example-fullblock ">&#9670;&nbsp;<span class="example-block" style="color:darkgreen">Տենից պատի պաստառները փչացել են։ </span></span> [[:w:Ստեփանոս Մալխասյանց|(Ստեփանոս Մալխասյանց)]][[Կատեգորիա:Քաղվածք/Ստեփանոս Մալխասյանց]] 
+# 
+==== Արտահայտություններ ====
+# տեն առնել - խոնավանալ <span class="example-fullblock ">&#9670;&nbsp;<span class="example-block" style="color:darkgreen">Թութունը ծակվորի մեջ տեն կառնու։ </span></span> [[:w:Մ․Հաճյան|(Մ․Հաճյան)]][[Կատեգորիա:Քաղվածք/Մ․Հաճյան]] 
+#
+#
+== Աղբյուրներ ==
+* <span class="citation" >Հրաչյա Աճառյանի անվան լեզվի ինստիտուտ,<nowiki> </nowiki>[http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=48&query=%D5%BF%D5%A5%D5%B6 Հայոց լեզվի բարբառային բառարան]<nowiki> </nowiki>(«Նաիրի» հրատարակչություն),<nowiki> </nowiki>Երևան,<nowiki> </nowiki>«ՀՀ Գիտությունների ազգային ակադեմիա»,<nowiki> </nowiki>2001-2002<nowiki> — </nowiki>2792&nbsp;էջ<nowiki>։</nowiki></span>
+[[Կատեգորիա:Բառեր «Հայոց լեզվի բարբառային բառարան» գրքից]]

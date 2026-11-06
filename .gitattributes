@@ -36,3 +36,5 @@ tools/testdata/sr-admiral/raw.wikitext -whitespace
 tools/testdata/sr-admiral/expanded.wikitext -whitespace
 src/encoder/testdata/et-contraction/source.raw.wikitext -whitespace
 src/encoder/testdata/et-contraction/source.static-template-derived.wikitext -whitespace
+tools/testdata/hy-ten49/raw.wikitext -whitespace
+tools/testdata/hy-ten49/expanded.wikitext -whitespace

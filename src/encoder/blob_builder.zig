@@ -1587,7 +1587,62 @@ fn supplementalIconLanguage(codes: LanguageCodes, section: language_source.Secti
     return owner;
 }
 
+// The retained Naslov header format names its language in a project link.
+// Its page-name prefix and the edition's content language confer no owner.
+const ProjectParentheticalDeclaration = struct {
+    target: []const u8,
+    name: []const u8,
+    label: []const u8,
+};
+
+fn projectParentheticalDeclaration(codes: LanguageCodes, section: language_source.Section) ?ProjectParentheticalDeclaration {
+    if (section.hyphen_marker or section.source.len == 0) return null;
+    const namespaces = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, namespaces.content_language, "sr")) return null;
+    const line = std.mem.trimEnd(u8, section.source[0 .. std.mem.indexOfScalar(u8, section.source, '\n') orelse section.source.len], "\r");
+    const physical = blobs.wikitext_syntax.controlHeading(line, null) orelse return null;
+    if (physical.level != 2 or !std.mem.eql(u8, physical.title, section.heading)) return null;
+    const heading = section.heading;
+    if (heading.len > 4096 or !std.unicode.utf8ValidateSlice(heading)) return null;
+    const opener = " <span style=\"font-size:80%;\">([[";
+    const closer = "]])</span>";
+    const at = std.mem.indexOf(u8, heading, opener) orelse return null;
+    if (at == 0 or !std.mem.endsWith(u8, heading, closer)) return null;
+    const headword = std.mem.trim(u8, heading[0..at], " \t");
+    if (headword.len == 0 or std.mem.indexOfAny(u8, headword, "[]{}<>&|=\r\n\"'") != null) return null;
+    const start = at + opener.len;
+    if (start >= heading.len - closer.len) return null;
+    const body = heading[start .. heading.len - closer.len];
+    if (std.mem.indexOfAny(u8, body, "[]{}<>&#\r\n\"'") != null) return null;
+    const pipe = std.mem.indexOfScalar(u8, body, '|') orelse return null;
+    const target = body[0..pipe];
+    const label = body[pipe + 1 ..];
+    if (target.len == 0 or target[0] == ':' or label.len == 0 or
+        std.mem.indexOfAny(u8, label, "|:") != null or
+        !std.mem.eql(u8, target, std.mem.trim(u8, target, " \t")) or
+        !std.mem.eql(u8, label, std.mem.trim(u8, label, " \t"))) return null;
+    const local = namespaces.ofTitle(target);
+    if (local.id != 4 or local.text.len == 0 or std.mem.indexOfAny(u8, local.text, ":|") != null) return null;
+    return .{ .target = target, .name = local.text, .label = label };
+}
+
+fn resolveProjectParenthetical(codes: LanguageCodes, declaration: ProjectParentheticalDeclaration) ?ResolvedLanguage {
+    // Only a source-backed canonical name supplies the owner. Lowercasing
+    // verifies the displayed label; it neither installs nor resolves an alias.
+    const owner = codes.resolveStrong(declaration.name) orelse return null;
+    var buffer: [4096]u8 = undefined;
+    var lowered = std.Io.Writer.fixed(&buffer);
+    @import("namespace_registry").writeLower(&lowered, declaration.name) catch return null;
+    if (!std.mem.eql(u8, lowered.buffered(), declaration.label)) return null;
+    for ([_][]const u8{ declaration.target, declaration.name, declaration.label }) |spelling| {
+        if (codes.isLanguageBoundary(spelling)) return null;
+        if (codes.resolve(spelling)) |known| if (!std.mem.eql(u8, known.code, owner.code)) return null;
+    }
+    return owner;
+}
+
 fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
+    if (projectParentheticalDeclaration(codes, section)) |declaration| return resolveProjectParenthetical(codes, declaration);
     if (supplementalIconLanguage(codes, section)) |owner| return owner;
     if (imageLanguageLabel(codes, section)) |label|
         return codes.resolveStrong(label) orelse codes.resolveTrusted(label);
@@ -1694,6 +1749,7 @@ fn rawPrefixBannerLanguage(codes: LanguageCodes, raw: []const u8, raw_sections: 
 }
 
 fn hasExplicitLanguageDeclaration(codes: LanguageCodes, section: language_source.Section) bool {
+    if (projectParentheticalDeclaration(codes, section) != null) return true;
     if (arabicLinkedOwner(codes, section.heading) != null) return true;
     if (arabicNorwegianDeclaration(codes, section.heading) != null) return true;
     if (language_source.equalsLanguageDeclaration(section.source)) |code|
@@ -1702,6 +1758,7 @@ fn hasExplicitLanguageDeclaration(codes: LanguageCodes, section: language_source
 }
 
 fn boundaryLanguage(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
+    if (projectParentheticalDeclaration(codes, section)) |declaration| return resolveProjectParenthetical(codes, declaration);
     if (supplementalIconLanguage(codes, section)) |owner| return owner;
     if (imageLanguageLabel(codes, section)) |label|
         return codes.resolveStrong(label) orelse codes.resolveTrusted(label);
@@ -14846,4 +14903,88 @@ test "SIMPLE root proof refuses soft render limit while raw templates supply no 
     const mandatory = try presentation_document.observeHeadingAnchorsWithWikiScopeAlloc(a, "synthetic-simple-proof", MissingText.untracked(deep.items), .{}, null, null, null, references, null, true);
     try std.testing.expect(!mandatory.page_wiki_scope_complete);
     try std.testing.expect((try simpleRawHeadingProof(a, .{}, "synthetic-simple-proof", deep.items)) == null);
+}
+
+test "project parenthetical language header requires strong name and exact lowercase display" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tsrwiktionary\n# dump-date\t20261001\n# content-language\tsr\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "4\tВикиречник\tProject\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "10\tШаблон\tTemplate\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tКатегорија\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n");
+    defer namespaces.deinit();
+    const Authority = struct {
+        foreign: []const u8 = "",
+        ambiguous: []const u8 = "",
+        fn strong(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Српски")) return .{ .heading = "Српски", .code = "sr" };
+            if (std.mem.eql(u8, value, "Енглески")) return .{ .heading = "Енглески", .code = "en" };
+            return null;
+        }
+        fn resolve(ctx: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            const self: *const @This() = @ptrCast(@alignCast(ctx.?));
+            if (std.mem.eql(u8, value, self.ambiguous)) return null;
+            if (std.mem.eql(u8, value, self.foreign)) return .{ .heading = "French", .code = "fr" };
+            return strong(null, value);
+        }
+        fn boundary(ctx: ?*const anyopaque, value: []const u8) bool {
+            const self: *const @This() = @ptrCast(@alignCast(ctx.?));
+            return std.mem.eql(u8, value, self.ambiguous);
+        }
+        fn section(source: []const u8) language_source.Section {
+            const line = source[0 .. std.mem.indexOfScalar(u8, source, '\n') orelse source.len];
+            const heading = blobs.wikitext_syntax.controlHeading(line, null).?;
+            return .{ .heading = heading.title, .source = source };
+        }
+    };
+    var authority: Authority = .{};
+    var codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .ctx = &authority,
+        .resolve_fn = Authority.resolve, .strong_fn = Authority.strong, .boundary_fn = Authority.boundary };
+    const source = "== адмирал <span style=\"font-size:80%;\">([[Викиречник:Српски|српски]])</span> ==\nBody.\n";
+    const section = Authority.section(source);
+    try std.testing.expectEqualStrings("sr", resolveSection(codes, section).?.code);
+    try std.testing.expectEqualStrings("sr", boundaryLanguage(codes, section).?.code);
+    try std.testing.expect(hasExplicitLanguageDeclaration(codes, section));
+    // The edition scopes this captured format, never the selected owner.
+    const english = Authority.section("== admiral <span style=\"font-size:80%;\">([[Викиречник:Енглески|енглески]])</span> ==\nBody.\n");
+    try std.testing.expectEqualStrings("en", resolveSection(codes, english).?.code);
+    codes.strong_fn = null;
+    try std.testing.expect(resolveSection(codes, section) == null);
+    try std.testing.expect(boundaryLanguage(codes, section) == null);
+    try std.testing.expect(hasExplicitLanguageDeclaration(codes, section));
+    codes.strong_fn = Authority.strong;
+    for ([_][]const u8{ "Викиречник:Српски", "Српски", "српски" }) |spelling| {
+        authority.foreign = spelling;
+        try std.testing.expect(resolveSection(codes, section) == null);
+        authority.foreign = "";
+        authority.ambiguous = spelling;
+        try std.testing.expect(resolveSection(codes, section) == null);
+        try std.testing.expect(boundaryLanguage(codes, section) == null);
+        authority.ambiguous = "";
+    }
+    for ([_][]const u8{
+        "== адмирал <span style=\"font-size:80%;\">([[Викиречник:Српски|English]])</span> ==\n",
+        "== адмирал <span style=\"font-size:80%;\">([[Викиречник:Српски|Српски]])</span> ==\n",
+        "== адмирал <span style=\"font-size:80%;\">([[Викиречник:Unknown|unknown]])</span> ==\n",
+    }) |invalid| try std.testing.expect(resolveSection(codes, Authority.section(invalid)) == null);
+    for ([_][]const u8{
+        "=== адмирал <span style=\"font-size:80%;\">([[Викиречник:Српски|српски]])</span> ===\n",
+        "== адмирал <span style=\"font-size:80%;\">([[Категорија:Српски|српски]])</span> ==\n",
+        "== адмирал <span style=\"font-size:80%;\">([[:Викиречник:Српски|српски]])</span> ==\n",
+        "== адмирал <span style=\"font-size:80%;\">([[Викиречник:Српски#x|српски]])</span> ==\n",
+        "== адмирал <span style=\"font-size:80%;\">([[Викиречник:Српски|<b>српски</b>]])</span> ==\n",
+        "== адмирал <span style=\"font-size:80%;\">([[Викиречник:Српски|српски|extra]])</span> ==\n",
+        "== адмирал <span style=\"font-size:80%;\">([[Викиречник:Српски|српски]])</span> extra ==\n",
+        "== адмирал <span style=\"font-size:80%;color:red\">([[Викиречник:Српски|српски]])</span> ==\n",
+        "== <nowiki>адмирал <span style=\"font-size:80%;\">([[Викиречник:Српски|српски]])</span></nowiki> ==\n",
+        "== {{word}} <span style=\"font-size:80%;\">([[Викиречник:Српски|српски]])</span> ==\n",
+    }) |unsupported| try std.testing.expect(projectParentheticalDeclaration(codes, Authority.section(unsupported)) == null);
+    var absent_physical = section;
+    absent_physical.source = "";
+    try std.testing.expect(projectParentheticalDeclaration(codes, absent_physical) == null);
+    namespaces.content_language = "fr";
+    try std.testing.expect(projectParentheticalDeclaration(codes, section) == null);
 }

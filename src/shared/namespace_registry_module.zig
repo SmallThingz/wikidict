@@ -8,6 +8,8 @@ pub const Role = registry.Role;
 pub const Spec = registry.Spec;
 pub const Registry = registry.Registry;
 pub const normalizeSpacing = registry.normalizeSpacing;
+// Build-time verification of source-authored lowercase labels, without aliases.
+pub const writeLower = @import("unicode_lower").writeLower;
 pub const english_test_fixture = registry.english_test_fixture;
 pub const englishTestRegistry = registry.englishTestRegistry;
 pub const french_test_fixture = registry.french_test_fixture;
