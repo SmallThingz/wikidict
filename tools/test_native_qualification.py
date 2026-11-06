@@ -683,5 +683,189 @@ class RetiredContinuationTests(unittest.TestCase):
         self.assertEqual(result['prepared_names'], tuple(group['id'] for group in cfg['groups']))
 
 
+class CurrentTailRecoveryTests(unittest.TestCase):
+    def fixture(self):
+        # Execute the actual tail branch, with file authentication retained and
+        # closed native inventories substituted at their existing API boundary.
+        import ast
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        cfg, proof, expectation = PreparationFailFastTests().fixture()
+        cfg.update(execution_stage='full', full_native_expected=7, groups_expected=26,
+            reader_expected_checks=50, bundle_expected_checks=182, metadata_python_expected=8)
+        for name in ('retained_source', 'retained_cache', 'compiler', 'runtime_python', 'python_bin',
+                     'canonical_runtime_inputs', 'runtime_helpers', 'dynamic_helper', 'dynamic_state',
+                     'helper', 'expectation', 'focused_groups', 'metadata_python_reuse', 'install_root'):
+            cfg[name] = {'bound': name}
+        prior_cfg = copy.deepcopy(cfg); cfg['execution_stage'] = 'tail'
+        cfg['tail_reuse'] = dict(configuration='configuration', result='result', closure='closure', release='release')
+        ordered, cases = qualification.bound_focus_plan(cfg, proof, Path(proof['cwd']))
+        phase_names = ['reviewed-language-aliases', 'focused-prepare-tools',
+            'focused-prepare-encoder_compile', 'focused-prepare-encoder_document',
+            'focused-prepare-encoder_writer', 'focused-prepare-encoder_support',
+            'focused-prepare-lua', 'focused-prepare-closure',
+            'filtered-discovery-encoder_compile-0', 'filtered-discovery-encoder_document-0',
+            'filtered-discovery-encoder_writer-0', 'cli-ffi-install', 'full-native-suite', 'bundle-pipeline']
+        output = root / 'stdout'; output.write_text('ok root.test.required\nREADER_INTEGRATION_PASS checks=50\n')
+        errors = root / 'stderr'; errors.write_text('')
+        binary = root / 'binary'; binary.write_bytes(b'authenticated installed and prepared fixture')
+        stdout, stderr, compiled = map(FakeExecution.ref, (output, errors, binary))
+        command = dict(status='exited', returncode=0)
+        phases = [dict(name=name, command=copy.deepcopy(command), stdout=stdout, stderr=stderr) for name in phase_names]
+        report = dict(status='passed', cases=[dict(width=80, checks=['check'] * 68)])
+        marks = dict(reader_checks=50, child_report='report', child_summary=dict(status='passed'),
+                     marker_lines=[dict(line=2, text='READER_INTEGRATION_PASS checks=50')])
+        prior = dict(phases=phases, full_native_pass=True, bundle_pipeline_pass=True,
+            cli_ffi_install_pass=True, bundle_pass=False, reader_markers=copy.deepcopy(marks),
+            installed={'bin/wikidict': compiled}, metadata_python=dict(passed=True, executed=8),
+            focused_tests=[dict(name=case[2], passed=True, command=copy.deepcopy(command),
+                                stdout=stdout, stderr=stderr, binary=compiled) for case in cases])
+        closed = dict(result='result', configuration='configuration', source_guard=True,
+            cleanup_proven=True, locks_free=True, full_native_pass=True, bundle_pipeline_pass=True,
+            full_actual_passed_tests=7, required_test_occurrences=1,
+            reader_markers=copy.deepcopy(marks), installed=copy.deepcopy(prior['installed']))
+        released = dict(closure='closure', cleanup_proven=True, source_guard=True, locks_free=True)
+        objects = dict(configuration=prior_cfg, result=prior, closure=closed, release=released, report=report)
+        expectation['required_test_counts'] = {'required': 1}
+        marker_calls = []; dynamic_calls = []; commands = []
+        native = dict(passed=True, status_count=7); grouped = dict(passed=True)
+        def auth(descriptor):
+            self.assertEqual(FakeExecution.ref(descriptor['path']), descriptor)
+            return Path(descriptor['path'])
+        def markers(text, contract, actual_report):
+            marker_calls.append((text, contract, actual_report))
+            self.assertEqual(text.splitlines().count('READER_INTEGRATION_PASS checks=50'), 1)
+            self.assertEqual(contract, dict(observed_child_summary=marks['child_summary'],
+                child_report=marks['child_report'], marker_lines=marks['marker_lines']))
+            self.assertIs(actual_report, report)
+            return copy.deepcopy(marks)
+        def old_markers(*args):
+            self.fail('tail used the obsolete 47-check reader validator')
+        def execute(*args):
+            commands.append(args); self.fail('tail validation launched a command')
+        namespace = dict(cfg=cfg, group_binding=proof, expect=expectation, private=Path(proof['cwd']),
+            focus_cases=cases, read=objects.__getitem__, auth=auth,
+            bound_focus_plan=qualification.bound_focus_plan,
+            validate_preparation_plan=qualification.validate_preparation_plan,
+            w=dict(ANSI=re.compile(r'\x1b\[[0-9;]*m'), STATUS=re.compile(r'^(ok) (.+)$', re.M),
+                   classify=lambda so, se, standalone: native),
+            inv=dict(validate_grouped=lambda helper, expected, so, se: grouped),
+            markers=markers, ev=dict(markers=old_markers), ds=object(),
+            dynamic=dict(validate=lambda state, **kwargs: dynamic_calls.append((state, kwargs))),
+            result={}, save=lambda: None, execute=execute)
+        source = ast.parse(Path(qualification.__file__).read_text())
+        branches = [node.body for node in ast.walk(source) if isinstance(node, ast.If)
+                    and ast.unparse(node.test) == "cfg['execution_stage'] == 'tail'"]
+        self.assertEqual(len(branches), 1)
+        code = compile(ast.Module(body=branches[0], type_ignores=[]), str(qualification.__file__), 'exec')
+        return dict(namespace=namespace, code=code, objects=objects, marker_calls=marker_calls,
+                    dynamic_calls=dynamic_calls, commands=commands, source=source, marks=marks)
+
+    def add_failed_bundle(self, value, returncode=1):
+        prior = value['objects']['result']
+        row = copy.deepcopy(prior['phases'][-1]); row['name'] = 'bundle'
+        row['command']['returncode'] = returncode
+        prior['phases'].append(row)
+        prior.update(passed=False, status='failed', error="AssertionError('bundle contract failed')")
+        return row
+
+    def test_current_partitioned_tail_uses_the_same_reader_checker_as_full(self):
+        import ast
+        # A terminal command can fail itself or return zero before its required
+        # bundle marker fails. Neither grants successful bundle credit.
+        for returncode in (None, 1, 0):
+            with self.subTest(trailing_bundle_returncode=returncode):
+                value = self.fixture(); namespace = value['namespace']
+                failed = self.add_failed_bundle(value, returncode) if returncode is not None else None
+                prior_before = copy.deepcopy(value['objects']['result'])
+                exec(value['code'], namespace)
+                result = namespace['result']
+                self.assertTrue(result['full_native_pass'] and result['bundle_pipeline_pass'])
+                self.assertFalse(result['focused_current_execution'] or result['full_native_current_execution'])
+                self.assertFalse(result.get('bundle_pass', False))
+                self.assertEqual(result['focused_inherited_count'], 7)
+                self.assertEqual(result['reader_markers'], value['marks'])
+                self.assertEqual(value['objects']['result'], prior_before)
+                if failed is None:
+                    self.assertNotIn('inherited_failed_bundle', result)
+                else:
+                    self.assertEqual(result['inherited_failed_bundle'], dict(phase=failed,
+                        status='failed', error=prior_before['error'], passed=False, current_execution=False))
+                self.assertEqual(len(value['marker_calls']), 1)
+                self.assertEqual(len(value['dynamic_calls']), 1)
+                self.assertEqual(value['commands'], [])
+                assignments = [node for node in ast.walk(value['source']) if isinstance(node, ast.Assign)
+                               and any(ast.unparse(target) == "result['reader_markers']" for target in node.targets)]
+                self.assertEqual(len(assignments), 1)
+                text, contract, report = value['marker_calls'][0]
+                namespace.update(text=text, contract=contract, report=report, result={})
+                exec(compile(ast.Module(body=assignments, type_ignores=[]), '<actual full reader call>', 'exec'), namespace)
+                self.assertEqual(namespace['result']['reader_markers'], result['reader_markers'])
+                self.assertEqual(value['marker_calls'][0], value['marker_calls'][1])
+
+    def test_current_tail_rejects_missing_extra_and_reordered_phases(self):
+        for defect in ('metadata', 'preparation', 'discovery', 'bundle-pipeline', 'extra',
+                       'prepare-order', 'discovery-order', 'legacy-single-encoder',
+                       'trailing-wrong-phase', 'trailing-duplicate', 'trailing-running',
+                       'trailing-unknown-status', 'trailing-missing-exit', 'trailing-passed',
+                       'trailing-no-error', 'trailing-mutated-output'):
+            value = self.fixture(); phases = value['objects']['result']['phases']
+            if defect == 'metadata': del phases[0]
+            elif defect == 'preparation': del phases[3]
+            elif defect == 'discovery': del phases[9]
+            elif defect == 'bundle-pipeline': phases.pop()
+            elif defect == 'extra': phases.insert(2, copy.deepcopy(phases[1]))
+            elif defect == 'prepare-order': phases[1], phases[2] = phases[2], phases[1]
+            elif defect == 'discovery-order': phases[8], phases[9] = phases[9], phases[8]
+            elif defect == 'legacy-single-encoder':
+                phases[:] = [dict(phases[0], name='focused-prepare-encoder'), *phases[-3:]]
+            else:
+                failed = self.add_failed_bundle(value)
+                if defect == 'trailing-wrong-phase': failed['name'] = 'cli-smoke'
+                elif defect == 'trailing-duplicate': phases.append(copy.deepcopy(failed))
+                elif defect == 'trailing-running': failed['command']['status'] = 'running'
+                elif defect == 'trailing-unknown-status': failed['command']['status'] = 'unknown'
+                elif defect == 'trailing-missing-exit': failed['command']['returncode'] = None
+                elif defect == 'trailing-passed': value['objects']['result']['passed'] = True
+                elif defect == 'trailing-no-error': value['objects']['result']['error'] = ''
+                else: failed['stderr'] = dict(failed['stderr'], sha256='different')
+            with self.subTest(defect=defect), self.assertRaises(AssertionError):
+                exec(value['code'], value['namespace'])
+            self.assertEqual(value['commands'], [])
+            self.assertEqual(value['marker_calls'], [])
+            self.assertEqual(value['dynamic_calls'], [])
+
+    def test_current_tail_preserves_plan_source_count_cleanup_and_reader_guards(self):
+        for defect in ('prior-stage', 'source', 'reader-count', 'metadata-count', 'discovery-map',
+                       'compiled-inventory', 'cleanup', 'failed-command', 'full-count', 'grouped-inventory',
+                       'required-name', 'binary-bytes', 'reader-receipt', 'reader-log'):
+            value = self.fixture(); namespace = value['namespace']; objects = value['objects']
+            if defect == 'prior-stage': objects['configuration']['execution_stage'] = 'tail'
+            elif defect == 'source': objects['configuration']['private_source_binding'] = {'sha256': 'other'}
+            elif defect == 'reader-count': objects['configuration']['reader_expected_checks'] = 47
+            elif defect == 'metadata-count': objects['configuration']['metadata_python_expected'] = 7
+            elif defect == 'discovery-map': del namespace['group_binding']['prepared_discovery_filters']['encoder_document']
+            elif defect == 'compiled-inventory': namespace['group_binding']['prepared_expected_occurrences']['encoder_document'] *= 2
+            elif defect == 'cleanup': objects['closure']['cleanup_proven'] = False
+            elif defect == 'failed-command': objects['result']['phases'][3]['command']['returncode'] = 1
+            elif defect == 'full-count': namespace['w']['classify'] = lambda *args, **kwargs: dict(passed=True, status_count=6)
+            elif defect == 'grouped-inventory': namespace['inv']['validate_grouped'] = lambda *args: dict(passed=False)
+            elif defect == 'required-name': namespace['expect']['required_test_counts'] = {'other': 1}
+            elif defect == 'binary-bytes': Path(objects['result']['installed']['bin/wikidict']['path']).write_bytes(b'changed')
+            elif defect == 'reader-receipt':
+                objects['result']['reader_markers']['reader_checks'] = 47
+                objects['closure']['reader_markers']['reader_checks'] = 47
+            else:
+                path = Path(objects['result']['phases'][0]['stdout']['path'])
+                path.write_text(path.read_text().replace('checks=50', 'checks=47'))
+                descriptor = FakeExecution.ref(path)
+                for row in objects['result']['phases'] + objects['result']['focused_tests']:
+                    row['stdout'] = descriptor
+            with self.subTest(defect=defect), self.assertRaises(AssertionError):
+                exec(value['code'], namespace)
+            self.assertEqual(value['commands'], [])
+            self.assertEqual(value['dynamic_calls'], [])
+
+
 if __name__ == '__main__':
     unittest.main()

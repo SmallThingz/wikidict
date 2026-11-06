@@ -377,11 +377,21 @@ if __name__ == '__main__':
           assert released['closure']==reuse['closure'] and released['cleanup_proven'] and released['source_guard'] and released['locks_free']
           assert closed['result']==reuse['result'] and closed['configuration']==reuse['configuration'] and closed['source_guard'] and closed['cleanup_proven'] and closed['locks_free']
           assert closed['full_native_pass'] and closed['bundle_pipeline_pass'] and closed['full_actual_passed_tests']==cfg['full_native_expected'] and closed['required_test_occurrences']==sum(expect['required_test_counts'].values())
-          for key in ('private_manifest','private_source_binding','retained_source','retained_cache','compiler','runtime_python','python_bin','canonical_runtime_inputs','runtime_helpers','dynamic_helper','dynamic_state','helper','expectation','focused_groups','groups','focused_expected','full_native_expected','groups_expected','bundle_expected_checks','metadata_python_reuse','install_root'):
+          for key in ('private_manifest','private_source_binding','retained_source','retained_cache','compiler','runtime_python','python_bin','canonical_runtime_inputs','runtime_helpers','dynamic_helper','dynamic_state','helper','expectation','focused_groups','groups','focused_expected','focused_distinct_names','saved_expected','full_native_expected','groups_expected','reader_expected_checks','bundle_expected_checks','metadata_python_reuse','metadata_python_expected','install_root'):
            assert cfg[key]==prior_cfg[key],key
+          prior_ordered,prior_cases=bound_focus_plan(prior_cfg,group_binding,private)
+          prepared_names,_,prepare_discovery=validate_preparation_plan(prior_cfg,group_binding,expect,prior_ordered,prior_cases)
+          expected_phases=['reviewed-language-aliases']+['focused-prepare-'+group['id']for group in prior_ordered]+['filtered-discovery-'+prepared+'-'+str(number)for prepared in prepared_names for number,_ in enumerate(prepare_discovery[prepared])]+['cli-ffi-install','full-native-suite','bundle-pipeline']
           assert prior['full_native_pass'] and prior['bundle_pipeline_pass'] and prior['cli_ffi_install_pass'] and not prior['bundle_pass']
-          assert [p['name']for p in prior['phases']]==['focused-prepare-encoder','cli-ffi-install','full-native-suite','bundle-pipeline']
-          for p in prior['phases']:
+          phase_names=[p['name']for p in prior['phases']]
+          assert phase_names in (expected_phases,expected_phases+['bundle'])
+          if phase_names==expected_phases+['bundle']:
+           failed_bundle=prior['phases'][-1]
+           assert prior['status']=='failed' and prior['passed'] is False and isinstance(prior['error'],str) and prior['error']
+           assert failed_bundle['command']['status']=='exited' and type(failed_bundle['command']['returncode'])is int
+           auth(failed_bundle['stdout']);auth(failed_bundle['stderr'])
+           result['inherited_failed_bundle']=dict(phase=failed_bundle,status=prior['status'],error=prior['error'],passed=False,current_execution=False)
+          for p in prior['phases'][:len(expected_phases)]:
            assert p['command']['status']=='exited' and p['command']['returncode']==0
            auth(p['stdout']);auth(p['stderr'])
           selected=[case[2]for case in focus_cases]
@@ -396,7 +406,7 @@ if __name__ == '__main__':
           actual={name:sum(n.endswith('.test.'+name)for n in names)for name in expect['required_test_counts']};assert actual==expect['required_test_counts']
           assert prior['reader_markers']==closed['reader_markers'] and prior['installed']==closed['installed']
           marks=prior['reader_markers'];report=read(marks['child_report']);contract=dict(observed_child_summary=marks['child_summary'],child_report=marks['child_report'],marker_lines=marks['marker_lines'])
-          assert ev['markers'](w['ANSI'].sub('',so+'\n'+se),contract,report)==marks
+          assert markers(w['ANSI'].sub('',so+'\n'+se),contract,report)==marks
           for installed in prior['installed'].values():auth(installed)
           cli=prior['installed']['bin/wikidict'];dynamic['validate'](ds,binary=cli['path'])
           result.update(execution_stage='tail',selected_current_count=0,focused_current_execution=False,full_native_current_execution=False,bundle_pipeline_current_execution=False,inherited_qualification=reuse,focused_qualified=True,focused_inherited_count=len(selected),native_inventory=native,grouped_inventory=grouped,required_test_counts=actual,reader_markers=prior['reader_markers'],metadata_python=prior['metadata_python'],installed=prior['installed'],cli_ffi_install_pass=True,full_native_pass=True,bundle_pipeline_pass=True)
