@@ -16992,3 +16992,235 @@ test "absent conversion variants do not admit malformed present profiles or wron
     try cleared.attachLanguageConversion(raw);
     try std.testing.expect(cleared.language_conversion == null);
 }
+
+test "normal Writer retained SR admiral compiles linked conversion scopes with complete body and codec" {
+    const F = struct {
+        const raw = @embedFile("testdata/sr-admiral/raw.wikitext");
+        const source = @embedFile("testdata/sr-admiral/expanded.wikitext");
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        const Scan = struct {
+            visible: std.ArrayList(u8) = .empty,
+            targets: std.ArrayList(u8) = .empty,
+            tables: usize = 0,
+            definitions: usize = 0,
+            bold_headword: bool = false,
+            superscript_actions: usize = 0,
+            translation_superscripts: [11]usize = @splat(0),
+            reference_superscripts: [2]usize = @splat(0),
+            declension: bool = false,
+            blue: bool = false,
+            pale_cells: usize = 0,
+            references: usize = 0,
+            speaker: bool = false,
+            audio: bool = false,
+            fn spans(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Span) !void {
+                for (values) |span| {
+                    try self.visible.appendSlice(a, span.text);
+                    try self.visible.appendSlice(a, span.trail);
+                    if (span.target.len != 0) { try self.targets.appendSlice(a, span.target); try self.targets.append(a, '\n'); }
+                    if (span.bold and std.mem.eql(u8, span.text, "адмирал")) self.bold_headword = true;
+                    if (span.superscript and span.target.len != 0) {
+                        self.superscript_actions += 1;
+                        // The source has eleven translation labels and two Cite
+                        // markers. Count and identify both roles independently.
+                        if (span.role == .reference) {
+                            try std.testing.expect(span.kind == .link);
+                            var matched = false;
+                            for ([_][]const u8{ "[1]", "[2]" }, [_][]const u8{ "#reference-1", "#reference-2" }, 0..) |label, target, index| {
+                                if (!std.mem.eql(u8, span.text, label)) continue;
+                                try std.testing.expectEqualStrings(target, span.target);
+                                self.reference_superscripts[index] += 1;
+                                matched = true;
+                            }
+                            try std.testing.expect(matched);
+                        } else {
+                            try std.testing.expect(span.kind == .external_link);
+                            var matched = false;
+                            // These exact destinations follow the retained
+                            // interwiki rows and ordinary UTF-8 URL escaping.
+                            for ([_][]const u8{ "en", "de", "fr", "hr", "nl", "ru", "eo", "pt", "bs", "lt", "it" }, [_][]const u8{
+                                "https://en.wiktionary.org/wiki/admiral",
+                                "https://de.wiktionary.org/wiki/Admiral",
+                                "https://fr.wiktionary.org/wiki/amiral",
+                                "https://hr.wiktionary.org/wiki/admiral",
+                                "https://nl.wiktionary.org/wiki/admiraal",
+                                "https://ru.wiktionary.org/wiki/%D0%B0%D0%B4%D0%BC%D0%B8%D1%80%D0%B0%D0%BB",
+                                "https://eo.wiktionary.org/wiki/admiralo",
+                                "https://pt.wiktionary.org/wiki/almirante",
+                                "https://bs.wiktionary.org/wiki/admiral",
+                                "https://lt.wiktionary.org/wiki/admirolas",
+                                "https://it.wiktionary.org/wiki/ammiraglio",
+                            }, 0..) |label, target, index| {
+                                if (!std.mem.eql(u8, span.text, label)) continue;
+                                try std.testing.expectEqualStrings(target, span.target);
+                                self.translation_superscripts[index] += 1;
+                                matched = true;
+                            }
+                            try std.testing.expect(matched);
+                        }
+                    }
+                    if (span.foreground) |color| if (std.mem.eql(u8, color, "#0000c0")) { self.blue = true; };
+                    try std.testing.expect(std.mem.indexOf(u8, span.text, "-{") == null);
+                    try std.testing.expect(std.mem.indexOf(u8, span.text, "}-") == null);
+                }
+            }
+            fn table(self: *@This(), a: std.mem.Allocator, value: encoder.presentation_types.Table) anyerror!void {
+                self.tables += 1;
+                try self.spans(a, value.caption);
+                if (value.rows.len == 8) {
+                    var cells: usize = 0;
+                    for (value.rows) |row| cells += row.cells.len;
+                    if (cells == 24) self.declension = true;
+                }
+                for (value.rows) |row| for (row.cells) |cell| {
+                    if (cell.background) |color| if (std.mem.eql(u8, color, "#ffffe0")) { self.pale_cells += 1; };
+                    if (cell.blocks) |cell_blocks| {
+                        try self.blocks(a, cell_blocks);
+                    } else {
+                        try self.spans(a, cell.spans);
+                        if (cell.nested_table) |nested| try self.table(a, nested);
+                    }
+                };
+            }
+            fn blocks(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Block) anyerror!void {
+                for (values) |block| {
+                    if (block.kind == .definition) self.definitions += 1;
+                    try self.spans(a, block.spans);
+                    if (block.table) |value| try self.table(a, value);
+                }
+            }
+            fn entry(self: *@This(), a: std.mem.Allocator, value: encoder.presentation_types.Entry) !void {
+                try self.spans(a, value.display_title);
+                try self.spans(a, value.preamble_spans);
+                self.references += value.references.len;
+                for (value.media) |media| {
+                    if (std.mem.eql(u8, media.file, "Loudspeaker.svg")) self.speaker = media.kind == .image;
+                    if (std.mem.eql(u8, media.file, "Sr-admiral.ogg")) self.audio = media.kind == .audio;
+                }
+                for (value.sections) |section| {
+                    try self.visible.appendSlice(a, section.title);
+                    try self.visible.append(a, '\n');
+                    try self.blocks(a, section.blocks);
+                }
+                for (value.references) |reference| {
+                    if (reference.blocks) |reference_blocks| try self.blocks(a, reference_blocks) else try self.spans(a, reference.spans);
+                }
+            }
+        };
+    };
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var checkpoint: []const u8 = "retained bytes";
+    errdefer std.debug.print("SR admiral checkpoint={s}\n", .{checkpoint});
+    try F.hash(F.raw, "02703d5d6c8976e1b7e3cfd66568bb2071fc0d3179c7d39a1245e7061dd28839");
+    try F.hash(F.source, "50eeb19abbaae39c643b901a917ee9a88fd9c962b8b56f26ef34db24e2009816");
+    // Core79b81 parses links/formatting before conversion; a plain raw rule
+    // keeps its complete children. Transparent spans retain independent inline
+    // emission boundaries without supplying style, actions or owner authority.
+    var reference: []const u8 = F.source;
+    for ([_][]const u8{
+        "-{''امير الرحل (амир ал-рахл)''}-",
+        "-{[http://www.rastko.org.yu/rastko-bo/casopisi/boka/23/dmartinovic.html www.rastko.org.yu]}-",
+        "-{ [[admiral]] [[:en:admiral|☞<sup>en</sup>]] }-",
+        "-{ [[Admiral]] [[:de:Admiral|☞<sup>de</sup>]] }-",
+        "-{ [[amiral]] [[:fr:amiral|☞<sup>fr</sup>]] }-",
+        "-{ [[admiral]] [[:hr:admiral|☞<sup>hr</sup>]] }-",
+        "-{ [[admiraal]] [[:nl:admiraal|☞<sup>nl</sup>]] }-",
+        "-{ [[адмирал]] [[:ru:адмирал|☞<sup>ru</sup>]] }-",
+        "-{ [[admiralo]] [[:eo:admiralo|☞<sup>eo</sup>]] }-",
+        "-{ [[almirante]] [[:pt:almirante|☞<sup>pt</sup>]] }-",
+        "-{ [[admiral]] [[:bs:admiral|☞<sup>bs</sup>]] }-",
+        "-{ [[admirolas]] [[:lt:admirolas|☞<sup>lt</sup>]] }-",
+        "-{ [[ammiraglio]] [[:it:ammiraglio|☞<sup>it</sup>]] }-",
+    }) |wrapper| {
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, reference, wrapper));
+        const replacement = try std.fmt.allocPrint(a, "<span>{s}</span>", .{wrapper[2 .. wrapper.len - 2]});
+        reference = try std.mem.replaceOwned(u8, a, reference, wrapper, replacement);
+    }
+    checkpoint = "captured profile and ordinary metadata APIs";
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/sr-admiral/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/sr-admiral/interwiki-map.tsv"));
+    const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try tmp.dir.writeFile(io, .{ .sub_path = "namespace-siteinfo.raw.json", .data = @embedFile("testdata/sr-admiral/namespace-siteinfo.raw.json") });
+    const site = (try loadSiteMainPage(io, a, metadata_root, &ns)) orelse return error.TestUnexpectedResult;
+    defer a.free(site.title);
+    try std.testing.expectEqualStrings("srwiktionary", ns.wiki);
+    const variants = ns.language_conversion orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3), variants.len);
+    try std.testing.expectEqualStrings("sr", variants[0]);
+    const behavior_source = @embedFile("testdata/sr-admiral/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var behavior_sha: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_sha, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/sr-admiral/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_sha); defer images.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/sr-admiral/language-registry.tsv"));
+    var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images;
+    // Exact ordinary snapshot authority only, with no fabricated Serbian alias.
+    // Full source-template/module ownership and captured Common.css loading are
+    // separate ordinary captured-page obligations; all inline CSS stays exact.
+    var roots: [2][]const u8 = undefined;
+    var stats: [2]encoder.blob_builder.BuildStats = undefined;
+    var manifests: [2][]const u8 = undefined;
+    for ([_][]const u8{ F.source, reference }, 0..) |source, i| {
+        checkpoint = "complete normal Writer";
+        roots[i] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/sr-admiral-{d}", .{tmp.sub_path, i});
+        var writer = try encoder.blob_builder.Writer.init(io, a, roots[i]); defer writer.deinit();
+        writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "адмирал", source, F.raw, null);
+        stats[i] = try writer.finish(codes);
+        manifests[i] = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[i], encoder.blob_catalog.manifest_filename }), a, .limited(64 * 1024));
+    }
+    try std.testing.expect(stats[0].language_records > 0);
+    try std.testing.expectEqual(stats[1].language_records, stats[0].language_records);
+    var actual_it = try encoder.blob_catalog.Iterator.init(manifests[0]);
+    var expected_it = try encoder.blob_catalog.Iterator.init(manifests[1]);
+    var count: usize = 0; var scan: F.Scan = .{};
+    while (try actual_it.next()) |item| {
+        checkpoint = "all saved fields and both codec streams";
+        const expected_item = (try expected_it.next()) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(expected_item.heading, item.heading);
+        const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], item.heading, "адмирал");
+        const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], expected_item.heading, "адмирал");
+        try std.testing.expectEqualDeep(expected, actual);
+        // Serialize the complete stored Entry, including every semantic and
+        // presentation field, and decode under the same actual owner metadata.
+        const actual_stored: encoder.presentation_types.Stored = .{ .entry = actual };
+        const expected_stored: encoder.presentation_types.Stored = .{ .entry = expected };
+        const encoded = try encoder.presentation_codec.encodeAlloc(a, actual_stored);
+        try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, expected_stored), encoded);
+        const roundtrip = try encoder.presentation_codec.decodeAlloc(a, encoded, actual.title, actual.kind, .{ .heading = actual.language orelse "Unclassified", .code = actual.language_code });
+        try std.testing.expectEqualDeep(actual_stored, roundtrip);
+        try scan.entry(a, actual); count += 1;
+    }
+    try std.testing.expect(try expected_it.next() == null);
+    try std.testing.expectEqual(stats[0].language_records, count);
+    checkpoint = "independent complete body and actions";
+    try std.testing.expect(scan.declension and scan.bold_headword and scan.blue);
+    try std.testing.expect(scan.tables >= 2 and scan.pale_cells >= 2);
+    try std.testing.expectEqual(@as(usize, 13), scan.superscript_actions);
+    var translation_count: usize = 0;
+    for (scan.translation_superscripts) |occurrences| {
+        try std.testing.expectEqual(@as(usize, 1), occurrences);
+        translation_count += occurrences;
+    }
+    try std.testing.expectEqual(@as(usize, 11), translation_count);
+    for (scan.reference_superscripts) |occurrences| try std.testing.expectEqual(@as(usize, 1), occurrences);
+    try std.testing.expectEqual(@as(usize, 2), scan.references);
+    try std.testing.expect(scan.speaker and scan.audio);
+    for ([_][]const u8{ "адмирал", "Номинатив", "адмиралима", "Слогови:", "ад·ми·рал", "Изговор:", "Значења:", "Веома високи чин у војсци (морнарица).", "Синоними:", "Порекло:", "امير الرحل (амир ал-рахл)", "Командант флоте", "грофу Марку Војновићу", "Асоцијације:", "Преводи", "Референце", "Речник синонима", "Адмирали и генерали Војновићи у руској војсци" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, text) != null);
+    for ([_][]const u8{ "admiral", "Admiral", "amiral", "admiraal", "admiralo", "almirante", "admirolas", "ammiraglio", "адмиралитет", "http://www.rastko.org.yu/rastko-bo/casopisi/boka/23/dmartinovic.html" }) |target| {
+        var found = false;
+        var targets = std.mem.splitScalar(u8, scan.targets.items, '\n');
+        while (targets.next()) |actual| if (std.mem.eql(u8, actual, target)) { found = true; };
+        try std.testing.expect(found);
+    }
+    const actual_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[0], "fallback-pages.jsonl" }), a, .limited(64 * 1024));
+    const expected_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[1], "fallback-pages.jsonl" }), a, .limited(64 * 1024));
+    try std.testing.expectEqualStrings(expected_report, actual_report);
+}

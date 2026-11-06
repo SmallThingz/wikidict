@@ -9692,12 +9692,66 @@ pub const Renderer = struct {
         if (!found) return null;
         return try self.plainWithMagicLinks(plain_text[emitted..], style, tail);
     }
+    // Link syntax has already become complete anchors when MediaWiki converts
+    // manual raw bodies. Prove only complete ordinary links here, keeping their
+    // target punctuation separate from the conversion grammar in visible text.
+    fn manualConversionLinkedScope(self: *Renderer, body: []const u8, allow_links: bool) bool {
+        var stack: [max_depth][]const u8 = undefined;
+        var count: usize = 0;
+        var scan: usize = 0;
+        while (scan < body.len) {
+            const tail = body[scan..];
+            if (tail[0] == '[') {
+                if (!allow_links) return false;
+                var links: ir.InlineIterator = .{ .input = body, .cursor = scan, .renderer_boundaries = true, .link_trail = self.context.link_trail };
+                const link_node = links.next() orelse return false;
+                const internal = starts(tail, "[[");
+                if (link_node.kind != (if (internal) ir.InlineKind.link else ir.InlineKind.external_link) or
+                    links.cursor <= scan or link_node.target.len == 0 or link_node.text.len == 0 or
+                    link_node.link_empty_label or link_node.link_label_restored_close or
+                    std.mem.indexOfAny(u8, link_node.target, "[]{}|;<>\r\n") != null or
+                    std.mem.indexOf(u8, link_node.target, "=>") != null or
+                    std.mem.indexOf(u8, link_node.target, "=&gt;") != null) return false;
+                // Media/category transclusions are not ordinary link scopes.
+                if (internal) if (self.namespaceOfTarget(link_node.target)) |ns| {
+                    if (ns == 6 or ns == 14) return false;
+                };
+                if (!self.manualConversionLinkedScope(link_node.text, false)) return false;
+                scan = links.cursor;
+                continue;
+            }
+            if (tail[0] == '<') {
+                const tag = syntax.tagAt(body, scan) orelse return false;
+                if (!(tag.is("b") or tag.is("i") or tag.is("strong") or tag.is("em") or tag.is("span") or tag.is("sup")) or tag.self_closing or
+                    std.mem.indexOfAny(u8, body[scan..tag.end], "[]{}|:") != null) return false;
+                if (tag.closing) {
+                    if (count == 0 or !std.ascii.eqlIgnoreCase(stack[count - 1], tag.name)) return false;
+                    count -= 1;
+                } else {
+                    if (count == stack.len) return false;
+                    stack[count] = tag.name;
+                    count += 1;
+                }
+                scan = tag.end;
+                continue;
+            }
+            if (std.mem.indexOfScalar(u8, "[]{}|:\r\n", tail[0]) != null or starts(tail, "=>") or starts(tail, "=&gt;")) return false;
+            scan += 1;
+        }
+        return count == 0;
+    }
+
     const ManualConversion = struct { body: []const u8, end: usize };
     fn manualConversion(self: *Renderer, input: []const u8, at: usize) Error!ManualConversion {
         const variants = (self.context.namespace_catalog orelse return error.UncompiledPresentation).language_conversion orelse return error.UncompiledPresentation;
         const close = std.mem.indexOfPos(u8, input, at + 2, "}-") orelse return error.UncompiledPresentation;
         var body = input[at + 2 .. close];
-        if (std.mem.indexOf(u8, body, "-{") != null or std.mem.indexOfAny(u8, body, "\r\n{}[]") != null) return error.UncompiledPresentation;
+        if (std.mem.indexOf(u8, body, "-{") != null or std.mem.indexOfAny(u8, body, "\r\n{}") != null) return error.UncompiledPresentation;
+        if (std.mem.indexOfScalar(u8, body, '[') != null) {
+            if (!self.manualConversionLinkedScope(body, true)) return error.UncompiledPresentation;
+            return .{ .body = body, .end = close + 2 };
+        }
+        if (std.mem.indexOfScalar(u8, body, ']') != null) return error.UncompiledPresentation;
         if (std.mem.indexOfScalar(u8, body, '|')) |pipe| {
             // An empty variant-only filter emits no text for every preferred
             // variant/fallback. Rule flags and nonempty alternatives are not
@@ -43466,6 +43520,7 @@ test "authenticated manual raw conversion preserves inline body actions formatti
     var behavior = try ManualConversionTest.behavior(a, &ns); defer behavior.deinit();
     for ([_]struct { source: []const u8, reference: []const u8 }{
         .{ .source = "before -{<strong class='selflink'>magal</strong>}- after", .reference = "before <strong class='selflink'>magal</strong> after" },
+        .{ .source = "-{[[Target|label]]}-", .reference = "[[Target|label]]" },
         .{ .source = "[[Target|-{&#91;a&#93;}-]] and -{<i>body</i>}- [https://example.test action]", .reference = "[[Target|&#91;a&#93;]] and <i>body</i> [https://example.test action]" },
         .{ .source = "-{zh;zh-hans;zh-hant|}-&#32;<span class='citation'>kept</span>", .reference = "&#32;<span class='citation'>kept</span>" },
         // Attribute-free span supplies an ordinary reference scope boundary;
@@ -43510,7 +43565,7 @@ test "manual conversion rejects unresolved rules and retains protected source do
     var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
     ns.language_conversion = &.{ "zh", "zh-hans", "zh-hant" };
     var behavior = try ManualConversionTest.behavior(a, &ns); defer behavior.deinit();
-    for ([_][]const u8{ "-{zh-hans:one;zh-hant:two}-", "-{H|hidden}-", "-{A|from=>to}-", "-{R|raw}-", "-{unknown|}-", "-{zh|nonempty}-", "-{outer -{inner}-}-", "-{unfinished", "-{<i>cross}-after</i>", "-{[[Target|label]]}-", "-{a\n# item}-" }) |raw| {
+    for ([_][]const u8{ "-{zh-hans:one;zh-hant:two}-", "-{H|hidden}-", "-{A|from=>to}-", "-{R|raw}-", "-{unknown|}-", "-{zh|nonempty}-", "-{outer -{inner}-}-", "-{unfinished", "-{<i>cross}-after</i>", "-{[[Target|label]}-", "-{[[Outer|[[Inner]]]]}-", "-{a\n# item}-" }) |raw| {
         var renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
         try std.testing.expectError(error.UncompiledPresentation, renderer.parseSpans(raw, .{}));
     }
@@ -43938,4 +43993,56 @@ test "category-prefixed nonleading table opener retains source literal actions a
     const blocks = try table.renderBody("{| class=wikitable\n| [[Target|cell]]\n|}");
     try std.testing.expectEqual(@as(usize, 1), blocks.len);
     try std.testing.expect(blocks[0].kind == .table);
+}
+
+test "manual raw conversion retains complete link targets labels superscripts references and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    ns.language_conversion = &.{ "sr", "sr-ec", "sr-el" };
+    var behavior = try ManualConversionTest.behavior(a, &ns); defer behavior.deinit();
+    for ([_]struct { source: []const u8, reference: []const u8 }{
+        .{ .source = "-{[[Target|label]]}-", .reference = "<span>[[Target|label]]</span>" },
+        .{ .source = "before -{ [[admiral]] [[:en:admiral|☞<sup>en</sup>]] }- after", .reference = "before <span> [[admiral]] [[:en:admiral|☞<sup>en</sup>]] </span> after" },
+        .{ .source = "''before -{[[Target|label]]}- after''", .reference = "''before <span>[[Target|label]]</span> after''" },
+        .{ .source = "-{[https://example.test/path preserved label]}-", .reference = "<span>[https://example.test/path preserved label]</span>" },
+        .{ .source = "body<ref>citation -{[http://example.test/path www.example.test]}-</ref>\n<references />", .reference = "body<ref>citation <span>[http://example.test/path www.example.test]</span></ref>\n<references />" },
+        .{ .source = "{|\n| -{ [[admiral]] [[:en:admiral|☞<sup>en</sup>]] }-\n|}\n", .reference = "{|\n| <span> [[admiral]] [[:en:admiral|☞<sup>en</sup>]] </span>\n|}\n" },
+    }) |row| {
+        var actual_renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+        var expected_renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+        const actual = try FormattingScopeTest.encode(a, &actual_renderer, try actual_renderer.renderBody(row.source));
+        const expected = try FormattingScopeTest.encode(a, &expected_renderer, try expected_renderer.renderBody(row.reference));
+        try std.testing.expectEqualDeep(expected, actual);
+        const codec = @import("blob_encoder").presentation_codec;
+        const bytes = try codec.encodeAlloc(a, actual);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), bytes);
+        const decoded = try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" });
+        try std.testing.expectEqualDeep(actual, decoded);
+    }
+}
+
+test "manual linked conversion refuses incomplete nested and rule bearing scopes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    ns.language_conversion = &.{ "sr", "sr-ec", "sr-el" };
+    var behavior = try ManualConversionTest.behavior(a, &ns); defer behavior.deinit();
+    for ([_][]const u8{
+        "-{[[Target|label]}-", "-{[https://example.test label}-", "-{[[Outer|[[Inner]]]]}-",
+        "-{[[Target|<sup>label]]}-</sup>", "-{<i>[[Target]]}-after</i>",
+        "-{sr:[[Target]]}-", "-{R|[[Target]]}-", "-{[[Target|sr:label]]}-",
+        "-{[[Target|a|b]]}-", "-{[https://example.test/a;sr:rule label]}-",
+        "-{[[File:Example.svg]]}-", "-{[[Category:Example]]}-", "-{[[Target|]]}-",
+        "-{[[Target]] -{nested}-}-", "-{[[Target]]\n# body}-", "-{[[Target]]<ref>note</ref>}-",
+    }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+        try std.testing.expectError(error.UncompiledPresentation, renderer.parseSpans(source, .{}));
+    }
+    var protected: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+    try std.testing.expectEqualStrings("-{[[Target|label]]}-", try flattened(a, try protected.parseSpans("<nowiki>-{[[Target|label]]}-</nowiki>", .{})));
+    var missing: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns } };
+    try std.testing.expectError(error.UncompiledPresentation, missing.parseSpans("-{[[Target|label]]}-", .{}));
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("-{[[Target|label]]}-"));
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("|}"));
 }

@@ -32,3 +32,5 @@ tools/testdata/cs-homosexual/language-names.tsv -whitespace
 tools/testdata/de-polish-states/common.css -whitespace
 tools/testdata/de-polish-states/page.expanded.wikitext -whitespace
 tools/testdata/de-polish-states/page.raw.wikitext -whitespace
+tools/testdata/sr-admiral/raw.wikitext -whitespace
+tools/testdata/sr-admiral/expanded.wikitext -whitespace
