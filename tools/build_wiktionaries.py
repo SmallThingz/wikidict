@@ -914,10 +914,13 @@ def auxiliary_snapshot_args(snapshots):
             for piece in ('--'+name+'-snapshot',str(path))]
 
 
-# These two files schedule/report the ordinary builder; neither is imported or
-# executed by its production dependency graph. Keep every other source file,
-# including tests, in the conservative production cache identity.
-SHARD_SOURCE_EXCLUSIONS = frozenset(('tools/corpus_controller.py', 'tools/test_corpus_controller.py'))
+# These standalone orchestration/qualification tools are not imported or
+# executed by the ordinary production dependency graph. Keep every other source
+# file, including tests, in the conservative production cache identity.
+SHARD_SOURCE_EXCLUSIONS = frozenset((
+    'tools/corpus_controller.py', 'tools/test_corpus_controller.py',
+    'tools/native_qualification.py', 'tools/test_native_qualification.py',
+))
 
 
 def _source_fingerprints(include_production=False):

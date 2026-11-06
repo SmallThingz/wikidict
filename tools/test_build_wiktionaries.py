@@ -63,6 +63,10 @@ class ShardSourceIdentityTests(PreparedToolsFixture):
             'tools/extraction_cache.py':b'production cache helper',
             'tools/corpus_controller.py':b'controller timing',
             'tools/test_corpus_controller.py':b'controller timing tests',
+            'tools/native_qualification.py':b'standalone native qualification',
+            'tools/test_native_qualification.py':b'qualification controls',
+            'tools/nested/native_qualification.py':b'unreviewed same basename remains included',
+            'tools/nested/test_native_qualification.py':b'unreviewed nested test remains included',
             'tools/nested/corpus_controller.py':b'unreviewed same basename remains included',
             'tools/test_other.py':b'unreviewed test dependency remains included',
         }
@@ -102,6 +106,43 @@ class ShardSourceIdentityTests(PreparedToolsFixture):
                         self.assertEqual((workspace/'state.json').read_bytes(),marker)
                         self.assertEqual((workspace/'state.json').stat().st_ino,inode)
                         for relative,data in retained.items():self.assertEqual((workspace/relative).read_bytes(),data)
+
+    def test_qualification_edits_reuse_workspace_but_keep_audit_and_publication_guards(self):
+        for name in ('tools/native_qualification.py','tools/test_native_qualification.py'):
+            with self.subTest(name=name),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);sources,registry,items=self.fixture(root)
+                tool=root/'zig';tool.write_bytes(b'unchanged compiler executable')
+                staging=root/'staging';staging.mkdir();target=root/'published'
+                with patch.object(b,'PROJECT',root),patch.object(b.shutil,'which',return_value=str(tool)):
+                    initial=b.shard_state(items,registry);workspace=root/'work'
+                    retained=self.seed(workspace,initial)
+                    marker=(workspace/'state.json').read_bytes();inode=(workspace/'state.json').stat().st_ino
+                    retained_inodes={relative:(workspace/relative).stat().st_ino for relative in retained}
+                    identity=b.build_input_identity(items,'zig',{},None,100)
+                    b.persist_build_identity(staging,identity)
+                    original=(staging/b.BUILD_IDENTITY_NAME).read_bytes()
+                    (staging/b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
+                    (root/name).write_bytes(sources[name]+b' changed qualification only')
+                    current=b.shard_state(items,registry)
+                    self.assertNotEqual(initial['source'],current['source'])
+                    self.assertEqual(initial['production_source'],current['production_source'])
+                    current_identity=b.build_input_identity(items,'zig',{},None,100)
+                    self.assertEqual(current_identity,dict(identity,source=current['source']))
+                    with self.assertRaisesRegex(ValueError,'Build inputs or compiler changed'):
+                        b.require_build_identity(identity,current_identity)
+                    with patch.object(b.time,'time',return_value=456):
+                        self.assertEqual(b.prepare_shard_workspace(workspace,current),123)
+                    self.assertEqual((workspace/'state.json').read_bytes(),marker)
+                    self.assertEqual((workspace/'state.json').stat().st_ino,inode)
+                    for relative,data in retained.items():
+                        self.assertEqual((workspace/relative).read_bytes(),data)
+                        self.assertEqual((workspace/relative).stat().st_ino,retained_inodes[relative])
+                    with self.assertRaisesRegex(ValueError,'Compiler source changed'):
+                        b.persist_build_identity(staging,identity)
+                    with self.assertRaisesRegex(ValueError,'Compiler source changed'):
+                        b._publish_verified_staging(staging,target,'testwiktionary','20261001',build_identity=identity)
+                    self.assertEqual((staging/b.BUILD_IDENTITY_NAME).read_bytes(),original)
+                    self.assertFalse(target.exists())
 
     def test_normal_failed_merge_resume_reuses_expander_and_shards_after_controller_edit(self):
         # Exercise the ordinary Python producer/verification/publication route.
@@ -171,7 +212,8 @@ class ShardSourceIdentityTests(PreparedToolsFixture):
 
     def test_producer_abi_other_tests_and_input_changes_invalidate_native_state(self):
         changes=('src/producer.zig','src/lua/runtime/abi.h','tools/extraction_cache.py',
-                 'tools/test_other.py','tools/nested/corpus_controller.py','registry','dump')
+                 'tools/test_other.py','tools/nested/corpus_controller.py',
+                 'tools/nested/native_qualification.py','tools/nested/test_native_qualification.py','registry','dump')
         for changed in changes:
             with self.subTest(changed=changed),tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp);sources,registry,items=self.fixture(root)

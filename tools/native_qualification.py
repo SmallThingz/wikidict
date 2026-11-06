@@ -2,6 +2,50 @@
 """Existing native qualification owner/worker, with authenticated per-run data."""
 
 
+def bound_captured_source_fingerprint(cfg, auth):
+    """Optional captured CLI identity is the authenticated current inventory digest."""
+    if 'captured_source_fingerprint' not in cfg:
+        return None
+    import re
+    fingerprint = cfg['captured_source_fingerprint']
+    assert type(fingerprint) is str and re.fullmatch(r'[0-9a-f]{64}', fingerprint)
+    descriptor = cfg['private_manifest']
+    assert fingerprint == descriptor['sha256']
+    auth(descriptor)
+    return fingerprint
+
+
+def qualification_build_argv(args, cache, native_build_argv, *, family, prefix=None):
+    """One source for every normal build's optional captured-source option."""
+    assert family in ('prepare', 'full', 'install', 'bundle-pipeline', 'bundle')
+    if family in ('prepare', 'full'):
+        argv = list(native_build_argv(args, cache))
+        assert argv[:3] == [str(args.compiler), 'build', 'test'] and argv.count('-j1') == 1
+        argv[argv.index('-j1')] = '-j2'
+        if family == 'prepare':
+            assert prefix is not None
+            assert not any(arg == '--test-filter' or arg.startswith('--test-filter=') for arg in argv)
+            argv[2] = 'prepare-tests'
+            argv += ['--prefix', str(prefix)]
+        else:
+            assert prefix is None
+    else:
+        assert prefix is not None
+        targets = {'install': ['cli', 'ffi'], 'bundle-pipeline': ['test-bundle-pipeline'],
+                   'bundle': ['test-bundle']}[family]
+        argv = [str(args.compiler), 'build'] + targets + ['-j2', '-Doptimize=safe',
+                '-Dtarget=x86_64-native', '-Dcpu=baseline', '--summary', 'all',
+                '--search-prefix', '/usr', '--cache-dir', str(cache / 'local'),
+                '--prefix', str(prefix)]
+    assert not any(arg.startswith('-Dcaptured-source-fingerprint') for arg in argv)
+    fingerprint = getattr(args, 'captured_source_fingerprint', None)
+    if fingerprint is not None:
+        import re
+        assert type(fingerprint) is str and re.fullmatch(r'[0-9a-f]{64}', fingerprint)
+        argv.append('-Dcaptured-source-fingerprint=' + fingerprint)
+    return argv
+
+
 def selected_focus_plan(groups, priority):
     """Order exact existing selectors; preserve their original receipt labels."""
     assert type(groups) is list and groups
@@ -191,6 +235,7 @@ if __name__ == '__main__':
          t=p.read_text();ns=[n for n in ast.parse(t).body if isinstance(n,ast.FunctionDef)and n.name==name];assert len(ns)==1;return ast.get_source_segment(t,ns[0])+'\n'
         start=json.loads((D/'start.json').read_text());cfg=read(start['configuration']);source=read(cfg['source']);expect=read(cfg['expectation']);cache=Path(cfg['retained_cache']['path']);cl=read(start['latest_runtime_boundary']);b=dict(deadline_unix=cfg['deadline_unix'],locks=cfg['ownership_locks'])
         qualification_tool=bound_qualification_tool(start['runtime_inputs']['qualification_tool'],auth,__file__)
+        captured_fingerprint=bound_captured_source_fingerprint(cfg,auth)
         R=bound_repository_root(start['runtime_inputs']['limits_api'],cfg['canonical_runtime_inputs'],auth);E=R/'.tmp/renderer-core-oct28'
         observed_core_provenance=None
         private_binding=read(cfg['private_source_binding']);private_manifest=read(cfg['private_manifest']);private=Path(cfg['retained_source']['path'])
@@ -318,6 +363,7 @@ if __name__ == '__main__':
          t=p.read_text();ns=[n for n in ast.parse(t).body if isinstance(n,ast.FunctionDef)and n.name==name];assert len(ns)==1;return ast.get_source_segment(t,ns[0])+'\n'
         start=json.loads((D/'start.json').read_text());cfg=read(start['configuration']);source=read(cfg['source']);expect=read(cfg['expectation']);cache=Path(cfg['retained_cache']['path']);cl=read(start['latest_runtime_boundary']);b=dict(deadline_unix=cfg['deadline_unix'],locks=cfg['ownership_locks'])
         qualification_tool=bound_qualification_tool(start['runtime_inputs']['qualification_tool'],auth,__file__)
+        captured_fingerprint=bound_captured_source_fingerprint(cfg,auth)
         R=bound_repository_root(start['runtime_inputs']['limits_api'],cfg['canonical_runtime_inputs'],auth);E=R/'.tmp/renderer-core-oct28'
         observed_core_provenance=None
         private_binding=read(cfg['private_source_binding']);private_manifest=read(cfg['private_manifest']);private=Path(cfg['retained_source']['path'])
@@ -355,12 +401,7 @@ if __name__ == '__main__':
          return True
         guard=source_guard
         def prepare_tests_argv(args,cache,prefix,native_build_argv):
-         argv=list(native_build_argv(args,cache))
-         assert argv[:3]==[str(args.compiler),'build','test'] and argv.count('-j1')==1
-         argv[argv.index('-j1')]='-j2'
-         assert not any(arg=='--test-filter'or arg.startswith('--test-filter=')for arg in argv)
-         argv[2]='prepare-tests'
-         return argv+['--prefix',str(prefix)]
+         return qualification_build_argv(args,cache,native_build_argv,family='prepare',prefix=prefix)
         import pathlib,re
         from types import SimpleNamespace
         sys.path.insert(0,str(R/'tools'));import build_resource_limits as limits
@@ -373,7 +414,7 @@ if __name__ == '__main__':
         marker_globals=dict(json=json,re=re,Path=Path);exec(compile(marker_source,'<current-reader-marker-contract>','exec'),marker_globals);markers=marker_globals['markers']
         assert cfg['reader_expected_checks']==50 and cfg['bundle_expected_checks']==182
         cs={};exec(compile(function(auth(start['runtime_inputs']['classifier']),'focused_test_outcome'),'<earned-classifier>','exec'),cs);classify=cs['focused_test_outcome']
-        args=SimpleNamespace(compiler=pathlib.Path(cfg['compiler']['path']))
+        args=SimpleNamespace(compiler=pathlib.Path(cfg['compiler']['path']),captured_source_fingerprint=captured_fingerprint)
         result=dict(passed=False,status='running',compiles=[],focused_tests=[],saved_tests=[],phases=[],full_native_pass=False,bundle_pipeline_pass=False,bundle_pass=False,cli_ffi_install_pass=False,canonical_source=False,source_copies=False,retained_private_source=str(private))
         result['selected_current_count']=cfg['focused_expected'];result['historical_pass_admission']=False
         def save():w['write'](out/'result.json',result)
@@ -384,6 +425,7 @@ if __name__ == '__main__':
          assert cfg['execution_stage'] in ('full','tail','focused-diagnostic')
          if cfg['execution_stage']=='tail':
           reuse=cfg['tail_reuse'];prior_cfg=read(reuse['configuration']);prior=read(reuse['result']);closed=read(reuse['closure']);released=read(reuse['release'])
+          assert bound_captured_source_fingerprint(prior_cfg,auth)==captured_fingerprint
           assert released['closure']==reuse['closure'] and released['cleanup_proven'] and released['source_guard'] and released['locks_free']
           assert closed['result']==reuse['result'] and closed['configuration']==reuse['configuration'] and closed['source_guard'] and closed['cleanup_proven'] and closed['locks_free']
           assert closed['full_native_pass'] and closed['bundle_pipeline_pass'] and closed['full_actual_passed_tests']==cfg['full_native_expected'] and closed['required_test_occurrences']==sum(expect['required_test_counts'].values())
@@ -411,6 +453,11 @@ if __name__ == '__main__':
            assert failed_bundle['command']['status']=='exited' and type(failed_bundle['command']['returncode'])is int
            auth(failed_bundle['stdout']);auth(failed_bundle['stderr'])
            result['inherited_failed_bundle']=dict(phase=failed_bundle,status=prior['status'],error=prior['error'],passed=False,current_execution=False)
+          if captured_fingerprint is not None:
+           for inherited in prior['phases']:
+            if inherited['name'].startswith('focused-prepare-') or inherited['name'] in ('cli-ffi-install','full-native-suite','bundle-pipeline','bundle'):
+             options=[arg for arg in inherited['command']['argv'] if arg.startswith('-Dcaptured-source-fingerprint')]
+             assert options==['-Dcaptured-source-fingerprint='+captured_fingerprint]
           for p in prior['phases'][:len(expected_phases)]:
            assert p['command']['status']=='exited' and p['command']['returncode']==0
            auth(p['stdout']);auth(p['stderr'])
@@ -476,8 +523,7 @@ if __name__ == '__main__':
           result['all_selected_executed']=True;result['focused_evidence_total']=len(result['focused_tests']);result['focused_qualified']=all(row['passed']for row in result['focused_tests']);save();assert result['focused_qualified'],'focused_functional_failure'
           if cfg['execution_stage']!='focused-diagnostic':
            assert not Path(cfg['install_root']).exists()
-           common=[str(args.compiler),'build','-j2','-Doptimize=safe','-Dtarget=x86_64-native','-Dcpu=baseline','--summary','all','--search-prefix','/usr','--cache-dir',str(cache/'local'),'--prefix',str(Path(cfg['install_root']))]
-           execute('cli-ffi-install',common[:2]+['cli','ffi']+common[2:])
+           execute('cli-ffi-install',qualification_build_argv(args,cache,w['native_build_argv'],family='install',prefix=Path(cfg['install_root'])))
            result['cli_ffi_install_pass']=True
            result['installed']={n:ref(Path(cfg['install_root'])/n)for n in ('bin/wikidict','lib/libdictffi.so','include/dict/dict.h')}
            assert private_binding['ABI']==9 and private_binding['wire']=='DPRE'
@@ -486,7 +532,7 @@ if __name__ == '__main__':
            assert 'DICT_ABI_VERSION == 9u && dict_abi_version() == DICT_ABI_VERSION' in (private/'tools/ffi_integration_test.c').read_text()
            cli=result['installed']['bin/wikidict'];auth(cli)
            result['installed_dynamic_identity']=dynamic['validate'](ds,binary=cli['path']);save()
-           full_argv=w['native_build_argv'](args,cache);assert full_argv.count('-j1')==1;full_argv[full_argv.index('-j1')]='-j2'
+           full_argv=qualification_build_argv(args,cache,w['native_build_argv'],family='full')
            so,se=execute('full-native-suite',full_argv);native=w['classify'](so,se,standalone=False);assert native['passed'];result['native_inventory']=native;result['grouped_inventory']=inv['validate_grouped'](w,expect['expected'],so,se)
            for binary in binaries.values():auth(binary)
            text=w['ANSI'].sub('',so+'\n'+se);names=[name for status,name in w['STATUS'].findall(text) if status=='ok'];assert len(names)==cfg['full_native_expected']
@@ -507,10 +553,9 @@ if __name__ == '__main__':
            result['writer_image_border']=dict(payload=ref(payload),normal_cli_json=ref(body),fixture_marker=ref(fixture),reader_source=private_model['files']['tools/reader_integration_test.zig'],ffi_test_source=private_model['files']['tools/ffi_integration_test.c'],normal_reader_checks=50,ffi_child_marker_asserted_inside_native_harness=True,ffi_stdout_retained=False,genuine_writer_fixture=True)
            result['full_native_pass']=True;save()
          if cfg['execution_stage']!='focused-diagnostic':
-          common=[str(args.compiler),'build','-j2','-Doptimize=safe','-Dtarget=x86_64-native','-Dcpu=baseline','--summary','all','--search-prefix','/usr','--cache-dir',str(cache/'local'),'--prefix',str(Path(cfg['install_root']))]
           tail_stages=[('bundle',['test-bundle'],'bundle_pass')] if cfg['execution_stage']=='tail' else [('bundle-pipeline',['test-bundle-pipeline'],'bundle_pipeline_pass'),('bundle',['test-bundle'],'bundle_pass')]
           for label,targets,key in tail_stages:
-           so,se=execute(label,common[:2]+targets+common[2:])
+           so,se=execute(label,qualification_build_argv(args,cache,w['native_build_argv'],family=label,prefix=Path(cfg['install_root'])))
            if label=='bundle':assert len(re.findall(r'BUNDLE_INTEGRATION_PASS checks='+str(cfg['bundle_expected_checks'])+r':',so+'\n'+se))==1
            result[key]=True;save()
           execute('cli-smoke',[cli['path'],'--help']);result['cli_smoke_pass']=True

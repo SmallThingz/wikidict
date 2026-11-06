@@ -440,7 +440,8 @@ class PreparationFailFastTests(unittest.TestCase):
             self.fail('unrelated metadata dependency unexpectedly accessed: ' + repr(value))
         compiler = Path('/fixture/zig')
         with tempfile.TemporaryDirectory() as tmp:
-            namespace = dict(cfg=cfg, group_binding=proof, expect=expectation,
+            namespace = dict(qualification_build_argv=qualification.qualification_build_argv,
+                cfg=cfg, group_binding=proof, expect=expectation,
                 ordered_groups=ordered, focus_cases=cases, Path=Path, re=re,
                 private=Path(proof['cwd']), private_manifest={}, read=read, auth=unexpected_auth,
                 execute=execute, save=lambda: None, result=result, out=Path(tmp),
@@ -748,7 +749,8 @@ class CurrentTailRecoveryTests(unittest.TestCase):
             self.fail('tail used the obsolete 47-check reader validator')
         def execute(*args):
             commands.append(args); self.fail('tail validation launched a command')
-        namespace = dict(cfg=cfg, group_binding=proof, expect=expectation, private=Path(proof['cwd']),
+        namespace = dict(bound_captured_source_fingerprint=qualification.bound_captured_source_fingerprint,
+            captured_fingerprint=None, cfg=cfg, group_binding=proof, expect=expectation, private=Path(proof['cwd']),
             focus_cases=cases, read=objects.__getitem__, auth=auth,
             bound_focus_plan=qualification.bound_focus_plan,
             validate_preparation_plan=qualification.validate_preparation_plan,
@@ -949,7 +951,8 @@ class InterleavedPreparationTests(unittest.TestCase):
         full_boundary = ast.parse("result['fake_full_boundary_reached'] = True").body
         code = compile(ast.Module(body=copy.deepcopy([argv_function] + branch[:finish] + full_boundary),
                                   type_ignores=[]), str(qualification.__file__), 'exec')
-        namespace = dict(cfg=cfg, group_binding=proof, expect=expectation, ordered_groups=ordered,
+        namespace = dict(qualification_build_argv=qualification.qualification_build_argv,
+            cfg=cfg, group_binding=proof, expect=expectation, ordered_groups=ordered,
             focus_cases=cases, private=Path(proof['cwd']), private_manifest={}, out=out, phase=phase,
             Path=Path, re=re, os=os, args=SimpleNamespace(compiler=Path('/fixture/zig')),
             cache=Path('/fixture/cache'), read=read, auth=auth, ref=FakeExecution.ref, execute=execute,
@@ -1160,6 +1163,116 @@ class DiagnosticPreparationPlanTests(unittest.TestCase):
         qualification.validate_preparation_plan(prior_cfg, namespace['group_binding'], namespace['expect'], ordered, cases)
         with self.assertRaises(AssertionError):
             exec(value['code'], namespace)
+        self.assertEqual(value['commands'], [])
+
+
+class CapturedFingerprintTests(unittest.TestCase):
+    def test_inventory_digest_is_authenticated_and_omission_is_exact(self):
+        digest = 'a' * 64
+        descriptor = dict(path='/fixture/current-inventory.json', bytes=123, sha256=digest)
+        seen = []
+        cfg = dict(private_manifest=descriptor)
+        self.assertIsNone(qualification.bound_captured_source_fingerprint(cfg, seen.append))
+        self.assertEqual(seen, [])
+        cfg['captured_source_fingerprint'] = digest
+        self.assertEqual(qualification.bound_captured_source_fingerprint(cfg, seen.append), digest)
+        self.assertEqual(seen, [descriptor])
+        for invalid in (None, True, '', 'A' * 64, 'a' * 63, 'g' * 64, 'b' * 64,
+                        digest + ' -Dother=true'):
+            with self.subTest(invalid=invalid):
+                cfg['captured_source_fingerprint'] = invalid
+                with self.assertRaises(AssertionError):
+                    qualification.bound_captured_source_fingerprint(cfg, seen.append)
+        cfg['captured_source_fingerprint'] = digest
+        def refused(value):
+            raise OSError('changed inventory')
+        with self.assertRaisesRegex(OSError, 'changed inventory'):
+            qualification.bound_captured_source_fingerprint(cfg, refused)
+
+    def test_every_build_family_preserves_old_argv_and_gets_one_bound_option(self):
+        from types import SimpleNamespace
+        compiler, cache, prefix = Path('/fixture/zig'), Path('/fixture/cache'), Path('/fixture/install')
+        def native(args, cache):
+            return [str(args.compiler), 'build', 'test', '-j1', '-Doptimize=safe',
+                    '-Dtarget=x86_64-native', '-Dcpu=baseline', '--search-prefix', '/usr',
+                    '--summary', 'all', '--cache-dir', str(cache / 'local')]
+        args = SimpleNamespace(compiler=compiler)
+        old_full = native(args, cache); old_full[3] = '-j2'
+        old_prepare = old_full.copy(); old_prepare[2] = 'prepare-tests'; old_prepare += ['--prefix', str(prefix)]
+        common = [str(compiler), 'build', '-j2', '-Doptimize=safe', '-Dtarget=x86_64-native',
+                  '-Dcpu=baseline', '--summary', 'all', '--search-prefix', '/usr',
+                  '--cache-dir', str(cache / 'local'), '--prefix', str(prefix)]
+        old = dict(prepare=old_prepare, full=old_full,
+                   install=common[:2] + ['cli', 'ffi'] + common[2:],
+                   **{'bundle-pipeline': common[:2] + ['test-bundle-pipeline'] + common[2:],
+                      'bundle': common[:2] + ['test-bundle'] + common[2:]})
+        for family, expected in old.items():
+            with self.subTest(family=family):
+                options = dict(family=family, prefix=None if family == 'full' else prefix)
+                self.assertEqual(qualification.qualification_build_argv(args, cache, native, **options), expected)
+                args.captured_source_fingerprint = 'a' * 64
+                actual = qualification.qualification_build_argv(args, cache, native, **options)
+                self.assertEqual(actual, expected + ['-Dcaptured-source-fingerprint=' + 'a' * 64])
+                self.assertEqual(sum(value.startswith('-Dcaptured-source-fingerprint=') for value in actual), 1)
+                del args.captured_source_fingerprint
+        with self.assertRaises(AssertionError):
+            qualification.qualification_build_argv(args, cache, native, family='arbitrary', prefix=prefix)
+        with self.assertRaises(AssertionError):
+            qualification.qualification_build_argv(args, cache,
+                lambda args, cache: native(args, cache) + ['-Dcaptured-source-fingerprint=' + 'b' * 64], family='full')
+
+    def test_actual_command_sites_use_common_builder_and_both_roles_bind_before_commands(self):
+        import ast
+        tree = ast.parse(Path(qualification.__file__).read_text())
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id == 'qualification_build_argv']
+        families = [next(keyword.value for keyword in call.keywords if keyword.arg == 'family') for call in calls]
+        self.assertEqual(sorted(value.value for value in families if isinstance(value, ast.Constant)),
+                         ['full', 'install', 'prepare'])
+        self.assertEqual([ast.unparse(value) for value in families if not isinstance(value, ast.Constant)], ['label'])
+        # Bundle labels are the fixed family allowlist; Reader is in the full normal graph.
+        self.assertIn("[('bundle-pipeline',['test-bundle-pipeline'],'bundle_pipeline_pass'),('bundle',['test-bundle'],'bundle_pass')]",
+                      Path(qualification.__file__).read_text())
+        bindings = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == 'captured_fingerprint'
+                            for target in node.targets)]
+        self.assertEqual(len(bindings), 2)
+        self.assertTrue(all(ast.unparse(node.value) == 'bound_captured_source_fingerprint(cfg, auth)'
+                            for node in bindings))
+        self.assertIn('captured_source_fingerprint=captured_fingerprint', Path(qualification.__file__).read_text())
+
+    def test_enabled_tail_requires_option_in_every_inherited_build_receipt(self):
+        helper = CurrentTailRecoveryTests()
+        self.addCleanup(helper.doCleanups)
+        for defect in (None, 'missing', 'different', 'duplicate'):
+            value = helper.fixture()
+            namespace = value['namespace']
+            namespace['captured_fingerprint'] = 'a' * 64
+            namespace['bound_captured_source_fingerprint'] = lambda cfg, auth: 'a' * 64
+            builds = [phase for phase in value['objects']['result']['phases']
+                      if phase['name'].startswith('focused-prepare-') or phase['name'] in
+                      ('cli-ffi-install', 'full-native-suite', 'bundle-pipeline', 'bundle')]
+            for phase in builds:
+                phase['command']['argv'] = ['zig', 'build', '-Dcaptured-source-fingerprint=' + 'a' * 64]
+            if defect == 'missing': builds[-1]['command']['argv'].pop()
+            elif defect == 'different': builds[-1]['command']['argv'][-1] = '-Dcaptured-source-fingerprint=' + 'b' * 64
+            elif defect == 'duplicate': builds[-1]['command']['argv'].append(builds[-1]['command']['argv'][-1])
+            with self.subTest(defect=defect):
+                if defect is None:
+                    exec(value['code'], namespace)
+                    self.assertTrue(namespace['result']['full_native_pass'])
+                else:
+                    with self.assertRaises(AssertionError):
+                        exec(value['code'], namespace)
+                self.assertEqual(value['commands'], [])
+
+    def test_tail_refuses_changed_captured_identity_before_any_command(self):
+        helper = CurrentTailRecoveryTests()
+        self.addCleanup(helper.doCleanups)
+        value = helper.fixture()
+        value['namespace']['captured_fingerprint'] = 'a' * 64
+        with self.assertRaises(AssertionError):
+            exec(value['code'], value['namespace'])
         self.assertEqual(value['commands'], [])
 
 
