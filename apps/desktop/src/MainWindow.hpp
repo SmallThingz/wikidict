@@ -28,7 +28,7 @@ class QGridLayout;
 class QResizeEvent;
 class QTabWidget;
 class QTextBrowser;
-class QTextEdit;
+class QPlainTextEdit;
 class QTimer;
 class QWidget;
 
@@ -43,6 +43,7 @@ private:
     void bindInlineImages();
     quint64 inlineImageGeneration_ = 0;
     quint64 readingComposition_ = 0;
+    bool readingFloatLayoutScheduled_ = false;
     struct Visit {
         QString title;
         QString language;
@@ -137,7 +138,7 @@ private:
     QLabel *meta_ = nullptr;
     QTabWidget *entryTabs_ = nullptr;
     QTextBrowser *reading_ = nullptr;
-    QTextEdit *json_ = nullptr;
+    QPlainTextEdit *json_ = nullptr;
     QTimer *searchTimer_ = nullptr;
     QJsonObject currentEntry_;
     QByteArray currentJson_;

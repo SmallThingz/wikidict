@@ -50,6 +50,7 @@
 #include <QScrollBar>
 #include <QScreen>
 #include <QScopeGuard>
+#include <utility>
 #include <QWindow>
 #include <QSettings>
 #include <QSet>
@@ -68,7 +69,7 @@
 #include <QTextBlock>
 #include <QTextBoundaryFinder>
 #include <QTextDocument>
-#include <QTextEdit>
+#include <QPlainTextEdit>
 #include <QTextFragment>
 #include <QTextOption>
 #include <QTextTable>
@@ -1066,6 +1067,7 @@ void MainWindow::chooseRoot() {
             sampleWords_.clear();
             currentEntry_ = {};
             currentJson_.clear();
+            json_->clear();
             media_->setEntry({});
             visits_.clear();
             visitIndex_ = -1;
@@ -1241,16 +1243,23 @@ void MainWindow::setupUi() {
     reading_->setFrameShape(QFrame::NoFrame);
     reading_->setAccessibleName(QStringLiteral("Dictionary entry"));
     reading_->installEventFilter(this);
+    reading_->viewport()->installEventFilter(this);
     reading_->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(reading_, &QTextBrowser::customContextMenuRequested, this, &MainWindow::showReaderContextMenu);
-    json_ = new QTextEdit(entryTabs_);
+    json_ = new QPlainTextEdit(entryTabs_);
     json_->setReadOnly(true);
-    json_->setLineWrapMode(QTextEdit::NoWrap);
+    json_->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+    json_->setLineWrapMode(QPlainTextEdit::NoWrap);
+    json_->setAccessibleName(QStringLiteral("Entry data"));
     entryTabs_->addTab(reading_, QStringLiteral("Reading"));
     media_ = new MediaPanel(entryTabs_);
     bindInlineImages();
     entryTabs_->addTab(media_, QStringLiteral("Media && speech"));
     entryTabs_->addTab(json_, QStringLiteral("Entry data"));
+    connect(entryTabs_, &QTabWidget::currentChanged, this, [this] {
+        if (entryTabs_->currentWidget() == json_ && json_->document()->isEmpty() && !currentJson_.isEmpty())
+            json_->setPlainText(QString::fromUtf8(currentJson_));
+    });
     right->addWidget(entryTabs_, 1);
 
     splitter->addWidget(sideScroll);
@@ -1644,6 +1653,15 @@ void MainWindow::updateReaderLayout() {
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
+    if (reading_ && watched == reading_->viewport() && event->type() == QEvent::Resize && !readingFloatLayoutScheduled_) {
+        readingFloatLayoutScheduled_ = true;
+        // Run after QTextBrowser applies the viewport width; coalesce resize
+        // events and use the current document, including any intervening entry.
+        QTimer::singleShot(0, this, [this] {
+            readingFloatLayoutScheduled_ = false;
+            SemanticHtml::finishFloatingLayout(reading_->document());
+        });
+    }
     if (watched == learningFocusCue_) {
         if (event->type() == QEvent::FocusIn) {
             // Qt clears the window cue before delivering this activation focus.
@@ -1752,63 +1770,133 @@ void MainWindow::bindInlineImages() {
         QPointer<QTextBrowser> widget(browser);
         QPointer<QTextDocument> document(browser->document());
         QPointer<InlineVectorImages> vectors(new InlineVectorImages(document->documentLayout()));
-        document->setResourceProvider([this, widget, document, vectors](const QUrl &url) -> QVariant {
+        struct PendingImage { QJsonObject image; MediaPanel::InlineImageAsset asset; };
+        struct PendingUpdates {
+            QHash<QUrl, PendingImage> images;
+            quint64 generation = 0;
+            quint64 composition = 0;
+            bool scheduled = false;
+        };
+        // Each document owns one queue. Coalesce only pending updates, never
+        // lifetime-deduplicate a URL: setHtml must reapply cached resources.
+        const auto pending = std::make_shared<PendingUpdates>();
+        document->setResourceProvider([this, widget, document, vectors, pending](const QUrl &url) -> QVariant {
             if (url.scheme() != SemanticHtml::inlineImageScheme || !widget || !document) return {};
             const QJsonObject image = SemanticHtml::inlineImageData(url);
             const quint64 generation = inlineImageGeneration_;
-            QTimer::singleShot(0, document, [this, widget, document, vectors, url, image, generation] {
-                if (!widget || !document || generation != inlineImageGeneration_) return;
-                const auto apply = [this, widget, document, vectors, url, image, generation](const MediaPanel::InlineImageAsset &asset) {
-                    if (!widget || !document || generation != inlineImageGeneration_) return;
-                    const bool ready = asset.state == MediaPanel::InlineImageState::Ready;
-                    QImage pixels = asset.image;
-                    QSize fallbackSize;
-                    if (!ready) {
-                        // No filename fallback: only an explicitly authored alt
-                        // may paint while the passive asset is unavailable.
-                        QTextImageFormat placeholder;
-                        SemanticHtml::imageDimensions(placeholder, image, document);
-                        pixels = QImage(qBound(1, qCeil(placeholder.width()), 256), qBound(1, qCeil(placeholder.height()), 64), QImage::Format_ARGB32_Premultiplied);
-                        pixels.fill(Qt::transparent);
-                        const QString alt = image.value(QStringLiteral("alt")).toString();
-                        if (!alt.isEmpty()) {
-                            // An unavailable image's authored dimensions do not
-                            // bound its semantic text alternative. Keep the full
-                            // alt accessible, with explicit elision only for text
-                            // wider than the current reading viewport.
-                            const QFontMetricsF metrics(document->defaultFont());
-                            const QString visibleAlt = metrics.elidedText(alt, Qt::ElideRight, qMax(32, widget->viewport()->width() - 8));
-                            fallbackSize = QSize(qMax(1, qCeil(metrics.horizontalAdvance(visibleAlt)) + 4), qMax(1, qCeil(metrics.height()) + 4));
-                            pixels = QImage(fallbackSize, QImage::Format_ARGB32_Premultiplied);
-                            pixels.fill(Qt::transparent);
-                            QPainter painter(&pixels); painter.setFont(document->defaultFont()); painter.setPen(widget->palette().color(QPalette::Text));
-                            painter.drawText(pixels.rect(), Qt::AlignCenter | Qt::TextSingleLine, visibleAlt);
-                        }
+            const quint64 composition = document == reading_->document() ? readingComposition_ : 0;
+            QTimer::singleShot(0, document, [this, widget, document, vectors, pending, url, image, generation, composition] {
+                if (!widget || !document || generation != inlineImageGeneration_
+                    || (document == reading_->document() && composition != readingComposition_)) return;
+                const auto apply = [this, widget, document, vectors, pending, url, image, generation, composition](const MediaPanel::InlineImageAsset &asset) {
+                    if (!widget || !document || generation != inlineImageGeneration_
+                        || (document == reading_->document() && composition != readingComposition_)) return;
+                    if (pending->generation != generation || pending->composition != composition) {
+                        pending->images.clear();
+                        pending->generation = generation;
+                        pending->composition = composition;
                     }
-                    if (vectors) vectors->setVector(url, ready ? asset.vector : nullptr);
-                    document->addResource(QTextDocument::ImageResource, url, pixels);
-                    struct Edit { int position; QTextImageFormat format; }; QVector<Edit> edits;
-                    for (QTextBlock block = document->begin(); block.isValid(); block = block.next())
-                        for (auto it = block.begin(); !it.atEnd(); ++it) {
-                            const QTextFragment fragment = it.fragment(); if (!fragment.isValid() || !fragment.charFormat().isImageFormat()) continue;
-                            QTextImageFormat format = fragment.charFormat().toImageFormat(); if (QUrl(format.name()) != url) continue;
-                            SemanticHtml::imageDimensions(format, image, document, ready ? asset.intrinsic : QSizeF(),
-                                asset.originalMime == QStringLiteral("image/svg+xml"));
-                            if (fallbackSize.isValid()) { format.setWidth(fallbackSize.width()); format.setHeight(fallbackSize.height()); }
-                            format.setProperty(SemanticHtml::inlineImageStateProperty, int(asset.state));
-                            format.setProperty(SemanticHtml::inlineImageStatusProperty, asset.message);
-                            edits.append({fragment.position(), format});
+                    pending->images.insert(url, PendingImage{image, asset});
+                    if (pending->scheduled) return;
+                    pending->scheduled = true;
+                    QTimer::singleShot(0, document, [this, widget, document, vectors, pending] {
+                        pending->scheduled = false;
+                        if (!widget || !document) return;
+                        if (pending->generation != inlineImageGeneration_
+                            || (document == reading_->document() && pending->composition != readingComposition_)) {
+                            pending->images.clear();
+                            return;
                         }
-                    for (const auto &edit : edits) { QTextCursor cursor(document); cursor.setPosition(edit.position); cursor.setPosition(edit.position + 1, QTextCursor::KeepAnchor); cursor.setCharFormat(edit.format); }
-                    QStringList descriptions;
-                    for (QTextBlock block = document->begin(); block.isValid(); block = block.next())
-                        for (auto it = block.begin(); !it.atEnd(); ++it) {
-                            const auto format = it.fragment().charFormat(); if (!format.isImageFormat()) continue;
-                            const QString alt = format.stringProperty(QTextFormat::ImageAltText); if (!alt.isEmpty()) descriptions.append(alt);
-                            const QString status = format.stringProperty(SemanticHtml::inlineImageStatusProperty); if (!status.isEmpty()) descriptions.append(status);
+                        const auto updates = std::exchange(pending->images, {});
+                        if (updates.isEmpty()) return;
+                        // Qt >=6.4 supports one layout after a formatting transaction.
+                        // Restore the caller's state, including an already disabled layout.
+                        const bool layoutEnabled = document->isLayoutEnabled();
+                        document->setLayoutEnabled(false);
+                        const auto restoreLayout = qScopeGuard([document, layoutEnabled] {
+                            if (!document) return;
+                            document->setLayoutEnabled(layoutEnabled);
+                            // Invalidate after restoring the caller's layout state:
+                            // enabled float flows must not reuse displaced line offsets.
+                            // Pixels can change even when character formats are equal.
+                            if (document) document->markContentsDirty(0, document->characterCount());
+                        });
+                        QHash<QUrl, QSize> fallbackSizes;
+                        for (auto update = updates.cbegin(); update != updates.cend(); ++update) {
+                            const QUrl &url = update.key();
+                            const QJsonObject &image = update->image;
+                            const auto &asset = update->asset;
+                            const bool ready = asset.state == MediaPanel::InlineImageState::Ready;
+                            QImage pixels = asset.image;
+                            QSize fallbackSize;
+                            if (!ready) {
+                                // No filename fallback: only an explicitly authored alt
+                                // may paint while the passive asset is unavailable.
+                                QTextImageFormat placeholder;
+                                SemanticHtml::imageDimensions(placeholder, image, document);
+                                pixels = QImage(qBound(1, qCeil(placeholder.width()), 256), qBound(1, qCeil(placeholder.height()), 64), QImage::Format_ARGB32_Premultiplied);
+                                pixels.fill(Qt::transparent);
+                                const QString alt = image.value(QStringLiteral("alt")).toString();
+                                if (!alt.isEmpty()) {
+                                    // An unavailable image's authored dimensions do not
+                                    // bound its semantic text alternative. Keep the full
+                                    // alt accessible, with explicit elision only for text
+                                    // wider than the current reading viewport.
+                                    const QFontMetricsF metrics(document->defaultFont());
+                                    const QString visibleAlt = metrics.elidedText(alt, Qt::ElideRight, qMax(32, widget->viewport()->width() - 8));
+                                    fallbackSize = QSize(qMax(1, qCeil(metrics.horizontalAdvance(visibleAlt)) + 4), qMax(1, qCeil(metrics.height()) + 4));
+                                    pixels = QImage(fallbackSize, QImage::Format_ARGB32_Premultiplied);
+                                    pixels.fill(Qt::transparent);
+                                    QPainter painter(&pixels); painter.setFont(document->defaultFont()); painter.setPen(widget->palette().color(QPalette::Text));
+                                    painter.drawText(pixels.rect(), Qt::AlignCenter | Qt::TextSingleLine, visibleAlt);
+                                }
+                            }
+                            if (vectors) vectors->setVector(url, ready ? asset.vector : nullptr);
+                            document->addResource(QTextDocument::ImageResource, url, pixels);
+                            fallbackSizes.insert(url, fallbackSize);
                         }
-                    descriptions.removeDuplicates(); widget->setAccessibleDescription(descriptions.join(QStringLiteral(" · ")));
-                    document->markContentsDirty(0, document->characterCount()); widget->viewport()->update();
+                        struct Edit { int position; QTextImageFormat format; };
+                        QVector<Edit> edits;
+                        QStringList descriptions;
+                        for (QTextBlock block = document->begin(); block.isValid(); block = block.next())
+                            for (auto it = block.begin(); !it.atEnd(); ++it) {
+                                const QTextFragment fragment = it.fragment();
+                                if (!fragment.isValid() || !fragment.charFormat().isImageFormat()) continue;
+                                const QTextImageFormat original = fragment.charFormat().toImageFormat();
+                                QTextImageFormat format = original;
+                                const QUrl url(format.name());
+                                const auto update = updates.constFind(url);
+                                if (update != updates.cend()) {
+                                    const auto &asset = update->asset;
+                                    const bool ready = asset.state == MediaPanel::InlineImageState::Ready;
+                                    SemanticHtml::imageDimensions(format, update->image, document,
+                                        ready ? asset.intrinsic : QSizeF(), asset.originalMime == QStringLiteral("image/svg+xml"));
+                                    const QSize fallbackSize = fallbackSizes.value(url);
+                                    if (fallbackSize.isValid()) { format.setWidth(fallbackSize.width()); format.setHeight(fallbackSize.height()); }
+                                    format.setProperty(SemanticHtml::inlineImageStateProperty, int(asset.state));
+                                    format.setProperty(SemanticHtml::inlineImageStatusProperty, asset.message);
+                                    if (format != original) edits.append({fragment.position(), format});
+                                }
+                                const QString alt = format.stringProperty(QTextFormat::ImageAltText);
+                                if (!alt.isEmpty()) descriptions.append(alt);
+                                const QString status = format.stringProperty(SemanticHtml::inlineImageStatusProperty);
+                                if (!status.isEmpty()) descriptions.append(status);
+                            }
+                        // Qt emits contentsChanged even for an empty edit block.
+                        if (!edits.isEmpty()) {
+                            QTextCursor cursor(document);
+                            cursor.beginEditBlock();
+                            for (const auto &edit : edits) {
+                                cursor.setPosition(edit.position);
+                                cursor.setPosition(edit.position + 1, QTextCursor::KeepAnchor);
+                                cursor.setCharFormat(edit.format);
+                            }
+                            cursor.endEditBlock();
+                        }
+                        descriptions.removeDuplicates();
+                        widget->setAccessibleDescription(descriptions.join(QStringLiteral(" · ")));
+                        widget->viewport()->update();
+                    });
                 };
                 const auto asset = media_->requestInlineImage(image.value(QStringLiteral("file")).toString(), document, url.toString(), apply);
                 apply(asset);
@@ -1829,6 +1917,9 @@ void MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const st
     if (addVisit) saveVisit();
     currentJson_ = document.toJson(QJsonDocument::Indented);
     currentEntry_ = entries.first().toObject();
+    // Entry data is plain text and remains unmaterialized while Reading is open.
+    json_->clear();
+    entryTabs_->setCurrentWidget(reading_);
     showCompactPane(false);
 
     const QString title = currentEntry_.value(QStringLiteral("title")).toString();
@@ -1854,8 +1945,7 @@ void MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const st
     sections_->setEnabled(sections_->count() > 1);
     resetFolding();
     reading_->verticalScrollBar()->setValue(0);
-    json_->setPlainText(QString::fromUtf8(currentJson_));
-    entryTabs_->setCurrentIndex(0);
+
 
     const SavedWord word = savedWord(currentEntry_);
     media_->setEntry(currentEntry_, LibraryStorage::sourceHost(api_->root()));

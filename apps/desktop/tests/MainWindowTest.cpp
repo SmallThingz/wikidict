@@ -37,6 +37,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QMenu>
@@ -78,6 +79,7 @@
 #include <QUrl>
 #include <QtTest>
 #include <limits>
+#include <memory>
 #include <algorithm>
 #include <array>
 
@@ -479,6 +481,413 @@ private slots:
         const QImage resource = window.reading_->document()->resource(QTextDocument::ImageResource, QUrl(format.name())).value<QImage>();
         qInfo() << "SVG_DETAIL" << "dpr" << dpr << "target" << target << "resource" << resource.size() << "mean_gray_error" << bestError;
         QVERIFY2(bestError <= 8.0, qPrintable(QStringLiteral("Normal reader lost SVG fine detail: mean gray error%1 at DPR%2 (allowed8/255)").arg(bestError).arg(dpr)));
+    }
+
+    void floatingTableKeepsFollowingHeadingAndParagraphSeparate() {
+        QSettings().setValue("media/allowImages", false);
+        MainWindow window(fixture_, QStringLiteral("dog"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(640, 600);
+        window.show();
+        QCoreApplication::processEvents();
+        const auto text = [](const QString &value) {
+            return QJsonObject{{"kind", "text"}, {"text", value}};
+        };
+        QJsonArray rows, media;
+        for (int row = 0; row != 40; ++row) {
+            QJsonArray cells;
+            for (int column = 0; column != 7; ++column) {
+                QJsonArray spans{text(QStringLiteral("Country %1 column %2").arg(row).arg(column))};
+                if (column == 4 && (row == 1 || row == 39)) {
+                    const QString file = QStringLiteral("Float fixture %1.svg").arg(row);
+                    spans.append(QJsonObject{{"kind", "link"}, {"text", ""}, {"target", "File:" + file},
+                        {"image", QJsonObject{{"file", file}, {"width_px", 30}, {"alt", QStringLiteral("Flag %1").arg(row)}}}});
+                    media.append(QJsonObject{{"kind", "image"}, {"file", file}, {"caption", ""}});
+                }
+                cells.append(QJsonObject{{"header", row == 0}, {"spans", spans}});
+            }
+            rows.append(QJsonObject{{"cells", cells}});
+        }
+        const QJsonObject tableStyle{{"float_side", "left"}, {"background", "#fffacd"},
+            {"collapse", "collapse"}, {"border", QJsonObject{{"solid", QJsonObject{
+                {"width", QJsonObject{{"unit", "px"}, {"value", 1}}}, {"color", "#aaaaaa"}}}}}};
+        const QJsonObject table{{"kind", "table"}, {"table", QJsonObject{{"rows", rows}, {"style", tableStyle}}}};
+        const QJsonObject linkedParagraph{{"kind", "paragraph"}, {"spans", QJsonArray{
+            QJsonObject{{"kind", "link"}, {"text", "References and further information:"},
+                {"target", "Wiktionary:References"}, {"bold", true}}}}};
+        const QJsonObject entry{{"title", "Floating table followed by references"}, {"kind", "language"},
+            {"language", window.api_->language()}, {"sections", QJsonArray{
+                QJsonObject{{"level", 2}, {"title", "Countries"}, {"blocks", QJsonArray{table}}},
+                QJsonObject{{"level", 2}, {"title", "References"}, {"blocks", QJsonArray{linkedParagraph,
+                    QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{text("Final reference sentinel")}}}}}}}},
+            {"media", media}};
+        window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false);
+        QTextDocument *document = window.reading_->document();
+        const QString fullText = document->toPlainText();
+        QCOMPARE(fullText.count(QChar::ObjectReplacementCharacter), 2);
+        QVERIFY(fullText.contains("Country 39 column 6"));
+        QVERIFY(fullText.contains("Final reference sentinel"));
+        const auto settle = [&] {
+            const auto done = std::make_shared<bool>(false);
+            QTimer::singleShot(0, document, [document, done] {
+                QTimer::singleShot(0, document, [done] { *done = true; });
+            });
+            return QTest::qWaitFor([done, &window] { return *done && !window.readingFloatLayoutScheduled_; }, 10000);
+        };
+        const auto disabled = [&] {
+            int count = 0;
+            for (QTextBlock block = document->begin(); block.isValid(); block = block.next())
+                for (auto it = block.begin(); !it.atEnd(); ++it) {
+                    const QTextFragment fragment = it.fragment();
+                    if (!fragment.isValid() || !fragment.charFormat().isImageFormat()) continue;
+                    if (fragment.charFormat().intProperty(SemanticHtml::inlineImageStateProperty)
+                        != int(MediaPanel::InlineImageState::Disabled)) return false;
+                    ++count;
+                }
+            return count == 2;
+        };
+        QJsonArray samples;
+        const auto rect = [](const QRectF &r) { return QJsonArray{r.x(), r.y(), r.width(), r.height()}; };
+        const auto layoutIsSeparate = [&](const QString &phase) {
+            document->documentLayout()->documentSize();
+            QTextBlock heading;
+            for (QTextBlock block = document->begin(); block.isValid(); block = block.next())
+                if (block.blockFormat().headingLevel() == 2 && block.text().contains("References")) { heading = block; break; }
+            if (!heading.isValid()) return false;
+            const QTextBlock paragraph = heading.next();
+            if (!paragraph.isValid() || paragraph.text() != QStringLiteral("References and further information:")) return false;
+            if (QTextCursor(heading).currentFrame() != document->rootFrame()
+                || QTextCursor(paragraph).currentFrame() != document->rootFrame()) return false;
+            QTextTable *actualTable = nullptr;
+            for (QTextFrame *frame : document->rootFrame()->childFrames())
+                if (auto *candidate = qobject_cast<QTextTable *>(frame)) actualTable = candidate;
+            if (!actualTable || actualTable->rows() != 40 || actualTable->columns() != 7
+                || actualTable->frameFormat().position() != QTextFrameFormat::FloatLeft) return false;
+            if (actualTable->format().background().color() != QColor("#fffacd")) return false;
+            if (!heading.layout()->lineCount() || !paragraph.layout()->lineCount()) return false;
+            bool disjoint = true;
+            for (int hi = 0; hi != heading.layout()->lineCount(); ++hi)
+                for (int pi = 0; pi != paragraph.layout()->lineCount(); ++pi) {
+                    // These are root-frame blocks: layout position plus local
+                    // line rectangle is the actual document-space paint region.
+                    const QRectF h = heading.layout()->lineAt(hi).naturalTextRect().translated(heading.layout()->position());
+                    const QRectF p = paragraph.layout()->lineAt(pi).naturalTextRect().translated(paragraph.layout()->position());
+                    if (h.intersects(p)) { qWarning() << phase << h << p; disjoint = false; }
+                }
+            bool hitsInOwnBlocks = true;
+            QJsonArray lineRegions;
+            for (const QTextBlock &block : {heading, paragraph})
+                for (int i = 0; i != block.layout()->lineCount(); ++i) {
+                    const QRectF line = block.layout()->lineAt(i).naturalTextRect().translated(block.layout()->position());
+                    const int hit = document->documentLayout()->hitTest(line.center(), Qt::FuzzyHit);
+                    const bool ownBlock = hit >= block.position() && hit < block.position() + block.length();
+                    hitsInOwnBlocks = hitsInOwnBlocks && ownBlock;
+                    lineRegions.append(QJsonObject{{"block_position", block.position()}, {"text", block.text()},
+                        {"layout_position", QJsonArray{block.layout()->position().x(), block.layout()->position().y()}},
+                        {"local_line_rect", rect(block.layout()->lineAt(i).naturalTextRect())},
+                        {"document_line_rect", rect(line)}, {"center_hit", hit}, {"center_hit_in_block", ownBlock}});
+                }
+            bool actionPreserved = false;
+            const QString expectedAction = QStringLiteral("dict:")
+                + QString::fromLatin1(QUrl::toPercentEncoding(QStringLiteral("Wiktionary:References")));
+            for (auto it = paragraph.begin(); !it.atEnd(); ++it) {
+                const auto format = it.fragment().charFormat();
+                actionPreserved |= format.isAnchor() && format.anchorHref() == expectedAction
+                    && format.fontWeight() >= QFont::Bold;
+            }
+            const bool contentPreserved = window.currentEntry_ == entry && document->toPlainText() == fullText;
+            QTextCursor cursor(document);
+            cursor.setPosition(heading.position());
+            window.reading_->setTextCursor(cursor);
+            window.reading_->ensureCursorVisible();
+            const bool captured = window.grab().save(QStringLiteral(".tmp/ui-screenshots/floating-table-") + phase + QStringLiteral(".png"));
+            samples.append(QJsonObject{{"phase", phase}, {"viewport_width", window.reading_->viewport()->width()},
+                {"text_width", document->textWidth()}, {"resize_callback_pending", window.readingFloatLayoutScheduled_},
+                {"line_regions", lineRegions}, {"line_rects_disjoint", disjoint},
+                {"hits_in_own_blocks", hitsInOwnBlocks}, {"exact_bold_action_preserved", actionPreserved},
+                {"content_preserved", contentPreserved}, {"frame_saved", captured}});
+            return disjoint && hitsInOwnBlocks && actionPreserved && contentPreserved && captured;
+        };
+        QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+        bool allSeparate = layoutIsSeparate(QStringLiteral("initial"));
+        QTRY_VERIFY_WITH_TIMEOUT(disabled(), 10000);
+        QVERIFY(settle());
+        allSeparate = layoutIsSeparate(QStringLiteral("settled")) && allSeparate;
+        // Preserve another ordinary event-drain and paint at the same width so
+        // a transient resize cannot masquerade as a persistent baseline error.
+        QVERIFY(settle());
+        allSeparate = layoutIsSeparate(QStringLiteral("settled-repeat")) && allSeparate;
+        for (int width : {900, 480, 640}) {
+            window.resize(width, 600);
+            QVERIFY(settle());
+            allSeparate = layoutIsSeparate(QStringLiteral("width-%1").arg(width)) && allSeparate;
+        }
+        window.refreshReading();
+        QTRY_VERIFY_WITH_TIMEOUT(disabled(), 10000);
+        QVERIFY(settle());
+        allSeparate = layoutIsSeparate(QStringLiteral("recomposition")) && allSeparate;
+        QCOMPARE(window.currentEntry_, entry);
+        QCOMPARE(document->toPlainText(), fullText);
+        QFile report(QStringLiteral(".tmp/ui-screenshots/floating-table-reference-geometry.json"));
+        QVERIFY(report.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+        const QByteArray reportBytes = QJsonDocument(QJsonObject{{"samples", samples}, {"all_separate", allSeparate}}).toJson();
+        QCOMPARE(report.write(reportBytes), qint64(reportBytes.size()));
+        report.close();
+        QVERIFY2(allSeparate, "Floating-table reference geometry/action/content failed; inspect retained phase geometry and frames");
+    }
+
+    void inlineImageUpdatesBatchLargeTableWithoutLosingSemanticContent() {
+        QSettings().setValue("media/allowImages", false);
+        MainWindow window(fixture_, QStringLiteral("dog"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(900, 700);
+        const auto text = [](const QString &value) {
+            return QJsonObject{{"kind", "text"}, {"text", value}};
+        };
+        QJsonArray rows, media;
+        QStringList expectedAlts, expectedActions;
+        for (int row = 0; row != 195; ++row) {
+            QJsonArray cells;
+            for (int column = 0; column != 7; ++column) {
+                QJsonArray spans{text(QStringLiteral("Cell %1:%2 ").arg(row).arg(column))};
+                if (column == 0 && row > 0 && row < 194) {
+                    const QString file = QStringLiteral("Batch flag %1.svg").arg(row);
+                    const QString alt = QStringLiteral("Flag alternative %1").arg(row, 3, 10, QChar('0'));
+                    const QString action = QStringLiteral("https://example.org/flag/%1").arg(row);
+                    const QJsonObject image{{"file", file}, {"width_px", 30}, {"alt", alt}, {"tooltip", ""}};
+                    spans.append(QJsonObject{{"kind", "external_link"}, {"text", ""}, {"target", action}, {"image", image}});
+                    media.append(QJsonObject{{"kind", "image"}, {"file", file}, {"caption", ""}});
+                    expectedAlts.append(alt); expectedActions.append(action);
+                }
+                cells.append(QJsonObject{{"spans", spans}});
+            }
+            rows.append(QJsonObject{{"cells", cells}});
+        }
+        const QJsonObject tableBlock{{"kind", "table"}, {"table", QJsonObject{{"rows", rows}}}};
+        const QJsonObject sentinel{{"kind", "paragraph"}, {"spans", QJsonArray{text("Final semantic sentinel after all 1365 cells")}}};
+        const QJsonObject section{{"level", 2}, {"title", "Large image table"}, {"blocks", QJsonArray{tableBlock, sentinel}}};
+        const QJsonObject entry{{"title", "Batched image consumer fixture"}, {"kind", "language"},
+            {"language", window.api_->language()}, {"sections", QJsonArray{section}}, {"references", QJsonArray{}}, {"media", media}};
+        const auto render = [&](const QJsonObject &value) {
+            window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{value}}}).toJson(), false);
+        };
+        const auto images = [&] {
+            QList<QTextImageFormat> result;
+            for (QTextBlock block = window.reading_->document()->begin(); block.isValid(); block = block.next())
+                for (auto it = block.begin(); !it.atEnd(); ++it) {
+                    const QTextFragment fragment = it.fragment();
+                    if (fragment.isValid() && fragment.charFormat().isImageFormat()) result.append(fragment.charFormat().toImageFormat());
+                }
+            return result;
+        };
+        const auto disabled = [&] {
+            const auto formats = images();
+            return formats.size() == 193 && std::all_of(formats.cbegin(), formats.cend(), [](const auto &format) {
+                return format.intProperty(SemanticHtml::inlineImageStateProperty) == int(MediaPanel::InlineImageState::Disabled);
+            });
+        };
+        render(entry);
+        QTextDocument *document = window.reading_->document();
+        const QString logicalText = document->toPlainText();
+        QVERIFY(logicalText.contains("Cell 194:6"));
+        QVERIFY(logicalText.contains("Final semantic sentinel after all 1365 cells"));
+        QSignalSpy changed(document, &QTextDocument::contentsChanged);
+        QSignalSpy layoutUpdates(document->documentLayout(), &QAbstractTextDocumentLayout::update);
+        QSignalSpy layoutSizes(document->documentLayout(), &QAbstractTextDocumentLayout::documentSizeChanged);
+        QTRY_VERIFY_WITH_TIMEOUT(disabled(), 10000);
+        // This counts the actual queued character-format transaction, not time.
+        // The old per-URL implementation emits a separate change for each image.
+        QCOMPARE(changed.count(), 1);
+        qInfo() << "193-image queued format burst: contentsChanged" << changed.count()
+                << "layout updates" << layoutUpdates.count() << "layout sizes" << layoutSizes.count();
+        QCOMPARE(window.currentEntry_, entry);
+        QCOMPARE(document->toPlainText(), logicalText);
+        const auto settled = images();
+        QCOMPARE(settled.size(), 193);
+        QSet<QString> names;
+        for (int i = 0; i != settled.size(); ++i) {
+            const auto &format = settled[i];
+            names.insert(format.name());
+            QCOMPARE(format.stringProperty(QTextFormat::ImageAltText), expectedAlts[i]);
+            QCOMPARE(format.anchorHref(), expectedActions[i]);
+            QVERIFY(format.hasProperty(QTextFormat::ImageTitle));
+            QCOMPARE(format.stringProperty(QTextFormat::ImageTitle), QString());
+            QVERIFY(format.width() >= 30.0);
+            QVERIFY(format.height() > 0);
+            QVERIFY(window.reading_->accessibleDescription().contains(expectedAlts[i]));
+            QVERIFY(!document->resource(QTextDocument::ImageResource, QUrl(format.name())).value<QImage>().isNull());
+        }
+        QCOMPARE(names.size(), 193);
+        // Repeated provider requests must repaint resources without writing an
+        // identical format or losing any occurrence. Use a queued sentinel so
+        // the check cannot pass before the real provider callbacks/drain run.
+        const auto provider = document->resourceProvider();
+        QVERIFY(bool(provider));
+        changed.clear();
+        for (int repeat = 0; repeat != 2; ++repeat)
+            for (const auto &format : settled) provider(QUrl(format.name()));
+        bool providerBurstDrained = false;
+        QTimer::singleShot(0, document, [&] {
+            QTimer::singleShot(0, document, [&] { providerBurstDrained = true; });
+        });
+        QTRY_VERIFY(providerBurstDrained);
+        const auto repeated = images();
+        qInfo() << "Duplicate image provider burst: formats equal" << (repeated == settled)
+                << "contentsChanged" << changed.count();
+        QCOMPARE(repeated, settled);
+        QCOMPARE(changed.count(), 0);
+        QCOMPARE(document->toPlainText(), logicalText);
+        // Two synchronous recompositions invalidate pending work without an
+        // entry change, and must still reapply all cached Disabled resources.
+        const quint64 generation = window.inlineImageGeneration_;
+        window.refreshReading();
+        window.refreshReading();
+        QCOMPARE(window.inlineImageGeneration_, generation);
+        changed.clear();
+        QTRY_VERIFY_WITH_TIMEOUT(disabled(), 10000);
+        QCOMPARE(changed.count(), 1);
+        QCOMPARE(images(), settled);
+        QCOMPARE(document->toPlainText(), logicalText);
+        // Pending old-entry callbacks cannot mutate or describe a replacement
+        // entry. Its uncatalogued image follows the ordinary Error path.
+        render(entry);
+        const QJsonObject replacementImage{{"file", "Uncatalogued replacement.svg"}, {"width_px", 30}, {"alt", "Replacement alternative"}};
+        const QJsonObject replacementSpan{{"kind", "text"}, {"text", ""}, {"image", replacementImage}};
+        const QJsonObject replacementBlock{{"kind", "paragraph"}, {"spans", QJsonArray{text("Replacement body "), replacementSpan}}};
+        QJsonObject replacement = entry;
+        replacement.insert("title", "Replacement entry");
+        replacement.insert("sections", QJsonArray{QJsonObject{{"level", 2}, {"title", "Replacement section"}, {"blocks", QJsonArray{replacementBlock}}}});
+        replacement.insert("media", QJsonArray{});
+        render(replacement);
+        changed.clear();
+        QTRY_VERIFY_WITH_TIMEOUT(images().size() == 1 && images().first().intProperty(SemanticHtml::inlineImageStateProperty) == int(MediaPanel::InlineImageState::Error), 10000);
+        QCOMPARE(changed.count(), 1);
+        QCOMPARE(window.currentEntry_, replacement);
+        QCOMPARE(images().first().stringProperty(QTextFormat::ImageAltText), QStringLiteral("Replacement alternative"));
+        QVERIFY(window.reading_->accessibleDescription().contains("Replacement alternative"));
+        QVERIFY(!window.reading_->accessibleDescription().contains("Flag alternative"));
+        QVERIFY(document->toPlainText().contains("Replacement body"));
+        QVERIFY(!document->toPlainText().contains("Final semantic sentinel"));
+    }
+
+    void initialInlineImageNormalizationBatchesFormatsAndRestoresLayout() {
+        for (bool initialLayoutEnabled : {true, false}) {
+            QTextDocument document;
+            document.setLayoutEnabled(false);
+            document.setTextWidth(640);
+            QFont font; font.setPointSizeF(12); document.setDefaultFont(font);
+            QString html = QStringLiteral("<p>Before all cells</p><table>");
+            QList<QJsonObject> authored;
+            QStringList urls;
+            for (int row = 0; row != 195; ++row) {
+                html += QStringLiteral("<tr>");
+                for (int column = 0; column != 7; ++column) {
+                    html += QStringLiteral("<td>Cell %1:%2 ").arg(row).arg(column);
+                    if (column == 0 && row > 0 && row < 194) {
+                        QJsonObject image{{"file", QStringLiteral("Normalization flag %1.svg").arg(row)}};
+                        if (row % 3 == 0) {
+                            image.insert("width_px", 30); image.insert("height_px", 15);
+                            image.insert("alt", QStringLiteral("Authored alternative %1").arg(row));
+                            image.insert("tooltip", QStringLiteral("Authored tooltip %1").arg(row));
+                        } else if (row % 3 == 1) {
+                            image.insert("width_px", 30); image.insert("alt", ""); image.insert("tooltip", "");
+                        } else {
+                            image.insert("height_px", 15);
+                        }
+                        image.insert("border", row % 2 == 0);
+                        authored.append(image);
+                        urls.append(SemanticHtml::inlineImageUrl(image).toString());
+                        html += QStringLiteral("<a href=\"https://example.org/normalization/%1\">%2</a>")
+                            .arg(row).arg(SemanticHtml::inlineImageHtml(image));
+                    }
+                    html += QStringLiteral("</td>");
+                }
+                html += QStringLiteral("</tr>");
+            }
+            html += QStringLiteral("</table><p>Final cell and semantic sentinel remain present</p>");
+            document.setHtml(html);
+            QImage cached(2, 3, QImage::Format_ARGB32_Premultiplied); cached.fill(Qt::red);
+            for (const auto &url : urls) document.addResource(QTextDocument::ImageResource, QUrl(url), cached);
+            document.setLayoutEnabled(initialLayoutEnabled);
+            const auto images = [&] {
+                QList<QPair<int, QTextImageFormat>> result;
+                for (QTextBlock block = document.begin(); block.isValid(); block = block.next())
+                    for (auto it = block.begin(); !it.atEnd(); ++it) {
+                        const QTextFragment fragment = it.fragment();
+                        if (fragment.isValid() && fragment.charFormat().isImageFormat())
+                            result.append({fragment.position(), fragment.charFormat().toImageFormat()});
+                    }
+                return result;
+            };
+            const auto before = images();
+            QCOMPARE(before.size(), 193);
+            const QString plain = document.toPlainText();
+            QVERIFY(plain.contains("Cell 194:6"));
+            QVERIFY(plain.contains("Final cell and semantic sentinel remain present"));
+            QList<QUrl> requests;
+            QList<bool> layoutsAtRequest;
+            document.setResourceProvider([&](const QUrl &url) -> QVariant {
+                requests.append(url); layoutsAtRequest.append(document.isLayoutEnabled());
+                return {};
+            });
+            QSignalSpy changes(&document, &QTextDocument::contentsChanged);
+            SemanticHtml::normalizeImages(&document);
+            QCOMPARE(changes.count(), 1);
+            QCOMPARE(document.isLayoutEnabled(), initialLayoutEnabled);
+            QCOMPARE(document.toPlainText(), plain);
+            const auto after = images();
+            QCOMPARE(after.size(), before.size());
+            QCOMPARE(requests.size(), 193);
+            for (int i = 0; i != after.size(); ++i) {
+                const auto &format = after[i].second;
+                const QJsonObject &image = authored[i];
+                const int row = i + 1;
+                QCOMPARE(after[i].first, before[i].first);
+                QCOMPARE(format.name(), before[i].second.name());
+                QCOMPARE(format.anchorHref(), before[i].second.anchorHref());
+                QCOMPARE(format.anchorHref(), QStringLiteral("https://example.org/normalization/%1").arg(row));
+                QCOMPARE(format.stringProperty(SemanticHtml::inlineImageExplanationProperty), before[i].second.toolTip());
+                QCOMPARE(format.intProperty(SemanticHtml::inlineImageStateProperty), 1);
+                QCOMPARE(format.stringProperty(SemanticHtml::inlineImageStatusProperty), QStringLiteral("Loading image."));
+                QCOMPARE(format.width(), row % 3 == 2 ? 15.0 : 30.0);
+                QCOMPARE(format.height(), row % 3 == 1 ? 30.0 : 15.0);
+                QCOMPARE(format.hasProperty(QTextFormat::ImageAltText), image.contains("alt"));
+                QCOMPARE(format.hasProperty(QTextFormat::ImageTitle), image.contains("tooltip"));
+                if (image.contains("alt")) QCOMPARE(format.stringProperty(QTextFormat::ImageAltText), image.value("alt").toString());
+                if (image.contains("tooltip")) {
+                    QCOMPARE(format.stringProperty(QTextFormat::ImageTitle), image.value("tooltip").toString());
+                    QCOMPARE(format.toolTip(), image.value("tooltip").toString());
+                }
+                QCOMPARE(format.boolProperty(SemanticHtml::inlineImageBorderProperty), row % 2 == 0);
+                if (row % 2) QVERIFY(!format.hasProperty(SemanticHtml::inlineImageBorderProperty));
+                QCOMPARE(requests[i], QUrl(urls[i]));
+                QCOMPARE(layoutsAtRequest[i], initialLayoutEnabled);
+                QCOMPARE(document.resource(QTextDocument::ImageResource, QUrl(urls[i])).value<QImage>(), cached);
+            }
+            // HTML replacement reuses cached resources. Every new occurrence
+            // still gets normalized and re-requested after restoring layout.
+            document.setLayoutEnabled(false);
+            document.setHtml(html);
+            for (const auto &url : urls) document.addResource(QTextDocument::ImageResource, QUrl(url), cached);
+            document.setLayoutEnabled(initialLayoutEnabled);
+            requests.clear(); layoutsAtRequest.clear(); changes.clear();
+            SemanticHtml::normalizeImages(&document);
+            QCOMPARE(changes.count(), 1);
+            QCOMPARE(images(), after);
+            QCOMPARE(document.toPlainText(), plain);
+            QCOMPARE(requests.size(), 193);
+            QVERIFY(std::all_of(layoutsAtRequest.cbegin(), layoutsAtRequest.cend(),
+                [=](bool enabled) { return enabled == initialLayoutEnabled; }));
+            // An image-free document must not acquire an empty transaction or
+            // toggle a caller-disabled layout.
+            document.setPlainText(QStringLiteral("No images, no format updates."));
+            requests.clear(); changes.clear();
+            SemanticHtml::normalizeImages(&document);
+            QCOMPARE(changes.count(), 0);
+            QVERIFY(requests.isEmpty());
+            QCOMPARE(document.isLayoutEnabled(), initialLayoutEnabled);
+            QCOMPARE(document.toPlainText(), QStringLiteral("No images, no format updates."));
+        }
     }
 
     void typedInlineImagesUseRealBodyAndHeadingResourcesWithoutFilenameLabels() {
@@ -3294,6 +3703,75 @@ private slots:
         QVERIFY(window.currentEntry_.isEmpty() || !window.currentEntry_.value(QStringLiteral("redirect")).toObject().value(QStringLiteral("followed")).toBool());
     }
 
+    void entryDataIsLazyExactPlainTextAndFollowsNavigation() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.resize(900, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        QCOMPARE(window.entryTabs_->currentWidget(), window.reading_);
+        QVERIFY(window.json_->document()->isEmpty());
+        QCOMPARE(window.json_->document()->blockCount(), 1);
+        QVERIFY(window.json_->isReadOnly());
+        QCOMPARE(window.json_->accessibleName(), QStringLiteral("Entry data"));
+        QVERIFY(qobject_cast<QPlainTextDocumentLayout *>(window.json_->document()->documentLayout()));
+        const QString catJson = QString::fromUtf8(window.currentJson_);
+        const QString readingBefore = window.reading_->toPlainText();
+        QVERIFY(!catJson.isEmpty());
+        auto *tabs = window.entryTabs_->tabBar();
+        tabs->setFocus(Qt::TabFocusReason);
+        QTest::keyClick(tabs, Qt::Key_Right);
+        QTest::keyClick(tabs, Qt::Key_Right);
+        QCOMPARE(window.entryTabs_->currentWidget(), window.json_);
+        QCOMPARE(window.json_->toPlainText(), catJson);
+        QCOMPARE(QJsonDocument::fromJson(window.json_->toPlainText().toUtf8()), QJsonDocument::fromJson(window.currentJson_));
+        QTest::keyClick(tabs, Qt::Key_Tab);
+        QTRY_VERIFY(window.json_->hasFocus());
+        QVERIFY(window.json_->textInteractionFlags().testFlag(Qt::TextSelectableByKeyboard));
+        QVERIFY(!window.json_->textInteractionFlags().testFlag(Qt::TextEditable));
+        auto *jsonScroll = window.json_->verticalScrollBar();
+        QVERIFY(jsonScroll->maximum() > jsonScroll->minimum());
+        QTest::keyClick(window.json_, Qt::Key_End, Qt::ControlModifier);
+        QCOMPARE(window.json_->textCursor().position(), window.json_->document()->characterCount() - 1);
+        // Cursor visibility need not consume the scrollbar's trailing document margin.
+        QTRY_VERIFY(window.json_->viewport()->rect().contains(window.json_->cursorRect()));
+        QVERIFY(jsonScroll->value() > jsonScroll->minimum());
+        QTest::keyClick(window.json_, Qt::Key_Home, Qt::ControlModifier);
+        QCOMPARE(window.json_->textCursor().position(), 0);
+        QTRY_COMPARE(jsonScroll->value(), jsonScroll->minimum());
+        QVERIFY(window.json_->viewport()->rect().contains(window.json_->cursorRect()));
+        QTest::keyClick(window.json_, Qt::Key_End, Qt::ControlModifier | Qt::ShiftModifier);
+        QCOMPARE(window.json_->textCursor().selectionStart(), 0);
+        QCOMPARE(window.json_->textCursor().selectionEnd(), window.json_->document()->characterCount() - 1);
+        QCOMPARE(window.json_->textCursor().selectedText().replace(QChar::ParagraphSeparator, QLatin1Char('\n')), catJson);
+        QTest::keyClick(window.json_, Qt::Key_C, Qt::ControlModifier);
+        QCOMPARE(QApplication::clipboard()->text(), catJson);
+        QTest::keyClicks(window.json_, "must remain read only");
+        QCOMPARE(window.json_->toPlainText(), catJson);
+        QSignalSpy textChanges(window.json_->document(), &QTextDocument::contentsChanged);
+        QTest::keyClick(window.json_, Qt::Key_Backtab, Qt::ShiftModifier);
+        QTRY_VERIFY(tabs->hasFocus());
+        QTest::keyClick(tabs, Qt::Key_Left);
+        QTest::keyClick(tabs, Qt::Key_Left);
+        QCOMPARE(window.entryTabs_->currentWidget(), window.reading_);
+        QCOMPARE(window.reading_->toPlainText(), readingBefore);
+        QTest::keyClick(tabs, Qt::Key_Right);
+        QTest::keyClick(tabs, Qt::Key_Right);
+        QCOMPARE(window.json_->toPlainText(), catJson);
+        QCOMPARE(textChanges.count(), 0);
+        QVERIFY(window.openWord(QStringLiteral("dog")));
+        QTRY_COMPARE(title(window), QStringLiteral("dog"));
+        QCOMPARE(window.entryTabs_->currentWidget(), window.reading_);
+        QVERIFY(window.json_->document()->isEmpty());
+        const QString dogJson = QString::fromUtf8(window.currentJson_);
+        QVERIFY(dogJson != catJson);
+        QTest::keyClick(tabs, Qt::Key_Right);
+        QTest::keyClick(tabs, Qt::Key_Right);
+        QCOMPARE(window.json_->toPlainText(), dogJson);
+        QVERIFY(!window.openWord(QStringLiteral("__missing_entry_data_control__")));
+        QCOMPARE(QString::fromUtf8(window.currentJson_), dogJson);
+        QCOMPARE(window.json_->toPlainText(), dogJson);
+    }
+
     void removingLastDictionaryClearsVisibleEntryAndSearchState_data() {
         QTest::addColumn<bool>("cancelReload");
         QTest::newRow("reload-managed-empty") << false;
@@ -3319,7 +3797,7 @@ private slots:
         window.show();
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
         QTRY_COMPARE(title(window), QStringLiteral("cat"));
-        QVERIFY(!window.json_->toPlainText().isEmpty());
+        QVERIFY(window.json_->toPlainText().isEmpty());
         QVERIFY(window.results_->count() > 0);
         QVERIFY(window.sections_->count() > 1);
         QVERIFY(window.sections_->isEnabled());
@@ -3328,6 +3806,8 @@ private slots:
         QStringList history;
         for (const auto &entry : window.learning_.history()) history.append(entry.key);
         window.entryTabs_->setCurrentWidget(window.json_);
+        QCOMPARE(window.json_->toPlainText(), QString::fromUtf8(window.currentJson_));
+        QVERIFY(!window.json_->toPlainText().isEmpty());
 
         bool removed = false;
         QTimer::singleShot(0, &window, [&] {

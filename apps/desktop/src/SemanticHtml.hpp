@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QHash>
 #include <QSet>
+#include <QScopeGuard>
 #include <QFontMetricsF>
 #include <QJsonArray>
 #include <QTextTable>
@@ -369,7 +370,21 @@ inline void normalizeImages(QTextDocument *document) {
             imageDimensions(format, image, document);
             edits.append({fragment.position(), format});
         }
-    for (const ImageEdit &edit : edits) { QTextCursor cursor(document); cursor.setPosition(edit.position); cursor.setPosition(edit.position + 1, QTextCursor::KeepAnchor); cursor.setCharFormat(edit.format); }
+    if (!edits.isEmpty()) {
+        const bool layoutEnabled = document->isLayoutEnabled();
+        document->setLayoutEnabled(false);
+        const auto restoreLayout = qScopeGuard([document, layoutEnabled] {
+            document->setLayoutEnabled(layoutEnabled);
+        });
+        QTextCursor cursor(document);
+        cursor.beginEditBlock();
+        const auto finishEdit = qScopeGuard([&cursor] { cursor.endEditBlock(); });
+        for (const ImageEdit &edit : edits) {
+            cursor.setPosition(edit.position);
+            cursor.setPosition(edit.position + 1, QTextCursor::KeepAnchor);
+            cursor.setCharFormat(edit.format);
+        }
+    }
     // A cached QTextDocument image can bypass the provider after setHtml,
     // but the new occurrence formats still need current state and geometry.
     // Reuse the installed provider's guarded request/apply path once per URL.
@@ -625,6 +640,23 @@ inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &
     cursor.endEditBlock();
 }
 
+inline void finishFloatingLayout(QTextDocument *document) {
+    if (!document || !document->isLayoutEnabled()) return;
+    QVector<QTextFrame *> pending{document->rootFrame()};
+    while (!pending.isEmpty()) {
+        QTextFrame *frame = pending.takeLast();
+        if (frame != document->rootFrame() && frame->frameFormat().position() != QTextFrameFormat::InFlow) {
+            // Qt's incremental layout can reuse a float-displaced line offset
+            // without advancing the following block by that displacement.
+            // A whole-range invalidation while enabled lays out the flow
+            // together, preserving authored floats, margins and text formats.
+            document->markContentsDirty(0, document->characterCount());
+            return;
+        }
+        for (QTextFrame *child : frame->childFrames()) pending.append(child);
+    }
+}
+
 inline void setHtml(QTextDocument *document, const QString &html) {
     if (!html.contains(markerOpen) && !html.contains(tableMarkerOpen) && !html.contains(inlineImageScheme + QChar(':'))) { document->setHtml(html); return; }
     QHash<QString, ScaleInfo> markers;
@@ -635,6 +667,7 @@ inline void setHtml(QTextDocument *document, const QString &html) {
     normalize(document, markers);
     normalizeTables(document, tables, tableCount);
     normalizeImages(document);
+    finishFloatingLayout(document);
 }
 
 inline void setHtml(QTextBrowser *browser, const QString &html) {
@@ -647,5 +680,6 @@ inline void setHtml(QTextBrowser *browser, const QString &html) {
     normalize(browser->document(), markers);
     normalizeTables(browser->document(), tables, tableCount);
     normalizeImages(browser->document());
+    finishFloatingLayout(browser->document());
 }
 } // namespace SemanticHtml
