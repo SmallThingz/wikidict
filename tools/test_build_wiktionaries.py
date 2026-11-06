@@ -4668,6 +4668,71 @@ class FileMetadataV2ReplayReuseTest(unittest.TestCase):
                     fixture.downloads,validate_auxiliary=True)
 
 
+    def final_auxiliary_boundary(self, function, snapshots, hashes, identity, staging):
+        # Execute the actual maintained finalization block; no native/subprocess boundary.
+        import ast,inspect,textwrap
+        tree=ast.parse(textwrap.dedent(inspect.getsource(function)))
+        blocks=[node for node in ast.walk(tree) if isinstance(node,ast.If) and
+                ast.unparse(node.test)=='auxiliary_hashes or build_identity is not None']
+        self.assertEqual(len(blocks),1)
+        namespace=dict(auxiliary_hashes=hashes,build_identity=identity,
+            auxiliary_snapshots=snapshots,aux_pinned=snapshots,staging=staging,
+            AUXILIARY_SHA_NAME=b.AUXILIARY_SHA_NAME,json=json,
+            _validated_auxiliary_state=b._validated_auxiliary_state,
+            _project_auxiliary_capture_identities=b._project_auxiliary_capture_identities)
+        exec(compile(ast.Module(body=blocks,type_ignores=[]),'<actual-final-auxiliary-boundary>','exec'),namespace)
+
+    def test_final_boundaries_share_one_fresh_validation_for_hashes_and_capture_identity(self):
+        fixture=self.resolver_fixture();snapshots=self.resolve_fixture(fixture)
+        hashes=b.verified_auxiliary_hashes(snapshots)
+        manifests,artifacts=b.auxiliary_capture_identities(snapshots)
+        identity=dict(auxiliary_capture_sha256=manifests,auxiliary_capture_artifact_sha256=artifacts)
+        for function in (b.build_sharded,b.build_locked):
+            with self.subTest(function=function.__name__),tempfile.TemporaryDirectory() as tmp:
+                staging=Path(tmp)
+                with patch.object(self.helper,'payload',wraps=self.helper.payload) as traversals, \
+                     patch.object(b,'_validated_auxiliary_state',wraps=b._validated_auxiliary_state) as validations:
+                    self.final_auxiliary_boundary(function,snapshots,hashes,identity,staging)
+                    self.assertEqual(validations.call_count,1)
+                    self.assertEqual(traversals.call_count,1)
+                self.assertEqual(json.loads((staging/b.AUXILIARY_SHA_NAME).read_text()),hashes)
+        # No identities means the existing no-op path stays a no-op.
+        with tempfile.TemporaryDirectory() as tmp,patch.object(b,'_validated_auxiliary_state') as validations:
+            for function in (b.build_sharded,b.build_locked):
+                self.final_auxiliary_boundary(function,None,None,None,Path(tmp))
+            validations.assert_not_called()
+
+    def test_final_boundaries_reject_snapshot_manifest_and_artifact_mismatches(self):
+        fixture=self.resolver_fixture();snapshots=self.resolve_fixture(fixture)
+        hashes=b.verified_auxiliary_hashes(snapshots)
+        manifests,artifacts=b.auxiliary_capture_identities(snapshots)
+        identity=dict(auxiliary_capture_sha256=manifests,auxiliary_capture_artifact_sha256=artifacts)
+        for function in (b.build_sharded,b.build_locked):
+            for mismatch in ('snapshot','manifest','artifact'):
+                expected_hashes=dict(hashes);expected=json.loads(json.dumps(identity))
+                if mismatch=='snapshot':expected_hashes['file-metadata']='0'*64
+                else:expected['auxiliary_capture_sha256' if mismatch=='manifest' else
+                              'auxiliary_capture_artifact_sha256']['file-metadata']='0'*64
+                with self.subTest(function=function.__name__,mismatch=mismatch),tempfile.TemporaryDirectory() as tmp, \
+                     patch.object(b,'_validated_auxiliary_state',wraps=b._validated_auxiliary_state) as validations:
+                    with self.assertRaisesRegex(ValueError,'Auxiliary (snapshot|capture) changed during build'):
+                        self.final_auxiliary_boundary(function,snapshots,expected_hashes,expected,Path(tmp))
+                    self.assertEqual(validations.call_count,1)
+
+    def test_final_boundaries_revalidate_changed_bytes_on_every_later_call(self):
+        fixture=self.resolver_fixture();snapshots=self.resolve_fixture(fixture)
+        hashes=b.verified_auxiliary_hashes(snapshots)
+        manifests,artifacts=b.auxiliary_capture_identities(snapshots)
+        identity=dict(auxiliary_capture_sha256=manifests,auxiliary_capture_artifact_sha256=artifacts)
+        with tempfile.TemporaryDirectory() as tmp:
+            for function in (b.build_sharded,b.build_locked):
+                self.final_auxiliary_boundary(function,snapshots,hashes,identity,Path(tmp))
+            self.mutate_same_size_and_mtime(self.first_response())
+            for function in (b.build_sharded,b.build_locked):
+                with self.subTest(function=function.__name__),self.assertRaisesRegex(ValueError,'artifact inventory changed'):
+                    self.final_auxiliary_boundary(function,snapshots,hashes,identity,Path(tmp))
+
+
 class LoopMessageSelectionTests(unittest.TestCase):
     """Real capture/replay and resolver; all outer source bytes are synthetic."""
     def setUp(self):

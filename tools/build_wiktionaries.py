@@ -2287,11 +2287,17 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         if sha256_file(interwiki_snapshot)!=interwiki_sha:
             raise ValueError('Interwiki map snapshot changed during build')
         (staging/INTERWIKI_SHA_NAME).write_text(interwiki_sha+'\n')
-    if auxiliary_hashes:
-        if verified_auxiliary_hashes(auxiliary_snapshots)!=auxiliary_hashes:
-            raise ValueError('Auxiliary snapshot changed during build')
-        (staging/AUXILIARY_SHA_NAME).write_text(json.dumps(auxiliary_hashes,sort_keys=True)+'\n')
-    require_auxiliary_capture_identity(auxiliary_snapshots,build_identity)
+    if auxiliary_hashes or build_identity is not None:
+        final_hashes,final_captures=_validated_auxiliary_state(auxiliary_snapshots)
+        if auxiliary_hashes:
+            if final_hashes!=auxiliary_hashes:
+                raise ValueError('Auxiliary snapshot changed during build')
+            (staging/AUXILIARY_SHA_NAME).write_text(json.dumps(auxiliary_hashes,sort_keys=True)+'\n')
+        if build_identity is not None:
+            manifests,artifacts=_project_auxiliary_capture_identities(final_captures)
+            if (manifests!=build_identity.get('auxiliary_capture_sha256',{}) or
+                    artifacts!=build_identity.get('auxiliary_capture_artifact_sha256',{})):
+                raise ValueError('Auxiliary capture changed during build')
     if page_links_snapshot is not None and sha256_file(page_links_snapshot)!=page_links_sha:
         raise ValueError('Derived page links changed during sharded build')
     if page_redirects_snapshot is not None and sha256_file(page_redirects_snapshot)!=page_redirects_sha:
@@ -2849,11 +2855,17 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
             if interwiki_sha is not None:
                 if sha256_file(pinned)!=interwiki_sha: raise ValueError('Interwiki map snapshot changed during build')
                 (staging/INTERWIKI_SHA_NAME).write_text(interwiki_sha+'\n')
-            if auxiliary_hashes:
-                if verified_auxiliary_hashes(aux_pinned)!=auxiliary_hashes:
-                    raise ValueError('Auxiliary snapshot changed during build')
-                (staging/AUXILIARY_SHA_NAME).write_text(json.dumps(auxiliary_hashes,sort_keys=True)+'\n')
-            require_auxiliary_capture_identity(aux_pinned,build_identity)
+            if auxiliary_hashes or build_identity is not None:
+                final_hashes,final_captures=_validated_auxiliary_state(aux_pinned)
+                if auxiliary_hashes:
+                    if final_hashes!=auxiliary_hashes:
+                        raise ValueError('Auxiliary snapshot changed during build')
+                    (staging/AUXILIARY_SHA_NAME).write_text(json.dumps(auxiliary_hashes,sort_keys=True)+'\n')
+                if build_identity is not None:
+                    manifests,artifacts=_project_auxiliary_capture_identities(final_captures)
+                    if (manifests!=build_identity.get('auxiliary_capture_sha256',{}) or
+                            artifacts!=build_identity.get('auxiliary_capture_artifact_sha256',{})):
+                        raise ValueError('Auxiliary capture changed during build')
             if page_links_snapshot is not None and sha256_file(page_links_snapshot)!=page_links_sha:
                 raise ValueError('Derived page links changed during build')
             if page_redirects_snapshot is not None and sha256_file(page_redirects_snapshot)!=page_redirects_sha:
