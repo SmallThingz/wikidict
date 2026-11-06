@@ -231,6 +231,193 @@ class DownloaderTest(unittest.TestCase):
             with patch.object(d.shutil,'which',return_value='/usr/bin/aria2c'),patch.object(d,'run_aria2',return_value=1):
                 with self.assertRaises(SystemExit):d.download_all([item],root,2)
             self.assertTrue((folder/'test.bz2.part.aria2').exists());self.assertFalse((folder/'test.bz2').exists())
+
+class ReviewedRegistryDerivationTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+        self.root=Path(self.tmp.name);self.downloads=self.root/'downloads';self.downloads.mkdir()
+        self.output=self.root/'derived'
+        self.old=('# wikidict-language-registry-v2\n# content-language\tur\n# mediawiki\n'
+                  'ur\tUrdu\tur\n# reviewed-alias\tur\tOld reviewed spelling\told-policy\t'+'0'*64+'\n').encode()
+        self.row=d.write_language_registry(self.downloads,'testwiktionary','20261001',self.old.decode(),'ur')
+        self.source=self.downloads/'testwiktionary/20261001/language-registry.tsv'
+        item=dict(wiki='testwiktionary',date='20261001',name='testwiktionary-20261001-pages-meta-current.xml.bz2',
+                  url=d.BASE+'/testwiktionary/20261001/testwiktionary-20261001-pages-meta-current.xml.bz2',size=4,sha1='a'*40)
+        self.manifest=dict(requested_editions=['testwiktionary'],files=[item],language_registries=[self.row],
+                           failures=[],auxiliary_capture_roots={})
+        self.manifest_path=self.downloads/'manifest.json';self.manifest_path.write_text(json.dumps(self.manifest)+'\n')
+        self.raw=self.manifest_path.read_bytes();self.sha=hashlib.sha256(self.raw).hexdigest()
+        self.original_stat=self.source.stat()
+
+    def derive(self, selected=None):
+        return d.derive_reviewed_language_registries(self.manifest_path,self.sha,self.downloads,self.output,
+                                                   ['testwiktionary'],selected)
+
+    def test_stale_registry_derives_immutable_manifest_and_existing_profile_lineage(self):
+        with self.assertRaisesRegex(ValueError,'Stale reviewed'):d.validate_registry_file(self.downloads,self.row)
+        path=self.derive();document=json.loads(path.read_bytes())
+        selected=d.derived_registry_paths(document,self.downloads)[('testwiktionary','20261001')]
+        expected=d.append_reviewed_language_aliases(''.join(line for line in self.old.decode().splitlines(keepends=True)
+                                                          if not line.startswith('# reviewed-alias'))).encode()
+        self.assertEqual(selected.read_bytes(),expected)
+        row=document['language_registries'][0]
+        self.assertEqual(d.validate_registry_file(self.downloads,row,document),selected)
+        self.assertEqual(document['files'],self.manifest['files'])
+        self.assertEqual(self.source.read_bytes(),self.old);self.assertEqual(self.manifest_path.read_bytes(),self.raw)
+        self.assertEqual(self.source.stat().st_ino,self.original_stat.st_ino)
+        lineage=json.loads(Path(row['derived_registry_lineage']['path']).read_bytes())
+        rows=json.loads(Path(row['derived_registry_manifest']['path']).read_bytes())
+        self.assertEqual(lineage['status'],'PASS');self.assertTrue(lineage['original_bytes_inodes_preserved'])
+        self.assertEqual(lineage['source_row'],self.row);self.assertEqual(lineage['source']['sha256'],self.row['sha256'])
+        self.assertEqual(lineage['rows'],row['derived_registry_manifest']);self.assertEqual(rows[0]['sha256'],row['sha256'])
+        self.assertEqual(lineage['target']['sha256'],row['sha256'])
+        # The maintained resolver consumes only the authenticated derived path;
+        # normal namespace and manifest checks remain in force.
+        import build_wiktionaries as builder
+        namespace=self.downloads/'testwiktionary/20261001/namespace-registry.tsv'
+        namespace.write_text('# wikidict-namespace-registry-v1\n# wiki\ttestwiktionary\n# dump-date\t20261001\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tentries\n')
+        actual=builder.resolve_edition_snapshot_options(document,{('testwiktionary','20261001'):[]},self.downloads)
+        self.assertEqual(actual[('testwiktionary','20261001')]['auxiliary_snapshots']['language-registry'],selected)
+
+    def test_source_authentication_tamper_conflicts_and_lineage_tamper_are_rejected(self):
+        with self.assertRaisesRegex(ValueError,'authentication'):d.derive_reviewed_language_registries(
+            self.manifest_path,'0'*64,self.downloads,self.output,['testwiktionary'])
+        self.assertFalse(self.output.exists())
+        self.source.write_bytes(self.old+b'changed')
+        with self.assertRaisesRegex(ValueError,'differs from manifest'):self.derive()
+        self.source.write_bytes(self.old)
+        path=self.derive();document=json.loads(path.read_bytes())
+        changed=json.loads(json.dumps(document));changed['language_registries'][0]['sha256']='0'*64
+        with self.assertRaisesRegex(ValueError,'lineage or manifest'):d.derived_registry_paths(changed,self.downloads)
+        selected=Path(document['language_registries'][0]['derived_registry']);selected.write_bytes(b'conflicting output')
+        with self.assertRaisesRegex(ValueError,'Conflicting'):self.derive()
+        self.assertEqual(selected.read_bytes(),b'conflicting output')
+        self.assertEqual(self.source.read_bytes(),self.old);self.assertEqual(self.manifest_path.read_bytes(),self.raw)
+
+    def test_exact_output_reconciliation_keeps_bytes_inodes_and_revalidates_authority(self):
+        path=self.derive();files={str(p.relative_to(self.output)):(p.read_bytes(),p.stat().st_ino)for p in self.output.rglob('*')if p.is_file()}
+        self.assertEqual(self.derive(),path)
+        self.assertEqual(files,{str(p.relative_to(self.output)):(p.read_bytes(),p.stat().st_ino)for p in self.output.rglob('*')if p.is_file()})
+        self.source.write_bytes(self.old.replace(b'Urdu',b'TAMP'))
+        with self.assertRaisesRegex(ValueError,'differs from manifest'):self.derive()
+        self.assertEqual(files,{str(p.relative_to(self.output)):(p.read_bytes(),p.stat().st_ino)for p in self.output.rglob('*')if p.is_file()})
+
+    def test_explicit_capture_override_is_distinct_and_must_match_size_hash_and_header(self):
+        capture=self.root/'captured-registry.tsv';captured=self.old.replace(b'Urdu',b'Captured Urdu')
+        capture.write_bytes(captured);source=d._registry_reference(capture,captured)
+        with patch.object(sys,'argv',['download_wiktionaries.py','--derive-reviewed-language-aliases',str(self.manifest_path),
+                                     '--source-manifest-sha256',self.sha,'--output',str(self.output),
+                                     '--source-registry',str(capture),'--source-registry-sha256',source['sha256']]), \
+             patch.object(sys,'stderr',io.StringIO()):
+            with self.assertRaises(SystemExit):d.main()
+        self.assertFalse(self.output.exists())
+        wrong=dict(source,sha256='0'*64)
+        with self.assertRaisesRegex(ValueError,'descriptor mismatch'):self.derive(wrong)
+        with self.assertRaisesRegex(ValueError,'descriptor mismatch'):self.derive(dict(source,bytes=len(captured)+1))
+        bad=captured.replace(b'# content-language\tur',b'# content-language\tfr');capture.write_bytes(bad)
+        with self.assertRaisesRegex(ValueError,'content language'):self.derive(d._registry_reference(capture,bad))
+        capture.write_bytes(captured);path=self.derive(source);doc=json.loads(path.read_bytes())
+        row=doc['language_registries'][0];lineage=json.loads(Path(row['derived_registry_lineage']['path']).read_bytes())
+        self.assertTrue(lineage['explicit_capture_source']);self.assertEqual(lineage['source'],source)
+        self.assertEqual(lineage['original_manifest_row'],self.row)
+        self.assertNotEqual(lineage['source_row']['sha256'],self.row['sha256'])
+        self.assertEqual(self.source.read_bytes(),self.old);self.assertEqual(capture.read_bytes(),captured)
+
+    def test_maintained_cli_derives_then_resume_plan_uses_authenticated_manifest_without_network(self):
+        with patch.object(sys,'argv',['download_wiktionaries.py','--derive-reviewed-language-aliases',str(self.manifest_path),
+                                     '--source-manifest-sha256',self.sha,'--output',str(self.output),'--wikis','testwiktionary']), \
+             patch.object(d,'snapshot',side_effect=AssertionError('no discovery')), \
+             patch.object(d,'download_all',side_effect=AssertionError('no download')),patch('builtins.print'):
+            d.main()
+        path=self.output/'manifest.json';sha=hashlib.sha256(path.read_bytes()).hexdigest()
+        with patch.object(sys,'argv',['download_wiktionaries.py','--resume','--plan','--output',str(self.downloads),
+                                     '--input-manifest',str(path),'--input-manifest-sha256',sha,'--wikis','testwiktionary']), \
+             patch.object(d,'download_all',side_effect=AssertionError('no download')),patch('builtins.print'):
+            d.main()
+        self.assertEqual(self.manifest_path.read_bytes(),self.raw)
+        with self.assertRaisesRegex(ValueError,'Selected input manifest authentication'):d.load_input_manifest(path,'0'*64,self.downloads)
+
+
+    def test_captured_resolver_uses_derived_registry_and_preserves_original_capture_guards(self):
+        import build_wiktionaries as builder
+        import namespace_registry_snapshot as namespace_projection
+        from test_build_wiktionaries import write_magic_fixture
+        import prepare_magic_words_int as int_magic
+        import prepare_magic_words_language as language_magic
+        import prepare_magic_words_lst as lst_magic
+        root=self.root/'captured';root.mkdir();wiki,date='testwiktionary','20261001'
+        item=self.manifest['files'][0]
+        namespaces={str(i):dict(id=i,name=name,canonical=name,case='case-sensitive',content=i==0,
+                                defaultcontentmodel='wikitext')for i,name in ((0,''),(10,'Template'),(14,'Category'))}
+        inventory=[dict(id=row['id'],name=row['name'],case=row['case'])for row in namespaces.values()]
+        query=dict(general=dict(wikiid=wiki,lang='ur',server='//test.wiktionary.org'),namespaces=namespaces,namespacealiases=[])
+        xml=('<mediawiki><siteinfo><dbname>'+wiki+'</dbname><namespaces>'+''.join(
+            '<namespace key="'+str(row['id'])+'" case="'+row['case']+'">'+row['name']+'</namespace>'
+            for row in inventory)+'</namespaces></siteinfo></mediawiki>').encode()
+        for name,raw in [('dump-siteinfo.xml',xml),('namespace-siteinfo.raw.json',json.dumps(dict(query=query)).encode()),
+                         ('pagetable-dumpstatus.raw.json',b'{}'),('language-registry.tsv',self.old)]:
+            (root/name).write_bytes(raw)
+        sidecar=dict(wiki=wiki,date=date,output_sha256=hashlib.sha256(self.old).hexdigest())
+        (root/'language-registry.manifest.json').write_text(json.dumps(sidecar))
+        artifacts={name:builder.sha256_file(root/name)for name in ('dump-siteinfo.xml','namespace-siteinfo.raw.json',
+                    'pagetable-dumpstatus.raw.json','language-registry.tsv','language-registry.manifest.json')}
+        capture=dict(wiki=wiki,date=date,source_xml=item,namespace_mismatches=[],artifacts=artifacts,
+                     dump_namespace_inventory=inventory,retrieved_utc='2026-10-18T00:00:00Z',
+                     siteinfo_source_url='https://test.wiktionary.org/w/api.php',siteinfo_temporal_scope='synthetic-local-fixture')
+        (root/'capture.complete.json').write_text(json.dumps(capture));namespace_projection.build(root)
+        magic=write_magic_fixture(self.root/'magic-capture',wiki,date,parser_functions=True,content_language='ur',complete_magic_projection=True)
+        int_root=magic.parent.parent/int_magic.DERIVED_DIRECTORY;int_magic.derive_snapshot(magic,int_root)
+        language_root=magic.parent.parent/language_magic.DERIVED_DIRECTORY;language_magic.derive_snapshot(int_root,language_root)
+        lst_magic.derive_snapshot(language_root,root/lst_magic.DERIVED_DIRECTORY)
+        self.manifest['auxiliary_capture_roots']={wiki:'captured'}
+        self.manifest_path.write_text(json.dumps(self.manifest)+'\n');self.raw=self.manifest_path.read_bytes();self.sha=hashlib.sha256(self.raw).hexdigest()
+        path=self.derive();document=json.loads(path.read_bytes());selected=Path(document['language_registries'][0]['derived_registry'])
+        options=builder.resolve_edition_snapshot_options(document,{(wiki,date):[item]},self.downloads,workspace=self.root)
+        self.assertEqual(options[(wiki,date)]['auxiliary_snapshots']['language-registry'],selected)
+        self.assertEqual((root/'language-registry.tsv').read_bytes(),self.old)
+        with self.assertRaisesRegex(ValueError,'differs from pinned inventory'):
+            builder.resolve_edition_snapshot_options(document,{(wiki,date):[item]},self.downloads,
+                {'language-registry':root/'language-registry.tsv'},workspace=self.root)
+        # Selecting the new registry must not exempt original captured artifacts.
+        (root/'pagetable-dumpstatus.raw.json').write_bytes(b'changed')
+        with self.assertRaisesRegex(ValueError,'changed capture artifact'):
+            builder.resolve_edition_snapshot_options(document,{(wiki,date):[item]},self.downloads,workspace=self.root)
+
+
+    def test_multi_edition_resume_authenticates_derivative_once_and_keeps_outputs_unchanged(self):
+        other='otherwiktionary'
+        other_old=self.old.replace(b'Urdu',b'Second Urdu')
+        other_row=d.write_language_registry(self.downloads,other,'20261001',other_old.decode(),'ur')
+        item=dict(self.manifest['files'][0],wiki=other,name=other+'-20261001-pages-meta-current.xml.bz2',
+                  url=d.BASE+'/'+other+'/20261001/'+other+'-20261001-pages-meta-current.xml.bz2')
+        self.manifest['requested_editions'].append(other);self.manifest['files'].append(item)
+        self.manifest['language_registries'].append(other_row)
+        self.manifest_path.write_text(json.dumps(self.manifest)+'\n')
+        self.raw=self.manifest_path.read_bytes();self.sha=hashlib.sha256(self.raw).hexdigest()
+        path=d.derive_reviewed_language_registries(self.manifest_path,self.sha,self.downloads,self.output,['testwiktionary',other])
+        before={str(p.relative_to(self.output)):(p.read_bytes(),p.stat().st_ino)for p in self.output.rglob('*')if p.is_file()}
+        document=json.loads(path.read_bytes());sha=hashlib.sha256(path.read_bytes()).hexdigest()
+        with patch.object(sys,'argv',['download_wiktionaries.py','--resume','--plan','--output',str(self.downloads),
+                                     '--input-manifest',str(path),'--input-manifest-sha256',sha,
+                                     '--wikis','testwiktionary',other]), \
+             patch.object(d,'derived_registry_paths',wraps=d.derived_registry_paths) as authenticated, \
+             patch.object(d,'_reviewed_registry_plan',wraps=d._reviewed_registry_plan) as plans, \
+             patch.object(d,'_validate_registry_file_path',wraps=d._validate_registry_file_path) as files, \
+             patch.object(d,'download_all',side_effect=AssertionError('no download')),patch('builtins.print'):
+            d.main()
+        self.assertEqual(authenticated.call_count,1);self.assertEqual(plans.call_count,1)
+        self.assertEqual(files.call_count,2)
+        self.assertEqual({call.args[0]for call in files.call_args_list},
+                         {Path(row['derived_registry'])for row in document['language_registries']})
+        self.assertEqual(before,{str(p.relative_to(self.output)):(p.read_bytes(),p.stat().st_ino)for p in self.output.rglob('*')if p.is_file()})
+        self.assertEqual(self.manifest_path.read_bytes(),self.raw);self.assertEqual(self.source.read_bytes(),self.old)
+        self.assertEqual((self.downloads/other/'20261001/language-registry.tsv').read_bytes(),other_old)
+        # The public API still authenticates lineage; it accepts no trusted map.
+        forged=json.loads(json.dumps(document));forged['language_registries'][0]['derived_registry']=str(self.source)
+        with self.assertRaisesRegex(ValueError,'lineage or manifest'):
+            d.validate_registry_file(self.downloads,forged['language_registries'][0],forged)
+
+
 if __name__=='__main__':unittest.main()
 
 class ManifestSelectionTest(unittest.TestCase):

@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 import re
 import time
+import stat
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -553,9 +554,9 @@ def validate_registry_item(item):
     if not re.fullmatch(r"[a-f0-9]{64}", item.get("sha256", "")) or not isinstance(item.get("size"), int) or item["size"] <= 0:
         raise ValueError("Invalid language registry checksum or size")
 
-def validate_registry_file(root, item):
+def _validate_registry_file_path(path, item):
+    """Strict per-file checks; only internal authenticated callers choose the path."""
     validate_registry_item(item)
-    path = root / item["wiki"] / item["date"] / item["name"]
     if not path.is_file() or path.stat().st_size != item["size"] or sha256_digest(path) != item["sha256"]:
         raise ValueError(f"Missing or unverified language registry: {path}")
     text = path.read_text(encoding="utf-8")
@@ -564,6 +565,233 @@ def validate_registry_file(root, item):
     if text != append_reviewed_language_aliases(upstream):
         raise ValueError(f"Stale reviewed language registry; derive a new registry and manifest without replacing original inputs: {path}")
     return path
+
+def validate_registry_file(root, item, manifest=None):
+    validate_registry_item(item)
+    paths = derived_registry_paths(manifest, root) if manifest is not None else {}
+    path = paths.get((item["wiki"], item["date"]), root / item["wiki"] / item["date"] / item["name"])
+    return _validate_registry_file_path(path, item)
+
+
+def _registry_regular_bytes(path, limit=32 * 1024 * 1024):
+    path = Path(path)
+    if not path.is_absolute() or path.is_symlink():
+        raise ValueError('Registry authority must be an absolute regular file')
+    before = path.stat()
+    if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
+        raise ValueError('Invalid or oversized registry authority')
+    stamp = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+    with path.open('rb') as stream:
+        raw = stream.read(limit + 1)
+        if stamp(os.fstat(stream.fileno())) != stamp(before):
+            raise ValueError('Registry authority changed while reading')
+    if len(raw) > limit or stamp(path.stat()) != stamp(before):
+        raise ValueError('Registry authority changed while reading')
+    return raw
+
+
+def _registry_reference(path, raw):
+    return dict(path=str(path), bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+
+
+def _registry_read_reference(record):
+    if not isinstance(record, dict) or set(record) != {'path', 'bytes', 'sha256'}:
+        raise ValueError('Invalid registry authority descriptor')
+    raw = _registry_regular_bytes(Path(record['path']))
+    if _registry_reference(Path(record['path']), raw) != record:
+        raise ValueError('Registry authority descriptor mismatch')
+    return raw
+
+
+def _reviewed_registry_plan(source, downloads, output, requested, selected_source=None):
+    """Recompute the complete immutable derivative; no saved success bypasses reads."""
+    original_raw = _registry_read_reference(source)
+    original = json.loads(original_raw)
+    if 'reviewed_alias_derivation' in original:
+        raise ValueError('Derive from the original input manifest, not another derivative')
+    selected = select_manifest_files(original, requested)
+    wanted = sorted({item['wiki'] for item in selected})
+    if selected_source is not None and len(wanted) != 1:
+        raise ValueError('Explicit captured registry requires exactly one selected edition')
+    downloads, output = Path(downloads), Path(output)
+    if not downloads.is_absolute() or downloads.resolve() != downloads or not output.is_absolute():
+        raise ValueError('Registry roots must be resolved absolute paths')
+    producer = Path(__file__).resolve()
+    aliases = producer.with_name('reviewed_language_aliases.json')
+    producer_raw = _registry_regular_bytes(producer)
+    aliases_raw = _registry_regular_bytes(aliases)
+    registries = original.get('language_registries')
+    if not isinstance(registries, list):
+        raise ValueError('Missing original registry inventory')
+    seen = set(); rows = []; lineage = []; outputs = {}
+    for item in registries:
+        validate_registry_item(item)
+        if 'derived_registry' in item:
+            raise ValueError('Original manifest contains derived registry paths')
+        key = (item['wiki'], item['date'])
+        if key in seen:
+            raise ValueError('Duplicate original registry identity')
+        seen.add(key)
+        if item['wiki'] not in wanted:
+            rows.append(dict(item)); continue
+        path = downloads / item['wiki'] / item['date'] / item['name']
+        if selected_source is None:
+            old = _registry_regular_bytes(path)
+            if len(old) != item['size'] or hashlib.sha256(old).hexdigest() != item['sha256']:
+                raise ValueError('Original registry differs from manifest')
+            authority = _registry_reference(path, old)
+        else:
+            authority = selected_source
+            old = _registry_read_reference(authority)
+        text = old.decode('utf-8')
+        if '# content-language\t' + item['content_language'] not in text.splitlines():
+            raise ValueError('Selected registry content language differs from manifest')
+        upstream_lines = []
+        for line in text.splitlines(keepends=True):
+            if line.startswith('# reviewed-alias'):
+                fields = line.rstrip('\n').split('\t')
+                if len(fields) != 5 or fields[0] != '# reviewed-alias' or not re.fullmatch('[a-f0-9]{64}', fields[4]):
+                    raise ValueError('Malformed original reviewed marker')
+            else:
+                upstream_lines.append(line)
+        upstream = ''.join(upstream_lines)
+        if not upstream.startswith('# wikidict-language-registry-v2\n') or not upstream.endswith('\n'):
+            raise ValueError('Invalid original registry framing')
+        source_stat = Path(authority['path']).stat()
+        source_identity = [source_stat.st_dev, source_stat.st_ino, source_stat.st_mode, source_stat.st_size, source_stat.st_mtime_ns, source_stat.st_ctime_ns]
+        new = append_reviewed_language_aliases(upstream).encode('utf-8')
+        relative = Path(item['wiki']) / item['date'] / item['name']
+        derived = dict(item, size=len(new), sha256=hashlib.sha256(new).hexdigest(),
+                       derived_registry=str(output / relative))
+        outputs[str(relative)] = new
+        row_relative = relative.parent / 'registry-rows.json'
+        lineage_relative = relative.parent / 'registry-lineage.json'
+        normal_row = {key: derived[key] for key in item if key != 'derived_registry'}
+        row_raw = (json.dumps([normal_row], indent=2, sort_keys=True) + '\n').encode()
+        outputs[str(row_relative)] = row_raw
+        profile = dict(status='PASS', rows=_registry_reference(output / row_relative, row_raw),
+                       source=authority, source_row=dict(item, size=len(old), sha256=authority['sha256']),
+                       target=_registry_reference(output / relative, new),
+                       upstream_sha256=hashlib.sha256(upstream.encode('utf-8')).hexdigest(),
+                       upstream_preferred_names_preserved=True, original_bytes_inodes_preserved=True,
+                       original_manifest=source, original_manifest_row=item,
+                       explicit_capture_source=selected_source is not None, source_identity=source_identity)
+        lineage_raw = (json.dumps(profile, indent=2, sort_keys=True) + '\n').encode()
+        outputs[str(lineage_relative)] = lineage_raw
+        derived['derived_registry_manifest'] = _registry_reference(output / row_relative, row_raw)
+        derived['derived_registry_lineage'] = _registry_reference(output / lineage_relative, lineage_raw)
+        rows.append(derived)
+        lineage.append(dict(original_manifest_row=item, selected_registry=authority,
+                            explicit_capture_source=selected_source is not None,
+                            source_identity=source_identity, upstream_sha256=profile['upstream_sha256'],
+                            derived_registry=profile['target'], rows=profile['rows'],
+                            lineage=derived['derived_registry_lineage']))
+    if set(wanted) != {row['original_manifest_row']['wiki'] for row in lineage}:
+        raise ValueError('Selected edition has no original registry')
+    ms = Path(source['path']).stat()
+    manifest_identity = [ms.st_dev, ms.st_ino, ms.st_mode, ms.st_size, ms.st_mtime_ns, ms.st_ctime_ns]
+    record = dict(original_manifest_identity=manifest_identity, schema='wikidict.reviewed-registry-derivation.v1', source_manifest=source,
+                  downloads=str(downloads), output=str(output), selected_editions=wanted,
+                  selected_capture_source=selected_source,
+                  producer=_registry_reference(producer, producer_raw),
+                  reviewed_aliases=_registry_reference(aliases, aliases_raw), registries=lineage)
+    derived = dict(original, language_registries=rows, reviewed_alias_derivation=record)
+    outputs['manifest.json'] = (json.dumps(derived, indent=2, sort_keys=True) + '\n').encode()
+    # Preserve both original inputs and the authority used by the normal producer.
+    if (_registry_read_reference(source) != original_raw or
+            _registry_regular_bytes(producer) != producer_raw or _registry_regular_bytes(aliases) != aliases_raw):
+        raise ValueError('Registry derivation authority changed')
+    for row in lineage:
+        _registry_read_reference(row['selected_registry'])
+        current = Path(row['selected_registry']['path']).stat()
+        if [current.st_dev, current.st_ino, current.st_mode, current.st_size, current.st_mtime_ns, current.st_ctime_ns] != row['source_identity']:
+            raise ValueError('Original registry identity changed during derivation')
+    return derived, outputs
+
+
+def derive_reviewed_language_registries(source_manifest, expected_sha256, downloads, output,
+                                      requested=None, selected_source=None):
+    """Explicit metadata-only derivation; never replaces source inputs or markers."""
+    source_manifest, downloads, output = Path(source_manifest), Path(downloads), Path(output)
+    raw = _registry_regular_bytes(source_manifest)
+    if not isinstance(expected_sha256, str) or not re.fullmatch('[a-f0-9]{64}', expected_sha256) or hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise ValueError('Original manifest authentication failed')
+    source = _registry_reference(source_manifest, raw)
+    if output == downloads or output in source_manifest.parents or output.is_symlink():
+        raise ValueError('Derived output must not replace original inputs')
+    derived, outputs = _reviewed_registry_plan(source, downloads, output, requested, selected_source)
+    if output.exists():
+        _require_registry_derivative_outputs(output, outputs)
+        return output / 'manifest.json'
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Claim only a previously absent directory. Never replace even an empty
+    # conflicting target; interrupted owned output remains inspectable/refused.
+    try:
+        output.mkdir()
+    except FileExistsError:
+        _require_registry_derivative_outputs(output, outputs)
+        return output / 'manifest.json'
+    for relative, data in outputs.items():
+        if relative == 'manifest.json': continue
+        path = output / relative; path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('xb') as stream:
+            stream.write(data); stream.flush(); os.fsync(stream.fileno())
+    again, current = _reviewed_registry_plan(source, downloads, output, requested, selected_source)
+    if current != outputs or again != derived:
+        raise ValueError('Registry derivation changed before publication')
+    # The input manifest is the completion authority and is published last.
+    with (output / 'manifest.json').open('xb') as stream:
+        stream.write(outputs['manifest.json']); stream.flush(); os.fsync(stream.fileno())
+    _require_registry_derivative_outputs(output, outputs)
+    return output / 'manifest.json'
+
+
+def _require_registry_derivative_outputs(output, outputs):
+    if output.is_symlink() or not output.is_dir():
+        raise ValueError('Unsafe derived registry directory')
+    entries = list(output.rglob('*'))
+    if any(path.is_symlink() for path in entries):
+        raise ValueError('Unsafe derived registry output link')
+    actual = {str(path.relative_to(output)) for path in entries if not path.is_dir()}
+    if actual != set(outputs):
+        raise ValueError('Conflicting derived registry output inventory')
+    for relative, raw in outputs.items():
+        if _registry_regular_bytes(output / relative) != raw:
+            raise ValueError('Conflicting derived registry output bytes')
+
+
+def derived_registry_paths(manifest, downloads):
+    record = manifest.get('reviewed_alias_derivation')
+    if record is None:
+        if any('derived_registry' in row for row in manifest.get('language_registries', [])):
+            raise ValueError('Derived registry lacks authenticated lineage')
+        return {}
+    if not isinstance(record, dict) or record.get('schema') != 'wikidict.reviewed-registry-derivation.v1':
+        raise ValueError('Invalid reviewed registry lineage')
+    if record['downloads'] != str(Path(downloads)):
+        raise ValueError('Derived registry uses different original downloads')
+    output = Path(record['output'])
+    expected, outputs = _reviewed_registry_plan(record['source_manifest'], Path(downloads), output,
+                                               record['selected_editions'], record['selected_capture_source'])
+    if expected != manifest:
+        raise ValueError('Derived registry lineage or manifest changed')
+    _require_registry_derivative_outputs(output, outputs)
+    return {(row['original_manifest_row']['wiki'], row['original_manifest_row']['date']):
+            Path(row['derived_registry']['path']) for row in record['registries']}
+
+
+def _load_input_manifest_state(path, expected_sha256, downloads):
+    raw = _registry_regular_bytes(Path(path))
+    if not isinstance(expected_sha256, str) or not re.fullmatch('[a-f0-9]{64}', expected_sha256) or hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise ValueError('Selected input manifest authentication failed')
+    manifest = json.loads(raw)
+    paths = derived_registry_paths(manifest, Path(downloads))
+    return manifest, paths
+
+
+def load_input_manifest(path, expected_sha256, downloads):
+    return _load_input_manifest_state(path, expected_sha256, downloads)[0]
+
 
 def digest(path):
     with path.open("rb") as source:
@@ -748,8 +976,38 @@ def main():
     parser.add_argument("--resume", action="store_true", help="Use the saved manifest, preserving snapshot dates across restarts")
     parser.add_argument("--interwiki-map-only", action="store_true",
                         help="Capture the current siteinfo interwiki map for exactly one --wikis edition")
+    parser.add_argument('--derive-reviewed-language-aliases', type=Path, metavar='SOURCE_MANIFEST',
+                        help='Derive immutable current reviewed registry metadata without changing original inputs')
+    parser.add_argument('--source-manifest-sha256')
+    parser.add_argument('--source-downloads', type=Path)
+    parser.add_argument('--source-registry', type=Path, help='Explicit captured registry; requires one --wikis edition and exact SHA256')
+    parser.add_argument('--source-registry-sha256')
+    parser.add_argument('--input-manifest', type=Path, help='Explicit authenticated original or derived manifest for --resume')
+    parser.add_argument('--input-manifest-sha256')
     args = parser.parse_args()
     args.output = args.output.expanduser().resolve()
+    if args.derive_reviewed_language_aliases is not None:
+        if args.resume or args.plan or args.xml_only or args.interwiki_map_only or args.input_manifest is not None:
+            parser.error('Registry derivation is a separate metadata-only mode')
+        if args.source_registry is not None and (not args.wikis or len(args.wikis) != 1):
+            parser.error('Explicit captured registry requires exactly one --wikis edition')
+        if bool(args.source_registry) != bool(args.source_registry_sha256):
+            parser.error('Explicit captured registry requires its exact SHA256')
+        source=args.derive_reviewed_language_aliases.absolute()
+        downloads=(args.source_downloads or source.parent).resolve()
+        selected=None
+        if args.source_registry is not None:
+            path=args.source_registry.absolute(); raw=_registry_regular_bytes(path)
+            selected=_registry_reference(path,raw)
+            if selected['sha256']!=args.source_registry_sha256:
+                parser.error('Captured registry authentication failed')
+        path=derive_reviewed_language_registries(source,args.source_manifest_sha256,downloads,args.output,args.wikis,selected)
+        print('Immutable reviewed registry manifest: '+str(path),flush=True)
+        return
+    if args.source_manifest_sha256 or args.source_downloads or args.source_registry or args.source_registry_sha256:
+        parser.error('Source derivation options require --derive-reviewed-language-aliases')
+    if bool(args.input_manifest) != bool(args.input_manifest_sha256) or args.input_manifest is not None and not args.resume:
+        parser.error('Explicit manifest requires --resume and --input-manifest-sha256')
     args.output.mkdir(parents=True, exist_ok=True)
 
     if args.interwiki_map_only:
@@ -760,12 +1018,19 @@ def main():
         return
 
     if args.resume:
-        manifest = json.loads((args.output / "manifest.json").read_text())
+        if args.input_manifest is not None:
+            manifest, registry_paths = _load_input_manifest_state(args.input_manifest.absolute(), args.input_manifest_sha256, args.output)
+        else:
+            manifest = json.loads((args.output / "manifest.json").read_text())
+            registry_paths = None
         selected_files = select_manifest_files(manifest, args.wikis)
+        if registry_paths is None:
+            registry_paths = derived_registry_paths(manifest, args.output)
         selected_editions = {item['wiki'] for item in selected_files}
         for item in manifest.get("language_registries", []):
             if item['wiki'] in selected_editions:
-                validate_registry_file(args.output, item)
+                path = registry_paths.get((item["wiki"], item["date"]), args.output / item["wiki"] / item["date"] / item["name"])
+                _validate_registry_file_path(path, item)
         if args.plan:
             print(f"{len(selected_files)} files in saved manifest")
         else:

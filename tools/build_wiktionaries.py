@@ -26,7 +26,7 @@ import uuid
 from compress_blobs import compress, compress_many, default_workers, verify_round_trip
 from build_disk_limits import BUILD_DISK_RESERVE_BYTES, require_merge_disk_space, compressed_blob_size
 from build_artifact_root import configure_artifact_root, artifact_path, remove_artifact_tree, unlink_artifact
-from download_wiktionaries import digest, language_registry_snapshot, validate_item, write_language_registry, select_manifest_files
+from download_wiktionaries import digest, language_registry_snapshot, validate_item, write_language_registry, select_manifest_files, derived_registry_paths, load_input_manifest
 import reviewed_nonlexical as nonlexical
 
 PROJECT = Path(__file__).resolve().parent.parent
@@ -750,6 +750,7 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
     workspace=PROJECT if workspace is None else workspace
     captures=manifest.get('auxiliary_capture_roots',{})
     if not isinstance(captures,dict):raise ValueError('Invalid auxiliary capture roots')
+    derived_paths=derived_registry_paths(manifest,downloads)
     records=manifest.get('language_registries',[])
     if not isinstance(records,list):raise ValueError('Invalid language registry inventory')
     languages={}
@@ -829,12 +830,15 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                     snapshots['magic-words']=path
         elif (downloads/edition/date/'namespace-registry.tsv').is_file():
             snapshots['namespace-registry']=downloads/edition/date/'namespace-registry.tsv'
+        # Authenticated derivation supersedes captured discovery, never an explicit caller selection.
+        if (edition,date) in derived_paths and 'language-registry' not in (overrides or {}):
+            snapshots['language-registry']=derived_paths[(edition,date)]
         snapshots.update(overrides or {})
         if 'namespace-registry' not in snapshots:raise ValueError(f'Missing namespace registry for {edition}/{date}')
         if 'language-registry' not in snapshots:
             record=languages.get((edition,date))
             if record is None or record.get('name')!='language-registry.tsv':raise ValueError(f'Missing pinned language registry for {edition}/{date}')
-            path=downloads/edition/date/record['name']
+            path=derived_paths.get((edition,date),downloads/edition/date/record['name'])
             if not path.is_file() or path.stat().st_size!=record.get('size') or sha256_file(path)!=record.get('sha256'):
                 raise ValueError(f'Unverified language registry: {path}')
             snapshots['language-registry']=path.resolve(strict=True)
@@ -3013,6 +3017,8 @@ def main():
     p.add_argument('--expansion-workers',type=int,help='Workers per sharded page expansion; default follows --threads, opt-in 5-8 requires watchdog and one edition job')
     p.add_argument('--expansion-timeout-ms',type=int,help='Explicit per-page wall deadline, 1 through 3600000 ms; default 60000. Timeouts fail the build rather than publish empty pages.')
     p.add_argument('--wikis',nargs='+',help='Build only these edition IDs')
+    p.add_argument('--input-manifest',type=Path,help='Explicit immutable input manifest; downloads remain in --downloads')
+    p.add_argument('--input-manifest-sha256',help='Required SHA256 for --input-manifest')
     p.add_argument('--now-unix',type=int,help='Pin build-time MediaWiki time for repeatable complete builds')
     p.add_argument('--interwiki-map-snapshot',type=Path,
                    help='Current siteinfo interwiki-map.tsv; its SHA-256 is part of the shard identity')
@@ -3074,7 +3080,9 @@ def main():
     if not 1 <= a.jobs <= 16:p.error('Jobs must be 1 through 16')
     if a.jobs*admission_workers > budget:p.error(f'jobs × workers must not exceed safe host budget {budget}')
     try:
-        manifest=json.loads((a.downloads/'manifest.json').read_text())
+        if bool(a.input_manifest)!=bool(a.input_manifest_sha256):raise ValueError('Explicit input manifest requires exact SHA256')
+        manifest=(load_input_manifest(a.input_manifest.absolute(),a.input_manifest_sha256,a.downloads.resolve())
+                  if a.input_manifest is not None else json.loads((a.downloads/'manifest.json').read_text()))
         items=select_manifest_files(manifest,a.wikis)
     except ValueError as error: p.error(str(error))
     groups={}
