@@ -1,0 +1,34 @@
+# wikidict-namespace-registry-v1
+# wiki	svwiktionary
+# dump-date	20261001
+# content-language	sv
+-2	Media	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Special	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Diskussion	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	Användare	User	first-letter	1	0	0		compile_only	standard_build_input
+3	Användardiskussion	User talk	first-letter	1	0	0		compile_only	discussion_namespace
+4	Wiktionary	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT
+5	Wiktionarydiskussion	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	WT-diskussion	Wiktionary talk
+6	Fil	File	case-sensitive	0	0	0		compile_only	standard_build_input	Bild	Image
+7	Fildiskussion	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Bilddiskussion	Image talk
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	MediaWiki-diskussion	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	MediaWiki diskussion
+10	Mall	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Malldiskussion	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	Hjälp	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Hjälpdiskussion	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Hjälp diskussion
+14	Kategori	Category	case-sensitive	0	0	0		compile_only	standard_build_input	KAT
+15	Kategoridiskussion	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+102	Appendix	Appendix	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+103	Appendixdiskussion	Appendixdiskussion	case-sensitive	1	0	0		compile_only	discussion_namespace
+104	Rimord	Rimord	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+105	Rimordsdiskussion	Rimordsdiskussion	case-sensitive	1	0	0		compile_only	discussion_namespace
+106	Transwiki	Transwiki	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+107	Transwikidiskussion	Transwikidiskussion	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Modul	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Moduldiskussion	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

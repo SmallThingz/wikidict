@@ -362,6 +362,72 @@ def render(profiles, directions, wiki, date, content_language):
     return ('\n'.join(lines) + '\n').encode('utf-8')
 
 
+
+SUPPORT_PROFILE = 'core-localization-positive-v1'
+SUPPORT_CORE = '79b81ba96674efc8a803fc956bc501d347d440d2'
+SUPPORT_SCOPE = 'immutable-primary-source-positive-only-not-deployed-observation'
+SUPPORT_PREFIX = 'language-names.support-source-'
+SUPPORT_SOURCES = {
+    'LanguageNameUtils.php': ('includes/Language/LanguageNameUtils.php', '5f55c8ed75da5dfee8f708a3c620b5f17dbe33396e99882175cb92f4828ba8f8'),
+    'nl.json': ('languages/i18n/nl.json', 'fca291d5bd2c1796a3a15dbd8bb72c67e74553cd6d8ac0e70015a4c54522003f'),
+}
+
+
+def supported_language_profile(root, profile, wiki, date, content_language, prefix=SUPPORT_PREFIX):
+    """Prove only the reviewed positive branch; absence is not false support."""
+    if (not isinstance(profile, dict) or set(profile) != {
+            'id', 'core', 'codes', 'scope', 'namespace_registry_sha256', 'siteinfo_sha256'}
+            or profile['id'] != SUPPORT_PROFILE or profile['core'] != SUPPORT_CORE
+            or profile['codes'] != ['nl'] or profile['scope'] != SUPPORT_SCOPE):
+        raise ValueError('Unreviewed language support source profile')
+    root = Path(root)
+    namespace = evidence.small(root / (prefix + 'namespace-registry.tsv'))
+    site_raw = evidence.small(root / (prefix + 'namespace-siteinfo.raw.json'))
+    if (evidence.digest(namespace) != profile['namespace_registry_sha256']
+            or evidence.digest(site_raw) != profile['siteinfo_sha256']
+            or namespace_identity(namespace, wiki, date) != content_language):
+        raise ValueError('Language support selected namespace identity differs')
+    site = evidence.decode(site_raw)
+    if not isinstance(site, dict) or any(key in site for key in ('error', 'errors', 'warnings')):
+        raise ValueError('Unsuccessful language support siteinfo')
+    if (site.get('date') != date or site.get('content_language') != content_language
+            or site.get('namespace_registry_sha256') != evidence.digest(namespace)):
+        raise ValueError('Language support siteinfo namespace/date binding differs')
+    general = site.get('query', {}).get('general', {})
+    if (general.get('wikiid'), general.get('lang'), general.get('git-hash')) != (wiki, content_language, SUPPORT_CORE):
+        raise ValueError('Language support core/wiki context differs')
+    receipts = evidence.decode(evidence.small(root / (prefix + 'source-receipts01.json')))
+    if (not isinstance(receipts, dict) or receipts.get('core') != SUPPORT_CORE
+            or not isinstance(receipts.get('sources'), list)
+            or len(receipts['sources']) != len(SUPPORT_SOURCES)):
+        raise ValueError('Incomplete language support primary receipts')
+    seen = set()
+    for receipt in receipts['sources']:
+        if not isinstance(receipt, dict) or receipt.get('file') not in SUPPORT_SOURCES or receipt['file'] in seen:
+            raise ValueError('Unexpected or repeated language support source')
+        name = receipt['file']; seen.add(name)
+        source_path, expected = SUPPORT_SOURCES[name]
+        raw = evidence.small(root / (prefix + name), MAX_SOURCE)
+        url = f'https://raw.githubusercontent.com/wikimedia/mediawiki/{SUPPORT_CORE}/{source_path}'
+        if (receipt.get('source_path') != source_path or receipt.get('url') != url
+                or receipt.get('status') != 200 or receipt.get('bytes') != len(raw)
+                or receipt.get('sha256') != expected or evidence.digest(raw) != expected):
+            raise ValueError('Language support primary source identity differs')
+        if name.endswith('.json') and not isinstance(evidence.decode(raw), dict):
+            raise ValueError('Invalid localization JSON')
+    # The reviewed LanguageNameUtils body excludes qqq and conditional Pig Latin,
+    # then ORs PHP/JSON readability. The pinned nl JSON proves this positive arm.
+    # It proves neither a negative for absent files nor a deployed config state.
+    return {'nl': True}
+
+
+def render_supported_languages(rows):
+    if not isinstance(rows, dict) or any(not code(k) or type(v) is not bool for k, v in rows.items()):
+        raise ValueError('Invalid explicit language support rows')
+    if rows.get('qqq') is True:
+        raise ValueError('qqq cannot be supported')
+    return ''.join(f'S\t{k}\t{int(v)}\n' for k, v in sorted(rows.items())).encode('utf-8')
+
 def producer():
     return {'generator_sha256': evidence.digest(evidence.small(Path(__file__))),
             'dependency_sha256': {name: evidence.digest(evidence.small(Path(evidence.__file__).with_name(name)))

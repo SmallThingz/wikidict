@@ -33,6 +33,7 @@ const Options = struct {
     magic_words_snapshot: ?[]const u8 = null,
     file_metadata_snapshot: ?[]const u8 = null,
     transclusion_redirects_snapshot: ?[]const u8 = null,
+    stylesheet_imports_snapshot: ?[]const u8 = null,
     llvm_workers: ?usize = null,
     page_workers: usize = 1,
     expansion_timeout_ms: ?u32 = null,
@@ -54,6 +55,10 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.namespace_registry_snapshot != null) return error.Usage;
             options.namespace_registry_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--stylesheet-imports-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.stylesheet_imports_snapshot != null) return error.Usage;
+            options.stylesheet_imports_snapshot = args[index];
         } else if (std.mem.eql(u8, args[index], "--site-info-snapshot")) {
             index += 1;
             if (index >= args.len or options.site_info_snapshot != null) return error.Usage;
@@ -961,6 +966,7 @@ test "structured Wikibase and language fallback snapshot options are strict" {
         .{ "--site-info-snapshot", "site_info_snapshot" },
         .{ "--site-statistics-format-snapshot", "site_statistics_format_snapshot" },
         .{ "--category-statistics-format-snapshot", "category_statistics_format_snapshot" },
+        .{ "--stylesheet-imports-snapshot", "stylesheet_imports_snapshot" },
     };
     inline for (cases) |case| {
         const options = try parseOptions(&.{ "dump.xml", "out", case[0], "snapshot.tsv" });
@@ -1011,6 +1017,8 @@ pub fn main(init: std.process.Init) !void {
     // incomplete marker so the caller still has durable failed-build state.
     try std.Io.Dir.cwd().access(init.io, dump, .{});
     try installSnapshot(init.io, a, options.namespace_registry_snapshot orelse return error.NamespaceRegistryRequired, expander_root, "namespace-registry.tsv");
+    if (options.stylesheet_imports_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "stylesheet-imports.json");
     if (options.site_info_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "namespace-siteinfo.raw.json");
     if (options.site_statistics_format_snapshot) |snapshot|
@@ -1203,4 +1211,10 @@ test "bundle image option snapshot arguments are strict" {
     try std.testing.expectEqualStrings("image.tsv", options.image_options_snapshot.?);
     try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--image-options-snapshot" }));
     try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--image-options-snapshot", "image.tsv", "--image-options-snapshot", "other.tsv" }));
+}
+
+test "explicit stylesheet snapshot option remains separate and rejects duplicates" {
+    const options = try parseOptions(&.{ "dump", "out", "--stylesheet-imports-snapshot", "snapshot.json" });
+    try std.testing.expectEqualStrings("snapshot.json", options.stylesheet_imports_snapshot.?);
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump", "out", "--stylesheet-imports-snapshot", "a", "--stylesheet-imports-snapshot", "b" }));
 }

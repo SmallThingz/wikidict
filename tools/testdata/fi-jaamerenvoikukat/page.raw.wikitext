@@ -1,0 +1,22 @@
+
+==Suomi==
+===Substantiivi===
+{{fi-subs}} (''monikollinen'')
+
+# yksi [[voikukat|voikukkien]] sukuun kuuluvista sektioista ({{takso|Taraxacum sect. Arctica}}<ref>{{lähde-kassu|<http://www.yso.fi/onto/kassu/k38531|Arctica}}. Viitattu 31.5.2016 päivättyyn versioon</ref>)
+
+====Käännökset====
+{{kohta|1|''Taraxacum'' sect. ''Arctica''|
+
+|loppu}}
+
+===Substantiivi===
+'''jäämerenvoikukat'''
+
+# {{taivm-mon-nom|fi|jäämerenvoikukka|luok=s}}
+# {{taivm-mon-akk|fi|jäämerenvoikukka|luok=s}}
+
+==Viitteet==
+<references/>
+
+[[Luokka:Suomen kielen kasvien sektiot]]

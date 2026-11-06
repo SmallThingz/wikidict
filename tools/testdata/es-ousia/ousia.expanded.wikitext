@@ -1,0 +1,41 @@
+== <span id="grc" class="headline-lang"></span>[[Apéndice:GRC:Referencia|Griego antiguo]][[Categoría:Griego antiguo]] ==
+<templatestyles src="Plantilla:pron-graf/styles.css"/>
+{|class="pron-graf"
+|style="background-color: var(--background-color-neutral, #eaecf0); color: var(--color-base, #202122);" colspan="2"|<span style="font-family: Arial, sans-serif; font-size: 1.5em;">οὐσία</span>
+|-
+|[[Apéndice:GRC:Referencia/Pronunciación|'''clásico''']] ([[Alfabeto Fonético Internacional|AFI]])
+|[uː.sí.a] /uː.ˈsi.aː/<br/>
+|-
+|[[Apéndice:GRC:Referencia/Pronunciación|'''koiné''']] ([[Alfabeto Fonético Internacional|AFI]])
+|[uˈsi.a]<br/>
+|-
+|[[Apéndice:GRC:Referencia/Pronunciación|'''bizantino''']] ([[Alfabeto Fonético Internacional|AFI]])
+|[uˈsi.a]<br/>
+|-
+|'''variantes'''
+|[[ἐσσία]],&nbsp;[[ὠσία]]<ref>dórico</ref>
+|}[[Categoría:GRC:Páginas sin audios]]
+
+=== Etimología ===
+De  [[οὖσα#Griego antiguo|''οὖσα'']] (''oũsa'')[[Categoría:GRC:Palabras endógenas|ΟΥΣΙΑ]], forma de nominativo femenino singular del participio de presente activo del verbo [[εἰμί#Griego antiguo|''εἰμί'']]&nbsp;(''eimí'',&nbsp;'[[ser#Español|ser; estar]]')<ref>«A Greek-English Lexicon». Oxford, 1940. Obtenido de: [http://www.perseus.tufts.edu/hopper/morph?l={{{1}}}&la=greek#lexicon http://www.perseus.tufts.edu/hopper/morph?l={{{1}}}&la=greek#lexicon]. </ref>, del protoindoeuropeo [[*h₁sóntih₂#Protoindoeuropeo|''*h₁sóntih₂'']], femenino de [[*h₁sónts#Protoindoeuropeo|''*h₁sónts'']], participio de [[*h₁es-#Protoindoeuropeo|''*h₁es-'']]&nbsp;('[[ser#Español|ser]]')
+
+=== Sustantivo femenino[[Categoría:GRC:Sustantivos femeninos|ΟΥΣΙΑ]][[Categoría:GRC:Sustantivos|ΟΥΣΙΑ]][[Categoría:GRC:Lemas|ΟΥΣΙΑ]][[Categoría:Lemas|ΟΥΣΙΑ]] ===
+
+;1: [[propiedad#Español|Propiedad]], [[patrimonio]], [[fortuna]]
+
+;2: En particular, propiedad [[inmobiliario|inmobiliaria]], [[tierra]]s
+
+;3 Filosofía[[Categoría:GRC:Filosofía|ΟΥΣΙΑ]]: [[esencia#Español|Esencia]], [[naturaleza]]
+:*'''Antónimos:''' [[πάθη#Griego antiguo|πάθη]], [[συμβεβηκότα#Griego antiguo|συμβεβηκότα]].
+
+;4 Filosofía[[Categoría:GRC:Filosofía|ΟΥΣΙΑ]]: [[sustancia#Español|Sustancia]]
+
+;5 Filosofía[[Categoría:GRC:Filosofía|ΟΥΣΙΑ]]: [[sustancialidad#Español|Sustancialidad]]
+
+;6: [[yeso#Español|Yeso]]
+
+=== Declinación ===
+<strong class="error"><span class="scribunto-error">Lua error in Módulo:flex/grc: UnsupportedExtensionTag</span></strong>
+
+== Referencias y notas ==
+<references />

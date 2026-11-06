@@ -1,0 +1,420 @@
+cite { font-style: normal; }
+
+/*
+== Rubriker ==
+
+The headline HTML has a legacy syntax and a new syntax.
+For some time, which syntax is used depends on the skin. Support both variants.
+See https://www.mediawiki.org/wiki/Heading_HTML_changes.
+*/
+/* Språkrubriken */
+.ns-0 h2, /* Legacy HTML */
+.ns-0 .mw-heading2 /* New HTML */ {
+	clear: both; /* hindra böjningstabeller mm från att glida över i nästa språk */
+	overflow: visible; /* formatera [[MediaWiki:Gadget-prominent interwikis.js]] rätt */
+	margin: 0.6em 0 0 0; /* öka avstånd ovanför, minska avstånd till nedanstående ordklassrubrik */
+}
+/* Ordklass- och översättningsrubrikerna */
+.ns-0 h3, .ns-0 h4, /* Legacy HTML */
+.ns-0 .mw-heading3, .ns-0 .mw-heading4 /* New HTML */ {
+	/*
+	 * Hindra böjningstabeller mm från att glida över i nästa ordklass och se till
+	 * att översättningsrubriken fortfarande är intill översättningsavsnittet.
+	 */
+	clear: both;
+}
+/* Dölj Redigera-länk för h3-avsnitt, eftersom detta inte stöds av [[MediaWiki:Gadget-tidy.js]] */
+.ns-0 h3 > .mw-editsection, /* Legacy HTML */
+.ns-0 .mw-heading3 > .mw-editsection /* New HTML */ {
+	display: none;
+}
+
+/*
+== Göm rubriken på huvudsidan ==
+*/
+.page-Wiktionary_Huvudsida.action-view h1.firstHeading { display: none; }
+
+/*
+== Göm rubriker på kategorisidor ==
+*/
+.ns-14 #mw-content-text h3 { display:none; }
+
+/*
+== Semantiska relationer ==
+*/
+/* markera rubriken för semantiska relationer tydligt (använt i {{synonymer}}, {{antonymer}} etc.) */
+.semantic-relation em {
+	color:#6b5a40;
+	font-style:normal;
+}
+
+/*
+== Markera omdirigeringar ==
+*/
+/* markera omdirigeringar i [[Special:Prefixindex]] och [[Special:Alla sidor]] tydligt */
+div.allpagesredirect a {
+	opacity:0.8;
+	font-style:italic;
+	padding-right:16px;
+	background:url("//upload.wikimedia.org/wikipedia/commons/thumb/7/71/Arrow_east.svg/12px-Arrow_east.svg.png") right no-repeat;
+}
+
+/*
+== Typsnitt ==
+*/
+/* använt i {{ipa}} */
+.ipa, .IPA {
+	font-family:"Arial Unicode MS", "Lucida Sans Unicode", "Lucida Sans", Code2000, Code2001, "Doulos SIL", "TITUS Cyberbit", "TITUS Cyberbit Basic", "Chrysanthi Unicode", Gentium, GentiumAlt, "Bitstream Cyberbit", "Bitstream Vera", sans-serif;
+}
+
+/* klasser använda för olika skriftsystem, t.ex. mha {{+arab}}, {{+thai}} */
+.arab-script { font-family:Tahoma, "Arial Unicode MS", Code2000, "Traditional Arabic"; font-size:125%; }
+.armn-script { font-family:Mshtakan, Tahoma, Arian AMU, DejaVu Sans, Sylfaen, Code2000, "Arial Unicode MS", sans-serif; font-size:120%; }
+.cyrl-script { font-family:Helvetica, Lucida Grande, Geneva, "Arial Unicode MS", Lucida Sans Unicode, Code2000, sans-serif; }
+.deva-script { font-family:Devanagari Sangam MN, Devanagari MT, Mangal, Raghu, Gargi, JanaSanskrit, JanaHindi, "Arial Unicode MS", Code2000, Bitstream Cyberbit, Bitstream CyberBase, sans-serif; font-size:125%; }
+.fa-arab-script { font-family:Tahoma, "Arial Unicode MS", Code2000; font-size:125%; }
+.geor-script { font-family:DejaVu Sans, "Arial Unicode MS", Sylfaen; }
+.grek-script { font-family:Athena, Gentium, Palatino Linotype, "Arial Unicode MS", Lucida Sans Unicode, Lucida Grande, Code2000, sans-serif; }
+.hani-script { font-family:SimSun, PMingLiU, Song, Ming, MingLiu, "Arial Unicode MS", Code2000, sans-serif; font-size:110%; font-style:normal; font-weight:normal; }
+.hebr-script { font-family:"SBL Hebrew", David, Narkisim, Miriam, Arial, serif; font-size:1.15em; font-style:normal; }
+.jpan-script { font-family:Hiragino Kaku Gothic Pro, MS PGothic, "Arial Unicode MS", Code2000, sans-serif; font-size:110%; font-style:normal; }
+.syrc-script {
+	font-family: 'Estrangelo Edessa', 'San Francisco', 'Code2000', 'Bitstream Cyberbit', 'Bitstream CyberBase', 'Bitstream Vera', 'TITUS Cyberbit Basic', 
+		/* tru: Serto or Western form of Syriac */'Noto Sans Syriac Western', 'Serto Jerusalem', 'Noto Sans Syriac',
+		/* aii: Madnhaya or Eastern form of Syriac */ 'Noto Sans Syriac Eastern', 'Noto Sans Syriac',
+		sans-serif;
+	font-size:125%; font-style:normal; }
+.taml-script { font-family:Tamil Sangam MN, InaiMathi, Vijaya, Akshar, JanaTamil, Code2000, ETTamilNew, Lohit Tamil, "Arial Unicode MS", Free Serif, Latha, sans-serif; font-size:125%; }
+.thai-script { font-family:"Arial Unicode MS", Code2000; font-size:125%; }
+
+/*
+== Wikitable ==
+*/
+.wikitable {
+	margin: 0.5em;
+	background: #ffffe0;
+	border: 1px #c5bf86 solid;
+	border-collapse: collapse;
+}
+
+.wikitable th, .wikitable td {
+	border: 1px #c5bf86 solid;
+	background: #ffffe0;
+	padding: 0.2em;
+}
+
+.wikitable th {
+	background: #eee9bf;
+	text-align: center;
+}
+
+.wikitable caption {
+	margin-left: inherit;
+	margin-right: inherit;
+}
+
+
+.wikitable.preload td {
+	background: inherit;
+}
+
+/*
+== {{tecken}} ==
+*/
+.symbol-display {
+	float: right;
+	clear: right;
+	border: 1px solid #eee;
+	line-height: 1;
+	text-align: center;
+	margin-bottom: 1em;
+}
+.symbol-display .symbol {
+	font-size: 500%;
+	padding: 0.15em 0.05em;
+}
+.symbol-display .information {
+	background-color: #eee;
+	padding: 0.15em 0.05em;
+}
+.symbol-display .codepoint {
+	font-weight: bold;
+	font-family: monospace;
+}
+
+/*
+== Grammatikmallar ==
+*/
+.grammar {
+	float:right;
+	clear:right;
+	margin:0 0 10px 10px;
+	background-color:#fffafa;
+	color:#8b795e;
+	text-align:center;
+	font-size:11px;
+	line-height:14px;
+	font-stretch:extra-expanded;
+	border:1px solid #eee9bf;
+}
+
+.grammar-hide .NavHead {
+	color:#8b795e;
+}
+
+.grammar th, .grammar td {
+	width:70px;
+	background-color:#fffafa;
+	border:1px solid #fffafa;
+	border-width:1px 0 0 1px;
+	padding:3px;
+	margin:0;
+}
+
+.grammar th {
+	background-color:#eee9bf;
+	font-weight:normal;
+	font-style:italic;
+	width:auto;
+}
+
+.grammar th.main {
+	font-weight:bold;
+	font-style:normal;
+	width:70px;
+}
+
+.grammar td {
+	border-color: #eee9bf;
+}
+
+.grammar td.note {
+	width:auto;
+	padding:1px 2px 2px 1px;
+}
+
+.grammar td.note div {
+	padding:2px 1px 1px 2px;
+}
+
+.grammar td.note table {
+	width:100%;
+	border-collapse:collapse;
+	border:1px solid #cac278;
+}
+
+.grammar td.note table th, .grammar td.note table td {
+	border-style:none;
+	background-color:#f3f1d9;
+	color:#8b795e;
+	padding:0.3em;
+	text-align:left;
+	width:100%;
+}
+
+.grammar td.note table th {
+	font-style:italic;
+	font-weight:normal;
+	padding:0.5em 1em;
+	width:60px;
+	text-align:center;
+}
+
+.grammar td.min, .grammar.min td, .grammar th.main.min, .grammar.min th.main {
+	width:auto;
+}
+
+.grammar td[colspan], .grammar th.main[colspan] {
+	width:auto;
+}
+.grammar td.grammar-warning {
+	background-color:#fff0f0;
+}
+
+
+/* extra ram ev runt vissa celler */
+.grammar td.b-left {
+	border-left-color:#eee9bf;
+}
+.grammar td.b-top {
+	border-top-color:#eee9bf;
+}
+
+/* hantera gömda mallar i mallar */
+.grammar table.NavFrameContainer {
+	margin:-0.3em;
+	font-style:normal;
+}
+.grammar table.NavFrameContainer td {
+	padding:0;
+	border:none;
+}
+.grammar div.NavFrame .grammar {
+	border:none;
+	margin-left:-0.3em;
+}
+
+/* grammar tables should fit tightly */
+div.NavFrame .grammar {
+	margin:0;
+}
+
+.grammar .grammar-arrow {
+	color: #ba8;
+}
+
+/*
+== Meddelanderutor ==
+*/
+.message_header,
+.message_content {
+	background: #ffffe0;
+	border-style: solid;
+	border-color: #eee9bf #eee9bf #eee9bf #e2d23c;
+	border-width: 1px 1px 1px 10px;
+	margin: 0 10%;
+	padding: 0.5em 1em;
+}
+.message_header {
+	font-weight: bold;
+	border-bottom-width: 0;
+	padding-bottom: 0;
+}
+.message_content {
+	border-top-width: 0;
+	font-style: italic;
+}
+#toc {
+	margin-top: 0.5em;
+}
+
+
+/*
+== {{audio}} ==
+*/
+.audiolink a {
+	background: url("//upload.wikimedia.org/wikipedia/commons/thumb/8/8a/Loudspeaker.svg/12px-Loudspeaker.svg.png") center left no-repeat !important;
+	padding-left: 12px !important;
+	padding-right: 0 !important;
+}
+/*
+== {{f}}, {{m}}, {{p}} m.fl. ==
+*/
+/* bestäm färg åt {{f}}, {{m}}, {{p}} m.fl. */
+#bodyContent .gender {
+	color: #6b5a40;
+	font-style: italic;
+}
+
+/*
+== Gömbara rutor ==
+*/
+/* Standard Navigationsleisten, aka box hiding thingy from .de.*/
+.NavFrame {
+	clear: both;
+	border: 1px solid #BFB76D;
+	padding: 2px !important;
+	overflow: hidden;
+}
+.NavFrame + .NavFrame {
+	margin-top: -1px;
+}
+.NavFrame .NavHead {
+	padding: 0 0.3em;
+	font-weight: bold;
+	font-size: 100%;
+	background-color: #EEE9BF;
+	position: relative;
+}
+.NavToggle {
+	float: right;
+	margin-left: 1em;
+	font-weight: normal;
+	font-size: smaller;
+}
+.NavFrame.half-width {
+	width: 50%;
+	clear: left;
+	float: left;
+}
+table.NavFrameContainer {
+	float:right;
+	clear:right;
+	font-size:11px;
+	line-height:14px;
+}
+.NavFrame > .NavContent {
+	overflow: auto;
+}
+.client-js .NavFrame > .NavContent {
+	display: none;
+}
+
+
+/*
+== Mobil sida ==
+*/
+/* Den mobila sidan sköts via [[MediaWiki:Mobile.css]], men här gömmer vi sånt som annars skulle vara med två gånger */
+.mobileonly { display: none; }
+.mobile .mobileonly { display: block; }
+
+/*
+== [[Mall:saknad betydelse]] ==
+*/
+.template-saknad_betydelse {
+	clear:right;
+	float:right;
+	margin-left:0.2em;
+}
+.template-saknad_betydelse + .template-saknad_betydelse {
+	clear:none;
+}
+
+/*
+== {{ö-inte}} ==
+*/
+.template-ö-inte {
+	font-style: italic;
+}
+.template-ö-inte a {
+	text-decoration: line-through;
+}
+
+/*
+== {{ö-topp}}, {{ö-botten}} ==
+*/
+.ö-content {
+	-moz-column-width: 25em;
+	-webkit-column-width: 25em;
+	column-width: 25em;
+	background: #FFFFE0;
+	padding-top: 2px;
+}
+
+.ö-content li {
+	-webkit-column-break-inside: avoid;
+	page-break-inside: avoid;
+	break-inside: avoid-column;
+}
+
+/* Se till att första kolumnen inte blir kortare än väntat */
+.ö-content > ul {
+	margin-top: 0;
+}
+
+/* Stödet för `break-inside` är bristfälligt, men vi kan gå runt det med inline-block. Då måste vi tyvärr också lägga tillbaka list-punkten. */
+.ö-content > ul > li {
+	display: inline-block;
+	width: 100%;
+}
+
+	.ö-content > ul > li:before {
+		content: "";
+		position: relative;
+		display: inline-block;
+		left: -1em;
+		width: 5px;
+		height: 13px;
+		margin-right: -5px;
+		background: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%225%22 height=%2213%22%3E %3Ccircle cx=%222.5%22 cy=%229.5%22 r=%222.5%22 fill=%22%2300528c%22/%3E %3C/svg%3E") no-repeat center;
+	}

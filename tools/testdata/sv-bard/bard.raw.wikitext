@@ -1,0 +1,38 @@
+{{se även|bard|barð}}
+
+==Svenska==
+===Substantiv===
+{{sv-subst-n-er}}
+{{media|Stridsvagn m21-29 Axvall 31.05.00.jpg|kamouflagemönster med svart '''bård''' (kant, rand) mellan färgfälten|4032861226 wallpaper.jpg|'''bård''' (tapetbård)}}
+'''bård'''
+#{{tagg|kat=mindre brukligt|text=allmänt}} [[kant]], [[rand]]
+#:{{citat|år=2015|titel=Strv m/21|förf=Rickard O. Lindström|Senare samma år försågs de med en kamouflagemålning i mörkgrönt, brunt och ljus sand i oregelbundna fält som separerades med en svart '''bård'''.}}
+#{{tagg|text=konstruktion}} [[ram]], [[infattning]]
+#:{{användning|om ram och infattning kring [[fönster]] och [[dörr]]ar}}
+#{{tagg|textilier}} [[långsmal]]t område (ofta [[kant]]) som skiljer sig från omgivningen hos [[tyg]]er eller [[tapet]]er
+#:''Jag undrar vilken '''bård''' vi ska välja till den nya tapeten.''
+#:{{hyperonymer|[[bårdatröja]], [[bårdmönster]], [[bårdschal]], [[bårdtröja]], [[tapetbård]]}}
+#{{tagg|hantverk}} om upphöjd eller insänkt [[rand]]
+#{{tagg|bokbinderi}} [[bokband]]
+#:{{citat|år=1916-1920|titel=Storhetstidens litterära krigsbyten. En kulturhistorisk-bibliografisk studie. 1–2|Bandet består af mörkbrunt kalfskinn med en blindprässad, rätt bred '''bård'''.}}
+#{{tagg|geografi}} [[gräns]]; om yttre, smal begränsning av mark och dylikt
+#{{tagg|naturgeografi}} [[strand]], [[strandbrädd]]
+#{{tagg|huvudbonader}} [[hattbrätte]]
+#:{{hyperonymer|[[bårdhatt]], [[bårdahatt]], [[hattbård]]}}
+#{{tagg|kläder|text=dödform}} [[band]]; [[bälte]], [[skärp]]
+:{{avgränsare}}
+:{{sammansättningar|[[bårdahatt]], [[bårdatröja]], [[bårdhatt]], [[bårdmönster]], [[bårdschal]], [[bårdtröja]], [[hattbård]], [[tapetbård]]}}
+:{{etymologi|Av {{härledning|sv|non|barð|kant, gräns, rand; "något med kant"}}. Kognat med {{kognat|en|border|kant}}, {{kognat|de|Borte|kant}}.}}
+:{{besläktade ord|[[bard]], [[bårda]]}}
+:{{homofoner|board}}
+
+====Översättningar====
+{{ö-topp|}}
+*danska: {{ö+|da|bort}}
+*engelska: {{ö+|en|border}}
+*franska: {{ö+|fr|bord|m}}, {{ö+|fr|bordure|f}}
+*tyska: {{ö+|de|Borte|f}}, {{ö+|de|Bordüre|f}}
+{{ö-botten}}
+
+==Källor==
+*{{källa-saob|bård|2024-10-22|unik=B_4693-0057.bZw9&pz=3>}}

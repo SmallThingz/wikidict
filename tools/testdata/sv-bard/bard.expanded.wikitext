@@ -1,0 +1,121 @@
+<p><i>Se även </i>[[bard]] <i>och</i> [[barð]].</p>
+
+==Svenska==
+===Substantiv===
+
+{| class="grammar template-sv-subst-n-er  " cellspacing="0" width="10"   
+!class="main"|Böjningar&nbsp;av ''[[bård]]&nbsp;''
+!colspan="2" class="min"|Singular
+!colspan="2" class="min"|Plural
+|-
+!class="main"|utrum
+!Obestämd
+!Bestämd
+!Obestämd
+!Bestämd
+|-
+!Nominativ
+|<span class="b-0">[[bård]]</span>
+|<span class="b-">[[bården]]</span>
+|<span class="b-">[[bårder]]</span>
+|<span class="b-">[[bårderna]]</span>
+|-
+!Genitiv
+|<span class="b-">[[bårds]]</span>
+|<span class="b-">[[bårdens]]</span>
+|<span class="b-">[[bårders]]</span>
+|<span class="b-">[[bårdernas]]</span>
+
+|}
+
+
+[[Kategori:Svenska/Alla uppslag|bz~rd]][[Kategori:Svenska/Substantiv|bz~rd]]
+[[Fil:Stridsvagn m21-29 Axvall 31.05.00.jpg|miniatyr|stående|&#32;kamouflagemönster med svart '''bård''' (kant, rand) mellan färgfälten]][[Fil:4032861226 wallpaper.jpg|miniatyr|stående|&#32;'''bård''' (tapetbård)]]
+'''bård'''
+#[[Kategori:Svenska/Mindre brukligt|bz~rd]] ''(allmänt)''  [[kant]], [[rand]]
+#:'''2015:''' ''Strv m/21'', Rickard O. Lindström:
+#::'' Senare samma år försågs de med en kamouflagemålning i mörkgrönt, brunt och ljus sand i oregelbundna fält som separerades med en svart '''bård'''. ''
+#:::''  ''
+# ''(konstruktion)''  [[ram]], [[infattning]]
+#:<dd class="semantic-relation template-användning"><em>Användning:</em> om ram och infattning kring [[fönster]] och [[dörr]]ar</dd>
+#[[Kategori:Svenska/Textilier|bz~rd]] ''(textilier)''  [[långsmal]]t område (ofta [[kant]]) som skiljer sig från omgivningen hos [[tyg]]er eller [[tapet]]er
+#:''Jag undrar vilken '''bård''' vi ska välja till den nya tapeten.''
+#:<dd class="semantic-relation template-hyperonymer"><em title="Överordnade ord">Hyperonymer:</em> [[bårdatröja]], [[bårdmönster]], [[bårdschal]], [[bårdtröja]], [[tapetbård]]</dd>
+#[[Kategori:Svenska/Hantverk|bz~rd]] ''(hantverk)''  om upphöjd eller insänkt [[rand]]
+#[[Kategori:Svenska/Bokbinderi|bz~rd]] ''(bokbinderi)''  [[bokband]]
+#:'''1916-1920:''' ''Storhetstidens litterära krigsbyten. En kulturhistorisk-bibliografisk studie. 1–2'':
+#::'' Bandet består af mörkbrunt kalfskinn med en blindprässad, rätt bred '''bård'''. ''
+#:::''  ''
+#[[Kategori:Svenska/Geografi|bz~rd]] ''(geografi)''  [[gräns]]; om yttre, smal begränsning av mark och dylikt
+#[[Kategori:Svenska/Naturgeografi|bz~rd]] ''(naturgeografi)''  [[strand]], [[strandbrädd]]
+#[[Kategori:Svenska/Huvudbonader|bz~rd]] ''(huvudbonader)''  [[hattbrätte]]
+#:<dd class="semantic-relation template-hyperonymer"><em title="Överordnade ord">Hyperonymer:</em> [[bårdhatt]], [[bårdahatt]], [[hattbård]]</dd>
+#[[Kategori:Svenska/Kläder|bz~rd]] ''(kläder, dödform)''  [[band]]; [[bälte]], [[skärp]]
+:[[Bild:Hor barileto avgraensare i 222 18 px trans.png|222px|link=|Indragna rader ovanför strecket gäller en särskild definition. Eventuella rader närmast nedan kan gälla en eller flera av definitionerna ovan.]]
+:<dd class="semantic-relation template-sammansättningar"><em title="Ord som består av flera andra ord">Sammansättningar:</em> [[bårdahatt]], [[bårdatröja]], [[bårdhatt]], [[bårdmönster]], [[bårdschal]], [[bårdtröja]], [[hattbård]], [[tapetbård]]</dd>
+:<dd class="semantic-relation template-etymologi"><em title="Ordets ursprung">Etymologi:</em> Av fornnordiska&nbsp;<i>[[barð#Fornnordiska|barð]]</i>&nbsp;(”kant, gräns, rand; "något med kant"”)[[Kategori:Svenska/Härledningar från fornnordiska|bz~rd]]. Kognat med engelska ''[[border#Engelska|border]]''&nbsp;(”kant”), tyska ''[[Borte#Tyska|Borte]]''&nbsp;(”kant”).</dd>
+:<dd class="semantic-relation template-besläktade_ord"><em title="Relaterade ord med samma ursprung (men som har andra prefix eller suffix, eller är av annan ordklass)">Besläktade ord:</em> [[bard]], [[bårda]]</dd>
+:[[Kategori:Svenska/Ord med homofoner]]<dd class="semantic-relation template-homofoner"><em title="Ord som uttalas likadant">Homofoner:</em> [[board]]</dd>
+
+====Översättningar====
+[[Kategori:Wiktionary:Översättningstabeller utan definition]]<div class="NavFrame översättningar">
+<div class="NavHead">Översättningar</div>
+<div class="NavContent">
+<div class="ö-content">
+
+*danska: <span
+ class="ö"
+ data-lang="da"
+ data-title="bort"
+ 
+ 
+ 
+ 
+ >[[bort#Danska|bort]]</span><sup>&nbsp;[[:da:bort|(da)]]</sup>
+*engelska: <span
+ class="ö"
+ data-lang="en"
+ data-title="border"
+ 
+ 
+ 
+ 
+ >[[border#Engelska|border]]</span><sup>&nbsp;[[:en:border|(en)]]</sup>
+*franska: <span
+ class="ö"
+ data-lang="fr"
+ data-title="bord"
+ data-gender="m"
+ 
+ 
+ 
+ >[[bord#Franska|bord]]</span><sup>&nbsp;[[:fr:bord|(fr)]]</sup>&#32;<b title="maskulinum" class="gender">''m''</b>, <span
+ class="ö"
+ data-lang="fr"
+ data-title="bordure"
+ data-gender="f"
+ 
+ 
+ 
+ >[[bordure#Franska|bordure]]</span><sup>&nbsp;[[:fr:bordure|(fr)]]</sup>&#32;<b title="femininum" class="gender">''f''</b>
+*tyska: <span
+ class="ö"
+ data-lang="de"
+ data-title="Borte"
+ data-gender="f"
+ 
+ 
+ 
+ >[[Borte#Tyska|Borte]]</span><sup>&nbsp;[[:de:Borte|(de)]]</sup>&#32;<b title="femininum" class="gender">''f''</b>, <span
+ class="ö"
+ data-lang="de"
+ data-title="Bordüre"
+ data-gender="f"
+ 
+ 
+ 
+ >[[Bordüre#Tyska|Bordüre]]</span><sup>&nbsp;[[:de:Bordüre|(de)]]</sup>&#32;<b title="femininum" class="gender">''f''</b>
+</div></div></div>
+
+==Källor==
+*Svenska Akademiens ordbok: "[https://www.saob.se/artikel/?unik=B_4693-0057.bZw9&pz=3> bård]", läst 2024-10-22

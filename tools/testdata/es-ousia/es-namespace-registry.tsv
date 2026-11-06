@@ -1,0 +1,32 @@
+# wikidict-namespace-registry-v1
+# wiki	eswiktionary
+# dump-date	20261001
+# content-language	es
+-2	Medio	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Especial	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Discusión	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	Usuario	User	first-letter	1	0	0		compile_only	standard_build_input	Usuaria
+3	Usuario discusión	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Usuaria discusión
+4	Wikcionario	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WN	WT	Wiktionary
+5	Wikcionario discusión	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	Archivo	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	Imagen
+7	Archivo discusión	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	Imagen discusión
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	MediaWiki discusión	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	Plantilla	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Plantilla discusión	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	Ayuda	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Ayuda discusión	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	Categoría	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Categoría discusión	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+100	Apéndice	Apéndice	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+101	Apéndice Discusión	Apéndice Discusión	case-sensitive	1	0	0		compile_only	discussion_namespace
+110	Tesauro	Tesauro	case-sensitive	1	0	0		thesaurus	verified_edition_feature
+111	Tesauro discusión	Tesauro discusión	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Módulo	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Módulo discusión	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Evento	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Evento discusión	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

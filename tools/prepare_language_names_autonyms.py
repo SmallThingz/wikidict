@@ -482,6 +482,91 @@ def augment(previous, observation_root, output):
     return validate_snapshot(output / (KIND + '.tsv'))
 
 
+
+SUPPORT_FIELDS = frozenset(('support_profile', 'support_producer', 'support_derived_utc',
+                            'support_previous_manifest_sha256', 'support_previous_output_sha256',
+                            'source_derived_support'))
+SUPPORT_PARENT = 'language-names.support-parent-manifest.json'
+
+
+def support_projection(root, manifest, original_tsv):
+    """Keep old API observations and newly derived source support separate."""
+    present = SUPPORT_FIELDS & set(manifest)
+    if not present:
+        return b''
+    if present != SUPPORT_FIELDS or not accepted_producer(manifest['support_producer']):
+        raise ValueError('Incomplete language support derivation provenance')
+    from datetime import datetime
+    stamp = manifest['support_derived_utc']
+    if not isinstance(stamp, str) or datetime.fromisoformat(stamp).tzinfo is None:
+        raise ValueError('Invalid language support derivation timestamp')
+    parent_raw = regular(Path(root) / SUPPORT_PARENT, MAX_MANIFEST)
+    parent = evidence.decode(parent_raw)
+    changed = SUPPORT_FIELDS | {'output_bytes', 'output_sha256', 'artifacts'}
+    if (not isinstance(parent, dict) or SUPPORT_FIELDS & set(parent)
+            or manifest['support_previous_manifest_sha256'] != evidence.digest(parent_raw)
+            or manifest['support_previous_output_sha256'] != evidence.digest(original_tsv)
+            or parent.get('output_sha256') != evidence.digest(original_tsv)
+            or parent.get('output_bytes') != len(original_tsv)
+            or {k: v for k, v in parent.items() if k not in changed} !=
+               {k: v for k, v in manifest.items() if k not in changed}):
+        raise ValueError('Language support parent observation identity changed')
+    # Every old observation artifact stays byte-identical. Only its final TSV is
+    # extended; request/raw/receipt/source inventories and observation times stay.
+    for name, identity in parent['artifacts'].items():
+        if name == KIND + '.tsv':
+            if identity != dict(size=len(original_tsv), sha256=evidence.digest(original_tsv)):
+                raise ValueError('Language support parent TSV differs')
+        elif manifest['artifacts'].get(name) != identity:
+            raise ValueError('Language support changed an old observation artifact')
+    import prepare_language_names_generic as generic
+    rows = generic.supported_language_profile(root, manifest['support_profile'], manifest['wiki'], manifest['date'], manifest['content_language'])
+    generic.render_supported_languages(manifest['source_derived_support'])
+    if manifest['source_derived_support'] != rows:
+        raise ValueError('Language support projection differs from source evidence')
+    return generic.render_supported_languages(rows)
+
+
+def derive_support(previous, sources, namespace_registry, siteinfo, output):
+    """Offline source-profile addition to an already verified autonym capture."""
+    import prepare_language_names_generic as generic
+    previous, sources, output = map(Path, (previous, sources, output))
+    parent_raw = regular(previous / (KIND + '.manifest.json'), MAX_MANIFEST)
+    parent = validate_snapshot(previous / (KIND + '.tsv'))
+    if SUPPORT_FIELDS & set(parent):
+        raise ValueError('Language support profile already present')
+    namespace = regular(Path(namespace_registry)); site_raw = regular(Path(siteinfo))
+    profile = dict(id=generic.SUPPORT_PROFILE, core=generic.SUPPORT_CORE, codes=['nl'], scope=generic.SUPPORT_SCOPE,
+                   namespace_registry_sha256=evidence.digest(namespace), siteinfo_sha256=evidence.digest(site_raw))
+    output.mkdir(parents=True, exist_ok=False)
+    # Copy only this already verified finite metadata family, never corpus input.
+    for name, identity in parent['artifacts'].items():
+        raw = regular(previous / name)
+        if identity != dict(size=len(raw), sha256=evidence.digest(raw)):
+            raise ValueError('Previous language observation changed')
+        evidence.put(output / name, raw)
+    evidence.put(output / SUPPORT_PARENT, parent_raw)
+    for name in (*generic.SUPPORT_SOURCES, 'source-receipts01.json'):
+        evidence.put(output / (generic.SUPPORT_PREFIX + name), regular(sources / name))
+    evidence.put(output / (generic.SUPPORT_PREFIX + 'namespace-registry.tsv'), namespace)
+    evidence.put(output / (generic.SUPPORT_PREFIX + 'namespace-siteinfo.raw.json'), site_raw)
+    rows = generic.supported_language_profile(output, profile, parent['wiki'], parent['date'], parent['content_language'])
+    original_tsv = regular(previous / (KIND + '.tsv'))
+    candidate = original_tsv + generic.render_supported_languages(rows)
+    # The copied TSV is private output, not a hardlink or a captured source file.
+    (output / (KIND + '.tsv')).write_bytes(candidate)
+    support_identity = producer()
+    support_identity['dependency_sha256']['prepare_language_names_generic.py'] = evidence.digest(regular(Path(generic.__file__)))
+    manifest = dict(parent, output_bytes=len(candidate), output_sha256=evidence.digest(candidate),
+                    support_profile=profile, support_producer=support_identity, support_derived_utc=evidence.utc(),
+                    support_previous_manifest_sha256=evidence.digest(parent_raw),
+                    support_previous_output_sha256=evidence.digest(original_tsv), source_derived_support=rows,
+                    artifacts=inventory(output))
+    evidence.document(output / (KIND + '.manifest.json'), manifest)
+    validate_snapshot(output / (KIND + '.tsv'), require_complete=False)
+    evidence.document(output / COMPLETE, dict(schema=SCHEMA, manifest_sha256=evidence.digest(regular(output / (KIND + '.manifest.json')))))
+    return validate_snapshot(output / (KIND + '.tsv'))
+
 def validate_snapshot(path, wiki=None, date=None, require_complete=True):
     path = Path(path); root = path.parent
     if path.name != KIND + '.tsv' or root.is_symlink() or not root.is_dir():
@@ -507,7 +592,8 @@ def validate_snapshot(path, wiki=None, date=None, require_complete=True):
     counts = dict(observed_codes=len(names), observed_positive=sum(bool(v) for v in names.values()), observed_empty=sum(not v for v in names.values()), singular_codes=len(single), singular_positive=sum(bool(v) for v in single.values()), singular_empty=sum(not v for v in single.values()))
     if any(observation.get(k) != v for k, v in counts.items()):
         raise ValueError('Observation counts differ')
-    expected = old_tsv + render_profile(single)
+    original_tsv = old_tsv + render_profile(single)
+    expected = original_tsv + support_projection(root, manifest, original_tsv)
     if b'\nC\t-\tsingle\t' in old_tsv or regular(path) != expected or manifest.get('old_output_sha256') != evidence.digest(old_tsv) or manifest.get('output_bytes') != len(expected) or manifest.get('output_sha256') != evidence.digest(expected) or manifest.get('singular_codes') != len(single) or manifest.get('singular_positive') != sum(bool(v) for v in single.values()) or manifest.get('singular_empty') != sum(not v for v in single.values()):
         raise ValueError('Autonym projection differs from exact replay')
     return manifest
@@ -535,12 +621,17 @@ def main():
     derive = commands.add_parser('augment')
     for key in ('previous', 'observation', 'output'):
         derive.add_argument('--' + key, type=Path, required=True)
+    support = commands.add_parser('derive-support')
+    for key in ('previous', 'sources', 'namespace-registry', 'siteinfo', 'output'):
+        support.add_argument('--' + key, type=Path, required=True)
     verify = commands.add_parser('verify'); verify.add_argument('path', type=Path)
     args = parser.parse_args()
     if args.command == 'capture':
         value = capture_observation(args.wiki, args.date, args.namespace_registry, args.sources, args.output, args.wall_seconds)
     elif args.command == 'augment':
         value = augment(args.previous, args.observation, args.output)
+    elif args.command == 'derive-support':
+        value = derive_support(args.previous, args.sources, args.namespace_registry, args.siteinfo, args.output)
     else:
         value = validate_snapshot(args.path)
     print(json.dumps(value, ensure_ascii=False))

@@ -411,6 +411,7 @@ pub const Provider = struct {
             .language_names = if (self.language_names != null) languageNames else null,
             .language_name = if (self.language_names != null) languageName else null,
             .language_direction = if (self.language_names != null) languageDirection else null,
+            .language_supported = if (self.language_names != null) languageSupported else null,
             .language_known_tag = if (self.language_registry_available) languageKnownTag else null,
         };
     }
@@ -1506,6 +1507,10 @@ pub const Provider = struct {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         return (self.language_names orelse return error.LanguageNameSnapshotMissing).name(code, display);
     }
+    fn languageSupported(ctx: ?*anyopaque, code: []const u8) anyerror!bool {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        return (self.language_names orelse return error.LanguageSupportSnapshotMissing).supported(code);
+    }
     fn languageDirection(ctx: ?*anyopaque, code: []const u8) anyerror!lua_program.WikitextProvider.LanguageDirection {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         return (self.language_names orelse return error.LanguageDirectionSnapshotMissing).direction(code);
@@ -2396,13 +2401,14 @@ test "provider exposes captured language profiles with exact single aliases and 
         try std.testing.expect(provider.api().language_names == null);
         try std.testing.expect(provider.api().language_name == null);
         try std.testing.expect(provider.api().language_direction == null);
+        try std.testing.expect(provider.api().language_supported == null);
     }
     const path = try std.fs.path.join(a, &.{ root, "language-names.tsv" });
     defer a.free(path);
     const bytes = try std.fmt.allocPrint(a, "# wikidict-language-names-v1\n# wiki\t{s}\n# dump-date\t{s}\n# content-language\t{s}\n" ++
         "C\tar\tall\t2\nN\tar\tall\tar\tالعربية\nN\tar\tall\tals\tAlemannic\n" ++
         "C\tar\tsingle\t2\nN\tar\tsingle\tar\tالعربية\nN\tar\tsingle\tals\tالألمانية السويسرية\n" ++
-        "C\t-\tdir\t2\nD\tar\trtl\nD\ten\tltr\n", .{ catalog.wiki, catalog.dump_date, catalog.content_language });
+        "C\t-\tdir\t2\nD\tar\trtl\nD\ten\tltr\nS\tnl\t1\nS\tfr\t0\n", .{ catalog.wiki, catalog.dump_date, catalog.content_language });
     defer a.free(bytes);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
     var provider = try Provider.init(io, a, root, catalog, "unused-dump.xml");
@@ -2414,6 +2420,9 @@ test "provider exposes captured language profiles with exact single aliases and 
     try std.testing.expectEqual(lua_program.WikitextProvider.LanguageDirection.rtl, try api.language_direction.?(&provider, "ar"));
     try std.testing.expectError(error.LanguageNameSnapshotMissing, api.language_names.?(&provider, "fr", .all));
     try std.testing.expectError(error.LanguageDirectionSnapshotMissing, api.language_direction.?(&provider, "unknown"));
+    try std.testing.expect(try api.language_supported.?(&provider, "nl"));
+    try std.testing.expect(!try api.language_supported.?(&provider, "fr"));
+    try std.testing.expectError(error.LanguageSupportSnapshotMissing, api.language_supported.?(&provider, "ar"));
 }
 
 test "provider exposes exact site server and rejects a different captured edition" {

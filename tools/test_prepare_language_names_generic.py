@@ -524,5 +524,77 @@ class GenericTest(unittest.TestCase):
 
 
 
+
+
+def support_fixture(root, wiki='nlwiktionary', content='nl', prefix=None):
+    prefix = names.SUPPORT_PREFIX if prefix is None else prefix
+    source_data = {'LanguageNameUtils.php': b'reviewed synthetic positive-branch source', 'nl.json': b'{"test-message":"value"}'}
+    pins = {name: (names.SUPPORT_SOURCES[name][0], names.evidence.digest(raw)) for name, raw in source_data.items()}
+    receipts = {'core': names.SUPPORT_CORE, 'sources': []}
+    for name, raw in source_data.items():
+        (root / (prefix + name)).write_bytes(raw)
+        path, digest = pins[name]
+        receipts['sources'].append(dict(file=name, source_path=path,
+            url=f'https://raw.githubusercontent.com/wikimedia/mediawiki/{names.SUPPORT_CORE}/{path}',
+            status=200, bytes=len(raw), sha256=digest))
+    (root / (prefix + 'source-receipts01.json')).write_text(json.dumps(receipts))
+    namespace = f'# wikidict-namespace-registry-v1\n# wiki\t{wiki}\n# dump-date\t20261001\n# content-language\t{content}\n'.encode()
+    site = json.dumps({'date': '20261001', 'content_language': content,
+        'namespace_registry_sha256': names.evidence.digest(namespace),
+        'query': {'general': {'wikiid': wiki, 'lang': content, 'git-hash': names.SUPPORT_CORE}}}).encode()
+    (root / (prefix + 'namespace-registry.tsv')).write_bytes(namespace)
+    (root / (prefix + 'namespace-siteinfo.raw.json')).write_bytes(site)
+    profile = dict(id=names.SUPPORT_PROFILE, core=names.SUPPORT_CORE, codes=['nl'], scope=names.SUPPORT_SCOPE,
+                   namespace_registry_sha256=names.evidence.digest(namespace), siteinfo_sha256=names.evidence.digest(site))
+    return pins, profile
+
+
+class SupportedLanguageSourceTests(unittest.TestCase):
+    def test_positive_source_profile_is_not_known_code_or_negative_enumeration(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); pins, profile = support_fixture(root)
+            with patch.object(names, 'SUPPORT_SOURCES', pins):
+                self.assertEqual(names.supported_language_profile(root, profile, 'nlwiktionary', '20261001', 'nl'), {'nl': True})
+                self.assertEqual(names.render_supported_languages({'nl': True}), b'S\tnl\t1\n')
+                for codes in ([], ['qqq'], ['en-x-piglatin'], ['unknown'], ['nl', 'en'], ['nl', 'nl']):
+                    with self.subTest(codes=codes), self.assertRaises(ValueError):
+                        names.supported_language_profile(root, dict(profile, codes=codes), 'nlwiktionary', '20261001', 'nl')
+        with self.assertRaises(ValueError): names.render_supported_languages({'qqq': True})
+        with self.assertRaises(ValueError): names.render_supported_languages({'nl': 1})
+
+    def test_source_tamper_and_unaccepted_or_misbound_receipts_reject(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); pins, profile = support_fixture(root)
+            receipt_path = root / (names.SUPPORT_PREFIX + 'source-receipts01.json')
+            original = json.loads(receipt_path.read_text())
+            with patch.object(names, 'SUPPORT_SOURCES', pins):
+                for field, value in [('status', 403), ('url', 'https://example.invalid/nl.json'), ('source_path', 'languages/i18n/en.json'), ('sha256', '0' * 64)]:
+                    bad = copy.deepcopy(original); bad['sources'][1][field] = value; receipt_path.write_text(json.dumps(bad))
+                    with self.subTest(field=field), self.assertRaises(ValueError):
+                        names.supported_language_profile(root, profile, 'nlwiktionary', '20261001', 'nl')
+                receipt_path.write_text(json.dumps(original))
+                (root / (names.SUPPORT_PREFIX + 'nl.json')).write_bytes(b'{"test-message":"tampered"}')
+                with self.assertRaises(ValueError):
+                    names.supported_language_profile(root, profile, 'nlwiktionary', '20261001', 'nl')
+
+    def test_selected_namespace_and_source_epoch_are_independently_checked(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); pins, profile = support_fixture(root)
+            with patch.object(names, 'SUPPORT_SOURCES', pins):
+                for changed in (dict(profile, core='1' * 40), dict(profile, scope='deployed-observation'), dict(profile, extra=True)):
+                    with self.assertRaises(ValueError): names.supported_language_profile(root, changed, 'nlwiktionary', '20261001', 'nl')
+                with self.assertRaises(ValueError): names.supported_language_profile(root, profile, 'enwiktionary', '20261001', 'en')
+                site_path = root / (names.SUPPORT_PREFIX + 'namespace-siteinfo.raw.json')
+                original = json.loads(site_path.read_text())
+                for field, value in [('date', '20260901'), ('content_language', 'en'), ('namespace_registry_sha256', '0' * 64)]:
+                    bad = copy.deepcopy(original); bad[field] = value
+                    raw = json.dumps(bad).encode(); site_path.write_bytes(raw)
+                    with self.subTest(field=field), self.assertRaises(ValueError):
+                        names.supported_language_profile(root, dict(profile, siteinfo_sha256=names.evidence.digest(raw)), 'nlwiktionary', '20261001', 'nl')
+                bad = copy.deepcopy(original); bad['query']['general']['git-hash'] = '1' * 40
+                raw = json.dumps(bad).encode(); site_path.write_bytes(raw)
+                with self.assertRaises(ValueError):
+                    names.supported_language_profile(root, dict(profile, siteinfo_sha256=names.evidence.digest(raw)), 'nlwiktionary', '20261001', 'nl')
+
 if __name__ == '__main__':
     unittest.main()

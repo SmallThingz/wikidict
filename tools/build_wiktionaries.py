@@ -34,7 +34,7 @@ SHARD_PAGES = 100_000
 SHARD_RETRIES = 3
 SHARD_STATE_VERSION = 3
 AUXILIARY_SNAPSHOT_NAMES = (
-    'site-info', 'site-statistics-format', 'category-statistics-format', 'commons-data', 'category-stats', 'interface-messages', 'category-tree',
+    'stylesheet-imports', 'site-info', 'site-statistics-format', 'category-statistics-format', 'commons-data', 'category-stats', 'interface-messages', 'category-tree',
     'wikibase-sitelinks', 'wikibase-entity-text', 'wikibase-entities',
     'wikibase-entity-terms', 'wikibase-page-links', 'language-fallbacks', 'language-names', 'date-numbering', 'file-metadata',
     'transclusion-redirects', 'namespace-registry', 'language-registry', 'magic-words', 'behavior-switches', 'image-options',
@@ -259,6 +259,7 @@ def validate_interwiki_provenance(snapshot, edition, expected_sha):
 
 
 def auxiliary_snapshot_filename(name):
+    if name=='stylesheet-imports':return 'stylesheet-imports.json'
     if name=='site-statistics-format':return 'site-statistics-format.json'
     if name=='category-statistics-format':return 'category-statistics-format.json'
     return 'namespace-siteinfo.raw.json' if name=='site-info' else name+'.tsv'
@@ -272,6 +273,9 @@ def auxiliary_manifest_filename(name, path=None):
 
 
 def auxiliary_capture_helper(name, path):
+    if name=='stylesheet-imports':
+        import prepare_stylesheet_imports
+        return prepare_stylesheet_imports
     if name=='file-metadata':
         manifest=path.with_name(auxiliary_manifest_filename(name))
         header=None
@@ -384,7 +388,7 @@ def auxiliary_capture_helper(name, path):
     if isinstance(record,dict) and record.get('schema')=='wikidict.language-messages-union.v1':
         import prepare_language_messages_union
         return prepare_language_messages_union
-    if isinstance(record,dict) and record.get('schema')=='wikidict.language-messages-capture.v2':
+    if isinstance(record,dict) and record.get('schema') in ('wikidict.language-messages-capture.v2','wikidict.language-messages-complete.v1'):
         import prepare_language_messages_v2
         return prepare_language_messages_v2
     import prepare_language_messages
@@ -568,7 +572,7 @@ def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_s
             # binding check. Nothing escapes this call or skips later rechecks.
             _validate_captured_snapshot_context(name,path,selected_capture,
                 selected_sources,capture_root,capture)
-        if capture is not None and name in ('language-fallbacks','interface-messages','commons-data','language-names','date-numbering','site-info','site-statistics-format','category-statistics-format','wikibase-page-links','file-metadata','behavior-switches','image-options'):
+        if capture is not None and name in ('stylesheet-imports','language-fallbacks','interface-messages','commons-data','language-names','date-numbering','site-info','site-statistics-format','category-statistics-format','wikibase-page-links','file-metadata','behavior-switches','image-options'):
             namespace_inputs[name]=capture[0]['namespace_registry_sha256']
         path=path.resolve(strict=True)
         if not path.is_file(): raise ValueError(f'Auxiliary snapshot is not a file: {path}')
@@ -644,7 +648,7 @@ def validate_capture_artifacts(root, record, required=()):
 def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
     # Standalone validation always obtains fresh evidence; callers cannot supply
     # a cached proof. The resolver shares its result only inside its hash loop.
-    needs_capture=(name in ('behavior-switches','image-options','wikibase-page-links','site-info') or
+    needs_capture=(name in ('stylesheet-imports','behavior-switches','image-options','wikibase-page-links','site-info') or
         (capture_root is not None and name in ('wikibase-entities','wikibase-entity-terms',
             'language-fallbacks','interface-messages','commons-data','language-names','date-numbering','file-metadata')))
     bound=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date')) if needs_capture else None
@@ -652,6 +656,10 @@ def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
 
 
 def _validate_captured_snapshot_context(name,path,capture,selected,capture_root,bound):
+    if name=='stylesheet-imports':
+        if capture_root is not None and bound[0]['namespace_registry_sha256']!=sha256_file(capture_root/'namespace-registry.tsv'):
+            raise ValueError('Stylesheet import namespace differs from selected capture')
+        return
     if name in ('behavior-switches','image-options'):
         if capture_root is not None:
             if bound[0]['namespace_registry_sha256']!=sha256_file(capture_root/'namespace-registry.tsv'):
@@ -733,12 +741,7 @@ def discover_auxiliary_generation(root,directory,names,edition,date):
             if helper is message_union:
                 message_union.require_preferred_loop(record)
                 continue
-            keys=record.get('keys')
-            # validate_snapshot already reconstructs the complete paired capture
-            # with today's verifier; recorded producer hashes remain provenance.
-            if (not isinstance(keys,list) or not 1<=len(keys)<=67
-                    or 'parser-template-loop-warning' not in keys):
-                raise ValueError('Preferred loop messages require the loop-warning key')
+            messages.require_preferred_loop(record)
     return snapshots
 
 
@@ -878,7 +881,7 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
                          capture[0].get('schema')=='wikidict.language-names-autonym-capture.v1')
         # Keep complete directory-provenance captures separate from other
         # snapshots so strict replay sees only their own recorded payloads.
-        folder=destination/name if name in ('commons-data','date-numbering','site-statistics-format','category-statistics-format') or autonym_capture else (
+        folder=destination/name if name in ('stylesheet-imports','commons-data','date-numbering','site-statistics-format','category-statistics-format') or autonym_capture else (
             destination/'site-info' if name=='site-info' and
             auxiliary_manifest_filename(name,source)=='site-info.manifest.json' else destination)
         if folder.is_symlink():raise ValueError('Unsafe auxiliary capture directory: '+str(folder))
@@ -1698,9 +1701,10 @@ class PreparedBlobTool:
             self.require_unchanged()
 
 
-def prepare_blob_tools(workspace, zig, edition, date, build_identity=None):
+def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, expander_args=None):
     """Use the existing Zig graph once, then bind its private installed outputs."""
-    with build_phase(edition,date,'blob_tools_prepare') as outcome:
+    phase='blob_tools_prepare' if expander_args is None else 'expander_and_blob_tools_prepare'
+    with build_phase(edition,date,phase) as outcome:
         source=source_fingerprint()
         compiler=shutil.which(zig)
         if compiler is None:raise ValueError('Zig compiler executable is unavailable')
@@ -1713,7 +1717,10 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None):
         for name in BLOB_TOOL_NAMES:
             path=prefix/'bin'/name
             if path.exists() or path.is_symlink():require_private_native_tool(path)
-        run_checked([str(compiler),'build','-j1','-Doptimize=fast','--prefix',str(prefix),'prepare-blob-tools'])
+        command=[str(compiler),'build','-j1','-Doptimize=fast','--prefix',str(prefix),'prepare-blob-tools']
+        if expander_args is not None:
+            command.extend(['--summary','all','build-dictionary','--',*expander_args])
+        run_checked(command)
         if source_fingerprint()!=source or sha256_file(compiler)!=compiler_sha:
             raise ValueError('Source or compiler changed during native blob tool preparation')
         require_native_tool_directory(prefix)
@@ -2116,17 +2123,18 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     expander_build=workspace/'expander'
     page_links_sha=sha256_file(page_links_snapshot) if page_links_snapshot is not None else None
     page_redirects_sha=sha256_file(page_redirects_snapshot) if page_redirects_snapshot is not None else None
+    tools=None
     if not expander_ready(expander_build,auxiliary_hashes,interwiki_sha,page_links_sha,page_redirects_sha):
         if expander_build.exists(): remove_artifact_tree(expander_build)
         staged=json.loads((workspace/'input/.complete.json').read_text())
         extraction_cache=Path(extraction_cache_root) if extraction_cache_root is not None else workspace/'input'/'extraction-cache'
-        timed_run([zig,'build','-j1','-Doptimize=fast','--summary','all','build-dictionary','--',str(dump),str(expander_build),
+        tools=prepare_blob_tools(workspace,zig,edition,date,build_identity,
+                  expander_args=[str(dump),str(expander_build),
                      *(['--interwiki-map-snapshot',str(interwiki_snapshot)] if interwiki_snapshot else []),
                      *pipeline_snapshot_args(registry,auxiliary_snapshots,page_links_snapshot,page_redirects_snapshot),
                      '--llvm-workers',str(llvm_workers),
                      '--parse-workers',str(min(workers,64)),'--page-workers',str(min(workers,16)),'--expander-only',
-                     *extraction_cache_args(extraction_cache,staged)],
-                  edition,date,'expander_build')
+                     *extraction_cache_args(extraction_cache,staged)])
     expander=expander_build/'.bundle-expander'
     with build_phase(edition,date,'page_index_count') as result:
         index_path=expander/'page-index.tsv'
@@ -2145,7 +2153,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         nonlexical.bind_identity(workspace,build_identity,reviewed_nonlexical)
     reviewed_args = ['--reviewed-nonlexical',str(reviewed_path)] if reviewed_path is not None else []
 
-    tools=prepare_blob_tools(workspace,zig,edition,date,build_identity)
+    if tools is None:
+        tools=prepare_blob_tools(workspace,zig,edition,date,build_identity)
     blob_builder=tools['dict-blob-build'];verifier=tools['dict-blob-verify'];merger=tools['dict-blob-merge']
     shards_root=raw_shards_path if raw_shards_path is not None else workspace/'shards'
     shards_root.mkdir(exist_ok=True)

@@ -72,6 +72,8 @@ pub const Registry = struct {
     captured_preferred_capitalizations: std.StringHashMapUnmanaged(?CapturedPreferredCapitalization) = .empty,
     strong_names: std.StringHashMapUnmanaged(void) = .empty,
     canonical_names: std.StringHashMapUnmanaged([]const u8) = .empty,
+    // Source canonical-name lookup is distinct from explicit language codes.
+    source_canonical_names: std.StringHashMapUnmanaged(?[]const u8) = .empty,
     headings: std.StringHashMapUnmanaged([]const u8) = .empty,
     arabic_articleless_names: std.StringHashMapUnmanaged(?DerivedPreferredName) = .empty,
     local_aliases: std.StringHashMapUnmanaged(?[]const u8) = .empty,
@@ -101,6 +103,7 @@ pub const Registry = struct {
         self.captured_preferred_capitalizations.deinit(self.arena.allocator());
         self.strong_names.deinit(self.arena.allocator());
         self.canonical_names.deinit(self.arena.allocator());
+        self.source_canonical_names.deinit(self.arena.allocator());
         self.arabic_articleless_names.deinit(self.arena.allocator());
         self.local_aliases.deinit(self.arena.allocator());
         self.reviewed_aliases.deinit(self.arena.allocator());
@@ -117,7 +120,7 @@ pub const Registry = struct {
 
     /// Positive boundary evidence does not resolve, trust or create an owner.
     pub fn isLanguageBoundary(self: *const Registry, heading: []const u8) bool {
-        return self.isAmbiguous(heading) or self.language_boundaries.contains(heading);
+        return self.isAmbiguous(heading) or self.hasCodeNameCollision(heading) or self.language_boundaries.contains(heading);
     }
 
     pub fn code(self: *const Registry, heading: []const u8) ?[]const u8 {
@@ -138,7 +141,23 @@ pub const Registry = struct {
         };
     }
 
+    fn hasCodeNameCollision(self: *const Registry, value: []const u8) bool {
+        if (!self.codes.contains(value)) return false;
+        const recorded = self.source_canonical_names.get(value) orelse return false;
+        const owner = recorded orelse return true;
+        return !std.mem.eql(u8, owner, value);
+    }
+
+    /// Only callers with an explicit canonical-name role may use this map.
+    /// Plain headings still need unambiguous Strong/Trusted authority.
+    pub fn resolveCanonicalName(self: *const Registry, value: []const u8) ?Resolved {
+        const recorded = self.source_canonical_names.get(value) orelse return null;
+        const owner = recorded orelse return null;
+        return .{ .code = owner, .heading = value };
+    }
+
     pub fn resolveTrusted(self: *const Registry, value: []const u8) ?Resolved {
+        if (self.hasCodeNameCollision(value)) return null;
         // The pinned generator includes first-letter capitalizations of its
         // preferred labels. Admit that exact existing alias for the same owner;
         // other ordinary aliases, code aliases, and conflicts retain their trust.
@@ -167,6 +186,7 @@ pub const Registry = struct {
     }
 
     pub fn resolveStrong(self: *const Registry, value: []const u8) ?Resolved {
+        if (self.hasCodeNameCollision(value)) return null;
         if (!self.strong_names.contains(value) or !self.names.contains(value)) return null;
         return self.resolve(value);
     }
@@ -604,8 +624,30 @@ pub const Registry = struct {
         if (heading.len == 0 or std.mem.indexOfAny(u8, heading, "\x00\n\r\t") != null)
             return error.InvalidLanguageRegistry;
         try self.reserveCode(code_value);
-        if (self.codes.contains(heading) and !std.mem.eql(u8, heading, code_value))
-            return error.ConflictingLanguageHeading;
+        const source_owned = self.arena.allocator();
+        if (self.source_canonical_names.getPtr(heading)) |previous| {
+            if (previous.*) |owner| {
+                if (!std.mem.eql(u8, owner, code_value)) previous.* = null;
+            }
+        } else {
+            try self.source_canonical_names.put(source_owned, try source_owned.dupe(u8, heading), try source_owned.dupe(u8, code_value));
+        }
+        if (self.source_canonical_names.get(heading).? == null) {
+            // Competing source declarations establish a boundary, never a
+            // last-wins owner. Reserved codes remain independently addressable.
+            if (!self.codes.contains(heading)) {
+                if (self.canonical_names.get(heading)) |owner| try self.rehomeExternalHeading(heading, owner);
+                _ = self.names.remove(heading);
+                _ = self.canonical_names.remove(heading);
+                _ = self.trusted_names.remove(heading);
+                _ = self.strong_names.remove(heading);
+                try self.ambiguous.put(source_owned, try source_owned.dupe(u8, heading), {});
+            }
+            return;
+        }
+        // Keep the explicit-code slot intact. A real source name such as HU
+        // "ari" -> aac does not make the independent ari code invalid.
+        if (self.codes.contains(heading) and !std.mem.eql(u8, heading, code_value)) return;
 
         if (self.canonical_names.get(heading)) |existing| {
             if (!std.mem.eql(u8, existing, code_value))
@@ -1028,6 +1070,7 @@ pub const Registry = struct {
         var expected_count: ?usize = null;
         var count: usize = 0;
         var codes: std.StringHashMapUnmanaged(void) = .empty;
+        var support_codes: std.StringHashMapUnmanaged(void) = .empty;
         var names: std.StringHashMapUnmanaged(?[]const u8) = .empty;
         var pending: std.ArrayList(struct { code: []const u8, name: []const u8 }) = .empty;
         while (lines.next()) |line| {
@@ -1036,6 +1079,14 @@ pub const Registry = struct {
             const tag = fields.next() orelse return error.InvalidLanguageNameSnapshot;
             const display = fields.next() orelse return error.InvalidLanguageNameSnapshot;
             const scope = fields.next() orelse return error.InvalidLanguageNameSnapshot;
+            if (std.mem.eql(u8, tag, "S")) {
+                if (fields.next() != null or !autonymCodeValid(display) or
+                    (!std.mem.eql(u8, scope, "1") and !std.mem.eql(u8, scope, "0")) or
+                    (std.mem.eql(u8, display, "qqq") and std.mem.eql(u8, scope, "1"))) return error.InvalidLanguageNameSnapshot;
+                const seen = try support_codes.getOrPut(a, display);
+                if (seen.found_existing) return error.DuplicateLanguageSupport;
+                continue; // Support evidence does not grant a language name.
+            }
             if (std.mem.eql(u8, tag, "D")) {
                 if (fields.next() != null or !autonymCodeValid(display) or
                     (!std.mem.eql(u8, scope, "ltr") and !std.mem.eql(u8, scope, "rtl"))) return error.InvalidLanguageNameSnapshot;
@@ -3676,4 +3727,94 @@ test "reviewed Nederlandjs alias keeps ordinary Dutch preferred name" {
     try std.testing.expect(value.resolveSourceTrusted("Nederlandjs") == null);
     try std.testing.expect(value.resolveTrusted("nederlandjs") == null);
     try std.testing.expect(!value.reviewed_varieties.contains("Nederlandjs"));
+}
+
+
+test "support rows are validated without granting autonym heading authority" {
+    var r = Registry.empty(std.testing.allocator);
+    defer r.deinit();
+    try r.addTsv(AutonymHeadingTest.registry);
+    const before = r.codes.count();
+    try AutonymHeadingTest.apply(&r, AutonymHeadingTest.header ++ "S\tnl\t1\nS\tfr\t0\n");
+    try std.testing.expectEqual(before, r.codes.count());
+    try std.testing.expect(r.resolveTrusted("Dutch") == null);
+    try std.testing.expect(!r.codes.contains("nl"));
+    try std.testing.expectError(error.DuplicateLanguageSupport, AutonymHeadingTest.apply(&r, AutonymHeadingTest.header ++ "S\tnl\t1\nS\tnl\t0\n"));
+    inline for (.{ "S\tnl\ttrue\n", "S\tNL\t1\n", "S\tqqq\t1\n", "S\tnl\t1\textra\n" }) |row|
+        try std.testing.expectError(error.InvalidLanguageNameSnapshot, AutonymHeadingTest.apply(&r, AutonymHeadingTest.header ++ row));
+    try std.testing.expectEqual(before, r.codes.count());
+}
+
+/// Prove the entire module is one literal forwarding return; execute no Lua.
+/// Return an owned target so the parser arena cannot escape into the loader.
+pub fn canonicalNameForwardTarget(a: std.mem.Allocator, source: []const u8) !?[]const u8 {
+    var p: usize = 0;
+    skip(source, &p);
+    if (std.mem.startsWith(u8, source[p..], "return")) {
+        p += 6;
+        skip(source, &p);
+        if (p < source.len and source[p] == '{') return null;
+    }
+    var chunk = try lua_parser.parse(a, source);
+    defer chunk.deinit();
+    if (chunk.body.len != 1) return null;
+    const statement = switch (chunk.body[0].*) { .return_stmt => |v| v, else => return null };
+    if (statement.values.len != 1) return null;
+    const call = switch (statement.values[0].*) { .call => |v| v, else => return null };
+    if (!literalName(call.callee, "require") or call.args.len != 1) return null;
+    const target = literalString(call.args[0]) orelse return null;
+    if (target.len == 0 or std.mem.indexOfAny(u8, target, "\x00\r\n\t") != null) return null;
+    return try a.dupe(u8, target);
+}
+
+test "canonical language name and code namespaces preserve HU ari without global heading trust" {
+    var r = Registry.empty(std.testing.allocator); defer r.deinit();
+    try r.addTsv("# mediawiki\nhu\tmagyar\nari\tArikara\naac\tAri\naa\tafar\n");
+    try r.addLua("return { [\"afar\"] = \"aa\", [\"ari\"] = \"aac\" }");
+    try std.testing.expectEqualStrings("ari", r.resolve("ari").?.code);
+    try std.testing.expectEqualStrings("Arikara", r.resolve("ari").?.heading);
+    try std.testing.expectEqualStrings("aac", r.resolveCanonicalName("ari").?.code);
+    try std.testing.expectEqualStrings("ari", r.resolveCanonicalName("ari").?.heading);
+    try std.testing.expect(r.resolveStrong("ari") == null);
+    try std.testing.expect(r.resolveTrusted("ari") == null);
+    try std.testing.expect(r.resolveSourceTrusted("ari") == null);
+    try std.testing.expectEqualStrings("aa", r.resolveStrong("afar").?.code);
+    try std.testing.expectEqualStrings("hu", r.resolveTrusted("magyar").?.code);
+    // A conflicting source declaration is retained as ambiguous, never last-wins.
+    try r.addLua("return { [\"ari\"] = \"aa\" }");
+    try std.testing.expect(r.resolveCanonicalName("ari") == null);
+    try std.testing.expect(r.resolveTrusted("ari") == null);
+    try std.testing.expectEqualStrings("ari", r.resolve("ari").?.code);
+}
+
+test "canonical language forwarding requires one literal global require return" {
+    const a = std.testing.allocator;
+    for ([_][]const u8{ "return require [[Modul:ziman/canonical names]]", "return require('Module:Names')", "-- exact forwarding\nreturn require(\"Module:Names\")" }) |source| {
+        const target = (try canonicalNameForwardTarget(a, source)).?; defer a.free(target);
+        try std.testing.expect(std.mem.startsWith(u8, target, "Modul"));
+    }
+    for ([_][]const u8{ "local require = function() return {} end; return require('Module:Names')", "return require(name)", "return require('Module:' .. name)", "return require('Module:Names'), 1", "side_effect(); return require('Module:Names')", "return mw.loadData('Module:Names')", "return { [\"English\"] = \"en\" }" }) |source| {
+        try std.testing.expect((try canonicalNameForwardTarget(a, source)) == null);
+    }
+}
+
+
+test "competing source canonical names never choose an owner in either declaration order" {
+    for ([_]bool{ false, true }) |reverse| {
+        var r = Registry.empty(std.testing.allocator); defer r.deinit();
+        try r.addTsv("# mediawiki\nen\tEnglish\nfr\tFrench\n");
+        const first = if (reverse) "fr" else "en";
+        const second = if (reverse) "en" else "fr";
+        try r.addStrongCanonical("Shared", first);
+        try r.addStrongCanonical("Shared", second);
+        try std.testing.expect(r.resolveCanonicalName("Shared") == null);
+        try std.testing.expect(r.resolveStrong("Shared") == null);
+        try std.testing.expect(r.resolveTrusted("Shared") == null);
+        try std.testing.expect(r.resolve("Shared") == null);
+        try std.testing.expect(r.isLanguageBoundary("Shared"));
+        try std.testing.expectEqualStrings("en", r.resolve("en").?.code);
+        try std.testing.expectEqualStrings("fr", r.resolve("fr").?.code);
+        try r.addStrongCanonical("Shared", first);
+        try std.testing.expect(r.resolveStrong("Shared") == null);
+    }
 }

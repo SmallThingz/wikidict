@@ -1,0 +1,724 @@
+[[Imagem:B,5.jpg|thumb|right|150px|{{centro|Boro}}]]
+[[Imagem:Pinus brutia(02).jpg|thumb|right|150px|{{centro|Pinheiro}}]]
+[[Imagem:CenterDrills123456.jpg|thumb|right|150px|{{centro|Broca}}]]
+[[Imagem:Pinot noir DSC 9092.jpg|thumb|right|150px|{{centro|Vinho}}]]
+{{confundir|Bor|BOR|bór|bòr|bôr|bör|bőr}}
+
+={{-mult-}}=
+=={{Abreviatura|mult}}==
+'''bor'''
+# {{escopo|mult|linguística}} [[w:ISO 639|código de língua ISO 639-3]] para o [[idioma]] '''[[bororo]]'''
+
+==Ver também==
+===Ligações externas===
+{{verTambém.Ini}}
+* [http://www.ethnologue.com/show_language.asp?code=bor informações sobre o idioma bororo no Ethnologue (em inglês)]
+{{verTambém.Fim}}
+
+
+={{-aa-}}=
+=={{Substantivo|aa}}==
+'''bor'''
+# [[trapo]], [[farrapo]]
+
+[[Categoria:Monossílabo (Afar)]]
+
+
+={{-sq-}}=
+=={{Substantivo|sq}}==
+'''bor''', {{gramática|m}}, {{s/p}}
+# {{escopo|sq|Elemento químico}} [[boro]], [[elemento químico]] de [[número atômico]] [[5]] e [[símbolo]] '''[[B]]'''
+
+===Declinação===
+{{decl.sq.subst.masc.sing}}
+
+==Ver também==
+===No Wikcionário===
+{{tabela periódica/sq}}
+===Na Wikipédia===
+* {{interwiki|w|sq}}
+
+===Ligações externas===
+{{verTambém.Ini}}
+* [https://web.archive.org/web/20110709082332/http://www.argjiro.net/fjalor/ An English-Albanian, Albanian-English Online Dictionary (em albanês e inglês)]
+{{verTambém.Fim}}
+
+[[Categoria:Monossílabo (Albanês)]]
+[[Categoria:Entrada com imagem (Albanês)]]
+[[Categoria:Cognato (Albanês)]]
+
+
+={{-az-}}=
+=={{Substantivo|az}}==
+{{elementos|B|berillium|Be|karbon|C}}
+'''bor'''
+# {{escopo|az|Elemento químico}} [[boro]], [[elemento químico]] de [[número atômico]] [[5]] e [[símbolo]] '''[[B]]'''
+
+==Ver também==
+===No Wikcionário===
+{{tabela periódica/az}}
+
+[[Categoria:Monossílabo (Azerbaijano)]]
+[[Categoria:Entrada com imagem (Azerbaijano)]]
+[[Categoria:Cognato (Azerbaijano)]]
+
+
+={{-br-}}=
+=={{Substantivo|br}}==
+'''{{grifar.Palavra|bor}}'''
+# {{escopo|br|Elemento químico}} [[boro]], [[elemento químico]] de [[número atômico]] [[5]] e [[símbolo]] '''[[B]]'''
+
+==Ver também==
+===No Wikcionário===
+{{tabela periódica/br}}
+
+[[Categoria:Monossílabo (Bretão)]]
+[[Categoria:Entrada com imagem (Bretão)]]
+[[Categoria:Cognato (Bretão)]]
+
+
+={{-ca-}}=
+=={{Substantivo|ca}}==
+{{flex.ca|ms=bor|ms-div=bor}}
+'''bor''', {{gramática|m}}, {{s/p}}
+# {{escopo|ca|Elemento químico}} [[boro]], [[elemento químico]] de [[número atômico]] [[5]] e [[símbolo]] '''[[B]]''':
+#* ''El '''bor''' és un element no metàl.lic pertanyent al grup III-A de la taula periòdica.'' <small>(O boro é um elemento não metálico pertencente ao grupo III-A da tabela periódica.)</small>
+
+=={{etimologia|ca}}==
+: Derivadode {{etimo|ca|borax}}.
+:* '''Datação''': [[w:1905|1905]]
+
+==Ver também==
+===No Wikcionário===
+{{tabela periódica/ca}}
+
+===Na Wikipédia===
+* {{interwiki|w|ca}}
+
+[[Categoria:Monossílabo (Catalão)]]
+[[Categoria:Século XX (Catalão)]]
+[[Categoria:Entrada com imagem (Catalão)]]
+[[Categoria:Cognato (Catalão)]]
+
+
+={{-cs-}}=
+=={{Substantivo|cs}}==
+'''bor''', {{gramática|m}} ''[[inanimado]]''
+# {{escopo|cs|Elemento químico}} [[boro]], [[elemento químico]] de [[número atômico]] [[5]] e [[símbolo]] '''[[B]]'''
+# {{escopo|cs|Botânica}} [[floresta]] de [[pinheiro]]s
+
+===Declinação===
+{{decl.cs.subst.masc.2}}
+
+==={{-varort-}}===
+* De '''1''': [[bór#{{cs}}|bór]]
+
+===Verbetes derivados===
+{{verTambém.Ini}}
+* {{link preto|boritý}}
+{{verTambém.Fim}}
+
+=={{etimologia|cs}}==
+* De '''2''':
+: Do [[proto-eslavo]] *''borъ''.
+
+=={{pronúncia|cs}}==
+* De '''1''': 
+** [[AFI]] {{AFI|/ˈboːr/}}
+** [[X-SAMPA]] /"bo:r/
+* De '''2''': 
+** [[AFI]] {{AFI|/ˈbor/}}
+** [[X-SAMPA]] /"bor/
+
+==Ver também==
+===No Wikcionário===
+{{tabela periódica/cs}}
+===Na Wikipédia===
+* {{interwiki|w|cs|Bor (prvek)}}
+
+===Ligações externas===
+* {{lingeacz}}
+
+[[Categoria:Monossílabo (Checo)]]
+[[Categoria:Entrada com imagem (Checo)]]
+[[Categoria:Cognato (Checo)]]
+
+
+={{-ku-}}=
+=={{Adjetivo|ku}}==
+'''bor'''
+# [[cinza]], [[cinzento]]
+
+==={{-varort-}}===
+* '''Alfabeto árabe''': {{link idioma|بۆر|ku}}
+
+=={{Substantivo|ku}}==
+{{elementos|B|berîlyûm|Be|karbon|C}}
+[[Ficheiro:Lion King 0001.jpg|thumb|100px|'''Bor''']]
+'''bor'''
+# {{escopo|ku|Mamífero}} [[cavalo]] (''[[wikispecies:Equus caballus|Equus caballus]]'')
+# {{escopo|ku|Elemento químico}} [[boro]]
+
+==Ver também==
+===No Wikcionário===
+{{verTambém.Ini}}
+* [[Apêndice:Cores]]
+{{verTambém.Fim}}
+{{cores/ku}}
+{{tabela periódica/ku}}
+===Na Wikipédia===
+* {{interwiki|w|ku}}
+
+[[Categoria:Monossílabo (Curdo)]]
+[[Categoria:Cor (Curdo)]]
+[[Categoria:Entrada com imagem (Curdo)]]
+[[Categoria:Cognato (Curdo)]]
+
+
+={{-da-}}=
+=={{Substantivo|da}}==
+'''bor''', {{gramática|n}}, {{s/p}}
+# {{escopo|da|Elemento químico}} [[boro]], [[elemento químico]] de [[número atômico]] [[5]] e [[símbolo]] '''[[B]]'''
+
+'''bor''', {{gramática|n}}
+# {{cont|2}} [[broca]]
+# [[verruma]]
+
+===Declinação===
+{{decl.da.subst.neu.sing|título=De 1 (substantivo neutro, sem plural (-''et''))}}
+{{decl.da.subst.neu|2=bor|r=|nip=bor|título=De 2 e 3 (substantivo neutro (-''et'', -))}}
+
+===Verbetes derivados===
+{{fraseini|Termos derivados de ''bor'' (2)}}
+* {{link idioma|bore|da}}
+* {{link idioma|boremaskine}}
+{{fraseNovaColuna|50}}
+* {{link idioma|tandlægebor}}
+* {{link idioma|vridbor}}
+{{frasefim}}
+
+=={{Forma verbal|da}}==
+'''bor'''
+# forma presente do verbo [[bo]]
+# forma imperativa do verbo [[bore]]
+
+=={{etimologia|da}}==
+* '''Substantivo (2-3)''':
+{{etimo2|non|borr|da}}
+
+=={{pronúncia|da}}==
+* [[AFI]] {{AFI|/ˈb̥oɐˀ/}}
+* [[X-SAMPA]] /"bo_06_?/
+
+==Ver também==
+===No Wikcionário===
+{{tabela periódica/da}}
+===Na Wikipédia===
+* {{interwiki|w|da|Bor (grundstof)}}
+
+===Ligações externas===
+* {{DDO}}
+
+[[Categoria:Monossílabo (Dinamarquês)]]
+[[Categoria:Ferramenta (Dinamarquês)]]
+[[Categoria:Entrada com imagem (Dinamarquês)]]
+[[Categoria:Cognato (Dinamarquês)]]
+
+
+={{-eo-}}=
+=={{Radical|eo}}==
+'''bor'''
+# {{escopo|eo|química}} relativo ao [[elemento químico]] [[boro]]
+
+===Verbetes derivados===
+{{verTambém.Ini}}
+* [[boro#{{eo}}|boro]]
+{{verTambém.Fim}}
+
+
+={{-sl-}}=
+=={{Substantivo|sl}}==
+'''bor''', {{gramática|m}}, {{s/p}}
+# {{escopo|sl|Elemento químico}} [[boro]], [[elemento químico]] de [[número atômico]] [[5]] e [[símbolo]] '''[[B]]'''
+# {{cont|2}} {{escopo|sl|botânica}} [[pinheiro]], [[árvore]] do [[gênero]] ''[[wikispecies:Pinus|Pinus]]''
+
+===Declinação===
+{{decl.sl.subst.masc.1.sing|título=De 1 (substantivo masculino sem plural)}}
+{{decl.sl.subst.masc.1|título=De 2 e 3 (substantivo masculino)}}
+
+=={{etimologia|sl}}==
+* De '''2''':
+: Do [[proto-eslavo]] *''borъ''.
+
+==Ver também==
+===No Wikcionário===
+* {{link preto|boraks}}
+{{tabela periódica/sl}}
+===Na Wikipédia===
+* {{interwiki|w|sl|Bor (element)}}
+
+[[Categoria:Monossílabo (Esloveno)]]
+[[Categoria:Árvore (Esloveno)]]
+[[Categoria:Entrada com imagem (Esloveno)]]
+[[Categoria:Cognato (Esloveno)]]
+
+
+={{-hu-}}=
+=={{Substantivo|hu}}==
+'''bor'''
+# [[vinho]]
+#* {{tradex|hu|A '''bor''' édeskés.|O vinho é doce.}}
+
+===Declinação===
+{{decl.hu.subst.ok|bo|r}}
+{{flex.hu.poss.otok|bor||ai}}
+
+===Expressões===
+* '''[[borban az igazság]]''': no vinho está a verdade ("in vino veritas")
+
+===Verbetes derivados===
+{{verTambém.Ini}}
+* {{link idioma|borász}}
+* {{link idioma|borászat}}
+* {{link idioma|borbély}}
+* {{l.s.|borda|{{hu}}}}
+* {{link idioma|bordázat}}
+* {{link idioma|borgazdaság}}
+* {{link idioma|borgonyafánk}}
+{{verTambém.NovaColuna|25}}
+* {{link idioma|borhamisítás}}
+* {{link idioma|boríték}}
+* {{link idioma|boritólap}}
+* {{link idioma|borjú}}
+* {{link idioma|borjúsült}}
+* {{link idioma|borkóstoló}}
+* {{link idioma|boróka}}
+{{verTambém.NovaColuna|25}}
+* {{link idioma|borona}}
+* {{link idioma|boroshordó}}
+* {{link idioma|borospohár}}
+* {{link idioma|borosta}}
+* {{link idioma|borostyán}}
+* {{link idioma|borostyánkő}}
+* {{link idioma|borotva}}
+{{verTambém.NovaColuna|25}}
+* {{link idioma|borotvapenge}}
+* {{link idioma|borozó}}
+* {{link idioma|borpárlat}}
+* {{link idioma|borpince}}
+* {{link idioma|borravaló}}
+* {{link idioma|borsó}}
+* {{link idioma|borsóhüvely}}
+{{verTambém.Fim}}
+
+=={{pronúncia|hu}}==
+* [[AFI]]: {{AFI|/ˈbor/}}
+* [[X-SAMPA]]: /"bor/
+
+==Ver também==
+===No Wikcionário===
+{{verTambém.Ini}}
+* {{confr|bór|hu}}
+{{verTambém.Fim}}
+
+===Ligações externas===
+{{Sztaki}}
+
+[[Categoria:Monossílabo (Húngaro)]]
+[[Categoria:Bebida (Húngaro)]]
+[[Categoria:Entrada com imagem (Húngaro)]]
+
+
+={{-io-}}=
+=={{Radical|io}}==
+'''bor'''
+# relativo a [[broca]]
+# relativo ao elemento químico [[boro]]
+
+===Verbetes derivados===
+{{fraseini|Termos derivados de ''bor'' (1)}}
+* [[borar]]
+* [[boro#{{io}}|boro]]
+{{fraseNovaColuna|34}}
+* [[boruro]]
+* [[borilo]]
+{{verTambém.NovaColuna|33}}
+* [[borileto]]
+{{frasefim}}
+
+{{fraseini|Termos derivados de ''bor'' (2)}}
+* [[boro#{{io}}|boro]]
+{{frasefim}}
+
+
+={{-id-}}=
+=={{Substantivo|id}}==
+'''bor'''
+# [[broca]]
+
+===Verbetes derivados===
+{{verTambém.Ini}}
+* {{link idioma|membor}}
+* {{link idioma|mengebor}}
+* {{link idioma|pengeboran}}
+{{verTambém.Fim}}
+
+=={{etimologia|id}}==
+{{etimo2|nl|boor|id}}
+
+==Ver também==
+===Ligações externas===
+{{verTambém.Ini}}
+* [https://web.archive.org/web/20090805021214/http://pusatbahasa.diknas.go.id/kbbi/index.php Kamus Besar Bahasa Indonesia (em indonésio)]
+{{verTambém.Fim}}
+
+[[Categoria:Monossílabo (Indonésio)]]
+[[Categoria:Ferramenta (Indonésio)]]
+[[Categoria:Entrada com imagem (Indonésio)]]
+
+
+={{-is-}}=
+=={{Substantivo|is}}==
+'''bor''', {{gramática|m}}
+# [[broca]]
+
+===Declinação===
+{{decl.is.subst.forte.masc.1a|bor}}
+
+===Verbetes derivados===
+{{verTambém.Ini}}
+* {{link idioma|borjárn}}
+* {{link idioma|borvél}}
+{{verTambém.Fim}}
+
+=={{etimologia|is}}==
+{{etimo2|non|borr|is}}
+
+==Ver também==
+===Ligações externas===
+{{verTambém.Ini}}
+* [http://digicoll.library.wisc.edu/cgi-bin/IcelOnline/IcelOnline.TEId-idx?type=simple&rgn=lemma&q1=bor ''bor'' no Icelandic Online Dictionary and Readings (em islandês)]
+{{verTambém.Fim}}
+
+[[Categoria:Monossílabo (Islandês)]]
+[[Categoria:Ferramenta (Islandês)]]
+[[Categoria:Entrada com imagem (Islandês)]]
+
+
+={{-nb-}}=
+=={{Substantivo|nb}}==
+'''bor''', {{gramática|n}}, {{s/p}}
+# {{escopo|nb|Elemento químico}} [[boro]], [[elemento químico]] de [[número atômico]] [[5]] e [[símbolo]] '''[[B]]'''
+'''bor''', {{gramática|m|n}}
+# {{cont|2}} [[broca]]:
+#* ''Jeg lager hull i veggen med et '''bor'''.'' <small>(Estou fazendo um furo na parede com uma broca.)</small>
+
+===Declinação===
+{{decl.nb.subst.neu.sing|título=De 1 (substantivo neutro sem plural)}}
+{{decl.nb.subst.masc.1|título=De 2 (substantivo masculino)}}
+{{decl.nb.subst.neu.1|título=De 2 (substantivo neutro)}}
+
+===Sinônimos===
+* De '''2''': {{link idioma|boremaskin}}
+
+=={{Forma verbal|nb}}==
+'''bor'''
+# forma imperativa do verbo [[bore]]
+
+=={{etimologia|nb}}==
+* '''Substantivo (2-3)''':
+{{etimo2|non|borr|nb}}
+
+==Ver também==
+===No Wikcionário===
+{{verTambém.Ini}}
+* {{link idioma|boraks|nb}}
+* {{link idioma|nesebor|nb}}
+{{verTambém.Fim}}
+{{tabela periódica/nb}}
+===Na Wikipédia===
+* {{interwiki|w|nb|Bor (element)}}
+===Ligações externas===
+* {{NAOB}}
+
+[[Categoria:Monossílabo (Norueguês Bokmål)]]
+[[Categoria:Ferramenta (Norueguês Bokmål)]]
+[[Categoria:Entrada com imagem (Norueguês Bokmål)]]
+[[Categoria:Cognato (Norueguês Bokmål)]]
+
+
+={{-pap-}}=
+=={{Substantivo|pap}}==
+'''bor'''
+# [[broca]]
+
+=={{Verbo|pap}}==
+'''bor'''
+# [[furar]], [[perfurar]]
+
+===Sinônimos===
+* [[bora#{{pap}}|bora]]
+
+==Ver também==
+===Ligações externas===
+{{verTambém.Ini}}
+* [http://www.wordgumbo.com/pc/pap/erengpap.htm English to Papiamento lexicon (em inglês)]
+{{verTambém.Fim}}
+
+[[Categoria:Monossílabo (Papiamento)]]
+
+
+={{-pl-}}=
+=={{Substantivo|pl}}==
+{{elementos|B|beryl|Be|węgiel|C}}
+'''bor''', {{gramática|m|ina}}, {{s/p}}
+# {{escopo|pl|Elemento químico}} [[boro]], [[elemento químico]] de [[número atômico]] [[5]] e [[símbolo]] '''[[B]]'''
+#* {{tradex|pl|Jakie właściwości chemiczne ma '''bor'''?|Quais são as propriedades químicas do boro?}}
+
+===Declinação===
+{{decl.pl.subst.masc.inanimado.sing|bo|r}}
+
+=={{etimologia|pl}}==
+{{etimo2|la|borax|pl|ponto=não}}, derivado do persa médio ''būrak'', pelo árabe {{xlatio|ar|بورق|(būraq)}} e pelo latim medieval {{etimo|la|borax}}.
+
+=={{pronúncia|pl}}==
+* [[AFI]]: {{AFI|/ˈbor/}} {{áudio|Pl-bor.ogg|ouvir|id=pl}}
+* [[X-SAMPA]]: /"bor/
+
+==Ver também==
+===No Wikcionário===
+{{verTambém.Ini}}
+* {{confr|bór|pl}}
+* {{link idioma|metaloid|pl}}
+{{verTambém.Fim}}
+{{tabela periódica/pl}}
+
+===Na Wikipédia===
+* {{interwiki|w|pl}}
+
+[[Categoria:Monossílabo (Polonês)]]
+[[Categoria:Entrada com imagem (Polonês)]]
+[[Categoria:Cognato (Polonês)]]
+
+
+={{-ro-}}=
+=={{Substantivo|ro}}==
+'''bor''', {{gramática|n}}, {{s/p}}
+# {{escopo|ro|Elemento químico}} [[boro]], [[elemento químico]] de [[número atômico]] [[5]] e [[símbolo]] '''[[B]]'''
+
+'''bor''', {{gramática|n}}
+# {{cont|2}} [[aba]], [[borda]]
+
+===Declinação===
+{{decl.ro.subst.sing.neu|título=De 1 (substantivo neutro, sem plural)}}
+{{decl.ro.subst.neu|título=De 2 (substantivo neutro)}}
+
+==={{-varort-}}===
+* '''Alfabeto cirílico''': {{escopo2|moldavo}} {{link idioma|бор|mo}}
+
+=={{etimologia|ro}}==
+* De '''1''':
+{{etimo2|fr|bore|ro|ponto=não}};
+* De '''2''':
+{{etimo2|fr|bord|ro}}
+
+=={{pronúncia|ro}}==
+* [[AFI]]: {{AFI|/ˈbor/}}
+* [[X-SAMPA]]: /"bor/
+
+==Ver também==
+===No Wikcionário===
+{{verTambém.Ini}}
+* {{link idioma|metaloid|ro}}
+{{verTambém.Fim}}
+{{tabela periódica/ro}}
+===Na Wikipédia===
+* {{interwiki|w|ro|Bor (element)}}
+
+===Ligações externas===
+{{verTambém.Ini}}
+* {{DEX}}
+{{verTambém.Fim}}
+
+[[Categoria:Monossílabo (Romeno)]]
+[[Categoria:Entrada com imagem (Romeno)]]
+[[Categoria:Cognato (Romeno)]]
+
+
+={{-sh-}}=
+=={{Substantivo|sh}}==
+'''bȏr''', {{gramática|m}}
+# {{escopo|sh|Elemento químico}} [[boro]], [[elemento químico]] de [[número atômico]] [[5]] e [[símbolo]] '''[[B]]'''
+# {{escopo|sh|Botânica}} [[pinheiro]], [[árvore]] do [[gênero]] ''[[wikispecies:Pinus|Pinus]]''
+
+===Declinação===
+{{decl.sh.subst.masc|cir=бор|ov=1}}
+
+==={{-varort-}}===
+* '''Alfabeto cirílico''': {{escopo2|sérvio}} {{link idioma|бор|sh}}
+
+===Verbetes derivados===
+{{verTambém.Ini}}
+* {{link idioma|borat|sh}}/{{link idioma|борат|sh}}
+{{verTambém.Fim}}
+
+=={{etimologia|sh}}==
+* De '''2''':
+: Do [[proto-eslavo]] *''borъ''.
+
+==Ver também==
+===No Wikcionário===
+{{verTambém.Ini}}
+* {{link idioma|boraks|sh}}/{{link idioma|боракс|sh}}
+* {{link idioma|metaloid|sh}}/{{link idioma|металоид|sh}}
+{{verTambém.Fim}}
+{{Bloco de navegação|tabela periódica/bs|tabela periódica/hr|tabela periódica/sr}}
+===Na Wikipédia===
+* {{interwiki|w|sh|Bor (element)}}
+
+[[Categoria:Monossílabo (Servocroata)]]
+[[Categoria:Árvore (Servocroata)]]
+[[Categoria:Entrada com imagem (Servocroata)]]
+[[Categoria:Cognato (Servocroata)]]
+
+
+={{-hsb-}}=
+=={{Substantivo|hsb}}==
+'''bor'''
+# {{escopo|hsb|Elemento químico}} [[boro]], [[elemento químico]] de [[número atômico]] [[5]] e [[símbolo]] '''[[B]]'''
+# {{escopo|hsb|Botânica}} [[painço]], [[milho-da-Itália]] (''[[wikispecies:Setaria italica|Setaria italica]]'')
+
+==Ver também==
+===No Wikcionário===
+{{verTambém.Ini}}
+* {{link idioma|chemiski element}}
+{{verTambém.Fim}}
+{{tabela periódica/hsb}}
+
+[[Categoria:Monossílabo (Sorábio Alto)]]
+[[Categoria:Entrada com imagem (Sorábio Alto)]]
+[[Categoria:Cognato (Sorábio Alto)]]
+
+
+={{-sv-}}=
+=={{Substantivo|sv}}==
+'''bor''', {{gramática|n}}, {{s/p}}
+# {{escopo|sv|Elemento químico}} [[boro]], [[elemento químico]] de [[número atômico]] [[5]] e [[símbolo]] '''[[B]]'''
+
+===Declinação===
+{{decl.sv.subst.neu.sing}}
+
+===Verbetes derivados===
+{{verTambém.Ini}}
+* {{link idioma|borsyra}}
+{{verTambém.Fim}}
+
+=={{Forma verbal|sv}}==
+'''bor'''
+# forma presente do verbo [[bo]]
+
+=={{pronúncia|sv}}==
+* '''Forma verbal''':
+** [[AFI]]: {{AFI|/ˈboːr/}}
+** [[X-SAMPA]]: /"bo:r/
+* '''Substantivo''':
+** [[AFI]]: {{AFI|/ˈbuːr/}}
+** [[X-SAMPA]]: /"bu:r/
+
+==Ver também==
+===No Wikcionário===
+{{verTambém.Ini}}
+* {{link idioma|borax|sv}}
+* {{link idioma|halvmetall|sv}}
+{{verTambém.Fim}}
+{{tabela periódica/sv}}
+===Na Wikipédia===
+* {{interwiki|w|sv}}
+
+===Ligações externas===
+{{verTambém.Ini}}
+* {{Lexin}}
+{{verTambém.Fim}}
+
+[[Categoria:Monossílabo (Sueco)]]
+[[Categoria:Entrada com imagem (Sueco)]]
+[[Categoria:Cognato (Sueco)]]
+
+
+={{-txh-}}=
+=={{Substantivo|txh}}==
+[[Ficheiro:Antelao.jpg|thumb|125px|'''Bor''']]
+'''bor'''
+# [[montanha]]
+
+=={{etimologia|txh}}==
+===Descendentes===
+{{tradini|Termos descendentes de ''bor''}}
+* {{trad|pt|boreal|hiperbóreo}}
+{{tradfim}}
+
+[[Categoria:Monossílabo (Trácio)]]
+[[Categoria:Geografia (Trácio)]]
+[[Categoria:Entrada com imagem (Trácio)]]
+
+
+={{-tr-}}=
+=={{Substantivo|tr}}==
+'''bor'''
+# {{escopo|tr|Elemento químico}} [[boro]], [[elemento químico]] de [[número atômico]] [[5]] e [[símbolo]] '''[[B]]'''
+
+===Declinação===
+{{decl.tr.subst|b|o|r}}
+
+=={{pronúncia|tr}}==
+* [[AFI]]: {{AFI|/ˈboɾ/}}
+* [[X-SAMPA]]: /"bo4/
+
+==Ver também==
+===No Wikcionário===
+{{verTambém.Ini}}
+* {{link idioma|boraks|tr}}
+* {{link idioma|metaloid|tr}}
+{{verTambém.Fim}}
+{{tabela periódica/tr}}
+===Na Wikipédia===
+* {{interwiki|w|tr}}
+
+===Ligações externas===
+{{verTambém.Ini}}
+* {{Tureng}}
+{{verTambém.Fim}}
+
+[[Categoria:Monossílabo (Turco)]]
+[[Categoria:Entrada com imagem (Turco)]]
+[[Categoria:Cognato (Turco)]]
+
+
+={{-otk-}}=
+==Substantivo==
+'''bor'''
+# [[vinho]]
+
+[[Categoria:Substantivo (Turco Antigo)]]
+[[Categoria:Monossílabo (Turco Antigo)]]
+[[Categoria:Bebida (Turco Antigo)]]
+[[Categoria:Entrada com imagem (Turco Antigo)]]
+
+
+={{-uz-}}=
+=={{Substantivo|uz}}==
+'''bor'''
+# {{escopo|uz|Elemento químico}} [[boro]], [[elemento químico]] de [[número atômico]] [[5]] e [[símbolo]] '''[[B]]'''
+
+==Ver também==
+===No Wikcionário===
+{{verTambém.Ini}}
+* {{link idioma|nimmetall}}
+{{verTambém.Fim}}
+{{tabela periódica/uz}}
+===Na Wikipédia===
+* {{interwiki|w|uz}}
+
+[[Categoria:Monossílabo (Uzbeque)]]
+[[Categoria:Entrada com imagem (Uzbeque)]]
+[[Categoria:Cognato (Uzbeque)]]

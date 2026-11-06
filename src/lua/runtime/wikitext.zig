@@ -138,6 +138,7 @@ pub const Provider = struct {
     language_name: ?host_api.LanguageNameFn = null,
     language_direction: ?host_api.LanguageDirectionFn = null,
     language_known_tag: ?*const fn (?*anyopaque, []const u8) anyerror!bool = null,
+    language_supported: ?host_api.LanguageSupportedFn = null,
     // When present, the edition snapshot is authoritative, including nonmatches.
     resolve_title_magic: ?*const fn (?*anyopaque, []const u8, rt.namespace_registry.magic_words.Form) anyerror!?[]const u8 = null,
     raw_suffix_profile: bool = false,
@@ -261,6 +262,7 @@ pub const Expander = struct {
         self.host.language_name = if (self.provider.language_name != null) hostLanguageName else null;
         self.host.language_direction = if (self.provider.language_direction != null) hostLanguageDirection else null;
         self.host.language_known_tag = hostLanguageKnownTag;
+        self.host.language_supported = if (self.provider.language_supported != null) hostLanguageSupported else null;
         host_api.set(self.runtime, &self.host);
     }
 
@@ -456,6 +458,12 @@ pub const Expander = struct {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const get = self.provider.wikibase_entity_text orelse return error.NotImplemented;
         return get(self.provider.ctx, entity_id);
+    }
+
+    fn hostLanguageSupported(raw: ?*anyopaque, code: []const u8) anyerror!bool {
+        const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
+        const get = self.provider.language_supported orelse return error.LanguageSupportSnapshotMissing;
+        return get(self.provider.ctx, code);
     }
 
     fn hostLanguageKnownTag(raw: ?*anyopaque, code: []const u8) anyerror!bool {
@@ -2945,15 +2953,15 @@ pub const Expander = struct {
     }
 
     fn expandTagParser(self: *Expander, raw_tag: []const u8, raw_args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
-        const tag = std.mem.trim(u8, try self.expandWikitext(raw_tag, params, host_title, depth + 1), " \t\r\n");
-        const canonical = canonicalExtensionTag(tag) orelse return error.UnsupportedExtensionTag;
-        const poem_argument = std.mem.eql(u8, canonical, "poem");
+        const tag = std.mem.trim(u8, try text_lib.killMarkersAlloc(self.runtime.allocator, try self.expandWikitext(raw_tag, params, host_title, depth + 1)), " \t\r\n\x00\x0b");
+        const canonical = canonicalExtensionTag(tag);
+        const poem_argument = if (canonical) |name| std.mem.eql(u8, name, "poem") else false;
         if (poem_argument) self.poem_argument_depth += 1;
         defer {
             if (poem_argument) self.poem_argument_depth -= 1;
         }
         const content: ?Value = if (raw_args.len == 0)
-            .{ .string = "" }
+            (if (canonical == null) null else .{ .string = "" })
         else
             .{ .string = try self.expandWikitext(raw_args[0], params, host_title, depth + 1) };
         var attrs: ?*rt.Table = null;
@@ -2970,7 +2978,7 @@ pub const Expander = struct {
             attrs = table;
         }
         if (poem_argument) return self.expandPoemValue(if (content) |value| try self.scalarText(value) else "", attrs, params, host_title, depth + 1);
-        return self.serializeExtension(canonical, content, attrs);
+        return if (canonical) |name| self.serializeExtension(name, content, attrs) else self.serializeOrdinaryTag(tag, content, attrs);
     }
 
     fn expandIntParser(
@@ -3601,8 +3609,23 @@ pub const Expander = struct {
         return out.toOwnedSlice(a);
     }
 
+    // CoreParserFunctions::tagObj emits an ordinary tag when no extension hook
+    // owns its name. Keep this path distinct from registered extension effects.
+    fn serializeOrdinaryTag(self: *Expander, raw_name: []const u8, content: ?Value, attrs: ?*rt.Table) ![]const u8 {
+        const raw = std.mem.trim(u8, try text_lib.killMarkersAlloc(self.runtime.allocator, raw_name), " \t\r\n\x00\x0b");
+        if (raw.len == 0 or !std.ascii.isAlphabetic(raw[0]) or canonicalExtensionTag(raw) != null) return error.UnsupportedExtensionTag;
+        for (raw[1..]) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != ':' and ch != '-' and ch != '_') return error.UnsupportedExtensionTag;
+        const name = try self.runtime.allocator.dupe(u8, raw);
+        for (name) |*ch| ch.* = std.ascii.toLower(ch.*);
+        return self.serializeTagElement(name, content, attrs, true);
+    }
+
     fn serializeExtension(self: *Expander, name: []const u8, content: ?Value, attrs: ?*rt.Table) ![]const u8 {
         if (std.mem.eql(u8, name, "phonos")) return self.renderPhonos(content, attrs);
+        return self.serializeTagElement(name, content, attrs, false);
+    }
+
+    fn serializeTagElement(self: *Expander, name: []const u8, content: ?Value, attrs: ?*rt.Table, ordinary: bool) ![]const u8 {
         const a = self.runtime.allocator;
         var out: std.ArrayList(u8) = .empty;
         try out.append(a, '<');
@@ -3619,9 +3642,15 @@ pub const Expander = struct {
             }.less);
             for (keys.items) |key| {
                 try out.append(a, ' ');
-                try out.appendSlice(a, key);
+                if (ordinary) {
+                    // The core ordinary-tag fallback escapes attribute names too.
+                    for (key) |ch| {
+                        if (ch == '\'') try out.appendSlice(a, "&#039;") else try appendAttrEscaped(&out, a, &.{ch});
+                    }
+                } else try out.appendSlice(a, key);
                 try out.appendSlice(a, "=\"");
-                try appendAttrEscaped(&out, a, try self.scalarText(table.rawGet(.{ .string = key }).?));
+                const value = try self.scalarText(table.rawGet(.{ .string = key }).?);
+                try appendAttrEscaped(&out, a, if (ordinary) try text_lib.killMarkersAlloc(a, value) else value);
                 try out.append(a, '"');
             }
         }
@@ -3769,11 +3798,12 @@ pub const Expander = struct {
     fn hostFrameExtensionTag(raw: ?*anyopaque, a: std.mem.Allocator, name: []const u8, content: ?Value, attrs: ?*rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         self.invalidateNativeDependencyArguments();
-        if (std.ascii.eqlIgnoreCase(name, "poem")) {
+        const tag = std.mem.trim(u8, try text_lib.killMarkersAlloc(a, name), " \t\r\n\x00\x0b");
+        if (std.ascii.eqlIgnoreCase(tag, "poem")) {
             const params = try self.runtime.newTable();
             return self.expandPoemValue(if (content) |value| try self.scalarText(value) else "", attrs, params, self.host.current_title, self.poem_hook_depth + 1);
         }
-        if (std.ascii.eqlIgnoreCase(name, "nowiki")) {
+        if (std.ascii.eqlIgnoreCase(tag, "nowiki")) {
             if (self.poem_argument_depth != 0) return self.poemLiteral("nowiki", if (content) |value| try self.scalarText(value) else "");
             const text = if (content) |value| if (value == .string) value.string else "" else "";
             const id = self.strip_counter;
@@ -3783,8 +3813,9 @@ pub const Expander = struct {
             try self.strip_values.put(page_a, id, .{ .kind = .nowiki, .text = stored });
             return makeNowikiMarker(a, id);
         }
-        const canonical = canonicalExtensionTag(name) orelse return error.UnsupportedExtensionTag;
-        return self.serializeExtension(canonical, content, attrs);
+        if (canonicalExtensionTag(tag)) |canonical| return self.serializeExtension(canonical, content, attrs);
+        // Scribunto extensionTag inserts an empty content argument even for nil.
+        return self.serializeOrdinaryTag(tag, content orelse .{ .string = "" }, attrs);
     }
 
     fn hostTextUnstripNoWiki(raw: ?*anyopaque, a: std.mem.Allocator, source: []const u8) anyerror![]const u8 {
@@ -3845,16 +3876,21 @@ pub const Expander = struct {
         const plain = std.ascii.eqlIgnoreCase(name, "#tag");
         const prefixed = std.ascii.startsWithIgnoreCase(name, "#tag:");
         if (!plain and !prefixed) return error.UnsupportedParserFunction;
-        const tag: []const u8 = if (plain) blk: {
+        const raw_tag: []const u8 = if (plain) blk: {
             const value = args.rawGet(.{ .number = 1 }) orelse return error.StringExpected;
             if (value != .string) return error.StringExpected;
             break :blk std.mem.trim(u8, value.string, " \t\r\n");
         } else std.mem.trim(u8, name[5..], " \t\r\n");
+        const tag = std.mem.trim(u8, try text_lib.killMarkersAlloc(a, raw_tag), " \t\r\n\x00\x0b");
         if (tag.len == 0) return error.UnsupportedExtensionTag;
         const content_index: usize = if (plain) 2 else 1;
         const attr_start: usize = content_index + 1;
         const content_text = if (args.rawGet(.{ .number = @floatFromInt(content_index) })) |value| try self.scalarText(value) else "";
         const attrs = try self.frameParserTagAttrs(args, attr_start);
+        if (canonicalExtensionTag(tag) == null) {
+            const content: ?Value = if (args.rawGet(.{ .number = @floatFromInt(content_index) }) != null) .{ .string = content_text } else null;
+            return self.serializeOrdinaryTag(tag, content, attrs);
+        }
         return hostFrameExtensionTag(raw, a, tag, .{ .string = content_text }, attrs);
     }
 
@@ -8184,7 +8220,16 @@ test "stored current-page magic and metadata distinguish explicit titles and res
         "{{NAMESPACENUMBER}}|{{PAGENAME}}|{{PAGEID}}|{{REVISIONID}}|{{NAMESPACENUMBER:Event:Stored page}}|{{PAGENAME:Event:Stored page}}", 1_670_803_200, current);
     try std.testing.expectEqualStrings("0|Event:Stored page|8451|32521|1728|Stored page", output);
     try std.testing.expectEqualStrings("Template:/Child", try expander.normalizeTransclusionName("/Child", title));
-    try std.testing.expectError(error.UnsupportedExtensionTag, expander.expandStoredFragment(title, "{{#tag:UnsupportedStoredPageReset|x}}", 1_670_803_200, current));
+    try std.testing.expectEqualStrings("<unsupportedstoredpagereset>x</unsupportedstoredpagereset>", try expander.expandStoredFragment(title, "{{#tag:UnsupportedStoredPageReset|x}}", 1_670_803_200, current));
+    // Context.initProgram supplies the test catalog used by Event and Appendix
+    // above. Remove it only for the intentional exceptional-page reset probe.
+    const catalog = runtime.namespace_catalog orelse return error.TestUnexpectedResult;
+    {
+        runtime.namespace_catalog = null;
+        defer runtime.namespace_catalog = catalog;
+        try std.testing.expectError(error.NamespaceRegistryRequired, expander.expandStoredFragment(title, "{{#tag:phonos|x}}", 1_670_803_200, current));
+    }
+    try std.testing.expect(runtime.namespace_catalog == catalog);
     try std.testing.expectEqualStrings("100|42", try expander.expandFragment("Appendix:Page/Sub", "{{NAMESPACENUMBER}}|{{PAGEID}}", 1_670_803_200));
     try std.testing.expect(expander.host.current_page == null);
 }
@@ -8669,4 +8714,115 @@ test "retained Slovak citation attribute slice expands without fabricated error 
     source.offset = "1";
     const expected_one = "&lrm;<sup dir=\"ltr\" class=\"Šablóna__Doplňte_zdroj\" style=\"border: 2px solid #c00;\"><span title=\"Je potrebné doložiť zdroj predchádzajúceho tvrdenia alebo citácie. Označené 10. 9. 2015 20:25:07 SE(L)Č.\">zdroj?</span></sup>";
     try std.testing.expectEqualStrings(expected_one, try expander.expandFragment("biola", "{{CitationShape|20150910192507}}", 1_791_731_560));
+}
+
+
+test "wikitext host forwards exact supported language evidence and errors" {
+    const Probe = struct {
+        calls: usize = 0,
+        fn get(raw: ?*anyopaque, code: []const u8) !bool {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            self.calls += 1;
+            if (std.mem.eql(u8, code, "nl")) return true;
+            if (std.mem.eql(u8, code, "fr")) return false;
+            if (std.mem.eql(u8, code, "oom")) return error.OutOfMemory;
+            return error.LanguageSupportSnapshotMissing;
+        }
+    };
+    var runtime = try rt.Context.init(std.testing.allocator, 0);
+    defer runtime.deinit();
+    var probe: Probe = .{};
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{
+        .ctx = &probe, .get = TestProvider.get, .exists = TestProvider.exists, .language_supported = Probe.get,
+    } };
+    expander.attach();
+    const get = expander.host.language_supported orelse return error.TestUnexpectedResult;
+    try std.testing.expect(try get(expander.host.ctx, "nl"));
+    try std.testing.expect(!try get(expander.host.ctx, "fr"));
+    try std.testing.expectError(error.LanguageSupportSnapshotMissing, get(expander.host.ctx, "zz"));
+    try std.testing.expectError(error.OutOfMemory, get(expander.host.ctx, "oom"));
+    try std.testing.expectEqual(@as(usize, 4), probe.calls);
+    expander.provider.language_supported = null;
+    expander.attach();
+    try std.testing.expect(expander.host.language_supported == null);
+}
+
+test "ordinary tag parser fallback preserves names content attributes and registered extension effects" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 24);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
+    const cases = [_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "before {{#tag:SPAN|[[B]]&ensp;|class=movil|style=visibility:hidden;}} after", .expected = "before <span class=\"movil\" style=\"visibility:hidden;\">[[B]]&ensp;</span> after" },
+        .{ .source = "{{#tag:DIV|body|title=\"a&b\"}}", .expected = "<div title=\"a&amp;b\">body</div>" },
+        .{ .source = "{{#tag:No-Hook_Tag|body}}", .expected = "<no-hook_tag>body</no-hook_tag>" },
+        .{ .source = "{{#tag:span}}", .expected = "<span/>" },
+        .{ .source = "{{#tag:span|}}", .expected = "<span></span>" },
+        .{ .source = "{{#tag:ref|note|name=n}}", .expected = "<ref name=\"n\">note</ref>" },
+        .{ .source = "{{#tag:templatestyles||src=Módulo:flex/estilo.css}}", .expected = "<templatestyles src=\"Módulo:flex/estilo.css\"></templatestyles>" },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("ordinary tag source={s}\n", .{case.source});
+        try std.testing.expectEqualStrings(case.expected, try expander.expandFragment("Page", case.source, 1_791_731_560));
+    }
+    // Scope limits are explicit; malformed tag-name bytes are not a hook bypass.
+    for ([_][]const u8{ "", "span onclick=x", "span><ref", "span/", "span\nother" }) |name|
+        try std.testing.expectError(error.UnsupportedExtensionTag, expander.serializeOrdinaryTag(name, .{ .string = "body" }, null));
+    // A registered name must never be sent through the ordinary serializer.
+    try std.testing.expectError(error.UnsupportedExtensionTag, expander.serializeOrdinaryTag("nowiki", .{ .string = "body" }, null));
+}
+
+test "native frame ordinary span calls preserve literal values and exact flex label pattern" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 24);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
+    _ = try expander.expandFragment("Page", "seed", 1_791_731_560);
+    const args = try runtime.newTable();
+    const frame = try frame_lib.makeFrameFromTable(&runtime, "Module:Probe", args, null);
+    const tag = try runtime.getIndex(frame, .{ .string = "extensionTag" });
+    const attrs = try runtime.newTable();
+    try attrs.rawSet(runtime.allocator, .{ .string = "class" }, .{ .string = "movil" });
+    try attrs.rawSet(runtime.allocator, .{ .string = "style" }, .{ .string = "visibility:hidden;" });
+    const before = expander.strip_counter;
+    // This is the exact Módulo:flex renderizar_tabla call shape; the supplied
+    // label is a representative API value, not invented full declension output.
+    const result = try runtime.callValue(tag, &.{ frame, .{ .string = "span" }, .{ .string = "οὐσία&ensp;" }, .{ .table = attrs } });
+    defer rt.freeResults(result);
+    try std.testing.expectEqualStrings("<span class=\"movil\" style=\"visibility:hidden;\">οὐσία&ensp;</span>", result[0].string);
+    try std.testing.expectEqual(before, expander.strip_counter);
+    const empty = try runtime.callValue(tag, &.{ frame, .{ .string = "SPAN" }, .nil });
+    defer rt.freeResults(empty);
+    try std.testing.expectEqualStrings("<span></span>", empty[0].string);
+    const quoted = try runtime.newTable();
+    try quoted.rawSet(runtime.allocator, .{ .string = "title" }, .{ .string = " \"literal&\" " });
+    const literal = try runtime.callValue(tag, &.{ frame, .{ .string = " SPAN " }, .{ .string = "{{#if:x|not preprocessed}}" }, .{ .table = quoted } });
+    defer rt.freeResults(literal);
+    try std.testing.expectEqualStrings("<span title=\" &quot;literal&amp;&quot; \">{{#if:x|not preprocessed}}</span>", literal[0].string);
+    const strange = try runtime.newTable();
+    try strange.rawSet(runtime.allocator, .{ .string = "bad&\"'" }, .{ .string = "<&\"'" });
+    try std.testing.expectEqualStrings("<span bad&amp;&quot;&#039;=\"&lt;&amp;&quot;'\">body</span>", try Expander.hostFrameExtensionTag(&expander, runtime.allocator, "span", .{ .string = "body" }, strange));
+    const named = try runtime.newTable();
+    try named.rawSet(runtime.allocator, .{ .number = 1 }, .{ .string = "body" });
+    try named.rawSet(runtime.allocator, .{ .string = "class" }, .{ .string = " \"movil\" " });
+    try std.testing.expectEqualStrings("<span class=\"movil\">body</span>", try expander.frameParserTag(&expander, runtime.allocator, "#tag:span", named));
+    const marker = try runtime.callValue(tag, &.{ frame, .{ .string = "nowiki" }, .{ .string = "[[literal]]" } });
+    defer rt.freeResults(marker);
+    try std.testing.expect(std.mem.startsWith(u8, marker[0].string, nowiki_marker_prefix));
+    try std.testing.expectEqual(before + 1, expander.strip_counter);
+    const marked = try runtime.newTable();
+    try marked.rawSet(runtime.allocator, .{ .string = "title" }, .{ .string = try std.fmt.allocPrint(runtime.allocator, "before{s}after", .{marker[0].string}) });
+    try std.testing.expectEqualStrings("<span title=\"beforeafter\">body</span>", try Expander.hostFrameExtensionTag(&expander, runtime.allocator, "span", .{ .string = "body" }, marked));
+    const marked_ref = try std.fmt.allocPrint(runtime.allocator, "re{s}f", .{marker[0].string});
+    try std.testing.expectEqualStrings("<ref>note</ref>", try Expander.hostFrameExtensionTag(&expander, runtime.allocator, marked_ref, .{ .string = "note" }, null));
 }

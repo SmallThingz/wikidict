@@ -11,3 +11,8 @@ tools/testdata/sr-tako/* -whitespace
 tools/testdata/tr-sunuk/* -whitespace
 tools/testdata/vi-gazeta/* -whitespace
 src/encoder/pt-bor-common-css.css -whitespace
+tools/testdata/sv-bard/* -whitespace
+tools/testdata/es-ousia/* -whitespace
+tools/testdata/pt-bor/* -whitespace
+tools/testdata/pt-css-imports/* -whitespace
+tools/testdata/fi-jaamerenvoikukat/* -whitespace

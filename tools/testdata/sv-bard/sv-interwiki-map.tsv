@@ -1,0 +1,5 @@
+# interwiki-magic	1
+da	1	0	0	0	https://da.wiktionary.org/wiki/$1	1
+de	1	0	0	0	https://de.wiktionary.org/wiki/$1	1
+en	1	0	0	0	https://en.wiktionary.org/wiki/$1	1
+fr	1	0	0	0	https://fr.wiktionary.org/wiki/$1	1

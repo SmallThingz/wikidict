@@ -1,0 +1,38 @@
+
+==Suomi==
+===Substantiivi===
+<b lang="fi" class="hakusana Zzzz">jäämerenvoikukat</b> [[Luokka:Suomen sanat|JÄÄMERENVOIKUKAT]][[Luokka:Suomen kielen substantiivit|JÄÄMERENVOIKUKAT]][[Luokka:Suomen kielen käänteissanakirja|TAKUKIOVNEREMÄÄJ]] (''monikollinen'')
+
+# yksi [[voikukat|voikukkien]] sukuun kuuluvista sektioista ([[species:Taraxacum sect. Arctica|<span lang="la">''Taraxacum'' sect.'' Arctica''</span>]]<ref>
+Kassu — kasvien suomenkieliset nimet. Suomen Biologian Seura Vanamo, Aalto-yliopiston Semanttisen laskennan tutkimusryhmä. Päivitettävä julkaisu: [http://www.yso.fi/onto/kassu/<http://www.yso.fi/onto/kassu/k38531 Arctica] . Viitattu 31.5.2016 päivättyyn versioon</ref>)
+
+====Käännökset====
+<div class="käännöskohta" style="clear:both">
+<div class="NavFrame">
+<div class="NavHead" style="text-align:left">'''1. ''Taraxacum'' sect. ''Arctica'''''</div>
+<div class="NavContent" style="text-align:left">
+{| class="käännöstaulukko" border="0" width="100%"
+|-
+| valign="top" width="48%" style="padding: 0.5em 0.5em 0.5em 0.5em; clear:both; "|
+<div class="plainlinks" style="font-size: 90%;">
+<p>
+''Tälle sanan merkitykselle ei valitettavasti vielä ole lisätty käännöksiä, mutta voit halutessasi [//fi.wiktionary.org/w/index.php?title=:j%C3%A4%C3%A4merenvoikukat&action=edit lisätä ne].''<br />
+''Huomaa, että voit lisätä vieraskielisiä käännöksiä '''vain suomenkielisille''' sanoille.''<br />
+<small>Etsi käännöksiä: [//fi.wiktionary.org/wiki/Toiminnot:Whatlinkshere/j%C3%A4%C3%A4merenvoikukat tänne viittaavat sivut], [http://en.wiktionary.org/wiki/j%C3%A4%C3%A4merenvoikukat englanninkielinen Wikisanakirja].</small>
+</p>
+</div>[[Luokka:Käännökset puuttuvat]]
+|}
+</div>
+</div>
+</div>
+
+===Substantiivi===
+'''jäämerenvoikukat'''
+
+#  ''monikon nominatiivimuoto'' ''sanasta'' '''<span class="Zzzz linkki" lang="fi">[[jäämerenvoikukka#Suomi|jäämerenvoikukka]]</span>'''[[Luokka:Suomen substantiivien taivutusmuodot|JÄÄMERENVOIKUKAT]]
+#  ''monikon akkusatiivimuoto'' ''sanasta'' '''<span class="Zzzz linkki" lang="fi">[[jäämerenvoikukka#Suomi|jäämerenvoikukka]]</span>'''[[Luokka:Suomen substantiivien taivutusmuodot|JÄÄMERENVOIKUKAT]]
+
+==Viitteet==
+<references/>
+
+[[Luokka:Suomen kielen kasvien sektiot]]

@@ -3039,7 +3039,7 @@ fn poemPhaseProbe(h: *Harness, pipeline: []const u8, blob_builder: []const u8, v
             const previous_generation = worker.generation;
             if (std.mem.eql(u8, case.title, "PoemPlainControl")) {
                 try h.require(previous_generation != 0 and worker.child != null, "error-reset control reuses the actual native worker");
-                const failing_source = "==English==\n<poem>allocated before failure</poem>{{#tag:UnsupportedPoemReset|x}}";
+                const failing_source = "==English==\n<poem>allocated before failure</poem>{{#tag:1InvalidPoemReset|x}}";
                 try std.testing.expectError(error.ExpansionFailed, worker.expand(h.a, i, try fixturePageIdentity(h.io, h.a, worker.root, i, case.title), case.title, failing_source));
                 const failure = worker.last_failure orelse return error.MissingPoemFailure;
                 try h.require(std.mem.eql(u8, failure.stage, "expand") and std.mem.eql(u8, failure.error_name, "UnsupportedExtensionTag"), "native expansion reports its genuine post-Poem error rather than a synthetic successful fallback");

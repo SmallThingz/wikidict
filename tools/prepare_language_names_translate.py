@@ -1,30 +1,34 @@
 #!/usr/bin/env python3
 """Capture the pinned French Translate documentation-language name profile.
 
-The generic collector remains byte-identical. This profile admits only the
-source-proven qqq hook in the en/fr ALL and single maps. Its API observations
+This profile uses an isolated instance of the maintained generic collector and
+admits only the source-proven qqq hook in the en/fr ALL and single maps. Its API observations
 remain current observations, not assertions about the public config deployment.
 """
 import importlib.util
 import json
 from pathlib import Path
+import re
 import sys
 
 sys.dont_write_bytecode = True
-GENERIC_SHA256 = 'e76d9a80f6c5ab32df2ddd596f3b383f2dc604f75eb469fc65ca5006f3a19f03'
-DEPENDENCY_PINS = {
-    'prepare_language_names_generic.py': GENERIC_SHA256,
-    'prepare_file_metadata.py': 'd2a09c741c3fb12ee1a59ea5ce6eeb9611105ffa782d90ca25d3a7b37acf23ab',
-    'download_wiktionaries.py': '061472228c81890c4eecc670ea643c8793cb5928cde7854fa4896f5c3c3b29d2',
-}
 import prepare_file_metadata as evidence
+import prepare_language_names_generic as generic
+import download_wiktionaries as downloader
 
-_generic_path = Path(evidence.__file__).with_name('prepare_language_names_generic.py')
-if evidence.digest(evidence.small(_generic_path)) != GENERIC_SHA256:
-    raise ValueError('Unreviewed generic language-name collector')
+DEPENDENCY_PATHS = {
+    'prepare_language_names_generic.py': Path(generic.__file__),
+    'prepare_file_metadata.py': Path(evidence.__file__),
+    'download_wiktionaries.py': Path(downloader.__file__),
+}
+_loaded_dependencies = {name: evidence.digest(evidence.small(path))
+                        for name, path in DEPENDENCY_PATHS.items()}
+_generic_path = DEPENDENCY_PATHS['prepare_language_names_generic.py']
 _spec = importlib.util.spec_from_file_location('_wikidict_translate_names_private', _generic_path)
 _base = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_base)
+if evidence.digest(evidence.small(_generic_path)) != _loaded_dependencies['prepare_language_names_generic.py']:
+    raise ValueError('Generic language-name collector changed during import')
 _original_primary = _base.primary_contract
 _original_finish = _base.finish_profile
 _original_reconstruct = _base.reconstruct
@@ -49,13 +53,24 @@ TRANSLATE_SOURCE_PINS = {
 
 def producer():
     dependencies = {}
-    for name, expected in DEPENDENCY_PINS.items():
-        actual = evidence.digest(evidence.small(Path(evidence.__file__).with_name(name)))
-        if actual != expected:
+    for name, path in DEPENDENCY_PATHS.items():
+        actual = evidence.digest(evidence.small(path))
+        if actual != _loaded_dependencies[name]:
             raise ValueError('Translate profile dependency changed: ' + name)
         dependencies[name] = actual
     return {'generator_sha256': evidence.digest(evidence.small(Path(__file__))),
             'dependency_sha256': dependencies}
+
+
+def validate_provenance(record):
+    # Recorded producer identities describe the observation. Current source and
+    # request/response/TSV reconstruction establish its present interpretation.
+    dependencies = record.get('dependency_sha256')
+    if not isinstance(dependencies, dict) or set(dependencies) != set(DEPENDENCY_PATHS):
+        raise ValueError('Invalid Translate producer dependency roles')
+    if any(not isinstance(value, str) or not re.fullmatch('[0-9a-f]{64}', value)
+           for value in [record.get('generator_sha256'), *dependencies.values()]):
+        raise ValueError('Invalid Translate producer provenance')
 
 
 def primary_contract(root, prefix=''):
@@ -125,6 +140,7 @@ def capture(args, transport=None, sleep=_base.time.sleep):
 _base.SCHEMA = SCHEMA
 _base.MAX_REQUESTS = MAX_REQUESTS
 _base.producer = producer
+_base.validate_provenance = validate_provenance
 _base.primary_contract = primary_contract
 _base.finish_profile = finish_profile
 _base.reconstruct = reconstruct

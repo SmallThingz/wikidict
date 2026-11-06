@@ -1,0 +1,32 @@
+/* Common CSS para todas las pieles */
+
+/* Evita que se genere un margen innecesario en la página principal */
+.page-Wikcionario_Portada #contentSub,
+.page-Wikcionario_Portada #contentSub2 {
+	display: none;
+}
+
+/* Ocultar texto para los no bibliotecarios */
+.para_biblios {
+	display: none;
+}
+
+/* Put a checker background at the image description page only visible if the image has transparent background */
+#file img {
+	background: url(//upload.wikimedia.org/wikipedia/commons/5/5d/Checker-16x16.png) repeat;
+}
+
+/* Estilo para las etiquetas del filtro de edición
+ - Añado color para poder identificarlas en la maraña que es cambios recientes. */
+.mw-tag-marker {
+	font-family: sans-serif;
+	font-style: italic;
+	font-size: 90%;
+	background-color: var(--background-color-content-removed, #ffe49c);
+}
+
+/* Evita que los elementos flotantes invadan otras secciones de idioma */
+.ns-0 h2,
+.ns-0 .mw-heading2 {
+	clear: both;
+}

@@ -1,0 +1,26 @@
+== {{lengua|grc}} ==
+{{pron-graf|leng=grc|fono=uː.ˈsi.aː|v=ἐσσία|v2=ὠσία|vnota2=dórico}}
+
+=== Etimología ===
+{{etimología|leng=grc|endo|οὖσα|tr=oũsa}}, forma de nominativo femenino singular del participio de presente activo del verbo {{l+|grc|εἰμί|tr=eimí|glosa=ser|glosa-alt=ser; estar}}<ref>{{LSJ}}</ref>, del protoindoeuropeo {{l+|ine-pro|*h₁sóntih₂}}, femenino de {{l+|ine-pro|*h₁sónts}}, participio de {{l+|ine-pro|*h₁es-|glosa=ser}}
+
+=== {{sustantivo femenino|grc}} ===
+
+;1: {{plm|propiedad}}, [[patrimonio]], [[fortuna]]
+
+;2: En particular, propiedad [[inmobiliario|inmobiliaria]], [[tierra]]s
+
+;3 {{csem|filosofía|leng=grc}}: {{plm|esencia}}, [[naturaleza]]
+{{antónimo|leng=grc|πάθη|συμβεβηκότα}}
+
+;4 {{csem|filosofía|leng=grc}}: {{plm|sustancia}}
+
+;5 {{csem|filosofía|leng=grc}}: {{plm|sustancialidad}}
+
+;6: {{plm|yeso}}
+
+=== Declinación ===
+{{grc.sust|οὐσῐ́ᾱ|ᾱς}}
+
+== Referencias y notas ==
+<references />

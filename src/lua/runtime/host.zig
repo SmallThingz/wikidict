@@ -97,6 +97,7 @@ pub const LanguageNamesFn = *const fn (?*anyopaque, ?[]const u8, LanguageNameSco
 pub const LanguageNameFn = *const fn (?*anyopaque, []const u8, ?[]const u8) anyerror![]const u8;
 pub const LanguageDirectionFn = *const fn (?*anyopaque, []const u8) anyerror!LanguageDirection;
 pub const LanguageKnownTagFn = *const fn (?*anyopaque, []const u8) anyerror!bool;
+pub const LanguageSupportedFn = *const fn (?*anyopaque, []const u8) anyerror!bool;
 
 pub const PageMetadata = struct {
     page_id: u64,
@@ -168,6 +169,8 @@ pub const Host = struct {
     language_name: ?LanguageNameFn = null,
     language_direction: ?LanguageDirectionFn = null,
     language_known_tag: ?LanguageKnownTagFn = null,
+    // Exact observed support, not language-name or known-tag membership.
+    language_supported: ?LanguageSupportedFn = null,
 };
 
 // Library installation copies immutable corpus metadata before Lua observes it.

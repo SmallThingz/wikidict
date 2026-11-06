@@ -10,6 +10,7 @@ from contextlib import contextmanager
 import io
 import json
 from pathlib import Path
+import re
 import tarfile
 import tempfile
 import time
@@ -35,6 +36,25 @@ def require(condition, message):
 def producer():
     return {'generator_sha256': evidence.digest(evidence.small(Path(__file__))),
             'base_producers': [legacy.producer(), v2.producer()]}
+
+
+def validate_provenance(value):
+    # Current replay authenticates the data; recorded hashes never select old code.
+    require(isinstance(value, dict) and set(value) == {'generator_sha256', 'base_producers'},
+            'Invalid union producer provenance')
+    require(isinstance(value['generator_sha256'], str)
+            and re.fullmatch('[0-9a-f]{64}', value['generator_sha256']), 'Invalid union producer digest')
+    bases = value['base_producers']
+    require(isinstance(bases, list) and len(bases) == 2, 'Invalid union base producer provenance')
+    for index, base in enumerate(bases):
+        roles = {'tools/prepare_file_metadata.py', 'tools/download_wiktionaries.py'}
+        if index == 1: roles.add('tools/prepare_language_messages.py')
+        require(isinstance(base, dict) and set(base) == {'generator_sha256', 'dependency_sha256'}
+                and isinstance(base['dependency_sha256'], dict) and set(base['dependency_sha256']) == roles,
+                'Invalid union base dependency roles')
+        require(all(isinstance(v, str) and re.fullmatch('[0-9a-f]{64}', v)
+                    for v in [base['generator_sha256'], *base['dependency_sha256'].values()]),
+                'Invalid union base producer digest')
 
 
 def document(path, value):
@@ -196,7 +216,7 @@ def verify(root, require_complete=True):
     per_output = {'kind', 'rows', 'output_bytes', 'output_sha256'}
     require({k: v for k, v in record.items() if k not in per_output} ==
             {k: v for k, v in records['language-fallbacks'].items() if k not in per_output}, 'Paired union manifests differ')
-    require(record.get('producer') == producer(), 'Union producer differs')
+    validate_provenance(record.get('producer'))
     require(record.get('temporal_scope') == 'current-api-observation' and record.get('dump_date') is None
             and record.get('candidate_queries_complete') is True and record.get('corpus_query_closure_proven') is False
             and record.get('fallback_mode') == 'strict' and record.get('message_mode') == 'plain-with-database',
@@ -314,10 +334,9 @@ def require_preferred_loop(record):
     profile = record.get('base_profile', {})
     keys = profile.get('keys')
     require(profile.get('schema') == v2.SCHEMA
-            and profile.get('generator_sha256') == v2.producer()['generator_sha256']
             and isinstance(keys, list) and 1 <= len(keys) <= 67
             and 'parser-template-loop-warning' in keys,
-            'Preferred loop union requires current v2 base and loop-warning key')
+            'Preferred loop union requires replayed v2 base and loop-warning key')
 
 
 def main():

@@ -1221,6 +1221,20 @@ fn isKnownLanguageTag(_: ?*anyopaque, runtime: *rt.Context, args: []const Value)
     return one(a, .{ .boolean = try get(host.ctx, args[0].string) });
 }
 
+fn isSupportedLanguage(_: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
+    if (args.len == 0 or args[0] != .string) return error.StringExpected;
+    const code = args[0].string;
+    if (code.len < 2 or code.len > 128) return one(runtime.allocator, .{ .boolean = false });
+    for (code) |c| if (!std.ascii.isLower(c) and !std.ascii.isDigit(c) and c != '-')
+        return one(runtime.allocator, .{ .boolean = false });
+    if (std.mem.eql(u8, code, "qqq")) return one(runtime.allocator, .{ .boolean = false });
+    // File availability and optional Pig Latin support belong to the captured
+    // deployment. An uncovered valid code is not an observed negative.
+    const host = host_api.getForStablePageRead(runtime) orelse return error.LanguageSupportSnapshotMissing;
+    const get = host.language_supported orelse return error.LanguageSupportSnapshotMissing;
+    return one(runtime.allocator, .{ .boolean = try get(host.ctx, code) });
+}
+
 fn displayLanguage(runtime: *rt.Context, args: []const Value, index: usize) !?[]const u8 {
     if (index >= args.len or args[index] == .nil) return null;
     if (args[index] != .string) return error.StringExpected;
@@ -1322,6 +1336,7 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table, case_mapper: *ustring_lib.No
     try language.rawSet(runtime.allocator, .{ .string = "FALLBACK_MESSAGES" }, .{ .string = "FALLBACK_MESSAGES" });
     try language.rawSet(runtime.allocator, .{ .string = "FALLBACK_STRICT" }, .{ .string = "FALLBACK_STRICT" });
     try setNative(runtime, language, "isKnownLanguageTag", null, isKnownLanguageTag);
+    try setNative(runtime, language, "isSupportedLanguage", null, isSupportedLanguage);
     try setNative(runtime, language, "fetchLanguageName", null, fetchLanguageName);
     try setNative(runtime, language, "fetchLanguageNames", null, fetchLanguageNames);
     try mw.rawSet(runtime.allocator, .{ .string = "language" }, .{ .table = language });
@@ -2153,4 +2168,61 @@ test "compact date recovery retains invalid input overflow and clock authority f
     // An authored absolute date never borrows the current clock.
     const timestamp = try parseTimestampText(&runtime, "20150910192507 +2 hours");
     try std.testing.expectEqualStrings("2015-09-10 21:25:07", try formatDateAlloc(arena.allocator(), timestamp, "Y-m-d H:i:s"));
+}
+
+
+test "AOT supported language uses exact deployment evidence independently of known tags" {
+    const Probe = struct {
+        calls: usize = 0,
+        fn expectFailure(runtime: *rt.Context, api: Value, args: []const Value, expected: anyerror) !void {
+            try std.testing.expectError(error.AotCallFailed, callField(runtime, api, "isSupportedLanguage", args));
+            try std.testing.expectEqualStrings(@errorName(expected), runtime.aotErrorName().?);
+            runtime.clearAotErrorName();
+        }
+        fn get(raw: ?*anyopaque, code: []const u8) !bool {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            self.calls += 1;
+            if (std.mem.eql(u8, code, "nl")) return true;
+            if (std.mem.eql(u8, code, "fr")) return false;
+            if (std.mem.eql(u8, code, "error")) return error.OutOfMemory;
+            return error.LanguageSupportSnapshotMissing;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var probe: Probe = .{};
+    var host = host_api.Host{ .ctx = &probe, .language_supported = Probe.get, .language_known_tag = KnownLanguageTagProbe.get };
+    host_api.set(&runtime, &host);
+    const mw = try runtime.newTable();
+    const ustring = try runtime.newNativeNamespace(.ustring);
+    const case_mapper = try ustring_lib.install(&runtime, ustring);
+    try install(&runtime, mw, case_mapper);
+    const api = mw.rawGet(.{ .string = "language" }).?;
+    // The retained ISOdate template supplies lang=nl, so its first API call is
+    // this installed callable; formatting dates is a separate obligation.
+    const dutch = try callField(&runtime, api, "isSupportedLanguage", &.{.{ .string = "nl" }});
+    defer rt.freeResults(dutch);
+    try std.testing.expect(dutch[0].boolean);
+    const french_known = try callField(&runtime, api, "isKnownLanguageTag", &.{.{ .string = "fr" }});
+    defer rt.freeResults(french_known);
+    try std.testing.expect(french_known[0].boolean);
+    const french_supported = try callField(&runtime, api, "isSupportedLanguage", &.{.{ .string = "fr" }});
+    defer rt.freeResults(french_supported);
+    try std.testing.expect(!french_supported[0].boolean);
+    const calls = probe.calls;
+    for ([_][]const u8{ "", "N", "NL", "nl/en", "qqq" }) |code| {
+        const result = try callField(&runtime, api, "isSupportedLanguage", &.{.{ .string = code }});
+        defer rt.freeResults(result);
+        try std.testing.expect(!result[0].boolean);
+    }
+    try std.testing.expectEqual(calls, probe.calls);
+    try Probe.expectFailure(&runtime, api, &.{}, error.StringExpected);
+    try Probe.expectFailure(&runtime, api, &.{.{ .number = 1 }}, error.StringExpected);
+    try Probe.expectFailure(&runtime, api, &.{.{ .string = "en-x-piglatin" }}, error.LanguageSupportSnapshotMissing);
+    try Probe.expectFailure(&runtime, api, &.{.{ .string = "zz" }}, error.LanguageSupportSnapshotMissing);
+    try Probe.expectFailure(&runtime, api, &.{.{ .string = "error" }}, error.OutOfMemory);
+    host.language_supported = null;
+    try Probe.expectFailure(&runtime, api, &.{.{ .string = "nl" }}, error.LanguageSupportSnapshotMissing);
 }

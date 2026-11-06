@@ -92,6 +92,20 @@ class TranslateNamesTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'dependency changed'):
                 names.producer()
 
+    def test_historical_producer_is_strict_recorded_provenance(self):
+        current = names.producer()
+        self.assertEqual(set(current['dependency_sha256']), set(names.DEPENDENCY_PATHS))
+        for name, path in names.DEPENDENCY_PATHS.items():
+            self.assertEqual(current['dependency_sha256'][name], names.evidence.digest(names.evidence.small(path)))
+        historic = copy.deepcopy(current)
+        historic['generator_sha256'] = '0' * 64
+        historic['dependency_sha256'] = {name: '1' * 64 for name in names.DEPENDENCY_PATHS}
+        names.validate_provenance(historic)
+        for value in (dict(historic, generator_sha256='BAD'), dict(historic, dependency_sha256={}),
+                      dict(historic, dependency_sha256={**historic['dependency_sha256'], 'unknown.py': '2' * 64}),
+                      dict(historic, dependency_sha256={**historic['dependency_sha256'], 'download_wiktionaries.py': None})):
+            with self.assertRaises(ValueError): names.validate_provenance(value)
+
     def test_source_proof_hashes_are_mandatory(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -126,6 +140,39 @@ class TranslateNamesTest(unittest.TestCase):
                 self.assertEqual(names.verify(args.output), manifest)
                 self.assertEqual(names.capture_artifacts(args.output/'language-names.tsv', manifest),
                                  names.capture_artifacts(args.output/'language-names.tsv'))
+                manifest = copy.deepcopy(manifest)
+                manifest['generator_sha256'] = '0' * 64
+                manifest['dependency_sha256'] = {name: '1' * 64 for name in names.DEPENDENCY_PATHS}
+                mp = args.output/'language-names.manifest.json'
+                def reseal():
+                    manifest['artifacts'] = names._base.payload(args.output)
+                    mp.write_bytes(names.evidence.encoded(manifest))
+                    (args.output/names.COMPLETE).write_bytes(names.evidence.encoded({
+                        'schema': names.SCHEMA, 'manifest_sha256': names.evidence.digest(mp.read_bytes())}))
+                reseal()
+                self.assertEqual(names.verify(args.output), manifest)
+                preserved = {p.name: p.read_bytes() for p in args.output.iterdir()}
+                record = manifest['requests'][0]
+                request_path = args.output / record['request']
+                receipt_path = args.output / record['accepted_receipt']
+                for change in ('query', 'receipt', 'resealed_raw'):
+                    for name, raw_bytes in preserved.items(): (args.output/name).write_bytes(raw_bytes)
+                    if change == 'query':
+                        request = json.loads(request_path.read_text()); request['query']['uselang'] = 'fr'
+                        request['url'] = names.evidence.wiktionary_api('frwiktionary') + '?' + urllib.parse.urlencode(sorted(request['query'].items()))
+                        request_path.write_bytes(names.evidence.encoded(request))
+                    else:
+                        receipt = json.loads(receipt_path.read_text())
+                        if change == 'receipt': receipt['accepted'] = False
+                        else:
+                            raw_path = args.output / receipt['response']; body = json.loads(raw_path.read_text())
+                            body['query']['languageinfo']['qqq']['name'] = 'Fabricated documentation'
+                            raw = names.evidence.encoded(body); raw_path.write_bytes(raw)
+                            receipt['response_bytes'] = len(raw); receipt['response_sha256'] = names.evidence.digest(raw)
+                        receipt_path.write_bytes(names.evidence.encoded(receipt))
+                    reseal()
+                    with self.subTest(change=change), self.assertRaises(ValueError): names.verify(args.output)
+                for name, raw_bytes in preserved.items(): (args.output/name).write_bytes(raw_bytes)
                 path = args.output/'language-names.tsv'
                 raw = path.read_bytes().replace(b'Message documentation', b'Changed documentation')
                 path.write_bytes(raw)

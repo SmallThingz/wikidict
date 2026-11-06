@@ -1,0 +1,185 @@
+/*<pre> CSS kaikille nahoille - esimerkiksi taulukoiden ulkoasuille */
+
+/* muokkaa-välilehden tekstin lihavointi. */
+#ca-edit a { font-weight: bold !important; }
+ 
+/* Luo tunnus -linkki näkyvämmäksi (en-wikissä sama) */
+#pt-createaccount {
+  font-weight: bold;
+  font-size: 110%;
+}
+
+/* Special:Allpages uudelleenohjaukset */
+.allpagesredirect a {
+    color: #aaaaaa;
+    background: none;
+}
+
+/* Laidan muokkaa-linkit oikeaan laitaan */
+.ltr .mw-editsection {
+  float: right;
+}
+.rtl .mw-editsection {
+  float: left;
+}
+
+/* Otsikoiden alleviivauksia ja ylämarginaali leveämmäksi, jotta erottuvat toisistaan vähän paremmin. */
+.ns-0 .mw-body .mw-heading3 { border-bottom: 1px dashed #aaaaaa; margin-top: 1.5em; }
+.ns-0 .mw-body .mw-heading4 { border-bottom: 1px dotted #dddddd; margin-top: 1em; }
+
+/* H5-otsikoiden muokkaa-linkit piiloon */
+.ns-0 .mw-body h5 .mw-editsection { display:none }
+
+/* Kieliotsikon, esim. ==Suomi== korostus */
+.ns-0 .mw-body .mw-heading2 {
+   clear: both;
+   border-top: solid 1px #aaaaaa;
+   border-bottom: solid 1px #aaaaaa;
+   border-left: none;
+   border-right: none;
+   margin-top: 1em;
+   background: var(--background-color-neutral-subtle, #f8f9fa);
+   padding-top: 0.5em;
+   padding-bottom: 0.5em;
+   font-size: 150%;
+   font-weight: bold;
+}
+
+/* Liittyvät sanat -osion aliosiot erottumaan paremmin ylemmän tason otsikoista. */
+.mw-body .mw-heading5 h5 {
+  color: var(--color-subtle);
+}
+
+
+/* Yleinen luokka näkymättömille elementeille. */
+.piilotettu {
+	display: none;
+}
+
+
+
+/**** NavFrame ****/
+div.NavFrame {
+    margin: 0px;
+    padding: 4px;
+    border: 1px solid #aaa;
+    text-align: center;
+    border-collapse: collapse;
+    font-size: 95%;
+}
+ 
+div.NavFrame + div.NavFrame {
+    border-top-style: none;
+    border-top-style: hidden;
+}
+div.NavPic {
+    background: var(--background-color-base,#fff);
+    margin: 0px;
+    padding: 2px;
+    float: left;
+}
+div.NavFrame div.NavHead {
+    font-weight: bold;
+    background: var( --background-color-neutral-subtle, #f2f2f2 );
+}
+div.NavFrame p {
+    font-size: 100%;
+}
+div.NavFrame div.NavContent {
+    font-size: 100%;
+}
+div.NavFrame div.NavContent p {
+    font-size: 100%;
+}
+div.NavEnd {
+    margin: 0px;
+    padding: 0px;
+    line-height: 1px;
+    clear: both;
+}
+a.NavToggle {
+    float: right;
+    margin-right: 3px;
+    font-weight: normal;
+    font-size: 90%;
+}
+ 
+/**** /NavFrame ***/
+
+
+
+/* CategoryTree-listojen muotoilut -- samat MediaWiki:Mobile.css-tiedostossa */
+
+.CategoryTreeTag .CategoryTreeBullet {
+	background-image: url("/w/skins/Vector/images/bullet-icon.png");
+	background-repeat: no-repeat;
+	background-position: center;
+	padding-left: 15px;
+}
+
+.CategoryTreeTag .CategoryTreeLabel {
+	font-style: normal;
+}
+
+/* Eräiden gadgettien työkaluille käytettävä palkki. */
+/* #tyokalupakki { } */
+
+/* Piilotetaan ensimmäistä työkalua edeltävä erotin. */
+#tyokalupakki .tyokaluerotin:first-child { 
+    display: none; 
+}
+
+/* Työkalujen ohjelinkkien koko. */
+#tyokalupakki .ohje_lnk {
+    font-size: 80%;
+}
+
+/* [[Malline:luo-nappi]]:n näyttämän sivunluontinapin muotoilu. */
+.luo-nappi a {
+	font-size: 0.8em;
+	color: #c473e7 !important; /* haalea darkviolet */
+}
+
+/* Väkänen kieliotsikon eteen, johon tultiin kielilinkistä. */
+h2 > span:target:before {
+	content: ">";
+	color: darkgray;
+}
+
+
+/* Yleiskäyttöisiä luokkia, joilla voi merkitä elementin vain tulostettavaksi
+   tai vain näytöllä näkyväksi. */
+@media print {
+    .vain-tulostus {
+        display: unset;
+    }
+    .vain-naytto, .ei-tulostus {
+        display: none;
+     }
+}
+@media screen {
+    .vain-tulostus, .ei-naytto {
+		display: none;
+    }
+    .vain-naytto {
+    	display: unset;
+    }
+}
+
+/**
+ * Määritelmien tavutus
+ **/
+.mw-parser-output > section > section > ol > li {
+  hyphens: auto;
+}
+
+.mw-parser-output > section > section > ol > li > dl {
+  hyphens: initial;
+
+}
+
+.käännöskohta > div > div > b {
+  hyphens: auto;
+}
+
+/*</pre>*/

@@ -14,11 +14,26 @@ import re
 import sys
 import time
 import urllib.parse
+import urllib.request
+import urllib.error
 
 sys.dont_write_bytecode = True
 import prepare_file_metadata as evidence
+import download_wiktionaries as downloader
+import prepare_language_messages as legacy
 
 SCHEMA = 'wikidict.language-messages-capture.v2'
+COMPLETE_SCHEMA = 'wikidict.language-messages-complete.v1'
+COMPLETE_PROFILE = 'allmessages-local-plain-v1'
+COMPLETE_API_CORE = '115ff4de72eec9482447f6ad2a93444f3f78fddd'
+COMPLETE_RESPONSE_BYTES = 16 * 1024 * 1024
+COMPLETE_TOTAL_BYTES = 128 * 1024 * 1024
+COMPLETE_MAX_ROWS = 250000
+COMPLETE_TSV_BYTES = 64 * 1024 * 1024
+COMPLETE_SOURCE_PINS = {
+    'ApiQueryAllMessages.php': ('includes/Api/ApiQueryAllMessages.php', '7fb1edf6d66f32ff0f76fac1facfd6fab7293b0f8fc2d768e6a3842e034e04fc'),
+    'MessageCache.php': ('includes/Language/MessageCache.php', 'cc1c90078dea41d74be946dbbd32a91c655a312f61a6e5a2355efac32e7281a8'),
+}
 PREFIX = 'language-messages.'
 KINDS = ('interface-messages', 'language-fallbacks')
 COMPLETE = PREFIX + 'complete.json'
@@ -169,6 +184,122 @@ def query_for(wiki, language, keys):
             'ammessages': '|'.join(keys), 'amprop': 'default', 'maxlag': '5'}
 
 
+def complete_query(language, continuation):
+    return {'action': 'query', 'format': 'json', 'formatversion': '2',
+            'meta': 'siteinfo|allmessages', 'siprop': 'general', 'amlang': language,
+            'ammessages': '*', 'amincludelocal': '1', 'amcustomised': 'all',
+            'amprop': 'default', 'maxlag': '5', **continuation}
+
+
+def complete_response(url, timeout):
+    # Keep the legacy shared transport byte-identical: other retained profiles
+    # bind its source identity. Only this explicit profile needs a larger page.
+    request = urllib.request.Request(url, headers={'User-Agent': evidence.AGENT, 'Accept': 'application/json'})
+    try:
+        response = urllib.request.urlopen(request, timeout=timeout)
+    except urllib.error.HTTPError as error:
+        response = error
+    with response:
+        final, original = urllib.parse.urlsplit(response.url), urllib.parse.urlsplit(url)
+        if (final.scheme, final.netloc, final.path) != (original.scheme, original.netloc, original.path):
+            raise ValueError('Unexpected API redirect endpoint')
+        return response.status, dict(response.headers), response.read(COMPLETE_RESPONSE_BYTES + 1)
+
+
+def complete_source_contract(root, prefix=''):
+    receipts = evidence.decode(evidence.small(Path(root) / (prefix + 'source-receipts01.json')))
+    core = receipts.get('core') if isinstance(receipts, dict) else None
+    if core != COMPLETE_API_CORE:
+        raise ValueError('Invalid complete-message API source revision')
+    records = receipts.get('sources')
+    if not isinstance(records, list) or len(records) != len(COMPLETE_SOURCE_PINS):
+        raise ValueError('Incomplete complete-message primary source inventory')
+    seen = set()
+    for record in records:
+        name = record.get('file') if isinstance(record, dict) else None
+        if name not in COMPLETE_SOURCE_PINS or name in seen:
+            raise ValueError('Unexpected complete-message primary source')
+        seen.add(name)
+        source_path, digest = COMPLETE_SOURCE_PINS[name]
+        raw = evidence.small(Path(root) / (prefix + name), 512 * 1024)
+        if (record.get('source_path') != source_path or record.get('status') != 200
+                or record.get('url') != f'https://raw.githubusercontent.com/wikimedia/mediawiki/{core}/{source_path}'
+                or record.get('bytes') != len(raw) or record.get('sha256') != digest
+                or evidence.digest(raw) != digest):
+            raise ValueError('Complete-message primary source identity differs')
+    return core
+
+
+def checked_core(data, wiki, content_language, core):
+    query = checked_query(data, wiki, content_language)
+    if query['general'].get('git-hash') != core:
+        raise ValueError('API source revision changed or differs from reviewed source')
+    return query
+
+
+def complete_order_key(name):
+    # PHP 8 NUM_STRING grammar (php.net/manual/en/language.types.numeric-strings.php).
+    # Reject numeric comparison rather than approximating its integer/float
+    # coercion; leading-numeric nonnumeric names still compare bytewise.
+    if re.fullmatch(r'[ \t\r\n\v\f]*[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?[ \t\r\n\v\f]*', name):
+        raise ValueError('Unsupported numeric-string API message ordering')
+    return name.encode('utf-8')
+
+
+def parse_complete_page(data, wiki, content_language, core, continuation):
+    query = checked_core(data, wiki, content_language, core)
+    rows = query.get('allmessages')
+    if not isinstance(rows, list) or len(rows) > COMPLETE_MAX_ROWS:
+        raise ValueError('Missing or excessive complete-message rows')
+    next_token = data.get('continue', {})
+    if (not isinstance(next_token, dict) or next_token and
+            (set(next_token) != {'continue', 'amfrom'} or
+             any(not isinstance(v, str) or not 1 <= len(v.encode()) <= 4096 or '\0' in v for v in next_token.values()))):
+        raise ValueError('Invalid allmessages continuation')
+    if not next_token and data.get('batchcomplete') is not True:
+        raise ValueError('Complete-message terminal response is not complete')
+    if continuation and (not rows or not isinstance(rows[0], dict) or rows[0].get('name') != continuation['amfrom']):
+        raise ValueError('Allmessages continuation skipped the first unreturned key')
+    if next_token and not rows:
+        raise ValueError('Allmessages continuation made no progress')
+    decoded = []
+    names = set()
+    previous = None
+    for row in rows:
+        if not isinstance(row, dict) or set(row) - {'name', 'normalizedname', 'content', 'missing', 'default', 'defaultmissing'}:
+            raise ValueError('Unsupported complete-message response fields')
+        name, normalized = row.get('name'), row.get('normalizedname')
+        if any(not isinstance(v, str) or not 1 <= len(v.encode()) <= 4096 or '\0' in v for v in (name, normalized)) or name in names:
+            raise ValueError('Invalid or duplicate enumerated message identity')
+        names.add(name)
+        ordered = complete_order_key(name)
+        if previous is not None and ordered <= previous:
+            raise ValueError('API message names are not strictly ordered')
+        previous = ordered
+        if 'default' in row and (not isinstance(row['default'], str) or '\0' in row['default']):
+            raise ValueError('Invalid default message evidence')
+        if 'defaultmissing' in row and (row['defaultmissing'] is not True or 'default' in row):
+            raise ValueError('Ambiguous default message evidence')
+        if 'missing' in row:
+            if row['missing'] is not True or any(k in row for k in ('content', 'default', 'defaultmissing')):
+                raise ValueError('Ambiguous missing message evidence')
+            value = None
+        else:
+            value = row.get('content')
+            if not isinstance(value, str) or '\0' in value:
+                raise ValueError('Missing or invalid plain message content')
+        try:
+            key = normalize_key(name)
+        except ValueError:
+            key = None
+        if key is not None and normalized != key:
+            raise ValueError('Conflicting supported message normalization')
+        decoded.append((name, normalized, key, value))
+    if next_token and complete_order_key(next_token['amfrom']) <= previous:
+        raise ValueError('Continuation does not follow the last emitted key')
+    return decoded, next_token
+
+
 def fallback_query(continuation):
     return {'action': 'query', 'format': 'json', 'formatversion': '2',
             'meta': 'siteinfo|languageinfo', 'siprop': 'general', 'licode': '*',
@@ -181,9 +312,9 @@ def query_url(wiki, query):
 
 def producer():
     return {'generator_sha256': evidence.digest(evidence.small(Path(__file__))),
-            'dependency_sha256': {name: evidence.digest(evidence.small(REPO / name)) for name in (
-                'tools/prepare_file_metadata.py', 'tools/download_wiktionaries.py',
-                'tools/prepare_language_messages.py')}}
+            'dependency_sha256': {name: evidence.digest(evidence.small(Path(module.__file__))) for name, module in (
+                ('tools/prepare_file_metadata.py', evidence), ('tools/download_wiktionaries.py', downloader),
+                ('tools/prepare_language_messages.py', legacy))}}
 
 
 
@@ -212,11 +343,13 @@ def owned_payload(root):
     return dict(sorted(found.items()))
 
 
-def request_observation(root, number, wiki, content_language, specification, transport, sleep, delay, deadline):
+def request_observation(root, number, wiki, content_language, specification, transport, sleep, delay, deadline,
+                        *, complete_core=None):
     if number > MAX_REQUESTS:
         raise ValueError('Capture request bound exceeded')
     request_name = f'{PREFIX}{number:04d}.request.json'
     query = (fallback_query(specification['continuation']) if specification['kind'] == 'fallbacks'
+             else complete_query(specification['language'], specification['continuation']) if specification['kind'] == 'allmessages'
              else query_for(wiki, specification['language'], specification['keys']))
     url = query_url(wiki, query)
     if len(url) > MAX_URL:
@@ -230,12 +363,15 @@ def request_observation(root, number, wiki, content_language, specification, tra
         headers, retry = {}, False
         try:
             status, headers, raw = transport(url, min(30, deadline - time.monotonic()))
+            if complete_core and sum(p.stat().st_size for p in root.glob(PREFIX + '*.raw.json')) + len(raw) > COMPLETE_TOTAL_BYTES:
+                receipt.update(status=status, response_not_retained='complete capture raw byte bound exceeded')
+                raise ValueError('Complete capture raw byte bound exceeded')
             receipt.update(status=status, response=name + '.raw.json',
                            response_bytes=len(raw), response_sha256=evidence.digest(raw),
                            headers={k.lower(): v for k, v in headers.items()
                                     if k.lower() in ('date', 'content-type', 'retry-after', 'etag')})
             evidence.put(root / receipt['response'], raw)
-            if len(raw) > MAX_RESPONSE:
+            if len(raw) > (COMPLETE_RESPONSE_BYTES if complete_core else MAX_RESPONSE):
                 raise ValueError('Oversized API response')
             if status != 200:
                 retry = status in (429, 500, 502, 503, 504)
@@ -243,7 +379,10 @@ def request_observation(root, number, wiki, content_language, specification, tra
             data = evidence.decode(raw)
             if isinstance(data, dict) and isinstance(data.get('error'), dict):
                 retry = data['error'].get('code') in ('maxlag', 'ratelimited', 'readonly')
+            if complete_core:
+                checked_core(data, wiki, content_language, complete_core)
             result = (parse_fallbacks(data, wiki, content_language) if specification['kind'] == 'fallbacks'
+                      else parse_complete_page(data, wiki, content_language, complete_core, specification['continuation']) if specification['kind'] == 'allmessages'
                       else parse_messages(data, specification['language'], specification['keys'], wiki, content_language))
             receipt.update(accepted=True, ended_utc=evidence.utc())
             evidence.document(root / (name + '.receipt.json'), receipt)
@@ -263,7 +402,259 @@ def request_observation(root, number, wiki, content_language, specification, tra
             sleep(wait)
 
 
+def complete_configuration(value):
+    fields = {'wiki', 'date', 'content_language', 'languages', 'extra_keys',
+              'namespace_registry_sha256', 'fallback_scope', 'profile', 'api_core',
+              'projection_scope', 'local_key_caveat', 'ordering_scope'}
+    if (not isinstance(value, dict) or set(value) != fields
+            or value['profile'] != COMPLETE_PROFILE
+            or value['projection_scope'] != 'ascii-key-projection-no-absence-inference'
+            or value['local_key_caveat'] != 'language-suffixed-only-pages-without-base-may-be-unenumerated'
+            or value['ordering_scope'] != 'utf8-byte-order-numeric-strings-refused'
+            or value['fallback_scope'] != 'all-supported-api-languages'
+            or not isinstance(value['api_core'], str) or not re.fullmatch('[0-9a-f]{40}', value['api_core'])
+            or not isinstance(value['namespace_registry_sha256'], str)
+            or not re.fullmatch('[0-9a-f]{64}', value['namespace_registry_sha256'])):
+        raise ValueError('Invalid complete-message profile configuration')
+    evidence.wiktionary_api(value['wiki'])
+    if not isinstance(value['date'], str) or not re.fullmatch('[0-9]{8}', value['date']):
+        raise ValueError('Invalid complete-message associated dump date')
+    datetime.strptime(value['date'], '%Y%m%d')
+    languages, keys = value['languages'], value['extra_keys']
+    if (not language_code(value['content_language']) or not isinstance(languages, list)
+            or not 1 <= len(languages) <= 50 or any(not language_code(x) for x in languages)
+            or languages != sorted(set(languages)) or not isinstance(keys, list)
+            or not 1 <= len(keys) <= MAX_MESSAGE_KEYS or keys != sorted(set(keys))
+            or len({normalize_key(k) for k in keys}) != len(keys)
+            or not REQUIRED_MESSAGE_KEYS <= set(keys)):
+        raise ValueError('Invalid complete-message language or supplemental key selection')
+    return value
+
+
+def reconstruct_complete(config, observe):
+    """One request plan for collection and replay; no unobserved negatives."""
+    complete_configuration(config)
+    fallbacks, messages, coverage = {}, {}, {}
+    continuation, tokens = {}, set()
+    while True:
+        rows, continuation = observe({'kind': 'fallbacks', 'continuation': continuation})
+        if set(rows) & set(fallbacks) or len(fallbacks) + len(rows) > MAX_FALLBACK_ROWS:
+            raise ValueError('Duplicate or excessive fallback rows')
+        fallbacks.update(rows)
+        if not continuation:
+            break
+        token = tuple(sorted(continuation.items()))
+        if token in tokens:
+            raise ValueError('Repeated fallback continuation')
+        tokens.add(token)
+    if not {config['content_language'], *config['languages']} <= set(fallbacks):
+        raise ValueError('Selected language absent from complete fallback inventory')
+    total_rows = 0
+    for language in config['languages']:
+        continuation, tokens, names, last_name = {}, set(), set(), None
+        projected, unsupported = {}, []
+        counters = dict(api_rows=0, explicit_missing=0, empty_values=0, nonempty_values=0,
+                        projected_api_rows=0, normalization_alias_rows=0, supplemental_rows=0)
+        while True:
+            rows, following = observe({'kind': 'allmessages', 'language': language, 'continuation': continuation})
+            for name, normalized, key, value in rows:
+                if last_name is not None and complete_order_key(name) <= complete_order_key(last_name):
+                    raise ValueError('API message pages are not strictly ordered')
+                last_name = name
+                if name in names:
+                    raise ValueError('Repeated API message key across continuation pages')
+                names.add(name); total_rows += 1; counters['api_rows'] += 1
+                if total_rows > COMPLETE_MAX_ROWS:
+                    raise ValueError('Complete-message row bound exceeded')
+                counters['explicit_missing' if value is None else 'empty_values' if value == '' else 'nonempty_values'] += 1
+                if key is None:
+                    unsupported.append(dict(name=name, normalizedname=normalized, reason='outside-ascii-key-projection'))
+                    continue
+                if key in projected:
+                    if projected[key] != value:
+                        raise ValueError('Conflicting normalized message aliases')
+                    counters['normalization_alias_rows'] += 1
+                else:
+                    projected[key] = value
+            if not following:
+                break
+            token = tuple(sorted(following.items()))
+            if token in tokens or following['amfrom'] in names:
+                raise ValueError('Repeated or regressing allmessages continuation')
+            tokens.add(token); continuation = following
+        counters['projected_api_rows'] = len(projected)
+        missing = [key for key in config['extra_keys'] if normalize_key(key) not in projected]
+        for chunk in message_chunks(missing):
+            rows = observe({'kind': 'messages', 'language': language, 'keys': chunk})
+            if set(rows) & set(projected):
+                raise ValueError('Supplemental message conflicts with enumeration')
+            projected.update(rows); counters['supplemental_rows'] += len(rows)
+        messages.update({(language, key): value for key, value in projected.items()})
+        coverage[language] = {**counters, 'raw_key_set_sha256': evidence.digest(evidence.encoded(sorted(names))),
+                              'unsupported_rows': unsupported, 'api_enumeration_complete': True,
+                              'projection_complete_for_api_inventory': not unsupported,
+                              'required_keys_observed': sorted(REQUIRED_MESSAGE_KEYS)}
+        if len(messages) > COMPLETE_MAX_ROWS:
+            raise ValueError('Complete-message projected row bound exceeded')
+    outputs = {'interface-messages': render_messages(messages, config['wiki'], config['date'], config['content_language']),
+               'language-fallbacks': render_fallbacks(fallbacks, config['wiki'], config['date'], config['content_language'])}
+    if any(len(raw) > COMPLETE_TSV_BYTES for raw in outputs.values()):
+        raise ValueError('Complete-message TSV byte bound exceeded')
+    return outputs, coverage, fallbacks, messages
+
+
+def capture_complete(args, transport=None, sleep=time.sleep):
+    if not 0 <= args.delay <= 60 or not 1 <= args.wall_seconds <= 86400:
+        raise ValueError('Invalid bounded complete-message capture settings')
+    original = evidence.stamp(args.namespace_registry)
+    namespace = evidence.small(args.namespace_registry)
+    language = namespace_identity(namespace, args.wiki, args.date)
+    api_core = complete_source_contract(args.api_sources)
+    config = complete_configuration(dict(wiki=args.wiki, date=args.date, content_language=language,
+        languages=sorted(set(args.languages or ['en', language])), extra_keys=sorted(set(args.messages or []) | REQUIRED_MESSAGE_KEYS),
+        namespace_registry_sha256=evidence.digest(namespace), fallback_scope='all-supported-api-languages',
+        profile=COMPLETE_PROFILE, api_core=api_core, projection_scope='ascii-key-projection-no-absence-inference',
+        local_key_caveat='language-suffixed-only-pages-without-base-may-be-unenumerated',
+        ordering_scope='utf8-byte-order-numeric-strings-refused'))
+    identity = producer(); root = args.output
+    root.mkdir(parents=True, exist_ok=False)
+    started, deadline = evidence.utc(), time.monotonic() + args.wall_seconds
+    try:
+        evidence.put(root / (PREFIX + 'namespace-registry.tsv'), namespace)
+        for name in (*COMPLETE_SOURCE_PINS, 'source-receipts01.json'):
+            evidence.put(root / (PREFIX + 'source-' + name), evidence.small(Path(args.api_sources) / name, 512 * 1024))
+        evidence.document(root / (PREFIX + 'requested.json'), config)
+        requests = []
+        if transport is None:
+            transport = complete_response
+        def observe(specification):
+            if requests:
+                if time.monotonic() + args.delay >= deadline:
+                    raise ValueError('Capture wall deadline reached')
+                sleep(args.delay)
+            result, request = request_observation(root, len(requests) + 1, args.wiki, language,
+                specification, transport, sleep, args.delay, deadline, complete_core=api_core)
+            requests.append(request)
+            return result
+        outputs, coverage, fallbacks, messages = reconstruct_complete(config, observe)
+        if producer() != identity or evidence.stamp(args.namespace_registry) != original:
+            raise ValueError('Collector or selected namespace changed during capture')
+        for kind, raw in outputs.items(): evidence.put(root / (kind + '.tsv'), raw)
+        coverage_raw = evidence.encoded(coverage)
+        if len(coverage_raw) > COMPLETE_RESPONSE_BYTES:
+            raise ValueError('Complete-message coverage evidence byte bound exceeded')
+        evidence.put(root / (PREFIX + 'coverage.json'), coverage_raw)
+        inventory = owned_payload(root)
+        common = dict(schema=COMPLETE_SCHEMA, header_version=1, **config, **identity,
+            source_url=evidence.wiktionary_api(args.wiki), dump_date=None, temporal_scope='current-api-sequential-observations',
+            started_utc=started, retrieved_utc=evidence.utc(), requests=requests, artifacts=inventory,
+            api_enumeration_complete=True, candidate_queries_complete=True, corpus_query_closure_proven=False,
+            fallback_mode='strict', message_mode='plain-with-database', fallback_languages=sorted(fallbacks),
+            coverage_sha256=evidence.digest(coverage_raw))
+        hashes = {}
+        for kind, raw in outputs.items():
+            record = dict(common, kind=kind, rows=len(fallbacks) if kind == 'language-fallbacks' else len(messages),
+                          output_bytes=len(raw), output_sha256=evidence.digest(raw))
+            encoded = evidence.encoded(record)
+            if len(encoded) > MAX_MANIFEST: raise ValueError('Complete-message paired manifest byte bound exceeded')
+            name = kind + '.manifest.json'; evidence.put(root / name, encoded); hashes[name] = evidence.digest(encoded)
+        verify_complete(root, require_complete=False)
+        evidence.document(root / COMPLETE, dict(schema=COMPLETE_SCHEMA, manifests=hashes))
+        return verify_complete(root)
+    except BaseException as error:
+        for name in (COMPLETE, *(kind + suffix for kind in KINDS for suffix in ('.tsv', '.manifest.json'))):
+            path = root / name
+            if path.exists(): path.rename(root / (name + '.unverified'))
+        evidence.document(root / (PREFIX + 'failure.json'), dict(error=str(error), ended_utc=evidence.utc(), **identity))
+        raise
+
+
+def verify_complete(root, require_complete=True):
+    root = Path(root)
+    if root.is_symlink() or not root.is_dir(): raise ValueError('Unsafe complete-message capture directory')
+    records, hashes = {}, {}
+    for kind in KINDS:
+        name = kind + '.manifest.json'; raw = evidence.small(root / name, MAX_MANIFEST)
+        record = evidence.decode(raw)
+        if not isinstance(record, dict) or record.get('schema') != COMPLETE_SCHEMA or record.get('kind') != kind or record.get('header_version') != 1:
+            raise ValueError('Complete-message paired schema mismatch')
+        records[kind], hashes[name] = record, evidence.digest(raw)
+    record = records['interface-messages']; other = records['language-fallbacks']
+    per_output = {'kind', 'rows', 'output_bytes', 'output_sha256'}
+    if {k: v for k, v in record.items() if k not in per_output} != {k: v for k, v in other.items() if k not in per_output}:
+        raise ValueError('Complete-message paired manifests differ')
+    validate_provenance(record)
+    if require_complete and evidence.decode(evidence.small(root / COMPLETE, MAX_MANIFEST)) != dict(schema=COMPLETE_SCHEMA, manifests=hashes):
+        raise ValueError('Complete-message completion marker mismatch')
+    if (record.get('temporal_scope') != 'current-api-sequential-observations' or record.get('dump_date') is not None
+            or record.get('api_enumeration_complete') is not True or record.get('candidate_queries_complete') is not True
+            or record.get('corpus_query_closure_proven') is not False or record.get('fallback_mode') != 'strict'
+            or record.get('message_mode') != 'plain-with-database'):
+        raise ValueError('Invalid complete-message coverage or temporal scope')
+    config = complete_configuration(evidence.decode(evidence.small(root / (PREFIX + 'requested.json'), MAX_MANIFEST)))
+    if any(record.get(k) != v for k, v in config.items()) or record.get('source_url') != evidence.wiktionary_api(config['wiki']):
+        raise ValueError('Complete-message requested configuration differs')
+    namespace = evidence.small(root / (PREFIX + 'namespace-registry.tsv'))
+    if (namespace_identity(namespace, config['wiki'], config['date']) != config['content_language']
+            or evidence.digest(namespace) != config['namespace_registry_sha256']
+            or complete_source_contract(root, PREFIX + 'source-') != config['api_core']):
+        raise ValueError('Complete-message namespace/source identity differs')
+    inventory = owned_payload(root)
+    if inventory != record.get('artifacts'):
+        raise ValueError('Complete-message artifact inventory differs')
+    if sum(v['size'] for k, v in inventory.items() if k.endswith('.raw.json')) > COMPLETE_TOTAL_BYTES:
+        raise ValueError('Complete-message raw evidence byte bound exceeded')
+    requests = record.get('requests')
+    if not isinstance(requests, list) or not 1 <= len(requests) <= MAX_REQUESTS:
+        raise ValueError('Invalid complete-message request inventory')
+    position = 0
+    def observe(specification):
+        nonlocal position
+        if position >= len(requests): raise ValueError('Unfinished complete-message request chain')
+        batch = requests[position]; position += 1
+        request_name = f'{PREFIX}{position:04d}.request.json'
+        if not isinstance(batch, dict) or set(batch) != {'request', 'accepted_receipt'} or batch['request'] != request_name:
+            raise ValueError('Complete-message request order differs')
+        accepted = batch['accepted_receipt']
+        if accepted not in [f'{PREFIX}{position:04d}-{i:02d}.receipt.json' for i in range(1, 5)]:
+            raise ValueError('Invalid accepted complete-message receipt name')
+        query = (fallback_query(specification['continuation']) if specification['kind'] == 'fallbacks'
+                 else complete_query(specification['language'], specification['continuation']) if specification['kind'] == 'allmessages'
+                 else query_for(config['wiki'], specification['language'], specification['keys']))
+        request = evidence.decode(evidence.small(root / request_name, MAX_MANIFEST))
+        if request != dict(specification, query=query, url=query_url(config['wiki'], query)):
+            raise ValueError('Complete-message request or continuation differs')
+        receipt = evidence.decode(evidence.small(root / accepted, MAX_MANIFEST))
+        response_name = accepted.removesuffix('.receipt.json') + '.raw.json'
+        if (receipt.get('accepted') is not True or receipt.get('status') != 200
+                or receipt.get('request') != request_name or receipt.get('response') != response_name
+                or not isinstance(receipt.get('started_utc'), str) or not isinstance(receipt.get('ended_utc'), str)):
+            raise ValueError('Unaccepted complete-message response')
+        raw = evidence.small(root / response_name, COMPLETE_RESPONSE_BYTES)
+        if receipt.get('response_bytes') != len(raw) or receipt.get('response_sha256') != evidence.digest(raw):
+            raise ValueError('Complete-message raw response differs from receipt')
+        data = evidence.decode(raw); checked_core(data, config['wiki'], config['content_language'], config['api_core'])
+        if specification['kind'] == 'fallbacks': return parse_fallbacks(data, config['wiki'], config['content_language'])
+        if specification['kind'] == 'allmessages': return parse_complete_page(data, config['wiki'], config['content_language'], config['api_core'], specification['continuation'])
+        return parse_messages(data, specification['language'], specification['keys'], config['wiki'], config['content_language'])
+    outputs, coverage, fallbacks, messages = reconstruct_complete(config, observe)
+    if position != len(requests): raise ValueError('Unconsumed complete-message request records')
+    coverage_raw = evidence.small(root / (PREFIX + 'coverage.json'), COMPLETE_RESPONSE_BYTES)
+    if coverage_raw != evidence.encoded(coverage) or record.get('coverage_sha256') != evidence.digest(coverage_raw):
+        raise ValueError('Complete-message projection coverage differs from raw evidence')
+    if record.get('fallback_languages') != sorted(fallbacks): raise ValueError('Complete-message fallback languages differ')
+    for kind, raw in outputs.items():
+        current = records[kind]
+        if (evidence.small(root / (kind + '.tsv'), COMPLETE_TSV_BYTES) != raw
+                or current.get('rows') != (len(fallbacks) if kind == 'language-fallbacks' else len(messages))
+                or current.get('output_bytes') != len(raw) or current.get('output_sha256') != evidence.digest(raw)):
+            raise ValueError('Complete-message TSV differs from reconstructed API evidence')
+    return records
+
+
 def capture(args, transport=None, sleep=time.sleep):
+    if getattr(args, 'complete_messages', False):
+        return capture_complete(args, transport, sleep)
     evidence.wiktionary_api(args.wiki)
     if (not re.fullmatch(r'\d{8}', args.date) or not 0 <= args.delay <= 60
             or not 1 <= args.wall_seconds <= 86400):
@@ -354,6 +745,9 @@ def capture(args, transport=None, sleep=time.sleep):
 
 def verify(root, require_complete=True):
     root = Path(root)
+    initial = evidence.decode(evidence.small(root / 'interface-messages.manifest.json', MAX_MANIFEST))
+    if isinstance(initial, dict) and initial.get('schema') == COMPLETE_SCHEMA:
+        return verify_complete(root, require_complete)
     if root.is_symlink() or not root.is_dir():
         raise ValueError('Unsafe language/message capture directory')
     manifests, hashes = {}, {}
@@ -508,6 +902,20 @@ def capture_artifacts(path, manifest=None):
     return result
 
 
+def require_preferred_loop(record):
+    # Call only after paired replay. Enumeration does not imply page-context
+    # coverage, but the required key has an actual API row in every language.
+    if record.get('schema') == COMPLETE_SCHEMA:
+        if (record.get('profile') != COMPLETE_PROFILE
+                or not REQUIRED_MESSAGE_KEYS <= set(record.get('extra_keys', []))):
+            raise ValueError('Preferred loop messages require observed loop-warning key')
+        return
+    keys = record.get('keys')
+    if (record.get('schema') != SCHEMA or not isinstance(keys, list)
+            or not 1 <= len(keys) <= MAX_MESSAGE_KEYS or not REQUIRED_MESSAGE_KEYS <= set(keys)):
+        raise ValueError('Preferred loop messages require the loop-warning key')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
@@ -519,12 +927,21 @@ def main():
     collect.add_argument('--namespace-registry', required=True, type=Path)
     collect.add_argument('--output', required=True, type=Path, help='New immutable capture directory')
     collect.add_argument('--languages', nargs='+', default=[])
-    collect.add_argument('--messages', nargs='+', required=True)
+    collect.add_argument('--messages', nargs='+', default=[])
+    collect.add_argument('--complete-messages', action='store_true',
+                         help='Enumerate all API/local base keys; explicit extras supplement omissions')
+    collect.add_argument('--api-sources', type=Path,
+                         help='Reviewed immutable API source files and source-receipts01.json')
     collect.add_argument('--delay', type=float, default=1.0)
     collect.add_argument('--wall-seconds', type=int, default=600)
     args = parser.parse_args()
     if args.command == 'capture' and args.delay < 1:
         parser.error('Network captures require at least one second between requests')
+    if args.command == 'capture':
+        if args.complete_messages and args.api_sources is None:
+            parser.error('--complete-messages requires --api-sources')
+        if not args.complete_messages and (not args.messages or args.api_sources is not None):
+            parser.error('Explicit v2 capture requires --messages and no --api-sources')
     manifests = capture(args) if args.command == 'capture' else verify(args.output)
     print(json.dumps({kind: {k: record[k] for k in ('wiki', 'date', 'content_language', 'rows',
         'output_sha256', 'temporal_scope')} for kind, record in manifests.items()}, sort_keys=True))

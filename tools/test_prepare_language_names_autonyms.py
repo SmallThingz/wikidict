@@ -245,5 +245,69 @@ class AutonymCaptureTests(unittest.TestCase):
                 m.replay_previous(root, manifest)
 
 
+
+
+class SupportProjectionTests(unittest.TestCase):
+    def fixture(self, root):
+        # Parent replay is independently covered by the existing capture suite.
+        # These controls exercise the real projection/inventory/parent joins.
+        previous = root / 'previous'; previous.mkdir()
+        child = b'# wikidict-language-names-v1\n# wiki\tnlwiktionary\n# dump-date\t20261001\n# content-language\tnl\nC\ten\tsingle\t1\nN\ten\tsingle\tnl\tDutch\nC\t-\tdir\t1\nD\tnl\tltr\n'
+        single = {'nl': 'Nederlands', 'xx': ''}
+        old = child + m.render_profile(single)
+        config = dict(wiki='nlwiktionary', date='20261001', content_language='nl', core='9' * 40)
+        counts = dict(observed_codes=2, observed_positive=1, observed_empty=1, singular_codes=2, singular_positive=1, singular_empty=1)
+        observation = dict(schema=m.OBSERVATION_SCHEMA, config=config, **m.producer(), **counts, retrieved_utc='2026-10-01T00:00:00+00:00')
+        m.evidence.document(previous / (m.PREFIX + 'observation.json'), observation)
+        m.evidence.put(previous / (m.KIND + '.tsv'), old)
+        parent = dict(schema=m.SCHEMA, kind=m.KIND, header_version=1, **config, **m.producer(), previous={},
+            observation=m.PREFIX + 'observation.json', old_output_sha256=m.evidence.digest(child), output_bytes=len(old),
+            output_sha256=m.evidence.digest(old), singular_codes=2, singular_positive=1, singular_empty=1,
+            native_resolution_proven=False, corpus_query_closure_proven=False, temporal_scope='current-api-observation', artifacts=m.inventory(previous))
+        m.evidence.document(previous / (m.KIND + '.manifest.json'), parent)
+        m.evidence.document(previous / m.COMPLETE, dict(schema=m.SCHEMA, manifest_sha256=m.evidence.digest(m.regular(previous / (m.KIND + '.manifest.json')))))
+        return previous, child, single, old
+
+    def test_offline_support_derivation_preserves_all_null_rows_and_old_observation_epoch(self):
+        import prepare_language_names_generic as generic
+        from test_prepare_language_names_generic import support_fixture
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); previous, child, single, old = self.fixture(root)
+            sources = root / 'sources'; sources.mkdir(); pins, _ = support_fixture(sources, prefix='')
+            before = {p.name: p.read_bytes() for p in previous.iterdir()}
+            with mock.patch.object(generic, 'SUPPORT_SOURCES', pins), mock.patch.object(m, 'replay_previous', return_value=(child, dict(wiki='nlwiktionary', date='20261001', content_language='nl'))), mock.patch.object(m, 'replay_observation', return_value=(single, single)):
+                self.assertEqual(m.validate_snapshot(previous / 'language-names.tsv')['core'], '9' * 40)
+                result = m.derive_support(previous, sources, sources / 'namespace-registry.tsv', sources / 'namespace-siteinfo.raw.json', root / 'out')
+                self.assertEqual((root / 'out/language-names.tsv').read_bytes(), old + b'S\tnl\t1\n')
+                self.assertEqual(result['core'], '9' * 40)
+                self.assertEqual(result['support_profile']['core'], generic.SUPPORT_CORE)
+                self.assertEqual(result['source_derived_support'], {'nl': True})
+                self.assertEqual({p.name: p.read_bytes() for p in previous.iterdir()}, before)
+                self.assertEqual((root / 'out' / (m.PREFIX + 'observation.json')).read_bytes(), before[m.PREFIX + 'observation.json'])
+                with self.assertRaises(ValueError):
+                    m.derive_support(root / 'out', sources, sources / 'namespace-registry.tsv', sources / 'namespace-siteinfo.raw.json', root / 'duplicate')
+
+    def test_resealed_output_and_prior_artifact_changes_cannot_invent_support(self):
+        import prepare_language_names_generic as generic
+        from test_prepare_language_names_generic import support_fixture
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); previous, child, single, old = self.fixture(root)
+            sources = root / 'sources'; sources.mkdir(); pins, _ = support_fixture(sources, prefix='')
+            with mock.patch.object(generic, 'SUPPORT_SOURCES', pins), mock.patch.object(m, 'replay_previous', return_value=(child, dict(wiki='nlwiktionary', date='20261001', content_language='nl'))), mock.patch.object(m, 'replay_observation', return_value=(single, single)):
+                out = root / 'out'; result = m.derive_support(previous, sources, sources / 'namespace-registry.tsv', sources / 'namespace-siteinfo.raw.json', out)
+                manifest_path = out / 'language-names.manifest.json'
+                def reseal(value):
+                    value['artifacts'] = m.inventory(out)
+                    manifest_path.write_bytes(m.evidence.encoded(value))
+                    (out / m.COMPLETE).write_bytes(m.evidence.encoded(dict(schema=m.SCHEMA, manifest_sha256=m.evidence.digest(manifest_path.read_bytes()))))
+                for suffix, claimed in [(b'S\tnl\t0\n', {'nl': False}), (b'S\tnl\t1\n', {'nl': 1}), (b'S\tnl\t1\nS\tqqq\t1\n', {'nl': True, 'qqq': True})]:
+                    raw = old + suffix; (out / 'language-names.tsv').write_bytes(raw)
+                    bad = dict(result, source_derived_support=claimed, output_bytes=len(raw), output_sha256=m.evidence.digest(raw)); reseal(bad)
+                    with self.assertRaises(ValueError): m.validate_snapshot(out / 'language-names.tsv')
+                (out / 'language-names.tsv').write_bytes(old + b'S\tnl\t1\n')
+                old_observation = out / (m.PREFIX + 'observation.json'); value = json.loads(old_observation.read_text()); value['retrieved_utc'] = '2026-11-01T00:00:00+00:00'; old_observation.write_text(json.dumps(value))
+                reseal(dict(result))
+                with self.assertRaises(ValueError): m.validate_snapshot(out / 'language-names.tsv')
+
 if __name__ == '__main__':
     unittest.main()

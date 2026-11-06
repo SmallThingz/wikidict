@@ -83,6 +83,8 @@ pub const PreObservation = struct {
     unclosed_formatting: bool,
 };
 pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: ReferenceDefinitions, poem_phase: ?*const PoemPhase) !PreObservation {
+    const observation_phase = consume_diagnostics.beginConsumePhase(.scope_observation);
+    defer consume_diagnostics.endConsumePhase(observation_phase);
     const Collector = struct {
         a: A,
         source: []const u8,
@@ -257,7 +259,8 @@ fn validateSpans(a: A, spans: []const compiler.Span, report: ?*Fallbacks) !void 
         };
     }
     // Check after template presentation conversion as well as ordinary actions.
-    // Action targets have no protected-literal exemption; code=true is not provenance.
+    // Display protected/code provenance never authorizes an action target.
+    // The explicit parameter exception revalidates its complete borrowed source token.
     for (spans) |span| {
         if (span.image) |image| {
             try validateText(image.file, report);
@@ -266,7 +269,8 @@ fn validateSpans(a: A, spans: []const compiler.Span, report: ?*Fallbacks) !void 
                 if (image.tooltip) |value| try validateText(value, report);
             }
         }
-        if (span.kind == .external_link and compiler.unresolvedExternalActionTarget(span.target))
+        if (span.kind == .external_link and compiler.unresolvedExternalActionTarget(span.target) and
+            !compiler.hasCompiledExternalLiteralParameterTarget(span))
             return error.UncompiledTemplate;
         if (span.kind == .link and compiler.unresolvedActionTarget(span.target))
             return error.UncompiledTemplate;
@@ -584,6 +588,8 @@ fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, so
 }
 
 pub fn observeHeadingAnchorsAlloc(a: A, title: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase) !HeadingObservation {
+    const observation_phase = consume_diagnostics.beginConsumePhase(.heading_observation);
+    defer consume_diagnostics.endConsumePhase(observation_phase);
     const work = try workWithHeadingOffsetsAlloc(a, title, "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, &.{}, null);
     var registry: heading_ids.Registry = .{};
     defer registry.deinit(a);
@@ -7090,12 +7096,14 @@ test "complete captured HR skakavica retains citation prose and typed two by fiv
     // All other visible body, references, grids, actions, metadata and style must agree.
     try std.testing.expectEqualSlices(u8, visible_reference_encoded, encoded);
     var inflection_tables: usize = 0;
-    for (stored.entry.sections) |section| for (section.blocks) |block| if (block.table) |body_table| {
+    var inflection_position: ?struct { section: usize, block: usize } = null;
+    for (stored.entry.sections, 0..) |section, section_index| for (section.blocks, 0..) |block, block_index| if (block.table) |body_table| {
         if (body_table.rows.len == 0 or body_table.rows[0].cells.len != 1 or body_table.rows[0].cells[0].colspan != 3) continue;
         var first: std.ArrayList(u8) = .empty;
         for (body_table.rows[0].cells[0].spans) |span| try first.appendSlice(a, span.text);
         if (!std.mem.eql(u8, std.mem.trim(u8, first.items, " \t\r\n"), "(1.1)")) continue;
         inflection_tables += 1;
+        inflection_position = .{ .section = section_index, .block = block_index };
         try std.testing.expectEqual(@as(usize, 9), body_table.rows.len);
         try std.testing.expectEqual(@as(usize, 3), body_table.rows[1].cells.len);
         for (body_table.rows) |row| for (row.cells) |cell| for (cell.spans) |span| {
@@ -7160,6 +7168,18 @@ test "complete captured HR skakavica retains citation prose and typed two by fiv
     try std.testing.expectEqualSlices(u8, &expected_stylesheet_digest, &stylesheet_digest);
     var stylesheet_profile = try @import("table_style_profile.zig").parseAlloc(a, stylesheet_source);
     defer stylesheet_profile.deinit();
+    const inflection_inline_css = "float:right; vertical-align: sub; margin-top:0.5em; margin-left:0.5em; margin-bottom:0.5em; border:1px solid #E8E8E8; border-collapse:collapse; background-color: #FBFBFB;";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, "{| class=\"infobox vcard\" style=\"" ++ inflection_inline_css ++ "\" cellspacing="));
+    const expected_inflection_style: types.TableStyle = .{
+        .background = "#fbfbfb",
+        .border = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = "#e8e8e8" } },
+        .collapse = .collapse,
+        .margins = null,
+    };
+    const resolved_inflection = try stylesheet_profile.resolveTableWithContext(a, 0, "infobox vcard", .{ .ancestor_classes = "", .own_id = "" }, null, inflection_inline_css);
+    try std.testing.expect(resolved_inflection.unresolved and !resolved_inflection.descendant_style_unresolved);
+    try std.testing.expect(resolved_inflection.background_specified);
+    try std.testing.expectEqualDeep(expected_inflection_style, resolved_inflection.style.?);
     const styled_bytes = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, "skakavica", .language, "Unclassified", "", MissingText.untracked(source), null, .{}, &namespaces, null, &images, null, null, &stylesheet_profile);
     try std.testing.expectEqualStrings("DPRC", styled_bytes[0..4]);
     const styled = try codec.decodeAlloc(a, styled_bytes, "skakavica", .language, .{ .code = "", .heading = "Unclassified" });
@@ -7218,9 +7238,28 @@ test "complete captured HR skakavica retains citation prose and typed two by fiv
     }
     try std.testing.expectEqual(@as(usize, 10), styled_cell_count);
     try std.testing.expectEqual(@as(usize, 5), styled_header_count);
-    // Normalize only the citation fields deliberately changed by this profile.
-    // Everything else, including all main-body data and actions, must agree.
+    // With a complete profile, the extra infobox classes no longer erase its
+    // independent inline paint. Unsupported margin longhands remain unresolved.
+    const inflection_at = inflection_position.?;
+    const baseline_section = stored.entry.sections[inflection_at.section];
+    const styled_section = styled.entry.sections[inflection_at.section];
+    try std.testing.expectEqual(baseline_section.blocks.len, styled_section.blocks.len);
+    const baseline_inflection = baseline_section.blocks[inflection_at.block].table.?;
+    const styled_inflection = styled_section.blocks[inflection_at.block].table.?;
+    try std.testing.expect(baseline_inflection.style == null);
+    try std.testing.expectEqualDeep(expected_inflection_style, styled_inflection.style.?);
+
+    // Normalize only this proved inflection style and the citation fields above.
+    // Every remaining body field, geometry, cell paint and action must agree.
+    // Copy the containers so the subsequent owned-record comparison sees styled intact.
     var normalized_styled = styled;
+    const normalized_sections = try a.dupe(types.Section, styled.entry.sections);
+    const normalized_body_blocks = try a.dupe(types.Block, styled_section.blocks);
+    var normalized_inflection = styled_inflection;
+    normalized_inflection.style = baseline_inflection.style;
+    normalized_body_blocks[inflection_at.block].table = normalized_inflection;
+    normalized_sections[inflection_at.section].blocks = normalized_body_blocks;
+    normalized_styled.entry.sections = normalized_sections;
     const normalized_references = try a.dupe(types.Reference, styled.entry.references);
     const normalized_reference_blocks = try a.dupe(types.Block, styled_blocks);
     var normalized_table = styled_table;
@@ -9034,6 +9073,47 @@ test "nonfloating image blocks preserve complete body actions cell ownership and
     try std.testing.expectEqual(@as(usize, 1), definitions);
 }
 
+test "literal query targets require exact parsed source proof through validation and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const url = "http://example.test/path?l={{{1}}}&lang=grc#lexicon";
+    const source = "[" ++ url ++ " " ++ url ++ "]";
+    var renderer: compiler.Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans(source, .{});
+    var report: Fallbacks = .{};
+    try validateSpans(a, spans, &report);
+    const copied = try a.dupe(compiler.Span, spans);
+    for (copied) |*span| span.target = try a.dupe(u8, span.target);
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, copied, &report));
+    for ([_]compiler.Provenance{ .parsed, .protected_literal, .entity_literal }) |origin| {
+        const forged = [_]compiler.Span{.{ .kind = .external_link, .text = "label", .target = url, .provenance = origin, .flags = .{ .code = true } }};
+        try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &forged, &report));
+    }
+    // A proof for one complete token cannot authorize any other destination.
+    const wrong = try a.dupe(compiler.Span, spans);
+    for (wrong) |*span| span.target = "http://example.test/path?l={{missing}}";
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, wrong, &report));
+    var fallbacks: Fallbacks = .{};
+    const payload = try compileReportedAlloc(a, "query literal", .language, "Greek", "grc", source, null, &fallbacks);
+    const stored = try codec.decodeAlloc(a, payload, "query literal", .language, .{ .heading = "Greek", .code = "grc" });
+    var visible: std.ArrayList(u8) = .empty;
+    var actions: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        if (span.kind == .external_link) {
+            actions += 1;
+            try std.testing.expectEqualStrings(url, span.target);
+        }
+    };
+    try std.testing.expect(actions != 0);
+    try std.testing.expectEqualStrings(url, visible.items);
+    try std.testing.expect(fallbacks.missing_template);
+    // The borrowed source-token proof is compiler state, never shipped data.
+    try std.testing.expect(std.mem.indexOf(u8, payload, source) == null);
+    try std.testing.expectEqualSlices(u8, payload, try codec.encodeAlloc(a, stored));
+}
+
 test "class-hidden rows preserve complete compiled body references media and codec" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -9070,4 +9150,44 @@ test "class-hidden rows preserve complete compiled body references media and cod
     try std.testing.expectEqual(@as(usize, 1), tables);
     try std.testing.expectEqual(@as(usize, 1), visible_actions);
     try std.testing.expect(!reported.unsupported_element and !reported.malformed_table);
+}
+
+test "literal path targets require exact source proof and retain numbered codec actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const url = "http://slovniky.lingea.cz/Portugalsko-cesky/{{{1}}}";
+    const source = "[" ++ url ++ "]";
+    var renderer: compiler.Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans(source, .{});
+    var report: Fallbacks = .{};
+    try validateSpans(a, spans, &report);
+    const copied = try a.dupe(compiler.Span, spans);
+    for (copied) |*span| span.target = try a.dupe(u8, span.target);
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, copied, &report));
+    const changed = try a.dupe(compiler.Span, spans);
+    for (changed) |*span| span.target = "http://example.test/{{missing}}";
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, changed, &report));
+    for ([_]compiler.Provenance{ .parsed, .protected_literal, .entity_literal }) |origin| {
+        const forged = [_]compiler.Span{.{ .kind = .external_link, .text = "[1]", .target = url, .provenance = origin, .flags = .{ .code = true } }};
+        try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &forged, &report));
+    }
+    var fallbacks: Fallbacks = .{};
+    const payload = try compileReportedAlloc(a, "path literal", .language, "English", "en", source, null, &fallbacks);
+    const stored = try codec.decodeAlloc(a, payload, "path literal", .language, .{ .heading = "English", .code = "en" });
+    var visible: std.ArrayList(u8) = .empty;
+    var actions: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        if (span.kind == .external_link) {
+            actions += 1;
+            try std.testing.expectEqualStrings(url, span.target);
+        }
+    };
+    try std.testing.expect(actions != 0);
+    try std.testing.expectEqualStrings("[1]", visible.items);
+    try std.testing.expect(fallbacks.missing_template);
+    try std.testing.expectEqualStrings("en", stored.entry.language_code);
+    try std.testing.expect(std.mem.indexOf(u8, payload, source) == null);
+    try std.testing.expectEqualSlices(u8, payload, try codec.encodeAlloc(a, stored));
 }

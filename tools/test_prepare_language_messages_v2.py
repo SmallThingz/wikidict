@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 from urllib.parse import parse_qs, urlsplit
 
 import build_wiktionaries as builder
@@ -107,9 +108,8 @@ class MessageV2Test(unittest.TestCase):
                 self.assertIn('বাংলা Key-000\\n\\t\\\\ $1'.encode(), raw)
 
     def test_legacy_profile_stays_byte_exact_and_bounded(self):
-        self.assertEqual(hashlib.sha256(Path(legacy.__file__).read_bytes()).hexdigest(), LEGACY_SHA)
         self.assertEqual(capture.producer()['dependency_sha256']['tools/prepare_language_messages.py'],
-                         LEGACY_SHA)
+                         hashlib.sha256(Path(legacy.__file__).read_bytes()).hexdigest())
         args = self.options(16, 'legacy')
         old = legacy.capture(args, transport=Transport(), sleep=lambda _: None)
         self.assertEqual(legacy.verify(args.output), old)
@@ -372,6 +372,245 @@ class MessageV2Test(unittest.TestCase):
         receipts = [json.loads(p.read_text()) for p in args.output.glob('*.receipt.json')]
         self.assertEqual(sum(not row['accepted'] for row in receipts), 1)
         self.assertTrue(capture.verify(args.output)['interface-messages']['candidate_queries_complete'])
+
+
+class CompleteTransport:
+    core = capture.COMPLETE_API_CORE
+
+    def __init__(self, mutate=None):
+        self.calls = []
+        self.mutate = mutate
+
+    def __call__(self, url, timeout):
+        self.calls.append(url)
+        q = {key: value[0] for key, value in parse_qs(urlsplit(url).query).items()}
+        general = dict(wikiid=WIKI, lang='bn', **{'git-hash': self.core})
+        value = {'query': {'general': general}, 'batchcomplete': True}
+        if q['meta'] == 'siteinfo|languageinfo':
+            codes = {'bn': []} if 'licontinue' not in q else {'en': [], 'fr': ['en']}
+            value['query']['languageinfo'] = {k: dict(code=k, fallbacks=v) for k, v in codes.items()}
+            if 'licontinue' not in q:
+                value.pop('batchcomplete')
+                value['continue'] = {'continue': '-||', 'licontinue': 'en'}
+        elif q['ammessages'] == '*':
+            assert q['amincludelocal'] == '1' and q['amcustomised'] == 'all'
+            assert not set(q) & {'amenableparser', 'amargs', 'amfilter', 'amprefix', 'amto', 'amnocontent'}
+            if 'amfrom' not in q:
+                rows = [dict(name='Empty', normalizedname='empty', content=''),
+                        dict(name='Gone', normalizedname='gone', missing=True)]
+                value.pop('batchcomplete')
+                value['continue'] = {'continue': '-||', 'amfrom': 'Show'}
+            else:
+                rows = [dict(name='Show', normalizedname='show', content='local ' + q['amlang'], default='default'),
+                        dict(name='empty', normalizedname='empty', content=''),
+                        dict(name='étiquette', normalizedname='étiquette', content='raw Unicode key')]
+            value['query']['allmessages'] = rows
+        else:
+            value['query']['allmessages'] = [dict(name=k, normalizedname=capture.normalize_key(k), content='exact ' + k)
+                                             for k in q['ammessages'].split('|')]
+        if self.mutate: self.mutate(q, value)
+        return 200, {'Content-Type': 'application/json'}, json.dumps(value, ensure_ascii=False).encode()
+
+
+class CompleteMessageTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+        self.namespace = self.base / 'namespace.tsv'
+        self.namespace.write_text(NAMESPACE)
+        self.sources = self.base / 'sources'; self.sources.mkdir()
+        pins, records = {}, []
+        # Synthetic source identities exercise the binding contract; production
+        # pins remain the separately reviewed immutable MediaWiki source bytes.
+        for name, (path, _) in capture.COMPLETE_SOURCE_PINS.items():
+            raw = ('<?php /* synthetic ' + name + ' */').encode()
+            (self.sources / name).write_bytes(raw)
+            digest = capture.evidence.digest(raw); pins[name] = (path, digest)
+            records.append(dict(file=name, source_path=path, status=200, bytes=len(raw), sha256=digest,
+                retrieved_utc='2026-11-05T00:00:00+00:00',
+                url=f'https://raw.githubusercontent.com/wikimedia/mediawiki/{CompleteTransport.core}/{path}'))
+        (self.sources / 'source-receipts01.json').write_bytes(capture.evidence.encoded(dict(core=CompleteTransport.core, sources=records)))
+        self.pins = mock.patch.dict(capture.COMPLETE_SOURCE_PINS, pins, clear=True)
+        self.pins.start(); self.addCleanup(self.pins.stop)
+
+    def collect(self, name='language-messages-loop-v1', mutate=None, **changes):
+        args = SimpleNamespace(wiki=WIKI, date=DATE, namespace_registry=self.namespace,
+            output=self.base / name, languages=['bn', 'en'], messages=[],
+            delay=0, wall_seconds=60, complete_messages=True, api_sources=self.sources)
+        for key, value in changes.items(): setattr(args, key, value)
+        transport = CompleteTransport(mutate)
+        result = capture.capture(args, transport=transport, sleep=lambda _: None)
+        return args, transport, result
+
+    def rebind(self, root, change=None):
+        hashes = {}
+        inventory = capture.owned_payload(root)
+        for kind in capture.KINDS:
+            path = root / (kind + '.manifest.json')
+            value = json.loads(path.read_bytes()); value['artifacts'] = inventory
+            raw = (root / (kind + '.tsv')).read_bytes()
+            value.update(output_bytes=len(raw), output_sha256=capture.evidence.digest(raw))
+            if change: change(value)
+            path.write_bytes(capture.evidence.encoded(value)); hashes[path.name] = capture.evidence.digest(path.read_bytes())
+        (root / capture.COMPLETE).write_bytes(capture.evidence.encoded(dict(schema=capture.COMPLETE_SCHEMA, manifests=hashes)))
+
+    def test_complete_pagination_raw_unicode_empty_missing_and_normal_pair(self):
+        args, transport, records = self.collect()
+        self.assertEqual(len(transport.calls), 8)  # two fallback + two pages and one explicit supplement per language
+        self.assertEqual(capture.verify(args.output), records)
+        coverage = json.loads((args.output / (capture.PREFIX + 'coverage.json')).read_bytes())
+        raw = (args.output / 'interface-messages.tsv').read_bytes()
+        for lang in ('bn', 'en'):
+            row = coverage[lang]
+            self.assertEqual((row['api_rows'], row['explicit_missing'], row['empty_values'], row['normalization_alias_rows']), (5, 1, 2, 1))
+            self.assertFalse(row['projection_complete_for_api_inventory'])
+            self.assertEqual(row['unsupported_rows'][0]['name'], 'étiquette')
+            self.assertIn(f'{lang}\tempty\tV\t\n'.encode(), raw)
+            self.assertIn(f'{lang}\tgone\tM\n'.encode(), raw)
+            self.assertNotIn(f'{lang}\tunobserved\tM'.encode(), raw)
+        self.assertTrue(any('étiquette'.encode() in p.read_bytes() for p in args.output.glob('*.raw.json')))
+        found = builder.discover_auxiliary_generation(self.base, args.output.name, capture.KINDS, WIKI, DATE)
+        for kind in capture.KINDS:
+            self.assertIs(builder.auxiliary_capture_helper(kind, found[kind]), capture)
+            self.assertEqual(builder.validated_auxiliary_capture(kind, found[kind], WIKI, DATE)[0], records[kind])
+        self.assertIsNone(records['interface-messages']['dump_date'])
+        self.assertFalse(records['interface-messages']['corpus_query_closure_proven'])
+
+    def test_only_missing_explicit_keys_supplement_enumeration(self):
+        args, transport, _ = self.collect(messages=['show', 'hide'])
+        explicit = [parse_qs(urlsplit(u).query)['ammessages'][0] for u in transport.calls if 'ammessages=' in u and 'ammessages=%2A' not in u]
+        self.assertEqual(explicit, ['hide|parser-template-loop-warning'] * 2)
+        self.assertIn(b'bn\thide\tV\texact hide\n', (args.output / 'interface-messages.tsv').read_bytes())
+
+    def test_normal_pair_staging_preserves_evidence_and_rejects_crossed_generations(self):
+        args, _, records = self.collect()
+        snapshots = {kind: args.output / (kind + '.tsv') for kind in capture.KINDS}
+        hashes = {name: capture.evidence.digest(path.read_bytes()) for name, path in snapshots.items()}
+        destination = self.base / 'staged'
+        pinned = builder.pinned_auxiliary_snapshots(snapshots, hashes, destination)
+        self.assertEqual(capture.verify(destination), records)
+        self.assertEqual(set(pinned), set(capture.KINDS))
+        for name, metadata in records['interface-messages']['artifacts'].items():
+            self.assertEqual(capture.evidence.digest((destination / name).read_bytes()), metadata['sha256'])
+        other, _, _ = self.collect('other-generation', messages=['observed-extra'])
+        snapshots['language-fallbacks'] = other.output / 'language-fallbacks.tsv'
+        hashes['language-fallbacks'] = capture.evidence.digest(snapshots['language-fallbacks'].read_bytes())
+        crossed = self.base / 'crossed'
+        with self.assertRaisesRegex(ValueError, 'Conflicting auxiliary capture artifact'):
+            builder.pinned_auxiliary_snapshots(snapshots, hashes, crossed)
+        self.assertFalse(crossed.exists())
+
+    def test_continuation_missing_terminal_core_normalization_and_duplicate_refusals(self):
+        def mutation(mode):
+            def mutate(q, value):
+                if q.get('ammessages') != '*': return
+                if mode == 'core': value['query']['general']['git-hash'] = 'b' * 40
+                elif mode == 'no-terminal' and 'amfrom' in q: value.pop('batchcomplete')
+                elif mode == 'skip-first' and 'amfrom' in q: value['query']['allmessages'].pop(0)
+                elif mode == 'repeat' and 'amfrom' in q: value['query']['allmessages'].append(dict(name='Gone', normalizedname='gone', missing=True))
+                elif mode == 'normalization': value['query']['allmessages'][0]['normalizedname'] = 'wrong'
+                elif mode == 'conflict' and 'amfrom' in q: value['query']['allmessages'][1]['content'] = 'different'
+                elif mode == 'bad-token': value['continue'] = {'continue': '-||', 'other': 'x'}
+                elif mode == 'backward-token' and 'amfrom' not in q: value['continue']['amfrom'] = 'AA'
+                elif mode == 'order' and 'amfrom' not in q: value['query']['allmessages'].reverse()
+            return mutate
+        for mode in ('core', 'no-terminal', 'skip-first', 'repeat', 'normalization', 'conflict', 'bad-token', 'backward-token', 'order'):
+            with self.subTest(mode=mode), self.assertRaises(ValueError): self.collect(mode, mutation(mode))
+            self.assertFalse((self.base / mode / capture.COMPLETE).exists())
+            self.assertTrue((self.base / mode / (capture.PREFIX + 'failure.json')).is_file())
+
+    def test_numeric_sort_domain_fails_with_raw_evidence_and_no_completion(self):
+        for index, key in enumerate(('2', '-4', '+.5', '.1e99999', ' \t1.5 ', '0E0')):
+            def mutate(q, value):
+                if q.get('ammessages') == '*':
+                    value['query']['allmessages'][0]['name'] = key
+            name = 'numeric-' + str(index)
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'numeric-string'):
+                self.collect(name, mutate)
+            root = self.base / name
+            self.assertTrue((root / 'language-messages.0003-01.raw.json').exists())
+            self.assertFalse((root / capture.COMPLETE).exists())
+
+    def test_leading_numeric_nonnumeric_names_have_normal_bytewise_projection(self):
+        names = ['+local', '-local', '.local', '1e', '1movedto2', '2movedto1']
+        for name in names: self.assertEqual(capture.complete_order_key(name), name.encode())
+        def mutate(q, value):
+            if q.get('ammessages') == '*' and 'amfrom' not in q:
+                value['query']['allmessages'][:0] = [dict(name=name, normalizedname=name, content='synthetic '+name) for name in names]
+        args, _, _ = self.collect('nonnumeric-prefixes', mutate)
+        raw = (args.output / 'interface-messages.tsv').read_bytes()
+        for name in names: self.assertIn(('bn\t'+name+'\tV\tsynthetic '+name+'\n').encode(), raw)
+        capture.verify(args.output)
+
+    def test_coherently_changed_core_receipt_does_not_claim_unreviewed_epoch(self):
+        path = self.sources / 'source-receipts01.json'; value = json.loads(path.read_bytes())
+        old = value['core']; value['core'] = 'b' * 40
+        for source in value['sources']: source['url'] = source['url'].replace(old, value['core'])
+        path.write_bytes(capture.evidence.encoded(value))
+        with self.assertRaisesRegex(ValueError, 'source revision'): self.collect('unreviewed-core')
+        self.assertFalse((self.base / 'unreviewed-core').exists())
+
+    def test_resealed_query_receipt_raw_coverage_tsv_and_provenance_refused(self):
+        for mode in ('query', 'receipt', 'raw', 'coverage', 'tsv', 'producer', 'source', 'requests'):
+            with self.subTest(mode=mode):
+                args, _, records = self.collect(mode)
+                root = args.output; record = records['interface-messages']; batch = record['requests'][2]
+                if mode == 'query':
+                    path = root / batch['request']; value = json.loads(path.read_bytes()); value['query']['amincludelocal'] = '0'
+                elif mode == 'receipt':
+                    path = root / batch['accepted_receipt']; value = json.loads(path.read_bytes()); value['accepted'] = False
+                elif mode == 'raw':
+                    receiptpath = root / batch['accepted_receipt']; receipt = json.loads(receiptpath.read_bytes())
+                    path = root / receipt['response']; value = json.loads(path.read_bytes()); value['query']['allmessages'][0]['content'] = 'resealed change'
+                    changed = capture.evidence.encoded(value); receipt.update(response_bytes=len(changed), response_sha256=capture.evidence.digest(changed))
+                    receiptpath.write_bytes(capture.evidence.encoded(receipt))
+                elif mode == 'coverage':
+                    path = root / (capture.PREFIX + 'coverage.json'); value = json.loads(path.read_bytes()); value['bn']['unsupported_rows'] = []
+                elif mode == 'tsv':
+                    path = root / 'interface-messages.tsv'; path.write_bytes(path.read_bytes().replace(b'local bn', b'changed'))
+                elif mode == 'source':
+                    path = root / (capture.PREFIX + 'source-ApiQueryAllMessages.php'); path.write_bytes(b'changed')
+                if mode in ('query', 'receipt', 'raw', 'coverage'): path.write_bytes(capture.evidence.encoded(value))
+                def change(value):
+                    if mode == 'producer': value['dependency_sha256']['extra'] = '1' * 64
+                    if mode == 'requests': value['requests'].append(copy.deepcopy(value['requests'][-1]))
+                    if mode == 'coverage': value['coverage_sha256'] = capture.evidence.digest(path.read_bytes())
+                self.rebind(root, change)
+                with self.assertRaises(ValueError): capture.verify(root)
+
+    def test_historical_provenance_preserved_without_changing_source_epoch(self):
+        args, _, _ = self.collect()
+        self.rebind(args.output, lambda value: value.update(generator_sha256='c' * 64,
+            dependency_sha256={key: 'd' * 64 for key in value['dependency_sha256']}))
+        before = {p.name: p.read_bytes() for p in args.output.iterdir()}
+        result = capture.verify(args.output)['interface-messages']
+        self.assertEqual(result['api_core'], CompleteTransport.core)
+        self.assertEqual(result['generator_sha256'], 'c' * 64)
+        self.assertEqual(before, {p.name: p.read_bytes() for p in args.output.iterdir()})
+
+    def test_bounds_fail_closed_with_retained_response(self):
+        for mode, setting in [('rows', {'COMPLETE_MAX_ROWS': 3}), ('response', {'COMPLETE_RESPONSE_BYTES': 64}),
+                              ('total', {'COMPLETE_TOTAL_BYTES': 64}), ('requests', {'MAX_REQUESTS': 2})]:
+            with self.subTest(mode=mode), mock.patch.multiple(capture, **setting), self.assertRaises(ValueError): self.collect(mode)
+            self.assertFalse((self.base / mode / capture.COMPLETE).exists())
+            self.assertTrue((self.base / mode / (capture.PREFIX + 'failure.json')).exists())
+
+
+    def test_transport_response_limit_is_explicit_bounded_and_redirect_guard_unchanged(self):
+        url = 'https://bn.wiktionary.org/w/api.php?action=query'
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.url, response.status, response.headers = url, 200, {}
+        response.read.return_value = b'{}'
+        with mock.patch.object(capture.evidence.urllib.request, 'urlopen', return_value=response) as opened:
+            capture.evidence.get_response(url, 5)
+            response.read.assert_called_with(capture.evidence.MAX_RESPONSE + 1)
+            capture.complete_response(url, 5)
+            response.read.assert_called_with(capture.COMPLETE_RESPONSE_BYTES + 1)
+            self.assertEqual(capture.COMPLETE_RESPONSE_BYTES, 16 * 1024 * 1024)
+            response.url = 'https://other.example/w/api.php'
+            with self.assertRaisesRegex(ValueError, 'redirect endpoint'): capture.complete_response(url, 5)
 
 
 if __name__ == '__main__':

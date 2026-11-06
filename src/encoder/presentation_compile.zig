@@ -643,6 +643,8 @@ pub const SpanFlags = packed struct(u8) {
     underline: bool = false,
 };
 pub const Span = struct {
+    // Build-only proof tied to one parsed source token and exact target slice.
+    external_literal_parameter: ?ExternalLiteralParameterProof = null,
     image: ?presentation_types.InlineImage = null,
     // Build-only proof from isolated attribute parsing; never serialized.
     image_fields_compiled: bool = false,
@@ -680,6 +682,37 @@ pub const Span = struct {
     flags: SpanFlags = .{},
     role: Role = .normal,
 };
+// Build-only source proof. The target remains the borrowed slice of this
+// complete parsed external token; neither field is serialized into DPR.
+pub const ExternalLiteralParameterProof = struct {
+    token: []const u8,
+    target: []const u8,
+};
+
+fn externalLiteralParameterProofMatches(proof: ExternalLiteralParameterProof, target: []const u8) bool {
+    return externalLiteralParameterTokenMatches(proof, target, false);
+}
+
+fn externalLiteralParameterTokenMatches(proof: ExternalLiteralParameterProof, target: []const u8, allow_unlabelled: bool) bool {
+    if (target.ptr != proof.target.ptr or target.len != proof.target.len or proof.token.len < 3 or
+        proof.token[0] != '[' or proof.token[proof.token.len - 1] != ']') return false;
+    const base = @intFromPtr(proof.token.ptr);
+    const at = @intFromPtr(target.ptr);
+    if (at <= base or at - base >= proof.token.len or target.len > proof.token.len - (at - base)) return false;
+    var it: ir.InlineIterator = .{ .input = proof.token, .renderer_boundaries = true };
+    const token = it.next() orelse return false;
+    if (token.kind != .external_link or it.cursor != proof.token.len or token.external_label_prefix.len != 0 or
+        token.target.ptr != target.ptr or token.target.len != target.len or
+        (!allow_unlabelled and token.text.ptr == token.target.ptr) or token.text.len == 0) return false;
+    return Renderer.literalDefaultlessExternalParameter(target) != null;
+}
+
+pub fn hasCompiledExternalLiteralParameterTarget(span: Span) bool {
+    if (span.kind != .external_link) return false;
+    const proof = span.external_literal_parameter orelse return false;
+    return externalLiteralParameterProofMatches(proof, span.target);
+}
+
 // Operate on final emitted spans, not a raw-source lookahead. This pass is
 // idempotent and never edits authored span bytes or grants a provenance waiver.
 // Captures/fragment regrouping copy whole Spans; validateSpans invokes it again
@@ -745,6 +778,19 @@ const QuoteBoundaries = struct {
         return if (last) |end| end > at else false;
     }
 };
+// A recognized raw HTML opener cannot occur in a MediaWiki link target.
+// Stop before a pipe or any other structural byte: admitted labels, escaped
+// angles, protected tags and incomplete/unknown HTML retain their own paths.
+fn htmlInterruptedInternalOpening(input: []const u8, at: usize) bool {
+    if (at > input.len or !starts(input[at..], "[[")) return false;
+    const body_start = at + 2;
+    const relative = std.mem.indexOfAny(u8, input[body_start..], "[]{}|<>&\r\n") orelse return false;
+    const boundary = body_start + relative;
+    if (input[boundary] != '<') return false;
+    const tag = syntax.tagAt(input, boundary) orelse return false;
+    return !tag.closing and !tag.isOpaque() and syntax.pairedHtmlTag(tag.name);
+}
+
 // An empty link opener on its own authored list line is literal source. It
 // cannot borrow a later chunk's close or hide the intervening block structure.
 fn standaloneListLinkOpening(input: []const u8, at: usize) bool {
@@ -778,7 +824,7 @@ fn quoteOpaqueEnd(a: A, input: []const u8, at: usize, boundaries: QuoteBoundarie
 fn quoteOpaqueCutEnd(a: A, input: []const u8, at: usize, boundaries: QuoteBoundaries, opaque_scan: *syntax.OpaqueScan, context: Context, label_scope: bool, cut: ?usize) Error!?usize {
     const end = try quoteOpaqueEnd(a, input, at, boundaries, opaque_scan, context);
     if (!label_scope) if (cut) |position| if (end) |skip| {
-        if (skip > position and standaloneListLinkOpening(input, at)) return null;
+        if (skip > position and (standaloneListLinkOpening(input, at) or htmlInterruptedInternalOpening(input, at))) return null;
     };
     return end;
 }
@@ -2817,9 +2863,14 @@ const PageExternalNumbering = struct {
             {
                 const target_at = @intFromPtr(token.target.ptr) - @intFromPtr(input.ptr);
                 if (target_at == 0 or target_at > input.len or input[target_at - 1] != '[' or it.cursor == 0 or input[it.cursor - 1] != ']') continue;
-                const target = try self.renderer.externalUrlTarget(token.target);
-                // Never manufacture a clean label for an uncompiled destination.
-                if (unresolvedExternalActionTarget(target)) return error.UncompiledTemplate;
+                // Only a complete parsed source token can authorize a literal
+                // defaultless destination before ordinary page numbering. The
+                // prepared explicit token is independently revalidated at emission.
+                const proof: ExternalLiteralParameterProof = .{ .token = input[before..it.cursor], .target = token.target };
+                const literal_target = externalLiteralParameterTokenMatches(proof, token.target, true);
+                const target = if (literal_target) token.target else try self.renderer.externalUrlTarget(token.target);
+                // Never manufacture a clean label for another unresolved target.
+                if (!literal_target and unresolvedExternalActionTarget(target)) return error.UncompiledTemplate;
                 if (!safeUrl(target)) continue;
                 const closing = self.address(input, it.cursor - 1);
                 var prepared_here = false;
@@ -4502,6 +4553,72 @@ pub const Renderer = struct {
         }
         try self.text(input[start..], style);
     }
+    // A defaultless bare parameter can survive expansion as literal URL data.
+    // Admit only original HTTP(S) query values. Authority/path/fragment braces,
+    // entity-created components, defaults and child syntax keep their old guards.
+    fn literalDefaultlessExternalQuery(value: []const u8) ?usize {
+        const authority_start: usize = if (std.ascii.startsWithIgnoreCase(value, "https://")) 8 else if (std.ascii.startsWithIgnoreCase(value, "http://")) 7 else return null;
+        if (!safeUrl(value) or std.mem.indexOfScalar(u8, value, '\\') != null) return null;
+        const question = std.mem.indexOfScalar(u8, value, '?') orelse return null;
+        const path = std.mem.indexOfScalarPos(u8, value, authority_start, '/') orelse return null;
+        if (path == authority_start or path >= question or std.mem.indexOfAny(u8, value[0..question], "{}&#") != null) return null;
+        const query_end = if (std.mem.indexOfScalarPos(u8, value, question + 1, '#')) |end| end else value.len;
+        if (std.mem.indexOfAny(u8, value[query_end..], "{}&") != null) return null;
+        var parts = std.mem.splitScalar(u8, value[question + 1 .. query_end], '&');
+        var count: usize = 0;
+        while (parts.next()) |part| {
+            const equal = std.mem.indexOfScalar(u8, part, '=') orelse return null;
+            if (equal == 0) return null;
+            for (part[0..equal]) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '_' and ch != '-' and ch != '.') return null;
+            var cursor = equal + 1;
+            while (cursor < part.len) {
+                if (part[cursor] == '{') {
+                    if (!starts(part[cursor..], "{{{")) return null;
+                    const pair = syntax.balanced(part, cursor) orelse return null;
+                    if (!literalBareParameterName(part[cursor + 3 .. pair.inner_end])) return null;
+                    count += 1;
+                    cursor = pair.end;
+                } else {
+                    if (part[cursor] == '}') return null;
+                    cursor += 1;
+                }
+            }
+        }
+        return if (count != 0) count else null;
+    }
+
+    // Admit literal bare parameters only in an original HTTP(S) path. The
+    // caller separately proves the complete parsed external token and target.
+    // Entity delimiters, query/fragment parameters and every other brace form
+    // remain outside this path proof.
+    fn literalDefaultlessExternalPathComponent(value: []const u8) ?usize {
+        const authority_start: usize = if (std.ascii.startsWithIgnoreCase(value, "https://")) 8 else if (std.ascii.startsWithIgnoreCase(value, "http://")) 7 else return null;
+        if (!safeUrl(value) or std.mem.indexOfAny(u8, value, "\\&") != null) return null;
+        const boundary = std.mem.indexOfAny(u8, value[authority_start..], "/?#") orelse return null;
+        const path_start = authority_start + boundary;
+        if (boundary == 0 or value[path_start] != '/' or std.mem.indexOfAny(u8, value[0..path_start], "{}") != null) return null;
+        const path_end = if (std.mem.indexOfAny(u8, value[path_start..], "?#")) |offset| path_start + offset else value.len;
+        if (std.mem.indexOfAny(u8, value[path_end..], "{}") != null) return null;
+        var cursor = path_start;
+        var count: usize = 0;
+        while (cursor < path_end) {
+            if (value[cursor] == '{') {
+                if (!starts(value[cursor..path_end], "{{{")) return null;
+                const pair = syntax.balanced(value[0..path_end], cursor) orelse return null;
+                if (!literalBareParameterName(value[cursor + 3 .. pair.inner_end])) return null;
+                count += 1;
+                cursor = pair.end;
+            } else {
+                if (value[cursor] == '}') return null;
+                cursor += 1;
+            }
+        }
+        return if (count != 0) count else null;
+    }
+    fn literalDefaultlessExternalParameter(value: []const u8) ?usize {
+        return literalDefaultlessExternalQuery(value) orelse literalDefaultlessExternalPathComponent(value);
+    }
+
     // A complete defaultless bare parameter is terminal literal text in
     // MediaWiki. Reuse the body proof, but admit it only inside an HTTPS path;
     // authority, query, fragments and every other brace form stay unresolved.
@@ -4583,8 +4700,13 @@ pub const Renderer = struct {
         try out.appendSlice(self.a, value[start..]);
         return out.toOwnedSlice(self.a);
     }
-    fn externalUrlLabel(self: *Renderer, value: []const u8, style: Style) Error!void {
-        if (literalDefaultlessExternalPath(value) != null) {
+    fn externalUrlLabel(self: *Renderer, value: []const u8, style: Style, count_parameters: bool) Error!void {
+        const literal_parameters = literalDefaultlessExternalParameter(value);
+        if (literalDefaultlessExternalPath(value) != null or literal_parameters != null) {
+            if (count_parameters) if (literal_parameters) |count| {
+                self.unresolved_templates += count;
+                self.fallbacks.missing_template = true;
+            };
             // Preserve the authored bare-URL label; only navigation uses the
             // escaped spelling. The shared proof covers every brace below.
             var start: usize = 0;
@@ -4615,10 +4737,25 @@ pub const Renderer = struct {
         return self.linkWithMissing(MissingText.untracked(label), target, style, depth, external);
     }
     pub fn linkWithMissing(self: *Renderer, tracked: MissingText, target: []const u8, style: Style, depth: usize, external: bool) Error!void {
+        return self.linkWithMissingParameterProof(tracked, target, style, depth, external, null);
+    }
+    fn linkWithMissingParameterProof(self: *Renderer, tracked: MissingText, target: []const u8, style: Style, depth: usize, external: bool, proof: ?ExternalLiteralParameterProof) Error!void {
         const label = tracked.bytes;
         var s = style;
-        const resolved_target = if (external) try self.externalUrlTarget(target) else target;
-        if (external and unresolvedExternalActionTarget(resolved_target)) {
+        const parameter_proven = external and if (proof) |p| externalLiteralParameterProofMatches(p, target) else false;
+        const start = self.spans.items.len;
+        defer if (parameter_proven) {
+            // A child action never inherits the outer source proof.
+            for (self.spans.items[start..]) |*span| if (span.kind == .external_link and span.target.ptr == target.ptr and span.target.len == target.len) {
+                span.external_literal_parameter = proof;
+            };
+        };
+        const resolved_target = if (external and !parameter_proven) try self.externalUrlTarget(target) else target;
+        if (parameter_proven) {
+            self.unresolved_templates += literalDefaultlessExternalParameter(target).?;
+            self.fallbacks.missing_template = true;
+        }
+        if (external and !parameter_proven and unresolvedExternalActionTarget(resolved_target)) {
             self.fallbacks.rejected_external_target = true;
             // Retain an authored label and all its formatting, but never inherit
             // an outer action or fabricate a replacement destination.
@@ -4661,8 +4798,8 @@ pub const Renderer = struct {
                 std.mem.indexOf(u8, decoded_label, "\xc2\xa0") != null;
             const visible = if (escaped_label) resolved_target else decoded_label;
             if (s.kind == .external_link and safeUrl(resolved_target) and
-                !unresolvedExternalActionTarget(resolved_target))
-                try self.externalUrlLabel(visible, s)
+                (parameter_proven or !unresolvedExternalActionTarget(resolved_target)))
+                try self.externalUrlLabel(visible, s, parameter_proven or literalDefaultlessExternalPath(target) == null)
             else
                 try self.text(visible, s);
             return;
@@ -6301,21 +6438,92 @@ pub const Renderer = struct {
         return weight;
     }
 
+    // The shared declaration scanner deliberately tolerates unfinished CSS.
+    // Font projection requires a complete attribute before selecting
+    // a literal value; malformed siblings cannot manufacture an override.
+    fn fontStyleListComplete(css: []const u8) bool {
+        var delimiters: [32]u8 = undefined;
+        var depth: usize = 0;
+        var quote: u8 = 0;
+        var at: usize = 0;
+        while (at < css.len) : (at += 1) {
+            const byte = css[at];
+            if (byte == 0) return false;
+            if (byte == '\\') {
+                if (at + 1 == css.len or std.mem.indexOfScalar(u8, "\n\r\x0c", css[at + 1]) != null) return false;
+                at += 1;
+                continue;
+            }
+            if (quote != 0) {
+                if (byte == '\n' or byte == '\r' or byte == '\x0c') return false;
+                if (byte == quote) quote = 0;
+                continue;
+            }
+            if (byte == '\'' or byte == '"') {
+                quote = byte;
+                continue;
+            }
+            if (byte == '/' and at + 1 < css.len and css[at + 1] == '*') {
+                const close = std.mem.indexOfPos(u8, css, at + 2, "*/") orelse return false;
+                at = close + 1;
+                continue;
+            }
+            if (byte == '*' and at + 1 < css.len and css[at + 1] == '/') return false;
+            if (byte == '(' or byte == '[' or byte == '{') {
+                if (depth == delimiters.len) return false;
+                delimiters[depth] = byte;
+                depth += 1;
+            } else if (byte == ')' or byte == ']' or byte == '}') {
+                const opening: u8 = switch (byte) { ')' => '(', ']' => '[', else => '{' };
+                if (depth == 0 or delimiters[depth - 1] != opening) return false;
+                depth -= 1;
+            }
+        }
+        return quote == 0 and depth == 0;
+    }
+
     fn htmlFontStyle(self: *Renderer, tag: syntax.Tag) Error!?bool {
         const css = (try self.semanticAttribute(tag, "style")) orelse return null;
-        if (std.mem.indexOfAny(u8, css, "'\"(){}[]\\!") != null or
-            std.mem.indexOf(u8, css, "/*") != null or std.mem.indexOf(u8, css, "*/") != null) return null;
+        if (!fontStyleListComplete(css)) return null;
         var italic: ?bool = null;
-        var declarations = std.mem.splitScalar(u8, css, ';');
-        while (declarations.next()) |raw| {
+        var important_seen = false;
+        var position: usize = 0;
+        while (try self.nextColorDeclaration(css, &position)) |raw| {
             const colon = std.mem.indexOfScalar(u8, raw, ':') orelse continue;
-            if (!std.ascii.eqlIgnoreCase(trim(raw[0..colon]), "font-style")) continue;
-            const value = trim(raw[colon + 1 ..]);
-            if (std.ascii.eqlIgnoreCase(value, "italic") or std.ascii.eqlIgnoreCase(value, "oblique")) italic = true else if (std.ascii.eqlIgnoreCase(value, "normal")) italic = false else return null;
+            const property_name = trim(raw[0..colon]);
+            const exact = std.ascii.eqlIgnoreCase(property_name, "font-style");
+            const reset = std.ascii.eqlIgnoreCase(property_name, "font") or std.ascii.eqlIgnoreCase(property_name, "all");
+            const escaped_name = std.mem.indexOfScalar(u8, property_name, '\\') != null;
+            if (!exact and !reset and !escaped_name) continue;
+            var value = trim(raw[colon + 1 ..]);
+            var important = false;
+            if (displayPriorityBang(value)) |bang| {
+                var priority_buffer: [256]u8 = undefined;
+                const priority = displayLiteral(trim(value[bang + 1 ..]), &priority_buffer) orelse continue;
+                if (!std.ascii.eqlIgnoreCase(priority, "important")) continue;
+                important = true;
+                value = trim(value[0..bang]);
+            }
+            if (value.len == 0) continue;
+            if (important_seen and !important) continue;
+            // Font/all shorthand, escaped names and unresolved applicable
+            // values invalidate an earlier projection at their own priority.
+            // They never evaluate a custom property or invent a font value.
+            var selected: ?bool = null;
+            if (!escaped_name) {
+                if (std.ascii.eqlIgnoreCase(value, "initial")) {
+                    selected = false;
+                } else if (exact and std.ascii.eqlIgnoreCase(value, "normal")) {
+                    selected = false;
+                } else if (exact and (std.ascii.eqlIgnoreCase(value, "italic") or std.ascii.eqlIgnoreCase(value, "oblique"))) {
+                    selected = true;
+                }
+            }
+            italic = selected;
+            important_seen = important;
         }
         return italic;
     }
-
     // Only the same simple declaration subset as htmlFontWeight is understood.
     // null means unsupported CSS, not an interpreted display override.
     fn htmlTableInlineDisplay(self: *Renderer, tag: syntax.Tag) Error!?bool {
@@ -6741,8 +6949,9 @@ pub const Renderer = struct {
 
     fn resolvedTableStyle(self: *Renderer, tag: syntax.Tag) Error!table_style_profile.TableResolution {
         const profile = self.context.table_styles orelse return .{ .style = null, .scope = self.table_style_scope, .unresolved = false };
-        var resolved = try profile.resolveTable(self.a, self.table_style_scope,
+        var resolved = try profile.resolveTableWithContext(self.a, self.table_style_scope,
             (try self.semanticAttribute(tag, "class")) orelse "",
+            .{ .ancestor_classes = self.table_css_ancestor_classes, .own_id = (try self.semanticAttribute(tag, "id")) orelse "" },
             try self.semanticAttribute(tag, "bgcolor"),
             (try self.semanticAttribute(tag, "style")) orelse "");
         if (self.table_style_unresolved or resolved.descendant_style_unresolved) {
@@ -6756,26 +6965,15 @@ pub const Renderer = struct {
         return resolved;
     }
 
-    fn cellStyleUnresolved(self: *Renderer, tag: syntax.Tag) Error!bool {
-        if (self.context.table_styles == null) return false;
-        return self.table_style_unresolved or trim((try self.semanticAttribute(tag, "class")) orelse "").len != 0;
-    }
-
     fn resolvedCellStyle(self: *Renderer, tag: syntax.Tag, fallback: ?[]const u8) Error!table_style_profile.CellResolution {
         const profile = self.context.table_styles orelse return .{ .style = null, .background = try self.tableCellBackground(tag, fallback), .background_specified = false, .unresolved = false };
         const ancestor_scope = profile.ancestorScope(self.table_css_ancestor_classes);
-        const unresolved_classes = try self.cellStyleUnresolved(tag);
-        if (unresolved_classes and !profile.hasAncestorCellRule(ancestor_scope, tag.is("th"))) {
-            self.fallbacks.unresolved_table_style = true;
-            // Unknown classes suppress new additions, retaining authored paint as partial.
-            return .{ .style = null, .background = try self.tableCellBackground(tag, fallback), .background_specified = false, .unresolved = true, .padding_basis_unresolved = true };
-        }
-        var resolved = try profile.resolveCellWithAncestors(self.a, self.table_style_scope, ancestor_scope, tag.is("th"),
+        var resolved = try profile.resolveCellWithContext(self.a, self.table_style_scope, ancestor_scope,
+            (try self.semanticAttribute(tag, "class")) orelse "",
+            .{ .ancestor_classes = self.table_css_ancestor_classes, .own_id = (try self.semanticAttribute(tag, "id")) orelse "" }, tag.is("th"),
             try self.semanticAttribute(tag, "bgcolor"),
             (try self.semanticAttribute(tag, "style")) orelse "");
-        if (unresolved_classes) {
-            // A known conditional ancestor winner must not be discarded merely
-            // because another class is unknown. Keep its normal cascade priority.
+        if (self.table_style_unresolved) {
             resolved.style = null;
             resolved.unresolved = true;
             resolved.padding_basis_unresolved = true;
@@ -8170,11 +8368,30 @@ pub const Renderer = struct {
         if (std.mem.indexOfAny(u8, input[cursor..boundary], "[]{}") != null) return false;
         const child = syntax.tagAt(input, boundary) orelse return false;
         if (child.closing or child.self_closing or !knownInlineHtmlName(child.name) or syntax.isOpaqueTag(child.name)) return false;
-        // The next raw tag must close this child. No recursive suffix search
-        // or outer attribute/style authority is introduced by this recovery.
-        const close_at = std.mem.indexOfScalarPos(u8, input, child.end, '<') orelse return false;
-        const close = syntax.tagAt(input, close_at) orelse return false;
-        return close.closing and close.is(child.name) and trim(close.attrs).len == 0;
+        // Prove this complete child locally, including nested paired HTML.
+        // Unknown, opaque, control, misnested and unfinished children cannot
+        // promote the rejected outer opener into literal text. No outer
+        // attribute/style authority or unbounded recursive search is added.
+        var names: [max_depth][]const u8 = undefined;
+        names[0] = child.name;
+        var depth: usize = 1;
+        cursor = child.end;
+        while (true) {
+            const next_at = std.mem.indexOfScalarPos(u8, input, cursor, '<') orelse return false;
+            const next = syntax.tagAt(input, next_at) orelse return false;
+            if (next.closing) {
+                if (!next.is(names[depth - 1]) or trim(next.attrs).len != 0) return false;
+                depth -= 1;
+                if (depth == 0) return true;
+            } else {
+                if (next.self_closing or !syntax.pairedHtmlTag(next.name) or
+                    !knownInlineHtmlName(next.name) or syntax.isOpaqueTag(next.name) or
+                    depth == names.len) return false;
+                names[depth] = next.name;
+                depth += 1;
+            }
+            cursor = next.end;
+        }
     }
     fn listSwitcherEditEnd(self: *Renderer, input: []const u8, tag: syntax.Tag) Error!?usize {
         if (!tag.is("span") or tag.closing or tag.self_closing) return null;
@@ -9292,6 +9509,18 @@ pub const Renderer = struct {
                 it.cursor = pair.end;
                 continue;
             }
+            if (s.provenance == .parsed and s.kind == .text and s.target.len == 0 and
+                s.self_link_target == null and !s.missing_nonaction and !s.code and
+                !s.preserve_whitespace and !self.in_template_literal_scope and self.body_link_target.len == 0 and
+                htmlInterruptedInternalOpening(input, it.cursor))
+            {
+                // Only the rejected raw opener is literal. HTML, tables and
+                // child links still pass through their ordinary semantic paths.
+                self.fallbacks.literal_markup = true;
+                try self.protectedLiteral(input[it.cursor .. it.cursor + 2], s);
+                it.cursor += 2;
+                continue;
+            }
             if (starts(input[it.cursor..], "[[]]")) {
                 if (!try self.emptyInternalLinkLiteral(input[it.cursor .. it.cursor + 4], s))
                     try self.malformedInternalBody(prepared_missing, "", "", input[it.cursor + 4 ..], s, depth);
@@ -9812,7 +10041,13 @@ pub const Renderer = struct {
                             opening.provenance = .protected_literal;
                     }
                     const label = if (token.external_label_prefix.len != 0)
-                        try std.fmt.allocPrint(self.a, "{s} {s}", .{ token.external_label_prefix, token.text })
+                        // Only the raw angle proved by DocIR is entity-spelled.
+                        // Normal label parsing records its literal provenance;
+                        // other label bytes and nested syntax keep their guards.
+                        if (token.external_label_prefix[0] == '<')
+                            try std.fmt.allocPrint(self.a, "&lt;{s} {s}", .{ token.external_label_prefix[1..], token.text })
+                        else
+                            try std.fmt.allocPrint(self.a, "{s} {s}", .{ token.external_label_prefix, token.text })
                     else
                         token.text;
                     if (inherited.kind == .link or inherited.kind == .external_link) {
@@ -9828,7 +10063,14 @@ pub const Renderer = struct {
                             // token recurses. Bare/unlabelled URLs keep the path above.
                             try self.inlineTextWithMissing(try missingSlice(self.a, prepared_missing, token.text), s, depth + 1);
                         } else try self.text(label, s);
-                    } else try self.linkWithMissing(try missingSlice(self.a, prepared_missing, label), token.target, s, depth + 1, true);
+                    } else {
+                        const proof: ?ExternalLiteralParameterProof = if (s.provenance == .parsed and s.kind == .text and token.external_label_prefix.len == 0 and
+                            token_start < it.cursor and it.cursor <= input.len) blk: {
+                            const candidate: ExternalLiteralParameterProof = .{ .token = input[token_start..it.cursor], .target = token.target };
+                            break :blk if (externalLiteralParameterProofMatches(candidate, token.target)) candidate else null;
+                        } else null;
+                        try self.linkWithMissingParameterProof(try missingSlice(self.a, prepared_missing, label), token.target, s, depth + 1, true, proof);
+                    }
                 },
                 .template => try self.resolveTemplate(token.text, s, depth),
             }
@@ -11198,7 +11440,15 @@ pub const Renderer = struct {
                 const offset = @intFromPtr(body.ptr) - @intFromPtr(input.ptr);
                 break :opening if (standaloneListLinkOpening(input, offset)) offset else null;
             } else null;
-            if (standalone_list_opening) |opening| {
+            const html_refused_list_opening: ?usize = if (!anchored_inline and !self.pre_block and !self.parsed_pre and
+                !link_label_scope and !self.in_reference and self.body_link_target.len == 0 and
+                !self.block_formatting.code and !self.in_template_literal_scope and list_prefix.path.len != 0) opening: {
+                const body = wikiListLineBody(physical_list[list_prefix.body_start..]);
+                const offset = @intFromPtr(body.ptr) - @intFromPtr(input.ptr);
+                break :opening if (htmlInterruptedInternalOpening(input, offset)) offset else null;
+            } else null;
+            const refused_list_opening = standalone_list_opening orelse html_refused_list_opening;
+            if (refused_list_opening) |opening| {
                 self.fallbacks.literal_markup = true;
                 if (origin != null) if (self.pre_scope_observer) |observer|
                     try observer.enter(observer.ctx, input, origin, opening, opening, opening, opening, false, .refused_link, .{}, "", self.formattingAttributes());
@@ -11213,7 +11463,7 @@ pub const Renderer = struct {
             // brackets while existing physical block phases process the body.
             // Resolve it before a whole-tail logical scan, so repeated refused
             // roots cannot cause overlapping full-suffix rescans.
-            if (standalone_list_opening != null or (root_candidate != null and root_candidate.?.refused)) {
+            if (refused_list_opening != null or (root_candidate != null and root_candidate.?.refused)) {
                 logical_line_end = physical_end;
             } else if (logical_line_end == null or start > logical_line_end.?) {
                 logical_line_end = syntax.logicalEndWithOpaqueScan(input, start, null, &line_opaque);
@@ -12942,7 +13192,6 @@ pub const Renderer = struct {
                         self.table_css_ancestor_classes = try self.cssClassesWith(previous_cell_css, cell_tag);
                         defer self.table_css_ancestor_classes = previous_cell_css;
                         const previous_cell_style_unresolved = self.table_style_unresolved;
-                        self.table_style_unresolved = try self.cellStyleUnresolved(cell_tag);
                         defer self.table_style_unresolved = previous_cell_style_unresolved;
                         const previous_cell_font_unresolved = self.table_style_font_unresolved;
                         self.table_style_font_unresolved = previous_cell_font_unresolved or resolved_cell.padding_basis_unresolved;
@@ -13389,7 +13638,7 @@ pub const Renderer = struct {
                         break :scoped try self.resolvedCellStyle(cell_tag, background_fallback);
                     };
                     self.guardCellEmStyle(&resolved_cell, cell_style, cell_formatting);
-                    current = .{ .style_font_unresolved = resolved_cell.padding_basis_unresolved, .style_unresolved = try self.cellStyleUnresolved(cell_tag), .style = resolved_cell.style, .spans = &.{}, .header = header, .colspan = content.colspan, .rowspan = content.rowspan, .background = resolved_cell.background };
+                    current = .{ .style_font_unresolved = resolved_cell.padding_basis_unresolved, .style_unresolved = self.table_style_unresolved, .style = resolved_cell.style, .spans = &.{}, .header = header, .colspan = content.colspan, .rowspan = content.rowspan, .background = resolved_cell.background };
                     current.?.css_ancestor_classes = try self.cssClassesWith(row_css_ancestors, cell_tag);
                     try self.appendWikiTableFosteredCopy(&cell_source, &cell_copies, tracked, content.text);
                     if (split_at == line.len) break;
@@ -15701,6 +15950,51 @@ test "parameter defaults remain visible when preceded by ordinary text" {
     try std.testing.expect(linked);
 }
 
+const MalformedHtmlOpenerOracle = struct {
+    fn check(a: A, source: []const u8, spans: []const Span, visible: []const u8, styled_word: []const u8, expected_style: Style) !void {
+        // Parser::handleInternalLinks2 preserves an invalid opener before the
+        // ordinary quote/HTML passes. Only those two source bytes are protected.
+        try std.testing.expect(spans.len != 0);
+        try std.testing.expectEqualStrings("[[", spans[0].text);
+        try std.testing.expectEqual(Provenance.protected_literal, spans[0].provenance);
+        try std.testing.expect(!spans[0].flags.bold and !spans[0].flags.italic);
+        var protected_bytes: usize = 0;
+        for (spans) |span| {
+            try std.testing.expect(span.kind == .text and span.target.len == 0 and !span.self_link);
+            try std.testing.expect(!span.generated_diagnostic);
+            if (span.provenance == .protected_literal) {
+                try std.testing.expectEqualStrings("[[", span.text);
+                protected_bytes += span.text.len;
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 2), protected_bytes);
+        const blocks = [_]Block{.{ .kind = .paragraph, .spans = spans }};
+        try FormattingScopeTest.shapes(a, &blocks, &.{"paragraph"}, &.{visible});
+        try FormattingScopeTest.word(a, &blocks, styled_word, expected_style);
+        const reference = try std.fmt.allocPrint(a, "<nowiki>[[</nowiki>{s}", .{source[2..]});
+        const document = @import("presentation_document.zig");
+        const codec = @import("blob_encoder").presentation_codec;
+        var report: document.Fallbacks = .{};
+        const bytes = try document.compileReportedAlloc(a, "malformed HTML opener", .language, "English", "en", source, null, &report);
+        const reference_bytes = try document.compileAlloc(a, "malformed HTML opener", .language, "English", "en", reference, null);
+        try std.testing.expect(report.literal_markup);
+        try std.testing.expectEqualSlices(u8, reference_bytes, bytes);
+        const stored = try codec.decodeAlloc(a, bytes, "malformed HTML opener", .language, .{ .code = "en", .heading = "English" });
+        const expected = try codec.decodeAlloc(a, reference_bytes, "malformed HTML opener", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqualDeep(expected.entry, stored.entry);
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+        const stored_blocks = stored.entry.sections[0].blocks;
+        try FormattingScopeTest.shapes(a, stored_blocks, &.{"paragraph"}, &.{visible});
+        try FormattingScopeTest.word(a, stored_blocks, styled_word, expected_style);
+        try std.testing.expectEqualStrings("[[", stored_blocks[0].spans[0].text);
+        try std.testing.expectEqualStrings("", stored_blocks[0].spans[0].trail);
+        for (stored_blocks[0].spans) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
+        // The public raw-text guard receives no new provenance exception.
+        try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(source));
+        try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(visible));
+    }
+};
+
 test "malformed link opener preserves brackets while following HTML and entities render" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -15708,7 +16002,8 @@ test "malformed link opener preserves brackets while following HTML and entities
     var r: Renderer = .{ .a = a, .context = .{} };
     const source = "[[broken <b>bold</b> &amp; tail";
     const spans = try r.parseSpans(source, .{});
-    try std.testing.expectEqualStrings("[malformed link] broken bold & tail", try flattened(a, spans));
+    try std.testing.expectEqualStrings("[[broken bold & tail", try flattened(a, spans));
+    try MalformedHtmlOpenerOracle.check(a, source, spans, "[[broken bold & tail", "bold", .{ .bold = true });
     for (spans) |span| {
         try std.testing.expect(span.kind == .text and !span.flags.italic);
         try std.testing.expectEqual(std.mem.indexOf(u8, span.text, "bold") != null, span.flags.bold);
@@ -18108,7 +18403,8 @@ test "quote scope oracle HTML nesting line resets protection and odd counts" {
         if (std.mem.indexOf(u8, span.text, "second") != null) try std.testing.expect(!span.flags.italic);
     };
     const malformed = try r.parseSpans("[[broken ''word", .{});
-    try std.testing.expectEqualStrings("[malformed link] broken word", try flattened(a, malformed));
+    try std.testing.expectEqualStrings("[[broken word", try flattened(a, malformed));
+    try MalformedHtmlOpenerOracle.check(a, "[[broken ''word", malformed, "[[broken word", "word", .{ .italic = true });
 }
 
 test "quote scope oracle authored HTML crossing retains text and scoped metadata" {
@@ -18200,7 +18496,8 @@ test "quote scope oracle malformed opener retains parsed HTML and nested targets
     const a = arena.allocator();
     var r: Renderer = .{ .a = a, .context = .{} };
     const html = try r.parseSpans("[[broken <b>bold</b> tail", .{});
-    try std.testing.expectEqualStrings("[malformed link] broken bold tail", try flattened(a, html));
+    try std.testing.expectEqualStrings("[[broken bold tail", try flattened(a, html));
+    try MalformedHtmlOpenerOracle.check(a, "[[broken <b>bold</b> tail", html, "[[broken bold tail", "bold", .{ .bold = true });
     for (html) |span| if (std.mem.indexOf(u8, span.text, "bold") != null) try std.testing.expect(span.flags.bold);
     const nested = try r.parseSpans("[[broken [[cat|inside]] tail", .{});
     try std.testing.expectEqualStrings("[malformed link] broken inside tail", try flattened(a, nested));
@@ -29939,7 +30236,7 @@ test "unsupported font style keeps inherited flags and protected literals unchan
     defer arena.deinit();
     const a = arena.allocator();
     const attributes = [_][]const u8{
-        "font-style: oblique 10deg",    "font-style: normal!important", "/* font-style:normal */",
+        "font-style: oblique 10deg",    "font-style: var(--slant)!important", "/* font-style:normal */",
         "color: 'x;font-style:normal'", "font-style: inherit",          "font-style: italic; x: func(a)",
         "not-font-style:normal",        "font-style normal",            "font-style: italic; font-style: unknown",
     };
@@ -36756,21 +37053,25 @@ test "unindexed table and cell classes preserve authored paint and suppress new 
     defer profile.deinit();
     var r: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
     const blocks = try r.renderBody("{| class='wikitable unknown' border='1' bgcolor='#123456'\n! head\n|\n{| class='wikitable'\n! child\n|}\n|}\n{| class='wikitable'\n! sibling\n| class='unknown' |\n{| class='wikitable'\n! unknown cell child\n|}\n|}");
-    const uncertain = blocks[0].table.?;
-    try std.testing.expect(uncertain.style == null);
-    try std.testing.expectEqual(@as(u16, 1), uncertain.geometry.?.border.?);
-    try std.testing.expect(uncertain.rows[0].cells[0].style == null);
-    try std.testing.expectEqualStrings("#123456", uncertain.rows[0].cells[0].background.?);
-    const child = uncertain.rows[0].cells[1].blocks.?[0].table.?;
-    try std.testing.expect(child.style == null);
-    try std.testing.expect(child.rows[0].cells[0].style == null);
+    // The complete stylesheet contains no rules for either extra class. Their
+    // presence cannot suppress independently proved table/header paint.
+    const outer = blocks[0].table.?;
+    try std.testing.expectEqualStrings("#f9f9f9", outer.style.?.background.?);
+    try std.testing.expectEqual(@as(u16, 1), outer.geometry.?.border.?);
+    try std.testing.expectEqualStrings("#f2f2f2", outer.rows[0].cells[0].background.?);
+    try std.testing.expectEqual(@as(f32, 2), outer.rows[0].cells[0].style.?.padding.?.top.value);
+    const child = outer.rows[0].cells[1].blocks.?[0].table.?;
+    try std.testing.expectEqualStrings("#f9f9f9", child.style.?.background.?);
+    try std.testing.expectEqualStrings("#f2f2f2", child.rows[0].cells[0].background.?);
     const sibling = blocks[1].table.?;
     try std.testing.expectEqualStrings("#f2f2f2", sibling.rows[0].cells[0].background.?);
     const cell_child = sibling.rows[0].cells[1].blocks.?[0].table.?;
-    try std.testing.expect(cell_child.style == null);
-    try std.testing.expect(cell_child.rows[0].cells[0].style == null);
-    try std.testing.expect(r.fallbacks.unresolved_table_style);
-    try std.testing.expect(!r.table_style_unresolved);
+    try std.testing.expectEqualStrings("#f9f9f9", cell_child.style.?.background.?);
+    try std.testing.expectEqualStrings("#f2f2f2", cell_child.rows[0].cells[0].background.?);
+    try std.testing.expectEqualStrings("head", try plainText(a, outer.rows[0].cells[0].spans));
+    try std.testing.expectEqualStrings("child", try plainText(a, child.rows[0].cells[0].spans));
+    try std.testing.expectEqualStrings("unknown cell child", try plainText(a, cell_child.rows[0].cells[0].spans));
+    try std.testing.expect(!r.fallbacks.unresolved_table_style and !r.table_style_unresolved);
 }
 
 test "inline images preserve occurrence dimensions alt actions and independent trail" {
@@ -37433,7 +37734,7 @@ test "interrupted HTML attribute proof isolates valid protected opaque and unfin
         "<span title='<widget>x</widget>'>body</span>",
         "<span title='<ref>x</ref>'>body</span>",
         "<span title='<strong>unfinished",
-        "<span title='<strong>x<b>nested</b></strong>'>body</span>",
+        "<span title='<strong>x<b>nested</strong></b>'>body</span>",
         "<span title='unfinished", "<span<strong>x</strong>",
     }) |source| try std.testing.expect(!Renderer.interruptedHtmlAttributeOpening(source, 0));
     const valid = "<span title='<nowiki><strong>literal</strong></nowiki>'>[[Target|body]]</span>";
@@ -38804,7 +39105,7 @@ test "defaultless HTTPS path parameters preserve numbered actions literal bare l
     var numbered: Renderer = .{ .a = a, .context = .{} };
     const blocks = try numbered.renderBody("[" ++ raw ++ "] [https://example.test/next]");
     try ExternalNumberingFixture.roundtrip(a, &numbered, blocks, &.{
-        .{ .target = target, .label = "[1]" },
+        .{ .target = raw, .label = "[1]" },
         .{ .target = "https://example.test/next", .label = "[2]" },
     });
     try std.testing.expectEqual(@as(usize, 1), numbered.unresolved_templates);
@@ -39756,6 +40057,475 @@ test "nonfloating image admission excludes span-only protected formatted and act
     try std.testing.expectError(error.RenderLimit, overflow.renderBody("[[File:X.svg|none|4294967296px]]"));
 }
 
+
+test "nested interrupted attribute children retain literal prefix and independent formatting" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var phase: []const u8 = "opening proof";
+    errdefer std.debug.print("nested attribute failed phase: {s}\n", .{phase});
+    const source = "<sup dir=rtl style='color:red;<strong class=error><span class=scribunto-error>[[Child|error]] <i>detail</i></span></strong>;'>[[After|tail]]</sup>";
+    const reference = "&lt;sup dir=rtl style='color:red;<strong class=error><span class=scribunto-error>[[Child|error]] <i>detail</i></span></strong>;'>[[After|tail]]</sup>";
+    const expected = "<sup dir=rtl style='color:red;error detail;'>tail";
+    try std.testing.expect(syntax.tagAt(source, 0) == null);
+    try std.testing.expect(Renderer.interruptedHtmlAttributeOpening(source, 0));
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    phase = "render body";
+    const blocks = try renderer.renderBody(source);
+    errdefer {
+        var remaining: usize = 32;
+        for (blocks) |block_value| {
+            if (remaining == 0) break;
+            remaining -= 1;
+            std.debug.print("nested attribute block={s} spans={d}\n", .{ @tagName(block_value.kind), block_value.spans.len });
+            for (block_value.spans) |span| {
+                if (remaining == 0) break;
+                remaining -= 1;
+                std.debug.print(" text={s} kind={s} target={s} classes={s} flags={any} provenance={s} direction={s} foreground={any} explanation={s}\n", .{
+                    span.text[0..@min(span.text.len, 160)], @tagName(span.kind), span.target[0..@min(span.target.len, 96)],
+                    span.classes[0..@min(span.classes.len, 96)], span.flags, @tagName(span.provenance),
+                    span.direction[0..@min(span.direction.len, 24)], span.foreground, span.explanation[0..@min(span.explanation.len, 96)],
+                });
+            }
+        }
+    }
+    phase = "compiler shape";
+    try FormattingScopeTest.shapes(a, blocks, &.{"paragraph"}, &.{expected});
+    phase = "compiler Child word";
+    try FormattingScopeTest.word(a, blocks, "error", .{ .kind = .link, .target = "Child", .bold = true, .classes = "error scribunto-error" });
+    phase = "compiler detail word";
+    try FormattingScopeTest.word(a, blocks, "detail", .{ .bold = true, .italic = true, .classes = "error scribunto-error" });
+    phase = "compiler tail word";
+    // "tail" is also a substring of "detail". Check the authored terminal
+    // action in its own span scope without weakening the whole-body oracle.
+    var terminal = blocks[0];
+    terminal.spans = terminal.spans[terminal.spans.len - 1 ..];
+    try std.testing.expectEqualStrings("tail", terminal.spans[0].text);
+    try FormattingScopeTest.word(a, &[_]@TypeOf(terminal){terminal}, "tail", .{ .kind = .link, .target = "After" });
+    phase = "compiler attributes and protected angle";
+    var protected_angles: usize = 0;
+    for (blocks[0].spans) |span| {
+        try std.testing.expect(!span.flags.superscript and span.direction.len == 0 and span.foreground == null and span.explanation.len == 0);
+        if (std.mem.eql(u8, span.text, "<")) {
+            protected_angles += 1;
+            try std.testing.expect(span.provenance == .protected_literal and span.kind == .text and span.target.len == 0);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), protected_angles);
+    const document = @import("presentation_document.zig");
+    const codec = @import("blob_encoder").presentation_codec;
+    var report: document.Fallbacks = .{};
+    phase = "document compile";
+    const bytes = try document.compileReportedAlloc(a, "nested attribute", .language, "English", "en", source, null, &report);
+    phase = "reference compile";
+    const expected_bytes = try document.compileAlloc(a, "nested attribute", .language, "English", "en", reference, null);
+    phase = "full codec parity";
+    try std.testing.expectEqualSlices(u8, expected_bytes, bytes);
+    phase = "literal report";
+    try std.testing.expect(report.literal_markup);
+    phase = "decode and roundtrip";
+    const stored = try codec.decodeAlloc(a, bytes, "nested attribute", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    phase = "Stored shape";
+    try FormattingScopeTest.shapes(a, stored.entry.sections[0].blocks, &.{"paragraph"}, &.{expected});
+    phase = "Stored Child word";
+    try FormattingScopeTest.word(a, stored.entry.sections[0].blocks, "error", .{ .kind = .link, .target = "Child", .bold = true, .classes = "error scribunto-error" });
+    phase = "Stored detail word";
+    try FormattingScopeTest.word(a, stored.entry.sections[0].blocks, "detail", .{ .bold = true, .italic = true, .classes = "error scribunto-error" });
+    phase = "Stored terminal action";
+    var stored_terminal = stored.entry.sections[0].blocks[0];
+    stored_terminal.spans = stored_terminal.spans[stored_terminal.spans.len - 1 ..];
+    try std.testing.expectEqualStrings("tail", stored_terminal.spans[0].text);
+    try std.testing.expectEqualStrings("", stored_terminal.spans[0].trail);
+    try FormattingScopeTest.word(a, &[_]@TypeOf(stored_terminal){stored_terminal}, "tail", .{ .kind = .link, .target = "After" });
+    phase = "strict raw rejection";
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(expected));
+}
+
+test "nested interrupted attribute proof requires complete bounded recognized children" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // This was the previous deliberately limited one-child negative. It now
+    // has a complete nested proof; malformed neighbors remain refused below.
+    const formerly_limited = "<span title='<strong>x<b>nested</b></strong>'>body</span>";
+    try std.testing.expect(Renderer.interruptedHtmlAttributeOpening(formerly_limited, 0));
+    for ([_][]const u8{
+        "<span title='<strong>x<b>nested</strong></b>'>body</span>",
+        "<span title='<strong>x<b>nested</b>'>body</span>",
+        "<span title='<strong>x<b>nested</b></strong bad>'>body</span>",
+        "<span title='<strong>x<widget>nested</widget></strong>'>body</span>",
+        "<span title='<strong>x<nowiki>nested</nowiki></strong>'>body</span>",
+        "<span title='<strong>x<pre>nested</pre></strong>'>body</span>",
+        "<span title='<strong>x<ref>nested</ref></strong>'>body</span>",
+        "<span title='<strong>x<!-- comment --></strong>'>body</span>",
+        "<span title='<strong>x<onlyinclude>nested</onlyinclude></strong>'>body</span>",
+        "<span title='<strong>x<noinclude>nested</noinclude></strong>'>body</span>",
+        "<span title='<strong>x<span/>nested</strong>'>body</span>",
+        "<span title='[[Target|<strong><span>nested</span></strong>]]'>body</span>",
+        "<span title='{{name|<strong><span>nested</span></strong>}}'>body</span>",
+    }) |source| try std.testing.expect(!Renderer.interruptedHtmlAttributeOpening(source, 0));
+    var depth_source: std.ArrayList(u8) = .empty;
+    try depth_source.appendSlice(a, "<span title='");
+    for (0..max_depth) |_| try depth_source.appendSlice(a, "<strong>");
+    try depth_source.appendSlice(a, "body");
+    for (0..max_depth) |_| try depth_source.appendSlice(a, "</strong>");
+    try std.testing.expect(Renderer.interruptedHtmlAttributeOpening(depth_source.items, 0));
+    try depth_source.insertSlice(a, "<span title='".len, "<strong>");
+    try depth_source.appendSlice(a, "</strong>");
+    try std.testing.expect(!Renderer.interruptedHtmlAttributeOpening(depth_source.items, 0));
+    var protected: Renderer = .{ .a = a, .context = .{} };
+    const protected_spans = try protected.parseSpans(try std.fmt.allocPrint(a, "<nowiki>{s}</nowiki>", .{formerly_limited}), .{});
+    try std.testing.expectEqualStrings(formerly_limited, try flattened(a, protected_spans));
+    for (protected_spans) |span| try std.testing.expect(span.provenance == .protected_literal and !span.flags.bold and span.target.len == 0);
+    for ([_]Style{ .{ .kind = .link, .target = "Outer" }, .{ .kind = .external_link, .target = "https://example.test" }, .{ .missing_nonaction = true }, .{ .self_link_target = "Outer" } }) |style| {
+        var inherited: Renderer = .{ .a = a, .context = .{} };
+        for (try inherited.parseSpans(formerly_limited, style)) |span|
+            if (std.mem.eql(u8, span.text, "<")) try std.testing.expect(span.provenance != .protected_literal);
+    }
+    const document = @import("presentation_document.zig");
+    try std.testing.expectError(error.UncompiledTemplate, document.compileAlloc(a, "unresolved", .language, "English", "en", "<span title='<strong><span>{{unresolved}}</span></strong>'>body</span>", null));
+    try std.testing.expectError(error.UncompiledPresentation, document.compileAlloc(a, "raw", .language, "English", "en", "before {| leaked", null));
+}
+
+
+// Exact JA expanded page 8bd8496d and namespace c38f44b5, with the selected
+// captured w row. The independent reference follows returned legacy-parser
+// DOM 1cc02752: the first NavFrame ends with the authored list line; only the
+// second table remains a NavFrame descendant. The live parser observation is
+// distinct from the matched historical parser source 79b81ba9.
+const JaHtmlInterruptedLinkFixture = struct {
+    const source = "\n" ++
+    "==カリスペル＝ペンド・オレイル語==\n" ++
+    "===語源===\n" ++
+    "\n" ++
+    "* [[w:オカナガン語|オカナガン語]] <i class=\"Latn mention\" lang=\"oka\">[[siw'łkʷ#オカナガン語|siw'łkʷ]]</i>\n" ++
+    "\n" ++
+    "* [[w:<div class=\"NavFrame\">\n" ++
+    "<div class=\"NavHead\"></div>\n" ++
+    "<div class=\"NavContent\">\n" ++
+    "{| style=\"width:100%;\" role=\"presentation\" class=\"Derived terms\"\n" ++
+    "|-\n" ++
+    "| style=\"vertical-align: top; text-align: left; background-color: #F8F8FF;  width: 80%;\" |\n" ++
+    "|}</div></div>|<div class=\"NavFrame\">\n" ++
+    "<div class=\"NavHead\"></div>\n" ++
+    "<div class=\"NavContent\">\n" ++
+    "{| style=\"width:100%;\" role=\"presentation\" class=\"Derived terms\"\n" ++
+    "|-\n" ++
+    "| style=\"vertical-align: top; text-align: left; background-color: #F8F8FF;  width: 80%;\" |\n" ++
+    "|}</div></div>]] <i class=\"Latn mention\" lang=\"col\">[[šáwłkʷ#コロンビア＝ウェナチー語|šáwłkʷ]]</i>\n" ++
+    "===名詞===\n" ++
+    "<strong class=\"Latn headword\" lang=\"fla\">sewłkʷ</strong>[[カテゴリ:カリスペル＝ペンド・オレイル語 |SEWŁKʷ]][[カテゴリ:カリスペル＝ペンド・オレイル語 名詞|SEWŁKʷ]]\n" ++
+    "#<ruby>[[:水|水]]<rp>（</rp><rt>[[みず|みず]]</rt><rp>）</rp></ruby>。";
+    const namespaces = "# wikidict-namespace-registry-v1\n" ++
+    "# wiki\tjawiktionary\n" ++
+    "# dump-date\t20261001\n" ++
+    "# content-language\tja\n" ++
+    "-2\tメディア\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n" ++
+    "-1\t特別\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n" ++
+    "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+    "1\tトーク\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tノート\n" ++
+    "2\t利用者\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+    "3\t利用者・トーク\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\t利用者‐会話\n" ++
+    "4\tWiktionary\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\n" ++
+    "5\tWiktionary・トーク\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWiktionary talk\tWiktionary‐ノート\n" ++
+    "6\tファイル\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\t画像\n" ++
+    "7\tファイル・トーク\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tImage talk\tファイル‐ノート\t画像‐ノート\n" ++
+    "8\tMediaWiki\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+    "9\tMediaWiki・トーク\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tMediaWiki‐ノート\n" ++
+    "10\tテンプレート\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+    "11\tテンプレート・トーク\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tTemplate‐ノート\n" ++
+    "12\tヘルプ\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+    "13\tヘルプ・トーク\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tHelp‐ノート\n" ++
+    "14\tカテゴリ\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+    "15\tカテゴリ・トーク\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tCategory‐ノート\n" ++
+    "100\t付録\t付録\tcase-sensitive\t1\t0\t0\t\tsupplemental\tunclassified_subject_retained\n" ++
+    "101\t付録・トーク\t付録・トーク\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n" ++
+    "710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n" ++
+    "711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n" ++
+    "828\tモジュール\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+    "829\tモジュール・トーク\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n" ++
+    "1728\tEvent\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n" ++
+    "1729\tEvent talk\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
+    // The observed empty first NavFrame has no stored content. Keep its
+    // list boundary, but omit the empty div: inline HTML adds a synthetic
+    // line break for it, absent from the observed li text and actual body.
+    const reference = "\n" ++
+    "==カリスペル＝ペンド・オレイル語==\n" ++
+    "===語源===\n" ++
+    "\n" ++
+    "* [[w:オカナガン語|オカナガン語]] <i class=\"Latn mention\" lang=\"oka\">[[siw'łkʷ#オカナガン語|siw'łkʷ]]</i>\n" ++
+    "\n" ++
+    "* <nowiki>[[</nowiki>w:\n" ++
+    "<div class=\"NavHead\"></div>\n" ++
+    "<div class=\"NavContent\">\n" ++
+    "{| style=\"width:100%;\" role=\"presentation\" class=\"Derived terms\"\n" ++
+    "|-\n" ++
+    "| style=\"vertical-align: top; text-align: left; background-color: #F8F8FF;  width: 80%;\" |\n" ++
+    "|}</div><p>|</p><div class=\"NavFrame\">\n" ++
+    "<div class=\"NavHead\"></div>\n" ++
+    "<div class=\"NavContent\">\n" ++
+    "{| style=\"width:100%;\" role=\"presentation\" class=\"Derived terms\"\n" ++
+    "|-\n" ++
+    "| style=\"vertical-align: top; text-align: left; background-color: #F8F8FF;  width: 80%;\" |\n" ++
+    "|}</div></div><p><nowiki>]]</nowiki> <i class=\"Latn mention\" lang=\"col\">[[šáwłkʷ#コロンビア＝ウェナチー語|šáwłkʷ]]</i></p>\n" ++
+    "===名詞===\n" ++
+    "<strong class=\"Latn headword\" lang=\"fla\">sewłkʷ</strong>[[カテゴリ:カリスペル＝ペンド・オレイル語 |SEWŁKʷ]][[カテゴリ:カリスペル＝ペンド・オレイル語 名詞|SEWŁKʷ]]\n" ++
+    "#<ruby>[[:水|水]]<rp>（</rp><rt>[[みず|みず]]</rt><rp>）</rp></ruby>。";
+    fn sameStored(a: A, actual: *Renderer, body: []const Block, expected: *Renderer, reference_body: []const Block) !void {
+        const codec = @import("blob_encoder").presentation_codec;
+        const stored = try FormattingScopeTest.encode(a, actual, body);
+        const reference_stored = try FormattingScopeTest.encode(a, expected, reference_body);
+        const bytes = try codec.encodeAlloc(a, stored);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, reference_stored), bytes);
+        const again = try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, again));
+    }
+    fn classToken(classes: []const u8, wanted: []const u8) bool {
+        var tokens = std.mem.tokenizeAny(u8, classes, " \t\r\n");
+        while (tokens.next()) |token| if (std.mem.eql(u8, token, wanted)) return true;
+        return false;
+    }
+    fn tables(a: A, blocks: []const Block, first: []const u8, second: []const u8) !void {
+        var count: usize = 0;
+        for (blocks) |block_value| if (block_value.table) |value| {
+            try std.testing.expect(count < 2);
+            try std.testing.expectEqual(Kind.table, block_value.kind);
+            try std.testing.expectEqualStrings("", block_value.list_path);
+            try std.testing.expectEqual(@as(u8, 0), block_value.depth);
+            try std.testing.expectEqual(@as(usize, 1), value.rows.len);
+            try std.testing.expectEqual(@as(usize, 1), value.rows[0].cells.len);
+            const cell = value.rows[0].cells[0];
+            try std.testing.expectEqualStrings(if (count == 0) first else second, trim(try flattened(a, cell.spans)));
+            try std.testing.expect(classToken(cell.css_ancestor_classes, "NavContent"));
+            try std.testing.expectEqual(count == 1, classToken(cell.css_ancestor_classes, "NavFrame"));
+            count += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 2), count);
+    }
+};
+
+test "JA retained malformed cognate keeps both table ancestries five actions and full codec body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const fixture = JaHtmlInterruptedLinkFixture;
+    var namespaces = try @import("namespace_registry").Registry.init(a, fixture.namespaces);
+    defer namespaces.deinit();
+    try namespaces.attachInterwikiMap("w\t1\t0\t0\t0\thttps://ja.wikipedia.org/wiki/$1\t0\n");
+    const context: Context = .{ .title = "sewłkʷ", .language = "カリスペル＝ペンド・オレイル語", .namespace_catalog = &namespaces };
+    var renderer: Renderer = .{ .a = a, .context = context };
+    const blocks = try renderer.renderBody(fixture.source);
+    try fixture.tables(a, blocks, "", "");
+    var text: std.ArrayList(u8) = .empty;
+    var actions: std.ArrayList(Span) = .empty;
+    var list_items: usize = 0;
+    var definitions: usize = 0;
+    var headings: std.ArrayList(u8) = .empty;
+    var openers: usize = 0;
+    var closers: usize = 0;
+    var headword = false;
+    for (blocks) |block_value| {
+        const visible = trim(try flattened(a, block_value.spans));
+        if (visible.len != 0) {
+            if (text.items.len != 0) try text.append(a, ' ');
+            try text.appendSlice(a, visible);
+        }
+        if (block_value.kind == .list_item) {
+            if (list_items == 1) try std.testing.expectEqualStrings("[[w:", visible);
+            try std.testing.expectEqualStrings("*", block_value.list_path);
+            list_items += 1;
+        }
+        if (block_value.kind == .definition) {
+            definitions += 1;
+            try std.testing.expectEqualStrings("#", block_value.list_path);
+            try std.testing.expectEqualStrings("1", block_value.number);
+        }
+        if (block_value.kind == .heading) try headings.append(a, block_value.level);
+        for (block_value.spans) |span| {
+            try std.testing.expect(!span.generated_diagnostic and span.kind != .template);
+            if (span.target.len != 0) try actions.append(a, span);
+            if (std.mem.eql(u8, span.text, "[[") or std.mem.eql(u8, span.text, "]]")) {
+                try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+                try std.testing.expect(span.kind == .text and span.target.len == 0 and !span.self_link);
+                if (std.mem.eql(u8, span.text, "[[")) openers += 1 else closers += 1;
+            }
+            if (std.mem.eql(u8, span.text, "sewłkʷ")) {
+                headword = true;
+                try std.testing.expect(span.flags.bold);
+                try std.testing.expectEqualStrings("fla", span.language);
+            }
+        }
+    }
+    try std.testing.expectEqualStrings("カリスペル＝ペンド・オレイル語 語源 オカナガン語 siw'łkʷ [[w: | ]] šáwłkʷ 名詞 sewłkʷ 水（みず）。", text.items);
+    try std.testing.expectEqualSlices(u8, &.{ 2, 3, 3 }, headings.items);
+    try std.testing.expectEqual(@as(usize, 2), list_items);
+    try std.testing.expectEqual(@as(usize, 1), definitions);
+    try std.testing.expect(openers == 1 and closers == 1 and headword);
+    try std.testing.expectEqual(@as(usize, 5), actions.items.len);
+    const targets = [_][]const u8{
+        "https://ja.wikipedia.org/wiki/%E3%82%AA%E3%82%AB%E3%83%8A%E3%82%AC%E3%83%B3%E8%AA%9E",
+        "siw'łkʷ#オカナガン語", "šáwłkʷ#コロンビア＝ウェナチー語", "水", "みず",
+    };
+    const labels = [_][]const u8{ "オカナガン語", "siw'łkʷ", "šáwłkʷ", "水", "みず" };
+    for (actions.items, targets, labels, 0..) |action, target, label, index| {
+        try std.testing.expectEqualStrings(target, action.target);
+        try std.testing.expectEqualStrings(label, action.text);
+        try std.testing.expectEqual(if (index == 0) ir.InlineKind.external_link else .link, action.kind);
+        if (index == 1 or index == 2) {
+            try std.testing.expect(action.flags.italic);
+            try std.testing.expectEqualStrings(if (index == 1) "oka" else "col", action.language);
+        }
+    }
+    try std.testing.expect(renderer.fallbacks.literal_markup and renderer.unresolved_templates == 0);
+    var reference: Renderer = .{ .a = a, .context = context };
+    try fixture.sameStored(a, &renderer, blocks, &reference, try reference.renderBody(fixture.reference));
+}
+
+test "HTML interrupted target preserves nonempty table contents styling references and sibling scope" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "* [[w:<div class=NavFrame>\n<div class=NavContent>\n{| border=0\n|-\n| bgcolor=#ffffe0 | [[A|first]]\n|}</div></div>|<div class=NavFrame>\n<div class=NavContent>\n{| border=0\n|-\n| bgcolor=#ffffe0 | ''[[B|second]]''\n|}</div></div>]] [[Tail]]<ref>retained reference</ref>";
+    // As in the retained JA reference, the empty first NavFrame contributes
+    // no body or table ancestor; do not create an inline block line break.
+    const reference_source = "* <nowiki>[[</nowiki>w:\n<div class=NavContent>\n{| border=0\n|-\n| bgcolor=#ffffe0 | [[A|first]]\n|}</div><p>|</p><div class=NavFrame>\n<div class=NavContent>\n{| border=0\n|-\n| bgcolor=#ffffe0 | ''[[B|second]]''\n|}</div></div><p><nowiki>]]</nowiki> [[Tail]]<ref>retained reference</ref></p>";
+    var profile = try table_style_profile.parseAlloc(a, ".NavFrame td { background:inherit; }");
+    defer profile.deinit();
+    const context: Context = .{ .table_styles = &profile };
+    var renderer: Renderer = .{ .a = a, .context = context };
+    const blocks = try renderer.renderBody(source);
+    try JaHtmlInterruptedLinkFixture.tables(a, blocks, "first", "second");
+    var count: usize = 0;
+    for (blocks) |block_value| if (block_value.table) |value| {
+        const cell = value.rows[0].cells[0];
+        if (count == 0) try std.testing.expectEqualStrings("#ffffe0", cell.background.?) else try std.testing.expect(cell.background == null);
+        try std.testing.expectEqual(@as(usize, 1), cell.spans.len);
+        try std.testing.expectEqual(ir.InlineKind.link, cell.spans[0].kind);
+        try std.testing.expectEqualStrings(if (count == 0) "A" else "B", cell.spans[0].target);
+        try std.testing.expectEqual(count == 1, cell.spans[0].flags.italic);
+        count += 1;
+    };
+    const references = try renderer.finishReferences();
+    try std.testing.expectEqual(@as(usize, 1), references.len);
+    try std.testing.expectEqualStrings("retained reference", try flattened(a, references[0].spans));
+    try std.testing.expectEqualStrings("", renderer.table_css_ancestor_classes);
+    var reference: Renderer = .{ .a = a, .context = context };
+    try JaHtmlInterruptedLinkFixture.sameStored(a, &renderer, blocks, &reference, try reference.renderBody(reference_source));
+}
+
+test "HTML interrupted target proof excludes labels protected text and unresolved source" {
+    for ([_][]const u8{ "[[w:<div class=NavFrame>", "[[x<b>body</b>]]", "[[<SPAN>body</SPAN>]]" }) |source|
+        try std.testing.expect(htmlInterruptedInternalOpening(source, 0));
+    for ([_][]const u8{
+        "[[Target|<div>label</div>]]", "[[x&lt;div&gt;]]", "[[x<nowiki>literal</nowiki>]]", "[[x<pre>literal</pre>]]",
+        "[[x<ref>reference</ref>]]", "[[x<unknown>body</unknown>]]", "[[x<div", "[[x</div>]]", "[[x\n<div>body</div>]]",
+        "[[{{missing}}<div>body</div>]]", "[[x[<div>body</div>]]", "[[x|label<div>body</div>]]",
+    }) |source| try std.testing.expect(!htmlInterruptedInternalOpening(source, 0));
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var label: Renderer = .{ .a = a, .context = .{} };
+    const linked = try label.parseSpans("[[Target|<i>kept</i>]]", .{});
+    try std.testing.expectEqual(@as(usize, 1), linked.len);
+    try std.testing.expectEqualStrings("Target", linked[0].target);
+    try std.testing.expect(linked[0].flags.italic and !label.fallbacks.literal_markup);
+    for ([_][]const u8{ "<nowiki>[[w:<div>literal</div>]]</nowiki>", "<pre>[[w:<div>literal</div>]]</pre>", "<span title='[[w:&lt;div&gt;'>kept</span>" }) |source| {
+        var protected: Renderer = .{ .a = a, .context = .{} };
+        const body = try protected.renderBody(source);
+        try std.testing.expect(!protected.fallbacks.literal_markup);
+        for (body) |block_value| for (block_value.spans) |span| try std.testing.expect(span.target.len == 0 and !span.generated_diagnostic);
+    }
+    var unresolved: Renderer = .{ .a = a, .context = .{} };
+    _ = try unresolved.parseSpans("[[w:<span>{{missing|body}}</span>]]", .{});
+    try std.testing.expectEqual(@as(usize, 1), unresolved.unresolved_templates);
+    for ([_][]const u8{ "[[", "]]", "{{missing}}", "<div>source</div>" }) |source|
+        try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(source));
+}
+
+test "parsed defaultless HTTP query literals preserve exact href label style and source proof" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const url = "http://www.perseus.tufts.edu/hopper/morph?l={{{1}}}&la=greek#lexicon";
+    const source = "[" ++ url ++ " " ++ url ++ "]";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans(source, .{ .italic = true, .foreground = "#123456", .foreground_set = true });
+    var label: std.ArrayList(u8) = .empty;
+    var literal: usize = 0;
+    for (spans) |span| {
+        try std.testing.expectEqual(ir.InlineKind.external_link, span.kind);
+        try std.testing.expectEqualStrings(url, span.target);
+        try std.testing.expect(hasCompiledExternalLiteralParameterTarget(span));
+        try std.testing.expect(span.flags.italic);
+        try std.testing.expectEqualStrings("#123456", span.foreground.?);
+        try label.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.text, "{{{1}}}")) {
+            literal += 1;
+            try std.testing.expectEqual(Provenance.protected_literal, span.provenance);
+        }
+    }
+    try std.testing.expectEqualStrings(url, label.items);
+    try std.testing.expectEqual(@as(usize, 1), literal);
+    // Two distinct authored occurrences: query destination and displayed label.
+    try std.testing.expectEqual(@as(usize, 2), renderer.unresolved_templates);
+    try std.testing.expect(renderer.fallbacks.missing_template);
+    try std.testing.expect(unresolvedExternalActionTarget(url));
+    // Neither the public action helper nor generic display provenance grants a proof.
+    var direct: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectError(error.UncompiledTemplate, direct.link(url, url, .{}, 0, true));
+    for (spans) |span| {
+        var copied = span;
+        copied.target = try a.dupe(u8, span.target);
+        try std.testing.expect(!hasCompiledExternalLiteralParameterTarget(copied));
+        var changed = span;
+        changed.target = span.target[0 .. span.target.len - 1];
+        try std.testing.expect(!hasCompiledExternalLiteralParameterTarget(changed));
+        var detached = span;
+        detached.external_literal_parameter = .{ .token = try a.dupe(u8, span.external_literal_parameter.?.token), .target = span.target };
+        try std.testing.expect(!hasCompiledExternalLiteralParameterTarget(detached));
+    }
+}
+
+test "literal query proof excludes unparsed domains entities defaults children and other URL components" {
+    for ([_][]const u8{
+        "http://example.test/?q={{{x|default}}}", "http://example.test/?q={{{x|}}}",
+        "http://example.test/?q={{missing}}", "http://example.test/?q={{{}}}",
+        "http://example.test/?q={{{bad name}}}", "http://example.test/?q={{{x\xff}}}",
+        "http://example.test/?q={{{x}}", "http://example.test/?q={{{x}}}}",
+        "http://example.test/?q={{{{x}}}}", "http://example.test/?q={{{x}}}{{missing}}",
+        "http://{{{host}}}/?q=x", "http://example.test/{{{path}}}?q=x",
+        "http://example.test/?q=x#{{{fragment}}}", "http://example.test/?{{{key}}}=value",
+        "http://example.test/?q=&#123;&#123;&#123;x&#125;&#125;&#125;",
+        "http://example.test/?q={{{x}}}&amp;lang=grc", "http://example.test/&quest;q={{{x}}}",
+        "http://example.test/?q={{{x}}}#&num;fragment", "http://example.test/?q={{{x}}}&bare",
+        "http://example.test/?q={{{x}}}\\tail", "ftp://example.test/?q={{{x}}}",
+        "//example.test/?q={{{x}}}", "javascript:alert({{{x}}})",
+    }) |target| {
+        errdefer std.debug.print("unexpected literal query admission target={s}\n", .{target});
+        try std.testing.expect(Renderer.literalDefaultlessExternalQuery(target) == null);
+    }
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const url = "https://example.test/?q={{{x}}}";
+    for ([_][]const u8{
+        "<nowiki>[" ++ url ++ " " ++ url ++ "]</nowiki>",
+        "<pre>[" ++ url ++ " " ++ url ++ "]</pre>",
+        "<span title=\"[" ++ url ++ " " ++ url ++ "]\">attribute only</span>",
+    }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        for (blocks) |block| for (block.spans) |span| {
+            try std.testing.expect(span.kind != .external_link);
+            try std.testing.expect(span.external_literal_parameter == null);
+        };
+    }
+    // Even complete URL bytes cannot create a proof outside a parsed bracketed token.
+    var bare: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectError(error.UncompiledTemplate, bare.link(url, url, .{ .code = true }, 0, true));
+}
+
 test "image border preserves occurrence dimensions actions and none geometry" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -39919,7 +40689,7 @@ test "static class visibility never inherits a table class as a row own class" {
     try std.testing.expectEqual(@as(usize, 1), actions);
 }
 
-test "retained Portuguese missing URL parameter remains rejected with unresolved stylesheet imports" {
+test "retained Portuguese literal URL parameter keeps numbered action with unresolved stylesheet imports" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -39935,9 +40705,34 @@ test "retained Portuguese missing URL parameter remains rejected with unresolved
     const row: syntax.Tag = .{ .name = "tr", .attrs = "style='background:#FFFFFF' align=center class=hiddenStructure", .end = 0, .closing = false, .self_closing = false };
     try std.testing.expect(!(try renderer.htmlDisplayNone(row)));
     try std.testing.expect(renderer.fallbacks.unsupported_element);
-    // Exact visible template output; neither title substitution nor percent
-    // encoding can turn this defaultless source parameter into an action.
-    try std.testing.expectError(error.UncompiledTemplate, renderer.renderBody("* „[http://slovniky.lingea.cz/Portugalsko-cesky/{{{1}}}]“ em LINGEA - Elektronický slovník"));
+    // The complete borrowed token proves a literal target, never a supplied
+    // parameter value. Unresolved CSS still cannot establish row visibility.
+    const url = "http://slovniky.lingea.cz/Portugalsko-cesky/{{{1}}}";
+    const blocks = try renderer.renderBody("* „[" ++ url ++ "]“ em LINGEA - Elektronický slovník");
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expectEqualStrings("*", blocks[0].list_path);
+    try std.testing.expectEqual(@as(u8, 1), blocks[0].depth);
+    try std.testing.expectEqualStrings("„[1]“ em LINGEA - Elektronický slovník", try plainText(a, blocks[0].spans));
+    var actions: usize = 0;
+    for (blocks[0].spans) |span| if (span.kind == .external_link) {
+        try std.testing.expectEqualStrings(url, span.target);
+        try std.testing.expectEqualStrings("[1]", span.text);
+        try std.testing.expect(externalLiteralParameterProofMatches(span.external_literal_parameter.?, span.target));
+        actions += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), actions);
+    try std.testing.expectEqual(@as(usize, 1), renderer.unresolved_templates);
+    try std.testing.expect(renderer.fallbacks.missing_template);
+    try std.testing.expect(!renderer.fallbacks.rejected_external_target);
+    const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+    const blob = @import("blob_encoder");
+    const bytes = try blob.presentation_codec.encodeAlloc(a, stored);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try blob.presentation_codec.encodeAlloc(a, decoded));
+    try std.testing.expectEqualStrings("„[1]“ em LINGEA - Elektronický slovník", try FormattingScopeTest.text(a, decoded.entry.sections[0].blocks[0].spans));
+    var invalid: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
+    try std.testing.expectError(error.UncompiledTemplate, invalid.renderBody("* [http://slovniky.lingea.cz/Portugalsko-cesky/{{{1|default}}}]"));
 }
 
 
@@ -40092,4 +40887,494 @@ test "linked angle sequence proof refuses malformed nested HTML copied and inher
     try std.testing.expectEqualStrings(source, try plainText(a, literal));
     for (literal) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
     try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("<in allarme>"));
+}
+
+test "parsed defaultless HTTP path retains exact href and ordinary external numbering" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const url = "http://slovniky.lingea.cz/Portugalsko-cesky/{{{1}}}";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody("[" ++ url ++ "] [https://example.test/after]");
+    try ExternalNumberingFixture.roundtrip(a, &renderer, blocks, &.{
+        .{ .target = url, .label = "[1]" },
+        .{ .target = "https://example.test/after", .label = "[2]" },
+    });
+    try std.testing.expectEqual(@as(usize, 1), renderer.unresolved_templates);
+    try std.testing.expect(renderer.fallbacks.missing_template);
+    try std.testing.expect(!renderer.fallbacks.rejected_external_target);
+    var styled: Renderer = .{ .a = a, .context = .{} };
+    const spans = try styled.parseSpans("[" ++ url ++ " ''literal {{{1}}}'']", .{ .bold = true, .foreground = "#123456", .foreground_set = true });
+    var visible: std.ArrayList(u8) = .empty;
+    for (spans) |span| {
+        try std.testing.expectEqual(ir.InlineKind.external_link, span.kind);
+        try std.testing.expectEqualStrings(url, span.target);
+        try std.testing.expect(hasCompiledExternalLiteralParameterTarget(span));
+        try std.testing.expect(span.flags.bold and span.flags.italic);
+        try std.testing.expectEqualStrings("#123456", span.foreground.?);
+        try visible.appendSlice(a, span.text);
+        var copied = span;
+        copied.target = try a.dupe(u8, span.target);
+        try std.testing.expect(!hasCompiledExternalLiteralParameterTarget(copied));
+        var changed = span;
+        changed.target = span.target[0 .. span.target.len - 1];
+        try std.testing.expect(!hasCompiledExternalLiteralParameterTarget(changed));
+        var detached = span;
+        detached.external_literal_parameter = .{ .token = try a.dupe(u8, span.external_literal_parameter.?.token), .target = span.target };
+        try std.testing.expect(!hasCompiledExternalLiteralParameterTarget(detached));
+    }
+    try std.testing.expectEqualStrings("literal {{{1}}}", visible.items);
+    var direct: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectError(error.UncompiledTemplate, direct.link(url, url, .{}, 0, true));
+}
+
+test "literal path source proof rejects defaults children manufactured tokens and nonpath components" {
+    for ([_][]const u8{
+        "http://example.test/{{{x|default}}}", "http://example.test/{{{x|}}}",
+        "http://example.test/{{missing}}", "http://example.test/{{{}}}",
+        "http://example.test/{{{bad name}}}", "http://example.test/{{{x\xff}}}",
+        "http://example.test/{{{x}}", "http://example.test/{{{x}}}}", "http://example.test/{{{{x}}}}",
+        "http://example.test/{{{x}}}{{missing}}", "http://{{{host}}}/path",
+        "http://example.test/path?q={{{x}}}", "http://example.test/path#{{{x}}}",
+        "http://example.test/&#123;&#123;&#123;x&#125;&#125;&#125;",
+        "http://example.test/{{{x}}}&amp;tail", "http://example.test/&quest;{{{x}}}",
+        "http://example.test/{{{x}}}\\tail", "ftp://example.test/{{{x}}}",
+        "//example.test/{{{x}}}", "javascript:alert({{{x}}})",
+    }) |target| {
+        errdefer std.debug.print("unexpected literal path admission={s}\n", .{target});
+        try std.testing.expect(Renderer.literalDefaultlessExternalPathComponent(target) == null);
+    }
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const url = "http://example.test/{{{x}}}";
+    for ([_][]const u8{
+        "<nowiki>[" ++ url ++ "]</nowiki>",
+        "<pre>[" ++ url ++ "]</pre>",
+        "<span title=\"[" ++ url ++ "]\">attribute only</span>",
+    }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        for (blocks) |block| for (block.spans) |span| {
+            try std.testing.expect(span.kind != .external_link);
+            try std.testing.expect(span.external_literal_parameter == null);
+        };
+    }
+    const incomplete = "[" ++ url;
+    const no_label = "[" ++ url ++ "]";
+    const proof: ExternalLiteralParameterProof = .{ .token = no_label, .target = no_label[1 .. no_label.len - 1] };
+    try std.testing.expect(!externalLiteralParameterProofMatches(proof, proof.target));
+    try std.testing.expect(externalLiteralParameterTokenMatches(proof, proof.target, true));
+    try std.testing.expect(!externalLiteralParameterTokenMatches(.{ .token = incomplete, .target = incomplete[1..] }, incomplete[1..], true));
+    var prepared: Renderer = .{ .a = a, .context = .{ .external_links_prepared = true } };
+    try std.testing.expectError(error.UncompiledTemplate, prepared.parseSpans(no_label, .{}));
+}
+
+test "generic class paint preserves wiki table body actions scopes and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try table_style_profile.parseAlloc(a,
+        ".base{background:#fffafa;border:1px solid #eee9bf}" ++
+        ".base th,.base td{background:#fffafa;padding:3px}" ++
+        ".base th{background:#eee9bf}.base th.main{padding:2px}" ++
+        ".base td.note table th{background:red!important}" ++
+        ".foreign .base{background:blue!important}");
+    defer profile.deinit();
+    const source = "{| class='base unused-template'\n! class='main unused-cell' | [[Head|heading]]\n| body [https://example.test/cell target]\n|}\n{|\n! sibling\n|}";
+    const reference = "{| class='base'\n! class='main' | [[Head|heading]]\n| body [https://example.test/cell target]\n|}\n{|\n! sibling\n|}";
+    var renderer: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
+    var control: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
+    const blocks = try renderer.renderBody(source);
+    const control_blocks = try control.renderBody(reference);
+    try std.testing.expectEqualStrings("base unused-template main unused-cell", blocks[0].table.?.rows[0].cells[0].css_ancestor_classes);
+    try std.testing.expectEqualStrings("base main", control_blocks[0].table.?.rows[0].cells[0].css_ancestor_classes);
+    try std.testing.expectEqualStrings("base unused-template", blocks[0].table.?.rows[0].cells[1].css_ancestor_classes);
+    try std.testing.expectEqualStrings("base", control_blocks[0].table.?.rows[0].cells[1].css_ancestor_classes);
+    try std.testing.expectEqualStrings("", blocks[1].table.?.rows[0].cells[0].css_ancestor_classes);
+    try std.testing.expectEqualStrings("", control_blocks[1].table.?.rows[0].cells[0].css_ancestor_classes);
+    try std.testing.expectEqualDeep(control.fallbacks, renderer.fallbacks);
+    const Check = struct {
+        fn verify(allocator: A, values: anytype) !void {
+            try std.testing.expectEqual(@as(usize, 2), values.len);
+            const first = values[0].table.?;
+            try std.testing.expectEqualStrings("#fffafa", first.style.?.background.?);
+            try std.testing.expectEqual(@as(usize, 1), first.rows.len);
+            try std.testing.expectEqual(@as(usize, 2), first.rows[0].cells.len);
+            const header = first.rows[0].cells[0];
+            const body = first.rows[0].cells[1];
+            try std.testing.expectEqualStrings("#eee9bf", header.background.?);
+            try std.testing.expectEqualStrings("#fffafa", body.background.?);
+            try std.testing.expectEqual(@as(f32, 2), header.style.?.padding.?.top.value);
+            try std.testing.expectEqual(@as(f32, 3), body.style.?.padding.?.top.value);
+            var header_text: std.ArrayList(u8) = .empty;
+            var body_text: std.ArrayList(u8) = .empty;
+            var internal: usize = 0;
+            var external: usize = 0;
+            for (header.spans) |span| {
+                try header_text.appendSlice(allocator, span.text);
+                if (span.kind == .link) {
+                    try std.testing.expectEqualStrings("Head", span.target);
+                    internal += 1;
+                }
+            }
+            for (body.spans) |span| {
+                try body_text.appendSlice(allocator, span.text);
+                if (span.kind == .external_link) {
+                    try std.testing.expectEqualStrings("https://example.test/cell", span.target);
+                    external += 1;
+                }
+            }
+            try std.testing.expectEqualStrings("heading", header_text.items);
+            try std.testing.expectEqualStrings("body target", body_text.items);
+            try std.testing.expectEqual(@as(usize, 1), internal);
+            try std.testing.expectEqual(@as(usize, 1), external);
+            const sibling = values[1].table.?;
+            try std.testing.expect(sibling.style == null and sibling.rows[0].cells[0].background == null);
+            try std.testing.expectEqualStrings("sibling", sibling.rows[0].cells[0].spans[0].text);
+        }
+    };
+    try Check.verify(a, blocks);
+    try Check.verify(a, control_blocks);
+    try std.testing.expect(!renderer.fallbacks.unresolved_table_style);
+    try std.testing.expectEqualStrings("", renderer.table_css_ancestor_classes);
+    try std.testing.expectEqual(@as(table_style_profile.Scope, 0), renderer.table_style_scope);
+    const references = try renderer.finishReferences();
+    try std.testing.expectEqual(@as(usize, 0), references.len);
+    try std.testing.expectEqual(@as(usize, 0), renderer.media.items.len);
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const sections = [_]Section{.{ .blocks = blocks }};
+    const blob = @import("blob_encoder");
+    const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, references, renderer.media.items);
+    const control_sections = [_]Section{.{ .blocks = control_blocks }};
+    const control_references = try control.finishReferences();
+    try std.testing.expectEqual(@as(usize, 0), control_references.len);
+    try std.testing.expectEqual(@as(usize, 0), control.media.items.len);
+    const control_bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &control_sections, blob.presentation_types.Layout{}, control_references, control.media.items);
+    try std.testing.expectEqualSlices(u8, control_bytes, bytes);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "class paint", .language, .{ .code = "en", .heading = "English" });
+    try Check.verify(a, decoded.entry.sections[0].blocks);
+    try std.testing.expectEqualSlices(u8, bytes, try blob.presentation_codec.encodeAlloc(a, decoded));
+    try std.testing.expectEqual(@as(usize, 0), decoded.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 0), decoded.entry.media.len);
+}
+
+test "external raw greater-than label preserves authored style and protected controls" {
+    try externalDelimiterCheck("[https://www.saob.se/artikel/?unik=B_4693-0057.bZw9&pz=3> bård]", "> bård", "https://www.saob.se/artikel/?unik=B_4693-0057.bZw9&pz=3");
+    try externalDelimiterCheck("[https://example.test>]", ">", "https://example.test");
+    try externalDelimiterCheck("[https://example.test/%3E label]", "label", "https://example.test/%3E");
+    try externalDelimiterCheck("[https://example.test&#62;word label]", "label", "https://example.test%3Eword");
+    try externalDelimiterCheck("<nowiki>[https://example.test>label]</nowiki>", "[https://example.test>label]", null);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans("<i>[https://example.test><b>bård</b>]</i>", .{});
+    var visible: std.ArrayList(u8) = .empty;
+    var bold_label = false;
+    var plain_delimiter = false;
+    for (spans) |span| {
+        try visible.appendSlice(a, span.text);
+        try std.testing.expectEqual(.external_link, span.kind);
+        try std.testing.expectEqualStrings("https://example.test", span.target);
+        try std.testing.expect(span.flags.italic);
+        if (std.mem.eql(u8, span.text, "bård")) {
+            try std.testing.expect(span.flags.bold);
+            bold_label = true;
+        } else {
+            try std.testing.expectEqualStrings(">", span.text);
+            try std.testing.expect(!span.flags.bold);
+            plain_delimiter = true;
+        }
+    }
+    try std.testing.expectEqualStrings(">bård", visible.items);
+    try std.testing.expect(bold_label and plain_delimiter);
+}
+
+test "nested URL literal less than retains one outer action exact entity provenance and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, reference: []const u8, visible: []const u8, italic: bool }{
+        .{ .source = "[http://outer.test/<http://inner.test/k38531 Arctica]", .reference = "[http://outer.test/&lt;http://inner.test/k38531 Arctica]", .visible = "<http://inner.test/k38531 Arctica", .italic = false },
+        .{ .source = "[http://outer.test/<http://inner.test/k38531 ''Arctica'']", .reference = "[http://outer.test/&lt;http://inner.test/k38531 ''Arctica'']", .visible = "<http://inner.test/k38531 Arctica", .italic = true },
+        .{ .source = "[http://outer.test/<http://inner.test/k38531]", .reference = "[http://outer.test/&lt;http://inner.test/k38531]", .visible = "<http://inner.test/k38531 ", .italic = false },
+    };
+    for (cases) |case| {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const spans = try r.parseSpans(case.source, .{});
+        try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
+        var literal_angles: usize = 0;
+        var italic_label = false;
+        for (spans) |span| {
+            try std.testing.expectEqual(ir.InlineKind.external_link, span.kind);
+            try std.testing.expectEqualStrings("http://outer.test/", span.target);
+            if (std.mem.indexOfScalar(u8, span.text, '<') != null) {
+                try std.testing.expectEqualStrings("<", span.text);
+                try std.testing.expectEqual(Provenance.entity_literal, span.provenance);
+                literal_angles += 1;
+            }
+            if (std.mem.eql(u8, span.text, "Arctica") and span.flags.italic) italic_label = true;
+        }
+        try std.testing.expectEqual(@as(usize, 1), literal_angles);
+        try std.testing.expectEqual(case.italic, italic_label);
+        try std.testing.expect(!r.fallbacks.rejected_external_target and r.unresolved_templates == 0);
+        var actual_renderer: Renderer = .{ .a = a, .context = .{} };
+        var expected_renderer: Renderer = .{ .a = a, .context = .{} };
+        const actual = try FormattingScopeTest.encode(a, &actual_renderer, try actual_renderer.renderBody(case.source));
+        const expected = try FormattingScopeTest.encode(a, &expected_renderer, try expected_renderer.renderBody(case.reference));
+        try std.testing.expectEqualDeep(expected, actual);
+        const codec = @import("blob_encoder").presentation_codec;
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), try codec.encodeAlloc(a, actual));
+        _ = try @import("presentation_document.zig").compileAlloc(a, "nested URL", .language, "English", "en", case.source, null);
+    }
+    var protected: Renderer = .{ .a = a, .context = .{} };
+    const raw = "[http://outer.test/<http://inner.test/k38531 Arctica]";
+    const protected_spans = try protected.parseSpans("<nowiki>" ++ raw ++ "</nowiki>", .{});
+    try std.testing.expectEqualStrings(raw, try flattened(a, protected_spans));
+    for (protected_spans) |span| {
+        try std.testing.expectEqual(ir.InlineKind.text, span.kind);
+        try std.testing.expectEqualStrings("", span.target);
+    }
+    // The parser proof never relaxes the URL validator or the publication guard.
+    try std.testing.expect(!ir.validExternalUrl("http://outer.test/<http://inner.test/k38531"));
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(raw));
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("<unfinished>"));
+    try std.testing.expectError(error.UncompiledTemplate, @import("presentation_document.zig").compileAlloc(a, "strict template", .language, "English", "en", "[http://outer.test/<http://inner.test/ {{real-unexpanded-template}}]", null));
+}
+
+test "parsed wiki and HTML table IDs preserve own paint absence actions body and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const blob = @import("blob_encoder");
+    var profile = try table_style_profile.parseAlloc(a,
+        "table.box{background:#112233;border-collapse:collapse}.box td{background:#223344}" ++
+        "#nsselect{background:#abcdef}td#chosen{background:#c0ffee}");
+    defer profile.deinit();
+    for ([_]struct { source: []const u8, reference: []const u8, table_color: []const u8, cell_color: []const u8 }{
+        .{ .source = "{| class=box\n| [[Visible|<b>paint</b>]] [https://example.test action]\n|}",
+           .reference = "{| class=box style='background:#112233!important'\n| style='background:#223344!important' | [[Visible|<b>paint</b>]] [https://example.test action]\n|}",
+           .table_color = "#112233", .cell_color = "#223344" },
+        .{ .source = "{| class=box id=nsselect\n| [[Visible|<b>paint</b>]] [https://example.test action]\n|}",
+           .reference = "{| class=box id=nsselect style='background:#abcdef!important'\n| style='background:#223344!important' | [[Visible|<b>paint</b>]] [https://example.test action]\n|}",
+           .table_color = "#abcdef", .cell_color = "#223344" },
+        .{ .source = "{| class=box\n| id=nsselect | [[Visible|<b>paint</b>]] [https://example.test action]\n|}",
+           .reference = "{| class=box style='background:#112233!important'\n| id=nsselect style='background:#abcdef!important' | [[Visible|<b>paint</b>]] [https://example.test action]\n|}",
+           .table_color = "#112233", .cell_color = "#abcdef" },
+        .{ .source = "<table class='box' id='ns&#115;elect'><tr><td id='chosen'>[[Visible|<b>paint</b>]] [https://example.test action]</td></tr></table>",
+           .reference = "<table class='box' id='ns&#115;elect' style='background:#abcdef!important'><tr><td id='chosen' style='background:#c0ffee!important'>[[Visible|<b>paint</b>]] [https://example.test action]</td></tr></table>",
+           .table_color = "#abcdef", .cell_color = "#c0ffee" },
+        .{ .source = "<div id='nsselect'><table class='box'><tr><td>[[Visible|<b>paint</b>]] [https://example.test action]</td></tr></table></div>",
+           .reference = "<div id='nsselect'><table class='box' style='background:#112233!important'><tr><td style='background:#223344!important'>[[Visible|<b>paint</b>]] [https://example.test action]</td></tr></table></div>",
+           .table_color = "#112233", .cell_color = "#223344" },
+    }) |case| {
+        errdefer std.debug.print("own-ID paint source={s}\n", .{case.source});
+        var renderer: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
+        var reference: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
+        const actual = try FormattingScopeTest.encode(a, &renderer, try renderer.renderBody(case.source));
+        const expected = try FormattingScopeTest.encode(a, &reference, try reference.renderBody(case.reference));
+        const bytes = try blob.presentation_codec.encodeAlloc(a, actual);
+        try std.testing.expectEqualSlices(u8, try blob.presentation_codec.encodeAlloc(a, expected), bytes);
+        try std.testing.expectEqualSlices(u8, bytes, try blob.presentation_codec.encodeAlloc(a, try blob.presentation_codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" })));
+        const blocks = actual.entry.sections[0].blocks;
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        const table = blocks[0].table.?;
+        try std.testing.expectEqualStrings(case.table_color, table.style.?.background.?);
+        try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+        try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+        const cell = table.rows[0].cells[0];
+        try std.testing.expectEqualStrings(case.cell_color, cell.background.?);
+        var visible: std.ArrayList(u8) = .empty;
+        var links: usize = 0;
+        var external: usize = 0;
+        var bold = false;
+        for (cell.spans) |span| {
+            try visible.appendSlice(a, span.text);
+            if (span.kind == .link) {
+                try std.testing.expectEqualStrings("Visible", span.target);
+                try std.testing.expect(span.bold);
+                links += 1;
+                bold = true;
+            }
+            if (span.kind == .external_link) {
+                try std.testing.expectEqualStrings("https://example.test", span.target);
+                external += 1;
+            }
+        }
+        try std.testing.expectEqualStrings("paint action", visible.items);
+        try std.testing.expectEqual(@as(usize, 1), links);
+        try std.testing.expectEqual(@as(usize, 1), external);
+        try std.testing.expect(bold);
+    }
+    var siblings: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
+    const values = try siblings.renderBody("{| class=box id=nsselect\n| first\n|}\n{| class=box\n| second\n|}");
+    try std.testing.expectEqual(@as(usize, 2), values.len);
+    try std.testing.expectEqualStrings("#abcdef", values[0].table.?.style.?.background.?);
+    try std.testing.expectEqualStrings("#112233", values[1].table.?.style.?.background.?);
+    try std.testing.expectEqualStrings("", siblings.table_css_ancestor_classes);
+    var protected: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
+    const literal = try protected.renderBody("<nowiki><table class=box id=nsselect><td>literal</td></table></nowiki>");
+    for (literal) |block| try std.testing.expect(block.table == null);
+}
+
+const FontStyleDeclarationTest = struct {
+    fn attribute(a: A, css: []const u8) ![]const u8 {
+        const escaped = try std.mem.replaceOwned(u8, a, css, "\"", "&quot;");
+        return std.fmt.allocPrint(a, "style=\"{s}\"", .{escaped});
+    }
+
+    fn projection(a: A, css: []const u8) !?bool {
+        var r: Renderer = .{ .a = a, .context = .{} };
+        return r.htmlFontStyle(.{ .name = "span", .attrs = try attribute(a, css), .end = 0, .closing = false, .self_closing = false });
+    }
+};
+
+test "font style isolates unrelated functional declarations and preserves linked label codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact captured NL boxed-label paint, plus independent quoted/function
+    // boundaries. The reference removes only font-style and supplies ordinary i.
+    const cases = [_]struct { before: []const u8, after: []const u8 }{
+        .{ .before = "background-color:var(--background-color-interactive-subtle,#f8f9fa);border-radius:var(--border-radius-base,2px);border:1px solid var(--border-color-subtle,#c8ccd1);padding:0 0.2em;color:inherit;", .after = "" },
+        .{ .before = "content:'func(a; font-style:normal)';color:var(--ink,red);", .after = "" },
+        .{ .before = "--quoted:\"func(a; font-style:normal)\";", .after = ";--nested:func([a; b],{c:d});" },
+        .{ .before = "/* font-style:normal; */", .after = ";content:'font-style:normal!important';" },
+    };
+    const document = @import("presentation_document.zig");
+    const codec = @import("blob_encoder").presentation_codec;
+    for (cases) |case| {
+        const css = try std.fmt.allocPrint(a, "{s}font-style:italic{s}", .{ case.before, case.after });
+        const reference_css = try std.fmt.allocPrint(a, "{s}{s}", .{ case.before, case.after });
+        const source = try std.fmt.allocPrint(a, "[[WikiWoordenboek:Zelfstandig naamwoord|<span {s}>zn</span>]] end", .{try FontStyleDeclarationTest.attribute(a, css)});
+        const reference = try std.fmt.allocPrint(a, "[[WikiWoordenboek:Zelfstandig naamwoord|<i><span {s}>zn</span></i>]] end", .{try FontStyleDeclarationTest.attribute(a, reference_css)});
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(source);
+        try FormattingScopeTest.shapes(a, blocks, &.{"paragraph"}, &.{"zn end"});
+        try FormattingScopeTest.word(a, blocks, "zn", .{ .kind = .link, .target = "WikiWoordenboek:Zelfstandig naamwoord", .italic = true });
+        try FormattingScopeTest.word(a, blocks, "end", .{});
+        for (blocks) |block_value| for (block_value.spans) |span| {
+            try std.testing.expect(span.provenance == .parsed);
+        };
+        const bytes = try document.compileAlloc(a, "functional font", .language, "English", "en", source, null);
+        const reference_bytes = try document.compileAlloc(a, "functional font", .language, "English", "en", reference, null);
+        const stored = try codec.decodeAlloc(a, bytes, "functional font", .language, .{ .code = "en", .heading = "English" });
+        const expected = try codec.decodeAlloc(a, reference_bytes, "functional font", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqualDeep(expected.entry, stored.entry);
+        try std.testing.expectEqualSlices(u8, reference_bytes, bytes);
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+        try FormattingScopeTest.shapes(a, stored.entry.sections[0].blocks, &.{"paragraph"}, &.{"zn end"});
+        try FormattingScopeTest.word(a, stored.entry.sections[0].blocks, "zn", .{ .kind = .link, .target = "WikiWoordenboek:Zelfstandig naamwoord", .italic = true });
+        try FormattingScopeTest.word(a, stored.entry.sections[0].blocks, "end", .{});
+    }
+}
+
+test "font style applicable declarations retain priority resets and unresolved scope" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { css: []const u8, expected: ?bool }{
+        .{ .css = "font-style:normal!important", .expected = false },
+        .{ .css = "FONT-STYLE: OBLIQUE", .expected = true },
+        .{ .css = "font-style:italic;font-style:normal", .expected = false },
+        .{ .css = "font-style:normal;font-style:italic", .expected = true },
+        .{ .css = "font-style:normal!important;font-style:italic", .expected = false },
+        .{ .css = "font-style:normal ! /* priority */ IMPORTANT;font-style:italic!important", .expected = true },
+        .{ .css = "font-style:normal!\\69mportant;font-style:italic", .expected = false },
+        .{ .css = "font-style:normal!important;font-style:var(--slant)", .expected = false },
+        .{ .css = "font-style:normal;font-style:var(--slant)", .expected = null },
+        .{ .css = "font-style:normal;font-style:var(--slant)!important", .expected = null },
+        .{ .css = "font-style:var(--slant)!important;font-style:italic", .expected = null },
+        .{ .css = "font-style:var(--slant);font-style:italic", .expected = true },
+        .{ .css = "font-style:italic;font:12px serif", .expected = null },
+        .{ .css = "font:12px serif;font-style:italic", .expected = true },
+        .{ .css = "font-style:italic;font:initial", .expected = false },
+        .{ .css = "font-style:italic;all:initial", .expected = false },
+        .{ .css = "font-style:normal;all:inherit", .expected = null },
+        .{ .css = "font-style:normal;all:unset!important;font-style:italic", .expected = null },
+        .{ .css = "all:initial!important;font-style:italic", .expected = false },
+        .{ .css = "font-style:italic!important;all:initial", .expected = true },
+        .{ .css = "font-style:normal;font-style:oblique 10deg", .expected = null },
+        .{ .css = "font-style:normal;font-style:inherit", .expected = null },
+        .{ .css = "font-style:normal;font-style:revert-layer", .expected = null },
+        .{ .css = "font-style:normal;\\66ont-style:italic", .expected = null },
+        .{ .css = "font-style:normal;\\61ll:initial", .expected = null },
+        .{ .css = "\\66ont-style:normal;font-style:italic", .expected = true },
+        .{ .css = "font-style:normal!important;\\66ont-style:italic", .expected = false },
+        .{ .css = "font-style:normal;\\66ont-style:italic!important", .expected = null },
+        .{ .css = "font-style:normal!important;font-style:italic!bogus", .expected = false },
+        .{ .css = "font-style:normal;font-style:!important", .expected = false },
+        .{ .css = "font-style:normal;content:'!important; font-style:italic'", .expected = false },
+        .{ .css = "font-style:normal;--x:{font-style:italic!important};color:var(--x)", .expected = false },
+        .{ .css = "font/**/-style:italic", .expected = null },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("font-style cascade: {s}\n", .{case.css});
+        try std.testing.expectEqual(case.expected, try FontStyleDeclarationTest.projection(a, case.css));
+    }
+    // The former unsupported normal!important fixture now has its literal
+    // cascade tested above and its actual scoped action/codec behavior here.
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("<i><span style='font-style:normal!important;color:var(--ink)'>[[Plain]]</span> [[Inherited]]</i> [[Outside]]");
+    try FormattingScopeTest.shapes(a, blocks, &.{"paragraph"}, &.{"Plain Inherited Outside"});
+    try FormattingScopeTest.word(a, blocks, "Plain", .{ .kind = .link, .target = "Plain" });
+    try FormattingScopeTest.word(a, blocks, "Inherited", .{ .kind = .link, .target = "Inherited", .italic = true });
+    try FormattingScopeTest.word(a, blocks, "Outside", .{ .kind = .link, .target = "Outside" });
+    const stored = try FormattingScopeTest.encode(a, &r, blocks);
+    try FormattingScopeTest.shapes(a, stored.entry.sections[0].blocks, &.{"paragraph"}, &.{"Plain Inherited Outside"});
+    try FormattingScopeTest.word(a, stored.entry.sections[0].blocks, "Plain", .{ .kind = .link, .target = "Plain" });
+    try FormattingScopeTest.word(a, stored.entry.sections[0].blocks, "Inherited", .{ .kind = .link, .target = "Inherited", .italic = true });
+    try FormattingScopeTest.word(a, stored.entry.sections[0].blocks, "Outside", .{ .kind = .link, .target = "Outside" });
+}
+
+test "font style preserves long simple lists and refuses incomplete complex declarations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "font-style:normal;/* unfinished", "font-style:normal;*/",
+        "font-style:normal;content:'unfinished", "font-style:normal;content:\"unfinished",
+        "font-style:normal;x:func(a", "font-style:normal;x:[a", "font-style:normal;x:{a",
+        "font-style:normal;x:func([a)]", "font-style:normal;x:a)",
+        "font-style:normal;x:a\\", "font-style:normal;x:a\\\n",
+        "font-style:normal;content:'raw\nnewline'", "font-style:normal;x:\x00",
+    }) |css| {
+        try std.testing.expect(!Renderer.fontStyleListComplete(css));
+        try std.testing.expectEqual(@as(?bool, null), try FontStyleDeclarationTest.projection(a, css));
+    }
+    var nested: std.ArrayList(u8) = .empty;
+    try nested.appendSlice(a, "font-style:normal;--x:");
+    for (0..32) |_| try nested.append(a, '(');
+    for (0..32) |_| try nested.append(a, ')');
+    try std.testing.expectEqual(@as(?bool, false), try FontStyleDeclarationTest.projection(a, nested.items));
+    try nested.insert(a, "font-style:normal;--x:".len, '(');
+    try nested.append(a, ')');
+    try std.testing.expectEqual(@as(?bool, null), try FontStyleDeclarationTest.projection(a, nested.items));
+    var count: std.ArrayList(u8) = .empty;
+    try count.appendSlice(a, "font-style:normal;");
+    for (0..255) |_| try count.appendSlice(a, "x:y;");
+    try std.testing.expectEqual(@as(?bool, false), try FontStyleDeclarationTest.projection(a, count.items));
+    try count.appendSlice(a, "x:y;");
+    try std.testing.expectEqual(@as(?bool, false), try FontStyleDeclarationTest.projection(a, count.items));
+    for (0..256) |_| try count.appendSlice(a, "x:y;");
+    try count.appendSlice(a, "font-style:italic");
+    try std.testing.expectEqual(@as(?bool, true), try FontStyleDeclarationTest.projection(a, count.items));
+    var long: std.ArrayList(u8) = .empty;
+    try long.appendSlice(a, "font-style:normal;--x:");
+    while (long.items.len < 16 * 1024) try long.append(a, 'x');
+    try std.testing.expectEqual(@as(?bool, false), try FontStyleDeclarationTest.projection(a, long.items));
+    try long.append(a, 'x');
+    try std.testing.expectEqual(@as(?bool, false), try FontStyleDeclarationTest.projection(a, long.items));
+    while (long.items.len < 32 * 1024) try long.append(a, 'x');
+    try long.appendSlice(a, ";font-style:italic");
+    try std.testing.expectEqual(@as(?bool, true), try FontStyleDeclarationTest.projection(a, long.items));
+    // Incomplete unrelated syntax cannot create a normal override in a valid
+    // inherited italic scope; the source body and both actions still survive.
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans("<span style='font-style:normal;x:func(a'>[[Kept]]</span> [[After]]", .{ .italic = true });
+    try std.testing.expectEqualStrings("Kept After", try flattened(a, spans));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "Kept"));
+    try std.testing.expect(unclosedExternalRecoveryHasLink(spans, .link, "After"));
+    for (spans) |span| try std.testing.expect(span.flags.italic);
 }

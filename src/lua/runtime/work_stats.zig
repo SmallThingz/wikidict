@@ -549,9 +549,9 @@ pub const PhaseTotals = struct {
 
 // Enabled only around synchronous parent consumption; protocol workers use
 // separate thread-local state. Uncovered consumer work remains in the aggregate.
-pub const ConsumePhase = enum { presentation, codec, spool };
+pub const ConsumePhase = enum { presentation, codec, spool, organization, heading_observation, scope_observation };
 pub const ConsumePhaseTotals = struct {
-    totals: [3]PhaseTotals = @splat(.{}),
+    totals: [@typeInfo(ConsumePhase).@"enum".field_names.len]PhaseTotals = @splat(.{}),
     active: ?ConsumePhase = null,
     started: ?PhaseStamp = null,
     fn phase(self: *ConsumePhaseTotals, io: std.Io, next: ?ConsumePhase) void {

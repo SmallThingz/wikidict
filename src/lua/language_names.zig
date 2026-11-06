@@ -52,6 +52,7 @@ pub const Registry = struct {
     profiles: std.StringHashMapUnmanaged(Profile) = .empty,
     directions: std.StringHashMapUnmanaged(Direction) = .empty,
     direction_count: ?usize = null,
+    supported_languages: std.StringHashMapUnmanaged(bool) = .empty,
 
     pub fn init(allocator: A, bytes: []const u8, wiki: []const u8, date: []const u8, language: []const u8) !Registry {
         if (bytes.len > 32 * 1024 * 1024 or !std.unicode.utf8ValidateSlice(bytes)) return error.InvalidLanguageNameSnapshot;
@@ -102,6 +103,15 @@ pub const Registry = struct {
                 if (entry.found_existing) return error.DuplicateLanguageName;
                 entry.value_ptr.* = decoded_name;
                 try profile.rows.append(a, .{ .code = code, .name = decoded_name });
+            } else if (std.mem.eql(u8, row_kind, "S")) {
+                const code = fields.next() orelse return error.InvalidLanguageNameSnapshot;
+                const value = fields.next() orelse return error.InvalidLanguageNameSnapshot;
+                if (fields.next() != null or !codeValid(code)) return error.InvalidLanguageNameSnapshot;
+                const supported_value = if (std.mem.eql(u8, value, "1")) true else if (std.mem.eql(u8, value, "0")) false else return error.InvalidLanguageNameSnapshot;
+                if (std.mem.eql(u8, code, "qqq") and supported_value) return error.InvalidLanguageNameSnapshot;
+                const entry = try self.supported_languages.getOrPut(a, code);
+                if (entry.found_existing) return error.DuplicateLanguageSupport;
+                entry.value_ptr.* = supported_value;
             } else if (std.mem.eql(u8, row_kind, "D")) {
                 const code = fields.next() orelse return error.InvalidLanguageNameSnapshot;
                 const value = fields.next() orelse return error.InvalidLanguageNameSnapshot;
@@ -138,6 +148,9 @@ pub const Registry = struct {
     pub fn name(self: *const Registry, code: []const u8, display: ?[]const u8) ![]const u8 {
         const selected = try self.lookupProfile(display, "single");
         return selected.index.get(code) orelse "";
+    }
+    pub fn supported(self: *const Registry, code: []const u8) !bool {
+        return self.supported_languages.get(code) orelse error.LanguageSupportSnapshotMissing;
     }
     pub fn direction(self: *const Registry, code: []const u8) !Direction {
         return self.directions.get(code) orelse error.LanguageDirectionSnapshotMissing;
@@ -187,4 +200,19 @@ test "reserved singular autonyms distinguish null explicit display and absent pr
     defer old.deinit();
     try std.testing.expectError(error.LanguageNameSnapshotMissing, old.name("en", null));
     try std.testing.expectError(error.InvalidLanguageNameSnapshot, Registry.init(std.testing.allocator, fixture ++ "C\t-\tall\t0\n", "arwiktionary", "20261001", "ar"));
+}
+
+
+test "language support profile retains positive negative and uncovered distinctions" {
+    var registry = try Registry.init(std.testing.allocator, fixture ++ "S\tnl\t1\nS\tfr\t0\n", "arwiktionary", "20261001", "ar");
+    defer registry.deinit();
+    try std.testing.expect(try registry.supported("nl"));
+    try std.testing.expect(!try registry.supported("fr"));
+    try std.testing.expectError(error.LanguageSupportSnapshotMissing, registry.supported("en-x-piglatin"));
+    try std.testing.expectError(error.LanguageSupportSnapshotMissing, registry.supported("ar"));
+    try std.testing.expectError(error.DuplicateLanguageSupport, Registry.init(std.testing.allocator, fixture ++ "S\tnl\t1\nS\tnl\t0\n", "arwiktionary", "20261001", "ar"));
+    var inputs = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer inputs.deinit();
+    for ([_][]const u8{ "S\tnl\ttrue\n", "S\tNL\t1\n", "S\tqqq\t1\n", "S\tnl\t1\textra\n" }) |row|
+        try std.testing.expectError(error.InvalidLanguageNameSnapshot, Registry.init(std.testing.allocator, try std.mem.concat(inputs.allocator(), u8, &.{fixture, row}), "arwiktionary", "20261001", "ar"));
 }

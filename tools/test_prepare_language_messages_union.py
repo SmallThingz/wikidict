@@ -186,7 +186,7 @@ class MessageUnionTest(unittest.TestCase):
         changes = [lambda record: record['sources'][0].update(retrieved_utc='invented'),
                    lambda record: record.update(corpus_query_closure_proven=True),
                    lambda record: record.update(namespace_registry_sha256='0' * 64),
-                   lambda record: record['producer'].update(generator_sha256='0' * 64),
+                   lambda record: record['producer'].update(generator_sha256='not-a-digest'),
                    lambda record: record['selection'].update(key='other')]
         for i, change in enumerate(changes):
             root, _, _ = self.capture(str(i))
@@ -264,12 +264,55 @@ class MessageUnionTest(unittest.TestCase):
             output=self.root / 'base-v1', languages=['sat'], messages=['old-key'], delay=0, wall_seconds=60)
         with patch.object(os, 'fsync', lambda descriptor: None):
             legacy.capture(args, transport=Transport(), sleep=lambda _: None)
+        hashes = {}
+        for kind in legacy.KINDS:
+            path = args.output / (kind + '.manifest.json'); record = json.loads(path.read_bytes())
+            record.update(generator_sha256='d1391161a139f0210f7f0e91dc222cf5026ec9d8607958cef9b91a17fbce3a47',
+                dependency_sha256={
+                    'tools/prepare_file_metadata.py': 'd2a09c741c3fb12ee1a59ea5ce6eeb9611105ffa782d90ca25d3a7b37acf23ab',
+                    'tools/download_wiktionaries.py': '6dcce0038ab7bbd85644beb608cad69bf074e3b78097601e139ff3db814029f0'})
+            path.write_bytes(union.evidence.encoded(record)); hashes[path.name] = union.evidence.digest(path.read_bytes())
+        (args.output / legacy.COMPLETE).write_bytes(union.evidence.encoded(dict(schema=legacy.SCHEMA, manifests=hashes)))
         self.base = args.output
         root, records, _ = self.capture()
         self.assertEqual(union.verify(root), records)
         self.assertEqual(records['interface-messages']['rows'], 2)
-        with self.assertRaisesRegex(ValueError, 'current v2'):
+        with self.assertRaisesRegex(ValueError, 'replayed v2'):
             union.require_preferred_loop(records['interface-messages'])
+
+
+    def test_recorded_historical_producer_does_not_replace_complete_replay(self):
+        root, _, _ = self.capture('language-messages-loop-v1')
+        def historical(record):
+            record['producer']['generator_sha256'] = '1' * 64
+            for base in record['producer']['base_producers']:
+                base['generator_sha256'] = '2' * 64
+                base['dependency_sha256'] = {k: '3' * 64 for k in base['dependency_sha256']}
+        self.rebind(root, historical)
+        before = {p.name: p.read_bytes() for p in root.iterdir()}
+        result = union.verify(root)
+        self.assertEqual({p.name: p.read_bytes() for p in root.iterdir()}, before)
+        self.assertEqual(result['interface-messages']['producer']['generator_sha256'], '1' * 64)
+        builder.discover_auxiliary_generation(self.root, root.name, union.KINDS, WIKI, DATE)
+        # Coherently rehash the accepted raw response AND its receipt. Current
+        # reconstruction must still reject its disagreement with the output.
+        receiptpath = root / result['interface-messages']['singleton']['accepted_receipt']
+        receipt = json.loads(receiptpath.read_bytes()); path = root / receipt['response']
+        value = json.loads(path.read_bytes()); value['query']['allmessages'][0]['content'] = 'changed'
+        raw = union.evidence.encoded(value); path.write_bytes(raw)
+        receipt.update(response_bytes=len(raw), response_sha256=union.evidence.digest(raw))
+        receiptpath.write_bytes(union.evidence.encoded(receipt)); self.rebind(root)
+        with self.assertRaisesRegex(ValueError, 'TSV differs'): union.verify(root)
+
+    def test_historical_union_provenance_requires_exact_roles_and_hash_shapes(self):
+        changes = [lambda p: p.update(extra='unknown'),
+                   lambda p: p['base_producers'].reverse(),
+                   lambda p: p['base_producers'][0]['dependency_sha256'].update(extra='4' * 64),
+                   lambda p: p['base_producers'][1].update(generator_sha256='A' * 64)]
+        for index, change in enumerate(changes):
+            root, _, _ = self.capture(str(index))
+            self.rebind(root, lambda record: change(record['producer']))
+            with self.subTest(index=index), self.assertRaises(ValueError): union.verify(root)
 
 
 if __name__ == '__main__':
