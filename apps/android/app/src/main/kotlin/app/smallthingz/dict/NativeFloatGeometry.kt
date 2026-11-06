@@ -7,6 +7,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Region
 import android.graphics.RegionIterator
+import android.graphics.text.LineBreaker
 import android.text.Layout
 import android.text.SpannableString
 import android.text.Spanned
@@ -191,7 +192,7 @@ internal class NativeFloatGeometry private constructor(
                 val nativeLayout = StaticLayout.Builder.obtain(native, 0, native.length, TextPaint(paint), width)
                     .setAlignment(alignment).setTextDirection(textDirection).setIncludePad(true)
                     .setLineSpacing(lineSpacingExtra, lineSpacingMultiplier)
-                    .setBreakStrategy(Layout.BREAK_STRATEGY_SIMPLE)
+                    .setBreakStrategy(LineBreaker.BREAK_STRATEGY_SIMPLE)
                     .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
                     .setIndents(left, right).build()
                 val flow = position(nativeLayout, width, ordered, carriedExclusions, insets)
