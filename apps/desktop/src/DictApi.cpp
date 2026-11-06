@@ -20,7 +20,7 @@ std::string errorText(dict_handle *handle, dict_status status, const char *opera
 }
 
 DictApi::DictApi(const QString &root) : root_(root) {
-    static_assert(DICT_ABI_VERSION == 8, "Qt typed image-border semantics require Dict ABI 8");
+    static_assert(DICT_ABI_VERSION == 9, "Qt typed block alignment and table float semantics require Dict ABI 9");
     if (dict_abi_version() != DICT_ABI_VERSION) throw DictApiError("incompatible Dict C ABI");
     const QByteArray bytes = root.toUtf8();
     dict_status status = dict_open(bytes.constData(), static_cast<size_t>(bytes.size()), &handle_);

@@ -926,6 +926,12 @@ pub const OpaqueParserScan = struct {
             if (missing and found == null) remember(&self.no_more_close_from[slot], open_end);
             return found orelse open_end;
         }
+        // Registered Cite attributes are raw extension-node text, not a fresh
+        // transclusion input. Its body remains active for normal expansion.
+        // This also preserves self-closing and unmatched opener attributes.
+        if (literal_only and (std.ascii.eqlIgnoreCase(name, "ref") or
+            std.ascii.eqlIgnoreCase(name, "references")))
+            return open_end;
         if (open_end >= 2 and s[open_end - 2] == '/')
             return if (literal_only and !isLiteralParserTag(name)) null else open_end;
         var closed_end: ?usize = null;
@@ -1472,7 +1478,7 @@ test "successive expansion nodes retain unmatched extension misses across calls"
     const nonliteral = "<ref data='{{hidden}}'>{{visible}}";
     try std.testing.expectEqual(std.mem.indexOf(u8, nonliteral, "{{visible}}").?, findTemplateOpenOutsideLiteralTags(nonliteral, 0).?);
     const closed = "<ref data='{{active}}'>{{body}}</ref>";
-    try std.testing.expectEqual(std.mem.indexOf(u8, closed, "{{active}}").?, findTemplateOpenOutsideLiteralTags(closed, 0).?);
+    try std.testing.expectEqual(std.mem.indexOf(u8, closed, "{{body}}").?, findTemplateOpenOutsideLiteralTags(closed, 0).?);
 }
 
 test "complete brace roots commit scan misses while failed lookahead retains earlier closed scopes" {
@@ -1654,4 +1660,37 @@ test "comment only heading provenance retains original delimiters without visibl
     const generated = try stripExpandedComments(a, "===<!--one-->==="); defer a.free(generated);
     try std.testing.expectEqualStrings("======", plain);
     try std.testing.expectEqualStrings("======", generated);
+}
+
+test "Cite expansion scan separates raw opener attributes from active body" {
+    for ([_][]const u8{
+        "<ref name=n<{{Attr}}>{{Body}}</ref>{{After}}",
+        "<REF name='{{Attr}}'>{{Body}}</REF>{{After}}",
+        "<ref name='{{Attr}}'/>{{Body}}",
+        "<ref name='{{Attr}}'>{{Body}}",
+        "<references group='{{Attr}}'><ref name=n>{{Body}}</ref></references>{{After}}",
+    }) |source| {
+        for ([_]bool{ false, true }) |include_poem| {
+            var scan: ExpansionScan = .{};
+            const first = scan.next(source, 0, include_poem).?.construct;
+            try std.testing.expectEqual(std.mem.indexOf(u8, source, "{{Body}}").?, first.open);
+            const later = scan.next(source, first.close + 2, include_poem);
+            if (std.mem.indexOf(u8, source, "{{After}}")) |at|
+                try std.testing.expectEqual(at, later.?.construct.open)
+            else
+                try std.testing.expect(later == null);
+        }
+    }
+    const quoted_gt = "<ref name='a>{{Body}}'>note</ref>";
+    try std.testing.expectEqual(std.mem.indexOf(u8, quoted_gt, "{{Body}}").?, findTemplateOpenOutsideLiteralTags(quoted_gt, 0).?);
+    const outer = "{{Outer|<ref name='{{Attr}}'>{{Body}}</ref>|tail}}";
+    const construct = findBraceConstruct(outer, 0).?;
+    try std.testing.expectEqual(@as(usize, 0), construct.open);
+    try std.testing.expectEqual(outer.len - 2, construct.close);
+    // Ordinary HTML keeps its established transclusion behavior; protected
+    // extension bodies remain inactive. No generalized attribute suppression.
+    const html = "<span title='{{Attr}}'>{{Body}}</span>";
+    try std.testing.expectEqual(std.mem.indexOf(u8, html, "{{Attr}}").?, findTemplateOpenOutsideLiteralTags(html, 0).?);
+    try std.testing.expect(findTemplateOpenOutsideLiteralTags("<nowiki><ref>{{Body}}</ref></nowiki>", 0) == null);
+    try std.testing.expect(findTemplateOpenOutsideLiteralTags("<math><ref>{{Body}}</ref></math>", 0) == null);
 }

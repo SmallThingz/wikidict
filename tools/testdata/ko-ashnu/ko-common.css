@@ -1,0 +1,643 @@
+/*** 참조: [[MediaWiki:Monobook.css]] ***/
+
+/* 글씨체, IPA 및 UNICODE................... */
+/* 순서 주의, «Arial Unicode MS»에 관한 안내:  */
+/* [[위키낱말사전:글자 모양 및 브라우저의 사용]] */
+ #bodyContent {
+	font-family:
+	'DejaVu Sans',
+	'Lucida Sans Unicode',
+	'Arial Unicode MS',
+	'Lucida Grande',
+	'Chrysanthi Unicode',
+	'Doulos SIL',
+	'Gentium',
+	'GentiumAlt',
+	'Quivira',
+	'Code2000',
+	'Code2001',
+	'TITUS Cyberbit Basic',
+	'Bitstream Cyberbit',
+	'Bitstream CyberBase',
+	'Hiragino Kaku Gothic Pro',
+	'Matrix Unicode',
+	'Thryomanes',
+	'Visual Geez Unicode',
+	'Microsoft Sans Serif',
+	'Athena',
+	'Palatino Linotype',
+	'Segoe UI',
+	'Charis SIL',
+	'Matrix Unicode',
+	'MPH 2B Damase',
+	'SimSun',
+	'Thryomanes',
+	'SBL Hebrew';
+	font-family /**/:inherit;
+	}
+	
+	/** .messagebox 스타일 **/
+.messagebox.merge {
+    border: 1px solid #c0b8cc;
+    background-color: #f0e5ff;
+    text-align: center;
+}
+.messagebox.cleanup {
+    border: 1px solid #9f9fff;
+    background-color: #efefff;
+    text-align: center;
+}
+.messagebox.standard-talk {
+    border: 1px solid #c0c090;
+    background-color: #f8eaba;
+    margin: 4px auto;
+}
+/* For old WikiProject banners inside banner shells. */
+.mbox-inside .standard-talk,
+.messagebox.nested-talk {
+    border: 1px solid #c0c090;
+    background-color: #f8eaba;
+    width: 100%;
+    margin: 2px 0;
+    padding: 2px;
+}
+.messagebox.small {
+    width: 238px;
+    font-size: 85%;
+    /* @noflip */
+    float: right;
+    clear: both;
+    /* @noflip */
+    margin: 0 0 1em 1em;
+    line-height: 1.25em;
+}
+.messagebox.small-talk {
+    width: 238px;
+    font-size: 85%;
+    /* @noflip */
+    float: right;
+    clear: both;
+    /* @noflip */
+    margin: 0 0 1em 1em;
+    line-height: 1.25em;
+    background: #F8EABA;
+}
+
+/* Cell sizes for ambox/tmbox/imbox/cmbox/ombox/fmbox/dmbox message boxes */
+th.mbox-text, td.mbox-text {   /* The message body cell(s) */
+    border: none;
+    /* @noflip */
+    padding: 0.25em 0.9em;     /* 0.9em left/right */
+    width: 100%;               /* Make all mboxes the same width regardless of text length */
+    font-size: small;
+}
+td.mbox-image {                /* The left image cell */
+    border: none;
+    /* @noflip */
+    padding: 2px 0 2px 0.9em;  /* 0.9em left, 0px right */
+    text-align: center;
+}
+td.mbox-imageright {           /* The right image cell */
+    border: none;
+    /* @noflip */
+    padding: 2px 0.9em 2px 0;  /* 0px left, 0.9em right */
+    text-align: center;
+}
+td.mbox-empty-cell {           /* An empty narrow cell */
+    border: none;
+    padding: 0;
+    width: 1px;
+}
+
+/* Article message box styles */
+table.ambox {
+    margin: 0 10%;                  /* 10% = Will not overlap with other elements */
+    border: 1px solid #aaa;
+    /* @noflip */
+    border-left: 10px solid #1e90ff;  /* Default "notice" blue */
+    background: #fbfbfb;
+}
+table.ambox + table.ambox {      /* Single border between stacked boxes. */
+    margin-top: -1px;
+}
+.ambox th.mbox-text,
+.ambox td.mbox-text {            /* The message body cell(s) */
+    padding: 0.25em 0.5em;       /* 0.5em left/right */
+}
+.ambox td.mbox-image {           /* The left image cell */
+    /* @noflip */
+    padding: 2px 0 2px 0.5em;    /* 0.5em left, 0px right */
+}
+.ambox td.mbox-imageright {      /* The right image cell */
+    /* @noflip */
+    padding: 2px 0.5em 2px 0;    /* 0px left, 0.5em right */
+}
+
+table.ambox-notice {
+    /* @noflip */
+    border-left: 10px solid #1e90ff;    /* Blue */
+}
+table.ambox-speedy {
+    /* @noflip */
+    border-left: 10px solid #b22222;    /* Red */
+    background: #fee;                   /* Pink */
+}
+table.ambox-delete {
+    /* @noflip */
+    border-left: 10px solid #b22222;    /* Red */
+}
+table.ambox-content {
+    /* @noflip */
+    border-left: 10px solid #f28500;    /* Orange */
+}
+table.ambox-style {
+    /* @noflip */
+    border-left: 10px solid #f4c430;    /* Yellow */
+}
+table.ambox-move {
+    /* @noflip */
+    border-left: 10px solid #9932cc;    /* Purple */
+}
+table.ambox-protection {
+    /* @noflip */
+    border-left: 10px solid #bba;       /* Gray-gold */
+}
+
+/* Image message box styles */
+table.imbox {
+    margin: 4px 10%;
+    border-collapse: collapse;
+    border: 3px solid #1e90ff;    /* Default "notice" blue */
+    background: #fbfbfb;
+}
+.imbox .mbox-text .imbox {  /* For imboxes inside imbox-text cells. */
+    margin: 0 -0.5em;       /* 0.9 - 0.5 = 0.4em left/right.        */
+    display: block;         /* Fix for webkit to force 100% width.  */
+}
+.mbox-inside .imbox {       /* For imboxes inside other templates.  */
+    margin: 4px;
+}
+
+table.imbox-notice {
+    border: 3px solid #1e90ff;    /* Blue */
+}
+table.imbox-speedy {
+    border: 3px solid #b22222;    /* Red */
+    background: #fee;             /* Pink */
+}
+table.imbox-delete {
+    border: 3px solid #b22222;    /* Red */
+}
+table.imbox-content {
+    border: 3px solid #f28500;    /* Orange */
+}
+table.imbox-style {
+    border: 3px solid #f4c430;    /* Yellow */
+}
+table.imbox-move {
+    border: 3px solid #9932cc;    /* Purple */
+}
+table.imbox-protection {
+    border: 3px solid #bba;       /* Gray-gold */
+}
+table.imbox-license {
+    border: 3px solid #88a;       /* Dark gray */
+    background: #f7f8ff;          /* Light gray */
+}
+table.imbox-featured {
+    border: 3px solid #cba135;    /* Brown-gold */
+}
+
+/* Category message box styles */
+table.cmbox {
+    margin: 3px 10%;
+    border-collapse: collapse;
+    border: 1px solid #aaa;
+    background: #DFE8FF;    /* Default "notice" blue */
+}
+
+table.cmbox-notice {
+    background: #D8E8FF;    /* Blue */
+}
+table.cmbox-speedy {
+    margin-top: 4px;
+    margin-bottom: 4px;
+    border: 4px solid #b22222;    /* Red */
+    background: #FFDBDB;          /* Pink */
+}
+table.cmbox-delete {
+    background: #FFDBDB;    /* Red */
+}
+table.cmbox-content {
+    background: #FFE7CE;    /* Orange */
+}
+table.cmbox-style {
+    background: #FFF9DB;    /* Yellow */
+}
+table.cmbox-move {
+    background: #E4D8FF;    /* Purple */
+}
+table.cmbox-protection {
+    background: #EFEFE1;    /* Gray-gold */
+}
+
+/* Other pages message box styles */
+table.ombox {
+    margin: 4px 10%;
+    border-collapse: collapse;
+    border: 1px solid #aaa;       /* Default "notice" gray */
+    background: #f9f9f9;
+}
+
+table.ombox-notice {
+    border: 1px solid #aaa;       /* Gray */
+}
+table.ombox-speedy {
+    border: 2px solid #b22222;    /* Red */
+    background: #fee;             /* Pink */
+}
+table.ombox-delete {
+    border: 2px solid #b22222;    /* Red */
+}
+table.ombox-content {
+    border: 1px solid #f28500;    /* Orange */
+}
+table.ombox-style {
+    border: 1px solid #f4c430;    /* Yellow */
+}
+table.ombox-move {
+    border: 1px solid #9932cc;    /* Purple */
+}
+table.ombox-protection {
+    border: 2px solid #bba;       /* Gray-gold */
+}
+
+/* Talk page message box styles */
+table.tmbox {
+    margin: 4px 10%;
+    border-collapse: collapse;
+    border: 1px solid #c0c090;    /* Default "notice" gray-brown */
+    background: #f8eaba;
+}
+.mediawiki .mbox-inside .tmbox { /* For tmboxes inside other templates. The "mediawiki" class ensures that */
+    margin: 2px 0;               /* this declaration overrides other styles (including mbox-small above)   */
+    width: 100%;                 /* For Safari and Opera */
+}
+.mbox-inside .tmbox.mbox-small { /* "small" tmboxes should not be small when  */
+    line-height: 1.5em;          /* also "nested", so reset styles that are   */
+    font-size: 100%;             /* set in "mbox-small" above.                */
+}
+
+table.tmbox-speedy {
+    border: 2px solid #b22222;    /* Red */
+    background: #fee;             /* Pink */
+}
+table.tmbox-delete {
+    border: 2px solid #b22222;    /* Red */
+}
+table.tmbox-content {
+    border: 2px solid #f28500;    /* Orange */
+}
+table.tmbox-style {
+    border: 2px solid #f4c430;    /* Yellow */
+}
+table.tmbox-move {
+    border: 2px solid #9932cc;    /* Purple */
+}
+table.tmbox-protection,
+table.tmbox-notice {
+    border: 1px solid #c0c090;    /* Gray-brown */
+}
+
+/* Disambig and set index box styles */
+table.dmbox {
+    clear: both;
+    margin: 0.9em 1em;
+    border-top: 1px solid #ccc;
+    border-bottom: 1px solid #ccc;
+    background: transparent;
+}
+
+/* Footer and header message box styles */
+table.fmbox {
+    clear: both;
+    margin: 0.2em 0;
+    width: 100%;
+    border: 1px solid #aaa;
+    background: #f9f9f9;     /* Default "system" gray */
+}
+table.fmbox-system {
+    background: #f9f9f9;
+}
+table.fmbox-warning {
+    border: 1px solid #bb7070;  /* Dark pink */
+    background: #ffdbdb;        /* Pink */
+}
+table.fmbox-editnotice {
+    background: transparent;
+}
+
+ /* 아래 각 글씨체는 span 태그 사용 */
+ span.Unicode {	font-family:
+	Code2000, Sun-ExtA, Arial Unicode MS, NSimSun, sans-serif;
+	}
+ 
+ span.Unicode1 { font-family:
+	Code2001, Quivira, MPH 2B Damase, sans-serif;
+	}
+ 
+ span.Unicode2 { font-family:
+	Sun-ExtB, Code2002, sans-serif;
+	}
+ 
+ span.hebrew { font-family:
+	Quivira, Sun-ExtA, Arial Unicode MS, SBL Hebrew, Code2000, MPH 2B Damase, sans-serif;
+	font-size: medium;
+	}
+
+ span.oldgreek { font-family:
+	Arial Unicode MS, Code2000, Athena Unicode, New Athena Unicode, Palatino Linotype, Gentium, sans-serif; font-size: 110%;
+	}
+
+ .IPA { font-family:
+	Arial Unicode MS, Lucida Sans Unicode, Chrysanthi Unicode, Doulos SIL, Gentium, GentiumAlt, Code2000, TITUS Cyberbit Basic, DejaVu Sans, Bitstream Cyberbit, Hiragino Kaku Gothic Pro, Segoe UI, Matrix Unicode; font-size: 110%;
+	}
+
+/* 문단 포맷 */
+/* 카테고리 박스 대신 위에 줄 */
+ #catlinks {
+	border: 0px;
+	border-top: 1px solid #8E8E8E;
+	background-color: #FAFAFA;
+	margin-top: 2em;
+	}
+
+/* 특수문서 (Specialpage)의 관리자 전용 및 아래에 부적절한 내용 제거 */
+ .mw-specialpagerestricted {
+        font-weight:normal;
+	}
+ div.mw-specialpages-notes {
+        display:none;
+	}
+
+/* 위키낱말사전:대문 firstHeading */
+ .page-위키낱말사전_대문 #siteNotice,
+ .page-위키낱말사전_대문 h1.firstHeading,
+ .page-Main_Page #siteNotice,
+ .page-Main_Page h1.firstHeading {
+	display: none;
+	}
+
+/* 로그인, 사용자 등록 */
+ #pt-login a,
+ #ca-edit a {
+	font-weight: bold !important;
+	}
+
+/* 넘겨진 문서 금방 알아 보게끔: [[Special:Allpages]] */
+ .allpagesredirect a,
+ .redirect-in-category,
+ .allpagesredirect a:visited  {
+	font-family: Batang;
+	color: #000;
+	}
+
+/* 최근바뀜 페이지 (rcoptions hr 과 legend 합쳐 쓰지 않도록) */
+ .rcoptions {
+	background-color: white;
+ 	border: 0;
+ 	margin-top: 1em;
+	}
+ .rcoptions hr {
+	display: none !important;
+	}
+ .rcoptions legend {
+	display: none !important;
+	}
+
+/* 찾기 결과 페이지 */
+ .mw-search-results {
+	margin: .3em;
+	}
+ .mw-search-results li {
+	margin: 0;
+	padding: .3em 1em;
+	border-bottom: 1px solid #948279;
+	background-color: #EEEEEE;
+	list-style-type: none;
+	list-style-image: none;
+	}
+ .mw-search-results table {
+	background-color: transparent;
+	}
+ .mw-search-result-data {
+	color: #0C3B81;
+	}
+ .searchmatch {
+	padding: 2px;
+	background-color: #CBFFB9;
+	color: #000;
+	}
+
+/* 각주 번호의 올려쓰기 칸 조절 및 링크 */
+ .reference,
+ .references sup { 
+	vertical-align: text-top;
+	position: relative;
+	font-size: 91%;
+	top: -0.3em;
+	}
+ ol.references > li:target {
+	font-weight: bold;
+	}
+ sup.reference:target {
+	background-color: #DEF;
+	}
+ 
+/* Commons 안내문 바른 글씨체로 */
+ .sharedUploadNotice {
+	font-style: normal;
+	}
+	
+	/* 틀 설명문서 */
+.template-documentation {
+    clear: both;
+    margin: 1em 0 0 0;
+    border: 1px solid #aaa; 
+    background-color: #ecfcf4; 
+    padding: 1em;
+}
+ 
+/* 최근 바뀜: 새글/잔글 "바탕체" */
+ .newpage {
+	font-family: Batang;
+	color: #000;
+	}
+ .minor { 
+	font-family: Batang;
+	color: #AAA;
+	font-weight: normal;
+	}
+
+/* 최근바뀜 간추린 내용 (글씨체 세우고 초록색) */
+ .comment {
+	font-size: 90%;
+	font-style: normal !important;
+	color: #117800;
+	}
+
+/* 페이지 검토 안내문 */
+ .patrollink a {
+	font-size: 120%;
+	}
+
+/* 바탕 그림 */
+ .BGImage_a {
+	background-image: url(//upload.wikimedia.org/wiktionary/ko/9/96/BGImage_a.jpg); background-repeat: repeat-x;
+	}
+ .BGImage_b {
+	background-image: url(//upload.wikimedia.org/wiktionary/ko/7/7f/BGImage_b.jpg); background-repeat: repeat-y;
+	}
+ #BGImage_c, .BGImage_c {
+	background-image: url(//upload.wikimedia.org/wiktionary/ko/c/c0/BGImage_c.jpg); background-repeat: repeat-y;
+	}
+ .BGImage_d {
+	background-image: url(//upload.wikimedia.org/wiktionary/ko/5/54/BGImage_d.jpg); background-repeat: repeat-y;
+	}
+ .BGImage_e {
+	background-image: url(//upload.wikimedia.org/wiktionary/ko/9/90/Icon-06a.png); background-repeat: no-repeat;
+	padding-left: 18px !important;
+	padding-right: 0 !important;
+	} 
+ .BGImage_favicon {
+	background-image: url(//upload.wikimedia.org/wiktionary/ko/d/d0/Icon_Dice.png);
+	}
+ .BGImage_0 {
+	background-image: url(//upload.wikimedia.org/wiktionary/ko/6/6d/BGImage_0.jpg); background-repeat: no-repeat;
+	}
+ .BGImage_L {
+	background-image: url(//upload.wikimedia.org/wiktionary/ko/b/b1/BGImage_L.png); background-repeat: no-repeat;
+	}
+ .BGImage_M {
+	background-image: url(//upload.wikimedia.org/wiktionary/ko/d/dd/BGImage_M.png); background-repeat: repeat-x;
+	}
+ .BGImage_R {
+	background-image: url(//upload.wikimedia.org/wiktionary/ko/3/35/BGImage_R.png); background-repeat: no-repeat;
+	}
+ .BGImage_CL {
+	background-image: url(//upload.wikimedia.org/wiktionary/ko/5/51/Corner_L.png); background-repeat: no-repeat;
+	}
+ .BGImage_CR {
+	background-image: url(//upload.wikimedia.org/wiktionary/ko/a/af/Corner_R.png); background-repeat: no-repeat;
+	}
+ .BGImage_V {
+	background-image: url(//upload.wikimedia.org/wiktionary/ko/c/c0/BGImage_V.png); background-repeat: repeat-x;
+	}
+
+/* 말기-펴기 단추 크기 */
+ .NavToggle {
+	float: right;
+	padding: 0 3px;
+	font-size: 90%;
+	border-top: 1px solid #EEE;
+	border-right: 1px solid #666;
+	border-bottom: 1px solid #666;
+	border-left: 1px solid #EEE;
+	background-color: #F3F3F3;
+	}
+
+/* 위키 테이블 + 프리티 테이블 */
+ .wikitable,
+ .prettytable {
+	margin: 1em 1em 1em 0;
+	background: #FDFDFD;
+	border: 1px #AAA solid;
+	border-collapse: collapse;
+	empty-cells:show;
+	}
+
+ .wikitable th, .wikitable td,
+ .prettytable th, .prettytable td {
+	border: 1px #AAA solid;
+	padding: 0.3em;
+	}
+
+ .wikitable caption,
+ .prettytable caption {
+	margin-left: inherit;
+	margin-right: inherit;
+	font-weight: bold;
+	}
+
+/* 마우스 따라가며 색깔 바뀌는 포맷 */
+ table.datatable {
+	background-color: transparent;
+	margin: 1em 1em 1em 0;
+	border: 1px #AAA solid;
+	border-collapse: collapse;
+	}
+ table.datatable th,
+ table.datatable td {
+	border: 1px #AAA solid;
+	padding: 3px 6px 3px 8px;
+	}
+ table.datatable th {
+	background-color: #DADADA;
+	}
+ table.datatable tr {
+	background-color: #FFFFFD;
+	}
+ table.datatable tr:hover {
+	background-color: #FFFFDD;
+	}
+
+/* 기본 사각형 포맷 */
+ #basicbox { 
+	padding: .4em 1em;
+	margin: 1em 0 1em 0;
+	border-top: 1px;
+	border-top-style: solid;
+	border-top-color: #F6FCFF;
+	border-bottom: 2px;
+	border-bottom-style: solid;
+	border-bottom-color: #006398;
+	background-color: #FBFBFB;
+	}
+ 	
+/* 문단 밑줄 */
+ #subheadline {
+	margin-top: 12px;
+	border-bottom: 1px;
+	border-bottom-color: #E6E6E6;
+	border-bottom-style: solid;
+	padding-left: 6px;
+	font-size: 110%;
+	background-image: url(//upload.wikimedia.org/wiktionary/ko/c/c0/BGImage_c.jpg); background-repeat: repeat-y;
+	}
+
+/* 낱말 변화 기본틀 */
+ .standbox {
+	clear: right;
+	float: right;
+	margin-left: 1em;
+	margin-bottom: .5em;
+	border-top: 1px solid #EEE;
+	border-right: 1px solid #AAA;
+	border-bottom: 1px solid #AAA;
+	border-left: 1px solid #EEE;
+	}
+ .standbox th {
+	padding: 2px 3px;
+	border-bottom: 1px solid #AAA;
+	}
+ .standbox td {
+	padding: 2px 3px;
+	}
+/* 로마자 표기 및 기타 발음 관계를 쓰는 줄 */
+ .leftmargin {
+	margin-left: 1.6em;
+	}
+
+ @media print {
+	#privacy, #about, #disclaimer { display: none; }
+ 	}

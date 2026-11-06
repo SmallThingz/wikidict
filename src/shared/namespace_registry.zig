@@ -33,6 +33,7 @@ pub const Registry = struct {
     // Optional immutable site metadata, owned by this registry arena.
     interwiki_rows: []const InterwikiRow = &.{},
     interwiki_magic: ?bool = null,
+    language_conversion: ?[]const []const u8 = null,
 
     pub fn load(io: std.Io, a: std.mem.Allocator, root: []const u8) !Registry {
         const path = try std.fs.path.join(a, &.{ root, "namespace-registry.tsv" });
@@ -110,6 +111,55 @@ pub const Registry = struct {
         for ([_]i32{ 0, 10, 14 }) |id| if (result.byId(id) == null) return error.InvalidNamespaceRegistry;
         return result;
     }
+    /// The selected installed site-info capture supplies conversion authority.
+    /// Missing/legacy snapshots never infer it from an edition or language name.
+    pub fn attachLanguageConversion(self: *Registry, raw: []const u8) !void {
+        if (raw.len > 1024 * 1024) return error.InvalidLanguageConversionProfile;
+        const a = self.arena.allocator();
+        const parsed = try std.json.parseFromSlice(std.json.Value, a, raw, .{});
+        defer parsed.deinit();
+        const F = struct {
+            fn string(value: std.json.Value, name: []const u8) ![]const u8 {
+                if (value != .object) return error.InvalidLanguageConversionProfile;
+                const item = value.object.get(name) orelse return error.InvalidLanguageConversionProfile;
+                if (item != .string) return error.InvalidLanguageConversionProfile;
+                return item.string;
+            }
+        };
+        const value = parsed.value;
+        const digest = std.fmt.bytesToHex(self.source_sha256, .lower);
+        if (!std.mem.eql(u8, try F.string(value, "schema"), "wikidict.site-info.v2") or
+            !std.mem.eql(u8, try F.string(value, "wiki"), self.wiki) or
+            !std.mem.eql(u8, try F.string(value, "date"), self.dump_date) or
+            !std.mem.eql(u8, try F.string(value, "content_language"), self.content_language) or
+            !std.mem.eql(u8, try F.string(value, "namespace_registry_sha256"), &digest)) return error.InvalidLanguageConversionProfile;
+        const query = value.object.get("query") orelse return error.InvalidLanguageConversionProfile;
+        if (query != .object) return error.InvalidLanguageConversionProfile;
+        const general = query.object.get("general") orelse return error.InvalidLanguageConversionProfile;
+        if (!std.mem.eql(u8, try F.string(general, "wikiid"), self.wiki) or
+            !std.mem.eql(u8, try F.string(general, "lang"), self.content_language)) return error.InvalidLanguageConversionProfile;
+        const enabled = general.object.get("langconversion") orelse {
+            self.language_conversion = null;
+            return;
+        };
+        if (enabled != .bool) return error.InvalidLanguageConversionProfile;
+        if (!enabled.bool) {
+            self.language_conversion = null;
+            return;
+        }
+        const variants = general.object.get("variants") orelse return error.InvalidLanguageConversionProfile;
+        if (variants != .array or variants.array.items.len == 0) return error.InvalidLanguageConversionProfile;
+        var codes: std.ArrayList([]const u8) = .empty;
+        for (variants.array.items) |variant| {
+            const code = try F.string(variant, "code");
+            if (code.len == 0) return error.InvalidLanguageConversionProfile;
+            for (code) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '-') return error.InvalidLanguageConversionProfile;
+            for (codes.items) |prior| if (std.mem.eql(u8, prior, code)) return error.InvalidLanguageConversionProfile;
+            try codes.append(a, try a.dupe(u8, code));
+        }
+        self.language_conversion = try codes.toOwnedSlice(a);
+    }
+
     /// Attach the selected edition's captured map; legacy six-column rows
     /// retain unknown magic and no inferred language-prefix metadata.
     /// Ordinary namespace callers remain unchanged until this is explicitly called.

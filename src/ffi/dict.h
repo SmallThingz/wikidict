@@ -26,7 +26,8 @@ typedef enum dict_status {
 // ABI6 requires font_scale_basis support, including normal-body identity.
 // ABI7 additionally requires authoritative typed reference blocks (DPRC).
 // ABI8 additionally requires typed image border decoration (conditional DPRD).
-#define DICT_ABI_VERSION 8u
+// ABI9 additionally requires block text alignment and table floats (DPRE).
+#define DICT_ABI_VERSION 9u
 
 uint32_t dict_abi_version(void);
 

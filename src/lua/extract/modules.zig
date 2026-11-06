@@ -469,6 +469,11 @@ pub fn main(init: std.process.Init) !void {
         error.FileNotFound => {},
         else => return err,
     };
+    const old_completion = try std.fs.path.join(init.arena.allocator(), &.{ output_root, "extraction-completion.json" });
+    std.Io.Dir.cwd().deleteFile(init.io, old_completion) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
     const compressed = std.mem.endsWith(u8, input_path, ".bz2") or std.mem.endsWith(u8, input_path, ".xml.zst");
     const zstd = std.mem.endsWith(u8, input_path, ".xml.zst");
     const multistream_index_path: ?[]const u8 = if (compressed)
@@ -704,6 +709,7 @@ pub fn main(init: std.process.Init) !void {
         }
         _ = arena.reset(.retain_capacity);
     }
+    var completed_stream_count: ?usize = null;
     if (expected_stream_count) |expected| {
         const consumed = input.consumedStreamCount() orelse return error.IncompleteMultistreamScan;
         if (consumed != expected) {
@@ -713,6 +719,7 @@ pub fn main(init: std.process.Init) !void {
             );
             return error.IncompleteMultistreamScan;
         }
+        completed_stream_count = consumed;
     }
     input.deinit();
     input_open = false;
@@ -745,6 +752,19 @@ pub fn main(init: std.process.Init) !void {
         const receipt = try sourceReceipt(init.io, init.arena.allocator(), input_path, output_root, &registry, original_source);
         const receipt_path = try std.fs.path.join(init.arena.allocator(), &.{ output_root, "extraction-source.json" });
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = receipt_path, .data = receipt });
+        if (completed_stream_count) |consumed| {
+            // The last member can contain only the XML footer, without a page.
+            // Persist the already verified complete scan, rather than inferring
+            // completion from the stream that happened to own the final page.
+            const completion = try std.json.Stringify.valueAlloc(init.arena.allocator(), .{
+                .schema = "wikidict.extraction-completion.v1",
+                .version = 1,
+                .expected_stream_count = expected_stream_count.?,
+                .consumed_stream_count = consumed,
+                .pages = pages,
+            }, .{});
+            try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = old_completion, .data = completion });
+        }
         const ready_path = try std.fs.path.join(init.arena.allocator(), &.{ output_root, "compiler-inputs.ready" });
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = ready_path, .data = "complete\n" });
     }
@@ -752,4 +772,67 @@ pub fn main(init: std.process.Init) !void {
         "TOTAL pages={d} modules={d} redirects={d} source_bytes={d} root_templates={d} root_modules={d}\n",
         .{ pages, modules, redirects, source_bytes, root_template_usage.count(), root_module_usage.count() },
     );
+}
+
+test "compressed extraction consumes footer-only member and rejects truncated footer" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const Codec = struct {
+        extern fn ZSTD_compress(dst: [*]u8, capacity: usize, src: [*]const u8, len: usize, level: c_int) usize;
+        extern fn ZSTD_isError(code: usize) c_uint;
+        extern fn BZ2_bzBuffToBuffCompress(dst: [*]u8, len: *c_uint, src: [*]const u8, source_len: c_uint, block_size: c_int, verbosity: c_int, work_factor: c_int) c_int;
+    };
+    const page_xml = "<mediawiki><page><title>ET final</title><ns>0</ns><id>7</id><revision><id>70</id><timestamp>2026-10-01T00:00:00Z</timestamp><model>wikitext</model><text>exact&amp;body</text></revision></page>";
+    const footer = "\n</mediawiki>";
+    var first_buffer: [1024]u8 = undefined;
+    var footer_buffer: [128]u8 = undefined;
+    const first_len = Codec.ZSTD_compress(&first_buffer, first_buffer.len, page_xml.ptr, page_xml.len, 1);
+    const footer_len = Codec.ZSTD_compress(&footer_buffer, footer_buffer.len, footer.ptr, footer.len, 1);
+    try std.testing.expectEqual(@as(c_uint, 0), Codec.ZSTD_isError(first_len));
+    try std.testing.expectEqual(@as(c_uint, 0), Codec.ZSTD_isError(footer_len));
+    const frames = try std.mem.concat(a, u8, &.{ first_buffer[0..first_len], footer_buffer[0..footer_len] });
+    defer a.free(frames);
+    const offsets = try std.fmt.allocPrint(a, "0:7:ET final\n{d}:0:footer\n", .{first_len});
+    defer a.free(offsets);
+    var index_buffer: [1024]u8 = undefined;
+    var index_len: c_uint = index_buffer.len;
+    try std.testing.expectEqual(@as(c_int, 0), Codec.BZ2_bzBuffToBuffCompress(&index_buffer, &index_len, offsets.ptr, @intCast(offsets.len), 1, 0, 30));
+    var temp = std.testing.tmpDir(.{});
+    defer temp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{temp.sub_path});
+    defer a.free(root);
+    const input_path = try std.fs.path.join(a, &.{ root, "tiny.xml.zst" });
+    defer a.free(input_path);
+    const index_path = try std.fs.path.join(a, &.{ root, "offsets.txt.bz2" });
+    defer a.free(index_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = input_path, .data = frames });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = index_buffer[0..index_len] });
+    {
+        var input = try InputPages.open(io, a, input_path, index_path);
+        defer input.deinit();
+        const page = (try input.next()).?;
+        try std.testing.expectEqualStrings("ET final", page.capture.title_raw.?);
+        try std.testing.expectEqualStrings("0", page.capture.ns_raw.?);
+        try std.testing.expectEqualStrings("7", page.capture.page_id_raw.?);
+        try std.testing.expectEqualStrings("70", page.capture.revision_id_raw.?);
+        try std.testing.expectEqualStrings("2026-10-01T00:00:00Z", page.capture.revision_timestamp_raw.?);
+        try std.testing.expectEqualStrings("exact&amp;body", page.capture.text_raw.?);
+        const decoded = try xml_decode.decodeSinglePassAlloc(a, page.capture.text_raw.?);
+        defer a.free(decoded);
+        try std.testing.expectEqualStrings("exact&body", decoded);
+        const location = page.source.multistream_zstd;
+        try std.testing.expectEqual(@as(u32, 0), location.stream_id);
+        try std.testing.expectEqual(std.mem.indexOf(u8, page_xml, "exact&amp;body").?, location.offset);
+        try std.testing.expectEqual("exact&amp;body".len, location.len);
+        try std.testing.expectEqual(@as(?usize, 1), input.consumedStreamCount());
+        try std.testing.expect((try input.next()) == null);
+        try std.testing.expectEqual(@as(?usize, 2), input.consumedStreamCount());
+    }
+    // The final page is available even when the later footer frame is corrupt;
+    // only scanning through EOF proves that extraction consumed the dump.
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = input_path, .data = frames[0 .. frames.len - 1] });
+    var truncated = try InputPages.open(io, a, input_path, index_path);
+    defer truncated.deinit();
+    try std.testing.expect((try truncated.next()) != null);
+    try std.testing.expectError(error.InvalidZstdMember, truncated.next());
 }

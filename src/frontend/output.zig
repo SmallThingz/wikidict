@@ -89,6 +89,7 @@ const PoemInfo = struct {
 
 /// Offsets refer to the formatted buffer, never to padded replacements of link text.
 pub const PoemProjection = struct {
+    float_flow: ?*FloatProjection = null,
     frame: *std.Io.Writer.Allocating,
     allocator: std.mem.Allocator,
     lines: *std.ArrayList(terminal.PoemLine),
@@ -367,11 +368,323 @@ fn tableCellRows(a: std.mem.Allocator, text: []const u8, columns: usize) ![]term
 fn tableWrappedLine(w: *std.Io.Writer, line: terminal.RenderRow, width: usize, color: bool, background: ?[3]u8, padding: usize) !void {
     return tableWrappedAlignedLine(w, line, width, color, background, padding, 0);
 }
+const TextAlign = @import("blob_encoder").presentation_types.CellTextAlign;
+
+pub const FlowOrigin = struct { start: usize, end: usize, row: usize };
+pub const FlowEvent = struct {
+    kind: enum { text, grid, float_grid, boundary },
+    start: usize,
+    end: usize,
+    alignment: ?TextAlign = null,
+    side: ?@import("blob_encoder").presentation_types.TableFloatSide = null,
+    left: usize = 0,
+    right: usize = 0,
+    supported: bool = true,
+};
+/// Build-only terminal layout coordinates; never semantic text or source markup.
+pub const FloatProjection = struct {
+    allocator: std.mem.Allocator,
+    frame: *std.Io.Writer.Allocating,
+    columns: usize,
+    events: std.ArrayList(FlowEvent) = .empty,
+    enabled: bool = true,
+    started: bool = false,
+    capturing: bool = false,
+    capturing_float: bool = false,
+    fn stop(self: *FloatProjection) !void {
+        if (!self.enabled) return;
+        if (self.started) {
+            const offset = self.frame.written().len;
+            try self.events.append(self.allocator, .{ .kind = .boundary, .start = offset, .end = offset });
+        }
+        self.enabled = false;
+    }
+    fn record(self: *FloatProjection, block: model.Block, start: usize) !void {
+        var event: FlowEvent = .{ .kind = .text, .start = start, .end = self.frame.written().len, .alignment = block.text_align };
+        if (block.table) |table| {
+            event.kind = .grid;
+            if (table.style) |style| if (style.float_side) |side| {
+                event.kind = .float_grid;
+                event.side = side;
+                if (style.margins) |margins| {
+                    // There is no established vertical or positive-em metric.
+                    const left = horizontalFloatMargin(margins.left, self.columns);
+                    const right = horizontalFloatMargin(margins.right, self.columns);
+                    event.supported = margins.top.value == 0 and margins.bottom.value == 0 and left != null and right != null;
+                    event.left = left orelse 0;
+                    event.right = right orelse 0;
+                }
+            };
+        } else if (block.kind == .rule or block.kind == .preformatted) event.kind = .grid;
+        try self.events.append(self.allocator, event);
+    }
+};
+fn horizontalFloatMargin(value: @import("blob_encoder").presentation_types.StyleLength, columns: usize) ?usize {
+    if (!std.math.isFinite(value.value) or value.value < 0) return null;
+    if (value.value == 0) return 0;
+    if (value.unit != .px) return null;
+    const cells = @ceil(@as(f64, value.value) / 8.0);
+    if (cells > @as(f64, @floatFromInt(columns)) or cells >= @as(f64, @floatFromInt(std.math.maxInt(usize)))) return null;
+    return @intFromFloat(cells);
+}
+fn floatRowsWithinBudget(rows: usize, columns: usize, max_cells: usize) bool {
+    return columns != 0 and rows <= max_cells / columns;
+}
+pub const FloatLayout = struct {
+    text: []u8,
+    rows: []terminal.RenderRow,
+    origins: []FlowOrigin,
+    unsupported: usize,
+    pub fn rowForOffset(self: FloatLayout, offset: usize) usize {
+        return flowRowForOffset(self.origins, offset);
+    }
+    pub fn deinit(self: FloatLayout, a: std.mem.Allocator) void {
+        a.free(self.rows);
+        a.free(self.origins);
+        a.free(self.text);
+    }
+};
+pub fn flowRowForOffset(origins: []const FlowOrigin, offset: usize) usize {
+    var selected: usize = 0;
+    var distance: usize = std.math.maxInt(usize);
+    for (origins) |origin| {
+        if (offset >= origin.start and (offset < origin.end or (origin.start == origin.end and offset == origin.start))) return origin.row;
+        if (origin.start >= offset and origin.start - offset < distance) {
+            selected = origin.row;
+            distance = origin.start - offset;
+        }
+    }
+    return selected;
+}
+
+const FloatRowBuilder = struct {
+    a: std.mem.Allocator,
+    source: []const u8,
+    columns: usize,
+    color: bool,
+    max_cells: usize,
+    used_cells: usize = 0,
+    out: std.Io.Writer.Allocating,
+    ranges: std.ArrayList(struct { start: usize, end: usize }) = .empty,
+    origins: std.ArrayList(FlowOrigin) = .empty,
+    unsupported: usize = 0,
+    active: ?struct {
+        rows: []terminal.RenderRow,
+        next: usize = 0,
+        width: usize,
+        left: usize,
+        right: usize,
+        side: @import("blob_encoder").presentation_types.TableFloatSide,
+    } = null,
+    fn deinit(self: *FloatRowBuilder) void {
+        if (self.active) |active| self.a.free(active.rows);
+        self.ranges.deinit(self.a);
+        self.origins.deinit(self.a);
+        self.out.deinit();
+    }
+    fn gap(self: FloatRowBuilder) usize {
+        return if (self.active) |active| self.columns - (active.width + active.left + active.right) else self.columns;
+    }
+    fn origin(self: *FloatRowBuilder, row: terminal.RenderRow) !void {
+        const start = @intFromPtr(row.bytes.ptr) - @intFromPtr(self.source.ptr);
+        try self.origins.append(self.a, .{ .start = start, .end = start + row.bytes.len, .row = self.ranges.items.len });
+    }
+    fn segment(self: *FloatRowBuilder, row: terminal.RenderRow, width: usize, alignment: ?TextAlign, fill: bool) !void {
+        const leading = row.left + alignmentLeading(alignment, row, width -| (row.left + row.right));
+        if (self.color) try self.out.writer.writeAll("\x1b[0m");
+        try self.out.writer.splatByteAll(' ', leading);
+        if (self.color) try row.carry.write(&self.out.writer);
+        try self.out.writer.writeAll(row.bytes);
+        if (self.color) try self.out.writer.writeAll("\x1b[0m");
+        if (fill) try self.out.writer.splatByteAll(' ', width -| (leading + terminal.cellWidth(row.bytes)));
+    }
+    fn emit(self: *FloatRowBuilder, prose_row: ?terminal.RenderRow, alignment: ?TextAlign) !void {
+        const start = self.out.written().len;
+        const empty: terminal.RenderRow = .{ .bytes = "", .carry = .{} };
+        if (self.active) |active| {
+            const floated = active.rows[active.next];
+            if (active.side == .left) {
+                try self.out.writer.splatByteAll(' ', active.left);
+                try self.segment(floated, active.width, null, true);
+                try self.out.writer.splatByteAll(' ', active.right);
+                if (prose_row) |row| try self.segment(row, self.gap(), alignment, false);
+            } else {
+                if (prose_row) |row| try self.segment(row, self.gap(), alignment, true) else try self.segment(empty, self.gap(), null, true);
+                try self.out.writer.splatByteAll(' ', active.left);
+                try self.segment(floated, active.width, null, false);
+                try self.out.writer.splatByteAll(' ', active.right);
+            }
+            try self.origin(floated);
+            self.active.?.next += 1;
+            if (self.active.?.next == active.rows.len) {
+                self.a.free(active.rows);
+                self.active = null;
+            }
+        } else if (prose_row) |row| try self.segment(row, self.columns, alignment, false);
+        if (prose_row) |row| try self.origin(row);
+        const end = self.out.written().len;
+        try self.ranges.append(self.a, .{ .start = start, .end = end });
+        try self.out.writer.writeByte('\n');
+    }
+    fn emitFixed(self: *FloatRowBuilder, row: terminal.RenderRow, left: usize, width: usize, alignment: ?TextAlign) !void {
+        const start = self.out.written().len;
+        try self.out.writer.splatByteAll(' ', left);
+        try self.segment(row, width, alignment, false);
+        try self.origin(row);
+        try self.ranges.append(self.a, .{ .start = start, .end = self.out.written().len });
+        try self.out.writer.writeByte('\n');
+    }
+    fn drain(self: *FloatRowBuilder) !void {
+        while (self.active != null) try self.emit(null, null);
+    }
+    fn poemsFor(self: FloatRowBuilder, a: std.mem.Allocator, poems: []const terminal.PoemLine, start: usize, end: usize) ![]terminal.PoemLine {
+        var out: std.ArrayList(terminal.PoemLine) = .empty;
+        errdefer out.deinit(a);
+        var previous: ?terminal.PoemLine = null;
+        for (poems) |line| {
+            if (line.offset >= start) break;
+            previous = line;
+        }
+        if (previous) |line| if (std.mem.indexOfScalar(u8, self.source[line.offset..start], '\n') == null) {
+            var continuation = line;
+            continuation.offset = 0;
+            continuation.left = line.continuation_left;
+            continuation.lead_bytes = 0;
+            continuation.lead_cells = 0;
+            try out.append(a, continuation);
+        };
+        for (poems) |line| if (line.offset >= start and line.offset < end) {
+            var local = line;
+            local.offset -= start;
+            try out.append(a, local);
+        };
+        return out.toOwnedSlice(a);
+    }
+    fn prose(self: *FloatRowBuilder, start: usize, end: usize, poems: []const terminal.PoemLine, initial: terminal.TextStyle, alignment: ?TextAlign) !void {
+        if (start == end) return;
+        var at = start;
+        var carry = initial;
+        while (at < end) {
+            const local_poems = try self.poemsFor(self.a, poems, at, end);
+            defer self.a.free(local_poems);
+            const rows = try terminal.wrapStyledProjectedFromStyle(self.a, self.source[at..end], self.gap(), local_poems, carry);
+            defer self.a.free(rows);
+            var count = rows.len;
+            if (count != 0 and rows[count - 1].bytes.len == 0 and self.source[end - 1] == '\n') count -= 1;
+            var used: usize = 0;
+            const had_float = self.active != null;
+            while (used < count) : (used += 1) {
+                try self.emit(rows[used], alignment);
+                if (had_float and self.active == null) { used += 1; break; }
+            }
+            if (used >= count) return;
+            // Reflow the remaining original slice at the now full width. The
+            // next row owns both its source offset and exact incoming SGR state.
+            at = @intFromPtr(rows[used].bytes.ptr) - @intFromPtr(self.source.ptr);
+            carry = rows[used].carry;
+        }
+    }
+    fn grid(self: *FloatRowBuilder, start: usize, end: usize, initial: terminal.TextStyle, event: ?FlowEvent) !void {
+        var trimmed = end;
+        if (event != null and event.?.kind == .float_grid) while (trimmed > start and self.source[trimmed - 1] == '\n') { trimmed -= 1; };
+        if (trimmed == start) return;
+        const rows = try terminal.wrapStyledProjectedFromStyle(self.a, self.source[start..trimmed], self.columns, &.{}, initial);
+        var transferred = false;
+        defer if (!transferred) self.a.free(rows);
+        var count = rows.len;
+        if (count != 0 and rows[count - 1].bytes.len == 0 and self.source[trimmed - 1] == '\n') count -= 1;
+        var width: usize = 0;
+        for (rows[0..count]) |row| width = @max(width, terminal.cellWidth(row.bytes));
+        if (event) |float_event| if (float_event.kind == .float_grid) {
+            const occupied = width +| float_event.left +| float_event.right;
+            if (float_event.supported and self.active == null and occupied <= self.columns and self.columns - occupied >= 2 and count != 0 and floatRowsWithinBudget(count, self.columns, self.max_cells -| self.used_cells)) {
+                self.used_cells += count * self.columns;
+                self.active = .{ .rows = rows, .width = width, .left = float_event.left, .right = float_event.right, .side = float_event.side.? };
+                transferred = true;
+                return;
+            }
+            self.unsupported += 1;
+            try self.drain();
+            var serial = float_event;
+            serial.kind = .grid;
+            serial.side = null;
+            return self.grid(start, end, initial, serial);
+        };
+        if (self.active != null and width > self.gap()) try self.drain();
+        const grid_width = self.gap();
+        const grid_left = if (self.active) |active| if (active.side == .left) self.columns - grid_width else 0 else 0;
+        const alignment = if (event) |value| value.alignment else null;
+        for (rows[0..count]) |row| {
+            if (self.active != null) try self.emit(row, alignment) else try self.emitFixed(row, grid_left, grid_width, alignment);
+        }
+    }
+    fn finish(self: *FloatRowBuilder) !FloatLayout {
+        try self.drain();
+        const text = try self.out.toOwnedSlice();
+        errdefer self.a.free(text);
+        const rows = try self.a.alloc(terminal.RenderRow, self.ranges.items.len);
+        errdefer self.a.free(rows);
+        for (rows, self.ranges.items) |*row, range| row.* = .{ .bytes = text[range.start..range.end], .carry = .{} };
+        const origins = try self.origins.toOwnedSlice(self.a);
+        return .{ .text = text, .rows = rows, .origins = origins, .unsupported = self.unsupported };
+    }
+};
+/// Visual rows own their buffer and map back to logical formatted byte ranges.
+/// The input frame, model graph and semantic target/visitor order are unchanged.
+pub fn floatLayoutAlloc(a: std.mem.Allocator, text: []const u8, columns: usize, poems: []const terminal.PoemLine, events: []const FlowEvent, color: bool) !FloatLayout {
+    return floatLayoutWithBudgetAlloc(a, text, columns, poems, events, color, 4 * 1024 * 1024);
+}
+fn floatLayoutWithBudgetAlloc(a: std.mem.Allocator, text: []const u8, columns: usize, poems: []const terminal.PoemLine, events: []const FlowEvent, color: bool, max_cells: usize) !FloatLayout {
+    if (columns < 2) return error.UnsupportedTerminalWidth;
+    var builder: FloatRowBuilder = .{ .a = a, .source = text, .columns = columns, .color = color, .max_cells = max_cells, .out = .init(a) };
+    defer builder.deinit();
+    var at: usize = 0;
+    var style: terminal.TextStyle = .{};
+    for (events) |event| {
+        if (event.start < at or event.end < event.start or event.end > text.len) return error.InvalidTerminalFlow;
+        try builder.prose(at, event.start, poems, style, null);
+        style = terminal.styleAfter(style, text[at..event.start]);
+        switch (event.kind) {
+            .boundary => try builder.drain(),
+            .text => try builder.prose(event.start, event.end, poems, style, event.alignment),
+            .grid, .float_grid => try builder.grid(event.start, event.end, style, event),
+        }
+        style = terminal.styleAfter(style, text[event.start..event.end]);
+        at = event.end;
+    }
+    try builder.prose(at, text.len, poems, style, null);
+    return builder.finish();
+}
+
+const BlockAlignmentPoint = struct { offset: usize, alignment: ?TextAlign };
+const BlockAlignments = struct {
+    allocator: std.mem.Allocator,
+    frame: *std.Io.Writer.Allocating,
+    points: std.ArrayList(BlockAlignmentPoint) = .empty,
+    fn record(self: *BlockAlignments, alignment: ?TextAlign) !void {
+        try self.points.append(self.allocator, .{ .offset = self.frame.written().len, .alignment = alignment });
+    }
+};
+fn alignmentLeading(alignment: ?TextAlign, line: terminal.RenderRow, width: usize) usize {
+    const spare = width -| terminal.cellWidth(line.bytes);
+    return switch (alignment orelse return 0) { .right => spare, .center => spare / 2, .left => 0 };
+}
+fn cellProjectedLeading(cell: @import("blob_encoder").presentation_types.Cell, line: terminal.RenderRow, width: usize, text: []const u8, points: []const BlockAlignmentPoint) usize {
+    var alignment: ?TextAlign = if (cell.style) |style| style.text_align else null;
+    const address = @intFromPtr(line.bytes.ptr);
+    const start = @intFromPtr(text.ptr);
+    if (address < start or address - start > text.len) return cellLineLeading(cell, line, width);
+    const offset = address - start;
+    for (points) |point| {
+        if (point.offset > offset) break;
+        alignment = point.alignment orelse if (cell.style) |style| style.text_align else null;
+    }
+    return alignmentLeading(alignment, line, width);
+}
 fn cellLineLeading(cell: @import("blob_encoder").presentation_types.Cell, line: terminal.RenderRow, width: usize) usize {
     const style = cell.style orelse return 0;
     const alignment = style.text_align orelse return 0;
-    const spare = width -| terminal.cellWidth(line.bytes);
-    return switch (alignment) { .right => spare, .center => spare / 2, else => 0 };
+    return alignmentLeading(alignment, line, width);
 }
 fn tableWrappedAlignedLine(w: *std.Io.Writer, line: terminal.RenderRow, width: usize, color: bool, background: ?[3]u8, padding: usize, leading: usize) !void {
     var base_buffer: [80]u8 = undefined;
@@ -407,6 +720,9 @@ const BlockDisplayContext = struct {
     cell_style: ?CellDisplayStyle = null,
     columns: ?usize = null,
     table_depth: usize = 0,
+    alignments: ?*BlockAlignments = null,
+    alignment_suppressed: bool = false,
+    ordinal: ?*usize = null,
 };
 
 fn cellHasTable(cell: @import("blob_encoder").presentation_types.Cell) bool {
@@ -418,6 +734,9 @@ fn cellHasTable(cell: @import("blob_encoder").presentation_types.Cell) bool {
 }
 
 fn tableCellText(w: *std.Io.Writer, cell: @import("blob_encoder").presentation_types.Cell, color: bool, columns: ?usize, table_depth: usize, inherited: ?CellDisplayStyle) anyerror!void {
+    return tableCellTextProjected(w, cell, color, columns, table_depth, inherited, null);
+}
+fn tableCellTextProjected(w: *std.Io.Writer, cell: @import("blob_encoder").presentation_types.Cell, color: bool, columns: ?usize, table_depth: usize, inherited: ?CellDisplayStyle, alignment_points: ?*BlockAlignments) anyerror!void {
     const style: CellDisplayStyle = .{
         .background = canonicalRgb(cell.background) orelse if (inherited) |value| value.background else null,
         .header = cell.header or if (inherited) |value| value.header else false,
@@ -426,7 +745,14 @@ fn tableCellText(w: *std.Io.Writer, cell: @import("blob_encoder").presentation_t
         if (cell.spans.len != 0 or cell.nested_table != null) return error.InvalidPresentation;
         var rendered: std.Io.Writer.Allocating = .init(std.heap.smp_allocator);
         defer rendered.deinit();
-        try blocksTextInContext(&rendered.writer, blocks, color, null, .{ .cell_style = style, .columns = columns, .table_depth = table_depth });
+        var track_alignment = false;
+        if (alignment_points != null) for (blocks) |block| {
+            if (block.text_align != null) { track_alignment = true; break; }
+        };
+        var alignments: BlockAlignments = .{ .allocator = std.heap.smp_allocator, .frame = &rendered };
+        defer alignments.points.deinit(alignments.allocator);
+        try blocksTextInContext(&rendered.writer, blocks, color, null, .{ .cell_style = style, .columns = columns, .table_depth = table_depth, .alignments = if (track_alignment) &alignments else null });
+        if (alignment_points) |points| try points.points.appendSlice(points.allocator, alignments.points.items);
         var end = rendered.written().len;
         // Remove the block renderer's final terminator, not authored newlines.
         if (end != 0 and rendered.written()[end - 1] == '\n') end -= 1;
@@ -449,6 +775,9 @@ fn tableTextWidth(w: *std.Io.Writer, table: model.Table, color: bool, projection
     return tableTextWidthInContext(w, table, color, projection, maximum, 0, null);
 }
 fn tableTextWidthInContext(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*PoemProjection, maximum: ?usize, parent_depth: usize, inherited: ?CellDisplayStyle) anyerror!void {
+    return tableTextWidthInContextIndented(w, table, color, projection, maximum, parent_depth, inherited, 2);
+}
+fn tableTextWidthInContextIndented(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*PoemProjection, maximum: ?usize, parent_depth: usize, inherited: ?CellDisplayStyle, indentation: usize) anyerror!void {
     if (parent_depth >= @import("blob_encoder").presentation_types.max_table_depth) return error.InvalidPresentation;
     const table_depth = parent_depth + 1;
     var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
@@ -474,7 +803,7 @@ fn tableTextWidthInContext(w: *std.Io.Writer, table: model.Table, color: bool, p
         if (requested) |v| columns_limit = if (maximum) |available| @min(available, v) else v;
     };
     var has_nested = false;
-    const Placed = struct { source: @import("blob_encoder").presentation_types.Cell, row: usize, column: usize, colspan: usize, rowspan: usize, text: []const u8, lines: []const []const u8, wrapped: ?[]terminal.RenderRow = null, background: ?[3]u8 = null };
+    const Placed = struct { source: @import("blob_encoder").presentation_types.Cell, row: usize, column: usize, colspan: usize, rowspan: usize, text: []const u8, lines: []const []const u8, wrapped: ?[]terminal.RenderRow = null, background: ?[3]u8 = null, alignments: []const BlockAlignmentPoint = &.{} };
     var cells: std.ArrayList(Placed) = .empty;
     var occupied: std.ArrayList(usize) = .empty;
     var widths: std.ArrayList(usize) = .empty;
@@ -500,7 +829,8 @@ fn tableTextWidthInContext(w: *std.Io.Writer, table: model.Table, color: bool, p
             var text: std.Io.Writer.Allocating = .init(a);
             defer text.deinit();
             has_nested = has_nested or cellHasTable(cell);
-            try tableCellText(&text.writer, cell, color, null, table_depth, surface);
+            var alignments: BlockAlignments = .{ .allocator = a, .frame = &text };
+            try tableCellTextProjected(&text.writer, cell, color, null, table_depth, surface, &alignments);
             const owned = try a.dupe(u8, text.written());
             var lines: std.ArrayList([]const u8) = .empty;
             var split = std.mem.splitScalar(u8, owned, '\n');
@@ -512,7 +842,7 @@ fn tableTextWidthInContext(w: *std.Io.Writer, table: model.Table, color: bool, p
             var available: usize = overhead * (colspan - 1);
             for (widths.items[column..][0..colspan]) |width| available += width;
             if (needed > available) widths.items[column + colspan - 1] += needed - available;
-            try cells.append(a, .{ .source = cell, .row = r, .column = column, .colspan = colspan, .rowspan = rowspan, .text = owned, .lines = lines.items, .background = canonicalRgb(cell.background) orelse if (surface) |value| value.background else null });
+            try cells.append(a, .{ .source = cell, .row = r, .column = column, .colspan = colspan, .rowspan = rowspan, .text = owned, .lines = lines.items, .alignments = alignments.points.items, .background = canonicalRgb(cell.background) orelse if (surface) |value| value.background else null });
             column += colspan;
         }
     }
@@ -521,7 +851,7 @@ fn tableTextWidthInContext(w: *std.Io.Writer, table: model.Table, color: bool, p
         try w.writeByte('\n');
     }
     if (table.geometry) |g| if (g.width != null and columns_limit != null and widths.items.len != 0) {
-        var natural = (overhead * widths.items.len + 2 + separator) -| spacing;
+        var natural = (overhead * widths.items.len + indentation + separator) -| spacing;
         for (widths.items) |width| natural += width;
         if (columns_limit.? > natural) widths.items[widths.items.len - 1] += columns_limit.? - natural;
     };
@@ -529,25 +859,28 @@ fn tableTextWidthInContext(w: *std.Io.Writer, table: model.Table, color: bool, p
     // Keep the natural grid byte-for-byte when it fits, and the CLI unbounded.
     if (columns_limit) |requested| {
         const columns = @max(requested, 8);
-        var natural: usize = (overhead * widths.items.len + 2 + separator) -| spacing;
+        var natural: usize = (overhead * widths.items.len + indentation + separator) -| spacing;
         for (widths.items) |width| natural += width;
         if (natural > columns and widths.items.len != 0) {
-            const budget = columns -| ((overhead * widths.items.len + 2 + separator) -| spacing);
+            const budget = columns -| ((overhead * widths.items.len + indentation + separator) -| spacing);
             if (budget < (if (has_nested) @as(usize, 8) else 2) * widths.items.len) {
                 // A grid cannot give every column one full wide glyph. Stack
                 // owned cells with explicit row/column/span identity instead.
-                const width = columns - 6;
+                const width = columns -| (indentation + 4);
                 for (cells.items) |cell| {
-                    try w.print("  Row {d}, column {d}", .{ cell.row + 1, cell.column + 1 });
+                    try w.splatByteAll(' ', indentation);
+                    try w.print("Row {d}, column {d}", .{ cell.row + 1, cell.column + 1 });
                     if (cell.colspan != 1 or cell.rowspan != 1) try w.print(" (span {d} x {d})", .{ cell.colspan, cell.rowspan });
                     try w.writeByte('\n');
                     var nested_text: std.Io.Writer.Allocating = .init(a);
                     defer nested_text.deinit();
-                    try tableCellText(&nested_text.writer, cell.source, color, width, table_depth, surface);
+                    var alignments: BlockAlignments = .{ .allocator = a, .frame = &nested_text };
+                    try tableCellTextProjected(&nested_text.writer, cell.source, color, width, table_depth, surface, &alignments);
                     const wrapped = try tableCellRows(a, nested_text.written(), width);
                     for (wrapped) |line| {
-                        try w.writeAll("  │");
-                        try tableWrappedAlignedLine(w, line, width, color, cell.background, 1, cellLineLeading(cell.source, line, width));
+                        try w.splatByteAll(' ', indentation);
+                        try w.writeAll("│");
+                        try tableWrappedAlignedLine(w, line, width, color, cell.background, 1, cellProjectedLeading(cell.source, line, width, nested_text.written(), alignments.points.items));
                         try w.writeAll("│\n");
                     }
                 }
@@ -581,8 +914,11 @@ fn tableTextWidthInContext(w: *std.Io.Writer, table: model.Table, color: bool, p
         for (widths.items[cell.column..][0..cell.colspan]) |part| width += part;
         var nested_text: std.Io.Writer.Allocating = .init(a);
         defer nested_text.deinit();
-        try tableCellText(&nested_text.writer, cell.source, color, width, table_depth, surface);
-        cell.wrapped = try tableCellRows(a, nested_text.written(), width);
+        var alignments: BlockAlignments = .{ .allocator = a, .frame = &nested_text };
+        try tableCellTextProjected(&nested_text.writer, cell.source, color, width, table_depth, surface, &alignments);
+        cell.text = try a.dupe(u8, nested_text.written());
+        cell.alignments = alignments.points.items;
+        cell.wrapped = try tableCellRows(a, cell.text, width);
     };
     const active = try a.alloc(?usize, widths.items.len);
     @memset(active, null);
@@ -598,7 +934,8 @@ fn tableTextWidthInContext(w: *std.Io.Writer, table: model.Table, color: bool, p
             height = @max(height, if (cell.wrapped) |wrapped| wrapped.len else cell.lines.len);
         }
         for (0..height) |line_index| {
-            try w.writeAll(if (border) "  │" else "  ");
+            try w.splatByteAll(' ', indentation);
+            if (border) try w.writeAll("│");
             var column: usize = 0;
             while (column < widths.items.len) {
                 var span: usize = 1;
@@ -620,7 +957,7 @@ fn tableTextWidthInContext(w: *std.Io.Writer, table: model.Table, color: bool, p
                 var width: usize = overhead * (span - 1);
                 for (widths.items[column..][0..span]) |part| width += part;
                 const rendered_line = wrapped_line orelse terminal.RenderRow{ .bytes = line, .carry = .{} };
-                try tableWrappedAlignedLine(w, rendered_line, width, color, background, padding, if (source) |cell| cellLineLeading(cell, rendered_line, width) else 0);
+                try tableWrappedAlignedLine(w, rendered_line, width, color, background, padding, if (source) |cell| cellProjectedLeading(cell, rendered_line, width, cells.items[active[column].?].text, cells.items[active[column].?].alignments) else 0);
                 column += span;
                 if (border) try w.writeAll("│");
                 if (column == widths.items.len) try w.writeByte('\n') else try w.splatByteAll(' ', spacing);
@@ -644,10 +981,63 @@ fn blocksText(w: *std.Io.Writer, blocks: []const model.Block, color: bool) !void
 fn blocksTextProjected(w: *std.Io.Writer, blocks: []const model.Block, color: bool, projection: ?*PoemProjection) anyerror!void {
     return blocksTextInContext(w, blocks, color, projection, .{ .columns = if (projection) |value| value.table_columns else null });
 }
+fn alignedBlockText(w: *std.Io.Writer, block: model.Block, color: bool, projection: ?*PoemProjection, context: BlockDisplayContext) anyerror!void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var rendered: std.Io.Writer.Allocating = .init(a);
+    defer rendered.deinit();
+    var metadata: std.ArrayList(terminal.PoemLine) = .empty;
+    var local_projection: PoemProjection = .{ .frame = &rendered, .allocator = a, .lines = &metadata, .table_columns = context.columns };
+    var local_context = context;
+    local_context.alignment_suppressed = true;
+    try blocksTextInContext(&rendered.writer, &.{block}, color, if (projection != null) &local_projection else null, local_context);
+    const columns = context.columns.?;
+    const rows = try terminal.wrapStyledProjected(a, rendered.written(), columns, metadata.items);
+    for (rows, 0..) |row, index| {
+        const visible = terminal.cellWidth(row.bytes);
+        const leading = if (visible == 0) 0 else row.left + alignmentLeading(block.text_align, row, columns -| (row.left + row.right));
+        if (projection) |parent| {
+            if (row.bytes.len != 0 or index + 1 < rows.len) {
+                // Prefix spaces belong to this buffered row, never semantic spans.
+                try parent.lines.append(parent.allocator, .{ .offset = parent.frame.written().len, .lead_bytes = leading, .lead_cells = leading, .right = row.right });
+            }
+        }
+        if (color and leading != 0) try w.writeAll("\x1b[0m");
+        try w.splatByteAll(' ', leading);
+        if (color) try row.carry.write(w);
+        try w.writeAll(row.bytes);
+        if (index + 1 < rows.len) try w.writeByte('\n');
+    }
+}
 fn blocksTextInContext(w: *std.Io.Writer, blocks: []const model.Block, color: bool, projection: ?*PoemProjection, context: BlockDisplayContext) anyerror!void {
-    var ordinal: usize = 0;
+    var local_ordinal: usize = 0;
+    const ordinal = context.ordinal orelse &local_ordinal;
     for (blocks) |block| {
+        if (projection) |p| if (p.float_flow) |flow| {
+            const floating = if (block.table) |table| if (table.style) |style| style.float_side != null else false else false;
+            if (flow.enabled and !flow.capturing and (flow.started or floating)) {
+                flow.started = true;
+                const start = p.frame.written().len;
+                flow.capturing = true;
+                flow.capturing_float = floating;
+                defer { flow.capturing = false; flow.capturing_float = false; }
+                var captured_context = context;
+                captured_context.ordinal = ordinal;
+                captured_context.alignment_suppressed = true;
+                try blocksTextInContext(w, &.{block}, color, projection, captured_context);
+                try flow.record(block, start);
+                continue;
+            }
+        };
+        if (context.alignments) |alignment| try alignment.record(block.text_align);
         if (block.kind == .blank) continue;
+        if (!context.alignment_suppressed and context.alignments == null and block.text_align != null and context.columns != null) {
+            var aligned_context = context;
+            aligned_context.ordinal = ordinal;
+            try alignedBlockText(w, block, color, projection, aligned_context);
+            continue;
+        }
         if (block.kind == .rule) {
             const inherited_header = if (context.cell_style) |style| style.header else false;
             if (color and inherited_header) try w.writeAll("\x1b[1m");
@@ -663,18 +1053,21 @@ fn blocksTextInContext(w: *std.Io.Writer, blocks: []const model.Block, color: bo
                 if (color and inherited_header) try w.writeAll("\x1b[1m");
                 try w.print("Color sample {s}\n\n", .{block.feature.?.data});
                 if (color and inherited_header) try w.writeAll("\x1b[0m");
-            } else try tableTextWidthInContext(w, table, color, projection, context.columns, context.table_depth, context.cell_style);
+            } else {
+                const floated = if (projection) |p| if (p.float_flow) |flow| flow.capturing_float else false else false;
+                try tableTextWidthInContextIndented(w, table, color, projection, context.columns, context.table_depth, context.cell_style, if (floated) 0 else 2);
+            }
             continue;
         }
         if (color) if (context.cell_style) |style| if (style.header) try w.writeAll("\x1b[1m");
         try w.splatByteAll(' ', @as(usize, @min(block.depth, 12)) * 2);
         switch (block.kind) {
             .definition => {
-                ordinal += 1;
+                ordinal.* += 1;
                 if (block.number.len != 0) {
                     try terminalText(w, block.number);
                     try w.writeAll(". ");
-                } else try w.print("{d}. ", .{ordinal});
+                } else try w.print("{d}. ", .{ordinal.*});
             },
             .example, .quotation => try w.writeAll("│ "),
             .list_item => if (block.number.len != 0) {
@@ -1143,6 +1536,7 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
             if (!emptyReferencePlaceholder(entry, i)) try captions.emitSection(w, entry.sections[i], color, projection);
         };
     }
+    if (projection) |p| if (p.float_flow) |flow| try flow.stop();
     if (details) try entryMetadataProjected(w, entry, color, projection, &captions);
 }
 
@@ -1270,6 +1664,7 @@ fn entryHasAbbreviations(entry: model.Entry) bool {
 }
 
 fn entryMetadataProjected(w: *std.Io.Writer, entry: model.Entry, color: bool, projection: ?*PoemProjection, captions: *VisibleMediaCaptions) !void {
+    if (projection) |p| if (p.float_flow) |flow| try flow.stop();
     // These references are emitted by this same details route below.
     for (entry.references) |ref| {
         if (ref.blocks) |blocks| {
@@ -1498,6 +1893,7 @@ pub fn entryTextFoldedProjected(frame: *std.Io.Writer.Allocating, entry: model.E
         const first: usize = if (sectionHeadingCompanion(section) != null) 1 else 0;
         for (section.blocks[first..]) |block| if (!closed or (meaning and block.kind == .definition)) try captions.emitBlocks(w, &.{block}, color, projection);
     }
+    if (projection) |p| if (p.float_flow) |flow| try flow.stop();
     if (preferences.details) {
         try entryMetadataProjected(w, entry, color, projection, &captions);
     } else if (entryHasAbbreviations(entry)) {
@@ -3933,4 +4329,476 @@ test "bordered image text projection stays honest while JSON retains decoration 
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "\"border\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "\"width_px\":40") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "File:Flag of Poland.svg") != null);
+}
+
+test "explicit terminal block alignment overrides cell inheritance after styled Unicode wrapping" {
+    terminal.initLocale();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const blocks = [_]model.Block{
+        .{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "1", .target = "One" }} },
+        .{ .kind = .paragraph, .text_align = .center, .spans = &.{.{ .kind = .link, .text = "猫אב猫אב", .target = "Two", .bold = true, .foreground = "#123456" }} },
+        .{ .kind = .paragraph, .text_align = .left, .spans = &.{.{ .kind = .external_link, .text = "3", .trail = "!", .target = "https://example.test/three" }} },
+        .{ .kind = .paragraph, .spans = &.{.{ .text = "4" }} },
+    };
+    const cell: @import("blob_encoder").presentation_types.Cell = .{ .blocks = &blocks, .style = .{ .text_align = .right } };
+    const original = try std.json.Stringify.valueAlloc(a, cell, .{});
+    for ([_]usize{ 4, 8, 16 }) |width| for ([_]bool{ false, true }) |color| {
+        var text: std.Io.Writer.Allocating = .init(a);
+        var alignments: BlockAlignments = .{ .allocator = a, .frame = &text };
+        try tableCellTextProjected(&text.writer, cell, color, width, 1, null, &alignments);
+        try std.testing.expectEqual(@as(usize, 4), alignments.points.items.len);
+        const rows = try tableCellRows(a, text.written(), width);
+        var seen_center = false;
+        var seen_left = false;
+        var seen_last = false;
+        for (rows) |row| {
+            if (terminal.cellWidth(row.bytes) == 0) continue;
+            const offset = @intFromPtr(row.bytes.ptr) - @intFromPtr(text.written().ptr);
+            const leading = cellProjectedLeading(cell, row, width, text.written(), alignments.points.items);
+            if (offset >= alignments.points.items[3].offset) {
+                seen_last = true;
+                try std.testing.expectEqual(width - 1, leading);
+            } else if (offset >= alignments.points.items[2].offset) {
+                seen_left = true;
+                try std.testing.expectEqual(@as(usize, 0), leading);
+            } else if (offset >= alignments.points.items[1].offset) {
+                seen_center = true;
+                try std.testing.expectEqual((width -| terminal.cellWidth(row.bytes)) / 2, leading);
+            } else try std.testing.expectEqual(width - 1, leading);
+            try std.testing.expect(terminal.cellWidth(row.bytes) <= width);
+        }
+        try std.testing.expect(seen_center and seen_left and seen_last);
+        const plain = try NarrowTableTest.plain(a, text.written());
+        try std.testing.expect(std.mem.indexOf(u8, plain, "猫אב猫אב") != null);
+        try std.testing.expect(std.mem.indexOf(u8, plain, "3!") != null);
+    };
+    try std.testing.expectEqualStrings(original, try std.json.Stringify.valueAlloc(a, cell, .{}));
+}
+
+test "terminal number cell renders right center right in the actual grid at bounded widths" {
+    terminal.initLocale();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const paragraphs = [_]model.Block{
+        .{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "1", .target = "One" }} },
+        .{ .kind = .paragraph, .text_align = .center, .spans = &.{.{ .kind = .link, .text = "2", .target = "Two", .bold = true, .font_scale = 2 }} },
+        .{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "3", .target = "Three" }} },
+    };
+    const table: model.Table = .{
+        .rows = &.{.{ .cells = &.{.{ .blocks = &paragraphs, .style = .{ .text_align = .right }, .background = "#b4cdcd" }} }},
+        .geometry = .{ .width = .{ .unit = .px, .value = 128 } },
+    };
+    for ([_]usize{ 12, 16, 40 }) |width| for ([_]bool{ false, true }) |color| {
+        var text: std.Io.Writer.Allocating = .init(a);
+        try tableTextWidth(&text.writer, table, color, null, width);
+        const plain = try NarrowTableTest.plain(a, text.written());
+        var lines = std.mem.splitScalar(u8, plain, '\n');
+        var positions: [3]usize = undefined;
+        var count: usize = 0;
+        while (lines.next()) |line| {
+            for ("123", 0..) |number, index| if (std.mem.indexOfScalar(u8, line, number)) |at| {
+                positions[index] = terminal.cellWidth(line[0..at]);
+                count += 1;
+                try std.testing.expect(terminal.cellWidth(line) <= width);
+            };
+        }
+        try std.testing.expectEqual(@as(usize, 3), count);
+        try std.testing.expectEqual(positions[0], positions[2]);
+        try std.testing.expect(positions[1] < positions[0]);
+        try std.testing.expectEqual(@as(usize, 4) + (positions[0] - 4) / 2, positions[1]);
+    };
+}
+
+test "terminal null block alignment keeps legacy grid and bounded body bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const table: model.Table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .text = "old" }} }} }} };
+    var grid: std.Io.Writer.Allocating = .init(a);
+    try tableTextWidth(&grid.writer, table, false, null, 40);
+    try std.testing.expectEqualStrings("  │ old │\n\n", grid.written());
+    const blocks = [_]model.Block{
+        .{ .kind = .paragraph, .text_align = null, .spans = &.{.{ .kind = .link, .text = "same", .trail = "s", .target = "Same", .italic = true }} },
+        .{ .kind = .table, .table = table },
+    };
+    for ([_]bool{ false, true }) |color| {
+        var unchanged: std.Io.Writer.Allocating = .init(a);
+        var suppressed: std.Io.Writer.Allocating = .init(a);
+        try blocksTextInContext(&unchanged.writer, &blocks, color, null, .{ .columns = 40 });
+        try blocksTextInContext(&suppressed.writer, &blocks, color, null, .{ .columns = 40, .alignment_suppressed = true });
+        try std.testing.expectEqualStrings(suppressed.written(), unchanged.written());
+    }
+}
+
+test "bounded top level alignment uses physical sides and keeps source spans unchanged" {
+    terminal.initLocale();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const spans = [_]model.Span{.{ .kind = .link, .text = "猫אב", .trail = "!", .target = "Target", .bold = true, .foreground = "#123456" }};
+    const before = try std.json.Stringify.valueAlloc(a, spans, .{});
+    for ([_]usize{ 8, 16, 36 }) |width| for ([_]TextAlign{ .left, .center, .right }) |alignment| for ([_]bool{ false, true }) |color| {
+        const block: model.Block = .{ .kind = .paragraph, .text_align = alignment, .spans = &spans };
+        var text: std.Io.Writer.Allocating = .init(a);
+        var metadata: std.ArrayList(terminal.PoemLine) = .empty;
+        var projection: PoemProjection = .{ .frame = &text, .allocator = a, .lines = &metadata, .table_columns = width };
+        try blocksTextProjected(&text.writer, &.{block}, color, &projection);
+        const plain = try NarrowTableTest.plain(a, text.written());
+        const expected = switch (alignment) { .left => @as(usize, 0), .center => (width - 5) / 2, .right => width - 5 };
+        try std.testing.expectEqual(expected, std.mem.indexOf(u8, plain, "猫אב!").?);
+        const rows = try terminal.wrapStyledProjected(a, text.written(), width, metadata.items);
+        for (rows) |row| try std.testing.expect(terminal.cellWidth(row.bytes) + row.left + row.right <= width);
+        var unbounded: std.Io.Writer.Allocating = .init(a);
+        var legacy: std.Io.Writer.Allocating = .init(a);
+        try blocksText(&unbounded.writer, &.{block}, color);
+        var no_alignment = block;
+        no_alignment.text_align = null;
+        try blocksText(&legacy.writer, &.{no_alignment}, color);
+        try std.testing.expectEqualStrings(legacy.written(), unbounded.written());
+    };
+    try std.testing.expectEqualStrings(before, try std.json.Stringify.valueAlloc(a, spans, .{}));
+}
+
+test "aligned nested cell blocks and stacked narrow grids retain per block alignment metadata" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const paragraphs = [_]model.Block{
+        .{ .kind = .paragraph, .text_align = .left, .spans = &.{.{ .text = "L" }} },
+        .{ .kind = .paragraph, .text_align = .center, .spans = &.{.{ .text = "M" }} },
+    };
+    const child: model.Table = .{ .rows = &.{.{ .cells = &.{.{ .blocks = &paragraphs, .style = .{ .text_align = .right } }} }} };
+    const outer: model.Table = .{ .rows = &.{.{ .cells = &.{
+        .{ .blocks = &.{.{ .kind = .table, .table = child }} },
+        .{ .blocks = &paragraphs, .style = .{ .text_align = .right } },
+    } }} };
+    for ([_]usize{ 12, 24, 60 }) |width| {
+        var text: std.Io.Writer.Allocating = .init(a);
+        try tableTextWidth(&text.writer, outer, true, null, width);
+        const plain = try NarrowTableTest.plain(a, text.written());
+        try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, plain, "L"));
+        try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, plain, "M"));
+        if (width == 12) {
+            const second = std.mem.indexOf(u8, plain, "Row 1, column 2").?;
+            try std.testing.expect(std.mem.indexOf(u8, plain[second..], "\n  │ L") != null);
+            try std.testing.expect(std.mem.indexOf(u8, plain[second..], "\n  │   M") != null);
+        } else {
+            var left_columns: [2]usize = undefined;
+            var middle_columns: [2]usize = undefined;
+            var left_count: usize = 0;
+            var middle_count: usize = 0;
+            var lines = std.mem.splitScalar(u8, plain, '\n');
+            while (lines.next()) |line| for (line, 0..) |byte, offset| {
+                if (byte == 'L') { left_columns[left_count] = terminal.cellWidth(line[0..offset]); left_count += 1; }
+                if (byte == 'M') { middle_columns[middle_count] = terminal.cellWidth(line[0..offset]); middle_count += 1; }
+            };
+            try std.testing.expectEqual(@as(usize, 2), left_count);
+            try std.testing.expectEqual(@as(usize, 2), middle_count);
+            for (left_columns, middle_columns) |left, middle| try std.testing.expectEqual(left + 1, middle);
+        }
+    }
+}
+
+test "aligned terminal definitions share numbering with ordinary siblings" {
+    const a = std.testing.allocator;
+    const blocks = [_]model.Block{
+        .{ .kind = .definition, .spans = &.{.{ .text = "A" }} },
+        .{ .kind = .definition, .text_align = .center, .spans = &.{.{ .text = "B" }} },
+        .{ .kind = .definition, .spans = &.{.{ .text = "C" }} },
+        .{ .kind = .definition, .text_align = .right, .spans = &.{.{ .text = "D" }} },
+    };
+    var out: std.Io.Writer.Allocating = .init(a);
+    defer out.deinit();
+    try blocksTextInContext(&out.writer, &blocks, false, null, .{ .columns = 12 });
+    try std.testing.expectEqualStrings("1. A\n    2. B\n3. C\n        4. D\n", out.written());
+}
+
+
+const CrossSectionFloatTest = struct {
+    // Source-derived/synthetic expected E shape; not an earned EU Reader fixture.
+    const entry: model.Entry = .{
+        .title = "dwa", .kind = .language, .language = "poloniera", .language_code = "pl",
+        .sections = &.{
+            .{ .level = 2, .title = "Poloniera", .blocks = &.{.{ .kind = .table, .table = .{
+                .geometry = .{ .width = .{ .unit = .px, .value = 250 }, .border = 2, .cell_padding = 4, .cell_spacing = 0 },
+                .style = .{ .float_side = .right, .margins = .{ .top = .{ .unit = .px, .value = 0 }, .right = .{ .unit = .px, .value = 0 }, .bottom = .{ .unit = .px, .value = 0 }, .left = .{ .unit = .px, .value = 20 } } },
+                .rows = &.{
+                    .{ .cells = &.{.{ .colspan = 2, .background = "#b4cdcd", .style = .{ .text_align = .right }, .blocks = &.{
+                        .{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "N_ONE", .target = "one" }} },
+                        .{ .kind = .paragraph, .text_align = .center, .spans = &.{.{ .kind = .link, .text = "N_TWO", .target = "two", .bold = true }} },
+                        .{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "N_TRI", .target = "three" }} },
+                    } }} },
+                    .{ .cells = &.{ .{ .spans = &.{.{ .text = "cardinal" }} }, .{ .spans = &.{.{ .text = "dwa" }} } } },
+                    .{ .cells = &.{ .{ .spans = &.{.{ .text = "ordinal" }} }, .{ .spans = &.{.{ .text = "drugi" }} } } },
+                },
+            } }} },
+            .{ .level = 3, .title = "Ahoskera", .blocks = &.{
+                .{ .kind = .list_item, .depth = 2, .list_path = ":*", .spans = &.{.{ .kind = .link, .text = "AHO_A", .target = "pronunciation", .trail = "!", .foreground = "#123456" }} },
+                .{ .kind = .list_item, .depth = 2, .list_path = ":*", .spans = &.{.{ .text = "AHO_B" }} },
+            } },
+            .{ .level = 3, .title = "Adjektiboa", .blocks = &.{
+                .{ .kind = .indent, .depth = 1, .list_path = ":", .spans = &.{.{ .text = "ADJ_I" }} },
+                .{ .kind = .list_item, .depth = 2, .list_path = ":#", .spans = &.{.{ .kind = .external_link, .text = "ADJ_L", .target = "https://example.test/two" }} },
+            } },
+            .{ .level = 3, .title = "Later", .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "AFTER_FLOW" }} }} },
+        },
+        .references = &.{.{ .number = 1, .group_number = 1, .spans = &.{.{ .text = "FOOT_NOTE" }} }},
+    };
+    const Capture = struct {
+        text: []u8, events: []FlowEvent, poems: []terminal.PoemLine, selected: usize,
+        fn deinit(self: Capture, a: std.mem.Allocator) void { a.free(self.poems); a.free(self.events); a.free(self.text); }
+    };
+    fn capture(a: std.mem.Allocator, value: model.Entry, width: usize, color: bool, expanded: []const usize) !Capture {
+        var text: std.Io.Writer.Allocating = .init(a);
+        defer text.deinit();
+        var poems: std.ArrayList(terminal.PoemLine) = .empty;
+        defer poems.deinit(a);
+        var flow: FloatProjection = .{ .allocator = a, .frame = &text, .columns = width };
+        defer flow.events.deinit(a);
+        var projection: PoemProjection = .{ .frame = &text, .allocator = a, .lines = &poems, .table_columns = width, .float_flow = &flow };
+        const selected = try entryTextFoldedProjected(&text, value, color, .{ .details = true }, expanded, 1, &projection);
+        const owned = try text.toOwnedSlice();
+        errdefer a.free(owned);
+        const events = try flow.events.toOwnedSlice(a);
+        errdefer a.free(events);
+        return .{ .text = owned, .events = events, .poems = try poems.toOwnedSlice(a), .selected = selected };
+    }
+    fn column(line: []const u8, marker: []const u8) ?usize {
+        const at = std.mem.indexOf(u8, line, marker) orelse return null;
+        return terminal.cellWidth(line[0..at]);
+    }
+};
+
+test "cross section terminal float admits source derived EU heading list and indent shape" {
+    terminal.initLocale();
+    const a = std.testing.allocator;
+    const F = CrossSectionFloatTest;
+    const before = try std.json.Stringify.valueAlloc(a, F.entry, .{});
+    defer a.free(before);
+    const captured = try F.capture(a, F.entry, 52, true, &.{});
+    defer captured.deinit(a);
+    const layout = try floatLayoutAlloc(a, captured.text, 52, captured.poems, captured.events, true);
+    defer layout.deinit(a);
+    try std.testing.expectEqual(@as(usize, 0), layout.unsupported);
+    const plain = try NarrowTableTest.plain(a, layout.text);
+    defer a.free(plain);
+    for ([_][]const u8{ "N_ONE", "N_TWO", "N_TRI", "AHO_A!", "AHO_B", "ADJ_I", "ADJ_L", "AFTER_FLOW", "FOOT_NOTE" }) |marker| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain, marker));
+    var crossed_heading = false;
+    var crossed_list = false;
+    var crossed_indent = false;
+    var lines = std.mem.splitScalar(u8, plain, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, "Ahoskera") != null) { crossed_heading = std.mem.indexOf(u8, line, "│") != null; }
+        if (std.mem.indexOf(u8, line, "AHO_A!") != null) { crossed_list = std.mem.indexOf(u8, line, "│") != null; }
+        if (std.mem.indexOf(u8, line, "ADJ_I") != null) { crossed_indent = std.mem.indexOf(u8, line, "│") != null; }
+    }
+    try std.testing.expect(crossed_heading and crossed_list and crossed_indent);
+    const selected_row = layout.rowForOffset(captured.selected);
+    const selected_plain = try NarrowTableTest.plain(a, layout.rows[selected_row].bytes);
+    defer a.free(selected_plain);
+    try std.testing.expect(std.mem.indexOf(u8, selected_plain, "Ahoskera") != null);
+    const after = try std.json.Stringify.valueAlloc(a, F.entry, .{});
+    defer a.free(after);
+    try std.testing.expectEqualStrings(before, after);
+}
+
+test "cross section terminal floats use physical sides checked px and explicit unsupported metrics" {
+    terminal.initLocale();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const F = CrossSectionFloatTest;
+    for ([_]@import("blob_encoder").presentation_types.TableFloatSide{ .left, .right }) |side| {
+        const sections = try a.dupe(model.Section, F.entry.sections);
+        const blocks = try a.dupe(model.Block, sections[0].blocks);
+        blocks[0].table.?.style.?.float_side = side;
+        sections[0].blocks = blocks;
+        var value = F.entry;
+        value.sections = sections;
+        const captured = try F.capture(a, value, 52, false, &.{});
+        const layout = try floatLayoutAlloc(a, captured.text, 52, captured.poems, captured.events, false);
+        try std.testing.expectEqual(@as(usize, 0), layout.unsupported);
+        var saw = false;
+        for (layout.rows) |row| if (std.mem.indexOf(u8, row.bytes, "AHO_A!") != null) {
+            saw = true;
+            const prose_column = F.column(row.bytes, "AHO_A!").?;
+            const border_column = F.column(row.bytes, "│").?;
+            if (side == .right) {
+                try std.testing.expectEqual(@as(usize, 20), border_column);
+                try std.testing.expect(prose_column < border_column);
+            } else {
+                try std.testing.expectEqual(@as(usize, 3), border_column);
+                try std.testing.expect(prose_column > border_column);
+            }
+            try std.testing.expect(terminal.cellWidth(row.bytes) <= 52);
+        };
+        try std.testing.expect(saw);
+        const narrow = try F.capture(a, value, 36, false, &.{});
+        const narrow_layout = try floatLayoutAlloc(a, narrow.text, 36, narrow.poems, narrow.events, false);
+        try std.testing.expectEqual(@as(usize, 1), narrow_layout.unsupported);
+        for (narrow_layout.rows) |row| if (std.mem.indexOf(u8, row.bytes, "AHO_A!") != null) try std.testing.expect(std.mem.indexOf(u8, row.bytes, "│") == null);
+    }
+    try std.testing.expect(floatRowsWithinBudget(24, 52, 4 * 1024 * 1024));
+    try std.testing.expect(!floatRowsWithinBudget(std.math.maxInt(usize), 52, 4 * 1024 * 1024));
+    try std.testing.expectEqual(@as(?usize, 3), horizontalFloatMargin(.{ .unit = .px, .value = 20 }, 52));
+    try std.testing.expectEqual(@as(?usize, 0), horizontalFloatMargin(.{ .unit = .em, .value = 0 }, 52));
+    try std.testing.expect(horizontalFloatMargin(.{ .unit = .em, .value = 0.5 }, 52) == null);
+    try std.testing.expect(horizontalFloatMargin(.{ .unit = .px, .value = std.math.floatMax(f32) }, 52) == null);
+    const sections = try a.dupe(model.Section, F.entry.sections);
+    const blocks = try a.dupe(model.Block, sections[0].blocks);
+    blocks[0].table.?.style.?.margins.?.top = .{ .unit = .px, .value = 1 };
+    sections[0].blocks = blocks;
+    var value = F.entry;
+    value.sections = sections;
+    const captured = try F.capture(a, value, 52, false, &.{});
+    const layout = try floatLayoutAlloc(a, captured.text, 52, captured.poems, captured.events, false);
+    try std.testing.expectEqual(@as(usize, 1), layout.unsupported);
+}
+
+test "high terminal float drains before normal wide grid and footer references" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const F = CrossSectionFloatTest;
+    const rows = try a.alloc(@import("blob_encoder").presentation_types.Row, 24);
+    for (rows, 0..) |*row, index| {
+        const cells = try a.alloc(@import("blob_encoder").presentation_types.Cell, 1);
+        const spans = try a.alloc(model.Span, 1);
+        spans[0] = .{ .text = try std.fmt.allocPrint(a, "HIGH_{d}", .{index}) };
+        cells[0] = .{ .spans = spans };
+        row.* = .{ .cells = cells };
+    }
+    const sections = try a.dupe(model.Section, F.entry.sections);
+    const first = try a.dupe(model.Block, sections[0].blocks);
+    first[0].table.?.rows = rows;
+    sections[0].blocks = first;
+    var value = F.entry;
+    value.sections = sections;
+    const captured = try F.capture(a, value, 52, true, &.{});
+    const layout = try floatLayoutAlloc(a, captured.text, 52, captured.poems, captured.events, true);
+    const plain = try NarrowTableTest.plain(a, layout.text);
+    try std.testing.expect(std.mem.indexOf(u8, plain, "HIGH_23").? < std.mem.indexOf(u8, plain, "References").?);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain, "FOOT_NOTE"));
+    for (layout.rows) |row| {
+        const visible = try NarrowTableTest.plain(a, row.bytes);
+        if (std.mem.indexOf(u8, visible, "References") != null or std.mem.indexOf(u8, visible, "FOOT_NOTE") != null) try std.testing.expect(std.mem.indexOf(u8, visible, "│") == null);
+    }
+    const later = try a.dupe(model.Block, sections[3].blocks);
+    later[0] = .{ .kind = .table, .table = .{ .geometry = .{ .width = .{ .unit = .px, .value = 400 } }, .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .text = "WIDE_LATER" }} }} }} } };
+    sections[3].blocks = later;
+    const with_grid = try F.capture(a, value, 52, false, &.{});
+    const with_grid_layout = try floatLayoutAlloc(a, with_grid.text, 52, with_grid.poems, with_grid.events, false);
+    try std.testing.expect(std.mem.indexOf(u8, with_grid_layout.text, "HIGH_23").? < std.mem.indexOf(u8, with_grid_layout.text, "WIDE_LATER").?);
+    // A fitting ordinary table is one rectangular box even when the adjacent
+    // float ends before its final row. Both physical sides retain that origin.
+    const prefix = "│F0│\n│F1│\n";
+    const logical = prefix ++ "│G0│\n│G1│\n│G2│\n│G3│\n";
+    for ([_]@import("blob_encoder").presentation_types.TableFloatSide{ .left, .right }) |side| for ([_]?TextAlign{ null, .center, .right }) |alignment| {
+        const events = [_]FlowEvent{
+            .{ .kind = .float_grid, .start = 0, .end = prefix.len, .side = side },
+            .{ .kind = .grid, .start = prefix.len, .end = logical.len, .alignment = alignment },
+        };
+        const fixed = try floatLayoutAlloc(a, logical, 16, &.{}, &events, false);
+        var grid_rows: usize = 0;
+        for (fixed.rows) |row| if (CrossSectionFloatTest.column(row.bytes, "│G")) |column| {
+            grid_rows += 1;
+            const extra: usize = if (alignment == .right) 8 else if (alignment == .center) 4 else 0;
+            try std.testing.expectEqual(@as(usize, if (side == .left) 4 else 0) + extra, column);
+            try std.testing.expect(terminal.cellWidth(row.bytes) <= 16);
+        };
+        try std.testing.expectEqual(@as(usize, 4), grid_rows);
+    };
+    // Exercise the real capture route as well as the fixed-rectangle event case.
+    later[0] = .{ .kind = .table, .table = .{ .geometry = .{ .width = .{ .unit = .px, .value = 64 } }, .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .text = "AG" }} }} }} } };
+    for ([_]@import("blob_encoder").presentation_types.TableFloatSide{ .left, .right }) |side| {
+        first[0].table.?.style.?.float_side = side;
+        var prior_column: ?usize = null;
+        for ([_]?TextAlign{ null, .center, .right }) |alignment| {
+            later[0].text_align = alignment;
+            const aligned = try F.capture(a, value, 52, false, &.{});
+            var saw_aligned_grid = false;
+            for (aligned.events) |event| if (event.kind == .grid and event.alignment == alignment) { saw_aligned_grid = true; };
+            try std.testing.expect(saw_aligned_grid);
+            const placed = try floatLayoutAlloc(a, aligned.text, 52, aligned.poems, aligned.events, false);
+            var marker_column: ?usize = null;
+            for (placed.rows) |row| if (F.column(row.bytes, "AG")) |column| { marker_column = column; };
+            try std.testing.expect(marker_column != null);
+            if (prior_column) |column| try std.testing.expect(marker_column.? > column);
+            prior_column = marker_column;
+        }
+    }
+}
+
+test "terminal float ending mid prose reflows original Unicode with seeded SGR and origins" {
+    terminal.initLocale();
+    const a = std.testing.allocator;
+    const prefix = "│F0│\n│F1│\n";
+    const logical = prefix ++ "\x1b[1;38;2;18;52;86mאב猫é 👩‍💻 אב猫é 👩‍💻 אב猫é 👩‍💻 END_MARK\x1b[0m\n";
+    const events = [_]FlowEvent{
+        .{ .kind = .float_grid, .start = 0, .end = prefix.len, .side = .right },
+        .{ .kind = .text, .start = prefix.len, .end = logical.len },
+    };
+    const layout = try floatLayoutAlloc(a, logical, 18, &.{}, &events, true);
+    defer layout.deinit(a);
+    try std.testing.expectEqual(@as(usize, 0), layout.unsupported);
+    const plain = try NarrowTableTest.plain(a, layout.text);
+    defer a.free(plain);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain, "END_MARK"));
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, plain, "猫"));
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, plain, "👩‍💻"));
+    try std.testing.expect(layout.rows.len > 2);
+    try std.testing.expect(std.mem.indexOf(u8, layout.rows[2].bytes, "\x1b[38;2;18;52;86m") != null);
+    for (layout.rows) |row| try std.testing.expect(terminal.cellWidth(row.bytes) <= 18);
+    try std.testing.expectEqual(@as(usize, 0), layout.rowForOffset(prefix.len));
+    try std.testing.expect(layout.rowForOffset(logical.len - 8) >= 2);
+}
+
+test "terminal float layout allocation failures keep borrowed logical input unchanged" {
+    const Case = struct {
+        fn run(a: std.mem.Allocator) !void {
+            const prefix = "│F│\n";
+            const text = prefix ++ "word word word\n";
+            const events = [_]FlowEvent{
+                .{ .kind = .float_grid, .start = 0, .end = prefix.len, .side = .left },
+                .{ .kind = .text, .start = prefix.len, .end = text.len },
+            };
+            // All output writers inside this call are Writer.Allocating. Its
+            // installed drain maps allocation failure to WriteFailed; normalize
+            // only that known harness boundary for the allocator-failure sweep.
+            const layout = floatLayoutAlloc(a, text, 16, &.{}, &events, true) catch |err| switch (err) {
+                error.WriteFailed => return error.OutOfMemory,
+                else => return err,
+            };
+            defer layout.deinit(a);
+            try std.testing.expectEqualStrings("│F│\nword word word\n", text);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Case.run, .{});
+}
+
+test "terminal float render budget falls back to complete serial body without model changes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const F = CrossSectionFloatTest;
+    const sections = try a.dupe(model.Section, F.entry.sections);
+    const blocks = try a.dupe(model.Block, sections[0].blocks);
+    blocks[0].table.?.caption = &.{.{ .kind = .link, .text = "BUDGET_CAPTION", .target = "caption-target", .trail = "!" }};
+    sections[0].blocks = blocks;
+    var value = F.entry;
+    value.sections = sections;
+    const before = try std.json.Stringify.valueAlloc(a, value, .{});
+    const captured = try F.capture(a, value, 52, false, &.{});
+    const serial = try floatLayoutWithBudgetAlloc(a, captured.text, 52, captured.poems, captured.events, false, 1);
+    try std.testing.expectEqual(@as(usize, 1), serial.unsupported);
+    // Every line fits: declining placement must preserve exact serial output,
+    // including the authored caption/trail and the article/reference remainder.
+    try std.testing.expectEqualStrings(captured.text, serial.text);
+    for ([_][]const u8{ "BUDGET_CAPTION!", "N_ONE", "N_TWO", "N_TRI", "AHO_A!", "AHO_B", "ADJ_I", "ADJ_L", "AFTER_FLOW", "FOOT_NOTE" }) |marker| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, serial.text, marker));
+    const after = try std.json.Stringify.valueAlloc(a, value, .{});
+    try std.testing.expectEqualStrings(before, after);
+    try std.testing.expectEqualStrings("caption-target", value.sections[0].blocks[0].table.?.caption[0].target);
 }

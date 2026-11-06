@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import {decode,buildIndex,RawSource} from './blob.js';
 const u=n=>{const b=Buffer.alloc(4);b.writeUInt32LE(n);return b;};
 const str=s=>{const b=Buffer.from(s);return Buffer.concat([u(b.length),b]);};
@@ -59,7 +60,8 @@ test('same legacy reference wire has equal B/C projected graphs',()=>{
 
 // Optional genuine-product parity; caller authenticates all three retained inputs.
 // Keep decoded defaults explicit and reject unmodeled fields instead of erasing them.
-if(process.env.WIKBLB_C_INTEROP==='1'){
+function graphFor(version){
+ const extended=version==='DPRE';
  const keys=(value,allowed)=>{for(const key of Object.keys(value))assert.ok(allowed.includes(key),'Unmodeled field '+key);};
  const nullable=value=>value??null;
  const length=value=>{keys(value,['unit','value']);return {unit:value.unit,value:value.value};};
@@ -71,13 +73,13 @@ if(process.env.WIKBLB_C_INTEROP==='1'){
  };
  const style=(value,table)=>{
   if(value==null)return null;
-  keys(value,table?['background','border','collapse','margins']:['border','padding','text_align']);
-  return table?{background:nullable(value.background),border:value.border==null?null:border(value.border),collapse:nullable(value.collapse),margins:value.margins==null?null:edges(value.margins)}:
+  keys(value,table?['background','border','collapse','margins',...(extended?['float_side']:[])]:['border','padding','text_align']);
+  return table?{...(extended?{float_side:nullable(value.float_side)}:{}),background:nullable(value.background),border:value.border==null?null:border(value.border),collapse:nullable(value.collapse),margins:value.margins==null?null:edges(value.margins)}:
    {border:value.border==null?null:border(value.border),padding:value.padding==null?null:edges(value.padding),text_align:nullable(value.text_align)};
  };
  const image=value=>{
-  if(value==null)return null;keys(value,['file','width_px','height_px','alt','tooltip']);
-  return {file:value.file,width_px:nullable(value.width_px),height_px:nullable(value.height_px),alt:nullable(value.alt),tooltip:nullable(value.tooltip)};
+  if(value==null)return null;keys(value,['file','width_px','height_px','alt','tooltip',...(extended?['border']:[])]);
+  return {...(extended?{border:value.border??false}:{}),file:value.file,width_px:nullable(value.width_px),height_px:nullable(value.height_px),alt:nullable(value.alt),tooltip:nullable(value.tooltip)};
  };
  const spanFields=['kind','role','text','target','trail','language','classes','direction','explanation','bold','italic','code','small','superscript','subscript','strike','underline'];
  const spans=values=>values.map(value=>{
@@ -94,8 +96,8 @@ if(process.env.WIKBLB_C_INTEROP==='1'){
   })};})};
  };
  const block=value=>{
-  keys(value,['kind','depth','level','spans','feature','list_path','path','number','table','anchor','anchor_fallback']);
-  return {kind:value.kind,depth:value.depth,level:value.level,spans:spans(value.spans),feature:feature(value.feature),list_path:value.list_path??value.path,number:value.number,table:table(value.table),anchor:value.anchor,anchor_fallback:value.anchor_fallback};
+  keys(value,['kind','depth','level','spans','feature','list_path','path','number','table','anchor','anchor_fallback',...(extended?['text_align']:[])]);
+  return {...(extended?{text_align:nullable(value.text_align)}:{}),kind:value.kind,depth:value.depth,level:value.level,spans:spans(value.spans),feature:feature(value.feature),list_path:value.list_path??value.path,number:value.number,table:table(value.table),anchor:value.anchor,anchor_fallback:value.anchor_fallback};
  };
  const graph=value=>{
   keys(value,['organization','alias','redirect','presentation_version','title','kind','language','language_code','display_title','preamble_spans','sections','references','media']);
@@ -107,6 +109,10 @@ if(process.env.WIKBLB_C_INTEROP==='1'){
    keys(ref,['kind','number','group_number','name','group','spans','blocks']);return {kind:ref.kind??'note',number:ref.number,group_number:ref.group_number,name:ref.name,group:ref.group,spans:spans(ref.spans),blocks:ref.blocks==null?null:ref.blocks.map(block)};
   }),media:value.media.map(media=>{keys(media,['file','kind','caption']);return {file:media.file,kind:media.kind,caption:media.caption};})};
  };
+ return graph;
+}
+if(process.env.WIKBLB_C_INTEROP==='1'){
+ const graph=graphFor('DPRC');
  for(const edition of ['HE','HR'])test('genuine '+edition+' DPRC matches complete Stored and normal Reader modeled graph',async()=>{
   const env=field=>{const key='WIKBLB_C_'+edition+'_'+field;assert.ok(process.env[key],key+' is required');return process.env[key];};
   const stored=JSON.parse(await readFile(env('STORED'),'utf8')),reader=JSON.parse(await readFile(env('READER'),'utf8'));
@@ -118,3 +124,17 @@ if(process.env.WIKBLB_C_INTEROP==='1'){
   const actual=decode(wire,{...index.metadata,title:row.title});assert.deepEqual(graph(actual),graph(expected));assert.deepEqual(graph(actual),graph(reader.entries[0]));
  });
 }
+
+// No actual E inputs are selected here. All three hashes must be supplied by owner.
+if(process.env.WIKBLB_E_INTEROP==='1')test('genuine EU DPRE matches entire Stored and normal Reader modeled graph',async()=>{
+ const env=field=>{const key='WIKBLB_E_EU_'+field;assert.ok(process.env[key],key+' is required');return process.env[key];};
+ const input=async field=>{const bytes=await readFile(env(field)),expected=env(field+'_SHA256');assert.match(expected,/^[0-9a-f]{64}$/);assert.equal(createHash('sha256').update(bytes).digest('hex'),expected,field+' authenticated bytes');return bytes;};
+ const blob=await input('FIXTURE'),stored=JSON.parse(await input('STORED')),reader=JSON.parse(await input('READER'));
+ assert.equal(stored.schema,'wikidict.captured-current-stored.v1');assert.equal(stored.full_export,true);assert.equal(stored.codec_roundtrip,true);assert.equal(stored.records.length,1);
+ assert.equal(stored.records[0].stored.schema,'dict.presentation.v3');assert.equal(reader.schema,'dict.results.v1');assert.equal(reader.entries.length,1);
+ const expected=stored.records[0].stored.entry;assert.deepEqual(reader.entries[0],expected);
+ const source=new RawSource(new Blob([blob])),index=await buildIndex(source);assert.equal(index.rows.length,1);assert.equal(index.rows[0].title,expected.title);
+ const row=index.rows[0],wire=await source.read(row.offset,row.length);assert.equal(new TextDecoder().decode(wire.subarray(0,4)),'DPRE');
+ const graph=graphFor('DPRE'),actual=decode(wire,{...index.metadata,title:row.title});
+ assert.deepEqual(graph(actual),graph(expected));assert.deepEqual(graph(actual),graph(reader.entries[0]));
+});

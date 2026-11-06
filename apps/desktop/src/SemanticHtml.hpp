@@ -54,6 +54,13 @@ inline qreal boundedFontPoints(qreal base, double scale, qreal maximum, qreal ra
 inline const QString tableMarkerOpen = QStringLiteral("<!--wikidict-table-style:");
 struct TableInfo { int ordinal; QJsonObject value; };
 inline bool present(const QJsonValue &value) { return !value.isUndefined() && !value.isNull(); }
+inline QString textAlignment(const QJsonValue &value) {
+    if (!present(value)) return {};
+    const QString alignment = value.toString();
+    if (!value.isString() || (alignment != QStringLiteral("left") && alignment != QStringLiteral("center") && alignment != QStringLiteral("right")))
+        throw std::runtime_error("invalid typed text alignment");
+    return alignment;
+}
 inline QJsonObject typedStyle(const QJsonValue &value, const QStringList &keys) {
     if (!present(value)) return {};
     if (!value.isObject() || value.toObject().isEmpty()) throw std::runtime_error("invalid table style");
@@ -90,8 +97,8 @@ inline qreal styleLengthUnits(const QJsonValue &value, const QTextDocument *docu
     const qreal base = unit == QStringLiteral("em") ? containerPoints * defaultDpi / 72 : 1;
     return boundedFontPoints(base, n, maximum);
 }
-inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints, int indent) {
-    bool styled = present(table.value(QStringLiteral("style")));
+inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints, int indent, bool resetTextAlignment = false) {
+    bool styled = resetTextAlignment || present(table.value(QStringLiteral("style")));
     if (!styled) {
         for (const QJsonValue &row : table.value(QStringLiteral("rows")).toArray())
             for (const QJsonValue &cell : row.toObject().value(QStringLiteral("cells")).toArray())
@@ -112,6 +119,7 @@ inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints,
     }
     if (!styled) return {};
     QJsonObject metadata{{"container_points", containerPoints}, {"indent", indent}, {"rows", rows}};
+    if (resetTextAlignment) metadata.insert(QStringLiteral("reset_text_alignment"), true);
     if (present(table.value(QStringLiteral("style")))) metadata.insert(QStringLiteral("style"), table.value(QStringLiteral("style")));
     return tableMarkerOpen + QString::fromLatin1(QJsonDocument(metadata).toJson(QJsonDocument::Compact).toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals)) + QStringLiteral("-->");
 }
@@ -188,7 +196,21 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             return Border{length(solid.value(QStringLiteral("width"))), QTextFrameFormat::BorderStyle_Solid, styleColor(solid.value(QStringLiteral("color")))};
         };
         QTextTableFormat format = table ? table->format() : QTextTableFormat();
-        const QJsonObject style = typedStyle(record.value.value(QStringLiteral("style")), {"background", "border", "collapse", "margins"});
+        const QJsonValue resetAlignment = record.value.value(QStringLiteral("reset_text_alignment"));
+        if (!resetAlignment.isUndefined() && !resetAlignment.isBool()) throw std::runtime_error("invalid table text-alignment scope");
+        // A surrounding aligned td otherwise moves a nested table as well as
+        // its text. Cell align attributes carry the intended text inheritance;
+        // restore the frame's default alignment independently of float position.
+        if (resetAlignment.toBool()) format.clearProperty(QTextFormat::BlockAlignment);
+        const QJsonObject style = typedStyle(record.value.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "float_side"});
+        if (present(style.value(QStringLiteral("float_side")))) {
+            const QJsonValue side = style.value(QStringLiteral("float_side"));
+            if (!side.isString() || (side.toString() != QStringLiteral("left") && side.toString() != QStringLiteral("right")))
+                throw std::runtime_error("invalid table float side");
+            // Public frame positioning participates in normal text flow and
+            // preserves the original QTextTable cells, offsets and selection.
+            format.setPosition(side.toString() == QStringLiteral("left") ? QTextFrameFormat::FloatLeft : QTextFrameFormat::FloatRight);
+        }
         if (present(style.value(QStringLiteral("background")))) format.setBackground(styleColor(style.value(QStringLiteral("background"))));
         if (present(style.value(QStringLiteral("border")))) { const Border b = border(style.value(QStringLiteral("border"))); format.setBorder(b.width); format.setBorderStyle(b.style); format.setBorderBrush(b.color); }
         if (present(style.value(QStringLiteral("collapse")))) {
@@ -233,16 +255,10 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                 if (present(cellStyle.value(QStringLiteral("border")))) { const Border b = border(cellStyle.value(QStringLiteral("border"))); cellFormat.setBorder(b.width); cellFormat.setBorderStyle(b.style); cellFormat.setBorderBrush(b.color); }
                 if (present(cellStyle.value(QStringLiteral("padding")))) { const auto e = edges(cellStyle.value(QStringLiteral("padding"))); cellFormat.setTopPadding(e[0]); cellFormat.setRightPadding(e[1]); cellFormat.setBottomPadding(e[2]); cellFormat.setLeftPadding(e[3]); }
                 cell.setFormat(cellFormat);
-                if (present(cellStyle.value(QStringLiteral("text_align")))) {
-                    const QString alignment = cellStyle.value(QStringLiteral("text_align")).toString();
-                    if (alignment != QStringLiteral("left") && alignment != QStringLiteral("center") && alignment != QStringLiteral("right")) throw std::runtime_error("invalid cell alignment");
-                    const Qt::Alignment align = alignment == QStringLiteral("center") ? Qt::AlignHCenter : alignment == QStringLiteral("right") ? Qt::AlignRight : Qt::AlignLeft;
-                    for (QTextBlock block = cell.firstCursorPosition().block(); block.isValid() && block.position() <= cell.lastCursorPosition().position(); block = block.next()) {
-                        QTextCursor cursor(block);
-                        if (cursor.currentTable() != table) continue;
-                        QTextBlockFormat blockFormat = block.blockFormat(); blockFormat.setAlignment(align); cursor.setBlockFormat(blockFormat);
-                    }
-                }
+                // Generated align attributes already resolve inheritance and
+                // explicit block overrides. Rewriting every block here erased
+                // e.g. the centered middle number of a right-aligned cell.
+                textAlignment(cellStyle.value(QStringLiteral("text_align")));
             }
             if (index != cells.size()) throw std::runtime_error("table style cell count mismatch");
         }

@@ -1,0 +1,324 @@
+== {{ziman|ku}} ==
+
+=== Bilêvkirin ===
+* {{ku-IPA}}
+* {{deng|ku|LL-Q36163 (kmr)-Ebulfîda-qaz.wav|dever=Bidlîs}}
+* {{ku-kîte}}
+
+=== Navdêr ===
+[[Wêne:Domestic Goose.jpg|thumb|Qazek]]
+{{navdêr|ku|z=m+}}
+# [[firinde|Firrindeyek]] [[avî]] ye, ji [[werdek]]an [[gir]]tir e û [[deng]]ê wan [[qîjqîjî]] ye.
+#* {{jêder|ku|jêgirtin='''Qaz''' bi refa xwe re baz e.|gotineke pêşiyan}}
+#* {{jêder|ku|jêgirtin=Çûme mala Eliyê zaza, xanimê [[lorik|lor ke]], <br/>danî ber min goştê '''qaza''', delalê lor ke!|ji straneke gelêrî}}
+#* {{jêder-kitêb|ku|jêgirtin=جادۆگەرییەکێ ب سحرا خۆ وەل مەکر کو ئەم ھندەك جارا '''قاز''' بین و ھندەك جارا کچك بین.|tr=Cadogerîyekê bi siḧra xo wel me kir ku em hindek cara '''qaz''' bîn û hindek cara kiçik bîn.|sc=ku-Arab|sernav=Bêrîvan û Hîvî (Çîrokêt Zarokan)|nivîskar=Leylan Îsmeîl|weşanxane=Çapxana Xanî|cih=Dihok|sal=2012|r=19}}
+
+==== Bi alfabeyên din ====
+* {{ku-ar|قاز}}
+* {{ku-kr|ԛаз}}
+
+==== Jê ====
+{{kol3|ku|cure=Jê
+|gerdenqaz
+|gerdenqazî
+|qazdar
+|qazdarî
+|qazî
+|qaz û quling
+|qazûquling
+|qazvan
+|qazvanî
+|qazvanîtî
+|qazvantî
+|qazxane
+|qazvanok
+}}
+
+==== Etîmolojî ====
+Ji {{ji|trk|ku}} bide ber {{hv|chg|غاز|tr=ğaz}}, {{hv|ota|قاز|tr=qaz}}, {{hv|az|qaz}}. Taliyê ji {{ji|trk-pro|ku|*kāŕ}}. Hevreha {{hv|fa|غاز}} / {{q|fa|قاز}}.
+
+==== Bide ber ====
+{{kol3|ku
+|qab
+|qaç
+|qad
+|qaj
+|qas
+|qîz
+|qoz
+|quz
+|gaz
+|xaz
+|baz
+|caz
+|laz
+|naz
+|raz
+|saz
+|waz
+}}
+
+==== Herwiha binêre ====
+{{kol3|ku
+|miravî
+|quling
+|qû
+|sonek
+|werdek
+}}
+
+==== Werger ====
+{{werger-ser}}
+* {{Z|ab}}: {{W-|ab|аҟыз|sc=Cyrl}}
+* {{Z|ady}}: {{W-|ady|къаз}}
+* {{Z|af}}: {{W+|af|gans}}
+* {{Z|sq}}: {{W+|sq|patë|m}}
+* {{Z|goh}}: {{W-|goh|gans}}
+* {{Z|de}}: {{W+|de|Gans|m}}
+* {{Z|alt}}: {{W-|alt|кас}}
+* {{Z|am}}: {{W-|am|ዝይ|sc=Ethi}}
+* {{Z|arc}}:
+*: {{Z|syc}}: {{W-|syc|ܘܙܐ|tr=wazzā|sc=Syrc}}
+* {{Z|aqc}}: {{W-|aqc|хъаз}}
+* {{Z|ast}}: {{W+|ast|gansu|n}}
+* {{Z|av}}: {{W-|av|хъаз}}
+* {{Z|az}}: {{W+|az|qaz}}
+* {{Z|bdr}}: {{W-|bdr|angsa'}}
+* {{Z|eu}}: {{W+|eu|antzara}}
+* {{Z|ba}}: {{W-|ba|ҡаҙ|sc=Cyrl}}
+* {{Z|bbl}}: {{W-|bbl|ბატ}}
+* {{Z|sne}}: {{W-|sne|asa}}
+* {{Z|be}}: {{W-|be|гусь|m}}, {{W-|be|гуса́к|n|sc=Cyrl}}
+* {{Z|bn}}: {{W+|bn|হাঁস|sc=Beng}}
+* {{Z|br}}: {{W+|br|gwaz|m}}
+* {{Z|kxd}}: {{W-|kxd|angsa}}
+* {{Z|bg}}: {{W+|bg|гъ́ска|m}}, {{W-|bg|гъсо́к|n}}
+* {{Z|my}}: {{W+|my|ငန်း|sc=Mymr}}
+* {{Z|bsk}}: {{W-|bsk|bataqh}}, {{W-|bsk|sindiṣ}}
+* {{Z|ce}}: {{W-|ce|гӏаз|sc=Cyrl}}
+* {{Z|cs}}: {{W+|cs|husa|m}}
+* {{Z|chr}}: {{W+|chr|ᏌᏌ|sc=Cher}}
+* {{Z|zh}}:
+*: {{Z|yue}}: {{W-|yue|鵝|tr=ngo4}}, {{W-|yue|鵝|tr=ngo4-2}}, {{W-|yue|雁|tr=ngaan6}}
+*: {{Z|dng}}: {{W-|dng|ңә}}
+*: {{Z|cmn}}: {{W+|cmn|鵝|tr=é}}, {{W+|cmn|雁|tr=yàn}}
+* {{Z|cho}}: {{W-|cho|shilaklak}}
+* {{Z|cv}}: {{W-|cv|хур|sc=Cyrl}}
+* {{Z|dlm}}: {{W-|dlm|jauca|m}}
+* {{Z|da}}: {{W+|da|gås|g}}
+* {{Z|dar}}: {{W-|dar|къаз}}
+* {{Z|dlg}}: {{W-|dlg|каас|tr=kaas|sc=Cyrl}}
+* {{Z|ovd}}: {{W-|ovd|gą̊s}}
+* {{Z|id}}: {{W+|id|angsa}}
+* {{Z|ar}}: {{W-|ar|إِوَزّ|n}}, {{W-|ar|وَزّ|n}}
+*: {{Z|arz}}: {{W-|arz|وز|n|tr=wizz}}, {{W-|arz|وزة|m|tr=wizza}}
+*: {{Z|ary}}: {{W-|ary|وز|n|tr=wazz}}, {{W-|ary|وزة|m|tr=wazza}}
+* {{Z|hy}}: {{W+|hy|սագ}}
+* {{Z|myv}}: {{W-|myv|мацей}}, {{W-|myv|гала}}, {{W-|myv|дига}}
+* {{Z|eo}}: {{W-|eo|ansero}}
+* {{Z|et}}: {{W+|et|hani}}
+* {{Z|evn}}: {{W-|evn|нюӈняки}}
+* {{Z|fa}}: {{W+|fa|غاز|tr=ğâz}}
+* {{Z|fo}}: {{W-|fo|gás|m}}
+* {{Z|fi}}: {{W+|fi|hanhi}}
+* {{Z|frp}}: {{W-|frp|ôye|m}}
+* {{Z|fr}}: {{W+|fr|oie|m}}
+* {{Z|fur}}: {{W-|fur|ocje}}, {{W-|fur|ocje|m}}
+* {{Z|stq}}: {{W-|stq|Gous|m}}, {{W-|stq|Gäise|m-p}}
+* {{Z|fy}}: {{W-|fy|goes|g}}
+* {{Z|gd}}: {{W-|gd|gèadh}}
+* {{Z|gag}}: {{W-|gag|kaaz}}
+* {{Z|gl}}: {{W+|gl|ganso|n}}, {{W-|gl|sangano|n}}
+* {{Z|got}}: {{W-|got|*𐌲𐌰𐌽𐍃|m}}
+* {{Z|ka}}: {{W-|ka|ბატი|sc=Geor}}
+* {{Z|ht}}: {{W-|ht|zwa}}
+* {{Z|hi}}: {{W+|hi|हंस|n|sc=Deva}}
+* {{Z|nl}}: {{W+|nl|gans|m}}
+* {{Z|iba}}: {{W-|iba|ansa}}
+* {{Z|he}}: {{W+|he|אווז|n|tr=aváz|cuda=אווז \ אַוָּז \ אֲוָז}}
+* {{Z|io}}: {{W+|io|ganso}}
+* {{Z|ang}}: {{W-|ang|gōs}}
+* {{Z|enm}}: {{W-|enm|goos}}
+* {{Z|en}}: {{W+|en|goose}}
+* {{Z|inh}}: {{W-|inh|гӏаж}}
+* {{Z|ia}}: {{W-|ia|ansere}}, {{W-|ia|oca}}
+* {{Z|sga}}: {{W-|sga|géd|n}}
+* {{Z|ga}}: {{W+|ga|gé|m}}
+* {{Z|ist}}: {{W-|ist|uoca|m}}
+* {{Z|it}}: {{W+|it|oca|m}}, {{W+|it|papero}}
+* {{Z|is}}: {{W+|is|gæs}}
+* {{Z|ja}}: {{W+|ja|鵝鳥|tr=がちょう, gachō|sc=Jpan}}, {{W+|ja|雁|tr=がん, gan, かり, kari|sc=Jpan}}
+* {{Z|kbd}}: {{W-|kbd|къаз}}
+* {{Z|kl}}: {{W-|kl|nerleq}}
+* {{Z|xal}}: {{W-|xal|һалун|sc=Cyrl}}
+* {{Z|krc}}: {{W-|krc|къаз|tr=qaz|sc=Cyrl}}
+* {{Z|kdr}}: {{W-|kdr|къаз|tr=qaz}}, {{W-|kdr|каз|tr=kaz}}
+* {{Z|kaa}}: {{W-|kaa|g'az}}, {{W-|kaa|ғаз}}
+* {{Z|csb}}: {{W-|csb|gãs|m}}
+* {{Z|ca}}: {{W+|ca|oca|m}}
+* {{Z|ckv}}: {{W-|ckv|ngu}}
+* {{Z|ks}}: {{W-|ks|اَسمٲنؠ أنٛز}}
+* {{Z|ky}}: {{W+|ky|каз|sc=Cyrl}}
+* {{Z|kqr}}: {{W-|kqr|ansa}}, {{W-|kqr|titik}}
+* {{Z|kpv}}: {{W-|kpv|дзодзӧг}}
+* {{Z|ko}}: {{W+|ko|기러기}}, {{W+|ko|거위}}, {{W-|ko|케사니}}
+* {{Z|kw}}: {{W-|kw|goedh|m}}
+* {{Z|co}}: {{W-|co|oca|m}}
+* {{Z|kum}}: {{W-|kum|къаз|tr=qaz|sc=Cyrl}}
+* {{Z|lld}}: {{W-|lld|aucia}}
+* {{Z|lkt}}: {{W-|lkt|maǧá}}
+* {{Z|la}}: {{W+|la|anser|n}}, {{W-|la|avica|m}}
+*: Scientific Latinized genera: ''[[Anser]]'', ''[[Branta]]'', ''[[Chen]]'', ''[[Cereopsis]]''
+* {{Z|lv}}: {{W+|lv|zoss|m}}
+* {{Z|lo}}: {{W+|lo|ຫ່ານ}}
+* {{Z|lzz}}: {{W-|lzz|კაზი}}, {{W-|lzz|ღაზი}}, {{W-|lzz|ღორღოჯი}}
+* Lenape:
+*: {{Z|unm}}: {{W-|unm|òpsuwihële}}
+* {{Z|lez}}: {{W-|lez|къаз|sc=Cyrl}}
+* {{Z|lij}}: {{W-|lij|oca|m}}
+* {{Z|lt}}: {{W+|lt|žąsis|m}}
+* {{Z|lmo}}: {{W-|lmo|occa|m}}
+* {{Z|lb}}: {{W+|lb|Gäns|m}}
+* {{Z|mk}}: {{W-|mk|гуска|m}}
+* {{Z|ms}}: {{W+|ms|angsa}}, {{W+|ms|soang}}, {{W-|ms|rangsa}}
+* {{Z|mt}}: {{W-|mt|wiżża|m}}
+* {{Z|mnc}}: {{W-|mnc|ᠨᡳᠣᠩᠨᡳᠶᠠᡥᠠ}}
+* {{Z|mns-nor}}: {{W-|mns-nor|лунт}}
+* {{Z|mi}}: {{W-|mi|kuihi}}
+* Marî:
+*: {{Z|mhr}}: {{W-|mhr|комбо}}
+* {{Z|hu}}: {{W+|hu|lúd}}, {{W+|hu|liba}}
+* {{Z|xmf}}: {{W-|xmf|ღორღონჯი}}
+* {{Z|mel}}: {{W-|mel|baguong}}
+* {{Z|egy}}: {{W-|egy|srw}}
+* {{Z|mic}}: {{W-|mic|sulumgw|an}}, {{W-|mic|tagali'j|an}}
+* {{Z|mn}}: {{W+|mn|галуу|sc=Cyrl}}
+* {{Z|mnw}}: {{W-|mnw|ဟာန်}}
+* {{Z|moe}}: {{W-|moe|nishk}}
+* {{Z|gld}}: {{W-|gld|нёнгя}}
+* {{Z|nap}}: {{W-|nap|pàpara}}
+* {{Z|nv}}: {{W-|nv|chį́į́shłigaii}}
+* {{Z|nds}}:
+*: {{Z|nds}}: {{W+|nds|Goos|m}}
+*: {{Z|pdt}}: {{W-|pdt|Gauns|m}}
+* {{Z|yrk}}: {{W-|yrk|ябто|tr=jabto}}
+* {{Z|ne}}: {{W-|ne|राजहंस}}
+* {{Z|nog}}: {{W-|nog|каз}}
+* {{Z|nrf}}: {{W-|nrf|ouaïe|m}}, {{W-|nrf|ouaie|m}}, {{W-|nrf|pithotte|m}}, {{W-|nrf|ouée|m}}
+* {{Z|no}}:
+*: {{Z|nb}}: {{W+|nb|gås|n|m}}
+*: {{Z|nn}}: {{W-|nn|gås|m}}
+* {{Z|oj}}: {{W-|oj|nika}}
+* {{Z|oc}}: {{W+|oc|auca}}
+* {{Z|os}}: {{W-|os|хъаз|sc=Cyrl}}
+*: {{Z|pi}}: {{W-|pi|ဟံသ|n}}
+* {{Z|ug}}: {{W-|ug|غاز|sc=ug-Arab}}
+* {{Z|uz}}: {{W+|uz|gʻoz}}
+* {{Z|ps}}: {{W+|ps|بته|m|tr=bata|sc=ps-Arab}}
+* {{Z|pms}}: {{W-|pms|òca|m}}
+* {{Z|pdt}}: {{W-|pdt|Gauns|m}}
+* {{Z|pl}}: {{W+|pl|gęś|m}}
+* {{Z|pt}}: {{W+|pt|ganso|n}}
+* {{Z|kk}}: {{W-|kk|қаз|sc=Cyrl}}
+* {{Z|cop}}: {{W-|cop|ⲕⲉⲛⲉⲥⲟⲥ|n}}, {{W-|cop|ⲣⲟ|n}}
+* {{Z|rgn}}: {{W-|rgn|oca|m}}
+* {{Z|rm}}: {{W-|rm|auca|m}}, {{W-|rm|ocha|m}}
+* {{Z|rom}}: {{W-|rom|gansako|n}}, {{W-|rom|papin|m}}
+* {{Z|ro}}: {{W+|ro|gâscă|m}}, {{W+|ro|gâscan|n}}, {{W+|ro|gânsac|n}}
+* {{Z|ru}}: {{W+|ru|гусь|n}}, {{W+|ru|гусы́ня|m}}, {{W+|ru|гуса́к|n}}
+* Samî:
+*: {{Z|se}}: {{W-|se|čuonjá}}
+*: {{Z|smn}}: {{W-|smn|čuánjá}}
+*: {{Z|sms}}: {{W-|sms|čuânj}}
+*: {{Z|sjd}}: {{W-|sjd|чуэнь}}
+* {{Z|sa}}: {{W+|sa|हंस|n}}
+* {{Z|sc}}: {{W-|sc|coca}}, {{W-|sc|oca}}
+* {{Z|scn}}: {{W-|scn|oca|m}}
+* {{Z|sh}}:
+*: Kirîlî: {{W-|sh|гуска|m|sc=Cyrl}}, {{W-|sh|гусан|n|sc=Cyrl}}
+*: Latînî: {{W+|sh|guska|m|sc=Latn}}, {{W+|sh|gusan|n|sc=Latn}}
+* {{Z|sk}}: {{W+|sk|hus|m}}
+* {{Z|sl}}: {{W+|sl|gos|m}}, {{W-|sl|gosak|n}}
+* Sorbî:
+*: {{Z|dsb}}: {{W-|dsb|gus|m}}
+*: {{Z|hsb}}: {{W-|hsb|hus|m}}, {{W-|hsb|husyca|m}}
+* {{Z|es}}: {{W+|es|ganso|n}}, {{W+|es|oca|m}}, {{W+|es|ánsar|n}}
+* {{Z|su}}: {{W-|su|soang}}
+* {{Z|sva}}: {{W-|sva|ღარღა̄დ}}
+* {{Z|sw}}: {{W-|sw|bata bukini}}
+* {{Z|sv}}: {{W+|sv|gås|g}}
+* {{Z|zdj}}: {{W-|zdj|gisi}}
+* {{Z|cjs}}: {{W-|cjs|қас|tr=qas|sc=Cyrl}}
+* {{Z|tyz}}: {{W-|tyz|hán}}
+* {{Z|tab}}: {{W-|tab|гъаз}}
+* {{Z|tg}}: {{W+|tg|ғоз}}, {{W+|tg|қоз}}
+* {{Z|tl}}: {{W-|tl|gansa}}
+* {{Z|ta}}: {{W+|ta|வாத்து}}
+* {{Z|blt}}: {{W-|blt|ꪬ꪿ꪱꪙ}}
+* {{Z|th}}: {{W+|th|ห่าน}}
+* {{Z|te}}: {{W+|te|బాతు}}, {{W+|te|పెద్దబాతు|sc=Telu}}
+* {{Z|crh}}: {{W-|crh|qaz}}
+* {{Z|tt}}: {{W+|tt|каз}}
+* {{Z|tr}}: {{W+|tr|kaz}}
+* {{Z|tk}}: {{W-|tk|gaz}}
+* {{Z|bo}}: {{W-|bo|ངང་པ|sc=Tibt}}
+* {{Z|tli}}: {{W-|tli|t'aawákh}}
+* {{Z|kim}}: {{W-|kim|қас|tr=qas}}
+* {{Z|tyv}}: {{W-|tyv|кас|sc=Cyrl}}
+* {{Z|udm}}: {{W-|udm|ӟазег|sc=Cyrl}}
+* {{Z|uga}}: {{W-|uga|𐎜𐎇}}
+* {{Z|ur}}: {{W-|ur|ہنس|n|tr=hans|sc=ur-Arab}}
+* {{Z|uk}}: {{W-|uk|гу́ска|m|sc=Cyrl}}, {{W-|uk|гуса́к|n|sc=Cyrl}},
+* {{Z|vec}}: {{W-|vec|oco|n}}
+* {{Z|vi}}: {{W+|vi|ngỗng}}
+* {{Z|vo}}: {{W+|vo|gan}}
+* {{Z|wa}}: {{W+|wa|åwe|m}}, {{W+|wa|oye|m}}
+* {{Z|cy}}: {{W+|cy|gŵydd|n}}, {{W+|cy|gwyddau|m-p}}
+* {{Z|wym}}: {{W-|wym|gaons|m}}
+* {{Z|kjh}}: {{W-|kjh|хас}}
+* Khanty:
+*: {{Z|kca}}: {{W-|kca|ԓәнт}}
+* {{Z|km}}: {{W+|km|ក្ងាន|tr=kŋaan|sc=Khmr}}
+* {{Z|sah}}: {{W-|sah|хаас|sc=Cyrl}}
+* {{Z|yi}}: {{W-|yi|גאַנדז|m}}
+* {{Z|ii}}: {{W-|ii|ꈭ}}
+* {{Z|esu}}: {{W-|esu|lagiq}}
+* {{Z|el}}: {{W+|el|χήνα|m}}
+*: Kevn: {{W-|grc|χήν|n|m}}
+* {{Z|za}}: {{W-|za|hanq}}
+* {{Z|zu}}: {{W+|zu|ihansi|c5|c6}}
+
+{{werger-bin}}
+
+:{{werger çavkanî|en|goose|beş=Ev qismê Wergerê|oldid=75821583}}
+
+{{mijar|ku|balinde}}
+
+==== Anagram ====
+* {{anagram|ku|a=aqz|zaq}}
+
+== {{ziman|ckb}} ==
+
+=== Navdêr ===
+{{navdêr|ckb|sc=Latn}}
+# {{g|ku|qaz}}
+
+{{PH-nîşan|27/2011}}
+
+== {{ziman|az}} ==
+
+=== Navdêr ===
+{{navdêr|az}}
+# {{mijar|az|heywan}} {{g|ku|qaz}}
+
+=== Çavkanî ===
+{{rûpela wergerê|az|qaz}}
+
+== {{ziman|crh}} ==
+
+=== Navdêr ===
+{{navdêr|crh}}
+# {{mijar|crh|heywan}} {{g|ku|qaz}}
+
+=== Çavkanî ===
+{{rûpela wergerê|crh|qaz}}

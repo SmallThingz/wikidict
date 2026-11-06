@@ -2,6 +2,9 @@ const std = @import("std");
 const format = @import("blob_format.zig");
 
 pub const schema = "dict.presentation.v3";
+// DPRE extends the private catalog capacity; earlier image records retain128.
+pub const legacy_inline_image_assets: usize = 128;
+pub const max_media_assets: usize = 256;
 pub const Role = enum { normal, label, pronunciation, headword, example, quotation, citation, reference };
 pub const InlineKind = enum { text, link, external_link, line_break };
 pub const FontScaleBasis = enum { context, normal_body };
@@ -122,11 +125,13 @@ pub const StyleBorder = union(enum) {
 };
 pub const BorderCollapse = enum { separate, collapse };
 pub const CellTextAlign = enum { left, center, right };
+pub const TableFloatSide = enum { left, right };
 pub const TableStyle = struct {
     background: ?[]const u8 = null,
     border: ?StyleBorder = null,
     collapse: ?BorderCollapse = null,
     margins: ?StyleEdges = null,
+    float_side: ?TableFloatSide = null,
 
     pub fn jsonStringify(self: TableStyle, jw: anytype) !void {
         try writeOptionalStyleFields(self, jw);
@@ -221,6 +226,23 @@ pub const Block = struct {
     anchor: []const u8 = "",
     anchor_fallback: []const u8 = "",
     table: ?Table = null,
+    text_align: ?CellTextAlign = null,
+
+    pub fn jsonStringify(self: Block, jw: anytype) !void {
+        try jw.beginObject();
+        inline for (@typeInfo(Block).@"struct".field_names) |name| {
+            if (comptime std.mem.eql(u8, name, "text_align")) {
+                if (self.text_align) |alignment| {
+                    try jw.objectField(name);
+                    try jw.write(alignment);
+                }
+            } else {
+                try jw.objectField(name);
+                try jw.write(@field(self, name));
+            }
+        }
+        try jw.endObject();
+    }
 };
 pub const Section = struct {
     level: u8,
@@ -349,9 +371,9 @@ pub fn validInlineImageAction(kind: InlineKind, target: []const u8) bool {
     };
 }
 fn validateInlineImageMedia(value: InlineImage, media: []const Media) ValidationError!void {
-    // The existing compiler caps the shared asset inventory at 128. Apply that
-    // bound only to new image occurrences; legacy records keep their old rules.
-    if (media.len > 128) return error.InvalidPresentation;
+    // The codec separately enforces the older wire versions'128-asset bound.
+    // Media-only legacy records retain their historical admission.
+    if (media.len > max_media_assets) return error.InvalidPresentation;
     var matches: usize = 0;
     for (media) |item| if (std.mem.eql(u8, item.file, value.file)) {
         if (item.kind != .image) return error.InvalidPresentation;
@@ -388,7 +410,7 @@ pub fn validBorder(value: StyleBorder) bool {
     };
 }
 pub fn validTableStyle(value: TableStyle) bool {
-    if (value.background == null and value.border == null and value.collapse == null and value.margins == null) return false;
+    if (value.background == null and value.border == null and value.collapse == null and value.margins == null and value.float_side == null) return false;
     if (value.background) |color| if (!isCanonicalRgb(color)) return false;
     if (value.border) |border| if (!validBorder(border)) return false;
     if (value.margins) |margins| if (!validStyleEdges(margins)) return false;
@@ -693,7 +715,7 @@ test "inline image model rejects invalid dimensions strings actions and asset jo
         stored.entry.media = media;
         try std.testing.expectError(error.InvalidPresentation, validateStored(stored, "image", .supplemental, null));
     }
-    var too_many: [129]Media = undefined;
+    var too_many: [max_media_assets + 1]Media = undefined;
     @memset(&too_many, good[0]);
     stored.entry.media = &too_many;
     try std.testing.expectError(error.InvalidPresentation, validateStored(stored, "image", .supplemental, null));
@@ -747,4 +769,39 @@ test "image border JSON defaults preserve legacy shape and reject nonboolean inp
         const invalid = std.json.parseFromSlice(InlineImage, a, source, .{});
         if (invalid) |value| { value.deinit(); return error.TestUnexpectedResult; } else |_| {}
     }
+}
+
+test "block alignment and table float JSON distinguish null from explicit physical sides" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const old = struct {
+        kind: BlockKind = .paragraph,
+        depth: u8 = 0,
+        spans: []const Span = &.{},
+        feature: ?Feature = null,
+        list_path: []const u8 = "",
+        number: []const u8 = "",
+        level: u8 = 0,
+        anchor: []const u8 = "",
+        anchor_fallback: []const u8 = "",
+        table: ?Table = null,
+    }{};
+    const legacy = try std.json.Stringify.valueAlloc(a, old, .{});
+    try std.testing.expectEqualStrings(legacy, try std.json.Stringify.valueAlloc(a, Block{ .kind = .paragraph }, .{}));
+    try std.testing.expectEqualStrings(legacy, try std.json.Stringify.valueAlloc(a, Block{ .kind = .paragraph, .text_align = null }, .{}));
+    for ([_]CellTextAlign{ .left, .center, .right }) |alignment| {
+        const json = try std.json.Stringify.valueAlloc(a, Block{ .kind = .paragraph, .text_align = alignment }, .{});
+        const suffix = try std.fmt.allocPrint(a, ",\"text_align\":\"{s}\"}}", .{@tagName(alignment)});
+        try std.testing.expect(std.mem.endsWith(u8, json, suffix));
+    }
+    try std.testing.expect(!validTableStyle(.{}));
+    for ([_]TableFloatSide{ .left, .right }) |side| {
+        const style: TableStyle = .{ .float_side = side };
+        try std.testing.expect(validTableStyle(style));
+        const expected = try std.fmt.allocPrint(a, "{{\"float_side\":\"{s}\"}}", .{@tagName(side)});
+        try std.testing.expectEqualStrings(expected, try std.json.Stringify.valueAlloc(a, style, .{}));
+    }
+    try std.testing.expectEqualStrings("{\"collapse\":\"separate\"}", try std.json.Stringify.valueAlloc(a, TableStyle{ .collapse = .separate, .float_side = null }, .{}));
+    try std.testing.expect(!validTableStyle(.{ .float_side = .right, .margins = StyleEdges.all(.{ .unit = .em, .value = -1 }) }));
 }

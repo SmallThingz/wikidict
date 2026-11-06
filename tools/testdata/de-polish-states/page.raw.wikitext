@@ -1,0 +1,1579 @@
+{{Verzeichnis}}
+== Staaten der Welt ==
+{| border=1 cellpadding=3 cellspacing=1 width=100% style="background-color: #FFFACD;color: black; font-size:100%; border: 1px #aaa solid; border-collapse: collapse; float: left" class="sortable"
+|-
+!style="background-color: #EEDC82;color: black" | [[państwo]] ([[nazwa]] [[oficjalny|oficjalna]])
+!style="background-color: #EEDC82;color: black" | [[obywatel]], [[obywatelka]]
+!style="background-color: #EEDC82;color: black" | [[Adjektiv]]
+!style="background-color: #EEDC82;color: black" | [[stolica]]
+!style="background-color: #EEDC82;color: black"  class="unsortable"| [[Flagge]]
+!style="background-color: #EEDC82;color: black" | [[Staat]] ([[amtlich]]e [[Bezeichnung]])
+!style="background-color: #EEDC82;color: black" |[[Hauptstadt]]
+|-
+|[[Afganistan]]<ref name="Afganistan"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 1</ref> ([[Islamska Republika Afganistanu]]<ref name="Afganistan"/>)
+|[[Afgańczyk]]<ref name="Afganistan"/>, [[Afganka]]<ref name="Afganistan"/>
+|[[afganistański]]<ref name="Afganistan"/>, [[afgański]]<ref name="Afganistan"/>
+|[[Kabul]]<ref name="Afganistan"/>
+|align=center|[[Bild:Flag of Afghanistan.svg|30px]]
+|[[Afghanistan]] ([[Islamische Republik Afghanistan]])
+|[[Kabul]]
+|-
+|[[Albania]]<ref name="Albania"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 1</ref> ([[Republika Albanii]]<ref name="Albania"/>)
+|[[Albańczyk]]<ref name="Albania"/>, [[Albanka]]<ref name="Albania"/>
+|[[albański]]<ref name="Albania"/>
+|[[Tirana]]<ref name="Albania"/>
+|align=center|[[Bild:Flag of Albania.svg|30px]]
+|[[Albanien]] ([[Republik Albanien]])
+|[[Tirana]]
+|-
+|[[Algieria]]<ref name="Algieria"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 1f.</ref> ([[Algierska Republika Ludowo-Demokratyczna]]<ref name="Algieria"/>)
+|[[Algierczyk]]<ref name="Algieria"/>, [[Algierka]]<ref name="Algieria"/>
+|[[algierski]]<ref name="Algieria"/>
+|[[Algier]]<ref name="Algieria"/>
+|align=center|[[Bild:Flag of Algeria.svg|30px]]
+|[[Algerien]] ([[Demokratische Volksrepublik Algerien]])
+|[[Algier]]
+|-
+|[[Andora]]<ref name="Andora"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 2</ref> ([[Księstwo Andory]]<ref name="Andora"/>)
+|[[Andorczyk]]<ref name="Andora"/>, [[Andorka]]<ref name="Andora"/>
+|[[andorski]]<ref name="Andora"/>
+|[[Andora]]<ref name="Andora"/>
+|align=center|[[Bild:Flag of Andorra.svg|30px]]
+|[[Andorra]] ([[Fürstentum Andorra]])
+|[[Andorra la Vella]]
+|-
+|[[Angola]]<ref name="Angola"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 2</ref> ([[Republika Angoli]]<ref name="Angola"/>)
+|[[Angolijczyk]]<ref name="Angola"/>/[[Angolczyk]]<ref name="Angola"/>, [[Angolijka]]<ref name="Angola"/>/[[Angolka]]<ref name="Angola"/>
+|[[angolski]]<ref name="Angola"/>, [[angolijski]]<ref name="Angola"/>
+|[[Luanda]]<ref name="Angola"/>
+|align=center|[[Bild:Flag of Angola.svg|30px]]
+|[[Angola]] ([[Republik Angola]])
+|[[Luanda]]
+|-
+|[[Antigua i Barbuda]]<ref name="Antigua i Barbuda"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 2</ref>
+|[[Antiguańczyk]], [[Antiguanka]]
+|[[antiguański]]
+|[[Saint John's]]<ref name="Antigua i Barbuda"/>
+|align=center|[[Bild:Flag of Antigua and Barbuda.svg|30px]]
+|[[Antigua und Barbuda]]
+|[[Saint John's]]
+|-
+|[[Arabia Saudyjska]]<ref name="Arabia Saudyjska"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 2</ref> ([[Królestwo Arabii Saudyjskiej]]<ref name="Arabia Saudyjska"/>)
+|[[Saudyjczyk]]<ref name="Arabia Saudyjska"/>, [[Saudyjka]]<ref name="Arabia Saudyjska"/>
+|[[saudyjski]]<ref name="Arabia Saudyjska"/>, [[saudyjsko-arabski]]
+|[[Rijad]]<ref name="Arabia Saudyjska"/>
+|align=center|[[Bild:Flag of Saudi Arabia.svg|30px]]
+|[[Saudi-Arabien]] ([[Königreich Saudi-Arabien]])
+|[[Riad]]
+|-
+|[[Argentyna]]<ref name="Argentyna"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 3</ref> ([[Republika Argentyńska]]<ref name="Argentyna"/>)
+|[[Argentyńczyk]]<ref name="Argentyna"/>, [[Argentynka]]<ref name="Argentyna"/>
+|[[argentyński]]<ref name="Argentyna"/>
+|[[Buenos Aires]]<ref name="Argentyna"/>
+|align=center|[[Bild:Flag of Argentina.svg|30px]]
+|[[Argentinien]] ([[Argentinische Republik]])
+|[[Buenos Aires]]
+|-
+|[[Armenia]]<ref name="Armenia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 3</ref> ([[Republika Armenii]]<ref name="Armenia"/>)
+|[[Armeńczyk]]<ref name="Armenia"/>, [[Armenka]]<ref name="Armenia"/>
+|[[armeński]]<ref name="Armenia"/>, [[ormiański]]
+|[[Erywań]]<ref name="Armenia"/>, [[Erewan]]
+|align=center|[[Bild:Flag of Armenia.svg|30px]]
+|[[Armenien]] ([[Republik Armenien]])
+|[[Eriwan]]
+|-
+|[[Australia]]<ref name="Australia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 3</ref> ([[Związek Australijski]]<ref name="Australia"/>)
+|[[Australijczyk]]<ref name="Australia"/>, [[Australijka]]<ref name="Australia"/>
+|[[australijski]]<ref name="Australia"/>
+|[[Canberra]]<ref name="Australia"/>
+|align=center|[[Bild:Flag of Australia.svg|30px]]
+|[[Australien]] ([[Commonwealth von Australien]])
+|[[Canberra]]
+|-
+|[[Austria]]<ref name="Austria"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 3</ref> ([[Republika Austrii]]<ref name="Austria"/>)
+|[[Austriak]]<ref name="Austria"/>, [[Austriaczka]]<ref name="Austria"/>
+|[[austriacki]]<ref name="Austria"/>
+|[[Wiedeń]]<ref name="Austria"/>
+|align=center|[[Bild:Flag of Austria.svg|30px]]
+|[[Österreich]] ([[Republik Österreich]])
+|[[Wien]]
+|-
+|[[Azerbejdżan]]<ref name="Azerbejdżan"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 3f.</ref> ([[Republika Azerbejdżanu]]<ref name="Azerbejdżan"/>)
+|[[Azerbejdżanin]]<ref name="Azerbejdżan"/>, [[Azerbejdżanka]]<ref name="Azerbejdżan"/>
+|[[azerbejdżański]]<ref name="Azerbejdżan"/>
+|[[Baku]]<ref name="Azerbejdżan"/>
+|align=center|[[Bild:Flag of Azerbaijan.svg|30px]]
+|[[Aserbaidschan]] ([[Republik Aserbaidschan]])
+|[[Baku]]
+|-
+|[[Bahamy]]<ref name="Bahamy"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 4</ref> ([[Wspólnota Bahamów]]<ref name="Bahamy"/>)
+|[[Bahamczyk]]<ref name="Bahamy"/>, [[Bahamka]]<ref name="Bahamy"/>
+|[[bahamski]]<ref name="Bahamy"/>
+|[[Nassau]]<ref name="Bahamy"/>
+|align=center|[[Bild:Flag of the Bahamas.svg|30px]]
+|[[Bahamas]] ([[Commonwealth der Bahamas]])
+|[[Nassau]]
+|-
+|[[Bahrajn]]<ref name="Bahrajn"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 4</ref> ([[Królestwo Bahrajnu]]<ref name="Bahrajn"/>)
+|[[Bahrajńczyk]]<ref name="Bahrajn"/>/[[Bahrańczyk]]<ref name="Bahrajn"/>, [[Bahrajnka]]<ref name="Bahrajn"/>/[[Bahranka]]<ref name="Bahrajn"/>
+|[[bahrański]]<ref name="Bahrajn"/>, [[bahrajński]]
+|[[Manama]]<ref name="Bahrajn"/>
+|align=center|[[Bild:Flag of Bahrain.svg|30px]]
+|[[Bahrain]] ([[Königreich Bahrain]])
+|[[Manama]]
+|-
+|[[Bangladesz]]<ref name="Bangladesz"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 4</ref> ([[Ludowa Republika Bangladeszu]]<ref name="Bangladesz"/>)
+|[[Banglijczyk]], [[Banglijka]]
+|[[bangladeski]]<ref name="Bangladesz"/>, [[banglijski]]
+|[[Dhaka]]<ref name="Bangladesz"/>
+|align=center|[[Bild:Flag of Bangladesh.svg|30px]]
+|[[Bangladesch]] ([[Volksrepublik Bangladesch]])
+|[[Dhaka]]
+|-
+|[[Barbados]]<ref name="Barbados"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 5</ref>
+|[[Barbadosyjczyk]]/[[Barbadoszczyk]], [[Barbadosyjka]]/[[Barbadoska]]
+|[[barbadoski]]<ref name="Barbados"/>
+|[[Bridgetown]]<ref name="Barbados"/>
+|align=center|[[Bild:Flag of Barbados.svg|30px]]
+|[[Barbados]]
+|[[Bridgetown]]
+|-
+|[[Belgia]]<ref name="Belgia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 5</ref> ([[Królestwo Belgii]]<ref name="Belgia"/>)
+|[[Belg]]<ref name="Belgia"/>, [[Belgijka]]<ref name="Belgia"/>
+|[[belgijski]]<ref name="Belgia"/>
+|[[Bruksela]]<ref name="Belgia"/>
+|align=center|[[Bild:Flag of Belgium.svg|30px]]
+|[[Belgien]] ([[Königreich Belgien]])
+|[[Brüssel]]
+|-
+|[[Belize]]<ref name="Belize"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 5</ref>
+|[[Belizeńczyk]]<ref name="Belize"/>, [[Belizenka]]<ref name="Belize"/>
+|[[belizeński]]<ref name="Belize"/>
+|[[Belmopan]]<ref name="Belize"/>
+|align=center|[[Bild:Flag of Belize.svg|30px]]
+|[[Belize]]
+|[[Belmopan]]
+|-
+|[[Benin]]<ref name="Benin"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 5</ref> ([[Republika Beninu]]<ref name="Benin"/>)
+|[[Benińczyk]]<ref name="Benin"/>, [[Beninka]]<ref name="Benin"/>
+|[[beniński]]<ref name="Benin"/>
+|[[Porto-Novo]]<ref name="Benin"/>, [[Kotonu]]<ref name="Benin"/>
+|align=center|[[Bild:Flag of Benin.svg|30px]]
+|[[Benin]] ([[Republik Benin]])
+|[[Porto Novo]], [[Cotonou]]
+|-
+|[[Bhutan]]<ref name="Bhutan"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 5f.</ref> ([[Królestwo Bhutanu]]<ref name="Bhutan"/>)
+|[[Bhutańczyk]]<ref name="Bhutan"/>, [[Bhutanka]]<ref name="Bhutan"/>
+|[[butański]]<ref name="Bhutan"/>
+|[[Thimphu]]<ref name="Bhutan"/>
+|align=center|[[Bild:Flag of Bhutan.svg|30px]]
+|[[Bhutan]] ([[Königreich Bhutan]])
+|[[Thimphu]]
+|-
+|[[Białoruś]]<ref name="Białoruś"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 6</ref> ([[Republika Białorusi]]<ref name="Białoruś"/>)
+|[[Białorusin]]<ref name="Białoruś"/>, [[Białorusinka]]<ref name="Białoruś"/>
+|[[białoruski]]<ref name="Białoruś"/>
+|[[Mińsk]]<ref name="Białoruś"/>
+|align=center|[[Bild:Flag of Belarus.svg|30px]]
+|[[Weißrussland]], [[Belarus]] ([[Republik Weißrussland]])
+|[[Minsk]]
+|-
+|[[Birma]]<ref name="Birma"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 6</ref>, [[Myanmar]], [[Mianma]] ([[Związek Birmański]]<ref name="Birma"/>, [[Związek Myanmar]]<ref name="Birma"/>)
+|[[Birmańczyk]]<ref name="Birma"/>, [[Birmanka]]<ref name="Birma"/>
+|[[birmański]]<ref name="Birma"/>
+|[[Naypyidaw]]<ref name="Birma"/>
+|align=center|[[Bild:Flag of Myanmar.svg|30px]]
+|[[Birma]], [[Burma]], [[Myanmar]] ([[Union Myanmar]])
+|[[Naypyidaw]]
+|-
+|[[Boliwia]]<ref name="Boliwia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 6</ref> ([[Republika Boliwii]]<ref name="Boliwia"/>)
+|[[Boliwijczyk]]<ref name="Boliwia"/>, [[Boliwijka]]<ref name="Boliwia"/>
+|[[boliwijski]]<ref name="Boliwia"/>
+|[[Sucre]]<ref name="Boliwia"/>, [[La Paz]]<ref name="Boliwia"/>
+|align=center|[[Bild:Flag of Bolivia.svg|30px]]
+|[[Bolivien]] ([[Republik Bolivien]])
+|[[Sucre]], [[La Paz]]
+|-
+|[[Bośnia i Hercegowina]]<ref name="Bośnia i Hercegowina"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 6</ref>
+|[[Bośniak]], [[Bośniaczka]];<br> [[Hercegowińczyk]], [[Hercegowinka]]
+|[[bośniacki i hercegowiński]]<ref name="Bośnia i Hercegowina"/>,<br> [[bośniacko-hercegowiński]]<ref name="Bośnia i Hercegowina"/>
+|[[Sarajewo]]<ref name="Bośnia i Hercegowina"/>
+|align=center|[[Bild:Flag of Bosnia and Herzegovina.svg|30px]]
+|[[Bosnien und Herzegowina]]
+|[[Sarajewo]]
+|-
+|[[Botswana]]<ref name="Botswana"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 7</ref> ([[Republika Botswany]]<ref name="Botswana"/>)
+|[[Botswańczyk]]<ref name="Botswana"/>, [[Botswanka]]<ref name="Botswana"/>
+|[[botswański]]<ref name="Botswana"/>
+|[[Gaborone]]<ref name="Botswana"/>
+|align=center|[[Bild:Flag of Botswana.svg|30px]]
+|[[Botsuana]] ([[Republik Botsuana]])
+|[[Gaborone]]
+|-
+|[[Brazylia]]<ref name="Brazylia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 7</ref> ([[Federacyjna Republika Brazylii]]<ref name="Brazylia"/>)
+|[[Brazylijczyk]]<ref name="Brazylia"/>, [[Brazylijka]]<ref name="Brazylia"/>
+|[[brazylijski]]<ref name="Brazylia"/>
+|[[Brasília]]<ref name="Brazylia"/>
+|align=center|[[Bild:Flag of Brazil.svg|30px]]
+|[[Brasilien]] ([[Föderative Republik Brasilien]])
+|[[Brasília]]
+|-
+|[[Brunei]]<ref name="Brunei"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 7</ref> ([[Państwo Brunei Darussalam]]<ref name="Brunei"/>)
+|[[Brunejczyk]]<ref name="Brunei"/>, [[Brunejka]]<ref name="Brunei"/>
+|[[brunejski]]<ref name="Brunei"/>
+|[[Bandar Seri Begawan]]<ref name="Brunei"/>
+|align=center|[[Bild:Flag of Brunei.svg|30px]]
+|[[Brunei]] ([[Brunei Darussalam]])
+|[[Bandar Seri Begawan]]
+|-
+|[[Bułgaria]]<ref name="Bułgaria"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 7</ref> ([[Republika Bułgarii]]<ref name="Bułgaria"/>)
+|[[Bułgar]]<ref name="Bułgaria"/>, [[Bułgarka]]<ref name="Bułgaria"/>
+|[[bułgarski]]<ref name="Bułgaria"/>
+|[[Sofia]]<ref name="Bułgaria"/>
+|align=center|[[Bild:Flag of Bulgaria.svg|30px]]
+|[[Bulgarien]] ([[Republik Bulgarien]])
+|[[Sofia]]
+|-
+|[[Burkina Faso]]<ref name="Burkina Faso"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 8</ref>
+|[[Burkińczyk]]<ref name="Burkina Faso"/>, [[Burkina]]<ref name="Burkina Faso"/>
+|[[burkiński]]<ref name="Burkina Faso"/>
+|[[Wagadugu]]<ref name="Burkina Faso"/>
+|align=center|[[Bild:Flag of Burkina Faso.svg|30px]]
+|[[Burkina Faso]]
+|[[Ouagadougou]]
+|-
+|[[Burundi]]<ref name="Burundi"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 8</ref> ([[Republika Burundi]]<ref name="Burundi"/>)
+|[[Burundyjczyk]]<ref name="Burundi"/>, [[Burundyjka]]<ref name="Burundi"/>
+|[[burundyjski]]<ref name="Burundi"/>
+|[[Bużumbura]]<ref name="Burundi"/>
+|align=center|[[Bild:Flag of Burundi.svg|30px]]
+|[[Burundi]] ([[Republik Burundi]])
+|[[Gitega]]
+|-
+|[[Chile]]<ref name="Chile"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 8</ref> ([[Republika Chile]]<ref name="Chile"/>)
+|[[Chilijczyk]]<ref name="Chile"/>, [[Chilijka]]<ref name="Chile"/>
+|[[czilijski]]<ref name="Chile"/>
+|[[Santiago]]<ref name="Chile"/>
+|align=center|[[Bild:Flag of Chile.svg|30px]]
+|[[Chile]] ([[Republik Chile]])
+|[[Santiago de Chile]]
+|-
+|[[Chiny]]<ref name="Chiny"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 8</ref> ([[Chińska Republika Ludowa]]<ref name="Chiny"/>)
+|[[Chińczyk]]<ref name="Chiny"/>, [[Chinka]]<ref name="Chiny"/>
+|[[chiński]]<ref name="Chiny"/>
+|[[Pekin]]<ref name="Chiny"/>
+|align=center|[[Bild:Flag of the People's Republic of China.svg|30px]]
+|[[China]] ([[Volksrepublik China]])
+|[[Peking]]
+|-
+|[[Chorwacja]]<ref name="Chorwacja"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 8f.</ref> ([[Republika Chorwacji]]<ref name="Chorwacja"/>)
+|[[Chorwat]]<ref name="Chorwacja"/>, [[Chorwatka]]<ref name="Chorwacja"/>
+|[[chorwacki]]<ref name="Chorwacja"/>
+|[[Zagrzeb]]<ref name="Chorwacja"/>
+|align=center|[[Bild:Flag of Croatia.svg|30px]]
+|[[Kroatien]] ([[Republik Kroatien]])
+|[[Zagreb]]
+|-
+|[[Cypr]]<ref name="Cypr"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 9</ref> ([[Republika Cypryjska]]<ref name="Cypr"/>)
+|[[Cypryjczyk]]<ref name="Cypr"/>, [[Cypryjka]]<ref name="Cypr"/>
+|[[cypryjski]]<ref name="Cypr"/>
+|[[Nikozja]]<ref name="Cypr"/>
+|align=center|[[Bild:Flag of Cyprus.svg|30px]]
+|[[Zypern]] ([[Republik Zypern]])
+|[[Nikosia]]
+|-
+|[[Czad]]<ref name="Czad"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 9</ref> ([[Republika Czadu]]<ref name="Czad"/>)
+|[[Czadyjczyk]]<ref name="Czad"/>, [[Czadyjka]]<ref name="Czad"/>
+|[[czadyjski]]<ref name="Czad"/>
+|[[Ndżamena]]<ref name="Czad"/>
+|align=center|[[Bild:Flag of Chad.svg|30px]]
+|[[Tschad]] ([[Republik Tschad]])
+|[[N'Djamena]]
+|-
+|[[Czarnogóra]]<ref name="Czarnogóra"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 9; auf der [http://www.gugik.gov.pl/komisja/pliki/protokol_ksng-39_posiedzenie.pdf 39. Sitzung der Kommission vom 13. Ferbruar 2008] wurde die Langform ''Republika Czarnogóy'' gestrichen, somit bleibt einzig die Kurzform ''Czarnogóra'' als Bezeichnung für diesen Staat</ref>
+|[[Czarnogórzanin]]<ref name="Czarnogóra"/>/[[Czarnogórzec]], [[Czarnogórzanka]]<ref name="Czarnogóra"/>/[[Czarnogórka]]
+|[[czarnogórski]]<ref name="Czarnogóra"/>
+|[[Podgorica]]<ref name="Czarnogóra"/>
+|align=center|[[Bild:Flag of Montenegro.svg|30px]]
+|[[Montenegro]]
+|[[Podgorica]]
+|-
+|[[Czechy]]<ref name="Czechy"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 10</ref> ([[Republika Czeska]]<ref name="Czechy"/>)
+|[[Czech]]<ref name="Czechy"/>, [[Czeszka]]<ref name="Czechy"/>
+|[[czeski]]<ref name="Czechy"/>
+|[[Praga]]<ref name="Czechy"/>
+|align=center|[[Bild:Flag of the Czech Republic.svg|30px]]
+|[[Tschechien]] ([[Tschechische Republik]])
+|[[Prag]]
+|-
+|[[Dania]]<ref name="Dania"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 10</ref> ([[Królestwo Danii]]<ref name="Dania"/>)
+|[[Duńczyk]]<ref name="Dania"/>, [[Dunka]]<ref name="Dania"/>
+|[[duński]]<ref name="Dania"/>
+|[[Kopenhaga]]<ref name="Dania"/>
+|align=center|[[Bild:Flag of Denmark.svg|30px]]
+|[[Dänemark]] ([[Königreich Dänemark]])
+|[[Kopenhagen]]
+|-
+|[[Demokratyczna Republika Konga]]<ref name="Demokratyczna Republika Konga"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 10</ref>
+|[[Kongijczyk]]<ref name="Demokratyczna Republika Konga"/>, [[Kongijka]]<ref name="Demokratyczna Republika Konga"/>
+|[[kongijski]]<ref name="Demokratyczna Republika Konga"/>
+|[[Kinszasa]]<ref name="Demokratyczna Republika Konga"/>
+|align=center|[[Bild:Flag of the Democratic Republic of the Congo.svg|30px]]
+|[[Demokratische Republik Kongo]]
+|[[Kinshasa]]
+|-
+|[[Dominika]]<ref name="Dominika"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 10</ref> ([[Wspólnota Dominiki]]<ref name="Dominika"/>)
+|[[Dominikanin]]<ref name="Dominika"/>, [[Dominikanka]]<ref name="Dominika"/>
+|[[dominicki]]<ref name="Dominika"/>
+|[[Roseau]]<ref name="Dominika"/>
+|align=center|[[Bild:Flag of Dominica.svg|30px]]
+|[[Dominica]] ([[Commonwealth von Dominica]])
+|[[Roseau]]
+|-
+|[[Dominikana]]<ref name="Dominikana"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 10f.</ref> ([[Republika Dominikańska]]<ref name="Dominikana"/>)
+|[[Dominikańczyk]]<ref name="Dominikana"/>, [[Dominikanka]]<ref name="Dominikana"/>
+|[[dominikański]]<ref name="Dominikana"/>
+|[[Santo Domingo]]<ref name="Dominikana"/>
+|align=center|[[Bild:Flag of the Dominican Republic.svg|30px]]
+|[[Dominikanische Republik]]
+|[[Santo Domingo]]
+|-
+|[[Dżibuti]]<ref name="Dżibuti"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 11</ref> ([[Republika Dżibuti]]<ref name="Dżibuti"/>)
+|[[Dżibutyjczyk]]<ref name="Dżibuti"/>, [[Dżibutyjka]]<ref name="Dżibuti"/>
+|[[dżibutyjski]]<ref name="Dżibuti"/>, [[dżibucki]]<ref name="Dżibuti"/>
+|[[Dżibuti]]<ref name="Dżibuti"/>
+|align=center|[[Bild:Flag of Djibouti.svg|30px]]
+|[[Dschibuti]] ([[Republik Dschibuti]])
+|[[Dschibuti]]
+|-
+|[[Egipt]]<ref name="Egipt"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 11</ref> ([[Arabska Republika Egiptu]]<ref name="Egipt"/>)
+|[[Egipcjanin]]<ref name="Egipt"/>, [[Egipcjanka]]<ref name="Egipt"/>
+|[[egipski]]<ref name="Egipt"/>
+|[[Kair]]<ref name="Egipt"/>
+|align=center|[[Bild:Flag of Egypt.svg|30px]]
+|[[Ägypten]] ([[Arabische Republik Ägypten]])
+|[[Kairo]]
+|-
+|[[Ekwador]]<ref name="Ekwador"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 11</ref> ([[Republika Ekwadoru]]<ref name="Ekwador"/>)
+|[[Ekwadorczyk]]<ref name="Ekwador"/>, [[Ekwadorka]]<ref name="Ekwador"/>
+|[[ekwadorski]]<ref name="Ekwador"/>
+|[[Quito]]<ref name="Ekwador"/>
+|align=center|[[Bild:Flag of Ecuador.svg|30px]]
+|[[Ecuador]] ([[Republik Ecuador]])
+|[[Quito]]
+|-
+|[[Erytrea]]<ref name="Erytrea"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 11f.</ref> ([[Państwo Erytrea]]<ref name="Erytrea"/>)
+|[[Erytrejczyk]]<ref name="Erytrea"/>, [[Erytrejka]]<ref name="Erytrea"/>
+|[[erutrejski]]<ref name="Erytrea"/>
+|[[Asmara]]<ref name="Erytrea"/>
+|align=center|[[Bild:Flag of Eritrea.svg|30px]]
+|[[Eritrea]] ([[Staat Eritrea]])
+|[[Asmara]]
+|-
+|[[Estonia]]<ref name="Estonia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 12</ref> ([[Republika Estońska]]<ref name="Estonia"/>)
+|[[Estończyk]]<ref name="Estonia"/>, [[Estonka]]<ref name="Estonia"/>
+|[[estoński]]<ref name="Estonia"/>
+|[[Tallinn]]<ref name="Estonia"/>
+|align=center|[[Bild:Flag of Estonia.svg|30px]]
+|[[Estland]] ([[Republik Estland]])
+|[[Tallinn]]
+|-
+|[[Etopia]]<ref name="Etiopia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 12</ref> ([[Federalna Deomokratyczna Republika Etiopii]]<ref name="Etiopia"/>)
+|[[Etiopczyk]]<ref name="Etiopia"/>, [[Etiopka]]<ref name="Etiopia"/>
+|[[etiopski]]<ref name="Etiopia"/>
+|[[Addis Abeba]]<ref name="Etiopia"/>
+|align=center|[[Bild:Flag of Ethiopia.svg|30px]]
+|[[Äthiopien]] ([[Demokratische Bundesrepublik Äthiopien]])
+|[[Addis Abeba]]
+|-
+|[[Fidżi]]<ref name="Fidżi"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 12</ref> ([[Republika Wysp Fidżi]]<ref name="Fidżi"/>)
+|[[Fidżyjczyk]]<ref name="Fidżi"/>, [[Fidżyjka]]<ref name="Fidżi"/>
+|[[fidżyjski]]<ref name="Fidżi"/>
+|[[Suva]]<ref name="Fidżi"/>
+|align=center|[[Bild:Flag of Fiji.svg|30px]]
+|[[Fidschi]] ([[Republik Fidschi-Inseln]])
+|[[Suva]]
+|-
+|[[Filipiny]]<ref name="Filipiny"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 13</ref> ([[Republika Filipin]]<ref name="Filipiny"/>)
+|[[Filipińczyk]]<ref name="Filipiny"/>, [[Filipinka]]<ref name="Filipiny"/>
+|[[filipiński]]<ref name="Filipiny"/>
+|[[Manila]]<ref name="Filipiny"/>
+|align=center|[[Bild:Flag of Philippines.svg|30px]]
+|[[Philippinen]] ([[Republik der Philippinen]])
+|[[Manila]]
+|-
+|[[Finlandia]]<ref name="Finlandia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 13</ref> ([[Republika Finlandii]]<ref name="Finlandia"/>)
+|[[Fin]]<ref name="Finlandia"/>, [[Finka]]<ref name="Finlandia"/>
+|[[fiński]]<ref name="Finlandia"/>, [[finlandzki]]<ref name="Finlandia"/>
+|[[Helsinki]]<ref name="Finlandia"/>
+|align=center|[[Bild:Flag of Finland.svg|30px]]
+|[[Finnland]] ([[Republik Finnland]])
+|[[Helsinki]]
+|-
+|[[Francja]]<ref name="Francja"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 13</ref> ([[Republika Francuska]]<ref name="Francja"/>)
+|[[Francuz]]<ref name="Francja"/>, [[Francuzka]]<ref name="Francja"/>
+|[[francuski]]<ref name="Francja"/>
+|[[Paryż]]<ref name="Francja"/>
+|align=center|[[Bild:Flag of France.svg|30px]]
+|[[Frankreich]] ([[Französische Republik]])
+|[[Paris]]
+|-
+|[[Gabon]]<ref name="Gabon"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 13</ref> ([[Republika Gabońska]]<ref name="Gabon"/>)
+|[[Gabończyk]]<ref name="Gabon"/>, [[Gabonka]]<ref name="Gabon"/>
+|[[gaboński]]<ref name="Gabon"/>
+|[[Libreville]]<ref name="Gabon"/>
+|align=center|[[Bild:Flag of Gabon.svg|30px]]
+|[[Gabon]] ([[Gabunische Republik]])
+|[[Libreville]]
+|-
+|[[Gambia]]<ref name="Gambia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 14</ref> ([[Republika Gambii]]<ref name="Gambia"/>)
+|[[Gambijczyk]]<ref name="Gambia"/>, [[Gambijka]]<ref name="Gambia"/>
+|[[gambijski]]<ref name="Gambia"/>
+|[[Bandżul]]<ref name="Gambia"/>
+|align=center|[[Bild:Flag of The Gambia.svg|30px]]
+|[[Gambia]] ([[Republik Gambia]])
+|[[Banjul]]
+|-
+|[[Ghana]]<ref name="Ghana"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 14</ref> ([[Republika Ghany]]<ref name="Ghana"/>)
+|[[Ghańczyk]]<ref name="Ghana"/>, [[Ghanka]]<ref name="Ghana"/>
+|[[ghański]]<ref name="Ghana"/>
+|[[Akra]]<ref name="Ghana"/>
+|align=center|[[Bild:Flag of Ghana.svg|30px]]
+|[[Ghana]] ([[Republik Ghana]])
+|[[Accra]]
+|-
+|[[Grecja]]<ref name="Grecja"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 14</ref> ([[Republika Grecka]]<ref name="Grecja"/>)
+|[[Grek]]<ref name="Grecja"/>, [[Greczynka]]<ref name="Grecja"/>
+|[[grecki]]<ref name="Grecja"/>
+|[[Ateny]]<ref name="Grecja"/>
+|align=center|[[Bild:Flag of Greece.svg|30px]]
+|[[Griechenland]] ([[Hellenische Republik]])
+|[[Athen]]
+|-
+|[[Grenada]]<ref name="Grenada"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 14</ref>
+|[[Grenadyjczyk]]<ref name="Grenada"/>, [[Grenadyjka]]<ref name="Grenada"/>
+|[[grenadyjski]]<ref name="Grenada"/>
+|[[Saint George's]]<ref name="Grenada"/>
+|align=center|[[Bild:Flag of Grenada.svg|30px]]
+|[[Grenada]]
+|[[St. George's]]
+|-
+|[[Gruzja]]<ref name="Gruzja"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 14f.</ref>
+|[[Gruzin]]<ref name="Gruzja"/>, [[Gruzinka]]<ref name="Gruzja"/>
+|[[gruziński]]<ref name="Gruzja"/>
+|[[Tbilisi]]<ref name="Gruzja"/>
+|align=center|[[Bild:Flag of Georgia.svg|30px]]
+|[[Georgien]]
+|[[Tiflis]]
+|-
+|[[Gujana]]<ref name="Gujana"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 15</ref> ([[Kooperacyjna Republika Gujany]]<ref name="Gujana"/>)
+|[[Gujańczyk]]<ref name="Gujana"/>, [[Gujanka]]<ref name="Gujana"/>
+|[[gujański]]<ref name="Gujana"/>
+|[[Georgetown]]<ref name="Gujana"/>
+|align=center|[[Bild:Flag of Guyana.svg|30px]]
+|[[Guyana]] ([[Kooperative Republik Guyana]])
+|[[Georgetown]]
+|-
+|[[Gwatemala]]<ref name="Gwatemala"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 15</ref> ([[Republika Gwatemali]]<ref name="Gwatemala"/>)
+|[[Gwatemalczyk]]<ref name="Gwatemala"/>, [[Gwatemalka]]<ref name="Gwatemala"/>
+|[[gwatemalski]]<ref name="Gwatemala"/>
+|[[Gwatemala]]<ref name="Gwatemala"/>
+|align=center|[[Bild:Flag of Guatemala.svg|30px]]
+|[[Guatemala]] ([[Republik Guatemala]])
+|[[Guatemala-Stadt]]
+|-
+|[[Gwinea]]<ref name="Gwinea"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 15</ref> ([[Republika Gwinei]]<ref name="Gwinea"/>)
+|[[Gwinejczyk]]<ref name="Gwinea"/>, [[Gwinejka]]<ref name="Gwinea"/>
+|[[gwinejski]]<ref name="Gwinea"/>
+|[[Konakry]]<ref name="Gwinea"/>
+|align=center|[[Bild:Flag of Guinea.svg|30px]]
+|[[Guinea]] ([[Republik Guinea]])
+|[[Conakry]]
+|-
+|[[Gwinea Bissau]]<ref name="Gwinea Bissau"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 15</ref> ([[Republika Gwinei Bissau]]<ref name="Gwinea Bissau"/>)
+|[[Gwinejczyk]]<ref name="Gwinea Bissau"/>, [[Gwinejka]]<ref name="Gwinea Bissau"/>
+|[[gwinejski]]<ref name="Gwinea Bissau"/>
+|[[Bissau]]<ref name="Gwinea Bissau"/>
+|align=center|[[Bild:Flag of Guinea-Bissau.svg|30px]]
+|[[Guinea-Bissau]] ([[Republik Guinea-Bissau]])
+|[[Bissau]]
+|-
+|[[Gwinea Równikowa]]<ref name="Gwinea Równikowa"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 16</ref> ([[Republika Gwinei Równikowej]]<ref name="Gwinea Równikowa"/>)
+|[[Gwinejczyk]]<ref name="Gwinea Równikowa"/>, [[Gwinejka]]<ref name="Gwinea Równikowa"/>
+|[[gwinejski]]<ref name="Gwinea Równikowa"/>
+|[[Malabo]]<ref name="Gwinea Równikowa"/>
+|align=center|[[Bild:Flag of Equatorial Guinea.svg|30px]]
+|[[Äquatorialguinea]] ([[Republik Äquatorialguinea]])
+|[[Malabo]]
+|-
+|[[Haiti]]<ref name="Haiti"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 16</ref> ([[Republika Haiti]]<ref name="Haiti"/>)
+|[[Haitańczyk]]<ref name="Haiti"/>, [[Haitanka]]<ref name="Haiti"/>
+|[[haitański]]<ref name="Haiti"/>
+|[[Port-au-Prince]]<ref name="Haiti"/>
+|align=center|[[Bild:Flag of Haiti.svg|30px]]
+|[[Haiti]] ([[Republik Haiti]])
+|[[Port-au-Prince]]
+|-
+|[[Hiszpania]]<ref name="Hiszpania"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 16</ref> ([[Królestwo Hiszpanii]]<ref name="Hiszpania"/>)
+|[[Hiszpan]]<ref name="Hiszpania"/>, [[Hiszpanka]]<ref name="Hiszpania"/>
+|[[hiszpański]]<ref name="Hiszpania"/>
+|[[Madryt]]<ref name="Hiszpania"/>
+|align=center|[[Bild:Flag of Spain.svg|30px]]
+|[[Spanien]] ([[Königreich Spanien]])
+|[[Madrid]]
+|-
+|[[Holandia]]<ref name="Holandia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 16</ref>, [[Niderlandy]] ([[Królestwo Niderlandów]]<ref name="Holandia"/>)
+|[[Holender]]<ref name="Holandia"/>, [[Holenderka]]<ref name="Holandia"/>;<br> [[Niderlandczyk]], [[Niderlandka]]
+|[[holenderski]]<ref name="Holandia"/>; [[niderlandzki]]<ref name="Holandia"/>
+|[[Amsterdam]]<ref name="Holandia"/>; [[Haga]]<ref name="Holandia"/>
+|align=center|[[Bild:Flag of the Netherlands.svg|30px]]
+|[[Niederlande]], [[Holland]] ([[Königreich der Niederlande]])
+|[[Amsterdam]], [[Den Haag]]
+|-
+|[[Honduras]]<ref name="Honduras"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 17</ref> ([[Republika Hondurasu]]<ref name="Honduras"/>)
+|[[Honduranin]]<ref name="Honduras"/>, [[Honduranka]]<ref name="Honduras"/>
+|[[honduraski]]<ref name="Honduras"/>
+|[[Tegucigalpa]]<ref name="Honduras"/>
+|align=center| 
+|[[Honduras]] ([[Republik Honduras]])
+|[[Tegucigalpa]]
+|-
+|[[Indie]]<ref name="Indie"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 17</ref> ([[Republika Indii]]<ref name="Indie"/>)
+|[[Hindus]]<ref name="Indie"/>, [[Hinduska]]<ref name="Indie"/>; [[Indus]], [[Induska]]
+|[[indyjski]]<ref name="Indie"/>
+|[[Nowe Delhi]]<ref name="Indie"/>
+|align=center|[[Bild:Flag of India.svg|30px]]
+|[[Indien]] ([[Republik Indien]])
+|[[Neu-Delhi]]
+|-
+|[[Indonezja]]<ref name="Indonezja"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 17</ref> ([[Republika Indonezji]]<ref name="Indonezja"/>)
+|[[Indonezyjczyk]]<ref name="Indonezja"/>, [[Indonezyjka]]<ref name="Indonezja"/>
+|[[indonezyjski]]<ref name="Indonezja"/>
+|[[Dżakarta]]<ref name="Indonezja"/>
+|align=center|[[Bild:Flag of Indonesia.svg|30px]]
+|[[Indonesien]] ([[Republik Indonesien]])
+|[[Jakarta]]
+|-
+|[[Irak]]<ref name="Irak"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 17</ref> ([[Republika Iraku]]<ref name="Irak"/>)
+|[[Irakijczyk]]<ref name="Irak"/>, [[Irakijka]]<ref name="Irak"/>
+|[[iracki]]<ref name="Irak"/>
+|[[Bagdad]]<ref name="Irak"/>
+|align=center|[[Bild:Flag of Iraq.svg|30px]]
+|[[Irak]] ([[Republik Irak]])
+|[[Bagdad]]
+|-
+|[[Iran]]<ref name="Iran"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 18</ref> ([[Islamska Republika Iranu]]<ref name="Iran"/>)
+|[[Irańczyk]]<ref name="Iran"/>, [[Iranka]]<ref name="Iran"/>
+|[[irański]]<ref name="Iran"/>
+|[[Teheran]]<ref name="Iran"/>
+|align=center|[[Bild:Flag of Iran.svg|30px]]
+|[[Iran]] ([[Islamische Republik Iran]])
+|[[Teheran]]
+|-
+|[[Irlandia]]<ref name="Irlandia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 18</ref>
+|[[Irlandczyk]]<ref name="Irlandia"/>, [[Irlandka]]<ref name="Irlandia"/>
+|[[irlandzki]]<ref name="Irlandia"/>
+|[[Dublin]]<ref name="Irlandia"/>
+|align=center|[[Bild:Flag of Ireland.svg|30px]]
+|[[Irland]]
+|[[Dublin]]
+|-
+|[[Islandia]]<ref name="Islandia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 18</ref> ([[Republika Islandii]]<ref name="Islandia"/>)
+|[[Islandczyk]]<ref name="Islandia"/>, [[Islandka]]<ref name="Islandia"/>
+|[[islandzki]]<ref name="Islandia"/>
+|[[Reykjavík]]<ref name="Islandia"/>, [[Rejkiawik]]
+|align=center|[[Bild:Flag of Iceland.svg|30px]]
+|[[Island]] ([[Republik Island]])
+|[[Reykjavík]]
+|-
+|[[Izrael]]<ref name="Izrael"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 18</ref> ([[Państwo Izrael]]<ref name="Izrael"/>)
+|[[Izraelczyk]]<ref name="Izrael"/>, [[Izraelka]]<ref name="Izrael"/>
+|[[izraelski]]<ref name="Izrael"/>
+|[[Jerozolima]]<ref name="Izrael"/>
+|align=center|[[Bild:Flag of Israel.svg|30px]]
+|[[Israel]] ([[Staat Israel]])
+|[[Jerusalem]]
+|-
+|[[Jamajka]]<ref name="Jamajka"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 19</ref>
+|[[Jamajczyk]]<ref name="Jamajka"/>, [[Jamajka]]<ref name="Jamajka"/>
+|[[jamajski]]<ref name="Jamajka"/>
+|[[Kingston]]<ref name="Jamajka"/>
+|align=center|[[Bild:Flag of Jamaica.svg|30px]]
+|[[Jamaika]]
+|[[Kingston]]
+|-
+|[[Japonia]]<ref name="Japonia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 19</ref>
+|[[Japończyk]]<ref name="Japonia"/>, [[Japonka]]<ref name="Japonia"/>
+|[[japoński]]<ref name="Japonia"/>
+|[[Tokio]]<ref name="Japonia"/>
+|align=center|[[Bild:Flag of Japan.svg|30px]]
+|[[Japan]]
+|[[Tokio]]
+|-
+|[[Jemen]]<ref name="Jemen"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 19</ref> ([[Republika Jemeńska]]<ref name="Jemen"/>)
+|[[Jemeńczyk]]<ref name="Jemen"/>, [[Jemenka]]<ref name="Jemen"/>
+|[[jemeński]]<ref name="Jemen"/>
+|[[Sana]]<ref name="Jemen"/>
+|align=center|[[Bild:Flag of Yemen.svg|30px]]
+|[[Jemen]] ([[Republik Jemen]])
+|[[Sana]]
+|-
+|[[Jordania]]<ref name="Jordania"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 19f.</ref> ([[Jordańskie Królestwo Haszymidzkie]]<ref name="Jordania"/>)
+|[[Jordańczyk]]<ref name="Jordania"/>, [[Jordanka]]<ref name="Jordania"/>
+|[[jordański]]<ref name="Jordania"/>
+|[[Amman]]<ref name="Jordania"/>
+|align=center|[[Bild:Flag of Jordan.svg|30px]]
+|[[Jordanien]] ([[Haschemitisches Königreich Jordanien]])
+|[[Amman]]
+|-
+|[[Kambodża]]<ref name="Kambodża"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 20</ref> ([[Królestwo Kambodży]]<ref name="Kambodża"/>)
+|[[Kambodżanin]]<ref name="Kambodża"/>, [[Kambodżanka]]<ref name="Kambodża"/>
+|[[kambodżański]]<ref name="Kambodża"/>
+|[[Phnom Penh]]<ref name="Kambodża"/>
+|align=center|[[Bild:Flag of Cambodia.svg|30px]]
+|[[Kambodscha]] ([[Königreich Kambodscha]])
+|[[Phnom Penh]]
+|-
+|[[Kamerun]]<ref name="Kamerun"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 20</ref> ([[Republika Kamerunu]]<ref name="Kamerun"/>)
+|[[Kameruńczyk]]<ref name="Kamerun"/>, [[Kamerunka]]<ref name="Kamerun"/>
+|[[kameruński]]<ref name="Kamerun"/>
+|[[Jaunde]]<ref name="Kamerun"/>
+|align=center|[[Bild:Flag of Cameroon.svg|30px]]
+|[[Kamerun]] ([[Republik Kamerun]])
+|[[Yaoundé]]
+|-
+|[[Kanada]]<ref name="Kanada"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 20</ref>
+|[[Kanadyjczyk]]<ref name="Kanada"/>, [[Kanadyka]]<ref name="Kanada"/>
+|[[kanadyjski]]<ref name="Kanada"/>
+|[[Ottawa]]<ref name="Kanada"/>
+|align=center|[[Bild:Flag of Canada.svg|30px]]
+|[[Kanada]]
+|[[Ottawa]]
+|-
+|[[Katar]]<ref name="Katar"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 20f.</ref> ([[Państwo Katar]]<ref name="Katar"/>)
+|[[Katarczyk]]<ref name="Katar"/>, [[Katarka]]<ref name="Katar"/>
+|[[katarski]]<ref name="Katar"/>
+|[[Ad-Dauha]]<ref name="Katar"/>
+|align=center|[[Bild:Flag of Qatar.svg|30px]]
+|[[Katar]] ([[Staat Katar]])
+|[[Doha]]
+|-
+|[[Kazachstan]]<ref name="Kazachstan"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 21</ref> ([[Republika Kazachstanu]]<ref name="Kazachstan"/>)
+|[[Kazach]]<ref name="Kazachstan"/>, [[Kazaszka]]<ref name="Kazachstan"/>
+|[[kazachstański]]<ref name="Kazachstan"/>, [[kazachski]]<ref name="Kazachstan"/>, [[kazaski]]<ref name="Kazachstan"/>
+|[[Astana]]<ref name="Kazachstan"/>
+|align=center|[[Bild:Flag of Kazakhstan.svg|30px]]
+|[[Kasachstan]] ([[Republik Kasachstan]])
+|[[Astana]]
+|-
+|[[Kenia]]<ref name="Kenia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 21</ref> ([[Republika Kenii]]<ref name="Kenia"/>)
+|[[Kenijczyk]]<ref name="Kenia"/>, [[Kenijka]]<ref name="Kenia"/>
+|[[kenijski]]<ref name="Kenia"/>
+|[[Nairobi]]<ref name="Kenia"/>
+|align=center|[[Bild:Flag of Kenya.svg|30px]]
+|[[Kenia]] ([[Republik Kenia]])
+|[[Nairobi]]
+|-
+|[[Kirgistan]]<ref name="Kirgistan"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 21</ref> ([[Republika Kirgiska]]<ref name="Kirgistan"/>)
+|[[Kirgiz]]<ref name="Kirgistan"/>, [[Kirgizka]]<ref name="Kirgistan"/>
+|[[kirgiski]]<ref name="Kirgistan"/>
+|[[Biszkek]]
+|align=center|[[Bild:Flag of Kyrgyzstan.svg|30px]]
+|[[Kirgisistan]] ([[Kirgisische Republik]])
+|[[Bischkek]]
+|-
+|[[Kiribati]]<ref name="Kiribati"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 22f.</ref> ([[Republika Kiribati]]<ref name="Kiribati"/>)
+|[[Kiribatyjczyk]]<ref name="Kiribati"/>, [[Kiribatyjka]]<ref name="Kiribati"/>
+|[[kiribacki]]<ref name="Kiribati"/>, [[kiribatyjski]]<ref name="Kiribati"/>
+|[[Bairiki]]<ref name="Kiribati"/>
+|align=center|[[Bild:Flag of Kiribati.svg|30px]]
+|[[Kiribati]] ([[Republik Kiribati]])
+|[[Bairiki]]
+|-
+|[[Kolumbia]]<ref name="Kolumbia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 22</ref> ([[Republika Kolumbii]]<ref name="Kolumbia"/>)
+|[[Kolumbijczyk]]<ref name="Kolumbia"/>, [[Komlubijka]]<ref name="Kolumbia"/>
+|[[kolumbijski]]<ref name="Kolumbia"/>
+|[[Bogota]]<ref name="Kolumbia"/>
+|align=center|[[Bild:Flag of Colombia.svg|30px]]
+|[[Kolumbien]] ([[Republik Kolumbien]])
+|[[Bogotá, D.C.]]
+|-
+|[[Komory]]<ref name="Komory"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 22</ref> ([[Związek Komorów]]<ref name="Komory"/>)
+|[[Komoryjczyk]]<ref name="Komory"/>, [[Komoryjka]]<ref name="Komory"/>
+|[[komoryjski]]<ref name="Komory"/>
+|[[Moroni]]<ref name="Komory"/>
+|align=center|[[Bild:Flag of the Comoros.svg|30px]]
+|[[Komoren]] ([[Union der Komoren]])
+|[[Moroni]]
+|-
+|[[Kongo]]<ref name="Kongo"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 22</ref> ([[Republika Konga]]<ref name="Kongo"/>)
+|[[Kongijczyk]]<ref name="Kongo"/>, [[Kongijka]]<ref name="Kongo"/>
+|[[kongijski]]<ref name="Kongo"/>
+|[[Brazzaville]]<ref name="Kongo"/>
+|align=center|[[Bild:Flag of the Republic of the Congo.svg|30px]]
+|[[Kongo]] ([[Republik Kongo]])
+|[[Brazzaville]]
+|-
+|[[Korea Południowa]]<ref name="Korea Południowa"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 23</ref> ([[Republika Korei]]<ref name="Korea Południowa"/>)
+|[[Koreańczyk]]<ref name="Korea Południowa"/>, [[Koreanka]]<ref name="Korea Południowa"/>
+|[[koreański]]<ref name="Korea Południowa"/>, [[południowokoreański]]<ref name="Korea Południowa"/>
+|[[Seul]]<ref name="Korea Południowa"/>
+|align=center|[[Bild:Flag of South Korea.svg|30px]]
+|[[Südkorea]] ([[Republik Korea]])
+|[[Seoul]]
+|-
+|[[Korea Północna]]<ref name="Korea Północna"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 23</ref> ([[Koreańska Republika Ludowo-Demokratyczna]]<ref name="Korea Północna"/>)
+|[[Koreańczyk]]<ref name="Korea Północna"/>, [[Koreanka]]<ref name="Korea Północna"/>
+|[[koreański]]<ref name="Korea Północna"/>, [[północnokoreański]]<ref name="Korea Północna"/>
+|[[Pjongjang]]<ref name="Korea Północna"/>, [[Phenian]]
+|align=center|[[Bild:Flag of North Korea.svg|30px]]
+|[[Nordkorea]] ([[Demokratische Volksrepublik Korea]])
+|[[Pjöngjang]]
+|-
+|[[Kostaryka]]<ref name="Kostaryka"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 23</ref> ([[Republika Kostaryki]]<ref name="Kostaryka"/>)
+|[[Kostraykanin]]<ref name="Kostaryka"/>, [[Kostarykanka]]<ref name="Kostaryka"/>
+|[[kostarykański]]<ref name="Kostaryka"/>
+|[[San José]]<ref name="Kostaryka"/>
+|align=center|[[Bild:Flag of Costa Rica.svg|30px]]
+|[[Costa Rica]] ([[Republik Costa Rica]])
+|[[San José]]
+|-
+|[[Kuba]]<ref name="Kuba"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 23</ref> ([[Republika Kuby]]<ref name="Kuba"/>)
+|[[Kubańczyk]]<ref name="Kuba"/>, [[Kubanka]]<ref name="Kuba"/>
+|[[kubański]]<ref name="Kuba"/>
+|[[Hawana]]<ref name="Kuba"/>
+|align=center|[[Bild:Flag of Cuba.svg|30px]]
+|[[Kuba]] ([[Republik Kuba]])
+|[[Havanna]]
+|-
+|[[Kuwejt]]<ref name="Kuwejt"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 24</ref> ([[Państwo Kuwejt]]<ref name="Kuwejt"/>)
+|[[Kuwejtczyk]]<ref name="Kuwejt"/>, [[Kuwejtka]]<ref name="Kuwejt"/>
+|[[kuwejcki]]<ref name="Kuwejt"/>
+|[[Kuwejt]]<ref name="Kuwejt"/>
+|align=center|[[Bild:Flag of Kuwait.svg|30px]]
+|[[Kuwait]] ([[Staat Kuwait]])
+|[[Kuwait]]
+|-
+|[[Laos]]<ref name="Laos"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 24</ref> ([[Laotańska Republika Ludowo-Demokratyczna]]<ref name="Laos"/>)
+|[[Laotańczyk]]<ref name="Laos"/>, [[Laotanka]]<ref name="Laos"/>
+|[[laotański]]<ref name="Laos"/>
+|[[Wientian]]<ref name="Laos"/>
+|align=center|[[Bild:Flag of Laos.svg|30px]]
+|[[Laos]] ([[Demokratische Volksrepublik Laos]])
+|[[Vientiane]]
+|-
+|[[Lesotho]]<ref name="Lesotho"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 24</ref> ([[Króleswto Lesotho]]<ref name="Lesotho"/>)
+|[[Lesotyjczyk]]<ref name="Lesotho"/>, [[Lesotyka]]<ref name="Lesotho"/>; [[Sotyjczyk]]<ref name="Lesotho"/>, [[Sotyjka]]<ref name="Lesotho"/>
+|[[lesotyjski]]<ref name="Lesotho"/>, [[sotyjski]]<ref name="Lesotho"/>
+|[[Maseru]]<ref name="Lesotho"/>
+|align=center|[[Bild:Flag of Lesotho.svg|30px]]
+|[[Lesotho]] ([[Königreich Lesotho]])
+|[[Maseru]]
+|-
+|[[Liban]]<ref name="Liban"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 24</ref> ([[Republika Libańska]]<ref name="Liban"/>)
+|[[Libańczyk]]<ref name="Liban"/>, [[Libanka]]<ref name="Liban"/>
+|[[libański]]<ref name="Liban"/>
+|[[Bejrut]]<ref name="Liban"/>
+|align=center|[[Bild:Flag of Lebanon.svg|30px]]
+|[[Libanon]] ([[Libanesische Republik]])
+|[[Beirut]]
+|-
+|[[Liberia]]<ref name="Liberia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 25</ref> ([[Republika Liberii]]<ref name="Liberia"/>)
+|[[Liberyjczyk]]<ref name="Liberia"/>, [[Liberyjka]]<ref name="Liberia"/>
+|[[liberyjski]]<ref name="Liberia"/>
+|[[Monrovia]]<ref name="Liberia"/>
+|align=center|[[Bild:Flag of Liberia.svg|30px]]
+|[[Liberia]] ([[Republik Liberia]])
+|[[Monrovia]]
+|-
+|[[Libia]]<ref name="Libia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 25</ref> ([[Wielka Arabska Libijska Dżamahirijja Ludowo-Socjalistyczna]]<ref name="Libia"/>)
+|[[Libijczyk]]<ref name="Libia"/>, [[Libijka]]<ref name="Libia"/>
+|[[libijski]]<ref name="Libia"/>
+|[[Trypolis]]<ref name="Libia"/>
+|align=center|[[Bild:Flag of Libya.svg|30px]]
+|[[Libyen]] ([[Sozialistische Libysch-Arabische Volks-Dschamahirija]])
+|[[Tripolis]]
+|-
+|[[Liechtenstein]]<ref name="Liechtenstein"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 25</ref> ([[Księstwo Liechtensteinu]]<ref name="Liechtenstein"/>)
+|—, —
+|—
+|[[Vaduz]]<ref name="Liechtenstein"/>
+|align=center|[[Bild:Flag of Liechtenstein.svg|30px]]
+|[[Liechtenstein]] ([[Fürstentum Liechtenstein]])
+|[[Vaduz]]
+|-
+|[[Litwa]]<ref name="Litwa"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 25</ref> ([[Republika Litewska]]<ref name="Litwa"/>)
+|[[Litwin]]<ref name="Litwa"/>, [[Litwinka]]<ref name="Litwa"/>
+|[[litewski]]<ref name="Litwa"/>
+|[[Wilno]]<ref name="Litwa"/>
+|align=center|[[Bild:Flag of Lithuania.svg|30px]]
+|[[Litauen]] ([[Republik Litauen]])
+|[[Vilnius]]
+|-
+|[[Luksemburg]]<ref name="Luksemburg"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 25f.</ref> ([[Wielkie Księstwo Luksemburga]]<ref name="Luksemburg"/>)
+|[[Luksemburczyk]]<ref name="Luksemburg"/>, [[Luksemburka]]<ref name="Luksemburg"/>
+|[[luksemburski]]<ref name="Luksemburg"/>
+|[[Luksemburg]]<ref name="Luksemburg"/>
+|align=center|[[Bild:Flag of Luxembourg.svg|30px]]
+|[[Luxemburg]] ([[Großherzogtum Luxemburg]])
+|[[Luxemburg]]
+|-
+|[[Łotwa]]<ref name="Łotwa"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 26</ref> ([[Republika Łotewska]]<ref name="Łotwa"/>)
+|[[Łotysz]]<ref name="Łotwa"/>, [[Łotyszka]]<ref name="Łotwa"/>
+|[[łotewski]]<ref name="Łotwa"/>
+|[[Ryga]]<ref name="Łotwa"/>
+|align=center|[[Bild:Flag of Latvia.svg|30px]]
+|[[Lettland]] ([[Republik Lettland]])
+|[[Riga]]
+|-
+|[[Macedonia]]<ref name="Macedonia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 26</ref> ([[Republika Macedonii]]<ref name="Macedonia"/>; [[Była Jugosłowiańska Republika Macedonii]]<ref name="Macedonia"/>)
+|[[Macedończyk]]<ref name="Macedonia"/>, [[Macedonka]]<ref name="Macedonia"/>
+|[[macedoński]]<ref name="Macedonia"/>
+|[[Skopje]]<ref name="Macedonia"/>
+|align=center|[[Bild:Flag of North Macedonia.svg|30px]]
+|[[Mazedonien]] ([[Republik Mazedonien]], [[ehemalige jugoslawische Republik Mazedonien]])
+|[[Skopje]]
+|-
+|[[Madagaskar]]<ref name="Madagaskar"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 26f.</ref> ([[Republika Madagaskaru]]<ref name="Madagaskar"/>)
+|[[Madagaskarczyk]]<ref name="Madagaskar"/>, [[Madagaskarka]]<ref name="Madagaskar"/>
+|[[madagaskarski]]<ref name="Madagaskar"/>
+|[[Antananarywa]]<ref name="Madagaskar"/>
+|align=center|[[Bild:Flag of Madagascar.svg|30px]]
+|[[Madagaskar]] ([[Republik Madagaskar]])
+|[[Antananarivo]]
+|-
+|[[Malawi]]<ref name="Malawi"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 27</ref> ([[Republika Malawi]]<ref name="Malawi"/>)
+|[[Malawijczyk]]<ref name="Malawi"/>, [[Malawijka]]<ref name="Malawi"/>
+|[[malawijski]]<ref name="Malawi"/>
+|[[Lilongwe]]<ref name="Malawi"/>
+|align=center|[[Bild:Flag of Malawi.svg|30px]]
+|[[Malawi]] ([[Republik Malawi]])
+|[[Lilongwe]]
+|-
+|[[Malediwy]]<ref name="Malediwy"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 27</ref>, [[Maledywy]] ([[Republika Malediwów]]<ref name="Malediwy"/>)
+|[[Malediwczyk]]<ref name="Malediwy"/>, [[Malediwka]]<ref name="Malediwy"/>
+|[[malediwski]]<ref name="Malediwy"/>
+|[[Male]]<ref name="Malediwy"/>
+|align=center|[[Bild:Flag of Maldives.svg|30px]]
+|[[Malediven]] ([[Republik Malediven]])
+|[[Malé]]
+|-
+|[[Malezja]]<ref name="Malezja"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 27</ref>
+|[[Malezyjczyk]]<ref name="Malezja"/>, [[Malezyjka]]<ref name="Malezja"/>
+|[[malezyjski]]<ref name="Malezja"/>
+|[[Kuala Lumpur]]<ref name="Malezja"/>, [[Putrajaya]]<ref name="Malezja"/>
+|align=center|[[Bild:Flag of Malaysia.svg|30px]]
+|[[Malaysia]]
+|[[Kuala Lumpur]], [[Putrajaya]]
+|-
+|[[Mali]]<ref name="Mali"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 27f.</ref> ([[Republka Mali]]<ref name="Mali"/>)
+|[[Malijczyk]]<ref name="Mali"/>, [[Malijka]]<ref name="Mali"/>
+|[[malijski]]<ref name="Mali"/>
+|[[Bamako]]<ref name="Mali"/>
+|align=center|[[Bild:Flag of Mali.svg|30px]]
+|[[Mali]] ([[Republik Mali]])
+|[[Bamako]]
+|-
+|[[Malta]]<ref name="Malta"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 28</ref> ([[Republika Malty]]<ref name="Malta"/>)
+|[[Maltańczyk]]<ref name="Malta"/>, [[Maltanka]]<ref name="Malta"/>
+|[[maltański]]<ref name="Malta"/>
+|[[Valletta]]<ref name="Malta"/>
+|align=center|[[Bild:Flag of Malta.svg|30px]]
+|[[Malta]] ([[Republik Malta]])
+|[[Valletta]]
+|-
+|[[Maroko]]<ref name="Maroko"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 28</ref> ([[Królestwo Marokańskie]]<ref name="Maroko"/>)
+|[[Marokańczyk]]<ref name="Maroko"/>, [[Marokanka]]<ref name="Maroko"/>
+|[[marokański]]<ref name="Maroko"/>
+|[[Rabat]]<ref name="Maroko"/>
+|align=center|[[Bild:Flag of Morocco.svg|30px]]
+|[[Marokko]] ([[Königreich Marokko]])
+|[[Rabat]]
+|-
+|[[Mauretania]]<ref name="Mauretania"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 28</ref> ([[Islamska Republika Mauretańska]]<ref name="Mauretania"/>)
+|[[Mauretańczyk]]<ref name="Mauretania"/>, [[Mauretanka]]<ref name="Mauretania"/>
+|[[mauretański]]<ref name="Mauretania"/>
+|[[Nawakszut]]<ref name="Mauretania"/>
+|align=center|[[Bild:Flag of Mauritania.svg|30px]]
+|[[Mauretanien]] ([[Islamische Republik Mauretanien]])
+|[[Nouakchott]]
+|-
+|[[Mauritius]]<ref name="Mauritius"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 28f.</ref> ([[Republika Mauritiusu]]<ref name="Mauritius"/>)
+|[[Maurytyjczyk]]<ref name="Mauritius"/>, [[Maurytyjka]]<ref name="Mauritius"/>
+|[[maurytyjski]]<ref name="Mauritius"/>
+|[[Port Louis]]<ref name="Mauritius"/>
+|align=center|[[Bild:Flag of Mauritius.svg|30px]]
+|[[Mauritius]] ([[Republik Mauritius]])
+|[[Port Louis]]
+|-
+|[[Meksyk]]<ref name="Meksyk"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 29</ref> ([[Meksykańskie Stany Zjednoczone]]<ref name="Meksyk"/>)
+|[[Meksykanin]]<ref name="Meksyk"/>, [[Meksykanka]]<ref name="Meksyk"/>
+|[[meksykański]]<ref name="Meksyk"/>
+|[[Meksyk]]<ref name="Meksyk"/>
+|align=center|[[Bild:Flag of Mexico.svg|30px]]
+|[[Mexiko]] ([[Vereinigte Mexikanische Staaten]])
+|[[Mexiko-Stadt]]
+|-
+|[[Mikronezja]]<ref name="Mikronezja"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 29</ref> ([[Sfederowane Stany Mikronezji]]<ref name="Mikronezja"/>)
+|[[Mikronezyjczyk]]<ref name="Mikronezja"/>, [[Mikronezyjka]]<ref name="Mikronezja"/>
+|[[mikronezyjczyk]]<ref name="Mikronezja"/>
+|[[Palikir]]<ref name="Mikronezja"/>
+|align=center|[[Bild:Flag_of_Federated_States_of_Micronesia.svg|30px]]
+|[[Mikronesien]] ([[Föderierte Staaten von Mikronesien]])
+|[[Palikir]]
+|-
+|[[Mołdawia]]<ref name="Mołdawia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 29</ref>, [[Mołdowa]] ([[Republika Mołdawii]]<ref name="Mołdawia"/>, [[Republika Mołdowy]]<ref name="Mołdawia"/>)
+|[[Mołdawianin]]<ref name="Mołdawia"/>, [[Mołdawianka]]<ref name="Mołdawia"/>
+|[[mołdawski]]<ref name="Mołdawia"/>
+|[[Kiszyniów]]<ref name="Mołdawia"/>
+|align=center|[[Bild:Flag of Moldova.svg|30px]]
+|[[Moldawien]], [[Moldau]] ([[Republik Moldau]])
+|[[Chişinău]], [[Kischinau]]
+|-
+|[[Monako]]<ref name="Monako"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 29f.</ref> ([[Księstwo Monako]]<ref name="Monako"/>)
+|[[Monakijczyk]]<ref name="Monako"/>, [[Monakijka]] <ref name="Monako"/>
+|[[monakijski]]<ref name="Monako"/>
+|[[Monako]]<ref name="Monako"/>
+|align=center|[[Bild:Flag of Monaco.svg|30px]]
+|[[Monaco]] ([[Fürstentum Monaco]])
+|[[Monaco]]
+|-
+|[[Mongolia]]<ref name="Mongolia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 30</ref>
+|[[Mongoł]]<ref name="Mongolia"/>, [[Mongołka]]<ref name="Mongolia"/>
+|[[mongolski]]<ref name="Mongolia"/>
+|[[Ułan Bator]]<ref name="Mongolia"/>
+|align=center|[[Bild:Flag of Mongolia.svg|30px]]
+|[[Mongolei]]
+|[[Ulaanbaatar]]
+|-
+|[[Mozambik]]<ref name="Mozambik"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 30</ref> ([[Republika Mozambiku]]<ref name="Mozambik"/>)
+|[[Mozambijczyk]]<ref name="Mozambik"/>, [[Mozambijka]]<ref name="Mozambik"/>
+|[[mozambicki]]<ref name="Mozambik"/>
+|[[Maputo]]<ref name="Mozambik"/>
+|align=center|[[Bild:Flag of Mozambique.svg|30px]]
+|[[Mosambik]] ([[Republik Mosambik]])
+|[[Maputo]]
+|-
+|[[Namibia]]<ref name="Namibia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 30</ref> ([[Republika Namibii]]<ref name="Namibia"/>)
+|[[Namibijczyk]]<ref name="Namibia"/>, [[Namibijka]]<ref name="Namibia"/>
+|[[namibijski]]<ref name="Namibia"/>
+|[[Windhuk]]<ref name="Namibia"/>
+|align=center|[[Bild:Flag of Namibia.svg|30px]]
+|[[Namibia]] ([[Republik Namibia]])
+|[[Windhoek]]
+|-
+|[[Nauru]]<ref name="Nauru"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 31f.</ref> ([[Republika Nauru]]<ref name="Nauru"/>)
+|[[Nauruańczyk]]<ref name="Nauru"/>, [[Nauruanka]]<ref name="Nauru"/>
+|[[nauruański]]<ref name="Nauru"/>
+|[[Yaren]]<ref name="Nauru"/>
+|align=center|[[Bild:Flag of Nauru.svg|30px]]
+|[[Nauru]] ([[Republik Nauru]])
+|[[Yaren]]
+|-
+|[[Nepal]]<ref name="Nepal"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 31</ref>
+|[[Nepalczyk]]<ref name="Nepal"/>, [[Nepalka]]<ref name="Nepal"/>
+|[[nepalski]]<ref name="Nepal"/>
+|[[Katmandu]]<ref name="Nepal"/>
+|align=center|[[Bild:Flag of Nepal.svg|30px]]
+|[[Nepal]]
+|[[Kathmandu]]
+|-
+|[[Niemcy]]<ref name="Niemcy"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 31</ref>, ([[Republika Federalna Niemiec]]<ref name="Niemcy"/>)
+|[[Niemiec]]<ref name="Niemcy"/>, [[Niemka]]<ref name="Niemcy"/>
+|[[niemiecki]]<ref name="Niemcy"/>
+|[[Berlin]]<ref name="Niemcy"/>
+|align=center|[[Bild:Flag of Germany.svg|30px]]
+|[[Deutschland]] ([[Bundesrepublik Deutschland]])
+|[[Berlin]]
+|-
+|[[Niger]]<ref name="Niger"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 31</ref> ([[Republika Nigeru]]<ref name="Niger"/>)
+|[[Nigerczyk]]<ref name="Niger"/>, [[Nigerka]]<ref name="Niger"/>
+|[[nigerski]]<ref name="Niger"/>
+|[[Niamey]]<ref name="Niger"/>
+|align=center|[[Bild:Flag of Niger.svg|30px]]
+|[[Niger]] ([[Republik Niger]])
+|[[Niamey]]
+|-
+|[[Nigeria]]<ref name="Nigeria"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 31f.</ref> ([[Federalna Republika Nigerii]]<ref name="Nigeria"/>)
+|[[Nigeryjczyk]]<ref name="Nigeria"/>, [[Nigeryjka]]<ref name="Nigeria"/>
+|[[nigeryjski]]<ref name="Nigeria"/>
+|[[Abudża]]<ref name="Nigeria"/>
+|align=center|[[Bild:Flag of Nigeria.svg|30px]]
+|[[Nigeria]] ([[Bundesrepublik Nigeria]])
+|[[Abuja]]
+|-
+|[[Nikaragua]]<ref name="Nikaragua"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 32</ref> ([[Republika Nikaragui]]<ref name="Nikaragua"/>)
+|[[Nikaraguańczyk]]<ref name="Nikaragua"/>, [[Nikaraguanka]]<ref name="Nikaragua"/>
+|[[nikaraguański]]<ref name="Nikaragua"/>
+|[[Managua]]<ref name="Nikaragua"/>
+|align=center|[[Bild:Flag of Nicaragua.svg|30px]]
+|[[Nicaragua]] ([[Republik Nicaragua]])
+|[[Managua]]
+|-
+|[[Norwegia]]<ref name="Norwegia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 32</ref> ([[Królestwo Norwegii]]<ref name="Norwegia"/>)
+|[[Norweg]]<ref name="Norwegia"/>, [[Norweżka]]<ref name="Norwegia"/>
+|[[norweski]]<ref name="Norwegia"/>
+|[[Oslo]]<ref name="Norwegia"/>
+|align=center|[[Bild:Flag of Norway.svg|30px]]
+|[[Norwegen]] ([[Königreich Norwegen]])
+|[[Oslo]]
+|-
+|[[Nowa Zelandia]]<ref name="Nowa Zelandia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 32</ref>
+|[[Nowozelandczyk]]<ref name="Nowa Zelandia"/>, [[Nowozelandka]]<ref name="Nowa Zelandia"/>
+|[[nowozelandzki]]<ref name="Nowa Zelandia"/>
+|[[Wellington]]<ref name="Nowa Zelandia"/>
+|align=center|[[Bild:Flag of New Zealand.svg|30px]]
+|[[Neuseeland]]
+|[[Wellington]]
+|-
+|[[Oman]]<ref name="Oman"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 32</ref> ([[Sułtanat Omanu]]<ref name="Oman"/>)
+|[[Omańczyk]]<ref name="Oman"/>, [[Omanka]]<ref name="Oman"/>
+|[[omański]]<ref name="Oman"/>
+|[[Maskat]]<ref name="Oman"/>
+|align=center|[[Bild:Flag of Oman.svg|30px]]
+|[[Oman]] ([[Sultanat Oman]])
+|[[Maskat]]
+|-
+|[[Pakistan]]<ref name="Pakistan"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 33</ref> ([[Islamska Republika Pakistanu]]<ref name="Pakistan"/>)
+|[[Pakistańczyk]]<ref name="Pakistan"/>, [[Pakistanka]]<ref name="Pakistan"/>
+|[[pakistański]]<ref name="Pakistan"/>
+|[[Islamabad]]<ref name="Pakistan"/>
+|align=center|[[Bild:Flag of Pakistan.svg|30px]]
+|[[Pakistan]] ([[Islamische Republik Pakistan]])
+|[[Islamabad]]
+|-
+|[[Palau]]<ref name="Palau"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 33</ref> ([[Republika Palau]]<ref name="Palau"/>)
+|—, —
+|—
+|[[Melekeok]]<ref name="Palau"/>
+|align=center|[[Bild:Flag of Palau.svg|30px]]
+|[[Palau]] ([[Republik Palau]])
+|[[Melekeok]]
+|-
+|[[Panama]]<ref name="Panama"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 33</ref> ([[Republika Panamy]]<ref name="Panama"/>)
+|[[Panamczyk]]<ref name="Panama"/>, [[Panamka]]<ref name="Panama"/>
+|[[panamski]]<ref name="Panama"/>
+|[[Panama]]<ref name="Panama"/>
+|align=center|[[Bild:Flag of Panama.svg|30px]]
+|[[Panama]] ([[Republik Panama]])
+|[[Panama-Stadt]]
+|-
+|[[Papua-Nowa Gwinea]]<ref name="Papua-Nowa Gwinea"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 33</ref> ([[Niezależne Państwo Papui-Nowej Gwinei]]<ref name="Papua-Nowa Gwinea"/>)
+|[[Papuańczyk]]<ref name="Papua-Nowa Gwinea"/>, [[Papuanka]]<ref name="Papua-Nowa Gwinea"/>
+|[[papuański]]<ref name="Papua-Nowa Gwinea"/>
+|[[Port Moresby]]<ref name="Papua-Nowa Gwinea"/>
+|align=center|[[Bild:Flag of Papua New Guinea.svg|30px]]
+|[[Papua-Neuguinea]] ([[Unabhängiger Staat Papua-Neuguinea]])
+|[[Port Moresby]]
+|-
+|[[Paragwaj]]<ref name="Paragwaj"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 34</ref> ([[Republika Paragwaju]]<ref name="Paragwaj"/>)
+|[[Paragwajczyk]]<ref name="Paragwaj"/>, [[Paragwajka]]<ref name="Paragwaj"/>
+|[[paragwajski]]<ref name="Paragwaj"/>
+|[[Asunción]]
+|align=center|[[Bild:Flag of Paraguay.svg|30px]]
+|[[Paraguay]] ([[Republik Paraguay]])
+|[[Asunción]]
+|-
+|[[Peru]]<ref name="Peru"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 34</ref> ([[Republika Peru]]<ref name="Peru"/>)
+|[[Peruwiańczyk]]<ref name="Peru"/>, [[Peruwianka]]<ref name="Peru"/>
+|[[peruwiański]]<ref name="Peru"/>
+|[[Lima]]<ref name="Peru"/>
+|align=center|[[Bild:Flag of Peru.svg|30px]]
+|[[Peru]] ([[Republik Peru]])
+|[[Lima]]
+|-
+|[[Polska]]<ref name="Polska"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 34</ref> ([[Rzeczpospolita Polska]]<ref name="Polska"/>)
+|[[Polak]]<ref name="Polska"/>, [[Polka]]<ref name="Polska"/>
+|[[polski]]<ref name="Polska"/>
+|[[Warszawa]]<ref name="Polska"/>
+|align=center|[[Bild:Flag of Poland.svg|30px]]
+|[[Polen]] ([[Republik Polen]])
+|[[Warschau]]
+|-
+|[[Portugalia]]<ref name="Portugalia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 34</ref> ([[Republika Portugalska]]<ref name="Portugalia"/>)
+|[[Portugalczyk]]<ref name="Portugalia"/>, [[Portugalka]]<ref name="Portugalia"/>
+|[[portugalski]]<ref name="Portugalia"/>
+|[[Lizbona]]<ref name="Portugalia"/>
+|align=center|[[Bild:Flag of Portugal.svg|30px]]
+|[[Portugal]] ([[Portugiesische Republik]])
+|[[Lissabon]]
+|-
+|[[Republika Południowej Afryki]]<ref name="Republika Południowej Afryki"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 35</ref>
+|[[Południowoafrykańczyk]]<ref name="Republika Południowej Afryki"/>, [[Południowoafrykanka]]<ref name="Republika Południowej Afryki"/>
+|[[południowoafrykański]]<ref name="Republika Południowej Afryki"/>
+|[[Pretoria]]<ref name="Republika Południowej Afryki"/>
+|align=center|[[Bild:Flag of South Africa.svg|30px]]
+|[[Südafrika]] ([[Republik Südafrika]])
+|[[Pretoria]]
+|-
+|[[Republika Środkowoafrykańska]]<ref name="Republika Środkowoafrykańska"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 35</ref>
+|—, —
+|[[środkowoafrykański]]<ref name="Republika Środkowoafrykańska"/>
+|[[Bangi]]<ref name="Republika Środkowoafrykańska"/>
+|align=center|[[Bild:Flag of the Central African Republic.svg|30px]]
+|[[Zentralafrikanische Republik]]
+|[[Bangui]]
+|-
+|[[Republika Zielonego Przylądku]]<ref name="Republika Zielonego Przylądku"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 35</ref>
+|—, —
+|—
+|[[Praia]]<ref name="Republika Zielonego Przylądku"/>
+|align=center|[[Bild:Flag of Cape Verde (10-17).svg|30px]]
+|[[Kap Verde]] ([[Republik Kap Verde]])
+|[[Praia]]
+|-
+|[[Rosja]]<ref name="Rosja"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 35</ref> ([[Federacja Rosyjska]]<ref name="Rosja"/>)
+|[[Rosjanin]]<ref name="Rosja"/>, [[Rosjanka]]<ref name="Rosja"/>
+|[[rosyjski]]<ref name="Rosja"/>
+|[[Moskwa]]<ref name="Rosja"/>
+|align=center|[[Bild:Flag of Russia.svg|30px]]
+|[[Russland]] ([[Russische Föderation]], [[Russländische Föderation]])
+|[[Moskau]]
+|-
+|[[Rumunia]]<ref name="Rumunia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 36</ref>
+|[[Rumun]]<ref name="Rumunia"/>, [[Rumunka]]<ref name="Rumunia"/>
+|[[rumuński]]<ref name="Rumunia"/>
+|[[Bukareszt]]<ref name="Rumunia"/>
+|align=center|[[Bild:Flag of Romania.svg|30px]]
+|[[Rumänien]]
+|[[Bukarest]]
+|-
+|[[Rwanda]]<ref name="Rwanda"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 36</ref> ([[Republika Rwandy]]<ref name="Rwanda"/>)
+|[[Rwandyjczyk]]<ref name="Rwanda"/>, [[Rwandyjka]]<ref name="Rwanda"/>
+|[[rwandyjski]]<ref name="Rwanda"/>
+|[[Kigali]]<ref name="Rwanda"/>
+|align=center|[[Bild:Flag of Rwanda.svg|30px]]
+|[[Ruanda]] ([[Republik Ruanda]])
+|[[Kigali]]
+|-
+|[[Saint Kitts i Nevis]]<ref name="Saint Kitts i Nevis"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 26</ref> ([[Federacja Saint Kitts i Nevis]]<ref name="Saint Kitts i Nevis"/>)
+|—, —
+|—
+|[[Basseterre]]<ref name="Saint Kitts i Nevis"/>
+|align=center|[[Bild:Flag of Saint Kitts and Nevis.svg|30px]]
+|[[St. Kitts und Nevis]] ([[Föderation St. Kitts und Nevis]])
+|[[Basseterre]]
+|-
+|[[Saint Lucia]]<ref name="Saint Lucia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 36</ref>
+|—, —
+|—
+|[[Castries]]<ref name="Saint Lucia"/>
+|align=center|[[Bild:Flag of Saint Lucia.svg|30px]]
+|[[St. Lucia]]
+|[[Castries]]
+|-
+|[[Saint Vincent i Grenadyny]]<ref name="Saint Vincent i Grenadyny"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 36</ref>
+|—, —
+|—
+|[[Kingstown]]<ref name="Saint Vincent i Grenadyny"/>
+|align=center|[[Bild:Flag of Saint Vincent and the Grenadines.svg|30px]]
+|[[St. Vincent und die Grenadinen]]
+|[[Kingstown]]
+|-
+|[[Salwador]]<ref name="Salwador"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 37</ref> ([[Republika Salwadoru]]<ref name="Salwador"/>)
+|[[Salwadorczyk]]<ref name="Salwador"/>, [[Salwadorka]]<ref name="Salwador"/>
+|[[salwadorski]]<ref name="Salwador"/>
+|[[San Salvador]]<ref name="Salwador"/>
+|align=center|[[Bild:Flag of El Salvador.svg|30px]]
+|[[El Salvador]] ([[Republik El Salvador]])
+|[[San Salvador]]
+|-
+|[[Samoa]]<ref name="Samoa"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 37</ref> ([[Niezależne Państwo Samoa]]<ref name="Samoa"/>)
+|[[Samoańczyk]]<ref name="Samoa"/>, [[Samoanka]]<ref name="Samoa"/>
+|[[samoański]]<ref name="Samoa"/>
+|[[Apia]]<ref name="Samoa"/>
+|align=center|[[Bild:Flag of Samoa.svg|30px]]
+|[[Samoa]] ([[Unabhängiger Staat Samoa]])
+|[[Apia]]
+|-
+|[[San Marino]]<ref name="San Marino"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 37</ref> ([[Repubilka San Marino]]<ref name="San Marino"/>)
+|[[Sanmaryńczyk]]<ref name="San Marino"/>, [[Sanmarynka]]<ref name="San Marino"/>
+|[[sanmaryński]]<ref name="San Marino"/>
+|[[San Marino]]<ref name="San Marino"/>
+|align=center|[[Bild:Flag of San Marino.svg|30px]]
+|[[San Marino]] ([[Republik San Marino]])
+|[[San Marino]]
+|-
+|[[Senegal]]<ref name="Senegal"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 37</ref> ([[Republika Senegalu]]<ref name="Senegal"/>)
+|[[Senegalczyk]]<ref name="Senegal"/>, [[Senegalka]]<ref name="Senegal"/>
+|[[senegalski]]<ref name="Senegal"/>
+|[[Dakar]]<ref name="Senegal"/>
+|align=center|[[Bild:Flag of Senegal.svg|30px]]
+|[[Senegal]] ([[Republik Senegal]])
+|[[Dakar]]
+|-
+|[[Serbia]]<ref name="Serbia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 38</ref> ([[Republika Serbii]]<ref name="Serbia"/>)
+|[[Serb]]<ref name="Serbia"/>, [[Serbka]]<ref name="Serbia"/>
+|[[serbski]]<ref name="Serbia"/>
+|[[Belgrad]]<ref name="Serbia"/>
+|align=center|[[Bild:Flag of Serbia.svg|30px]]
+|[[Serbien]] ([[Republik Serbien]])
+|[[Belgrad]]
+|-
+|[[Seszele]]<ref name="Seszele"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 38</ref> ([[Republika Seszeli]]<ref name="Seszele"/>)
+|[[Seszelczyk]]<ref name="Seszele"/>, [[Seszelka]]<ref name="Seszele"/>
+|[[seszelski]]<ref name="Seszele"/>
+|[[Victoria]]<ref name="Seszele"/>
+|align=center|[[Bild:Flag of the Seychelles.svg|30px]]
+|[[Seychellen]] ([[Republik Seychellen]])
+|[[Victoria]]
+|-
+|[[Sierra Leone]]<ref name="Sierra Leone"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 38</ref> ([[Republika Sierra Leone]]<ref name="Sierra Leone"/>)
+|[[Sierraleończyk]]<ref name="Sierra Leone"/>, [[Sierraleonka]]<ref name="Sierra Leone"/>
+|[[sierraleoński]]<ref name="Sierra Leone"/>
+|[[Freetown]]<ref name="Sierra Leone"/>
+|align=center|[[Bild:Flag of Sierra Leone.svg|30px]]
+|[[Sierra Leone]] ([[Republik Sierra Leone]])
+|[[Freetown]]
+|-
+|[[Singapur]]<ref name="Singapur"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 38</ref> ([[Republika Singapuru]]<ref name="Singapur"/>)
+|[[Singapurczyk]]<ref name="Singapur"/>, [[Singapurka]]<ref name="Singapur"/>
+|[[singapurski]]<ref name="Singapur"/>
+|[[Singapur]]<ref name="Singapur"/>
+|align=center|[[Bild:Flag of Singapore.svg|30px]]
+|[[Singapur]] ([[Republik Singapur]])
+|[[Singapur]]
+|-
+|[[Słowacja]]<ref name="Słowacja"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 39</ref> ([[Republika Słowacka]]<ref name="Słowacja"/>)
+|[[Słowak]]<ref name="Słowacja"/>, [[Słowaczka]]<ref name="Słowacja"/>
+|[[słowacki]]<ref name="Słowacja"/>
+|[[Bratysława]]<ref name="Słowacja"/>
+|align=center|[[Bild:Flag of Slovakia.svg|30px]]
+|[[Slowakei]] ([[Slowakische Republik]])
+|[[Bratislava]]
+|-
+|[[Słowenia]]<ref name="Słowenia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 39</ref> ([[Republika Słowenii]]<ref name="Słowenia"/>)
+|[[Słoweniec]]<ref name="Słowenia"/>, [[Słowenka]]<ref name="Słowenia"/>
+|[[słoweński]]<ref name="Słowenia"/>
+|[[Lublana]]<ref name="Słowenia"/>
+|align=center|[[Bild:Flag of Slovenia.svg|30px]]
+|[[Slowenien]] ([[Republik Slowenien]])
+|[[Ljubljana]]
+|-
+|[[Somalia]]<ref name="Somalia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 39</ref> ([[Republika Somalii]]<ref name="Somalia"/>)
+|[[Somalijczyk]]<ref name="Somalia"/>, [[Somalijka]]<ref name="Somalia"/>
+|[[somalijski]]<ref name="Somalia"/>
+|[[Mogadiszu]]<ref name="Somalia"/>
+|align=center|[[Bild:Flag of Somalia.svg|30px]]
+|[[Somalia]] ([[Republik Somalia]])
+|[[Mogadischu]]
+|-
+|[[Sri Lanka]]<ref name="Sri Lanka"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 39f.</ref> ([[Demokratyczno-Socjalistyczna Republika Sri Lanka]]<ref name="Sri Lanka"/>)
+|[[Lankijczyk]]<ref name="Sri Lanka"/>, [[Lankijka]]<ref name="Sri Lanka"/>
+|[[lankijski]]<ref name="Sri Lanka"/>
+|[[Sri Dźajawardanapura Kotte]]<ref name="Sri Lanka"/>, [[Kolombo]]<ref name="Sri Lanka"/>
+|align=center|[[Bild:Flag of Sri Lanka.svg|30px]]
+|[[Sri Lanka]] ([[Demokratische Sozialistische Republik Sri Lanka]])
+|[[Sri Jayawardenepura]], [[Colombo]]
+|-
+|[[Stany Zjednoczone]]<ref name="Stany Zjednoczone"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 40</ref> ([[Stany Zjednoczone Ameryki]]<ref name="Stany Zjednoczone"/>)
+|[[Amerykanin]]<ref name="Stany Zjednoczone"/>, [[Amerykanka]]<ref name="Stany Zjednoczone"/>
+|[[amerykański]]<ref name="Stany Zjednoczone"/>
+|[[Waszyngton]]<ref name="Stany Zjednoczone"/>
+|align=center|[[Bild:Flag of the United States.svg|30px]]
+|[[Vereinigte Staaten]] ([[Vereinigte Staaten von Amerika]])
+|[[Washington]]
+|-
+|[[Suazi]]<ref name="Suazi"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 40</ref> ([[Królestwo Suazi]]<ref name="Suazi"/>)
+|[[Suazyjczyk]]<ref name="Suazi"/>, [[Suazyjka]]<ref name="Suazi"/>
+|[[suazyjski]]<ref name="Suazi"/>
+|[[Mbabane]]<ref name="Suazi"/>, [[Lobamba]]<ref name="Suazi"/>
+|align=center|[[Bild:Flag of Swaziland.svg|30px]]
+|[[Swasiland]] ([[Königreich Swasiland]])
+|[[Mbabane]]
+|-
+|[[Sudan]]<ref name="Sudan"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 40f.</ref> ([[Republika Sudanu]]<ref name="Sudan"/>)
+|[[Sudańczyk]]<ref name="Sudan"/>, [[Sudanka]]<ref name="Sudan"/>
+|[[sudański]]
+|[[Chartun]]<ref name="Sudan"/>
+|align=center|[[Bild:Flag of Sudan.svg|30px]]
+|[[Sudan]] ([[Republik Sudan]])
+|[[Khartum]]
+|-
+|[[Surinam]]<ref name="Surinam"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 41</ref> ([[Republika Surinamu]]<ref name="Surinam"/>)
+|[[Surinamczyk]]<ref name="Surinam"/>, [[Surinamka]]<ref name="Surinam"/>
+|[[surinamski]]<ref name="Surinam"/>
+|[[Paramaribo]]<ref name="Surinam"/>
+|align=center|[[Bild:Flag of Suriname.svg|30px]]
+|[[Suriname]] ([[Republik Suriname]])
+|[[Paramaribo]]
+|-
+|[[Syria]]<ref name="Syria"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 41</ref> ([[Syryjska Republika Arabska]]<ref name="Syria"/>)
+|[[Syryjczyk]]<ref name="Syria"/>, [[Syryjka]]<ref name="Syria"/>
+|[[syryjski]]<ref name="Syria"/>
+|[[Damaszek]]<ref name="Syria"/>
+|align=center|[[Bild:Flag of Syria.svg|30px]]
+|[[Syrien]] ([[Arabische Republik Syrien]])
+|[[Daskus]]
+|-
+|[[Szwajcaria]]<ref name="Szwajcaria"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 41</ref> ([[Konfederacja Szwajcarska]]<ref name="Szwajcaria"/>)
+|[[Szwajcar]]<ref name="Szwajcaria"/>, [[Szwajcarka]]<ref name="Szwajcaria"/>
+|[[szwajcarski]]<ref name="Szwajcaria"/>
+|[[Berno]]<ref name="Szwajcaria"/>
+|align=center|[[Bild:Flag of Switzerland.svg|30px]]
+|[[Schweiz]] ([[Schweizerische Eidgenossenschaft]])
+|[[Bern]]
+|-
+|[[Szwecja]]<ref name="Szwecja"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 42</ref> ([[Królestwo Szwecji]]<ref name="Szwecja"/>)
+|[[Szwed]]<ref name="Szwecja"/>, [[Szwedka]]<ref name="Szwecja"/>
+|[[szwedzki]]<ref name="Szwecja"/>
+|[[Sztokholm]]<ref name="Szwecja"/>
+|align=center|[[Bild:Flag of Sweden.svg|30px]]
+|[[Schweden]] ([[Königreich Schweden]])
+|[[Stockholm]]
+|-
+|[[Tadżykistan]]<ref name="Tadżykistan"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 42</ref> ([[Republika Tadżykistanu]]<ref name="Tadżykistan"/>)
+|[[Tadżyk]]<ref name="Tadżykistan"/>, [[Tadżyczka]]<ref name="Tadżykistan"/>/[[Tadżyjka]]
+|[[tadżycki]]<ref name="Tadżykistan"/>
+|[[Duszanbe]]<ref name="Tadżykistan"/>
+|align=center|[[Bild:Flag of Tajikistan.svg|30px]]
+|[[Tadschikistan]] ([[Republik Tadschikistan]])
+|[[Duschanbe]]
+|-
+|[[Tajwan]]<ref name="Tajwan"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 63</ref> ([[Republika Chińska]]<ref name="Tajwan"/>)
+|[[Tajwańczyk]]<ref name="Tajwan"/>, [[Tajwanka]]<ref name="Tajwan"/>
+|[[tajwański]]<ref name="Tajwan"/>
+|[[Tajpej]]<ref name="Tajwan"/>
+|align=center|[[Bild:Flag of the Republic of China.svg|30px]]
+|[[Taiwan]] ([[Republik China]])
+|[[Taipeh]]
+|-
+|[[Tajlandia]]<ref name="Tajlandia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 42</ref> ([[Królestwo Tajlandii]]<ref name="Tajlandia"/>)
+|[[Tajlandczyk]]<ref name="Tajlandia"/>/[[Taj]]<ref name="Tajlandia"/>, [[Tajlandka]]<ref name="Tajlandia"/>/[[Tajka]]<ref name="Tajlandia"/>
+|[[tajlandzki]]<ref name="Tajlandia"/>
+|[[Bangkok]]<ref name="Tajlandia"/>
+|align=center|[[Bild:Flag of Thailand.svg|30px]]
+|[[Thailand]] ([[Königreich Thailand]])
+|[[Bangkok]]
+|-
+|[[Tanzania]]<ref name="Tanzania"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 42f.</ref> ([[Zjednoczona Republika Tanzanii]]<ref name="Tanzania"/>)
+|[[Tanzańczyk]]<ref name="Tanzania"/>, [[Tanzanka]]<ref name="Tanzania"/>
+|[[tanzański]]<ref name="Tanzania"/>
+|[[Dodoma]]<ref name="Tanzania"/>, [[Das es Salaam]]<ref name="Tanzania"/>
+|align=center|[[Bild:Flag of Tanzania.svg|30px]]
+|[[Tansania]] ([[Vereinigte Republik Tansania]])
+|[[Dodoma]], [[Daressalam]]
+|-
+|[[Timor Wschodni]]<ref name="Timor Wschodni"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 43</ref> ([[Demokratyczna Republika Timoru Wschodniego]]<ref name="Timor Wschodni"/>)
+|[[Timorczyk]]<ref name="Timor Wschodni"/>, [[Timorka]]<ref name="Timor Wschodni"/>
+|[[wschodniotimorski]]<ref name="Timor Wschodni"/>
+|[[Dili]]<ref name="Timor Wschodni"/>
+|align=center|[[Bild:Flag of East Timor.svg|30px]]
+|[[Osttimor]] ([[Demokratische Republik Timor-Leste]])
+|[[Dili]]
+|-
+|[[Togo]]<ref name="Togo"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 43</ref> ([[Republika Togijska]]<ref name="Togo"/>)
+|[[Togijczyk]]<ref name="Togo"/>, [[Togijka]]<ref name="Togo"/>
+|[[togijski]]<ref name="Togo"/>
+|[[Lomé]]<ref name="Togo"/>
+|align=center|[[Bild:Flag of Togo (3-2).svg|30px]]
+|[[Togo]] ([[Republik Togo]])
+|[[Lomé]]
+|-
+|[[Tonga]]<ref name="Tonga"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 43</ref> ([[Królestwo Tonga]]<ref name="Tonga"/>)
+|[[Tongijczyk]]<ref name="Tonga"/>, [[Tongijka]]<ref name="Tonga"/>
+|[[tongijski]]<ref name="Tonga"/>
+|[[Nuku’alofa]]<ref name="Tonga"/>
+|align=center|[[Bild:Flag of Tonga.svg|30px]]
+|[[Tonga]] ([[Königreich Tonga]])
+|[[Nuku’alofa]]
+|-
+|[[Trynidad i Tobago]]<ref name="Trynidad i Tobago"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 44f.</ref> ([[Republika Trynidadu i Tobago]]<ref name="Trynidad i Tobago"/>)
+|—, —
+|[[trynidadzko-tobagijski]]<ref name="Trynidad i Tobago"/>
+|[[Port-of-Spain]]<ref name="Trynidad i Tobago"/>
+|align=center|[[Bild:Flag of Trinidad and Tobago.svg|30px]]
+|[[Trinidad und Tobago]] ([[Republik Trinidad und Tobago]])
+|[[Port-of-Spain]]
+|-
+|[[Tunezja]]<ref name="Tunezja"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 44</ref> ([[Republika Tunezyjska]]<ref name="Tunezja"/>)
+|[[Tunezyjczyk]]<ref name="Tunezja"/>, [[Tunezyjka]]<ref name="Tunezja"/>
+|[[tunezyjski]]<ref name="Tunezja"/>
+|[[Tunis]]<ref name="Tunezja"/>
+|align=center|[[Bild:Flag of Tunisia.svg|30px]]
+|[[Tunesien]] ([[Tunesische Republik]])
+|[[Tunis]]
+|-
+|[[Turcja]]<ref name="Turcja"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 44</ref> ([[Republika Turcji]])<ref name="Turcja"/>
+|[[Turek]]<ref name="Turcja"/>, [[Turczynka]]<ref name="Turcja"/>
+|[[turecki]]<ref name="Turcja"/>
+|[[Ankara]]<ref name="Turcja"/>
+|align=center|[[Bild:Flag of Turkey.svg|30px]]
+|[[Türkei]] ([[Republik Türkei]])
+|[[Ankara]]
+|-
+|[[Turkmenistan]]<ref name="Turkmenistan"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 44</ref>
+|[[Turkmen]]<ref name="Turkmenistan"/>, [[Turkmenka]]<ref name="Turkmenistan"/>
+|[[turkmeński]]<ref name="Turkmenistan"/>
+|[[Aszchabad]]<ref name="Turkmenistan"/>
+|align=center|[[Bild:Flag of Turkmenistan.svg|30px]]
+|[[Turkmenistan]] ([[Republik Turkmenistan]])
+|[[Aschgabat]]
+|-
+|[[Tuvalu]]<ref name="Tuvalu"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 44</ref>
+|[[Tuwalczyk]]<ref name="Tuvalu"/>, [[Tuwalka]]<ref name="Tuvalu"/>
+|[[tuwalski]]<ref name="Tuvalu"/>
+|[[Vaiaku]]<ref name="Tuvalu"/>
+|align=center|[[Bild:Flag of Tuvalu.svg|30px]]
+|[[Tuvalu]]
+|[[Vaiaku]]
+|-
+|[[Uganda]]<ref name="Uganda"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 45</ref> ([[Republika Ugandy]]<ref name="Uganda"/>)
+|[[Ugandyjczyk]]<ref name="Uganda"/>, [[Ugandyjka]]<ref name="Uganda"/>
+|[[ugandyjski]]<ref name="Uganda"/>
+|[[Kampala]]<ref name="Uganda"/>
+|align=center|[[Bild:Flag of Uganda.svg|30px]]
+|[[Uganda]] ([[Republik Uganda]])
+|[[Kampala]]
+|-
+|[[Ukraina]]<ref name="Ukraina"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 45</ref>
+|[[Ukrainiec]]<ref name="Ukraina"/>, [[Ukrainka]]<ref name="Ukraina"/>
+|[[ukraiński]]<ref name="Ukraina"/>
+|[[Kijów]]<ref name="Ukraina"/>
+|align=center|[[Bild:Flag of Ukraine.svg|30px]]
+|[[Ukraine]]
+|[[Kiew]]
+|-
+|[[Urugwaj]]<ref name="Urugwaj"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 45</ref> ([[Wschodnia Republika Urugwaju]]<ref name="Urugwaj"/>)
+|[[Urugwajczyk]]<ref name="Urugwaj"/>, [[Urugwajka]]<ref name="Urugwaj"/>
+|[[urugwajski]]<ref name="Urugwaj"/>
+|[[Montevideo]]<ref name="Urugwaj"/>
+|align=center|[[Bild:Flag of Uruguay.svg|30px]]
+|[[Uruguay]] ([[Ostrepublik des Uruguay]])
+|[[Montevideo]]
+|-
+|[[Uzbekistan]]<ref name="Uzbekistan"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 45</ref> ([[Republika Uzbekistanu]]<ref name="Uzbekistan"/>)
+|[[Uzbek]]<ref name="Uzbekistan"/>, [[Uzbeczka]]<ref name="Uzbekistan"/>/[[Uzbejka]]
+|[[uzbecki]]<ref name="Uzbekistan"/>
+|[[Taszkent]]<ref name="Uzbekistan"/>
+|align=center|[[Bild:Flag of Uzbekistan.svg|30px]]
+|[[Usbekistan]] ([[Republik Usbekistan]])
+|[[Taschkent]]
+|-
+|[[Vanuatu]]<ref name="Vanuatu"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 46f.</ref> ([[Republika Vanuatu]]<ref name="Vanuatu"/>)
+|—, —
+|[[wanuacki]]<ref name="Vanuatu"/>
+|[[Port Vila]]<ref name="Vanuatu"/>
+|align=center|[[Bild:Flag of Vanuatu.svg|30px]]
+|[[Vanuatu]] ([[Republik Vanuatu]])
+|[[Port Vila]]
+|-
+|[[Watykan]]<ref name="Watykan"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 46</ref> ([[Stolica Apostolska]]<ref name="Watykan"/>, [[Państwo Waytkańskie]]<ref name="Watykan"/>)
+|[[Watykańczyk]], [[Watykanka]]
+|[[watykański]]<ref name="Watykan"/>
+|[[Watykan]]<ref name="Watykan"/>
+|align=center|[[Bild:Flag of the Vatican City.svg|30px]]
+|[[Vatikan]], [[Vatikanstadt]] ([[Staat Vatikanstadt]])
+|[[Vatikanstadt]]
+|-
+|[[Wenezuela]]<ref name="Wenezuela"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 46</ref> ([[Boliwariańska Republika Wenezueli]]<ref name="Wenezuela"/>)
+|[[Wenezuelczyk]]<ref name="Wenezuela"/>, [[Wenezuelka]]<ref name="Wenezuela"/>
+|[[wenezuelski]]<ref name="Wenezuela"/>
+|[[Caracas]]<ref name="Wenezuela"/>
+|align=center|[[Bild:Flag of Venezuela.svg|30px]]
+|[[Venezuela]] ([[Bolivarische Republik Venezuela]])
+|[[Caracas]]
+|-
+|[[Węgry]]<ref name="Węgry"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 46</ref> ([[Republika Węgierska]]<ref name="Węgry"/>)
+|[[Węgier]]<ref name="Węgry"/>, [[Węgierka]]<ref name="Węgry"/>
+|[[węgierski]]<ref name="Węgry"/>
+|[[Budapeszt]]<ref name="Węgry"/>
+|align=center|[[Bild:Flag of Hungary.svg|30px]]
+|[[Ungarn]] ([[Republik Ungarn]])
+|[[Budapest]]
+|-
+|[[Wielka Brytania]]<ref name="Wielka Brytania"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 46f.</ref> ([[Zjednoczone Królestwo Wielkiej Brytanii i Irlandii Północnej]]<ref name="Wielka Brytania"/>)
+|[[Brytyjczyk]]<ref name="Wielka Brytania"/>, [[Brytyjka]]<ref name="Wielka Brytania"/>
+|[[brytyjski]]<ref name="Wielka Brytania"/>
+|[[Londyn]]<ref name="Wielka Brytania"/>
+|align=center|[[Bild:Flag of the United Kingdom.svg|30px]]
+|[[Großbritannien]] ([[Vereinigtes Königreich Großbritannien und Nordirland]])
+|[[London]]
+|-
+|[[Wietnam]]<ref name="Wietnam"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 47</ref> ([[Socjalistyczna Republika Wietnamu]]<ref name="Wietnam"/>)
+|[[Wietnamczyk]]<ref name="Wietnam"/>, [[Wietnamka]]<ref name="Wietnam"/>
+|[[wietnamski]]<ref name="Wietnam"/>
+|[[Hanoi]]<ref name="Wietnam"/>
+|align=center|[[Bild:Flag of Vietnam.svg|30px]]
+|[[Vietnam]] ([[Sozialistische Republik Vietnam]])
+|[[Hanoi]]
+|-
+|[[Włochy]]<ref name="Włochy"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 47</ref> ([[Republika Włoska]]<ref name="Włochy"/>)
+|[[Włoch]]<ref name="Włochy"/>, [[Włoszka]]<ref name="Włochy"/>
+|[[włoski]]<ref name="Włochy"/>
+|[[Rzym]]<ref name="Włochy"/>
+|align=center|[[Bild:Flag of Italy.svg|30px]]
+|[[Italien]] ([[Italienische Republik]])
+|[[Rom]]
+|-
+|[[Wybrzeże Kości Słoniowej]]<ref name="Wybrzeże Kości Słoniowej"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 47</ref> ([[Republika Wybrzeża Kości Słoniowej]]<ref name="Wybrzeże Kości Słoniowej"/>, [[Republika Côte d'Ivoire]]<ref name="Wybrzeże Kości Słoniowej"/>)
+|—, —
+|—
+|[[Jamusukro]]<ref name="Wybrzeże Kości Słoniowej"/>, [[Abidżan]]<ref name="Wybrzeże Kości Słoniowej"/>
+|align=center|[[Bild:Flag of Cote d'Ivoire.svg|30px]]
+|[[Elfenbeinküste]], [[Côte d'Ivoire]] ([[Republik Côte d'Ivoire]])
+|[[Yamoussoukro]], [[Abidjan]]
+|-
+|[[Wyspy Marshalla]]<ref name="Wyspy Marshalla"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 47f.</ref> ([[Republika Wysp Marshalla]]<ref name="Wyspy Marshalla"/>)
+|—, —
+|[[marszalski]]<ref name="Wyspy Marshalla"/>
+|[[Majuro]]<ref name="Wyspy Marshalla"/>
+|align=center|[[Bild:Flag of the Marshall Islands.svg|30px]]
+|[[Marshallinseln]] ([[Republik Marshallinseln]])
+|[[Majuro]]
+|-
+|[[Wyspy Salomona]]<ref name="Wyspy Salomona"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 48</ref>
+|[[Salomończyk]]<ref name="Wyspy Salomona"/>, [[Salomonka]]<ref name="Wyspy Salomona"/>
+|[[salomoński]]<ref name="Wyspy Salomona"/>
+|[[Honiara]]<ref name="Wyspy Salomona"/>
+|align=center|[[Bild:Flag of the Solomon Islands.svg|30px]]
+|[[Salomonen]]
+|[[Honiara]]
+|-
+|[[Wyspy Świętego Tomasza i Książęca]]<ref name="Wyspy Świętego Tomasza i Książęca"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 48</ref> ([[Demokratyczna Republika Wysp Świętego Tomasza i Książęcej]]<ref name="Wyspy Świętego Tomasza i Książęca"/>)
+|—, —
+|—
+|[[São Tomé]]<ref name="Wyspy Świętego Tomasza i Książęca"/>
+|align=center|[[Bild:Flag of Sao Tome and Principe.svg|30px]]
+|[[São Tomé und Príncipe]] ([[Demokratische Republik São Tomé und Príncipe]])
+|[[São Tomé]]
+|-
+|[[Zambia]]<ref name="Zambia"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 48</ref> ([[Republika Zambii]]<ref name="Zambia"/>)
+|[[Zambijczyk]]<ref name="Zambia"/>, [[Zambijka]]<ref name="Zambia"/>
+|[[zambijski]]<ref name="Zambia"/>
+|[[Lusaka]]<ref name="Zambia"/>
+|align=center|[[Bild:Flag of Zambia.svg|30px]]
+|[[Sambia]] ([[Republik Sambia]])
+|[[Lusaka]]
+|-
+|[[Zimbabwe]]<ref name="Zimbabwe"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 48</ref> ([[Republika Zimbabwe]]<ref name="Zimbabwe"/>)
+|—, —
+|—
+|[[Harare]]<ref name="Zimbabwe"/>
+|align=center|[[Bild:Flag of Zimbabwe.svg|30px]]
+|[[Simbabwe]] ([[Republik Simbabwe]])
+|[[Harare]]
+|-
+|[[Zjednoczone Emiraty Arabskie]]<ref name="Zjednoczone Emiraty Arabskie"> nach {{Lit-KSNG: Nazwy państw świata|A=3}} S. 49</ref> ([[Państwo Zjednoczonych Emiratów Arabskich]]<ref name="Zjednoczone Emiraty Arabskie"/>)
+|—, —
+|[[emiracki]]<ref name="Zjednoczone Emiraty Arabskie"/>
+|[[Abu Zabi]]<ref name="Zjednoczone Emiraty Arabskie"/>
+|align=center|[[Bild:Flag of the United Arab Emirates.svg|30px]]
+|[[Vereinigte Arabische Emirate]]
+|[[Abu Dhabi]]
+|}
+
+== Referenzen ==
+{{Referenzen}}
+*[[Wiktionary:Deutsch/Liste der Staatennamen|Liste der Staatennamen auf Deutsch]]
+**[[Verzeichnis:Polnisch/Staaten Afrikas|Liste der Staatennamen Afrikas auf Polnisch und Deutsch]]
+**[[Verzeichnis:Polnisch/Staaten Asiens|Liste der Staatennamen Asiens auf Polnisch und Deutsch]]
+**[[Verzeichnis:Polnisch/Staaten Australiens und Ozeaniens|Liste der Staatennamen Australiens und Ozeaniens auf Polnisch und Deutsch]]
+**[[Verzeichnis:Polnisch/Staaten Europas|Liste der Staatennamen Europas auf Polnisch und Deutsch]]
+**[[Verzeichnis:Polnisch/Staaten Nord- und Mittelamerikas|Liste der Staatennamen Nord- und Mittelamerikas auf Polnisch und Deutsch]]
+**[[Verzeichnis:Polnisch/Staaten Südamerikas|Liste der Staatennamen Südamerikas auf Polnisch und Deutsch]]
+*{{Wikipedia|spr=pl|Świat}}
+*Deutscher {{Wikipedia|Welt}}
+
+== Quellen ==
+{{Quellen}}

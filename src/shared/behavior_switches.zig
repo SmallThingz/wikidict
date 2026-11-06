@@ -3,7 +3,7 @@ const std = @import("std");
 const casefold = @import("unicode_casefold.zig");
 pub const header = "# wikidict-behavior-switches-v1";
 pub const ids = [_][]const u8{ "notoc", "forcetoc", "toc", "noeditsection", "nogallery", "hiddencat", "index", "noindex", "newsectionlink", "nonewsectionlink", "nocontentconvert", "notitleconvert", "staticredirect", "expectunusedcategory", "expectunusedtemplate", "expectshortpage", "noglobal", "nomediaviewercarousel", "disambiguation", "expectedUnconnectedPage", "archivedtalk", "notalk", "keeptitle", "expectwithoutscans" };
-const Alias = struct { text: []const u8, sensitive: bool, scalars: usize, toc: bool = false };
+const Alias = struct { text: []const u8, sensitive: bool, scalars: usize, toc: bool = false, nocontentconvert: bool = false };
 fn identity(lines: *std.mem.SplitIterator(u8, .scalar), prefix: []const u8, expected: []const u8) !void {
     const line = lines.next() orelse return error.InvalidBehaviorSnapshot;
     if (!std.mem.startsWith(u8, line, prefix) or !std.mem.eql(u8, line[prefix.len..], expected)) return error.BehaviorIdentityMismatch;
@@ -65,7 +65,7 @@ pub const Registry = struct {
                 }
             }
             if (entries.items.len >= 10000) return error.InvalidBehaviorSnapshot;
-            try entries.append(alloc, .{ .text = alias, .sensitive = sensitive, .scalars = count, .toc = std.mem.eql(u8, id, "toc") });
+            try entries.append(alloc, .{ .text = alias, .sensitive = sensitive, .scalars = count, .toc = std.mem.eql(u8, id, "toc"), .nocontentconvert = std.mem.eql(u8, id, "nocontentconvert") });
         }
         return .{ .arena = arena, .aliases = try entries.toOwnedSlice(alloc), .initial_bytes = initials };
     }
@@ -74,17 +74,20 @@ pub const Registry = struct {
         self.* = undefined;
     }
     pub fn matchAt(self: *const Registry, a: std.mem.Allocator, input: []const u8, at: usize) std.mem.Allocator.Error!?usize {
-        return self.matchAtKind(a, input, at, false);
+        return self.matchAtKind(a, input, at, .any);
     }
     pub fn tocMatchAt(self: *const Registry, a: std.mem.Allocator, input: []const u8, at: usize) std.mem.Allocator.Error!?usize {
-        return self.matchAtKind(a, input, at, true);
+        return self.matchAtKind(a, input, at, .toc);
     }
-    fn matchAtKind(self: *const Registry, a: std.mem.Allocator, input: []const u8, at: usize, toc_only: bool) std.mem.Allocator.Error!?usize {
+    pub fn noContentConvertMatchAt(self: *const Registry, a: std.mem.Allocator, input: []const u8, at: usize) std.mem.Allocator.Error!?usize {
+        return self.matchAtKind(a, input, at, .nocontentconvert);
+    }
+    fn matchAtKind(self: *const Registry, a: std.mem.Allocator, input: []const u8, at: usize, kind: enum { any, toc, nocontentconvert }) std.mem.Allocator.Error!?usize {
         _ = a;
         if (at >= input.len or !self.initial_bytes[input[at]]) return null;
         var longest: usize = at;
         for (self.aliases) |alias| {
-            if (toc_only and !alias.toc) continue;
+            if ((kind == .toc and !alias.toc) or (kind == .nocontentconvert and !alias.nocontentconvert)) continue;
             // Switch delimiters are punctuation and cannot case-fold into another byte.
             if (!std.ascii.isAlphabetic(alias.text[0]) and alias.text[0] < 128 and input[at] != alias.text[0]) continue;
             if (alias.sensitive) {

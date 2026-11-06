@@ -107,10 +107,11 @@ sealed interface StyleBorder {
 }
 enum class TableCollapse { Separate, Collapse }
 enum class CellTextAlign { Left, Center, Right }
+enum class TableFloatSide { Left, Right }
 data class TableStyle(val background: String? = null, val border: StyleBorder? = null,
-    val collapse: TableCollapse? = null, val margins: StyleEdges? = null) {
+    val collapse: TableCollapse? = null, val margins: StyleEdges? = null, val floatSide: TableFloatSide? = null) {
     init {
-        require(background != null || border != null || collapse != null || margins != null) { "Empty table style" }
+        require(background != null || border != null || collapse != null || margins != null || floatSide != null) { "Empty table style" }
         require(background == null || Regex("#[0-9a-f]{6}").matches(background)) { "Invalid table background RGB" }
     }
 }
@@ -154,6 +155,7 @@ data class Block(
     val level: Int = 0,
     val anchor: String = "",
     val anchorFallback: String = "",
+    val textAlign: CellTextAlign? = null,
 )
 data class Feature(val kind: String, val language: String, val data: String, val tailKind: String, val tail: String)
 data class Section(val level: Int, val title: String, val blocks: List<Block>, val anchor: String = "", val anchorFallback: String = "")
@@ -197,7 +199,7 @@ data class Entry(
     init {
         val occurrences = inlineImages
         if (occurrences.isNotEmpty()) {
-            require(media.size <= 128) { "Too many inline image assets" }
+            require(media.size <= 256) { "Too many inline image assets" }
             val byFile = media.groupBy { it.file }
             occurrences.forEach { image ->
                 val matching = byFile[image.file]

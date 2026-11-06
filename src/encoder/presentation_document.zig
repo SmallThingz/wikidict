@@ -111,7 +111,7 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
             const hidden_tag = if (kind == .hidden or kind == .css_block) blk: {
                 const tag = blobs.wikitext_syntax.tagAt(domain, opening_start) orelse return error.InvalidPreContext;
                 if (!matched or tag.closing or tag.self_closing or tag.end != body_start or target.len != 0) return error.InvalidPreContext;
-                if (kind == .css_block and (!tag.is("div") or tag.attr("class") == null or attributes.css_ancestor_classes.len == 0)) return error.InvalidPreContext;
+                if (kind == .css_block and (!tag.is("div") or ((tag.attr("class") == null or attributes.css_ancestor_classes.len == 0) and ((tag.attr("style") == null and tag.attr("align") == null) or attributes.text_align == null)))) return error.InvalidPreContext;
                 const pair = blobs.wikitext_syntax.matchingTag(domain, tag) orelse return error.InvalidPreContext;
                 if (pair.inner_end != body_end or pair.end != resume_at) return error.InvalidPreContext;
                 break :blk tag.name;
@@ -155,7 +155,7 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
                 .matched = matched,
                 .kind = kind,
                 .formatting = formatting,
-                .attributes = .{ .classes = owned_classes, .css_ancestor_classes = owned_css_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set, .foreground = owned_foreground, .foreground_set = attributes.foreground_set, .font_scale = attributes.font_scale, .font_scale_basis = attributes.font_scale_basis, .font_scale_set = attributes.font_scale_set },
+                .attributes = .{ .text_align = attributes.text_align, .classes = owned_classes, .css_ancestor_classes = owned_css_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set, .foreground = owned_foreground, .foreground_set = attributes.foreground_set, .font_scale = attributes.font_scale, .font_scale_basis = attributes.font_scale_basis, .font_scale_set = attributes.font_scale_set },
                 .target = owned_target,
                 .tag_name = hidden_tag,
                 .link_quotes = link_quotes,
@@ -193,6 +193,7 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
             .image_options = image_options,
             .poem_phase = poem_phase,
             .citations = reference_context.citations,
+            .content_conversion = reference_context.content_conversion,
             .external_links_prepared = reference_context.citations != null,
         },
     };
@@ -533,11 +534,13 @@ fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, 
             .image_options = image_options, .table_styles = table_styles,
             .poem_phase = poem_phase,
             .citations = reference_context.citations,
+            .content_conversion = reference_context.content_conversion,
             .external_links_prepared = reference_context.citations != null,
         },
     };
     renderer.page_reference_definitions = reference_context.items;
     renderer.fallbacks.merge(reference_context.fallbacks);
+    renderer.context.content_conversion = try compiler.pageContentConversion(a, tracked.bytes, renderer.context);
     var builder: Builder = .{
         .a = a,
         .renderer = &renderer,
@@ -561,6 +564,7 @@ fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, so
     var renderer: compiler.Renderer = .{ .a = a, .context = .{ .title = title, .language = if (language.len == 0) "English" else language, .link_trail = link_trail, .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .image_options = image_options, .table_styles = table_styles, .poem_phase = poem_phase } };
     if (fragments.len == 0) renderer.page_html_heading_openings = &html_openings;
     renderer.context.citations = reference_context.citations;
+    renderer.context.content_conversion = try compiler.pageContentConversion(a, source.bytes, .{ .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .content_conversion = reference_context.content_conversion });
     renderer.context.external_links_prepared = reference_context.citations != null;
     renderer.page_reference_definitions = reference_context.items;
     renderer.fallbacks.merge(reference_context.fallbacks);
@@ -6708,7 +6712,7 @@ test "complete retained OC nicard reference angles preserve full body actions an
     try std.testing.expectEqualSlices(u8, expected, actual);
     try std.testing.expectEqualDeep(expected_report, actual_report);
     const stored = try codec.decodeAlloc(a, actual, "niçard", .language, .{ .code = "oc", .heading = "Occitan" });
-    try std.testing.expectEqualStrings("DPRB", actual[0..4]);
+    try std.testing.expectEqualStrings("DPRC", actual[0..4]);
     var sized_headings: u8 = 0;
     for (stored.entry.sections) |section| for (section.blocks) |block| {
         if (block.kind != .heading) continue;
@@ -6745,7 +6749,23 @@ test "complete retained OC nicard reference angles preserve full body actions an
     var tables: usize = 0;
     for (stored.entry.sections) |section| for (section.blocks) |block| {
         if (block.kind == .definition) definitions += 1;
-        if (block.table != null) tables += 1;
+        if (block.table) |table| {
+            tables += 1;
+            // The null-profile inline resolver retains authored margin: 1em 0.
+            // Existing width geometry remains the independent width="100%" hint.
+            try std.testing.expectEqualDeep(types.TableStyle{ .margins = .{
+                .top = .{ .unit = .em, .value = 1 },
+                .right = .{ .unit = .px, .value = 0 },
+                .bottom = .{ .unit = .em, .value = 1 },
+                .left = .{ .unit = .px, .value = 0 },
+            } }, table.style.?);
+            try std.testing.expectEqualDeep(types.TableGeometry{ .width = .{ .unit = .percent, .value = 100 } }, table.geometry.?);
+            try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+            try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+            // Cell padding and dotted border are not projected without a CSS profile.
+            try std.testing.expect(table.rows[0].cells[0].style == null);
+            try std.testing.expectEqualStrings("#ffffff", table.rows[0].cells[0].background.?);
+        }
     };
     try std.testing.expectEqual(@as(usize, 2), definitions);
     try std.testing.expectEqual(@as(usize, 1), tables);
@@ -7083,7 +7103,7 @@ test "complete captured HR skakavica retains citation prose and typed two by fiv
     defer images.deinit();
     // This is a document-context gate, not a normal Writer ownership claim.
     const encoded = try compileReportedWithOptionsAlloc(a, "skakavica", .language, "Unclassified", "", source, null, .{}, &namespaces, null, &images, null);
-    try std.testing.expectEqualStrings("DPRC", encoded[0..4]);
+    try std.testing.expectEqualStrings("DPRE", encoded[0..4]);
     const stored = try codec.decodeAlloc(a, encoded, "skakavica", .language, .{ .code = "", .heading = "Unclassified" });
     try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, stored));
     // The complete retained source deliberately contains two hidden maintenance rows.
@@ -7170,18 +7190,30 @@ test "complete captured HR skakavica retains citation prose and typed two by fiv
     defer stylesheet_profile.deinit();
     const inflection_inline_css = "float:right; vertical-align: sub; margin-top:0.5em; margin-left:0.5em; margin-bottom:0.5em; border:1px solid #E8E8E8; border-collapse:collapse; background-color: #FBFBFB;";
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, "{| class=\"infobox vcard\" style=\"" ++ inflection_inline_css ++ "\" cellspacing="));
+    const expected_inflection_margins: types.StyleEdges = .{
+        .top = .{ .unit = .em, .value = 0.5 },
+        .right = .{ .unit = .px, .value = 0 },
+        .bottom = .{ .unit = .em, .value = 0.5 },
+        .left = .{ .unit = .em, .value = 0.5 },
+    };
+    const expected_baseline_inflection_style: types.TableStyle = .{
+        .float_side = .right,
+        .margins = expected_inflection_margins,
+    };
     const expected_inflection_style: types.TableStyle = .{
+        .float_side = .right,
         .background = "#fbfbfb",
         .border = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = "#e8e8e8" } },
         .collapse = .collapse,
-        .margins = null,
+        .margins = expected_inflection_margins,
     };
     const resolved_inflection = try stylesheet_profile.resolveTableWithContext(a, 0, "infobox vcard", .{ .ancestor_classes = "", .own_id = "" }, null, inflection_inline_css);
     try std.testing.expect(resolved_inflection.unresolved and !resolved_inflection.descendant_style_unresolved);
+    try std.testing.expect(!resolved_inflection.margin_basis_unresolved);
     try std.testing.expect(resolved_inflection.background_specified);
     try std.testing.expectEqualDeep(expected_inflection_style, resolved_inflection.style.?);
     const styled_bytes = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, "skakavica", .language, "Unclassified", "", MissingText.untracked(source), null, .{}, &namespaces, null, &images, null, null, &stylesheet_profile);
-    try std.testing.expectEqualStrings("DPRC", styled_bytes[0..4]);
+    try std.testing.expectEqualStrings("DPRE", styled_bytes[0..4]);
     const styled = try codec.decodeAlloc(a, styled_bytes, "skakavica", .language, .{ .code = "", .heading = "Unclassified" });
     try std.testing.expectEqualSlices(u8, styled_bytes, try codec.encodeAlloc(a, styled));
     try std.testing.expectEqual(stored.entry.sections.len, styled.entry.sections.len);
@@ -7238,15 +7270,15 @@ test "complete captured HR skakavica retains citation prose and typed two by fiv
     }
     try std.testing.expectEqual(@as(usize, 10), styled_cell_count);
     try std.testing.expectEqual(@as(usize, 5), styled_header_count);
-    // With a complete profile, the extra infobox classes no longer erase its
-    // independent inline paint. Unsupported margin longhands remain unresolved.
+    // Both routes retain the authored float and relative margins. The profile
+    // adds independent paint; vertical-align remains outside the typed subset.
     const inflection_at = inflection_position.?;
     const baseline_section = stored.entry.sections[inflection_at.section];
     const styled_section = styled.entry.sections[inflection_at.section];
     try std.testing.expectEqual(baseline_section.blocks.len, styled_section.blocks.len);
     const baseline_inflection = baseline_section.blocks[inflection_at.block].table.?;
     const styled_inflection = styled_section.blocks[inflection_at.block].table.?;
-    try std.testing.expect(baseline_inflection.style == null);
+    try std.testing.expectEqualDeep(expected_baseline_inflection_style, baseline_inflection.style.?);
     try std.testing.expectEqualDeep(expected_inflection_style, styled_inflection.style.?);
 
     // Normalize only this proved inflection style and the citation fields above.
@@ -9190,4 +9222,341 @@ test "literal path targets require exact source proof and retain numbered codec 
     try std.testing.expectEqualStrings("en", stored.entry.language_code);
     try std.testing.expect(std.mem.indexOf(u8, payload, source) == null);
     try std.testing.expectEqualSlices(u8, payload, try codec.encodeAlloc(a, stored));
+}
+
+test "retained HY kalatsekh malformed argument preserves whole page body paint navigation and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = @embedFile("testdata/hy-kalatsekh/page.expanded.wikitext");
+    const raw = @embedFile("testdata/hy-kalatsekh/page.raw.wikitext");
+    const reference = @embedFile("testdata/hy-kalatsekh/page.reference.wikitext");
+    try std.testing.expectEqual(@as(usize, 337), raw.len);
+    try std.testing.expectEqual(@as(usize, 1329), source.len);
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(raw, &hash, .{});
+    try std.testing.expectEqualStrings("f8bc554b587daab4a91f10a447e4c3a796f33629c03cce43cefd6baa644828b6", &std.fmt.bytesToHex(hash, .lower));
+    std.crypto.hash.sha2.Sha256.hash(source, &hash, .{});
+    try std.testing.expectEqualStrings("d0a247aab1fc513ede64813f04ab65fee8824ef8592192aea6eecf285a3303d1", &std.fmt.bytesToHex(hash, .lower));
+    var ns = try NamespaceRegistry.init(a, @embedFile("testdata/hy-kalatsekh/namespace-registry.tsv"));
+    defer ns.deinit();
+    const title = "կալացեխ";
+    // Full page/compiler proof only: no edition default or dialect owner is
+    // invented. Normal Writer ownership and captured Common.css qualification
+    // remain separate from this exact inline paint and complete-body oracle.
+    var actual_report: Fallbacks = .{};
+    var expected_report: Fallbacks = .{};
+    const actual_bytes = try compileReportedWithLinkTrailAlloc(a, title, .language, "Unclassified", "", source, null, .{}, &ns, &actual_report);
+    const expected_bytes = try compileReportedWithLinkTrailAlloc(a, title, .language, "Unclassified", "", reference, null, .{}, &ns, &expected_report);
+    try std.testing.expect(actual_report.literal_markup);
+    expected_report.literal_markup = true;
+    try std.testing.expectEqualDeep(expected_report, actual_report);
+    try std.testing.expectEqualSlices(u8, expected_bytes, actual_bytes);
+    const metadata: format.LanguageMetadata = .{ .code = "", .heading = "Unclassified" };
+    const actual = try codec.decodeAlloc(a, actual_bytes, title, .language, metadata);
+    const expected = try codec.decodeAlloc(a, expected_bytes, title, .language, metadata);
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqualStrings("", actual.entry.language_code);
+    try std.testing.expectEqualStrings("Unclassified", actual.entry.language.?);
+    try std.testing.expectEqualSlices(u8, actual_bytes, try codec.encodeAlloc(a, actual));
+    try std.testing.expectEqualDeep(actual, try codec.decodeAlloc(a, try codec.encodeAlloc(a, actual), title, .language, metadata));
+    try std.testing.expectEqual(@as(usize, 0), actual.entry.media.len);
+    try std.testing.expectEqual(@as(usize, 0), actual.entry.references.len);
+    var visible: std.ArrayList(u8) = .empty;
+    var painted: usize = 0;
+    var lexical: usize = 0;
+    var citation: usize = 0;
+    var syllables = false;
+    var definition = false;
+    for (actual.entry.sections) |section| {
+        try visible.appendSlice(a, section.title);
+        for (section.blocks) |block| {
+            try std.testing.expect(block.table == null);
+            if (block.kind == .definition) definition = true;
+            for (block.spans) |span| {
+                try visible.appendSlice(a, span.text);
+                try visible.appendSlice(a, span.trail);
+                if (std.mem.eql(u8, span.text, "կալացեխից")) {
+                    painted += 1;
+                    try std.testing.expect(span.bold and !span.italic and span.kind == .text and span.target.len == 0);
+                    try std.testing.expect(span.background != null and std.ascii.eqlIgnoreCase(span.background.?, "#EDF0FF"));
+                    try std.testing.expectEqualStrings("example-select", span.classes);
+                }
+                if (std.mem.indexOf(u8, span.text, "կա•լա•ցեխ") != null) {
+                    syllables = true;
+                    try std.testing.expect(span.bold);
+                }
+                if (span.kind == .link) {
+                    lexical += 1;
+                    try std.testing.expectEqualStrings("վանկ", span.target);
+                    try std.testing.expectEqualStrings("վանկեր", span.text);
+                }
+                if (span.kind == .external_link) {
+                    citation += 1;
+                    try std.testing.expectEqualStrings("http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=48&query=%D5%AF%D5%A1%D5%AC%D5%A1%D6%81%D5%A5%D5%AD", span.target);
+                    try std.testing.expectEqualStrings("Հայոց լեզվի բարբառային բառարան", span.text);
+                }
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), painted);
+    try std.testing.expectEqual(@as(usize, 1), lexical);
+    try std.testing.expectEqual(@as(usize, 1), citation);
+    try std.testing.expect(definition and syllables);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "{{օրն|Գոմեշը ոտը կալացեխից դուրս հանեց։|}Աճ}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Հայերեն բարբառային բառ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Արտահայտություններ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Աղբյուրներ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "2792") != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "[malformed template]") == null);
+}
+
+test "list formatting heading copies retain page collision IDs through tracked owner projection" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const french = "==French==\n===Shared===\n# premier\n";
+    const english = "==English==\n**<div class=NonModificabile>\n===Shared===\n''kept'' [[Other|child]]\n</div>\n";
+    const page = french ++ english;
+    const observation = try observeHeadingAnchorsAlloc(a, "entry", MissingText.untracked(page), .{}, null, null, null, .{}, null);
+    try std.testing.expectEqual(@as(usize, 4), observation.items.len);
+    const expected_offsets = [_]usize{
+        std.mem.indexOf(u8, page, "French").?,
+        std.mem.indexOf(u8, page, "Shared").?,
+        std.mem.indexOf(u8, page, "English").?,
+        std.mem.lastIndexOf(u8, page, "Shared").?,
+    };
+    for (observation.items, expected_offsets, [_][]const u8{ "French", "Shared", "English", "Shared_2" }) |item, offset, anchor| {
+        try std.testing.expectEqual(offset, item.source_offset);
+        try std.testing.expectEqualStrings(anchor, item.anchor);
+    }
+    const tracked = try missing_dependency.slice(a, MissingText.untracked(page), french.len, page.len);
+    try std.testing.expect(tracked.bytes.ptr != english.ptr);
+    const fragments = [_]SourceFragment{.{ .source = english, .missing = tracked }};
+    const projection = [_]HeadingSourceRange{.{ .owner_start = 0, .page_start = french.len, .len = english.len }};
+    const encoded = try compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(a, "entry", .language, "English", "en", MissingText.untracked(english), null, .{}, null, null, null, .{}, null, null, &fragments, &observation, &projection);
+    const stored = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 2), stored.entry.sections.len);
+    try std.testing.expectEqualStrings("English", stored.entry.sections[0].anchor);
+    try std.testing.expectEqualStrings("Shared", stored.entry.sections[1].title);
+    try std.testing.expectEqualStrings("Shared_2", stored.entry.sections[1].anchor);
+    var italic: usize = 0;
+    var actions: usize = 0;
+    for (stored.entry.sections[1].blocks) |block| for (block.spans) |span| {
+        if (std.mem.eql(u8, span.text, "kept")) {
+            try std.testing.expect(span.italic and !span.bold and span.kind == .text);
+            try std.testing.expect(std.mem.indexOf(u8, span.classes, "NonModificabile") != null);
+            italic += 1;
+        }
+        if (span.kind == .link) {
+            try std.testing.expectEqualStrings("Other", span.target);
+            try std.testing.expectEqualStrings("child", span.text);
+            try std.testing.expect(!span.italic and !span.bold);
+            actions += 1;
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), italic);
+    try std.testing.expectEqual(@as(usize, 1), actions);
+    try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, stored));
+    try std.testing.expectEqualDeep(stored, try codec.decodeAlloc(a, try codec.encodeAlloc(a, stored), "entry", .language, .{ .code = "en", .heading = "English" }));
+    // An unproved source position still refuses projection; no text/label lookup
+    // is used to repair missing provenance or borrow another owner's heading.
+    const wrong = [_]HeadingSourceRange{.{ .owner_start = 0, .page_start = french.len - 1, .len = english.len }};
+    try std.testing.expectError(error.InvalidHeadingProjection, compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(a, "entry", .language, "English", "en", MissingText.untracked(english), null, .{}, null, null, null, .{}, null, null, &fragments, &observation, &wrong));
+}
+
+test "typed layout document retains cell paragraphs references actions and conditional codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "==Section==\n{| border=2 cellpadding=4 cellspacing=0 style='float:right;margin-left:20px'\n| align=right colspan=2 | [[One|1]] <div style='text-align:center'><big>'''[[Two|2]]'''</big></div>[[Three|3]]\n|}\n[[After|after]]<ref>[[Book|note]]</ref><ref><div style='text-align:left'>[[R1|a]]<div style='text-align:center'>[[R2|b]]</div>[[R3|c]]</div></ref><references/>";
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "layout fixture", .supplemental, "", "", source, null, &report);
+    try std.testing.expectEqualStrings("DPRE", bytes[0..4]);
+    const stored = try codec.decodeAlloc(a, bytes, "layout fixture", .supplemental, null);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    var tables: usize = 0;
+    var after: usize = 0;
+    var headings: usize = 0;
+    for (stored.entry.sections) |section| {
+        if (std.mem.eql(u8, section.title, "Section")) {
+            headings += 1;
+            try std.testing.expectEqualStrings("Section", section.anchor);
+        }
+        for (section.blocks) |block| {
+            if (block.table) |table| {
+                tables += 1;
+                try std.testing.expectEqual(types.TableFloatSide.right, table.style.?.float_side.?);
+                try std.testing.expectEqual(@as(f32, 20), table.style.?.margins.?.left.value);
+                try std.testing.expectEqual(@as(?u16, 2), table.geometry.?.border);
+                try std.testing.expectEqual(@as(?u16, 4), table.geometry.?.cell_padding);
+                try std.testing.expectEqual(@as(?u16, 0), table.geometry.?.cell_spacing);
+                const cell = table.rows[0].cells[0];
+                try std.testing.expectEqual(@as(u16, 2), cell.colspan);
+                try std.testing.expectEqual(types.CellTextAlign.right, cell.style.?.text_align.?);
+                const ordered = cell.blocks.?;
+                try std.testing.expectEqual(@as(usize, 3), ordered.len);
+                for (ordered, [_][]const u8{ "One", "Two", "Three" }, 0..) |paragraph, target, index| {
+                    try std.testing.expect(paragraph.kind == .paragraph and paragraph.spans.len == 1);
+                    try std.testing.expectEqualStrings(target, paragraph.spans[0].target);
+                    if (index == 1) {
+                        try std.testing.expectEqual(types.CellTextAlign.center, paragraph.text_align.?);
+                        try std.testing.expect(paragraph.spans[0].bold);
+                        try std.testing.expectApproxEqAbs(@as(f32, 1.2), paragraph.spans[0].font_scale.?, 0.0001);
+                    } else try std.testing.expect(paragraph.text_align == null);
+                }
+            }
+            for (block.spans) |span| if (std.mem.eql(u8, span.target, "After")) {
+                after += 1;
+                try std.testing.expect(block.text_align == null);
+            };
+        }
+    }
+    try std.testing.expect(tables == 1 and after == 1 and headings == 1);
+    try std.testing.expectEqual(@as(usize, 2), stored.entry.references.len);
+    const ordinary = stored.entry.references[0];
+    try std.testing.expect(ordinary.blocks == null and ordinary.spans.len == 1);
+    try std.testing.expectEqualStrings("Book", ordinary.spans[0].target);
+    const rich = stored.entry.references[1];
+    try std.testing.expect(rich.spans.len == 0 and rich.blocks.?.len == 3);
+    for (rich.blocks.?, [_][]const u8{ "R1", "R2", "R3" }, 0..) |paragraph, target, index| {
+        try std.testing.expectEqualStrings(target, paragraph.spans[0].target);
+        try std.testing.expectEqual(if (index == 1) types.CellTextAlign.center else .left, paragraph.text_align.?);
+    }
+    try std.testing.expect(!report.unresolved_table_style);
+    const unchanged = try compileAlloc(a, "layout fixture", .supplemental, "", "", "==Section==\nplain", null);
+    try std.testing.expect(!std.mem.eql(u8, "DPRE", unchanged[0..4]));
+}
+
+test "typed layout observed authored alignment survives both fragment boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "<div style='text-align:right'>[[Inside|inside]]\n</div>\n[[After|after]]", "<div align=right>[[Inside|inside]]\n</div>\n[[After|after]]" }) |source| {
+        const observed = try observePreScopesAlloc(a, "alignment fragment", source, .{}, null, null, null, .{}, null);
+        try std.testing.expectEqual(@as(usize, 1), observed.scopes.len);
+        const scope = observed.scopes[0];
+        try std.testing.expect(scope.kind == .css_block);
+        try std.testing.expectEqual(types.CellTextAlign.right, scope.attributes.text_align.?);
+        try std.testing.expectEqualStrings("div", scope.tag_name);
+        const cut = scope.body_start;
+        const initial = [_]FragmentPreContext.Initial{.{ .body_end = scope.body_end - cut, .resume_at = scope.resume_at - cut, .kind = scope.kind, .tag_name = scope.tag_name, .formatting = scope.formatting, .attributes = scope.attributes }};
+        var suffix_renderer: compiler.Renderer = .{ .a = a, .context = .{} };
+        const suffix = try suffix_renderer.renderBodyWithFragmentPre(source[cut..], .{ .initial = &initial });
+        var inside: usize = 0;
+        var after: usize = 0;
+        for (suffix) |block| for (block.spans) |span| {
+            if (std.mem.eql(u8, span.target, "Inside")) {
+                inside += 1;
+                try std.testing.expectEqual(types.CellTextAlign.right, block.text_align.?);
+            }
+            if (std.mem.eql(u8, span.target, "After")) {
+                after += 1;
+                try std.testing.expect(block.text_align == null);
+            }
+        };
+        try std.testing.expect(inside == 1 and after == 1);
+        const trailing = [_]FragmentPreContext.Trailing{.{ .opening_start = scope.opening_start, .body_start = scope.body_start, .kind = scope.kind, .tag_name = scope.tag_name, .formatting = scope.formatting, .attributes = scope.attributes }};
+        var prefix_renderer: compiler.Renderer = .{ .a = a, .context = .{} };
+        const prefix = try prefix_renderer.renderBodyWithFragmentPre(source[0..scope.body_end], .{ .trailing = &trailing });
+        try std.testing.expectEqual(@as(usize, 1), prefix.len);
+        try std.testing.expectEqual(types.CellTextAlign.right, prefix[0].text_align.?);
+        try std.testing.expectEqualStrings("Inside", prefix[0].spans[0].target);
+        try std.testing.expect(prefix_renderer.body_formatting_attributes.text_align == null and suffix_renderer.body_formatting_attributes.text_align == null);
+        try std.testing.expect(!prefix_renderer.fallbacks.unclosed_formatting and !suffix_renderer.fallbacks.unclosed_formatting);
+    }
+}
+
+test "Cite interrupted attribute keeps ordinary note body styles actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const body = "''book'' [[Target|entry]] [https://example.test/book source]";
+    const tail = "\n<ref name=n/><references/>\n==Later==\n# [[After|after]]";
+    const bad = "==English==\n# '''word'''<ref name=\"n\"<[[:Template:Absent]]>" ++ body ++ "</ref>" ++ tail;
+    const clean = "==English==\n# '''word'''<ref name=\"n\">" ++ body ++ "</ref>" ++ tail;
+    var bad_report: Fallbacks = .{};
+    var clean_report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", bad, null, &bad_report);
+    const expected = try compileReportedAlloc(a, "entry", .language, "English", "en", clean, null, &clean_report);
+    try std.testing.expectEqualSlices(u8, expected, bytes);
+    const stored = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.references.len);
+    try std.testing.expectEqualStrings("n", stored.entry.references[0].name);
+    var internal = false;
+    var external = false;
+    var italic = false;
+    for (stored.entry.references[0].spans) |span| {
+        if (span.kind == .link and std.mem.eql(u8, span.target, "Target")) {
+            try std.testing.expectEqualStrings("entry", span.text);
+            internal = true;
+        }
+        if (span.kind == .external_link and std.mem.eql(u8, span.target, "https://example.test/book")) {
+            try std.testing.expectEqualStrings("source", span.text);
+            external = true;
+        }
+        if (span.italic and std.mem.eql(u8, span.text, "book")) italic = true;
+    }
+    try std.testing.expect(internal and external and italic);
+    try std.testing.expectEqualDeep(clean_report, bad_report);
+    // A protected opener remains authored display text, not a citation event.
+    const protected_source = "<nowiki><ref name=n<bad>literal</ref></nowiki>";
+    const protected = try codec.decodeAlloc(a, try compileAlloc(a, "entry", .language, "English", "en", protected_source, null), "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 0), protected.entry.references.len);
+    // No residual or invalid target exception, and no consumption of a valid
+    // unexpanded body template merely because its enclosing opener recovered.
+    try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "entry", .language, "English", "en", "word<ref name=n<bad>{{unexpanded|x}}</ref><references/>", null));
+    try std.testing.expectError(error.UncompiledPresentation, compiler.requireCompiledText("<ref name=n<bad>"));
+}
+
+test "retained ataujia Cite opener preserves complete document and real bibliography" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = @embedFile("es-ataujia-expanded.wikitext");
+    const invalid_attribute = "<[[:Plantilla:DLCE1906]]";
+    const at = std.mem.indexOf(u8, source, invalid_attribute) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOfPos(u8, source, at + invalid_attribute.len, invalid_attribute) == null);
+    const reference = try std.mem.concat(a, u8, &.{ source[0..at], source[at + invalid_attribute.len ..] });
+    var namespaces = try NamespaceRegistry.init(a, @embedFile("es-ataujia-namespace.tsv"));
+    defer namespaces.deinit();
+    var actual_report: Fallbacks = .{};
+    var reference_report: Fallbacks = .{};
+    // Metadata here is explicit test input; the separate normal Writer oracle
+    // must establish ownership from its authenticated registry and raw source.
+    const bytes = try compileReportedWithOptionsAlloc(a, "ataujía", .language, "Español", "es", source, null, .{}, &namespaces, null, null, &actual_report);
+    const expected = try compileReportedWithOptionsAlloc(a, "ataujía", .language, "Español", "es", reference, null, .{}, &namespaces, null, null, &reference_report);
+    try std.testing.expectEqualSlices(u8, expected, bytes);
+    try std.testing.expectEqualDeep(reference_report, actual_report);
+    // The corrected preprocessor preserves raw extension attributes. This is
+    // a test input substitution, not a claimed newly captured Worker reply.
+    const raw_attribute = try std.mem.concat(a, u8, &.{ source[0..at], "<{{DLCE1906|210}}", source[at + invalid_attribute.len ..] });
+    var raw_report: Fallbacks = .{};
+    const raw_bytes = try compileReportedWithOptionsAlloc(a, "ataujía", .language, "Español", "es", raw_attribute, null, .{}, &namespaces, null, null, &raw_report);
+    try std.testing.expectEqualSlices(u8, expected, raw_bytes);
+    try std.testing.expectEqualDeep(reference_report, raw_report);
+    const stored = try codec.decodeAlloc(a, bytes, "ataujía", .language, .{ .code = "es", .heading = "Español" });
+    const roundtrip = try codec.encodeAlloc(a, stored);
+    try std.testing.expectEqualSlices(u8, bytes, roundtrip);
+    try std.testing.expectEqualDeep(stored, try codec.decodeAlloc(a, roundtrip, "ataujía", .language, .{ .code = "es", .heading = "Español" }));
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.references.len);
+    const note = stored.entry.references[0];
+    try std.testing.expectEqualStrings("dlce1906", note.name);
+    var note_text: std.ArrayList(u8) = .empty;
+    var archive = false;
+    for (note.spans) |span| {
+        try note_text.appendSlice(a, span.text);
+        if (span.kind == .external_link and std.mem.eql(u8, span.target, "https://archive.org/details/diccionariocompl00rodruoft")) {
+            try std.testing.expectEqualStrings("Diccionario completo de la lengua española", span.text);
+            try std.testing.expect(span.italic);
+            archive = true;
+        }
+        try std.testing.expect(!std.mem.eql(u8, span.target, "Plantilla:DLCE1906"));
+    }
+    try std.testing.expect(archive);
+    for ([_][]const u8{ "Manuel Rodríguez-Navas", "Página 210.", "Editorial: Madrid, Callejón.", "1906." }) |piece|
+        try std.testing.expect(std.mem.indexOf(u8, note_text.items, piece) != null);
+    // Whole byte/Stored equality above covers every section, table cell, inline
+    // style, media occurrence, action and reference; no field projection used.
 }

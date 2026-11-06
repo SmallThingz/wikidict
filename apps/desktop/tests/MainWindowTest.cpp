@@ -721,17 +721,342 @@ private slots:
         QCOMPARE(selectedAnchor(), QStringLiteral("section:0"));
         // The second activation must work without moving the cursor or acquiring
         // focus again, including after queued inline-resource format updates.
+        for (const auto key : {Qt::Key_Return, Qt::Key_Space}) {
+            for (int cycle = 0; cycle < 2; ++cycle) {
+                QTest::keyClick(window.reading_, key);
+                QTRY_VERIFY(window.collapsedSections_.contains(0));
+                QVERIFY(!window.reading_->toPlainText().contains("BODY TO FOLD"));
+                QTRY_COMPARE(selectedAnchor(), QStringLiteral("section:0"));
+                QTest::keyClick(window.reading_, key);
+                QTRY_VERIFY(!window.collapsedSections_.contains(0));
+                QVERIFY(window.reading_->toPlainText().contains("BODY TO FOLD"));
+                QTRY_COMPARE(selectedAnchor(), QStringLiteral("section:0"));
+            }
+        }
+        QCOMPARE(window.currentEntry_, entry);
+    }
+
+    void spaceActivatesNormalFallbackHeadingBeforeTable() {
+        MainWindow window(fixture_, QStringLiteral("dog"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(640, 600); window.show(); window.activateWindow();
+        // Exact first section of retained normal Reader dwa (28d426bc), including
+        // all original table fields. There is no rich-heading companion block.
+        const QJsonObject section = QJsonDocument::fromJson(QByteArrayLiteral(R"DICT({"level":2,"title":"Poloniera","anchor":"Poloniera","anchor_fallback":"","blocks":[{"kind":"table","depth":0,"spans":[],"feature":null,"list_path":"","number":"","level":0,"anchor":"","anchor_fallback":"","table":{"caption":[],"rows":[{"cells":[{"spans":[{"kind":"link","text":"1","target":"jeden","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"font_scale":0.949999988079071,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"font_scale":0.949999988079071,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"font_scale":0.949999988079071,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"2","target":"","trail":"","language":"","classes":"center","direction":"","explanation":"","foreground":null,"font_scale":1.96992027759552,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"line_break","text":"\n","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"font_scale":0.949999988079071,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"3","target":"trzy","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"font_scale":0.949999988079071,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":2,"rowspan":1,"background":"#b4cdcd"}]},{"cells":[{"spans":[{"kind":"text","text":"Zenbaki kardinala","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"font_scale":0.949999988079071,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[{"kind":"text","text":"dwa","target":"","trail":"","language":"","classes":"mw-selflink selflink","direction":"","explanation":"","foreground":null,"font_scale":0.949999988079071,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"}]},{"cells":[{"spans":[{"kind":"text","text":"Zenbaki ordinala","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"font_scale":0.949999988079071,"bold":true,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"},{"spans":[{"kind":"link","text":"drugi","target":"drugi","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"font_scale":0.949999988079071,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"font_scale":0.949999988079071,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"m","target":"","trail":"","language":"","classes":"gender m","direction":"","explanation":"","foreground":null,"font_scale":0.949999988079071,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":".","target":"","trail":"","language":"","classes":"gender m gender-period","direction":"","explanation":"","foreground":null,"font_scale":0.949999988079071,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"; ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"font_scale":0.949999988079071,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"drugie","target":"drugie","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"font_scale":0.949999988079071,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":" ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","foreground":null,"font_scale":0.949999988079071,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"n","target":"","trail":"","language":"","classes":"gender n","direction":"","explanation":"","foreground":null,"font_scale":0.949999988079071,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":".","target":"","trail":"","language":"","classes":"gender n gender-period","direction":"","explanation":"","foreground":null,"font_scale":0.949999988079071,"bold":false,"italic":true,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"header":false,"colspan":1,"rowspan":1,"background":"#f9f9f9"}]}],"geometry":{"border":2,"cell_spacing":0,"cell_padding":4,"width":{"unit":"px","value":250}},"style":{"background":"#f9f9f9","border":{"solid":{"width":{"unit":"px","value":1},"color":"#aaaaaa"}},"collapse":"collapse"}}}]})DICT")).object();
+        QCOMPARE(section.value("title").toString(), QStringLiteral("Poloniera"));
+        QCOMPARE(section.value("blocks").toArray().size(), 1);
+        QCOMPARE(section.value("blocks").toArray().first().toObject().value("kind").toString(), QStringLiteral("table"));
+        const QJsonObject entry{{"title", "dwa"}, {"kind", "language"}, {"language", "poloniera"},
+            {"sections", QJsonArray{section}}};
+        window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false);
+        const QString body = window.reading_->toPlainText();
+        QVERIFY(body.contains("Zenbaki kardinala"));
+        window.reading_->setFocus(); QTRY_VERIFY(window.reading_->hasFocus());
+        const auto selectedAnchor = [&] {
+            QTextCursor cursor = window.reading_->textCursor();
+            if (!cursor.hasSelection()) return QString();
+            cursor.setPosition(cursor.selectionStart());
+            cursor.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+            return cursor.charFormat().anchorHref();
+        };
+        QSignalSpy activated(window.reading_, &QTextBrowser::anchorClicked);
+        QTest::keyClick(window.reading_, Qt::Key_Home, Qt::ControlModifier);
+        QTest::keyClick(window.reading_, Qt::Key_Tab);
+        QCOMPARE(selectedAnchor(), QStringLiteral("section:0"));
         for (int cycle = 0; cycle < 2; ++cycle) {
-            QTest::keyClick(window.reading_, Qt::Key_Return);
+            QTest::keyClick(window.reading_, Qt::Key_Space);
+            QTRY_COMPARE(activated.count(), cycle * 2 + 1);
             QTRY_VERIFY(window.collapsedSections_.contains(0));
-            QVERIFY(!window.reading_->toPlainText().contains("BODY TO FOLD"));
+            QVERIFY(!window.reading_->toPlainText().contains("Zenbaki kardinala"));
             QTRY_COMPARE(selectedAnchor(), QStringLiteral("section:0"));
-            QTest::keyClick(window.reading_, Qt::Key_Return);
+            QTest::keyClick(window.reading_, Qt::Key_Space);
+            QTRY_COMPARE(activated.count(), cycle * 2 + 2);
             QTRY_VERIFY(!window.collapsedSections_.contains(0));
-            QVERIFY(window.reading_->toPlainText().contains("BODY TO FOLD"));
+            QCOMPARE(window.reading_->toPlainText(), body);
             QTRY_COMPARE(selectedAnchor(), QStringLiteral("section:0"));
         }
         QCOMPARE(window.currentEntry_, entry);
+    }
+
+    void spaceOutsideDisclosureKeepsReaderScrollingAndLinkSemantics() {
+        MainWindow window(fixture_, QStringLiteral("dog"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(640, 600); window.show(); window.activateWindow();
+        const QJsonArray spans{
+            QJsonObject{{"kind", "link"}, {"text", "Ordinary word link"}, {"target", "dog"}},
+            QJsonObject{{"kind", "text"}, {"text", QStringLiteral(" Body text for scrolling.").repeated(200)}}};
+        const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", spans}};
+        const QJsonObject section{{"level", 2}, {"title", "Disclosure"}, {"blocks", QJsonArray{paragraph}}};
+        const QJsonObject entry{{"title", "Space controls"}, {"kind", "language"},
+            {"language", window.api_->language()}, {"sections", QJsonArray{section}}};
+        window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false);
+        window.reading_->setFocus(); QTRY_VERIFY(window.reading_->hasFocus());
+        const QString body = window.reading_->toPlainText();
+        const auto selectedAnchor = [&] {
+            QTextCursor cursor = window.reading_->textCursor();
+            if (!cursor.hasSelection()) return QString();
+            cursor.setPosition(cursor.selectionStart());
+            cursor.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+            return cursor.charFormat().anchorHref();
+        };
+        QSignalSpy activated(window.reading_, &QTextBrowser::anchorClicked);
+        QTest::keyClick(window.reading_, Qt::Key_Home, Qt::ControlModifier);
+        QTest::keyClick(window.reading_, Qt::Key_Tab);
+        QCOMPARE(selectedAnchor(), QStringLiteral("section:0"));
+        QTest::keyClick(window.reading_, Qt::Key_Space, Qt::ShiftModifier);
+        QCOMPARE(activated.count(), 0);
+        QVERIFY(window.collapsedSections_.isEmpty());
+        QCOMPARE(window.reading_->toPlainText(), body);
+
+        QTest::keyClick(window.reading_, Qt::Key_Tab);
+        QCOMPARE(selectedAnchor(), QStringLiteral("dict:dog"));
+        auto *scroll = window.reading_->verticalScrollBar();
+        QTRY_VERIFY(scroll->maximum() > 0);
+        scroll->setValue(0);
+        QTest::keyClick(window.reading_, Qt::Key_Space);
+        QTRY_VERIFY(scroll->value() > 0);
+        QCOMPARE(activated.count(), 0);
+        QCOMPARE(window.currentEntry_, entry);
+        QVERIFY(window.collapsedSections_.isEmpty());
+        QCOMPARE(window.reading_->toPlainText(), body);
+
+        QTextCursor range = window.reading_->document()->find(QStringLiteral("Disclosure"));
+        const QTextCursor bodyWord = window.reading_->document()->find(QStringLiteral(" Body text for scrolling."));
+        QVERIFY(!range.isNull() && !bodyWord.isNull());
+        range.setPosition(bodyWord.selectionEnd(), QTextCursor::KeepAnchor);
+        window.reading_->setTextCursor(range);
+        QCOMPARE(selectedAnchor(), QStringLiteral("section:0"));
+        scroll->setValue(0);
+        QTest::keyClick(window.reading_, Qt::Key_Space);
+        QTRY_VERIFY(scroll->value() > 0);
+        QCOMPARE(activated.count(), 0);
+        QCOMPARE(window.currentEntry_, entry);
+        QVERIFY(window.collapsedSections_.isEmpty());
+        QCOMPARE(window.reading_->toPlainText(), body);
+
+        QTextCursor plain(window.reading_->document());
+        plain.setPosition(window.reading_->document()->characterCount() - 2);
+        window.reading_->setTextCursor(plain);
+        QVERIFY(!window.reading_->textCursor().hasSelection());
+        scroll->setValue(0);
+        QTest::keyClick(window.reading_, Qt::Key_Space);
+        QTRY_VERIFY(scroll->value() > 0);
+        QCOMPARE(activated.count(), 0);
+        QCOMPARE(window.currentEntry_, entry);
+        QVERIFY(window.collapsedSections_.isEmpty());
+        QCOMPARE(window.reading_->toPlainText(), body);
+    }
+
+    void typedBlockAlignmentKeepsCellInheritanceAndOffsets() {
+        MainWindow window(fixture_);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const auto paragraph = [](const QString &text, const QJsonValue &align = QJsonValue()) {
+            QJsonObject block{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{{"kind", "link"}, {"text", text}, {"target", "Alignment target"}}}}};
+            if (!align.isUndefined()) block.insert("text_align", align);
+            return block;
+        };
+        QJsonObject middle = paragraph("2", "center");
+        QJsonObject middleSpan = middle.value("spans").toArray().first().toObject();
+        middleSpan.insert("font_scale", 2.0); middle.insert("spans", QJsonArray{middleSpan});
+        const QJsonObject cell{{"colspan", 2}, {"background", "#b4cdcd"}, {"style", QJsonObject{{"text_align", "right"}}},
+            {"blocks", QJsonArray{paragraph("1"), middle, paragraph("3")}}};
+        const QJsonObject table{{"geometry", QJsonObject{{"width", QJsonObject{{"unit", "px"}, {"value", 250}}}, {"border", 2}, {"cell_padding", 4}, {"cell_spacing", 0}}},
+            {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{cell}}}, QJsonObject{{"cells", QJsonArray{
+                QJsonObject{{"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "A"}}}}},
+                QJsonObject{{"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "B"}}}}}}}}}}};
+        const QJsonObject source{{"kind", "table"}, {"table", table}};
+        const QByteArray before = QJsonDocument(source).toJson(QJsonDocument::Compact);
+        QString expectedText;
+        for (const QString &direction : {QStringLiteral("ltr"), QStringLiteral("rtl")}) {
+            QTextDocument document;
+            document.setDefaultFont(QFont("DejaVu Sans", 12));
+            SemanticHtml::setHtml(&document, QStringLiteral("<div dir='%1'>%2</div>").arg(direction, window.blockHtml(source)));
+            for (const int width : {640, 900, 640}) {
+                document.setTextWidth(width); (void)document.size();
+                const QTextCursor one = document.find("1"), two = document.find("2"), three = document.find("3");
+                QVERIFY(!one.isNull() && !two.isNull() && !three.isNull());
+                QCOMPARE(one.blockFormat().alignment(), Qt::Alignment(Qt::AlignRight | Qt::AlignAbsolute));
+                QCOMPARE(two.blockFormat().alignment(), Qt::Alignment(Qt::AlignHCenter));
+                QCOMPARE(three.blockFormat().alignment(), one.blockFormat().alignment());
+                QCOMPARE(one.currentTable(), two.currentTable());
+                QCOMPARE(one.currentTable()->cellAt(0, 0).columnSpan(), 2);
+                QCOMPARE(one.currentTable()->cellAt(0, 0).format().background().color(), QColor("#b4cdcd"));
+                for (const QTextCursor &cursor : {one, two, three}) {
+                    const QTextBlock block = cursor.block(); const QTextLine line = block.layout()->lineAt(0);
+                    QVERIFY(line.isValid());
+                    const qreal start = line.cursorToX(cursor.selectionStart() - block.position());
+                    const qreal end = line.cursorToX(cursor.selectionEnd() - block.position());
+                    if (cursor.selectedText() == QStringLiteral("2"))
+                        QVERIFY(qAbs((start + end) / 2 - (line.x() + line.width() / 2)) < 1.0);
+                    else QVERIFY(qAbs(qMax(start, end) - (line.x() + line.width())) < 1.0);
+                    QCOMPARE(cursor.charFormat().anchorHref(), QStringLiteral("dict:Alignment%20target"));
+                }
+                QTextCursor selection(&document); selection.select(QTextCursor::Document);
+                if (expectedText.isEmpty()) expectedText = selection.selectedText();
+                QCOMPARE(selection.selectedText(), expectedText);
+                QVERIFY(one.selectionStart() < two.selectionStart() && two.selectionStart() < three.selectionStart());
+                // Explicit text alignment must not move the table frame itself.
+                QCOMPARE(one.currentTable()->format().position(), QTextFrameFormat::InFlow);
+            }
+        }
+        QCOMPARE(QJsonDocument(source).toJson(QJsonDocument::Compact), before);
+        // Nested tables explicitly inherit cell text alignment; a child block
+        // can still override it. Null and absent block fields remain identical.
+        QJsonObject innerCell{{"blocks", QJsonArray{paragraph("Nested inherited"), paragraph("Nested override", "left")}}};
+        QJsonObject inner{{"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{innerCell}}}}}};
+        QJsonObject outerCell{{"style", QJsonObject{{"text_align", "right"}}}, {"blocks", QJsonArray{QJsonObject{{"kind", "table"}, {"table", inner}}}}};
+        QTextDocument nested;
+        SemanticHtml::setHtml(&nested, window.tableHtml(QJsonObject{{"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{outerCell}}}}}}, 0));
+        QCOMPARE(nested.find("Nested inherited").blockFormat().alignment(), Qt::Alignment(Qt::AlignRight | Qt::AlignAbsolute));
+        QCOMPARE(nested.find("Nested override").blockFormat().alignment(), Qt::Alignment(Qt::AlignLeft | Qt::AlignAbsolute));
+        QTextTable *innerFrame = nested.find("Nested inherited").currentTable(); QVERIFY(innerFrame);
+        QCOMPARE(innerFrame->format().position(), QTextFrameFormat::InFlow);
+        QVERIFY(!innerFrame->format().hasProperty(QTextFormat::BlockAlignment));
+        QCOMPARE(window.blockHtml(paragraph("Unchanged")), window.blockHtml(paragraph("Unchanged", QJsonValue::Null)));
+        for (const QString &kind : {QStringLiteral("preformatted"), QStringLiteral("heading"), QStringLiteral("quotation"), QStringLiteral("list_item")}) {
+            QJsonObject block = paragraph("First\nSecond", "right"); block.insert("kind", kind);
+            QTextDocument aligned, original; SemanticHtml::setHtml(&aligned, window.blockHtml(block));
+            block.remove("text_align"); SemanticHtml::setHtml(&original, window.blockHtml(block));
+            QCOMPARE(aligned.toPlainText(), original.toPlainText());
+            for (QTextBlock b = aligned.begin(); b.isValid(); b = b.next())
+                if (!b.text().isEmpty()) QCOMPARE(b.blockFormat().alignment(), Qt::Alignment(Qt::AlignRight | Qt::AlignAbsolute));
+        }
+    }
+
+    void typedTableFloatsWrapFollowingTextAndReflow() {
+        MainWindow window(fixture_);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const auto px = [](double value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
+        const QJsonArray blocks{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{
+            QJsonObject{{"kind", "link"}, {"text", "Floating target"}, {"target", "Float destination"}}}}},
+            QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Tall cell\nsecond line\nthird line\nfourth line\nfifth line"}}}}}};
+        const QJsonObject cell{{"blocks", blocks}};
+        const QJsonObject geometry{{"width", QJsonObject{{"unit", "px"}, {"value", 250}}}, {"border", 2}, {"cell_padding", 4}, {"cell_spacing", 0}};
+        QJsonObject table{{"geometry", geometry}, {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{cell}}}}}};
+        const QString prose = QStringLiteral("Following prose remains selectable and wraps around the actual floated table. ").repeated(18);
+        const auto block = [](const QString &text) { return QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", text}}}}}; };
+        for (const QString &side : {QStringLiteral("left"), QStringLiteral("right")}) {
+            const QJsonObject margins{{"top", px(0)}, {"right", px(side == "left" ? 20 : 0)}, {"bottom", px(0)}, {"left", px(side == "right" ? 20 : 0)}};
+            table.insert("style", QJsonObject{{"float_side", side}, {"margins", margins}});
+            const QJsonObject source{{"kind", "table"}, {"table", table}, {"text_align", "right"}};
+            for (const QString &direction : {QStringLiteral("ltr"), QStringLiteral("rtl")}) {
+                QTextDocument document; document.setDefaultFont(QFont("DejaVu Sans", 12));
+                const QString body = window.blockHtml(source) + window.blockHtml(block(prose)) + window.blockHtml(block("Following final paragraph"));
+                SemanticHtml::setHtml(&document, QStringLiteral("<div dir='%1'>%2</div>").arg(direction, body));
+                QJsonObject inFlowTable = table; inFlowTable.insert("style", QJsonObject{{"margins", margins}});
+                QJsonObject inFlowSource = source; inFlowSource.insert("table", inFlowTable);
+                QTextDocument reference; reference.setDefaultFont(document.defaultFont());
+                SemanticHtml::setHtml(&reference, QStringLiteral("<div dir='%1'>%2</div>").arg(direction,
+                    window.blockHtml(inFlowSource) + window.blockHtml(block(prose)) + window.blockHtml(block("Following final paragraph"))));
+                QCOMPARE(document.toPlainText(), reference.toPlainText());
+                const QString logical = document.toPlainText();
+                QTextCursor originalSelection(&document); originalSelection.select(QTextCursor::Document);
+                const QString selectedLogical = originalSelection.selectedText();
+                for (const int width : {640, 900, 640}) {
+                    document.setTextWidth(width); (void)document.size();
+                    QTextCursor link = document.find("Floating target"); QVERIFY(!link.isNull());
+                    QTextTable *frame = link.currentTable(); QVERIFY(frame);
+                    QCOMPARE(frame->format().position(), side == "left" ? QTextFrameFormat::FloatLeft : QTextFrameFormat::FloatRight);
+                    QCOMPARE(frame->format().width().rawValue(), 250.0);
+                    QCOMPARE(frame->format().leftMargin(), side == "right" ? 20.0 : 0.0);
+                    QCOMPARE(frame->format().rightMargin(), side == "left" ? 20.0 : 0.0);
+                    const QRectF reportedFrame = document.documentLayout()->frameBoundingRect(frame);
+                    const QSize rasterSize = document.size().toSize();
+                    QVERIFY(rasterSize.width() > 0 && rasterSize.width() <= 4096 && rasterSize.height() > 0 && rasterSize.height() <= 4096);
+                    QImage raster(rasterSize, QImage::Format_ARGB32_Premultiplied); raster.fill(Qt::white);
+                    QPainter painter(&raster); document.drawContents(&painter); painter.end();
+                    // This fixture begins with a bordered table. Qt's public frame rectangle
+                    // includes its first-cell offset; measure the painted outer border instead.
+                    const QRectF rootBox = document.documentLayout()->frameBoundingRect(document.rootFrame());
+                    const QTextFrameFormat rootFormat = document.rootFrame()->frameFormat();
+                    const qreal contentLeft = rootBox.left() + rootFormat.leftMargin();
+                    const qreal contentRight = rootBox.right() - rootFormat.rightMargin();
+                    const int paintTop = qRound(rootBox.top() + rootFormat.topMargin() + frame->format().topMargin());
+                    QVERIFY(paintTop >= 0 && paintTop < raster.height());
+                    int paintLeft = -1, paintRight = -1;
+                    for (int x = 0; x < raster.width(); ++x) {
+                        if (raster.pixelColor(x, paintTop) != QColor(Qt::white)) {
+                            if (paintLeft < 0) paintLeft = x;
+                            paintRight = x + 1;
+                        }
+                    }
+                    QVERIFY(paintLeft >= 0 && paintRight > paintLeft);
+                    for (int x = paintLeft; x < paintRight; ++x)
+                        QVERIFY2(raster.pixelColor(x, paintTop) != QColor(Qt::white), "outer table border is not continuous");
+                    int paintBottom = paintTop;
+                    while (paintBottom < raster.height() && raster.pixelColor(paintLeft, paintBottom) != QColor(Qt::white)) ++paintBottom;
+                    QVERIFY(paintBottom > paintTop && paintBottom < raster.height());
+                    const QRectF paintedBox(paintLeft, paintTop, paintRight - paintLeft, paintBottom - paintTop);
+                    const QRectF box = paintedBox.adjusted(-frame->format().leftMargin(), -frame->format().topMargin(),
+                        frame->format().rightMargin(), frame->format().bottomMargin());
+                    QCOMPARE(box.width(), frame->format().width().rawValue());
+                    QCOMPARE(box.height(), reportedFrame.height());
+                    if (side == "left") QCOMPARE(box.left(), contentLeft);
+                    else QCOMPARE(box.right(), contentRight);
+                    const QTextCursor following = document.find("Following prose"); QVERIFY(!following.isNull());
+                    const QTextBlock paragraph = following.block(); const QTextLayout *layout = paragraph.layout();
+                    const QPointF origin = document.documentLayout()->blockBoundingRect(paragraph).topLeft();
+                    QVERIFY(layout->lineCount() > 1);
+                    bool beside = false, below = false;
+                    for (int i = 0; i < layout->lineCount(); ++i) {
+                        const QTextLine line = layout->lineAt(i);
+                        const QRectF rect = line.naturalTextRect().translated(origin);
+                        if (rect.top() < box.bottom() && rect.bottom() > box.top()) {
+                            beside = true;
+                            if (side == "right") QVERIFY2(rect.right() <= box.left() + 1, "text overlaps the right float or its margin");
+                            else QVERIFY2(rect.left() >= box.right() - 1, "text overlaps the left float or its margin");
+                        }
+                        if (rect.top() >= box.bottom()) below = true;
+                    }
+                    QVERIFY2(beside, "table was merely aligned or cleared instead of floated beside following text");
+                    QVERIFY(below);
+                    QCOMPARE(document.toPlainText(), logical);
+                    QCOMPARE(link.selectedText(), QStringLiteral("Floating target"));
+                    QCOMPARE(link.charFormat().anchorHref(), QStringLiteral("dict:Float%20destination"));
+                    const QTextBlock linkBlock = link.block(); const QTextLine linkLine = linkBlock.layout()->lineAt(0);
+                    const QPointF linkOrigin = document.documentLayout()->blockBoundingRect(linkBlock).topLeft();
+                    const qreal x = (linkLine.cursorToX(link.selectionStart() - linkBlock.position()) + linkLine.cursorToX(link.selectionEnd() - linkBlock.position())) / 2;
+                    const QPointF point = linkOrigin + QPointF(x, linkLine.y() + linkLine.height() / 2);
+                    QCOMPARE(document.documentLayout()->anchorAt(point), QStringLiteral("dict:Float%20destination"));
+                    const int hit = document.documentLayout()->hitTest(point, Qt::ExactHit);
+                    QVERIFY(hit >= link.selectionStart() && hit < link.selectionEnd());
+                    QTextCursor selection(&document); selection.select(QTextCursor::Document);
+                    QCOMPARE(selection.selectedText(), selectedLogical);
+                }
+            }
+        }
+    }
+
+    void typedLayoutRejectsUnknownValuesAndPreservesLegacyDefaults() {
+        MainWindow window(fixture_);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QJsonObject block{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Original"}}}}};
+        const QString original = window.blockHtml(block);
+        block.insert("text_align", QJsonValue::Null); QCOMPARE(window.blockHtml(block), original);
+        for (const QJsonValue &bad : {QJsonValue("start"), QJsonValue("justify"), QJsonValue(0), QJsonValue(QJsonObject{})}) {
+            block.insert("text_align", bad); QVERIFY_EXCEPTION_THROWN(window.blockHtml(block), std::runtime_error);
+            block.insert("kind", "blank"); QVERIFY_EXCEPTION_THROWN(window.blockHtml(block), std::runtime_error);
+            block.insert("kind", "paragraph");
+        }
+        QJsonObject table{{"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{QJsonObject{{"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Cell"}}}}}}}}}}};
+        QTextDocument document;
+        SemanticHtml::setHtml(&document, window.tableHtml(table, 0));
+        const QString text = document.toPlainText();
+        table.insert("style", QJsonObject{{"background", "#f9f9f9"}, {"float_side", QJsonValue::Null}});
+        SemanticHtml::setHtml(&document, window.tableHtml(table, 0));
+        QCOMPARE(document.find("Cell").currentTable()->format().position(), QTextFrameFormat::InFlow);
+        QCOMPARE(document.toPlainText(), text);
+        for (const QJsonValue &bad : {QJsonValue("none"), QJsonValue("inline-start"), QJsonValue(false)}) {
+            table.insert("style", QJsonObject{{"float_side", bad}});
+            QVERIFY_EXCEPTION_THROWN(SemanticHtml::setHtml(&document, window.tableHtml(table, 0)), std::runtime_error);
+            const QJsonObject swatch{{"kind", "table"}, {"table", table}, {"feature", QJsonObject{{"kind", "color_swatch"}, {"data", "#123456"}}}};
+            QVERIFY_EXCEPTION_THROWN(SemanticHtml::setHtml(&document, window.blockHtml(swatch)), std::runtime_error);
+        }
+        table.insert("style", QJsonObject{{"float_side", "right"}});
+        const QJsonObject swatch{{"kind", "table"}, {"table", table}, {"feature", QJsonObject{{"kind", "color_swatch"}, {"data", "#123456"}}}};
+        SemanticHtml::setHtml(&document, window.blockHtml(swatch));
+        QVERIFY(!document.find("Cell").isNull());
+        QCOMPARE(document.find("Cell").currentTable()->format().position(), QTextFrameFormat::FloatRight);
     }
 
     void typedTableStylesKeepFractionalMetricsStructureAndDeviceLimit() {

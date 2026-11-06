@@ -77,6 +77,7 @@ class BlobDecoderTest {
         value.border?.let { fields["border"] = producerStyleBorder(it) }
         value.collapse?.let { fields["collapse"] = if (it == TableCollapse.Separate) "separate" else "collapse" }
         value.margins?.let { fields["margins"] = producerStyleEdges(it) }
+        value.floatSide?.let { fields["float_side"] = if (it == TableFloatSide.Left) "left" else "right" }
     }
     private fun producerTable(table: Table): Map<String, Any?> = linkedMapOf<String, Any?>(
         "caption" to table.caption.map(::producerSpan),
@@ -95,7 +96,9 @@ class BlobDecoderTest {
         "feature" to block.feature?.let { linkedMapOf("kind" to it.kind, "language" to it.language,
             "data" to it.data, "tail_kind" to it.tailKind, "tail" to it.tail) },
         "list_path" to block.listPath, "number" to block.number, "level" to block.level,
-        "anchor" to block.anchor, "anchor_fallback" to block.anchorFallback, "table" to block.table?.let(::producerTable))
+        "anchor" to block.anchor, "anchor_fallback" to block.anchorFallback, "table" to block.table?.let(::producerTable)).also { fields ->
+        block.textAlign?.let { fields["text_align"] = when (it) { CellTextAlign.Left -> "left"; CellTextAlign.Center -> "center"; CellTextAlign.Right -> "right" } }
+    }
     private fun producerEntry(entry: Entry): Map<String, Any?> = linkedMapOf(
         "title" to entry.title, "kind" to entry.kind, "language" to entry.language, "language_code" to entry.languageCode,
         "display_title" to entry.displayTitle.map(::producerSpan), "preamble_spans" to entry.preamble.map(::producerSpan),
@@ -110,7 +113,7 @@ class BlobDecoderTest {
 
     /** Configured producer case is a separate required run of the existing conformance target. */
     private fun requiredProducerConformance(version: Char) {
-        require(version in "789BCD")
+        require(version in "789BCDE")
         val prefix = "WIKBLB_DPR$version"
         fun name(suffix: String) = "${prefix}_$suffix"
         val fixtureTitle = when (version) {
@@ -119,6 +122,7 @@ class BlobDecoderTest {
             '9' -> "DPR9 reference fragments"
             'B' -> "DPRB font scale basis"
             'D' -> "image-border-contract"
+            'E' -> "dwa"
             else -> "נספח:שיבושי הגייה/תבנית"
         }
         require(producerEnvironment(name("REQUIRED")) == "1")
@@ -228,6 +232,12 @@ class BlobDecoderTest {
                 require(!book.border && book.widthPx == 30L && book.heightPx == null)
             }
         }
+        if (version == 'E') {
+            val entry = checkNotNull(selected)
+            require(entry.title == "dwa" && entry.kind == "language" && entry.language == "poloniera" && entry.languageCode == "pl")
+            // The complete modeled graph below is compared with actual Writer/Reader outputs
+            // by the existing producer comparator. Do not substitute a synthetic E byte fixture.
+        }
         val output = File(producerEnvironment(name("ACTUAL"))).canonicalFile
         require(output.parentFile.isDirectory && output.createNewFile()) { "Use a fresh owned output path" }
         output.writeText(producerJson(linkedMapOf(
@@ -281,7 +291,7 @@ class BlobDecoderTest {
     }
 
     @Test fun everyRealCorpusRecordDecodesDirectly() {
-        val requiredVersions = "789BCD".filter { System.getenv("WIKBLB_DPR${it}_REQUIRED") != null }
+        val requiredVersions = "789BCDE".filter { System.getenv("WIKBLB_DPR${it}_REQUIRED") != null }
         if (requiredVersions.isNotEmpty()) {
             require(requiredVersions.length == 1) { "Select exactly one required producer case" }
             requiredProducerConformance(requiredVersions.single())

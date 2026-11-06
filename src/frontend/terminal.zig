@@ -521,6 +521,12 @@ pub const TextStyle = struct {
         if (self.background) |rgb| try w.print("\x1b[48;2;{d};{d};{d}m", .{ rgb[0], rgb[1], rgb[2] });
     }
 };
+pub fn styleAfter(initial: TextStyle, text: []const u8) TextStyle {
+    var result = initial;
+    result.scan(text);
+    return result;
+}
+
 pub const PoemLine = struct { offset: usize, lead_bytes: usize = 0, lead_cells: usize = 0, left: usize = 0, continuation_left: usize = 0, right: usize = 0 };
 pub const RenderRow = struct { bytes: []const u8, carry: TextStyle, left: usize = 0, right: usize = 0 };
 pub fn wrapStyled(a: std.mem.Allocator, text: []const u8, columns: usize) ![]RenderRow {
@@ -544,9 +550,13 @@ fn textByteCount(text: []const u8) usize {
 
 /// Rows continue borrowing the original text; section offsets remain valid.
 pub fn wrapStyledProjected(a: std.mem.Allocator, text: []const u8, columns: usize, poem_lines: []const PoemLine) ![]RenderRow {
+    return wrapStyledProjectedFromStyle(a, text, columns, poem_lines, .{});
+}
+/// Continue wrapping an original slice without losing its incoming SGR state.
+pub fn wrapStyledProjectedFromStyle(a: std.mem.Allocator, text: []const u8, columns: usize, poem_lines: []const PoemLine, initial: TextStyle) ![]RenderRow {
     var rows: std.ArrayList(RenderRow) = .empty;
     errdefer rows.deinit(a);
-    var style: TextStyle = .{};
+    var style: TextStyle = initial;
     var line_offset: usize = 0;
     var metadata_index: usize = 0;
     var lines = std.mem.splitScalar(u8, text, '\n');
@@ -763,4 +773,27 @@ test "SGR overflow and soft spaces retain complete spacing mark clusters" {
         try std.testing.expectEqualStrings(first, rendered[0].bytes);
         try std.testing.expectEqualStrings(second, rendered[1].bytes);
     }
+}
+
+
+test "seeded terminal wrapping preserves existing row policy and continuation style" {
+    initLocale();
+    const a = std.testing.allocator;
+    const source = "猫é 👩‍💻 אב cats";
+    const initial = styleAfter(.{}, "\x1b[1;38;2;18;52;86m");
+    const seeded = try wrapStyledProjectedFromStyle(a, source, 6, &.{}, initial);
+    defer a.free(seeded);
+    try std.testing.expect(seeded.len > 1);
+    for (seeded) |row| {
+        try std.testing.expect(row.carry.bold);
+        try std.testing.expectEqualDeep(@as(?[3]u8, .{ 18, 52, 86 }), row.carry.foreground);
+        try std.testing.expect(cellWidth(row.bytes) <= 6);
+        try std.testing.expect(@intFromPtr(row.bytes.ptr) >= @intFromPtr(source.ptr));
+        try std.testing.expect(@intFromPtr(row.bytes.ptr) + row.bytes.len <= @intFromPtr(source.ptr) + source.len);
+    }
+    const legacy = try wrapStyledProjected(a, source, 6, &.{});
+    defer a.free(legacy);
+    const default_seed = try wrapStyledProjectedFromStyle(a, source, 6, &.{}, .{});
+    defer a.free(default_seed);
+    try std.testing.expectEqualDeep(legacy, default_seed);
 }

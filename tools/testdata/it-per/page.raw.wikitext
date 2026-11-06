@@ -1,0 +1,247 @@
+{{Vedi|Pêr}}
+== {{-it-}} ==
+{{-prep-|it}}
+{{Pn}}
+# indica il moto [[attraverso]] un luogo
+#* Sono passato '''per''' il centro
+# indica il moto [[entro]] un certo spazio
+#* ''Camminava ansiosamente '''per''' la stanza''
+# indica [[destinazione]]
+#* ''Questo è il treno '''per''' Londra''
+#in certi casi indica un [[luogo]]
+#* ''C'era un uomo sdraiato '''per''' terra
+# indica un [[periodo]]
+#* ''Ho studiato '''per''' tre ore''
+# indica [[inclinazione]]
+#* ''Sei molto dotato '''per''' la matematica''
+# indica un [[mezzo]]
+#* ''Te lo invio '''per''' posta''
+# indica una [[causa]]
+#* ''Tremava '''per''' il freddo''
+# indica uno [[scopo]]
+#* ''Mi sono arruolato '''per''' la gloria''
+# indica a [[vantaggio]] di chi è l'azione
+#* ''Ma io l'ho fatto '''per''' te!''
+# indica l'[[ambito]] in cui è valida l'affermazione
+#* ''É bravo, '''per''' un novizio''
+# indica il [[modo]] in cui si svolge l'azione
+#* ''Le cose non spariscono '''per''' magia!''
+# indica un [[prezzo]]
+#* ''Te lo vendo '''per''' appena trecento euro''
+# indica una [[distanza]]
+#* ''Lo inseguii '''per''' 20 km''
+# {{Term|matematica|it}} indica quante volte un [[numero]] è [[moltiplicato]] o [[diviso]]
+#* ''Si legge "otto '''per''' tre ventiquattro" e si scrive 8 ·3=24''
+
+{{-sill-}}
+; pér
+
+{{-pron-}}
+{{IPA|/ˈper/}}
+
+{{-etim-}}
+{{la}} [[per#latino|per]]
+
+{{-quote-}}
+{{Quote
+|Sion ha detto: "Il Signore mi ha abbandonato, il Signore mi ha dimenticato". Si dimentica forse una donna del suo bambino, così da non commuoversi '''per''' il figlio delle sue viscere? Anche se costoro mi dimenticassero, io invece non ti dimenticherò mai
+|[[w:Libro di Isaia|Libro di Isaia]] {{Passo biblico|Is|49,14-15}}, testo CEI 2008}}
+
+{{-sin-}}
+*(moto per luogo)[[attraverso]], [[lungo]]
+* (moto a luogo)[[verso]], [[in direzione di]]
+*(stato in luogo)[[in]]
+*(tempo)[[durante]]
+* a causa di
+* con lo scopo di, [[al fine di]]
+*a vantaggio di, [[a favore di]], [[in favore di]] 
+*(mezzo, prezzo) [[a]]
+*(limitazione) [[secondo]], [[quanto a]]
+
+{{-rel-}}
+* [[per-]], [[pel]], [[pello]], [[pella]], [[pei]], [[pegli]], [[stare per]], [[per di più]], [[per lo meno]], [[per lo più]]
+
+{{-prov-}}
+* ''essere per''
+* ''per [[amore]] [[anche]] una [[donna]] onesta, può [[perdere]] la [[testa]]''
+* ''[[per niente]]'':
+
+{{-trad-}}
+{{Trad1|moto attraverso un luogo}}
+:* {{en}}:  [[through]]
+<!-- inserire dopo i : la/le traduzione/ni nelle altre lingue -->
+{{Trad2}}
+
+{{Trad1|moto entro un certo spazio}}
+:* {{en}}:  [[about]], [[around]]
+<!-- inserire dopo i : la/le traduzione/ni nelle altre lingue -->
+{{Trad2}}
+
+{{Trad1|destinazione}}
+:* {{en}}:  [[to]], [[for]]
+<!-- inserire dopo i : la/le traduzione/ni nelle altre lingue -->
+{{Trad2}}
+
+{{Trad1|un luogo}}
+:* {{en}}:  <!-- inserire dopo i : la/le traduzione/ni nelle altre lingue -->
+{{Trad2}}
+
+{{Trad1|un periodo}}
+:* {{en}}:  [[for]]
+<!-- inserire dopo i : la/le traduzione/ni nelle altre lingue -->
+{{Trad2}}
+
+{{Trad1|inclinazione}}
+:* {{en}}:  <!-- inserire dopo i : la/le traduzione/ni nelle altre lingue -->
+{{Trad2}}
+
+{{Trad1|un mezzo}}
+:* {{en}}:  [[by]]
+<!-- inserire dopo i : la/le traduzione/ni nelle altre lingue -->
+{{Trad2}}
+
+{{Trad1|una causa}}
+:* {{en}}:  [[from]], [[with]]
+<!-- inserire dopo i : la/le traduzione/ni nelle altre lingue -->
+{{Trad2}}
+
+{{Trad1|uno scopo}}
+:* {{en}}:  <!-- inserire dopo i : la/le traduzione/ni nelle altre lingue -->
+{{Trad2}}
+
+{{Trad1|vantaggio di chi è l'azione}}
+:* {{en}}:  [[for]]
+<!-- inserire dopo i : la/le traduzione/ni nelle altre lingue -->
+{{Trad2}}
+
+{{Trad1|l'ambito in cui è valida l'affermazione}}
+:* {{en}}:  [[for]]
+<!-- inserire dopo i : la/le traduzione/ni nelle altre lingue -->
+{{Trad2}}
+
+{{Trad1|modo in cui si svolge l'azione}}
+:* {{en}}:  [[by]]
+<!-- inserire dopo i : la/le traduzione/ni nelle altre lingue -->
+{{Trad2}}
+
+{{Trad1|un prezzo}}
+:* {{en}}:  [[for]]
+<!-- inserire dopo i : la/le traduzione/ni nelle altre lingue -->
+{{Trad2}}
+
+{{Trad1|una distanza}}
+:* {{en}}:  [[for]]
+<!-- inserire dopo i : la/le traduzione/ni nelle altre lingue -->
+{{Trad2}}
+
+{{Trad1|indica quante volte un numero è moltiplicato o diviso}}
+:* {{en}}:  <!-- inserire dopo i : la/le traduzione/ni nelle altre lingue -->
+{{Trad2}}
+
+== {{-br-}} ==
+{{-sost form-|br}}
+{{Pn}} ''pl''
+# {{Term|botanica|br}} {{Term|gastronomia|br}} plurale di [[perenn]] ; [[pere]].
+
+{{-pron-}}
+{{IPA|/ˈpeːr/}}
+
+{{-etim-}}
+Del bretone medio ''per''.
+
+===[[forme|Forme]] [[flesse]]===
+* [[ber]] (mutazione per lenizione)
+* [[fer]] (mutazione per spirantizzazione)
+
+== {{-da-}} ==
+{{-prep-|da}}
+# per ogni
+
+== {{-eo-}} ==
+{{-prep-|eo}}
+# [[con]]
+
+== {{-en-}} ==
+{{-prep-|en}}
+# per ogni
+#* ''$5 '''per''' person''
+
+== {{-la-}} ==
+{{-prep-|la}}
+{{Pn}}
+# {{Cum|''accusativo''}} attraverso
+#* ''Pater exit '''per''' ostium''
+# {{Cum|''accusativo''}} durante
+
+{{-etim-}}
+dalla radice Protoindoeuropea * ''per'', prima
+
+== {{-lmo-}} ==
+{{-prep-|lmo}}
+{{Pn}}
+# [[per#italiano|per]]
+
+{{-pron-}}
+{{IPA|/pɛr/}}
+
+{{-etim-}}
+dal {{la}} ''[[per]]''
+
+{{-sost-|lmo}}
+{{Pn}} ''m''
+# ''variante di [[pér]]''
+
+{{-pron-}}
+{{IPA|/peːr/}}
+
+== {{-rm-}} ==
+{{-sost-|rm}}
+# [[addome]]
+
+== {{-sv-}} ==
+{{-prep-|sv}}
+# per ogni
+
+
+
+== {{-hu-}} ==
+{{-sost-|hu}}
+# [[processo]] 
+
+
+
+
+
+
+{{-ref-}}
+*italiano
+** {{Fonte|trec}}
+** {{Fonte|eti}}
+** {{Fonte|sabco}}
+** {{Fonte|desan|P}}
+** {{Fonte|sin-co}}
+** {{Fonte|dizit}}
+*bretone
+**{{-ref-}}
+* {{Fonte|link=http://devri.bzh/dictionnaire/p/per-1/|opera= Devri|testo= per |altro= su Le dictionnaire diachronique du breton}}
+* danese
+** {{Noref|da}}
+* esperanto
+** {{Noref|eo}}
+*inglese
+** {{Noref|en}}
+* latino
+** {{Noref|la}}
+* lombardo
+** {{Noref|lmo}}
+* romancio
+** {{Noref|rm}}
+* svedese
+** {{Noref|sv}}
+* ungherese
+** {{Noref|hu}}
+
+
+
+
+[[Categoria:Aritmetica-IT|per]]

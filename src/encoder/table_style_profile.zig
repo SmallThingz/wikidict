@@ -9,17 +9,20 @@ pub const ElementContext = struct {
     own_id: ?[]const u8 = null,
 };
 pub const TableResolution = struct { style: ?types.TableStyle, scope: Scope, unresolved: bool, margin_basis_unresolved: bool = false, background_specified: bool = false, descendant_style_unresolved: bool = false };
-pub const CellResolution = struct { style: ?types.CellStyle, background: ?[]const u8, background_specified: bool, unresolved: bool, padding_basis_unresolved: bool = false };
+pub const CellResolution = struct { style: ?types.CellStyle, background: ?[]const u8, background_specified: bool, unresolved: bool, padding_basis_unresolved: bool = false, alignment_specified: bool = false };
 const max_css_bytes = 1024 * 1024;
 const max_rules = 4096;
 const Target = enum { element, table, cell, th, td, other };
-const Property = enum { background, border, collapse, margins, padding, text_align, other };
+const Property = enum { background, border, collapse, margins, margin_top, margin_right, margin_bottom, margin_left, padding, text_align, float_side, layout_reset, other };
 const Value = union(enum) {
     color: []const u8,
     border: types.StyleBorder,
     collapse: types.BorderCollapse,
     edges: types.StyleEdges,
     align_value: types.CellTextAlign,
+    float_value: types.TableFloatSide,
+    no_float,
+    length_value: types.StyleLength,
     unsupported,
 };
 const Declaration = struct { property: Property, value: Value, important: bool, order: u32, affects_font_basis: bool = false };
@@ -49,7 +52,7 @@ const Priority = struct {
 };
 const Winner = struct { value: Value, priority: Priority };
 const Winners = struct {
-    slots: [7]?Winner = @splat(null),
+    slots: [@typeInfo(Property).@"enum".field_names.len]?Winner = @splat(null),
     selector_unresolved: bool = false,
     font_basis_unresolved: bool = false,
     fn add(self: *Winners, declaration: Declaration, specificity: u64, conditional: bool, inline_style: bool) void {
@@ -60,21 +63,120 @@ const Winners = struct {
         self.slots[index] = .{ .value = if (conditional) .unsupported else declaration.value, .priority = next };
     }
     fn value(self: Winners, property: Property) ?Value {
-        return if (self.slots[@backingInt(property)]) |winner| winner.value else null;
+        var selected = self.slots[@backingInt(property)];
+        if (property == .float_side or property == .text_align) if (self.slots[@backingInt(Property.layout_reset)]) |reset| {
+            if (selected == null or reset.priority.wins(selected.?.priority)) selected = reset;
+        };
+        return if (selected) |winner| winner.value else null;
     }
     fn unresolved(self: Winners) bool {
         if (self.selector_unresolved) return true;
-        for (self.slots) |slot| if (slot) |winner| if (winner.value == .unsupported) return true;
-        return false;
+        for (self.slots, 0..) |slot, index| {
+            const property: Property = @enumFromInt(index);
+            if (property == .margins or marginEdge(property) != null) continue;
+            if (slot) |winner| if (winner.value == .unsupported) return true;
+        }
+        return resolvedMargins(self).unresolved;
     }
 };
+
+
+fn marginEdge(property: Property) ?usize {
+    return switch (property) { .margin_top => 0, .margin_right => 1, .margin_bottom => 2, .margin_left => 3, else => null };
+}
+const MarginResolution = struct { value: ?types.StyleEdges = null, unresolved: bool = false };
+fn resolvedMargins(winners: Winners) MarginResolution {
+    var values: [4]types.StyleLength = @splat(.{ .unit = .px, .value = 0 });
+    var seen = false;
+    inline for (.{ Property.margin_top, Property.margin_right, Property.margin_bottom, Property.margin_left }, 0..) |property, index| {
+        var selected = winners.slots[@backingInt(Property.margins)];
+        if (winners.slots[@backingInt(property)]) |edge| {
+            if (selected == null or edge.priority.wins(selected.?.priority)) selected = edge;
+        }
+        if (winners.slots[@backingInt(Property.layout_reset)]) |reset| {
+            if (selected == null or reset.priority.wins(selected.?.priority)) selected = reset;
+        }
+        if (selected) |winner| {
+            seen = true;
+            switch (winner.value) {
+                .length_value => |value| values[index] = value,
+                .edges => |edges_value| values[index] = switch (index) { 0 => edges_value.top, 1 => edges_value.right, 2 => edges_value.bottom, 3 => edges_value.left, else => unreachable },
+                else => return .{ .unresolved = true },
+            }
+        }
+    }
+    return .{ .value = if (seen) .{ .top = values[0], .right = values[1], .bottom = values[2], .left = values[3] } else null };
+}
+
+pub const AlignmentResolution = struct { value: ?types.CellTextAlign = null, specified: bool = false, unresolved: bool = false };
+const AlignmentCascade = struct {
+    resolution: AlignmentResolution = .{},
+    priority: Priority = .{},
+    inline_style: bool = false,
+    fn consider(self: *AlignmentCascade, declaration: Declaration, specificity: u32, conditional: bool, inline_style: bool) void {
+        const next: Priority = .{ .important = declaration.important, .specificity = specificity, .order = declaration.order };
+        if (self.resolution.specified) {
+            if (next.important == self.priority.important and inline_style != self.inline_style) {
+                if (!inline_style) return;
+            } else if (!next.wins(self.priority)) return;
+        }
+        const known = !conditional and declaration.value == .align_value;
+        self.* = .{ .resolution = .{ .value = if (known) declaration.value.align_value else null, .specified = true, .unresolved = !known }, .priority = next, .inline_style = inline_style };
+    }
+    fn declarations(self: *AlignmentCascade, a: std.mem.Allocator, css: []const u8, specificity: u32, order: u32, conditional: bool, inline_style: bool) !void {
+        var pos: usize = 0;
+        var next_order = order;
+        while (try nextDeclarationAlloc(a, css, &pos)) |raw| {
+            defer a.free(raw);
+            next_order += 1;
+            const colon = std.mem.indexOfScalar(u8, raw, ':') orelse continue;
+            const name = trim(raw[0..colon]);
+            if (std.ascii.eqlIgnoreCase(name, "all") or std.mem.indexOfScalar(u8, name, '\\') != null) {
+                if (try declarationAlloc(a, raw, next_order)) |declaration| self.consider(declaration, specificity, true, inline_style);
+            } else if (try declarationAlloc(a, raw, next_order)) |declaration| {
+                if (declaration.property == .text_align) self.consider(declaration, specificity, conditional, inline_style);
+            }
+        }
+    }
+};
+
+pub fn presentationalTextAlign(raw: ?[]const u8) ?types.CellTextAlign {
+    const value = trim(raw orelse return null);
+    inline for (.{ "left", "center", "right" }, .{ types.CellTextAlign.left, .center, .right }) |name, alignment| if (std.ascii.eqlIgnoreCase(value, name)) return alignment;
+    return null;
+}
+fn emptyProfile(a: std.mem.Allocator) Profile {
+    return .{ .arena = std.heap.ArenaAllocator.init(a), .rules = &.{}, .classes = &.{}, .admitted_rule_numbers = &.{}, .has_unsupported_rules = false };
+}
+pub fn resolveInlineTableAlloc(a: std.mem.Allocator, css: []const u8) !TableResolution {
+    if (css.len > max_css_bytes) return .{ .style = null, .scope = 0, .unresolved = true, .margin_basis_unresolved = true };
+    const profile = emptyProfile(a);
+    const winners = try profile.cascade(a, .table, 0, 0, "", .{ .ancestor_classes = "", .own_id = "" }, null, null, css);
+    const margins = resolvedMargins(winners);
+    var style: types.TableStyle = .{ .margins = margins.value };
+    var unresolved = margins.unresolved;
+    if (winners.value(.float_side)) |value| {
+        if (value == .float_value) style.float_side = value.float_value;
+        unresolved = unresolved or value == .unsupported;
+    }
+    return .{ .style = if (types.validTableStyle(style)) style else null, .scope = 0, .unresolved = unresolved, .margin_basis_unresolved = winners.font_basis_unresolved };
+}
+pub fn resolveInlineCellAlloc(a: std.mem.Allocator, legacy_align: ?[]const u8, css: []const u8) !CellResolution {
+    const profile = emptyProfile(a);
+    const alignment = try profile.resolveAlignment(a, "", "", "", legacy_align, css);
+    return .{ .style = if (alignment.value) |value| .{ .text_align = value } else null, .background = null, .background_specified = false, .unresolved = alignment.unresolved, .alignment_specified = alignment.specified };
+}
+pub fn resolveInlineAlignmentAlloc(a: std.mem.Allocator, legacy_align: ?[]const u8, css: []const u8) !AlignmentResolution {
+    const profile = emptyProfile(a);
+    return profile.resolveAlignment(a, "", "", "", legacy_align, css);
+}
 
 // Visibility is resolved only during production; no CSS enters a reader record.
 // Its own-class namespace is separate from the table ancestor paint namespace.
 const DisplaySelector = struct {
     tag: ?[]const u8 = null,
     id: ?[]const u8 = null,
-    classes: Scope = 0,
+    classes: []const u32 = &.{},
     specificity: u32 = 0,
     uncertain: bool = false,
 };
@@ -84,17 +186,19 @@ pub const DisplayIterator = struct {
     profile: *const Profile,
     tag: []const u8,
     id: []const u8,
-    classes: Scope,
+    classes: []const u8,
     cursor: usize = 0,
 
     pub fn next(self: *DisplayIterator) ?DisplayMatch {
-        while (self.cursor < self.profile.display_rules.len) {
+        rules: while (self.cursor < self.profile.display_rules.len) {
             const rule = self.profile.display_rules[self.cursor];
             self.cursor += 1;
             const selector = rule.selector;
             if (selector.tag) |tag| if (!std.ascii.eqlIgnoreCase(tag, self.tag)) continue;
             if (selector.id) |id| if (!std.mem.eql(u8, id, self.id)) continue;
-            if (selector.classes & self.classes != selector.classes) continue;
+            for (selector.classes) |required| {
+                if (!Profile.hasClass(self.classes, self.profile.display_classes[required])) continue :rules;
+            }
             return .{ .css = rule.css, .specificity = selector.specificity, .order = rule.order, .uncertain = selector.uncertain };
         }
         return null;
@@ -120,6 +224,7 @@ pub const DisplayCascade = struct {
 
 /// Producer-only static table styles. No selector or declaration text enters a reader.
 pub const Profile = struct {
+    custom_properties: ?*const CustomProfile = null,
     arena: std.heap.ArenaAllocator,
     sources: []const SourceRange = &.{},
     rules: []const Rule,
@@ -132,14 +237,17 @@ pub const Profile = struct {
     display_classes: []const []const u8 = &.{},
 
     pub fn displayRules(self: *const Profile, tag: []const u8, classes: []const u8, id: []const u8) DisplayIterator {
-        var scope: Scope = 0;
-        var tokens = std.mem.tokenizeAny(u8, classes, " \t\r\n\x0c");
-        while (tokens.next()) |token| {
-            for (self.display_classes, 0..) |name, i| if (std.mem.eql(u8, token, name)) {
-                scope |= @as(Scope, 1) << @intCast(i);
-            };
-        }
-        return .{ .profile = self, .tag = tag, .id = id, .classes = scope };
+        return .{ .profile = self, .tag = tag, .id = id, .classes = classes };
+    }
+
+    pub fn resolveAlignment(self: *const Profile, a: std.mem.Allocator, tag: []const u8, classes: []const u8, id: []const u8, legacy_align: ?[]const u8, css: []const u8) std.mem.Allocator.Error!AlignmentResolution {
+        if (self.globally_unresolved or css.len > max_css_bytes) return .{ .specified = true, .unresolved = true };
+        var cascade_value: AlignmentCascade = .{};
+        if (presentationalTextAlign(legacy_align)) |alignment| cascade_value.consider(.{ .property = .text_align, .value = .{ .align_value = alignment }, .important = false, .order = 0 }, 0, false, false);
+        var matches = self.displayRules(tag, classes, id);
+        while (matches.next()) |matched| try cascade_value.declarations(a, matched.css, matched.specificity, matched.order, matched.uncertain, false);
+        try cascade_value.declarations(a, css, 0, max_rules * 1024, false, true);
+        return cascade_value.resolution;
     }
 
     pub fn deinit(self: *Profile) void {
@@ -175,12 +283,13 @@ pub const Profile = struct {
         return result;
     }
 
-    fn cascade(self: *const Profile, a: std.mem.Allocator, target: Target, scope: Scope, ancestor_scope: Scope, own_names: []const u8, context: ElementContext, legacy_bg: ?[]const u8, inline_css: []const u8) !Winners {
+    fn cascade(self: *const Profile, a: std.mem.Allocator, target: Target, scope: Scope, ancestor_scope: Scope, own_names: []const u8, context: ElementContext, legacy_bg: ?[]const u8, legacy_align: ?[]const u8, inline_css: []const u8) !Winners {
         const ancestor_names = context.ancestor_classes;
         var winners: Winners = .{};
         if (legacy_bg) |raw| if (try canonicalColorAlloc(a, raw)) |color| {
             winners.add(.{ .property = .background, .value = .{ .color = color }, .important = false, .order = 0 }, 0, false, false);
         };
+        if (presentationalTextAlign(legacy_align)) |alignment| winners.add(.{ .property = .text_align, .value = .{ .align_value = alignment }, .important = false, .order = 0 }, 0, false, false);
         rules: for (self.rules) |rule| {
             const selector_value = rule.selector;
             if (selector_value.target != .element and selector_value.target != target and !(selector_value.target == .cell and (target == .th or target == .td))) continue;
@@ -228,7 +337,7 @@ pub const Profile = struct {
         // Every local selector is represented as a proved match/nonmatch or an
         // uncertain property override. An extra element class absent from that
         // complete sheet cannot erase independent known paint.
-        const winners = try self.cascade(a, .table, own_scope, if (ancestor_names) |names| self.ancestorScope(names) else 0, classes, context, legacy_bg, inline_css);
+        const winners = try self.cascade(a, .table, own_scope, if (ancestor_names) |names| self.ancestorScope(names) else 0, classes, context, legacy_bg, null, inline_css);
         var style: types.TableStyle = .{};
         if (winners.value(.background)) |value| if (value == .color) {
             style.background = value.color;
@@ -239,8 +348,9 @@ pub const Profile = struct {
         if (winners.value(.collapse)) |value| if (value == .collapse) {
             style.collapse = value.collapse;
         };
-        if (winners.value(.margins)) |value| if (value == .edges) {
-            style.margins = value.edges;
+        style.margins = resolvedMargins(winners).value;
+        if (winners.value(.float_side)) |value| if (value == .float_value) {
+            style.float_side = value.float_value;
         };
         return .{ .style = if (types.validTableStyle(style)) style else null, .scope = inherited_scope | own_scope, .unresolved = winners.unresolved(), .margin_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(inherited_scope, ancestor_names), .background_specified = winners.value(.background) != null };
     }
@@ -274,9 +384,17 @@ pub const Profile = struct {
     }
 
     pub fn resolveCellWithContext(self: *const Profile, a: std.mem.Allocator, scope: Scope, ancestor_scope: Scope, own_names: []const u8, context: ElementContext, header: bool, legacy_bg: ?[]const u8, inline_css: []const u8) std.mem.Allocator.Error!CellResolution {
+        return self.resolveCellWithContextAndHints(a, scope, ancestor_scope, own_names, context, header, legacy_bg, null, inline_css);
+    }
+
+    pub fn resolveCellWithHints(self: *const Profile, a: std.mem.Allocator, scope: Scope, ancestor_scope: Scope, header: bool, legacy_bg: ?[]const u8, legacy_align: ?[]const u8, inline_css: []const u8) std.mem.Allocator.Error!CellResolution {
+        return self.resolveCellWithContextAndHints(a, scope, ancestor_scope, "", .{}, header, legacy_bg, legacy_align, inline_css);
+    }
+
+    pub fn resolveCellWithContextAndHints(self: *const Profile, a: std.mem.Allocator, scope: Scope, ancestor_scope: Scope, own_names: []const u8, context: ElementContext, header: bool, legacy_bg: ?[]const u8, legacy_align: ?[]const u8, inline_css: []const u8) std.mem.Allocator.Error!CellResolution {
         const ancestor_names = context.ancestor_classes;
-        if (self.globally_unresolved or inline_css.len > max_css_bytes) return .{ .style = null, .background = null, .background_specified = true, .unresolved = true, .padding_basis_unresolved = true };
-        const winners = try self.cascade(a, if (header) .th else .td, scope, ancestor_scope, own_names, context, legacy_bg, inline_css);
+        if (self.globally_unresolved or inline_css.len > max_css_bytes) return .{ .style = null, .background = null, .background_specified = true, .unresolved = true, .padding_basis_unresolved = true, .alignment_specified = true };
+        const winners = try self.cascade(a, if (header) .th else .td, scope, ancestor_scope, own_names, context, legacy_bg, legacy_align, inline_css);
         var style: types.CellStyle = .{};
         if (winners.value(.border)) |value| if (value == .border) {
             style.border = value.border;
@@ -288,7 +406,7 @@ pub const Profile = struct {
             style.text_align = value.align_value;
         };
         const background = winners.value(.background);
-        return .{ .style = if (types.validCellStyle(style)) style else null, .background = if (background) |value| (if (value == .color) value.color else null) else null, .background_specified = background != null, .unresolved = winners.unresolved(), .padding_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(scope, ancestor_names) };
+        return .{ .style = if (types.validCellStyle(style)) style else null, .background = if (background) |value| (if (value == .color) value.color else null) else null, .background_specified = background != null, .unresolved = winners.unresolved(), .padding_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(scope, ancestor_names), .alignment_specified = winners.value(.text_align) != null };
     }
 };
 
@@ -305,11 +423,12 @@ const Builder = struct {
     display_rules: std.ArrayList(DisplayRule) = .empty,
     display_classes: std.ArrayList([]const u8) = .empty,
 
-    fn displayClassBit(self: *Builder, name: []const u8) !Scope {
-        for (self.display_classes.items, 0..) |prior, i| if (std.mem.eql(u8, prior, name)) return @as(Scope, 1) << @intCast(i);
-        if (self.display_classes.items.len == 64) return error.StyleProfileLimit;
+    fn displayClassId(self: *Builder, name: []const u8) !u32 {
+        for (self.display_classes.items, 0..) |prior, i| if (std.mem.eql(u8, prior, name)) return @intCast(i);
+        // IDs and selector occurrences are bounded by the aggregate CSS byte limit.
+        // Sparse membership does not consume the independent table-paint scope.
         try self.display_classes.append(self.a, try self.a.dupe(u8, name));
-        return @as(Scope, 1) << @intCast(self.display_classes.items.len - 1);
+        return @intCast(self.display_classes.items.len - 1);
     }
 
     fn displayIdentifierStart(text: []const u8, pos: usize) bool {
@@ -354,6 +473,8 @@ const Builder = struct {
         }
         const tail = trim(text[start..]);
         var result: DisplaySelector = .{ .uncertain = conditional or start != 0 };
+        var classes: std.ArrayList(u32) = .empty;
+        defer classes.deinit(self.a);
         var class_count: u32 = 0;
         pos = 0;
         if (tail.len != 0 and (std.ascii.isAlphabetic(tail[0]) or tail[0] == '_')) {
@@ -376,7 +497,7 @@ const Builder = struct {
             // condition; escapes, non-ASCII and replaced NUL can extend it.
             if (end < tail.len and std.mem.indexOfScalar(u8, ".#:[", tail[end]) == null) break;
             if (kind == '.') {
-                result.classes |= try self.displayClassBit(tail[pos..end]);
+                try classes.append(self.a, try self.displayClassId(tail[pos..end]));
                 // Pack the exact lexicographic ID/class/type tuple. Only one
                 // ID and one type are admitted; larger class counts stay
                 // uncertain instead of carrying into the ID component.
@@ -391,6 +512,7 @@ const Builder = struct {
         }
         if (pos != tail.len or tail.len == 0) result.uncertain = true;
         if (result.uncertain) result.specificity = std.math.maxInt(u32);
+        result.classes = try classes.toOwnedSlice(self.a);
         return result;
     }
 
@@ -619,16 +741,18 @@ const Builder = struct {
             var declaration_pos: usize = 0;
             const display_order = self.declaration_order;
             var has_display = false;
+            var has_alignment = false;
             while (try nextDeclarationAlloc(self.a, css[body_start..end], &declaration_pos)) |raw| {
                 if (std.mem.indexOfScalar(u8, raw, ':')) |colon| {
                     const property = trim(raw[0..colon]);
+                    has_alignment = has_alignment or std.ascii.eqlIgnoreCase(property, "text-align") or std.ascii.eqlIgnoreCase(property, "all") or std.mem.indexOfScalar(u8, property, '\\') != null;
                     has_display = has_display or std.ascii.eqlIgnoreCase(property, "display") or std.ascii.eqlIgnoreCase(property, "all") or std.mem.indexOfScalar(u8, property, '\\') != null;
                 }
                 self.declaration_order += 1;
                 if (self.declaration_order >= max_rules * 1024) return error.StyleProfileLimit;
                 if (try declarationAlloc(self.a, raw, self.declaration_order)) |declaration| try declarations.append(self.a, declaration);
             }
-            if (has_display) try self.appendDisplayRules(prelude, try self.a.dupe(u8, css[body_start..end]), conditional, display_order);
+            if (has_display or has_alignment) try self.appendDisplayRules(prelude, try self.a.dupe(u8, css[body_start..end]), conditional, display_order);
             var selectors = std.mem.splitScalar(u8, prelude, ',');
             var projected: std.ArrayList(Selector) = .empty;
             var list_uncertain = false;
@@ -638,7 +762,7 @@ const Builder = struct {
                     try projected.append(self.a, selector_value);
                 } else list_uncertain = true;
             }
-            var admitted = has_display;
+            var admitted = has_display or has_alignment;
             for (projected.items) |parsed_selector| {
                 var selector_value = parsed_selector;
                 // One unproved selector branch can invalidate the whole list.
@@ -792,8 +916,8 @@ fn closingBrace(css: []const u8, pos: *usize) !usize {
 
 fn representedProperty(target: Target, property: Property) bool {
     return switch (property) {
-        .background, .border, .other => true,
-        .collapse, .margins => target == .table,
+        .background, .border, .other, .layout_reset => true,
+        .collapse, .margins, .margin_top, .margin_right, .margin_bottom, .margin_left, .float_side => target == .table,
         .padding, .text_align => target != .table,
     };
 }
@@ -802,11 +926,15 @@ fn propertyFor(name: []const u8) ?Property {
     if (std.ascii.eqlIgnoreCase(name, "background") or std.ascii.eqlIgnoreCase(name, "background-color") or std.ascii.eqlIgnoreCase(name, "background-image")) return .background;
     if (std.ascii.eqlIgnoreCase(name, "border-collapse")) return .collapse;
     if (std.ascii.eqlIgnoreCase(name, "border") or std.ascii.startsWithIgnoreCase(name, "border-")) return .border;
-    if (std.ascii.eqlIgnoreCase(name, "margin") or std.ascii.startsWithIgnoreCase(name, "margin-")) return .margins;
+    if (std.ascii.eqlIgnoreCase(name, "margin")) return .margins;
+    inline for (.{ "margin-top", "margin-right", "margin-bottom", "margin-left" }, .{ Property.margin_top, .margin_right, .margin_bottom, .margin_left }) |edge, property| if (std.ascii.eqlIgnoreCase(name, edge)) return property;
+    if (std.ascii.startsWithIgnoreCase(name, "margin-")) return .margins;
+    if (std.ascii.eqlIgnoreCase(name, "float")) return .float_side;
+    if (std.ascii.eqlIgnoreCase(name, "all")) return .layout_reset;
     if (std.ascii.eqlIgnoreCase(name, "padding") or std.ascii.startsWithIgnoreCase(name, "padding-")) return .padding;
     if (std.ascii.eqlIgnoreCase(name, "text-align")) return .text_align;
     // These affect table/cell presentation but have no projection in this ABI.
-    inline for (.{ "width", "height", "min-width", "max-width", "min-height", "max-height", "display", "visibility", "float", "position", "color", "font", "font-size", "font-family", "font-weight", "vertical-align", "table-layout", "border-spacing", "opacity", "transform", "all" }) |relevant| if (std.ascii.eqlIgnoreCase(name, relevant)) return .other;
+    inline for (.{ "width", "height", "min-width", "max-width", "min-height", "max-height", "display", "visibility", "position", "color", "font", "font-size", "font-family", "font-weight", "vertical-align", "table-layout", "border-spacing", "opacity", "transform", "all" }) |relevant| if (std.ascii.eqlIgnoreCase(name, relevant)) return .other;
     if (name.len == 0 or std.mem.startsWith(u8, name, "--")) return null;
     return .other;
 }
@@ -937,6 +1065,18 @@ fn declarationAlloc(a: std.mem.Allocator, raw: []const u8, order: u32) !?Declara
                 } else if (!unsupportedEdges(value, property == .margins)) return null;
             }
         },
+        .margin_top, .margin_right, .margin_bottom, .margin_left => {
+            if (length(value)) |next| {
+                projection = .{ .length_value = next };
+            } else {
+                var tokens = std.mem.tokenizeAny(u8, value, " \t\r\n");
+                _ = tokens.next();
+                if (!dynamicValue(value) and (tokens.next() != null or !unsupportedEdges(value, true))) return null;
+            }
+        },
+        .float_side => {
+            if (std.ascii.eqlIgnoreCase(value, "left")) projection = .{ .float_value = .left } else if (std.ascii.eqlIgnoreCase(value, "right")) projection = .{ .float_value = .right } else if (std.ascii.eqlIgnoreCase(value, "none")) projection = .no_float else if (std.ascii.eqlIgnoreCase(value, "inline-start") or std.ascii.eqlIgnoreCase(value, "inline-end") or dynamicValue(value)) {} else return null;
+        },
         .text_align => {
             if (std.ascii.eqlIgnoreCase(value, "left")) {
                 projection = .{ .align_value = .left };
@@ -945,6 +1085,9 @@ fn declarationAlloc(a: std.mem.Allocator, raw: []const u8, order: u32) !?Declara
             } else if (std.ascii.eqlIgnoreCase(value, "right")) {
                 projection = .{ .align_value = .right };
             } else if (std.ascii.eqlIgnoreCase(value, "justify") or std.ascii.eqlIgnoreCase(value, "start") or std.ascii.eqlIgnoreCase(value, "end") or dynamicValue(value)) {} else return null;
+        },
+        .layout_reset => {
+            if (!(std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "inherit") or std.ascii.eqlIgnoreCase(value, "unset") or std.ascii.eqlIgnoreCase(value, "revert") or std.ascii.eqlIgnoreCase(value, "revert-layer") or std.ascii.startsWithIgnoreCase(value, "var(") or std.ascii.startsWithIgnoreCase(value, "env("))) return null;
         },
         .other => {},
     }
@@ -1544,9 +1687,21 @@ test "display profile uses bounded own classes independently of table paint scop
     var own_id = profile.displayRules("tr", "", "chosen");
     try std.testing.expectEqual(@as(u32, 1 << 24), own_id.next().?.specificity);
     try std.testing.expect(own_id.next() == null);
-    var too_many: std.ArrayList(u8) = .empty;
-    for (0..65) |i| try too_many.appendSlice(a, try std.fmt.allocPrint(a, ".v{d} {{ display:none; }}\n", .{i}));
-    try std.testing.expectError(error.StyleProfileLimit, parseAlloc(a, too_many.items));
+    var many: std.ArrayList(u8) = .empty;
+    for (0..256) |i| try many.appendSlice(a, try std.fmt.allocPrint(a, ".v{d} {{ display:none; }}\n", .{i}));
+    var many_profile = try parseAlloc(a, many.items);
+    defer many_profile.deinit();
+    try std.testing.expectEqual(@as(usize, 256), many_profile.display_classes.len);
+    for (0..256) |i| {
+        const name = try std.fmt.allocPrint(a, "v{d}", .{i});
+        var matched = many_profile.displayRules("div", name, "");
+        try std.testing.expectEqual(@as(u32, 1 << 8), matched.next().?.specificity);
+        try std.testing.expect(matched.next() == null);
+    }
+    for ([_][]const u8{ "V255", "v255extra", "v256", "" }) |name| {
+        var unmatched = many_profile.displayRules("div", name, "");
+        try std.testing.expect(unmatched.next() == null);
+    }
     var overflow: std.ArrayList(u8) = .empty;
     for (0..65536) |_| try overflow.appendSlice(a, ".a");
     try overflow.appendSlice(a, "{display:none}");
@@ -1554,6 +1709,58 @@ test "display profile uses bounded own classes independently of table paint scop
     defer overflow_profile.deinit();
     var overflow_rules = overflow_profile.displayRules("tr", "a", "");
     try std.testing.expect(overflow_rules.next().?.uncertain);
+}
+
+test "sparse display classes preserve compound specificity source repeats and allocation unwind" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var css: std.ArrayList(u8) = .empty;
+    for (0..256) |i| try css.appendSlice(a, try std.fmt.allocPrint(a, ".c{d}{{display:none}}\n", .{i}));
+    const compound = ".c255.c255.gate{text-align:center}.Case{display:block}";
+    const Case = struct {
+        fn run(allocator: std.mem.Allocator, first: []const u8, second: []const u8) !void {
+            var profile = try parseSourcesAlloc(allocator, &.{
+                .{ .css = first, .base_url = "https://example.test/first.css" },
+                .{ .css = second, .base_url = "https://example.test/second.css" },
+                .{ .css = first, .base_url = "https://example.test/first.css" },
+            });
+            defer profile.deinit();
+            try std.testing.expectEqual(@as(usize, 258), profile.display_classes.len);
+            try std.testing.expectEqual(@as(usize, 3), profile.sources.len);
+            try std.testing.expectEqual(@as(usize, 1), profile.sources[0].rule_begin);
+            try std.testing.expectEqual(profile.sources[0].rule_end, profile.sources[1].rule_begin);
+            try std.testing.expectEqual(profile.sources[1].rule_end, profile.sources[2].rule_begin);
+            try std.testing.expectEqualStrings(profile.sources[0].base_url, profile.sources[2].base_url);
+            try std.testing.expectEqualDeep(profile.sources[0].css_sha256, profile.sources[2].css_sha256);
+            var matches = profile.displayRules("div", "c255\tgate", "");
+            const first_match = matches.next().?;
+            const compound_match = matches.next().?;
+            const repeated_match = matches.next().?;
+            try std.testing.expectEqual(@as(u32, 1 << 8), first_match.specificity);
+            try std.testing.expectEqual(@as(u32, 3 << 8), compound_match.specificity);
+            try std.testing.expectEqual(@as(u32, 1 << 8), repeated_match.specificity);
+            try std.testing.expect(!first_match.uncertain and !compound_match.uncertain and !repeated_match.uncertain);
+            try std.testing.expect(first_match.order < compound_match.order and compound_match.order < repeated_match.order);
+            try std.testing.expectEqualStrings(first_match.css, repeated_match.css);
+            try std.testing.expect(matches.next() == null);
+            var missing_compound_class = profile.displayRules("div", "c255", "");
+            try std.testing.expectEqual(@as(u32, 1 << 8), missing_compound_class.next().?.specificity);
+            try std.testing.expectEqual(@as(u32, 1 << 8), missing_compound_class.next().?.specificity);
+            try std.testing.expect(missing_compound_class.next() == null);
+            for ([_][]const u8{ "gate", "C255 gate", "c255extra gate", "case", "" }) |names| {
+                var absent = profile.displayRules("div", names, "");
+                try std.testing.expect(absent.next() == null);
+            }
+            var case_sensitive = profile.displayRules("div", "Case", "");
+            try std.testing.expectEqualStrings("display:block", case_sensitive.next().?.css);
+            try std.testing.expect(case_sensitive.next() == null);
+            const alignment = try profile.resolveAlignment(allocator, "div", "c255 gate", "", null, "");
+            try std.testing.expectEqual(@as(?types.CellTextAlign, .center), alignment.value);
+            try std.testing.expect(alignment.specified and !alignment.unresolved);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Case.run, .{ css.items, compound });
 }
 
 test "display cascade keeps important and inline priority distinct from selector specificity" {
@@ -1787,4 +1994,473 @@ test "cell paint own ID distinguishes source absence match and legacy unknown co
     try std.testing.expectEqualStrings("#222222", matching.background.?);
     const unknown = try profile.resolveCellWithClasses(a, 0, scope, "", "box", false, null, "");
     try std.testing.expect(unknown.unresolved and unknown.background == null);
+}
+
+test "layout profile keeps presentational alignment below stylesheet and inline winners" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, "td{text-align:left} th{text-align:center!important}");
+    defer profile.deinit();
+    const td = try profile.resolveCellWithHints(a, 0, 0, false, null, "RIGHT", "");
+    try std.testing.expectEqual(types.CellTextAlign.left, td.style.?.text_align.?);
+    try std.testing.expect(td.alignment_specified and !td.unresolved);
+    const th = try profile.resolveCellWithHints(a, 0, 0, true, null, "right", "text-align:left");
+    try std.testing.expectEqual(types.CellTextAlign.center, th.style.?.text_align.?);
+    const inline_important = try profile.resolveCellWithHints(a, 0, 0, true, null, "right", "text-align:left!important");
+    try std.testing.expectEqual(types.CellTextAlign.left, inline_important.style.?.text_align.?);
+    const hint = try resolveInlineCellAlloc(a, " right ", "font-size:95%;color:red;text-align:banana");
+    try std.testing.expectEqual(types.CellTextAlign.right, hint.style.?.text_align.?);
+    try std.testing.expect(!hint.unresolved);
+    const unknown = try resolveInlineCellAlloc(a, "right", "text-align:var(--alignment)");
+    try std.testing.expect(unknown.style == null and unknown.alignment_specified and unknown.unresolved);
+    const reset = try profile.resolveCellWithHints(a, 0, 0, false, null, "right", "all:initial");
+    try std.testing.expect(reset.style == null and reset.alignment_specified and reset.unresolved);
+    const invalid_hint = try resolveInlineCellAlloc(a, "middle", "");
+    try std.testing.expect(invalid_hint.style == null and !invalid_hint.alignment_specified and !invalid_hint.unresolved);
+}
+
+test "layout profile cascades physical float none and each margin edge independently" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, "table.box{float:left;margin:1px 2px 3px 4px}");
+    defer profile.deinit();
+    const selected = try profile.resolveTable(a, 0, "box", null, "float:right;margin-left:20px");
+    try std.testing.expectEqual(types.TableFloatSide.right, selected.style.?.float_side.?);
+    const edges_value = selected.style.?.margins.?;
+    try std.testing.expectEqualDeep(types.StyleEdges{
+        .top = .{ .unit = .px, .value = 1 },
+        .right = .{ .unit = .px, .value = 2 },
+        .bottom = .{ .unit = .px, .value = 3 },
+        .left = .{ .unit = .px, .value = 20 },
+    }, edges_value);
+    try std.testing.expect(!selected.unresolved);
+    const none = try profile.resolveTable(a, 0, "box", null, "float:none");
+    try std.testing.expect(none.style.?.float_side == null and !none.unresolved);
+    const first_important = try profile.resolveTable(a, 0, "box", null, "float:right!important;float:none;margin-left:20px!important;margin:0");
+    try std.testing.expectEqual(types.TableFloatSide.right, first_important.style.?.float_side.?);
+    try std.testing.expectEqual(@as(f32, 20), first_important.style.?.margins.?.left.value);
+    try std.testing.expectEqual(@as(f32, 0), first_important.style.?.margins.?.right.value);
+    const shorthand_wins = try profile.resolveTable(a, 0, "box", null, "margin-left:auto;margin:0");
+    try std.testing.expectEqualDeep(types.StyleEdges.all(.{ .unit = .px, .value = 0 }), shorthand_wins.style.?.margins.?);
+    try std.testing.expect(!shorthand_wins.unresolved);
+    const invalid = try profile.resolveTable(a, 0, "box", null, "float:banana;margin-left:1px 2px");
+    try std.testing.expectEqual(types.TableFloatSide.left, invalid.style.?.float_side.?);
+    try std.testing.expectEqual(@as(f32, 4), invalid.style.?.margins.?.left.value);
+    try std.testing.expect(!invalid.unresolved);
+    const negative = try profile.resolveTable(a, 0, "box", null, "margin-left:-1px;float:inline-start");
+    try std.testing.expect(negative.style == null and negative.unresolved);
+    const reset = try profile.resolveTable(a, 0, "box", null, "all:unset");
+    try std.testing.expect(reset.style == null and reset.unresolved);
+    const plain = try resolveInlineTableAlloc(a, "font-size:95%;background:red;float:right;margin-left:20px");
+    try std.testing.expectEqual(types.TableFloatSide.right, plain.style.?.float_side.?);
+    try std.testing.expectEqual(@as(f32, 20), plain.style.?.margins.?.left.value);
+    try std.testing.expectEqual(@as(f32, 0), plain.style.?.margins.?.top.value);
+    try std.testing.expect(plain.style.?.background == null and plain.style.?.border == null and !plain.unresolved);
+}
+
+test "layout profile resolves generic controlled class alignment without name heuristics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // This is a controlled stylesheet fixture, not normal EU default authority.
+    var profile = try parseAlloc(a, ".center{width:100%;text-align:center}.other{text-align:right}#probe{text-align:left!important}");
+    defer profile.deinit();
+    const centered = try profile.resolveAlignment(a, "div", "center", "", null, "");
+    try std.testing.expect(centered.specified and centered.value.? == .center and !centered.unresolved);
+    const inline_value = try profile.resolveAlignment(a, "div", "center", "", null, "text-align:right");
+    try std.testing.expectEqual(types.CellTextAlign.right, inline_value.value.?);
+    const important = try profile.resolveAlignment(a, "div", "center", "probe", null, "text-align:right");
+    try std.testing.expectEqual(types.CellTextAlign.left, important.value.?);
+    const inline_important = try profile.resolveAlignment(a, "div", "center", "probe", null, "text-align:right!important");
+    try std.testing.expectEqual(types.CellTextAlign.right, inline_important.value.?);
+    const unbound = try resolveInlineAlignmentAlloc(a, null, "");
+    try std.testing.expect(!unbound.specified and unbound.value == null and !unbound.unresolved);
+    const case_sensitive = try profile.resolveAlignment(a, "div", "Center", "", null, "");
+    try std.testing.expect(!case_sensitive.specified);
+    var conditional = try parseAlloc(a, ".center{text-align:center}@media print{.center{text-align:right}}");
+    defer conditional.deinit();
+    const uncertain = try conditional.resolveAlignment(a, "div", "center", "", null, "");
+    try std.testing.expect(uncertain.specified and uncertain.value == null and uncertain.unresolved);
+    const invalid = try profile.resolveAlignment(a, "div", "center", "", null, "text-align:banana!important");
+    try std.testing.expectEqual(types.CellTextAlign.center, invalid.value.?);
+    const dynamic = try profile.resolveAlignment(a, "div", "center", "", null, "text-align:var(--alignment)");
+    try std.testing.expect(dynamic.specified and dynamic.value == null and dynamic.unresolved);
+}
+
+// Producer-only CSS custom properties. Unknown source/context is distinct from
+// CSS's guaranteed-invalid value: only the latter may select a var fallback.
+pub const CustomValue = union(enum) { known: []const u8, invalid, unknown };
+pub const CustomBinding = struct { name: []const u8, value: CustomValue };
+pub const CustomEnvironment = struct {
+    values: []const CustomBinding = &.{},
+    complete: bool = false,
+    pub fn get(self: CustomEnvironment, name: []const u8) CustomValue {
+        for (self.values) |entry| if (std.mem.eql(u8, entry.name, name)) return entry.value;
+        return if (self.complete) .invalid else .unknown;
+    }
+};
+pub const CustomElement = struct { tag: []const u8, classes: []const u8 = "", id: []const u8 = "", root: bool = false, inline_css: []const u8 = "" };
+pub const CustomContext = struct { dark: ?bool = null, ancestors: []const CustomElement };
+const CustomRule = struct { selector: DisplaySelector, root_only: bool, css: []const u8, order: u32 };
+const CustomWinner = struct { name: []const u8, raw: []const u8, unknown: bool, priority: Priority, state: enum { fresh, visiting, done } = .fresh, cyclic: bool = false, value: CustomValue = .unknown };
+pub const CustomProfile = struct {
+    // Observed page-specific stylesheet/ancestor context is not an edition
+    // default. Other titles retain unknown authority until separately bound.
+    page_title: ?[]const u8 = null,
+    rules: []const CustomRule,
+    classes: []const []const u8,
+    is_opaque: bool,
+    root_environment: CustomEnvironment = .{},
+    pub fn appliesTo(self: *const CustomProfile, title: []const u8) bool {
+        return if (self.page_title) |expected| std.mem.eql(u8, expected, title) else true;
+    }
+
+    pub fn element(self: *const CustomProfile, a: std.mem.Allocator, parent: CustomEnvironment, element_value: CustomElement, inline_css: []const u8) !CustomEnvironment {
+        var winners: std.ArrayList(CustomWinner) = .empty;
+        defer winners.deinit(a);
+        var complete = parent.complete and !self.is_opaque;
+        rules: for (self.rules) |rule| {
+            if (rule.root_only and !element_value.root) continue;
+            if (rule.selector.tag) |tag| if (!std.ascii.eqlIgnoreCase(tag, element_value.tag)) continue;
+            if (rule.selector.id) |id| if (!std.mem.eql(u8, id, element_value.id)) continue;
+            for (rule.selector.classes) |required| if (!Profile.hasClass(element_value.classes, self.classes[required])) continue :rules;
+            try customDeclarations(a, &winners, rule.css, rule.selector.uncertain, .{ .specificity = rule.selector.specificity, .order = rule.order }, &complete);
+        }
+        try customDeclarations(a, &winners, inline_css, false, .{ .inline_style = true, .order = max_rules * 1024 }, &complete);
+        // Most elements do not redefine variables. Share immutable computed
+        // parent data instead of cloning the complete site token table per span.
+        if (winners.items.len == 0 and complete == parent.complete and !self.is_opaque) return parent;
+        var out: std.ArrayList(CustomBinding) = .empty;
+        for (parent.values) |entry| try out.append(a, .{ .name = entry.name, .value = if (self.is_opaque) .unknown else entry.value });
+        var stack: std.ArrayList(usize) = .empty;
+        defer stack.deinit(a);
+        for (winners.items, 0..) |_, index| {
+            const value = try customComputed(a, winners.items, index, .{ .values = parent.values, .complete = complete }, &stack);
+            const binding: CustomBinding = .{ .name = try a.dupe(u8, winners.items[index].name), .value = value };
+            var replaced = false;
+            for (out.items) |*entry| if (std.mem.eql(u8, entry.name, binding.name)) { entry.* = binding; replaced = true; break; };
+            if (!replaced) try out.append(a, binding);
+        }
+        // An unparsed escaped name can affect an inherited binding as well as a
+        // missing name. Never turn parser uncertainty into CSS absence.
+        if (!complete) for (out.items) |*entry| { entry.value = .unknown; };
+        return .{ .values = try out.toOwnedSlice(a), .complete = complete };
+    }
+};
+fn customName(raw: []const u8) bool {
+    if (raw.len <= 2 or !std.mem.startsWith(u8, raw, "--")) return false;
+    for (raw[2..]) |c| if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') return false;
+    return true;
+}
+const CustomPriorityValue = struct { value: []const u8, important: bool = false, unknown: bool = false };
+pub fn customPriority(raw: []const u8) CustomPriorityValue {
+    var quote: u8 = 0;
+    var escaped = false;
+    var depth: usize = 0;
+    var bang: ?usize = null;
+    for (raw, 0..) |c, i| {
+        if (escaped) { escaped = false; continue; }
+        if (c == '\\') { escaped = true; continue; }
+        if (quote != 0) { if (c == quote) quote = 0; continue; }
+        if (c == '\'' or c == '"') { quote = c; continue; }
+        if (c == '(' or c == '[' or c == '{') depth += 1;
+        if (c == ')' or c == ']' or c == '}') { if (depth == 0) return .{ .value = raw, .unknown = true }; depth -= 1; }
+        if (c == '!' and depth == 0) { if (bang != null) return .{ .value = raw, .unknown = true }; bang = i; }
+    }
+    if (quote != 0 or escaped or depth != 0) return .{ .value = raw, .unknown = true };
+    if (bang) |at| {
+        if (!std.ascii.eqlIgnoreCase(trim(raw[at + 1 ..]), "important")) return .{ .value = raw, .unknown = true };
+        return .{ .value = trim(raw[0..at]), .important = true };
+    }
+    return .{ .value = raw };
+}
+fn customDeclarations(a: std.mem.Allocator, out: *std.ArrayList(CustomWinner), css: []const u8, uncertain: bool, priority: Priority, complete: *bool) !void {
+    if (css.len > max_css_bytes) { complete.* = false; return; }
+    var at: usize = 0;
+    var order = priority.order;
+    while (try nextDeclarationAlloc(a, css, &at)) |raw| {
+        order +|= 1;
+        const colon = std.mem.indexOfScalar(u8, raw, ':') orelse continue;
+        const name = trim(raw[0..colon]);
+        if (std.mem.indexOfScalar(u8, name, '\\') != null) { complete.* = false; continue; }
+        if (!std.mem.startsWith(u8, name, "--")) continue;
+        if (!customName(name)) { complete.* = false; continue; }
+        const selected = customPriority(trim(raw[colon + 1 ..]));
+        const value = selected.value;
+        var p = priority;
+        p.order = order;
+        p.important = selected.important;
+        var found = false;
+        for (out.items) |*prior| if (std.mem.eql(u8, prior.name, name)) {
+            found = true;
+            if (p.wins(prior.priority)) prior.* = .{ .name = name, .raw = value, .unknown = uncertain or selected.unknown, .priority = p };
+            break;
+        };
+        if (!found) {
+            if (out.items.len >= 4096) { complete.* = false; return; }
+            try out.append(a, .{ .name = name, .raw = value, .unknown = uncertain or selected.unknown, .priority = p });
+        }
+    }
+}
+const CustomCall = struct { name: []const u8, fallback: ?[]const u8 };
+fn customCall(raw: []const u8) ?CustomCall {
+    const value = trim(raw);
+    if (!std.mem.startsWith(u8, value, "var(") or value.len < 6 or value[value.len - 1] != ')') return null;
+    var depth: usize = 0;
+    var comma: ?usize = null;
+    var quote: u8 = 0;
+    var escaped = false;
+    for (value[4 .. value.len - 1], 4..) |c, i| {
+        if (escaped) { escaped = false; continue; }
+        if (quote != 0) {
+            if (c == '\n' or c == '\r' or c == 12) return null;
+            if (c == '\\') escaped = true else if (c == quote) quote = 0;
+            continue;
+        }
+        if (c == '\'' or c == '"') { quote = c; continue; }
+        if (c == '\\' or c == '/' or c == ';' or c == '{' or c == '}') return null;
+        if (c == '(') depth += 1;
+        if (c == ')') { if (depth == 0) return null; depth -= 1; }
+        if (c == ',' and depth == 0 and comma == null) comma = i;
+    }
+    if (depth != 0 or quote != 0 or escaped) return null;
+    const end = comma orelse value.len - 1;
+    const name = trim(value[4..end]);
+    if (!customName(name)) return null;
+    return .{ .name = name, .fallback = if (comma) |i| trim(value[i + 1 .. value.len - 1]) else null };
+}
+fn customContainsFunction(value: []const u8) bool {
+    // Strings are literal tokens, including text resembling a dependency.
+    // Outside strings, unsupported escapes/functions cannot become literals.
+    var quote: u8 = 0;
+    var escaped = false;
+    for (value, 0..) |c, i| {
+        if (escaped) { escaped = false; continue; }
+        if (quote != 0) {
+            if (c == '\n' or c == '\r' or c == 12) return true;
+            if (c == '\\') escaped = true else if (c == quote) quote = 0;
+            continue;
+        }
+        if (c == '\'' or c == '"') { quote = c; continue; }
+        if (c == '\\' or std.mem.startsWith(u8, value[i..], "var(")) return true;
+    }
+    return quote != 0 or escaped;
+}
+fn customLookup(a: std.mem.Allocator, entries: []CustomWinner, name: []const u8, parent: CustomEnvironment, stack: *std.ArrayList(usize)) std.mem.Allocator.Error!CustomValue {
+    for (entries, 0..) |entry, i| if (std.mem.eql(u8, entry.name, name)) return customComputed(a, entries, i, parent, stack);
+    return parent.get(name);
+}
+fn customExpression(a: std.mem.Allocator, entries: []CustomWinner, raw: []const u8, parent: CustomEnvironment, stack: *std.ArrayList(usize), depth: usize) std.mem.Allocator.Error!CustomValue {
+    if (depth > 32 or raw.len > 65536) return .unknown;
+    const value = trim(raw);
+    if (customCall(value)) |call| {
+        // The dependency graph includes fallback references even when the main
+        // value exists. Walking both branches preserves cycle invalidation.
+        const fallback: CustomValue = if (call.fallback) |f| try customExpression(a, entries, f, parent, stack, depth + 1) else .invalid;
+        const selected = try customLookup(a, entries, call.name, parent, stack);
+        return switch (selected) { .invalid => fallback, else => selected };
+    }
+    if (customContainsFunction(value)) return .unknown;
+    return .{ .known = try a.dupe(u8, value) };
+}
+fn customComputed(a: std.mem.Allocator, entries: []CustomWinner, index: usize, parent: CustomEnvironment, stack: *std.ArrayList(usize)) std.mem.Allocator.Error!CustomValue {
+    if (entries[index].state == .done) return entries[index].value;
+    if (entries[index].state == .visiting) {
+        var cycle = false;
+        for (stack.items) |i| { cycle = cycle or i == index; if (cycle) entries[i].cyclic = true; }
+        return .invalid;
+    }
+    if (stack.items.len >= 32) return .unknown;
+    entries[index].state = .visiting;
+    try stack.append(a, index);
+    defer _ = stack.pop();
+    const raw = entries[index].raw;
+    const value: CustomValue = if (entries[index].unknown) .unknown else if (std.ascii.eqlIgnoreCase(raw, "initial")) .invalid else if (std.ascii.eqlIgnoreCase(raw, "inherit") or std.ascii.eqlIgnoreCase(raw, "unset")) parent.get(entries[index].name) else if (std.ascii.eqlIgnoreCase(raw, "revert") or std.ascii.eqlIgnoreCase(raw, "revert-layer")) .unknown else try customExpression(a, entries, raw, parent, stack, 0);
+    entries[index].value = if (entries[index].cyclic) .invalid else value;
+    entries[index].state = .done;
+    return entries[index].value;
+}
+pub fn customColorValue(a: std.mem.Allocator, environment: CustomEnvironment, raw: []const u8) !CustomValue {
+    var stack: std.ArrayList(usize) = .empty;
+    defer stack.deinit(a);
+    return customExpression(a, &.{}, raw, environment, &stack, 0);
+}
+
+const CustomBuilder = struct {
+    selector_builder: Builder,
+    rules: std.ArrayList(CustomRule) = .empty,
+    is_opaque: bool = false,
+    order: u32 = 0,
+    dark: ?bool,
+    fn parse(self: *CustomBuilder, css: []const u8, conditional: bool, depth: usize) anyerror!void {
+        if (depth > 16) return error.StyleProfileLimit;
+        const a = self.selector_builder.a;
+        var pos: usize = 0;
+        while (true) {
+            try skipSpaceComments(css, &pos);
+            if (pos == css.len) break;
+            const start = pos;
+            const boundary = try findBoundary(css, &pos);
+            const prelude = trim(css[start .. pos - 1]);
+            if (boundary == ';') {
+                // Imports/namespace/layer order are not implicit dependencies.
+                self.is_opaque = true;
+                continue;
+            }
+            if (boundary != '{') return error.InvalidStyleProfile;
+            const begin = pos;
+            const end = try closingBrace(css, &pos);
+            const body = css[begin..end];
+            if (std.mem.startsWith(u8, prelude, "@media")) {
+                const query = trim(prelude[6..]);
+                const applies: ?bool = if (std.mem.eql(u8, query, "screen") or std.mem.eql(u8, query, "all")) true else if (std.mem.eql(u8, query, "print")) false else if (std.mem.eql(u8, query, "screen and (prefers-color-scheme:dark)") or std.mem.eql(u8, query, "screen and (prefers-color-scheme: dark)")) self.dark else null;
+                if (applies == false) continue;
+                try self.parse(body, conditional or applies == null, depth + 1);
+                continue;
+            }
+            if (prelude.len != 0 and prelude[0] == '@') {
+                if (isConditionalGroup(prelude)) {
+                    try self.parse(body, true, depth + 1);
+                } else if (std.mem.indexOf(u8, body, "--") != null or std.mem.startsWith(u8, prelude, "@property")) self.is_opaque = true;
+                continue;
+            }
+            var declarations: std.ArrayList(CustomWinner) = .empty;
+            defer declarations.deinit(a);
+            var complete = true;
+            try customDeclarations(a, &declarations, body, false, .{}, &complete);
+            if (!complete) self.is_opaque = true;
+            if (declarations.items.len == 0) continue;
+            if (self.rules.items.len >= max_rules) return error.StyleProfileLimit;
+            const order = self.order;
+            var declaration_at: usize = 0;
+            while (try nextDeclarationAlloc(a, body, &declaration_at)) |_| {
+                self.order += 1;
+                if (self.order >= max_rules * 1024) return error.StyleProfileLimit;
+            }
+            const copied = try a.dupe(u8, body);
+            var parts = std.mem.splitScalar(u8, prelude, ',');
+            const first = self.rules.items.len;
+            var uncertain = conditional;
+            while (parts.next()) |part| {
+                if (self.rules.items.len >= max_rules) return error.StyleProfileLimit;
+                const root_only = std.mem.eql(u8, trim(part), ":root");
+                var selector = try self.selector_builder.displaySelector(if (root_only) "html" else part, conditional);
+                if (root_only) selector.specificity = 1 << 8;
+                uncertain = uncertain or selector.uncertain;
+                try self.rules.append(a, .{ .selector = selector, .root_only = root_only, .css = copied, .order = order });
+            }
+            if (uncertain) for (self.rules.items[first..]) |*rule| { rule.selector.uncertain = true; rule.selector.specificity = std.math.maxInt(u32); };
+        }
+    }
+};
+/// Attach only to a selected, source-bound profile. Parse all supplied sheets,
+/// retaining name-specific unknown rules rather than choosing var fallbacks.
+pub fn attachCustomProperties(profile: *Profile, sources: []const Source, context: CustomContext) !void {
+    const a = profile.arena.allocator();
+    if (context.ancestors.len == 0 or context.ancestors.len > 32 or !context.ancestors[0].root or !std.mem.eql(u8, context.ancestors[0].tag, "html")) return error.InvalidStyleProfile;
+    var builder: CustomBuilder = .{ .selector_builder = .{ .a = a }, .dark = context.dark };
+    var total: usize = 0;
+    for (sources) |source| {
+        total = std.math.add(usize, total, source.css.len) catch return error.StyleProfileLimit;
+        if (total > max_css_bytes) return error.StyleProfileLimit;
+        try builder.parse(source.css, false, 0);
+    }
+    const result = try a.create(CustomProfile);
+    result.* = .{ .rules = builder.rules.items, .classes = builder.selector_builder.display_classes.items, .is_opaque = builder.is_opaque };
+    var environment: CustomEnvironment = .{ .complete = !builder.is_opaque };
+    for (context.ancestors, 0..) |element_value, i| {
+        if (i != 0 and element_value.root) return error.InvalidStyleProfile;
+        environment = try result.element(a, environment, element_value, element_value.inline_css);
+    }
+    result.root_environment = environment;
+    profile.custom_properties = result;
+}
+
+const CustomPropertyFixture = struct {
+    fn profile(a: std.mem.Allocator, css: []const u8) !Profile {
+        var result = try parseAlloc(a, "");
+        errdefer result.deinit();
+        try attachCustomProperties(&result, &.{.{ .css = css, .base_url = "https://example.invalid/observed.css" }}, .{
+            .dark = false, .ancestors = &.{ .{ .tag = "html", .classes = "skin-theme-clientpref-day", .root = true }, .{ .tag = "body" } },
+        });
+        return result;
+    }
+    fn known(environment: CustomEnvironment, name: []const u8, expected: []const u8) !void {
+        const value = environment.get(name);
+        try std.testing.expect(value == .known);
+        try std.testing.expectEqualStrings(expected, value.known);
+    }
+};
+test "selected custom properties preserve computed inheritance local priority and sibling scope" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try CustomPropertyFixture.profile(a,
+        ":root{--ink:#123456;--copy:var(--ink);--Mixed:#abcdef} .local{--ink:#654321} .important{--ink:#445566!important}"
+    ); defer profile.deinit();
+    const custom = profile.custom_properties.?;
+    const parent = custom.root_environment;
+    try CustomPropertyFixture.known(parent, "--ink", "#123456");
+    const child = try custom.element(a, parent, .{ .tag = "span", .classes = "local" }, "--ink:#fedcba;--ink:#234567!important;--ink:#ffffff");
+    try CustomPropertyFixture.known(child, "--ink", "#234567");
+    try CustomPropertyFixture.known(child, "--copy", "#123456");
+    const peer = try custom.element(a, parent, .{ .tag = "span" }, "");
+    try CustomPropertyFixture.known(peer, "--ink", "#123456");
+    const important = try custom.element(a, parent, .{ .tag = "span", .classes = "important" }, "--ink:#ffffff");
+    try CustomPropertyFixture.known(important, "--ink", "#445566");
+    const inline_important = try custom.element(a, parent, .{ .tag = "span", .classes = "important" }, "--ink:#ffffff!important");
+    try CustomPropertyFixture.known(inline_important, "--ink", "#ffffff");
+    try std.testing.expect(parent.get("--mixed") == .invalid);
+    const order = try custom.element(a, parent, .{ .tag = "span" }, "--a:var(--b);--b:#102030");
+    try CustomPropertyFixture.known(order, "--a", "#102030");
+}
+test "custom variable cycles invalid values and unknown authority cannot manufacture fallback paint" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try CustomPropertyFixture.profile(a, ":root{--ink:#123456}"); defer profile.deinit();
+    const custom = profile.custom_properties.?;
+    const value = try custom.element(a, custom.root_environment, .{ .tag = "span" },
+        "--a:var(--b,red);--b:var(--a,blue);--c:var(--a,#abcdef);--d:var(--ink,var(--d));--empty:initial;--text:12px;--quoted:\"not !important\";--nested:fn(!important);--strong:\"not !important\" !important;--strong:red");
+    try std.testing.expect(value.get("--a") == .invalid and value.get("--b") == .invalid and value.get("--d") == .invalid);
+    try CustomPropertyFixture.known(value, "--c", "#abcdef");
+    try CustomPropertyFixture.known(value, "--quoted", "\"not !important\"");
+    try CustomPropertyFixture.known(value, "--nested", "fn(!important)");
+    try CustomPropertyFixture.known(value, "--strong", "\"not !important\"");
+    const missing = try customColorValue(a, value, "var(--absent,#abcdef)");
+    try std.testing.expectEqualStrings("#abcdef", missing.known);
+    const invalid = try customColorValue(a, value, "var(--empty,#abcdef)");
+    try std.testing.expectEqualStrings("#abcdef", invalid.known);
+    const defined_noncolor = try customColorValue(a, value, "var(--text,#abcdef)");
+    try std.testing.expectEqualStrings("12px", defined_noncolor.known);
+    const quoted = try customColorValue(a, value, "var(--quoted,#abcdef)");
+    try std.testing.expectEqualStrings("\"not !important\"", quoted.known);
+    const unused_quoted = try customColorValue(a, value, "var(--ink,'not !important')");
+    try std.testing.expectEqualStrings("#123456", unused_quoted.known);
+    const quoted_fallback = try customColorValue(a, value, "var(--absent,'var(--a), !important)')");
+    try std.testing.expectEqualStrings("'var(--a), !important)'", quoted_fallback.known);
+    const quoted_self = try custom.element(a, value, .{ .tag = "span" }, "--s:'var(--s)'");
+    try CustomPropertyFixture.known(quoted_self, "--s", "'var(--s)'");
+    try std.testing.expect((try customColorValue(a, value, "var(--absent,'unterminated)")) == .unknown);
+    try std.testing.expect((try customColorValue(a, .{}, "var(--absent,#abcdef)")) == .unknown);
+    var unknown = try CustomPropertyFixture.profile(a, ":root{--ink:#123456}@supports(display:grid){span{--ink:#abcdef}}"); defer unknown.deinit();
+    const uncertain = try unknown.custom_properties.?.element(a, unknown.custom_properties.?.root_environment, .{ .tag = "span" }, "");
+    try std.testing.expect((try customColorValue(a, uncertain, "var(--ink,#fedcba)")) == .unknown);
+}
+test "custom property source order spans long declaration blocks and selected theme" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var css: std.ArrayList(u8) = .empty;
+    try css.appendSlice(a, ":root{--ink:#123456}@media screen{.x{");
+    for (0..1100) |_| try css.appendSlice(a, "--ink:#ff0000;");
+    try css.appendSlice(a, "}.x{--ink:#00ff00}}html.skin-theme-clientpref-night{--ink:#010203}");
+    var profile = try CustomPropertyFixture.profile(a, css.items); defer profile.deinit();
+    const custom = profile.custom_properties.?;
+    const result = try custom.element(a, custom.root_environment, .{ .tag = "span", .classes = "x" }, "");
+    try CustomPropertyFixture.known(result, "--ink", "#00ff00");
+    var night = try parseAlloc(a, ""); defer night.deinit();
+    try attachCustomProperties(&night, &.{.{ .css = css.items, .base_url = "https://example.invalid/observed.css" }}, .{
+        .dark = true, .ancestors = &.{ .{ .tag = "html", .classes = "skin-theme-clientpref-night", .root = true }, .{ .tag = "body" } },
+    });
+    try CustomPropertyFixture.known(night.custom_properties.?.root_environment, "--ink", "#010203");
 }

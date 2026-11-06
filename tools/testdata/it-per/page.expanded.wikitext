@@ -1,0 +1,355 @@
+<templatestyles src="Mbox/common.css" />
+ <table class="plainlinks ombox ombox-notice" role="presentation" style="background-color: #D8E8FF; border:1px solid #A0CCA0; color:#000;"><tr><td class="mbox-image">[[File:Blue_Glass_Arrow.svg|30px]]</td><td class="mbox-text">Vedi anche: [[Pêr]]</td></tr></table>
+== [[File:Flag of Italy.svg|40px|border|bandiera italiana]] [[Appendice:Italiano|Italiano]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[preposizione|Preposizione]]''===
+[[Categoria:Preposizioni in italiano]] 
+
+'''per'''<small></small>
+# indica il moto [[attraverso]] un luogo
+#* Sono passato '''per''' il centro
+# indica il moto [[entro]] un certo spazio
+#* ''Camminava ansiosamente '''per''' la stanza''
+# indica [[destinazione]]
+#* ''Questo è il treno '''per''' Londra''
+#in certi casi indica un [[luogo]]
+#* ''C'era un uomo sdraiato '''per''' terra
+# indica un [[periodo]]
+#* ''Ho studiato '''per''' tre ore''
+# indica [[inclinazione]]
+#* ''Sei molto dotato '''per''' la matematica''
+# indica un [[mezzo]]
+#* ''Te lo invio '''per''' posta''
+# indica una [[causa]]
+#* ''Tremava '''per''' il freddo''
+# indica uno [[scopo]]
+#* ''Mi sono arruolato '''per''' la gloria''
+# indica a [[vantaggio]] di chi è l'azione
+#* ''Ma io l'ho fatto '''per''' te!''
+# indica l'[[ambito]] in cui è valida l'affermazione
+#* ''É bravo, '''per''' un novizio''
+# indica il [[modo]] in cui si svolge l'azione
+#* ''Le cose non spariscono '''per''' magia!''
+# indica un [[prezzo]]
+#* ''Te lo vendo '''per''' appena trecento euro''
+# indica una [[distanza]]
+#* ''Lo inseguii '''per''' 20 km''
+# <small>(<i>[[matematica]]</i>)</small>[[Categoria:Matematica-IT]] indica quante volte un [[numero]] è [[moltiplicato]] o [[diviso]]
+#* ''Si legge "otto '''per''' tre ventiquattro" e si scrive 8 ·3=24''
+
+=== [[File:Hyph abc.svg|45px]] [[sillabazione|Sillabazione]] ===
+
+; pér
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/ˈper/</span>
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+[[latino]] [[per#latino|per]]
+
+
+{| cellpadding="0" style="width:auto; background:none; margin-bottom:.5em; font-size:95%; color:#606060; text-align:left"
+| style="padding:0 1.2em; vertical-align:top"|[[Immagine:Wikiquote-logo.svg|15px|Collabora a Wikiquote]]
+| style="padding:0 1.2em 0 0"|<div style="font-style:normal">«Sion ha detto: "Il Signore mi ha abbandonato, il Signore mi ha dimenticato". Si dimentica forse una donna del suo bambino, così da non commuoversi '''per''' il figlio delle sue viscere? Anche se costoro mi dimenticassero, io invece non ti dimenticherò mai
+»</div>
+|- 
+| style="padding:0 1.2em"|
+| style="padding:0 1.2em 0 0"|<div style="font-style:normal">(<small>[[w:Libro di Isaia|Libro di Isaia]] [http://www.laparola.net/wiki.php?riferimento=Is49%2C14-15&formato_rif=vp 49,14-15], testo CEI 2008</small>)</div>
+|}
+
+===[[File:Icona_sinonimi.png|35px]] [[sinonimi|Sinonimi]]===
+
+*(moto per luogo)[[attraverso]], [[lungo]]
+* (moto a luogo)[[verso]], [[in direzione di]]
+*(stato in luogo)[[in]]
+*(tempo)[[durante]]
+* a causa di
+* con lo scopo di, [[al fine di]]
+*a vantaggio di, [[a favore di]], [[in favore di]] 
+*(mezzo, prezzo) [[a]]
+*(limitazione) [[secondo]], [[quanto a]]
+
+===[[Image:Books-aj.svg aj ashton 01.svg|30px]] [[termine|Termini]] [[correlato|correlati]]===
+
+* [[per-]], [[pel]], [[pello]], [[pella]], [[pei]], [[pegli]], [[stare per]], [[per di più]], [[per lo meno]], [[per lo più]]
+
+===[[Image:Isimple system icons web find.png|30px]] [[proverbio|Proverbi]] e [[modo di dire|modi di dire]] ===
+
+* ''essere per''
+* ''per [[amore]] [[anche]] una [[donna]] onesta, può [[perdere]] la [[testa]]''
+* ''[[per niente]]'':
+
+=== [[Image:Gnome-globe.svg|30px]] [[traduzione|Traduzione]] ===
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">moto attraverso un luogo
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]:  [[through]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">moto entro un certo spazio
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]:  [[about]], [[around]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">destinazione
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]:  [[to]], [[for]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">un luogo
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]:  
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">un periodo
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]:  [[for]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">inclinazione
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]:  
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">un mezzo
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]:  [[by]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">una causa
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]:  [[from]], [[with]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">uno scopo
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]:  
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">vantaggio di chi è l'azione
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]:  [[for]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">l'ambito in cui è valida l'affermazione
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]:  [[for]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">modo in cui si svolge l'azione
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]:  [[by]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">un prezzo
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]:  [[for]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">una distanza
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]:  [[for]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">indica quante volte un numero è moltiplicato o diviso
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]:  
+|}</div></div>
+
+==  [[File:Flag of Brittany.svg|40px]] [[bretone|Bretone]] ==
+===[[Image:Open book 01.svg|30px]] ''[[sostantivo|Sostantivo]], [[forma]] [[flesso|flessa]]''===
+[[Categoria:Forme flesse sostantivali in bretone]]
+'''per'''<small></small> ''pl''
+# <small>(<i>[[botanica]]</i>)</small>[[Categoria:Botanica-BR]] <small>(<i>[[gastronomia]]</i>)</small>[[Categoria:Gastronomia-BR]] plurale di [[perenn]] ; [[pere]].
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/ˈpeːr/</span>
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+Del bretone medio ''per''.
+
+===[[forme|Forme]] [[flesse]]===
+* [[ber]] (mutazione per lenizione)
+* [[fer]] (mutazione per spirantizzazione)
+
+== [[File:Flag_of_Denmark.svg|40px]] [[danese|Danese]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[preposizione|Preposizione]]''===
+[[Categoria:Preposizioni in danese]] 
+
+# per ogni
+
+==  [[File:Flag of Esperanto.svg|border|40px]] [[esperanto|Esperanto]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[preposizione|Preposizione]]''===
+[[Categoria:Preposizioni in esperanto]] 
+
+# [[con]]
+
+== [[Categoria:Parole in inglese]][[File:Flag_of_the_United_Kingdom.svg|40px]] [[Appendice:Inglese|Inglese]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[preposizione|Preposizione]]''===
+[[Categoria:Preposizioni in inglese]] 
+
+# per ogni
+#* ''$5 '''per''' person''
+
+== [[File:SPQRomani.svg|border|40px]] [[latino|Latino]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[preposizione|Preposizione]]''===
+[[Categoria:Preposizioni in latino]] 
+
+'''per'''<small></small>
+# <small>''seguito da'' ''accusativo''</small> attraverso
+#* ''Pater exit '''per''' ostium''
+# <small>''seguito da'' ''accusativo''</small> durante
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+dalla radice Protoindoeuropea * ''per'', prima
+
+== [[File:Flag of Lombardy.svg|40px]] [[Appendice:Lombardo|Lombardo]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[preposizione|Preposizione]]''===
+[[Categoria:Preposizioni in lombardo]] 
+
+'''per'''<small></small>
+# [[per#italiano|per]]
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/pɛr/</span>
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+dal [[latino]] ''[[per]]''
+
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in lombardo]] 
+
+'''per'''<small></small> ''m''
+# ''variante di [[pér]]''
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/peːr/</span>
+
+==  [[File:Flag of Switzerland.svg|40px]] [[romancio|Romancio]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in romancio]] 
+
+# [[addome]]
+
+==  [[File:Flag of Sweden.svg|40px]] [[svedese|Svedese]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[preposizione|Preposizione]]''===
+[[Categoria:Preposizioni in svedese]] 
+
+# per ogni
+
+
+
+== [[File:Flag_of_Hungary.svg|40px]] [[ungherese|Ungherese]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in ungherese]] 
+
+# [[processo]] 
+
+
+
+
+
+
+<div class="NonModificabile">
+== [[Image:Nuvola apps bookcase.svg|30px|]] [[note|Note]] / [[riferimenti|Riferimenti]] ==
+</div>
+*italiano
+** AA.VV., [https://www.treccani.it/vocabolario/ricerca/per/ ''Vocabolario Treccani''] edizione online su ''[https://www.treccani.it treccani.it]'', Istituto dell'Enciclopedia Italiana
+** Ottorino Pianigiani, [https://www.etimo.it/?term=per&find=Cerca ''dizionario etimologico''] online su ''[https://www.etimo.it etimo.it]''
+** Francesco Sabatini e Vittorio Coletti, [http://dizionari.corriere.it/dizionario_italiano/P/per.shtml ''Il Sabatini Coletti''] edizione online su ''[http://dizionari.corriere.it corriere.it]'', RCS Mediagroup
+** Il Sansoni, [http://dizionari.corriere.it/dizionario_italiano/P/per.shtml Italiano] edizione on-line da "www.corriere.it"
+** AA.VV., [https://dizionari.corriere.it/dizionario_sinonimi_contrari/P/per.shtml ''Dizionario dei Sinonimi e dei Contrari''] edizione on line su ''[https://dizionari.corriere.it corriere.it]'', RCS Mediagroup
+** Enrico Olivetti, [https://www.dizionario-italiano.it/dizionario-italiano.php?lemma=PER100 ''Dizionario Italiano Olivetti''] edizione on line su ''[https://www.dizionario-italiano.it www.dizionario-italiano.it]'', Olivetti Media Communication
+*bretone
+**<div class="NonModificabile">
+== [[Image:Nuvola apps bookcase.svg|30px|]] [[note|Note]] / [[riferimenti|Riferimenti]] ==
+</div>
+* Devri, [http://devri.bzh/dictionnaire/p/per-1/ per] su Le dictionnaire diachronique du breton
+* danese
+** ''&rarr; [[Wikizionario:Cita le fonti|Riferimenti]] mancanti. Se vuoi, <span class="plainlinks">[//it.wiktionary.org/w/index.php?title=per&action=edit aggiungili]</span> tu.'' 
+
+[[Categoria:Da aiutare fonti - danese]]
+* esperanto
+** ''&rarr; [[Wikizionario:Cita le fonti|Riferimenti]] mancanti. Se vuoi, <span class="plainlinks">[//it.wiktionary.org/w/index.php?title=per&action=edit aggiungili]</span> tu.'' 
+
+[[Categoria:Da aiutare fonti - esperanto]]
+*inglese
+** ''&rarr; [[Wikizionario:Cita le fonti|Riferimenti]] mancanti. Se vuoi, <span class="plainlinks">[//it.wiktionary.org/w/index.php?title=per&action=edit aggiungili]</span> tu.'' 
+
+[[Categoria:Da aiutare fonti - inglese]]
+* latino
+** ''&rarr; [[Wikizionario:Cita le fonti|Riferimenti]] mancanti. Se vuoi, <span class="plainlinks">[//it.wiktionary.org/w/index.php?title=per&action=edit aggiungili]</span> tu.'' 
+
+[[Categoria:Da aiutare fonti - latino]]
+* lombardo
+** ''&rarr; [[Wikizionario:Cita le fonti|Riferimenti]] mancanti. Se vuoi, <span class="plainlinks">[//it.wiktionary.org/w/index.php?title=per&action=edit aggiungili]</span> tu.'' 
+
+[[Categoria:Da aiutare fonti - lombardo]]
+* romancio
+** ''&rarr; [[Wikizionario:Cita le fonti|Riferimenti]] mancanti. Se vuoi, <span class="plainlinks">[//it.wiktionary.org/w/index.php?title=per&action=edit aggiungili]</span> tu.'' 
+
+[[Categoria:Da aiutare fonti - romancio]]
+* svedese
+** ''&rarr; [[Wikizionario:Cita le fonti|Riferimenti]] mancanti. Se vuoi, <span class="plainlinks">[//it.wiktionary.org/w/index.php?title=per&action=edit aggiungili]</span> tu.'' 
+
+[[Categoria:Da aiutare fonti - svedese]]
+* ungherese
+** ''&rarr; [[Wikizionario:Cita le fonti|Riferimenti]] mancanti. Se vuoi, <span class="plainlinks">[//it.wiktionary.org/w/index.php?title=per&action=edit aggiungili]</span> tu.'' 
+
+[[Categoria:Da aiutare fonti - ungherese]]
+
+
+
+
+[[Categoria:Aritmetica-IT|per]]

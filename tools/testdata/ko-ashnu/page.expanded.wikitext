@@ -1,0 +1,8 @@
+== 모로코 아랍어 ==
+=== 발음 ===
+<table cellpadding=0 cellspacing=0 style="margin: 0 .2em .2em 1.6em; background-color: transparent;"><tr><td style="font-weight: bold">[[위키낱말사전:발음 듣기|<span style="color: #000">음성</span>]]</td><td style="padding-right: .1em">&nbsp;[[:파일:LL-Q56426 (ary)-Fenakhay-اشنو.wav|<span style="color: #000">듣기</span>]]&nbsp;&nbsp;</td></tr><tr><td style="padding-left: 1.1em"></td><td style="padding: 0 .1em 0 .5em">[[파일:LL-Q56426 (ary)-Fenakhay-اشنو.wav]]</td></tr></table>
+
+<strong class="error"><span class="scribunto-error">Lua error in 모듈:ary-IPA: Please provide vocalized Arabic in the first parameter of {{[[Template:ar-IPA|ar-IPA]]}}, or transliteration in the "tr" parameter.</span></strong>
+=== 부사 ===
+<span class="headword-line"><strong class="Arab headword" lang="ary">اشنو</strong> (<span lang="ary-Latn" class="headword-tr tr Latn" dir="ltr"><small>로마자 표기 필요</small></span>)</span>[[분류:모로코 아랍어 기본형|اشنو]][[분류:모로코 아랍어 부사|اشنو]][[분류:로마자 표기가 요청된 모로코 아랍어 낱말|اشنو]][[분류:항목이 있는 문서|اشنو]][[분류:1개의 항목이 있는 문서|اشنو]][[분류:비표준 언어 제목이 있는 문서|اشنو]]
+# <span class='form-of-definition use-with-mention'><templatestyles src="Module:form of/style.css"/>잘못 <span class='form-of-definition-link'><span class="Arab" lang="ary">[[:أشنو#모로코&#x5F;아랍어|أشنو]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ary-Latn" class="mention-tr tr Latn">ʔašnu</span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">무엇, 어떤</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span></span></span>.[[분류:모로코 아랍어 널리 쓰이는 잘못된 철자|اشنو]]

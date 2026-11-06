@@ -8826,3 +8826,69 @@ test "native frame ordinary span calls preserve literal values and exact flex la
     const marked_ref = try std.fmt.allocPrint(runtime.allocator, "re{s}f", .{marker[0].string});
     try std.testing.expectEqualStrings("<ref>note</ref>", try Expander.hostFrameExtensionTag(&expander, runtime.allocator, marked_ref, .{ .string = "note" }, null));
 }
+
+test "native Cite raw attributes do not transclude while note bodies and surrounding templates do" {
+    const Source = struct {
+        attribute_calls: usize = 0,
+        body_calls: usize = 0,
+        fn get(raw: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            if (std.mem.eql(u8, title, "Template:DLCE1906")) {
+                self.attribute_calls += 1;
+                return null;
+            }
+            if (std.mem.eql(u8, title, "Template:Body")) {
+                self.body_calls += 1;
+                return "''book'' [[Target|entry]]";
+            }
+            if (std.mem.eql(u8, title, "Template:Fail")) return error.OutOfMemory;
+            return null;
+        }
+        fn exists(raw: ?*anyopaque, title: []const u8) anyerror!bool {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            if (std.mem.eql(u8, title, "Template:DLCE1906")) {
+                self.attribute_calls += 1;
+                return false;
+            }
+            return std.mem.eql(u8, title, "Template:Body") or std.mem.eql(u8, title, "Template:Fail");
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var source: Source = .{};
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = &source, .get = Source.get, .exists = Source.exists } };
+    const input = "before {{Body}}<ref name=\"dlce1906\"<{{DLCE1906|210}}>{{Body}}</ref> after {{Body}}<references/>";
+    const expected = "before ''book'' [[Target|entry]]<ref name=\"dlce1906\"<{{DLCE1906|210}}>''book'' [[Target|entry]]</ref> after ''book'' [[Target|entry]]<references/>";
+    try std.testing.expectEqualStrings(expected, try expander.expandFragment("Page", input, null));
+    try std.testing.expectEqual(@as(usize, 0), source.attribute_calls);
+    try std.testing.expect(source.body_calls != 0);
+    try std.testing.expect(expander.missing_dependency_metadata == null);
+    try std.testing.expectEqual(@as(usize, 0), expander.dependency_page.occurrences.items.len);
+    for ([_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "<ref name='{{DLCE1906}}'>{{Body}}</ref>", .expected = "<ref name='{{DLCE1906}}'>''book'' [[Target|entry]]</ref>" },
+        .{ .input = "<ref name='{{DLCE1906}}'/>{{Body}}", .expected = "<ref name='{{DLCE1906}}'/>''book'' [[Target|entry]]" },
+        .{ .input = "<ref name='{{DLCE1906}}'>{{Body}}", .expected = "<ref name='{{DLCE1906}}'>''book'' [[Target|entry]]" },
+        .{ .input = "<references group='{{DLCE1906}}'><ref name=n>{{Body}}</ref></references>", .expected = "<references group='{{DLCE1906}}'><ref name=n>''book'' [[Target|entry]]</ref></references>" },
+        .{ .input = "<nowiki><ref name='{{DLCE1906}}'>{{Body}}</ref></nowiki>", .expected = "<nowiki><ref name='{{DLCE1906}}'>{{Body}}</ref></nowiki>" },
+        .{ .input = "<math><ref>{{Body}}</ref></math>", .expected = "<math><ref>{{Body}}</ref></math>" },
+    }) |case| {
+        try std.testing.expectEqualStrings(case.expected, try expander.expandFragment("Page", case.input, null));
+        try std.testing.expectEqual(@as(usize, 0), source.attribute_calls);
+        try std.testing.expect(expander.missing_dependency_metadata == null);
+    }
+    // A real missing body call still produces exactly its ordinary diagnostic.
+    const missing = try expander.expandFragment("Page", "<ref name=n>{{DLCE1906}}</ref>", null);
+    try std.testing.expectEqualStrings("<ref name=n>[[:Template:DLCE1906]]</ref>", missing);
+    var phase = try dependency.decode(a, expander.missing_dependency_metadata.?, missing, "");
+    defer phase.deinit();
+    try std.testing.expectEqual(@as(usize, 1), phase.occurrences().len);
+    try std.testing.expectEqualStrings("Template:DLCE1906", phase.occurrences()[0].title);
+    // Active-body allocator failure is never converted to a reference or text.
+    try std.testing.expectError(error.OutOfMemory, expander.expandFragment("Page", "<ref name=n<bad>{{Fail}}</ref>", null));
+}

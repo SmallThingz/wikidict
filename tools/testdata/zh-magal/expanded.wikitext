@@ -1,0 +1,26 @@
+==寒溪語==
+
+{| class="floatright number-box" cellpadding="5" cellspacing="0" style="background: var(--wikt-palette-white, #ffffff); color: inherit; border: 1px var(--border-color-base,#aaa) solid; border-collapse: collapse; margin-top: .5em;" rules="all"
+|+ '''寒溪語數字 <sup>(<span class="plainlinks">[//zh.wiktionary.org/w/index.php?title=Module:number_list/data/ycr&action=edit 編]</span>)</sup>'''
+|- style="text-align: center;"
+| class="table-cell  adjacent-number | [[:payat#寒溪語|-{ ←  4}-]]
+! class="table-cell  current-number | 5
+| class="table-cell  adjacent-number | 6&nbsp;&nbsp;→&nbsp;<sup>[[:tiyu#寒溪語|-{&#91;a&#93;}-]], [[:roku#寒溪語|-{&#91;b&#93;}-]]</sup>
+|-
+|-
+| colspan="3" style="text-align: center;" |  &nbsp;&nbsp;&nbsp;'''[[基數詞]]'''：<span class="Latn" lang="ycr">-{<strong class="selflink">magal</strong>}-</span>
+|}<templatestyles src="Template:number box/styles.css"/>
+
+===詞源===
+派生自<strong class="error"><span class="scribunto-error">Lua error in Module:Etymology/templates: Wikibase sitelink snapshot missing entity=Q715766 site=zhwiki</span></strong>。
+
+===數詞===
+<span class="headword-line"><strong class="Latn headword" lang="ycr">-{magal}-</strong></span>[[Category:寒溪語詞元|MAGAL]][[Category:寒溪語數詞|MAGAL]][[Category:有詞條的頁面|MAGAL]][[Category:有1個詞條的頁面|MAGAL]]
+
+# [[五]]
+
+===參考資料===
+* <span class="citation "
+>-{zh;zh-hans;zh-hant|}-&#32;[https://www.doc88.com/p-140805772401.html?r=1 <nowiki />宜蘭寒溪泰雅語基本詞彙與生活會話百句<nowiki />]</span><span
+    class="Z3988"
+    title="ctx_ver=Z39.88-2004&rft_val_fmt=info%3Aofi%2Ffmt%3Akev%3Amtx%3Abook&rft.genre=book&rft.btitle=%E5%AE%9C%E8%98%AD%E5%AF%92%E6%BA%AA%E6%B3%B0%E9%9B%85%E8%AA%9E%E5%9F%BA%E6%9C%AC%E8%A9%9E%E5%BD%99%E8%88%87%E7%94%9F%E6%B4%BB%E6%9C%83%E8%A9%B1%E7%99%BE%E5%8F%A5&rft_id=https%3A%2F%2Fwww.doc88.com%2Fp-140805772401.html%3Fr%3D1&rfr_id=info:sid/zh.wikipedia.org:magal"><span style="display: none;">&nbsp;</span></span>

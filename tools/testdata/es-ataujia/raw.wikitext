@@ -1,0 +1,20 @@
+== {{lengua|es}} ==
+{{pron-graf}}
+
+=== Etimología ===
+{{etimología|ar|التورشية|tr=ataurshía|glosa=pintura}}.
+
+=== {{sustantivo femenino|es}} ===
+{{es.sust}}
+;1: Obra moruna de distintos metales, embutidos unos con otros y con esmaltes de colores, que sirve para [[guarnecer]] estribos, [[alfanje]]s, frenos, etc.<ref name="dlce1906"<{{DLCE1906|210}}>{{referencia|editorial=Madrid, Callejón|a=Manuel Rodríguez-Navas|t=Diccionario completo de la lengua española|p=210|f=1906|u=https://archive.org/details/diccionariocompl00rodruoft|c=libro}}</ref>
+
+=== Véase también ===
+{{w}}
+
+=== Traducciones ===
+{{trad-arriba}}
+{{t|it|t1=intarsi}}
+{{trad-abajo}}
+
+== Referencias y notas ==
+<references />

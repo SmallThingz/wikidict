@@ -211,5 +211,60 @@ class StylesheetImportsTests(unittest.TestCase):
             collector.capture_artifacts(other / collector.SNAPSHOT, record)
 
 
+class CustomPropertyInputTests(unittest.TestCase):
+    url = 'https://es.wiktionary.org/w/index.php?title=control&useskin=vector-2022'
+    link = 'https://es.wiktionary.org/w/load.php?only=styles&skin=vector-2022&modules=control'
+
+    def artifacts(self, extra_head='', root_style=''):
+        css = b'.head{font-weight:bold}'
+        html = ('<html class="skin-theme-clientpref-day"><head><meta name="generator" content="MediaWiki test">'
+                '<style>:root{--ink:#111111}</style>' + extra_head + '<link rel="stylesheet" href="' + self.link.replace('&', '&amp;') + '">'
+                '</head><body style="' + root_style + '"><div class="mw-parser-output"><style>.x{--ink:#333333}</style></div></body></html>').encode()
+        result = {'root-common.css': css, 'root-authority.json': json.dumps({
+            'wiki': 'eswiktionary', 'dump_date': '20261001', 'namespace_sha256': 'a' * 64,
+            'title': 'MediaWiki:Common.css', 'content_model': 'css', 'decoded_source_sha256': collector.digest(css),
+            'decoded_source_bytes': len(css), 'page_id': 1, 'revision_id': 2}).encode()}
+        for number, url, mime, body in [(2, self.url, 'text/html', html), (3, self.link, 'text/css', b':root{--ink:#222222}')]:
+            prefix = f'request-{number:02d}'
+            result[prefix + '.json'] = json.dumps({'url': url, 'accept': mime, 'method': 'GET', 'retry': False}).encode()
+            result[prefix + '.response'] = body
+            result[prefix + '.receipt.json'] = json.dumps({'accepted': True, 'status': 200, 'final_url': url,
+                'started_utc': '2026-11-06T01:00:00Z', 'ended_utc': '2026-11-06T01:00:01Z',
+                'response_bytes': len(body), 'response_sha256': collector.digest(body), 'headers': {'content-type': mime}}).encode()
+        return result
+
+    def test_custom_context_keeps_order_ancestor_override_and_distinct_epoch(self):
+        value = collector.custom_snapshot(self.artifacts(root_style='--ink:#abcdef'))
+        self.assertEqual([':root{--ink:#111111}', ':root{--ink:#222222}', '.x{--ink:#333333}'], [item['css'] for item in value['sources']])
+        self.assertEqual('--ink:#abcdef', value['ancestors'][1]['inline_css'])
+        self.assertEqual('control', value['page_title'])
+        self.assertIsNone(value['dark'])  # day class does not reveal OS preference
+        self.assertIn('not historical', value['temporal_scope'])
+        self.assertEqual('MediaWiki test', value['generator'])
+        raw = self.artifacts()['request-02.response'].replace(b'rel="stylesheet"', b'rel="StyleSheet"')
+        parsed, _, _ = collector.custom_page_context(raw, self.url)
+        self.assertEqual([self.link], parsed.links)
+
+    def test_custom_context_refuses_unknown_applicability_or_changed_response(self):
+        for declaration in ('<style media="print">:root{--ink:red}</style>', '<style type="text/less">:root{--ink:red}</style>',
+                            '<style scoped>:root{--ink:red}</style>', '<link rel="alternate stylesheet" href="x.css">',
+                            '<link rel="stylesheet" disabled href="x.css">', '<base href="https://other.invalid/">'):
+            with self.subTest(declaration=declaration), self.assertRaises(ValueError):
+                collector.custom_snapshot(self.artifacts(extra_head=declaration))
+        with self.assertRaises(ValueError):
+            collector.custom_snapshot(self.artifacts(root_style='--ink:&#35;abcdef'))
+        for kind in ('bytes', 'request', 'context'):
+            artifacts = self.artifacts()
+            if kind == 'bytes':
+                artifacts['request-03.response'] = b':root{--ink:red}'
+            elif kind == 'request':
+                request = json.loads(artifacts['request-03.json']); request['retry'] = True
+                artifacts['request-03.json'] = json.dumps(request).encode()
+            else:
+                artifacts['request-02.response'] = artifacts['request-02.response'].replace(b'clientpref-day', b'clientpref-os')
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                collector.custom_snapshot(artifacts)
+
+
 if __name__ == '__main__':
     unittest.main()

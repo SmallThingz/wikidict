@@ -1,0 +1,45 @@
+== <span id="es" class="headline-lang"></span>[[Apéndice:ES:Referencia|Español]][[Categoría:Español]] ==
+<templatestyles src="Plantilla:pron-graf/styles.css"/>
+{|class="pron-graf"
+|style="background-color: var(--background-color-neutral, #eaecf0); color: var(--color-base, #202122);" colspan="2"|<span style="font-family: Arial, sans-serif; font-size: 1.5em;">ataujía</span>
+|-
+|[[Apéndice:ES:Referencia/Pronunciación|'''pronunciación''']] ([[Alfabeto Fonético Internacional|AFI]])
+|[at̪awˈxia]<br/>
+|-
+|'''silabación'''
+|a-tau-jí-a
+|-
+|'''acentuación'''
+|llana[[Categoría:ES:Palabras llanas|ATAUJIA]]
+|-
+|'''longitud silábica'''
+|tetrasílaba[[Categoría:ES:Palabras tetrasílabas|ATAUJIA]]
+|-
+|'''rima'''
+|[[:Categoría:ES:Rimas:i.a|i.a]][[Categoría:ES:Rimas:i.a]]
+|}[[Categoría:ES:Páginas sin audios]]
+
+=== Etimología ===
+Del árabe [[التورشية#Árabe|''التورشية'']] (''ataurshía'', 'pintura')[[Categoría:ES:Palabras provenientes del árabe|ATAUJIA]].
+
+=== Sustantivo femenino[[Categoría:ES:Sustantivos femeninos|ATAUJIA]][[Categoría:ES:Sustantivos|ATAUJIA]][[Categoría:ES:Lemas|ATAUJIA]][[Categoría:Lemas|ATAUJIA]] ===
+'''ataují<span style='color:var(--color-option-lime, #1f7a39); font-weight: bold;'>a</span>'''&ensp;¦&ensp;plural: [[ataujías|ataují<span style='color:var(--color-option-lime, #1f7a39); font-weight: bold;'>as</span>]][[Categoría:ES:Sustantivos regulares]]
+;1: Obra moruna de distintos metales, embutidos unos con otros y con esmaltes de colores, que sirve para [[guarnecer]] estribos, [[alfanje]]s, frenos, etc.<ref name="dlce1906"<[[:Plantilla:DLCE1906]]><span style='font-variant:small-caps;'>Manuel Rodríguez-Navas</span>. ''<span class='plainlinks'>[https://archive.org/details/diccionariocompl00rodruoft Diccionario completo de la lengua española]</span>''. Página 210. Editorial: Madrid, Callejón. 1906. </ref>
+
+=== Véase también ===
+*[[Image:Wikipedia-logo-v2.svg|15px|link=w:es:Wikipedia:Portada|Colabora en Wikipedia]] [[w:es:Wikipedia:Portada|Wikipedia]]  tiene un artículo sobre '''[[w::ataujía|ataujía]]'''.
+
+=== Traducciones ===
+<templatestyles src="Plantilla:trad-arriba/estilo.css" />
+<div class='trad-arriba mw-collapsible mw-collapsed' style='display:grid'>
+<div class='trad-arriba mw-collapsible-toggle'>'''Traducciones&nbsp;[<span class='fakelinks down'>▲</span><span class='fakelinks up'>▼</span>]'''</div>
+<div class='trad-arriba mw-collapsible-content'>
+<div class='caja-responsiva' width='100%'>
+
+* Italiano: [[intarsi#Italiano|intarsi]] <sup>[[:it:intarsi|(it)]]</sup>[[Categoría:Español-Italiano]].
+</div>
+</div>
+</div>
+
+== Referencias y notas ==
+<references />

@@ -150,6 +150,51 @@ public:
 protected:
     void keyPressEvent(QKeyEvent *event) override {
         ++interaction;
+        if (event->key() == Qt::Key_Space && event->modifiers() == Qt::NoModifier && hasFocus()) {
+            const QTextCursor selected = textCursor();
+            if (selected.hasSelection()) {
+                const int first = selected.selectionStart(), last = selected.selectionEnd();
+                const QTextBlock block = document()->findBlock(first);
+                bool wholeDisclosure = false;
+                // Qt focuses a contiguous anchor run within one text block, excluding
+                // its separator. charFormat() at a block boundary can describe the
+                // following character, so use the actual fragment ranges instead.
+                if (block.isValid() && last <= block.position() + block.length() - 1) {
+                    auto it = block.begin();
+                    while (!it.atEnd()) {
+                        const QTextFragment fragment = it.fragment();
+                        ++it;
+                        if (!fragment.isValid() || !fragment.charFormat().isAnchor()) continue;
+                        const QString href = fragment.charFormat().anchorHref();
+                        const int runStart = fragment.position();
+                        int runEnd = runStart + fragment.length();
+                        while (!it.atEnd()) {
+                            const QTextFragment next = it.fragment();
+                            if (!next.isValid() || next.position() != runEnd ||
+                                !next.charFormat().isAnchor() || next.charFormat().anchorHref() != href) break;
+                            runEnd += next.length();
+                            ++it;
+                        }
+                        if (first == runStart && last == runEnd &&
+                            QUrl(href).scheme() == QStringLiteral("section")) {
+                            wholeDisclosure = true;
+                            break;
+                        }
+                    }
+                }
+                if (wholeDisclosure) {
+                    // Keep Qt's focused-anchor activation and the existing post-fold
+                    // focus restoration; ordinary links and body Space still scroll.
+                    QKeyEvent activation(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier,
+                        QString(), event->isAutoRepeat(), event->count());
+                    keyboardActivation = true;
+                    QTextBrowser::keyPressEvent(&activation);
+                    keyboardActivation = false;
+                    event->setAccepted(activation.isAccepted());
+                    return;
+                }
+            }
+        }
         const bool documentStart = event->matches(QKeySequence::MoveToStartOfDocument);
         const bool documentEnd = event->matches(QKeySequence::MoveToEndOfDocument);
         keyboardActivation = event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter;
@@ -2333,7 +2378,7 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
     return out;
 
 }
-QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDepth, const QString &inheritedBackground, const QString &location) const {
+QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDepth, const QString &inheritedBackground, const QString &location, const QString &inheritedAlignment) const {
     if (tableDepth > 16) throw DictApiError("nested table depth exceeds presentation limit");
     const int indent = depth > 0 ? 30 + std::clamp(depth - 1, 0, 20) * 16 : 0;
     QString out = QStringLiteral("<table cellspacing='0' cellpadding='5' style='border-collapse:collapse;margin:8px 0;margin-left:%1px'>").arg(indent);
@@ -2369,11 +2414,12 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             .arg((!geometry.value(QStringLiteral("cell_spacing")).isUndefined() && !geometry.value(QStringLiteral("cell_spacing")).isNull()) ? QStringLiteral("separate") : QStringLiteral("collapse"))
             .arg(tableDepth > 1 ? 0 : 8).arg(indent);
     }
-    const QJsonObject tableStyle = SemanticHtml::typedStyle(table.value(QStringLiteral("style")), {"background", "border", "collapse", "margins"});
+    const QJsonObject tableStyle = SemanticHtml::typedStyle(table.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "float_side"});
     const QString tableBackground = SemanticHtml::present(tableStyle.value(QStringLiteral("background")))
         ? SemanticHtml::styleColor(tableStyle.value(QStringLiteral("background"))).name() : inheritedBackground;
     const QJsonArray caption = table.value(QStringLiteral("caption")).toArray();
-    if (!caption.isEmpty()) out += QStringLiteral("<caption>%1</caption>").arg(spansHtml(caption, 0, {}, tableBackground));
+    if (!caption.isEmpty()) out += QStringLiteral("<caption%1>%2</caption>")
+        .arg(inheritedAlignment.isEmpty() ? QString() : QStringLiteral(" align='%1'").arg(inheritedAlignment), spansHtml(caption, 0, {}, tableBackground));
     qsizetype rowIndex = 0;
     for (const QJsonValue &rowValue : table.value(QStringLiteral("rows")).toArray()) {
         out += QStringLiteral("<tr>");
@@ -2395,13 +2441,11 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
                 style += QStringLiteral(";background-color:") + effectiveBackground
                     + QStringLiteral(";color:") + backgroundInk(effectiveBackground);
             const QJsonObject cellStyle = SemanticHtml::typedStyle(cell.value(QStringLiteral("style")), {"border", "padding", "text_align"});
-            if (SemanticHtml::present(cellStyle.value(QStringLiteral("text_align")))) {
-                const QString alignment = cellStyle.value(QStringLiteral("text_align")).toString();
-                if (alignment != QStringLiteral("left") && alignment != QStringLiteral("center") && alignment != QStringLiteral("right"))
-                    throw DictApiError("invalid cell alignment");
-                // Safe inherited enum; exact qreal metrics are applied after import.
-                style += QStringLiteral(";text-align:") + alignment;
-            }
+            const QString ownAlignment = SemanticHtml::textAlignment(cellStyle.value(QStringLiteral("text_align")));
+            const QString alignment = ownAlignment.isEmpty() ? inheritedAlignment : ownAlignment;
+            // HTML align retains physical left/right under RTL. Qt imports cell
+            // inheritance and explicit child overrides before the metric pass.
+            const QString alignAttribute = alignment.isEmpty() ? QString() : QStringLiteral(" align='%1'").arg(alignment);
             const QJsonArray cellSpans = cell.value(QStringLiteral("spans")).toArray();
             const QString cellLocation = location.isEmpty() ? QString() : location + QStringLiteral("-row-%1-cell-%2").arg(rowIndex).arg(cellIndex);
             const QJsonValue child = cell.value(QStringLiteral("nested_table"));
@@ -2414,25 +2458,35 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
                 for (const QJsonValue &value : blocks.toArray()) {
                     if (!value.isObject()) throw DictApiError("invalid ordered table block");
                     const QString blockLocation = cellLocation.isEmpty() ? QString() : cellLocation + QStringLiteral("-block-%1").arg(blockIndex++);
-                    contents += blockHtml(value.toObject(), effectiveBackground, tableDepth + 1, blockLocation);
+                    contents += blockHtml(value.toObject(), effectiveBackground, tableDepth + 1, blockLocation, alignment);
                 }
             } else if (!child.isUndefined() && !child.isNull()) {
                 if (!child.isObject() || !cellSpans.isEmpty()) throw DictApiError("invalid nested table cell");
                 contents = tableHtml(child.toObject(), 0, tableDepth + 1, effectiveBackground,
-                    cellLocation.isEmpty() ? QString() : cellLocation + QStringLiteral("-table"));
+                    cellLocation.isEmpty() ? QString() : cellLocation + QStringLiteral("-table"), alignment);
             } else contents = spansHtml(cellSpans, 0, {}, effectiveBackground);
             ++cellIndex;
-            out += QStringLiteral("<%1 colspan='%2' rowspan='%3' style='%4'>%5</%1>")
-                .arg(tag).arg(colspan).arg(rowspan).arg(style, contents);
+            out += QStringLiteral("<%1 colspan='%2' rowspan='%3' style='%4'%5>%6</%1>")
+                .arg(tag).arg(colspan).arg(rowspan).arg(style, alignAttribute, contents);
         }
         out += QStringLiteral("</tr>");
         ++rowIndex;
     }
     out += QStringLiteral("</table>");
-    return SemanticHtml::tableStyleMarker(table, readingPointSize_, indent) + out;
+    return SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty()) + out;
 }
 
-QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location) const {
+QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location, const QString &inheritedAlignment) const {
+    const QString explicitAlignment = SemanticHtml::textAlignment(block.value(QStringLiteral("text_align")));
+    const QString alignment = explicitAlignment.isEmpty() ? inheritedAlignment : explicitAlignment;
+    const QString html = blockContentsHtml(block, cellBackground, tableDepth, location, alignment);
+    // Tables have their own placement; inherited text alignment goes into cells.
+    // A div around a table would also change QTextTableFormat::alignment.
+    if (html.isEmpty() || explicitAlignment.isEmpty() || block.value(QStringLiteral("table")).isObject()) return html;
+    return QStringLiteral("<div align='%1'>%2</div>").arg(explicitAlignment, html);
+}
+
+QString MainWindow::blockContentsHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location, const QString &alignment) const {
     const QString kind = block.value(QStringLiteral("kind")).toString();
     if (kind == QStringLiteral("blank")) return {};
     if (kind == QStringLiteral("rule"))
@@ -2450,6 +2504,7 @@ QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackg
         return value.isUndefined() || (value.isString() && value.toString() == expected);
     };
     if (kind == QStringLiteral("table") && table.isObject()
+        && !SemanticHtml::present(table.toObject().value(QStringLiteral("style")).toObject().value(QStringLiteral("float_side")))
         && feature.value(QStringLiteral("kind")).toString() == QStringLiteral("color_swatch") && canonicalColor
         && defaultField(QStringLiteral("language"), QString())
         && defaultField(QStringLiteral("tail_kind"), QStringLiteral("none"))
@@ -2457,10 +2512,13 @@ QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackg
         const int depth = block.value(QStringLiteral("depth")).toInt();
         const int indent = depth > 0 ? 30 + std::clamp(depth - 1, 0, 20) * 16 : 0;
         // The empty sample is decorative; the adjacent readable text is its sole accessible label.
-        return QStringLiteral("<table cellspacing='0' cellpadding='5' style='margin:8px 0;margin-left:%1px'>"
-            "<tr><td width='40' bgcolor='%2'>&#160;</td><td>Color sample %2</td></tr></table>").arg(indent).arg(color);
+        const QString html = QStringLiteral("<table cellspacing='0' cellpadding='5' style='margin:8px 0;margin-left:%1px'>"
+            "<tr><td width='40' bgcolor='%2'>&#160;</td><td%3>Color sample %2</td></tr></table>").arg(indent).arg(color)
+            .arg(alignment.isEmpty() ? QString() : QStringLiteral(" align='%1'").arg(alignment));
+        const QJsonObject renderedShape{{"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{QJsonObject{}, QJsonObject{}}}}}}};
+        return SemanticHtml::tableStyleMarker(renderedShape, readingPointSize_, indent, !alignment.isEmpty()) + html;
     }
-    if (table.isObject()) return tableHtml(table.toObject(), block.value(QStringLiteral("depth")).toInt(), tableDepth, cellBackground, location);
+    if (table.isObject()) return tableHtml(table.toObject(), block.value(QStringLiteral("depth")).toInt(), tableDepth, cellBackground, location, alignment);
     const QJsonArray spans = block.value(QStringLiteral("spans")).toArray();
     const bool poem = hasPoemSpans(spans);
     if (kind == QStringLiteral("paragraph") && block.value(QStringLiteral("depth")).toInt() == 0 &&

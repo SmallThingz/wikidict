@@ -2,6 +2,7 @@ package app.smallthingz.dict
 
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
@@ -13,6 +14,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.*
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -321,4 +323,137 @@ class NestedTableDeviceTest {
             }
         } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
     }
+    @Test fun explicitParagraphCenterOverridesInheritedRightCellAcrossRtlAndResize() {
+        val blocks = listOf(Block("paragraph", 0, listOf(Span("text", "first"))),
+            Block("paragraph", 0, listOf(Span("text", "middle", fontScale = 2f)), textAlign = CellTextAlign.Center),
+            Block("paragraph", 0, listOf(Span("link", "last", "last-target"))),
+            Block("preformatted", 0, listOf(Span("text", "R")), textAlign = CellTextAlign.Right),
+            Block("preformatted", 0, listOf(Span("text", "C")), textAlign = CellTextAlign.Center))
+        val table = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 2, 1, background = "#b4cdcd", blocks = blocks,
+            style = CellStyle(textAlign = CellTextAlign.Right)))),
+            TableGeometry(border = 2, cellSpacing = 0, cellPadding = 4, width = TableWidth(TableWidthUnit.Px, 250)))
+        val direction = mutableStateOf(LayoutDirection.Ltr)
+        val width = mutableStateOf(280)
+        var followed: String? = null
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                CompositionLocalProvider(LocalLayoutDirection provides direction.value) {
+                    DictTheme("light") { androidx.compose.foundation.layout.Box(
+                        Modifier.requiredWidth(width.value.dp)) { CompiledTableView(table, null) { followed = it } } }
+                }
+            } }
+            for (widthDp in listOf(260, 280, 320)) for (rtl in listOf(LayoutDirection.Ltr, LayoutDirection.Rtl)) {
+                compose.runOnIdle { width.value = widthDp; direction.value = rtl; followed = null }
+                compose.waitForIdle()
+                for ((label, expected) in listOf("first" to androidx.compose.ui.text.style.TextAlign.Right,
+                        "middle" to androidx.compose.ui.text.style.TextAlign.Center, "last" to androidx.compose.ui.text.style.TextAlign.Right,
+                        "R" to androidx.compose.ui.text.style.TextAlign.Right, "C" to androidx.compose.ui.text.style.TextAlign.Center)) {
+                    val node = compose.onNodeWithText(label, useUnmergedTree = true)
+                    node.assertIsDisplayed()
+                    val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                    node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                    val layout = layouts.single()
+                    assertEquals(expected, layout.layoutInput.style.textAlign)
+                    if (label == "R" || label == "C") {
+                        val cell = compose.onNodeWithTag("compiled-table-cell-root-0", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+                        assertTrue("Short preformatted text must receive viewport width, not only its intrinsic glyph width",
+                            node.fetchSemanticsNode().boundsInRoot.width > cell.width / 2f)
+                    }
+                    if (expected == androidx.compose.ui.text.style.TextAlign.Center)
+                        assertEquals(layout.size.width / 2f, (layout.getLineLeft(0) + layout.getLineRight(0)) / 2f, 1f)
+                    else assertEquals(layout.size.width.toFloat(), layout.getLineRight(0), 1f)
+                    if (label == "last") {
+                        val link = layout.layoutInput.text.getLinkAnnotations(0, layout.layoutInput.text.length).single()
+                        node.performTouchInput { click(layout.getBoundingBox(link.start).center) }
+                        compose.runOnIdle { assertEquals("last-target", followed) }
+                    }
+                }
+            }
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+    }
+
+    @Test fun sectionHeadingCompanionKeepsExplicitPhysicalAlignmentAndItsLink() {
+        val align = mutableStateOf(CellTextAlign.Center)
+        val direction = mutableStateOf(LayoutDirection.Ltr)
+        var followed: String? = null
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                val rich = Block("heading", 0, listOf(Span("link", "Pronunciation", "pronunciation-target")),
+                    level = 3, textAlign = align.value)
+                val entry = Entry("Aligned heading", emptyList(), "language", "English", "en",
+                    listOf(Section(3, "Pronunciation", listOf(rich, Block("paragraph", 0, listOf(Span("text", "Body")))))), emptyList())
+                CompositionLocalProvider(LocalLayoutDirection provides direction.value) {
+                    DictTheme("light") { EntryView(entry, false, {}, onLink = { followed = it }) }
+                }
+            } }
+            for (side in listOf(CellTextAlign.Center, CellTextAlign.Right)) for (rtl in listOf(LayoutDirection.Ltr, LayoutDirection.Rtl)) {
+                compose.runOnIdle { align.value = side; direction.value = rtl; followed = null }
+                compose.waitForIdle()
+                val node = compose.onNodeWithText("Pronunciation", useUnmergedTree = true)
+                val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                val layout = layouts.single()
+                assertEquals(if (side == CellTextAlign.Center) androidx.compose.ui.text.style.TextAlign.Center else androidx.compose.ui.text.style.TextAlign.Right,
+                    layout.layoutInput.style.textAlign)
+                if (side == CellTextAlign.Center) assertEquals(layout.size.width / 2f, (layout.getLineLeft(0) + layout.getLineRight(0)) / 2f, 1f)
+                else assertEquals(layout.size.width.toFloat(), layout.getLineRight(0), 1f)
+                val link = layout.layoutInput.text.getLinkAnnotations(0, layout.layoutInput.text.length).single()
+                node.performTouchInput { click(layout.getBoundingBox(link.start).center) }
+                compose.runOnIdle { assertEquals("pronunciation-target", followed) }
+            }
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+    }
+
+    @Test fun tableOnlySectionKeepsFollowingNativeHeadingFoldAndListActions() {
+        val px0 = StyleLength(StyleLengthUnit.Px, 0f)
+        val table = Table(emptyList(), List(4) { listOf(Cell(listOf(Span("text", "number")), false, 1, 1)) },
+            TableGeometry(width = TableWidth(TableWidthUnit.Px, 100)),
+            TableStyle(margins = StyleEdges(px0, px0, px0, StyleLength(StyleLengthUnit.Px, 20f)), floatSide = TableFloatSide.Right))
+        val entry = Entry("dwa control", emptyList(), "language", "poloniera", "pl", listOf(
+            Section(2, "Poloniera", listOf(Block("table", 0, emptyList(), table = table))),
+            Section(3, "Ahoskera", listOf(
+                Block("list_item", 2, listOf(Span("link", "IPA", "IPA"), Span("text", ": /dva/")), listPath = ":*"),
+                Block("list_item", 2, listOf(Span("text", "second pronunciation")), listPath = ":*"))),
+            Section(3, "Adjektiboa", listOf(Block("indent", 1, listOf(Span("text", "number meaning")), listPath = ":")))), emptyList())
+        var followed: String? = null
+        var activityRoot: android.view.View? = null
+        fun nativeView(): NativeFloatTextView {
+            fun collect(view: android.view.View): List<NativeFloatTextView> = when (view) {
+                is NativeFloatTextView -> listOf(view)
+                is android.view.ViewGroup -> (0 until view.childCount).flatMap { collect(view.getChildAt(it)) }
+                else -> emptyList()
+            }
+            return collect(checkNotNull(activityRoot)).single()
+        }
+        fun action(label: String) {
+            compose.runOnIdle {
+                val view = nativeView()
+                val provider = view.accessibilityNodeProvider
+                val id = (0 until 32).single { candidate ->
+                    val info = provider.createAccessibilityNodeInfo(candidate)
+                    info != null && info.text?.toString() == label && info.isClickable
+                }
+                assertTrue(provider.performAction(id, android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+            }
+            compose.waitForIdle()
+        }
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activityRoot = activity.window.decorView; activity.setContent {
+                DictTheme("light") { EntryView(entry, false, {}, onLink = { followed = it }, settings = AppSettings(collapseDetails = false)) }
+            } }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val text = nativeView().logicalText.toString()
+                assertTrue(text.contains("Ahoskera") && text.contains("second pronunciation") && text.contains("number meaning"))
+                assertFalse(text.contains(":*")) // Source list path is a marker gutter, never invented body text.
+            }
+            action("IPA")
+            compose.runOnIdle { assertEquals("IPA", followed) }
+            action("Collapse Ahoskera")
+            compose.runOnIdle { assertFalse(nativeView().logicalText.contains("second pronunciation")) }
+            action("Expand Ahoskera")
+            compose.runOnIdle { assertTrue(nativeView().logicalText.contains("second pronunciation")) }
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+    }
+
 }

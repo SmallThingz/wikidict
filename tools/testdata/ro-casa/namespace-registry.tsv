@@ -1,0 +1,32 @@
+# wikidict-namespace-registry-v1
+# wiki	rowiktionary
+# dump-date	20261001
+# content-language	ro
+-2	Media	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Special	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Discuție	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discuţie
+2	Utilizator	User	first-letter	1	0	0		compile_only	standard_build_input
+3	Discuție Utilizator	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Discuţie Utilizator
+4	Wikționar	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	Discuție Wikționar	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discuţie Wikționar	Wiktionary talk
+6	Fișier	File	case-sensitive	0	0	0		compile_only	standard_build_input	Fişier	Image	Imagine
+7	Discuție Fișier	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discuţie Fişier	Discuţie Imagine	Image talk
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	Discuție MediaWiki	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	Discuţie MediaWiki
+10	Format	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Discuție Format	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discuţie Format
+12	Ajutor	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Discuție Ajutor	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discuţie Ajutor
+14	Categorie	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Discuție Categorie	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discuţie Categorie
+100	Portal	Portal	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+101	Discuție Portal	Discuție Portal	case-sensitive	1	0	0		compile_only	discussion_namespace
+102	Apendice	Apendice	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+103	Discuție Apendice	Discuție Apendice	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Modul	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Discuție Modul	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

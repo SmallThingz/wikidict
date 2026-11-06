@@ -143,6 +143,90 @@ class ExtractionCacheTest(unittest.TestCase):
         (self.source / "dump-streams.tsv").write_bytes(b"1\t100\t100\n")
         with self.assertRaises(ValueError):cache.publish(self.root,self.expected,self.source)
 
+    def footer_proof(self):
+        # ET's observed metadata ends with page stream 631 and footer stream 632.
+        (self.source / "dump-streams.tsv").write_bytes(b"632\t28802028\t22\n")
+        page = b"631\t0\t10\tTemplate:fixture\n"
+        (self.source / "page-index.tsv").write_bytes(page)
+        header = b"DPTIDX01" + b"".join(n.to_bytes(8, "little") for n in
+                                            (2, 8, 1, 1, len(page), 0, 0))
+        (self.source / "page-title-index.bin").write_bytes(header + bytes(128))
+        proof = dict(schema="wikidict.extraction-completion.v1", version=1,
+                     expected_stream_count=633, consumed_stream_count=633, pages=1)
+        path = self.source / "extraction-completion.json"
+        path.write_text(json.dumps(proof))
+        return path, proof
+
+    def test_footer_fullscan_proof_roundtrip_and_asset_tamper(self):
+        path, _ = self.footer_proof()
+        self.assertEqual(0, cache.publish(self.root, self.expected, self.source))
+        generation, = self.root.iterdir()
+        marker = cache.read_marker(generation / ".complete.json")
+        self.assertIn(path.name, [row[0] for row in marker["assets"]])
+        output = self.base / "footer-output"
+        output.mkdir()
+        self.assertEqual(0, cache.probe(self.root, self.expected, output))
+        self.assertTrue((output / path.name).is_symlink())
+        self.assertEqual(path.read_bytes(), (output / path.name).read_bytes())
+        (generation / path.name).write_text("{}")
+        rejected = self.base / "tampered-output"
+        rejected.mkdir()
+        self.assertEqual(cache.MISS, cache.probe(self.root, self.expected, rejected))
+        self.assertEqual([], list(rejected.iterdir()))
+
+    def test_footer_missing_truncated_and_forged_proof_rejected(self):
+        path, proof = self.footer_proof()
+        variants = [b"{", b" " * 4097, b"[]"]
+        for field in proof:
+            missing = dict(proof)
+            del missing[field]
+            variants.append(json.dumps(missing).encode())
+        for field, value in (("version", True), ("schema", "other"),
+                             ("expected_stream_count", 632), ("consumed_stream_count", 632),
+                             ("pages", 2), ("pages", 0), ("pages", True),
+                             ("consumed_stream_count", "633"), ("expected_stream_count", -1)):
+            variants.append(json.dumps(dict(proof, **{field: value})).encode())
+        for raw in variants:
+            with self.subTest(raw=raw[:100]):
+                path.write_bytes(raw)
+                with self.assertRaises(ValueError):
+                    cache.validate_extraction_completion(self.source)
+        path.unlink()
+        with self.assertRaisesRegex(ValueError, "final page stream"):
+            cache.validate_extraction_completion(self.source)
+
+    def test_footer_proof_does_not_waive_index_or_ready_guards(self):
+        path, proof = self.footer_proof()
+        title = self.source / "page-title-index.bin"
+        valid_title = title.read_bytes()
+        for body in (valid_title[:32], valid_title[:-1], b"BADMAGIC" + valid_title[8:],
+                     valid_title[:8] + bytes(8) + valid_title[16:]):
+            title.write_bytes(body)
+            with self.assertRaises(ValueError):cache.validate_extraction_completion(self.source)
+        title.write_bytes(valid_title)
+        (self.source / "page-index.tsv").write_bytes(b"634\t0\t10\tTemplate:fixture\n")
+        with self.assertRaises(ValueError):cache.validate_extraction_completion(self.source)
+        self.footer_proof()
+        (self.source / "page-index.tsv").write_bytes(b"631\t0\t10\tLongerTemplate:fixture\n")
+        with self.assertRaises(ValueError):cache.validate_extraction_completion(self.source)
+        self.footer_proof()
+        (self.source / "compiler-inputs.ready").write_bytes(b"incomplete\n")
+        with self.assertRaises(ValueError):cache.validate_extraction_completion(self.source)
+        (self.source / "compiler-inputs.ready").write_bytes(b"complete\n")
+        self.footer_proof()
+        target = self.base / "proof-backing"
+        path.rename(target)
+        path.symlink_to(target)
+        with self.assertRaises(ValueError):cache.validate_extraction_completion(self.source)
+        with self.assertRaises(ValueError):cache.walk_assets(self.source)
+        target.unlink()
+        with self.assertRaises(ValueError):cache.validate_extraction_completion(self.source)
+
+    def test_present_invalid_proof_rejected_even_with_equal_tails(self):
+        path, _ = self.footer_proof()
+        (self.source / "dump-streams.tsv").write_bytes(b"631\t0\t22\n")
+        with self.assertRaises(ValueError):cache.validate_extraction_completion(self.source)
+
     def test_namespace_registry_is_part_of_identity(self):
         with mock.patch.object(cache, "tool_identity", return_value={}):
             original=cache.identity(Path("extractor"), "a"*64, "d"*64, "e"*64)

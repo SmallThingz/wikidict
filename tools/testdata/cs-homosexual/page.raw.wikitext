@@ -1,0 +1,84 @@
+{{Viz|homosexual}}
+
+== čeština ==
+
+=== výslovnost ===
+* {{IPA|ɦɔmɔsɛksʊaːl}}
+
+=== dělení ===
+* ho-mo-se-xuál
+
+=== etymologie ===
+Z německého [[homosexual]], které bylo v 2. polovině devatenáctého století utvořeno jako kompozitum z následujícího latinsko-řeckého základu:<br />starořecké [[ὁμός]] ''(homos)'' — ''stejný, tentýž'' a latinského [[sexualis]], které vychází ze substantiva [[sexus#latina|sexus]], tedy ''„rozseknutí; pohlaví“'', jež souvisí se slovesem [[secare#latina|secāre]].
+
+=== podstatné jméno ===
+* ''rod mužský životný''
+
+==== skloňování ====
+{{Substantivum (cs)
+  | snom = homosexuál
+  | sgen = [[homosexuála]]
+  | sdat = [[homosexuálu]] / [[homosexuálovi]]
+  | sacc = [[homosexuála]]
+  | svoc = [[homosexuále]]
+  | sloc = [[homosexuálu]] / [[homosexuálovi]]
+  | sins = [[homosexuálem]]
+  | pnom = [[homosexuálové]]
+  | pgen = [[homosexuálů]]
+  | pdat = [[homosexuálům]]
+  | pacc = [[homosexuály]]
+  | pvoc = [[homosexuálové]]
+  | ploc = [[homosexuálech]]
+  | pins = [[homosexuály]]
+}}
+
+==== význam ====
+# [[homosexuální]] [[člověk]];<ref name="ascs">{{ASCS
+  | rok = 1998
+  | heslo = homosexuál
+  | strany = 296
+}}</ref> [[osoba]] [[pociťující]] [[či]] [[projevující]] [[pohlavní]] [[náklonnost]] k osobám [[stejný|stejného]] [[pohlaví]]
+
+==== překlady ====
+# {{Překlady
+  | význam = homosexuální člověk
+  | de = {{P|de|Homosexueller|m}}, {{P|de|Schwule|m}}
+  | en = {{P|en|homosexual}}, {{P|en|gay}}
+  | fr = {{P|fr|homosexuel|m}}
+  | it = {{P|it|omosessuale|m}}, {{P|it|uranista|m}}
+  | ru = {{P|ru|гомосексуалист|m}}, {{P|ru|гомосексуал|m}}, {{P|ru|гей|m}}
+  | sv = {{P|sv|homosexuell person}}, {{P|sv|bög}}
+}}
+
+==== synonyma ====
+# [[gay]], {{Příznak2|expr.}} [[hošan]], {{Příznak2|vulg.}} [[bomerant]]<ref name="Diatelová">DIATELOVÁ, Irena. Urážlivé, vulgární a rasistické projevy na internetových diskusních fórech [online]. 2013 [cit. 2014-05-04]. Bakalářská práce. Masarykova univerzita, Filozofická fakulta. Vedoucí práce Marek Grác. s. 22. Dostupné z: <http://is.muni.cz/th/379183/ff_b />.</ref>, [[buk]]<ref name="Diatelová" />, [[bukál]]<ref name="Diatelová" />, [[bukvice]]<ref name="Diatelová" />, [[buzerant]]<ref name="Diatelová" />, [[komínovrt]], [[teplajzník]], [[richtařina]], [[bůza]], [[mrdkožrout]], [[bukvičák]], [[zadkojeb]], [[buzik]], <ref name="Diatelová" />, [[buzík]]<ref name="Diatelová" />, [[buzna]]<ref name="Diatelová" />, [[buzola]], [[homoděj]], [[homofil]], [[homokláda]]<ref name="Diatelová" />, [[homoprut]], [[homouš]]<ref name="Diatelová" />, [[hulibrk]], [[hulpéro]]<ref name="Diatelová" />, [[kuřbuřt]]<ref name="Diatelová" />, [[řiťopich]]<ref name="Diatelová" />, [[spermohlt]]<ref name="Diatelová" />, [[teplomil]], [[teplouš]]<ref name="Diatelová" />, [[zateplená menšina]]<ref name="Diatelová" />,[[pytlosaj]]<ref name="Diatelová" />,,[[klobásodusič]]<ref name="Diatelová" /> [[pederast]], {{Příznak2|arg.}} [[pytložvejk]]<ref>{{Citace elektronického periodika
+  | příjmení = Pravdová
+  | jméno = Markéta
+  | titul = Termobuk, pytložvejk, marcela. Naučte se, co vás čeká ve vězení
+  | periodikum = iDNES.cz
+  | odkaz na periodikum = w:iDNES.cz
+  | datum vydání = 2014-10-09
+  | datum přístupu = 2019-12-07
+  | url = https://www.idnes.cz/technet/veda/argot-rec-kriminalniku.A140826_155938_vojenstvi_kuz
+}}</ref>, {{Příznak2|arch.}} [[samcoložník]], [[mužoložník]]<ref>{{Chrám i tvrz|rok=1992|strany=129}}</ref>, {{Příznak2|ob.}} [[tetička]], [[pindíkomil]]
+
+==== antonyma ====
+# [[heterosexuál]]
+
+==== související ====
+* [[homosexualita]]
+* [[homosexuální]]
+* [[homosexuálně]]
+* [[transsexuál]]
+* [[transsexualita]]
+* [[transsexuální]]
+* [[transsexuálně]]
+
+== poznámky ==
+<references />
+
+== externí odkazy ==
+* {{Wikipedie|článek=Homosexuál}}
+* {{Wikicitáty|téma=Homosexuál}}
+
+[[Kategorie:Česká substantiva]]

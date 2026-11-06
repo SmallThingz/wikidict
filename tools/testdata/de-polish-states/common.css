@@ -1,0 +1,932 @@
+ /*
+ ** Diese Seite beinhaltet unsere skinübergreifende css-Datei
+ ** Für skinspezifische Änderungen bitte entsprechende css-Seiten bearbeiten, siehe [[MediaWiki:Common.css/navi]]
+ ** Validation: https://u5l.de/y
+ ** Änderungen hier benötigen dank Cache einige Zeit, bis sie bei allen sichtbar sind.
+ */
+ 
+ /* Abschneiden von herausragenden Zeichen im Seitentitel verhindern
+ ** Font für Reimseiten, erster Versuch
+ */
+:root {
+	/* H I N T E R G R U N D F A R B E N */
+	/* Wie Seitenhintergrund */
+    --hintergrundfarbe-basis: var(--background-color-base, #ffffff);
+	/* Wie Inhaltsverzeichnis / Neutral-subtil */
+    --hintergrundfarbe1: var(--background-color-neutral-subtle, #f9f9f9);
+	/* "Weiß" / Standard-Hintergrund */
+    --hintergrundfarbe2: var(--background-color-base, #fff);
+	/* "Gelb", auffällig / Warnung */
+    --hintergrundfarbe3: var(--background-color-warning-subtle, #ffff40);
+	/* Sehr auffällig (Orange) */
+    --hintergrundfarbe4: var(--background-color-option-orange, #fa0);
+	/* Neutral, abgesetzt */
+    --hintergrundfarbe5: var(--background-color-neutral, #e0e0e0);
+	/* Blau/Violett */
+    --hintergrundfarbe6: var(--background-color-progressive-subtle, #b3b7ff);
+	/* Rosa/Rot */
+    --hintergrundfarbe7: var(--background-color-error-subtle, #ffcbcb);
+	/* Gelb/Orangegelb */
+    --hintergrundfarbe8: var(--background-color-warning-subtle, #ffebad);
+	/* Grün */
+    --hintergrundfarbe9: var(--background-color-success-subtle, #b9ffc5);
+	
+	/* R A H M E N F A R B E N */
+	/* Wie Inhaltsverzeichnis */
+	--rahmenfarbe1: var(--border-color-divider, #aaa);
+	/* Unauffällig, geringer Kontrast */
+	--rahmenfarbe2: var(--border-color-subtle, #e9e9e9);
+	/* "Rot", auffällig */
+	--rahmenfarbe3: var(--border-color-error, #c00000);
+	/* Neutrale Farbe, deutlich */
+	--rahmenfarbe4: var(--border-color-interactive, #88a);
+	/* "Schwarz", hoher Kontrast */
+	--rahmenfarbe5: var(--border-color-emphasized, #000);
+}
+
+ #firstHeading {
+     overflow: visible !important;
+ }
+
+ #firstHeading .mw-body .ns-106 h1 {
+     font-family: 'DejaVu Sans', 'Doulos SIL', sans-serif;
+ }
+
+ 
+ /* Unnötige Elemente auf der Hauptseite entfernen */
+ body.page-Wiktionary_Hauptseite h1.firstHeading,
+ body.page-Wiktionary_Hauptseite #siteSub,
+ body.page-Wiktionary_Hauptseite #contentSub,
+ body.page-Wiktionary_Hauptseite #p-tb,
+ body.page-Wiktionary_Hauptseite #catlinks {
+     display: none !important;
+ }
+ 
+ /* Stabilversionen */
+.flaggedrevs-color-0 {
+    background-color: var(--background-color-warning-subtle, #FFFCD9);
+    color: var(--color-base, #202122);
+}
+
+.flaggedrevs-color-1 {
+    background-color: var(--background-color-success-subtle, #EAFFEA);
+    color: var(--color-base, #202122);
+}
+.mw-fr-reviewlink {
+    background-color: transparent !important;
+}
+#p-cactions li#ca-stable a {
+    background-color: var(--background-color-success-subtle, #F5FFF5);
+}
+
+#p-cactions li#ca-current a {
+    background-color: var(--background-color-warning-subtle, #FFFEEE);
+}
+
+
+ /* Linkbilder */
+ .nodeco a:hover {
+     text-decoration: none !important;
+ }
+ 
+ /* Kein Hochladen-Link in der Sidebar */
+ #t-upload {
+     display: none;
+ }
+ 
+ /* Suchfeld-Attrappe mit Link, um Seite in Schnellsuchleiste aufzunehmen */
+ .searchBoxMag {
+     background: url(//upload.wikimedia.org/wiktionary/de/d/d5/Suchfeld-Lupe.png) no-repeat;
+ }
+ .searchBoxLogo {
+     background: url(//upload.wikimedia.org/wiktionary/de/4/4b/Suchfeld-Logo.png) no-repeat;
+ }
+ .searchBoxLogo:hover {
+     background: url(//upload.wikimedia.org/wiktionary/de/5/59/Suchfeld-Logo_blau.png) no-repeat;
+ }
+ 
+ /* Schaltflächen */
+ /* ** Bei diversen Schaltflächen eine Hand als Cursor zeigen ** */
+ #wpDiff,
+ #wpSave,
+ #wpPreview,
+ #wpLoginattempt,
+ #wpMailmypassword,
+ .searchButton,
+ .createboxButton {
+     cursor: pointer;
+ }
+ #nsinvert {
+     cursor: auto !important;
+ }
+
+ /* ** Bei erfolgloser Suche Text in Buttons beim Drüberfahren rot machen ** */
+ 
+ .createboxButton:hover {
+     color: var(--color-destructive, #ba0000);
+ }
+ 
+ /* Stylesheet fuer den 'Ausklappen'-Button an Navileisten, der in Common.js implementiert wird (aus dewiki) */
+ .NavToggle, .NavToggleAll, .NavToggleConfig {
+    float: right;
+    font-size: x-small;
+ }
+ 
+/* Sonderzeichen-Hervorhebung */
+.specialbasic a:hover,
+.speciallang a:hover {
+    color: var(--color-option-orange, #FF8C00);
+}
+ 
+ /* Symboleinbindung für [[Vorlage:Audio]] */
+ .audiolink a {
+     background: url("//upload.wikimedia.org/wikipedia/commons/thumb/8/8a/Loudspeaker.svg/16px-Loudspeaker.svg.png") center left no-repeat !important;
+     padding-left: 20px !important;
+     padding-right: 0 !important;
+ }
+ 
+ /* Redirects auf [[Spezial:Allpages]] kursiv  */
+ .allpagesredirect {
+     font-style: italic;
+ }
+ 
+ /* Druckeinstellungen */
+ /* ** Sidebar nicht drucken ** */
+ @media print {
+     .NavPic,
+     .NavFrame,
+     .NavToggle,
+     .NavToggleAll,
+     .NavToggleConfig,
+     .BoxenVerschmelzen {
+          display: none;
+     }
+     .printNav .NavFrame,
+     /* .,! nur bis #closedNavBar = .closedNavBar: */
+     .printNav .NavContent {
+          display: block !important;
+     }
+ }
+ /* ** Diclaimer etc. nicht drucken ** */
+ @media print {
+     #privacy,
+     #about,
+     #disclaimer,
+     #metadata,
+     #dablink {
+          display:none;
+     }
+ }
+ 
+ /* Hinweisboxen */
+ .messagebox {
+    border: 1px solid var(--border-color-base, #aaaaaa);
+    background-color: var(--background-color-neutral-subtle, #f9f9f9);
+    color: var(--color-base, #202122);
+	width: 80%;
+    margin: 0 auto 1em auto;
+    padding: .2em;
+    text-align: justify;
+}
+ 
+ /* Referenz-links */
+ ol.references {
+     font-size: 90%;
+ }
+ .references-small {
+     font-size: 90%;
+ }
+ .same-bg {
+     background: none;
+ }
+ol.references > li:target {
+    background-color: var(--background-color-progressive-subtle, #DEF);
+    color: var(--color-base, #202122);
+}
+sup.reference:target {
+    background-color: var(--background-color-progressive-subtle, #DEF);
+    color: var(--color-base, #202122);
+}
+ 
+ /* T156351: Support for Parsoid's Cite implementation */
+ a[ rel="mw:referencedBy" ]::before {
+     font-weight: bold;
+ }
+
+ /* Standardtabellen - doppelt siehe unten
+ .nogrid th,
+ .nogrid td {
+     border: none;
+ }
+ div.float-left, table.float-left, .float-left {
+     float: left;
+     clear: left;
+ }
+ div.float-right, table.float-right, .float-right {
+     float: right;
+     clear: right;
+     margin: 1em 0 1em 1em;
+ }
+ table.centered, .centered {
+     margin-left: auto;
+     margin-right: auto;
+ }
+ */
+
+ /* Vorformatierung für Textbausteine (von [[w:MediaWiki:Common.css]]) */
+.rahmenfarbe1 { /* Wie Inhaltsverzeichnis */
+	border: 1px solid var(--border-color-divider, #aaa);
+}
+.rahmenfarbe2 { /* Unauffällig, geringer Kontrast */
+	border: 1px solid var(--border-color-subtle, #e9e9e9);
+}
+.rahmenfarbe3 { /* "Rot", auffällig */
+	border: 1px solid var(--border-color-error, #c00000);
+}
+.rahmenfarbe4 { /* Neutrale Farbe, deutlich */
+	border: 1px solid var(--border-color-interactive, #88a);
+}
+.rahmenfarbe5 { /* "Schwarz", hoher Kontrast */
+	border: 1px solid var(--border-color-emphasized, #000);
+}
+
+tr.hintergrundfarbe-basis th,
+tr th.hintergrundfarbe-basis,
+table.hintergrundfarbe-basis,
+.hintergrundfarbe-basis { /* Wie Seitenhintergrund */
+	background-color: var(--hintergrundfarbe-basis);
+	color: var(--color-base, #202122); /* Passende Standard-Textfarbe */
+}
+
+tr.hintergrundfarbe1 th,
+tr th.hintergrundfarbe1,
+table.hintergrundfarbe1,
+.hintergrundfarbe1 { /* Wie Inhaltsverzeichnis / Neutral-subtil */
+	background-color: var(--hintergrundfarbe1);
+	color: var(--color-base, #202122); /* Passende Standard-Textfarbe */
+}
+
+tr.hintergrundfarbe2 th,
+tr th.hintergrundfarbe2,
+table.hintergrundfarbe2,
+.hintergrundfarbe2 { /* "Weiß" / Standard-Hintergrund */
+	background-color: var(--hintergrundfarbe2);
+	color: var(--color-base, #202122); /* Passende Standard-Textfarbe */
+}
+
+tr.hintergrundfarbe3 th,
+tr th.hintergrundfarbe3,
+table.hintergrundfarbe3,
+.hintergrundfarbe3 { /* "Gelb", auffällig / Warnung */
+	background-color: var(--hintergrundfarbe3);
+	color: var(--color-base, #202122); /* Passende Standard-Textfarbe */
+}
+
+tr.hintergrundfarbe4 th,
+tr th.hintergrundfarbe4,
+table.hintergrundfarbe4,
+.hintergrundfarbe4 { /* Sehr auffällig (Orange) */
+	background-color: var(--hintergrundfarbe4);
+	color: var(--color-base, #202122); /* Passende Standard-Textfarbe */
+}
+
+tr.hintergrundfarbe5 th,
+tr th.hintergrundfarbe5,
+table.hintergrundfarbe5,
+.hintergrundfarbe5 { /* Neutral, abgesetzt */
+	background-color: var(--hintergrundfarbe5);
+	color: var(--color-base, #202122); /* Passende Standard-Textfarbe */
+}
+
+tr.hintergrundfarbe6 th,
+tr th.hintergrundfarbe6,
+table.hintergrundfarbe6,
+.hintergrundfarbe6 { /* Blau/Violett */
+	background-color: var(--hintergrundfarbe6);
+	color: var(--color-base, #202122); /* Passende Standard-Textfarbe */
+}
+
+tr.hintergrundfarbe7 th,
+tr th.hintergrundfarbe7,
+table.hintergrundfarbe7,
+.hintergrundfarbe7 { /* Rosa/Rot */
+	background-color: var(--hintergrundfarbe7);
+	color: var(--color-base, #202122); /* Passende Standard-Textfarbe */
+}
+
+tr.hintergrundfarbe8 th,
+tr th.hintergrundfarbe8,
+table.hintergrundfarbe8,
+.hintergrundfarbe8 { /* Gelb/Orangegelb */
+	background-color: var(--hintergrundfarbe8);
+	color: var(--color-base, #202122); /* Passende Standard-Textfarbe */
+}
+
+tr.hintergrundfarbe9 th,
+tr th.hintergrundfarbe9,
+table.hintergrundfarbe9,
+.hintergrundfarbe9 { /* Grün */
+	background-color: var(--hintergrundfarbe9);
+	color: var(--color-base, #202122); /* Passende Standard-Textfarbe */
+}
+ 
+ /* Shortcutposition */
+ #Shortcut_oben_rechts {
+     display: inline;
+ }
+ #Shortcuts {
+     display: inline;
+     position: absolute;
+     z-index: 1;
+     border: none;
+     background: none;
+     right: 12px;
+     top: 0.3em;
+     float: right;
+     margin: 0.0em;
+     padding: 0.0em;
+     line-height: 1.5em;
+     text-align: right;
+     text-indent: 0;
+     font-size: 85%;
+     text-transform: none;
+     white-space: normal;
+ }
+ 
+ /* Icon für PDF-Dateien in Externlinks erzeugen (von [[w:en:MediaWiki:Common.css]]) */
+ /* ** Für diverse Browser wie Firefox, Opera ** */
+ #bodyContent a[href$=".pdf"].external, 
+ #bodyContent a[href*=".pdf?"].external, 
+ #bodyContent a[href*=".pdf#"].external,
+ #bodyContent a[href$=".PDF"].external, 
+ #bodyContent a[href*=".PDF?"].external, 
+ #bodyContent a[href*=".PDF#"].external {
+     background: url(//upload.wikimedia.org/wikipedia/commons/thumb/2/23/Icons-mini-file_acrobat.gif/15px-Icons-mini-file_acrobat.gif) center right no-repeat;
+     padding-right: 16px;
+ }
+ 
+ /* ** Für IE ** */
+ span.PDFlink a {
+     background: url(//upload.wikimedia.org/wikipedia/commons/thumb/2/23/Icons-mini-file_acrobat.gif/15px-Icons-mini-file_acrobat.gif) center right no-repeat !important;
+     padding-right: 17px !important;
+ }
+ 
+ /* font-Deklarationen für bestimmte Schriften mit Sonderzeichen */
+ span.spanAr { font-family: 'Arial Unicode MS', Code2000, 'MPH 2B Damase', 'DejaVu Sans', sans-serif; }
+ .ipa { font-family: 'DejaVu Sans', 'Doulos SIL', 'Lucida Sans Unicode', 'Chrysanthi Unicode', Gentium, GentiumAlt, Code2000, 'TITUS Cyberbit Basic', 'Bitstream Vera Sans', 'Bitstream Cyberbit', 'Hiragino Kaku Gothic Pro', 'Matrix Unicode', 'Lucida Grande', 'MV Boli', 'MS Mincho', Arial, sans-serif; }
+ .ipa2 { font-family: Gentium, Gentium Plus, GentiumAlt, DejaVu Sans, Segoe UI, Lucida Grande, Charis SIL, Doulos SIL, TITUS Cyberbit Basic, Code2000, Lucida Sans Unicode, sans-serif; }
+ .polytonic { font-family: 'Arial Unicode MS', Code2000, 'New Athena Unicode', 'Palatino Linotype', 'DejaVu Sans', Gentium, 'Athena Unicode', 'Lucida Sans Unicode'; }
+ 
+ /* Sichtungslink (effizienter) hervorheben */
+.mw-fr-reviewlink a:link {
+    color: var(--color-option-green, #006400);
+}
+ 
+ /* hinweis auf nutzungsbedingungen auffälliger und besser abgetrennt */
+.mw-tos-summary {
+    border: solid 1px var(--border-color-error, #c00000);
+    background-color: var(--background-color-base, #ffffff);
+    color: var(--color-base, #202122);
+    padding-left: 1em;
+    margin-top: 1em;
+}
+ 
+ /* Bei URLs, die auf unser Projekt und verwandte Projekte verweisen, den Pfeil ausblenden
+ * Dieser Pfeil dient nur dazu, auf externe Ziele hinzuweisen
+ * Auf den Einsatz der Klasse "plainlinks" kann dadurch verzichtet werden
+ * Quelltext kopiert von //de.wikipedia.org/wiki/MediaWiki:Common.css
+ * content durch mw-content-text ersetzt, wegen Kollision mit Sichtungsbox blue button is invisible
+ */
+#mw-content-text a[href*="//de.wiktionary.org"],
+#mw-content-text a[href*=".toolforge.org/"] {
+  background: none !important;
+  padding: 0 !important;
+}
+
+/* Für auffällige [[MediaWiki:Anoneditwarning]] */
+#mw-anon-edit-warning {
+    width: 80%;
+    background-color: var(--background-color-progressive-subtle, #d3e1f2);
+    color: var(--color-base, #202122);
+    border: 1px solid var(--border-color-progressive, #1a47ff);
+    margin: 1em auto;
+    padding: 1em;
+}
+
+
+/* Zebra-Tabellen ursprünglich (von [[w:MediaWiki:Common.css]]) */
+table.wikitable.zebra tr:nth-child(even) {
+	background-color: var(--background-color-base, #fff);
+	color: var(--color-base, #202122);
+}
+
+.nogrid th,
+.nogrid td {
+	border: none;
+}
+div.float-left,
+table.float-left,
+ul.float-left,
+.float-left {
+	clear: left;
+	float: left;
+	margin: 1em 1em 1em 0;
+}
+div.float-right,
+table.float-right,
+ul.float-right,
+.float-right {
+	clear: right;
+	float: right;
+	margin: .4em 0 .5em .4em !important; /* Flexionsbox soll nicht an Überschrift kleben */
+}
+div.centered,
+table.centered,
+ul.centered,
+.centered {
+	margin-left: auto;
+	margin-right: auto;
+}
+.toptextcells td {
+	vertical-align: top;
+}
+
+/* Begrenzung der im Inhaltsverzeichnis angezeigten Überschriften 
+   <div class="toclimit-3"> z. B. sorgt dafür, dass ==Überschriften== 
+   und ===Überschriften=== angezeigt werden [auch =Überschriften=, 
+   sofern vorhanden] aber keine Überschriften der Ebenen 4 oder 5 usw.
+   (von [[w:en:MediaWiki:Common.css]]) */
+ .toclimit-2 .toclevel-1 ul,
+ .toclimit-3 .toclevel-2 ul,
+ .toclimit-4 .toclevel-3 ul,
+ .toclimit-5 .toclevel-4 ul,
+ .toclimit-6 .toclevel-5 ul,
+ .toclimit-7 .toclevel-6 ul { display: none; }
+
+/* Keine Vergrößerung der Zeilenhöhe durch hochgestellte Zahlen der Fußnoten (von [[w:MediaWiki:Common.css]]) */
+
+sup.reference {
+	font-weight: 400;
+	font-style: normal;
+}
+sup,
+sub {
+	line-height: 1em;
+}
+
+/* Links in Flexionstabellen in normaler Textfarbe darstellen,
+   Selbstlinks nicht fett */
+.inflection-table a.new {
+	color: var(--color-base, #202122);
+}
+
+.inflection-table strong.selflink {
+	font-weight: normal;
+}
+
+/* Class zum Abschalten von Elementen in der Desktop-Ansicht; analog zu nomobile */
+.nodesktop {
+  display: none;
+}
+
+/* Textgröße aus Vorlage hierher wg. Desktop/Mobile Unterschied */
+.SieheAuchText { font-size: 12px; }
+/* Links in Vorlage:Siehe_auch fett darstellen */
+.SieheAuch a {
+	font-size: 12px;
+	font-weight: bold;
+}
+
+
+ /***** Teileinträge besser abgrenzen (Stil 1) *****/
+.ns-0 #mw-content-text .mw-heading2,
+.ns-0 #mw-content-text h2 {
+   clear: none;
+   border-top: solid 1px #aaaaaa;
+   border-bottom: solid 1px #aaaaaa;
+   padding: 0.5em 0.5em 0.5em 0.0em;
+   background-color: #DAEAFA;
+   color: #202122;
+   margin-top: 1.0em;
+   margin-bottom: 0.0em;  /* alt -0.1em wg neuem HTML-Layout geändert */
+}
+
+.ns-0 #mw-content-text .mw-heading2 h2 {
+   clear: none;
+   border-top: none;
+   border-bottom: none;
+}
+
+.ns-0 #mw-content-text .mw-heading3,
+.ns-0 #mw-content-text h3 {
+   clear: both;
+   padding-left: 0.0em;
+   background-color: #EAF3FC;
+   color: #202122;
+   border-top: solid 1px #aaaaaa;
+   border-bottom: dotted 1px #aaaaaa;
+}
+
+/* Für neues HTML-Llayout bei monobook, ohne die anderen Skins zu zerstören */
+.ns-0 #mw-content-text .mw-heading3 h3 {
+   border-top: none;
+   border-bottom: none;
+}
+
+.ns-0 #mw-content-text .mw-heading4,
+.ns-0 #mw-content-text h4 {
+   clear: both;
+}
+
+
+ /* Inhaltsverzeichnis korrigieren */
+.ns-0 #toc .mw-heading2,
+.ns-0 #toc h2 {
+   background: transparent;
+   color: inherit;
+   border: none;
+   padding: 0;
+   font-size: 100%;
+   font-weight: bold;
+}
+
+/* 2. Dunkel-Modus (Exakte Überschreibung für Vector 2022 / Dark Mode) */
+html.skin-theme-clientpref-night .ns-0 #mw-content-text .mw-heading2,
+html.skin-theme-clientpref-night .ns-0 #mw-content-text h2 {
+   background-color: #202d3d !important; /* Angenehmes Dunkelblau */
+   color: #eaecf0 !important;
+   border-top-color: #36495f !important;
+   border-bottom-color: #36495f !important;
+}
+
+html.skin-theme-clientpref-night .ns-0 #mw-content-text .mw-heading3,
+html.skin-theme-clientpref-night .ns-0 #mw-content-text h3 {
+   background-color: #1c2530 !important; /* Etwas dunkleres Blau */
+   color: #eaecf0 !important;
+   border-top-color: #36495f !important;
+   border-bottom-color: #36495f !important;
+}
+
+/* 3. Dunkel-Modus via System-Einstellung (OS-Pref) */
+@media (prefers-color-scheme: dark) {
+   html.skin-theme-clientpref-os .ns-0 #mw-content-text .mw-heading2,
+   html.skin-theme-clientpref-os .ns-0 #mw-content-text h2 {
+      background-color: #202d3d !important;
+      color: #eaecf0 !important;
+      border-top-color: #36495f !important;
+      border-bottom-color: #36495f !important;
+   }
+
+   html.skin-theme-clientpref-os .ns-0 #mw-content-text .mw-heading3,
+   html.skin-theme-clientpref-os .ns-0 #mw-content-text h3 {
+      background-color: #1c2530 !important;
+      color: #eaecf0 !important;
+      border-top-color: #36495f !important;
+      border-bottom-color: #36495f !important;
+   }
+}
+
+/* allow inline hieroglyphs */
+.mw-hiero-outer {
+	display: inline-table;
+	vertical-align: middle;
+	font-size: 11px;
+}
+
+/* Kennzeichnung veralteter Vorlagen, vgl. [[Vorlage:veraltete Vorlage]] */
+.veralteteVorlage {
+    border: 1px dashed var(--border-color-error, red);
+    padding: 1px;
+}
+
+
+/* Im Namensraum 106 = "Reim" die im Kategoriebereich enthaltenen
+** roten Links zu sprachübergreifenden Reimkategorien nicht anzeigen.
+** Siehe: [[Spezial:Permanentlink/8258666#Rotlinks_oder_Kategorien_mit_nur_einer_Seite?]]
+*/
+.ns-106 #mw-normal-catlinks a[href*="Kategorie:Reim_-"].new {
+  display: none; 	
+}
+
+
+/* Im Namensraum 106 = "Reim" die nach der Level-3-Überschrift = <h3>
+** folgenden Listelemente automatisch in mehreren Spalten anzeigen
+** nicht in den Menüs, deshalb Beschränkung auf mw-content-text
+*/
+.ns-106 #mw-content-text .mw-heading3 ~ ul,
+.ns-106 #mw-content-text h3 ~ ul {
+  column-width: 11em; 	
+}
+
+
+/* Sorgt zusammen mit der Vorlage:AutoColumns dafür, dass die der Vorlage
+** folgenden Listelemente automatisch in mehreren Spalten angezeigt werden.
+** Nicht in den Menüs, deshalb Beschränkung auf mw-content-text.
+** Die Zeile mit section ist für Parsoid
+*/
+#mw-content-text .li-auto-columnsXS ~ ul,
+#mw-content-text .li-auto-columnsXS ~ section ul {
+  column-width: 11em;
+  word-wrap: break-word;
+}
+#mw-content-text .li-auto-columnsS ~ ul,
+#mw-content-text .li-auto-columnsS ~ section ul {
+  column-width: 13em;
+  word-wrap: break-word;
+}
+#mw-content-text .li-auto-columnsM ~ ul,
+#mw-content-text .li-auto-columnsM ~ section ul {
+  column-width: 15em;
+  word-wrap: break-word;
+}
+#mw-content-text .li-auto-columnsL ~ ul,
+#mw-content-text .li-auto-columnsL ~ section ul {
+  column-width: 19em;
+  word-wrap: break-word;
+}
+#mw-content-text .li-auto-columnsXL ~ ul,
+#mw-content-text .li-auto-columnsXL ~ section ul {
+  column-width: 23em;
+  word-wrap: break-word;
+}
+
+/* Ü-Tabelle, bei nur einer Spalte listelement 1 nicht anzeigen */
+.uetabli1 {
+  display: none;
+}
+
+/* Ü-Tabelle automatisch in zwei Spalten aufteilen */
+@media (min-width: 768px) {
+  .uetab ~ ul {
+    column-gap: 2em;
+    column-count: 2;
+  }
+
+  /* Innerhalb einer geschachtelten Übersetzung einen Spaltenumbruch vermeiden */
+  .uetab ~ ul > li {
+    break-inside: avoid;  /* Chrome, Edge */
+    -webkit-column-break-inside: avoid;  /* webkit-Browser */
+    page-break-inside: avoid;  /* Firefox */
+  }
+
+  /* Bei nur einer Übersetzung Spaltung aufheben (nur eine Zeile über alle Spalten) */
+  .uetab ~ ul > li:only-of-type {
+    column-span: all;
+  }
+
+  /* Bei mehreren Spalten listelement 1 anzeigen */
+  .uetabli1 {
+    display: initial;
+  }
+}
+
+/* Übersetzungseditor: Bullet für Listen aus optischen Gründen abschalten */
+ul.uluetab {
+  list-style-type: none !important;
+  list-style-image: none !important;
+}
+
+/* Abstand rechts vom Eingabefeld/Checkbox, damit der folgende Text nicht direkt daran klebt */
+input {
+  margin-right: 3px;
+}
+
+/* disable sidebar-link to multi-language wikisource (mehrsprachige Wikisource) */
+.wb-otherproject-sources {
+  display:none
+}
+
+/* Schamlos kopiert aus: de.wikipedia.org/wiki/Vorlage:Tabellenstile/styles.css */
+
+/* tabelle-zeile-aktiv */
+table.wikitable.tabelle-zeile-aktiv tr:hover td,
+table.wikitable.mw-datatable tr:hover td {
+    background-color: #eaf3ff;
+}
+@media screen {
+	html.skin-theme-clientpref-night .ns-0 #mw-content-text .mw-heading2 ,
+	html.skin-theme-clientpref-night .ns-0 #mw-content-text h2,		
+	html.skin-theme-clientpref-night .ns-0 #mw-content-text .mw-heading3 ,
+	html.skin-theme-clientpref-night .ns-0 #mw-content-text h3 {
+		background-color: inherit;
+	}
+	html.skin-theme-clientpref-night  table.wikitable.tabelle-zeile-aktiv tr:hover td,
+	html.skin-theme-clientpref-night table.wikitable.mw-datatable tr:hover td {
+	    background-color: #404142;
+	    color: var(--color-base, #eaecf0);
+	}
+}
+@media screen and (prefers-color-scheme: dark) {
+	html.skin-theme-clientpref-os .ns-0 #mw-content-text .mw-heading2 ,
+	html.skin-theme-clientpref-os .ns-0 #mw-content-text h2,
+	html.skin-theme-clientpref-os .ns-0 #mw-content-text .mw-heading3 ,
+	html.skin-theme-clientpref-os .ns-0 #mw-content-text h3 {
+		background-color: inherit;
+	}
+	html.skin-theme-clientpref-os table.wikitable.tabelle-zeile-aktiv tr:hover td,
+	html.skin-theme-clientpref-os table.wikitable.mw-datatable tr:hover td {
+    	background-color: #404142;
+	    color: var(--color-base, #eaecf0);
+	}
+}
+
+/* tabelle-kopf-fixiert */
+@media screen and (min-width: 721px) {
+	table.wikitable.tabelle-kopf-fixiert th,
+	table.wikitable.tabelle-kopf-fixiert tr.tabelle-zaehler-kopf::before {
+		position: sticky;
+		top: 0;
+		z-index: 12;
+	}
+	table.wikitable.tabelle-kopf-fixiert {
+		border-collapse: separate;
+		border-spacing: 0;
+		border-bottom-style: none;
+		border-left-style: none;
+	}
+	table.wikitable.tabelle-kopf-fixiert th,
+	table.wikitable.tabelle-kopf-fixiert td {
+		border-right-style: none;
+		border-top-style: none;
+	}
+}
+@media screen and (min-width: 1000px) {
+	html.client-js.vector-sticky-header-enabled table.wikitable.tabelle-kopf-fixiert th,
+	html.client-js.vector-sticky-header-enabled table.wikitable.tabelle-kopf-fixiert tr.tabelle-zaehler-kopf::before {
+		top: 3.125rem;
+	}
+}
+
+/* tabelle-zaehler */
+table.wikitable.tabelle-zaehler {
+	counter-reset: tabZaehler;
+}
+table.wikitable.tabelle-zaehler tr::before {
+	display: table-cell;
+	padding-right: 0.5em;
+	padding-left: 0.5em;
+	text-align: right;
+	vertical-align: inherit;
+	background-color: var(--hintergrundfarbe5);
+	content: "";
+}
+table.wikitable.tabelle-zaehler:not(.tabelle-kopf-fixiert) tr:not(.tabelle-zaehler-kein)::before {
+	border-top: 1px solid var(--border-color-divider, #a2a9b1);
+}
+table.wikitable.tabelle-zaehler.tabelle-kopf-fixiert tr:not(.tabelle-zaehler-kein)::before {
+	border-left: 1px solid var(--border-color-divider, #a2a9b1);
+	border-bottom: 1px solid var(--border-color-divider, #a2a9b1);
+}
+table.wikitable.tabelle-zaehler:not(.sortable) tbody tr:not(:first-child):not(.tabelle-zaehler-auslassen):not(.tabelle-zaehler-kein),
+table.wikitable.tabelle-zaehler.sortable tbody tr:not(.tabelle-zaehler-auslassen):not(.tabelle-zaehler-kein) {
+	counter-increment: tabZaehler;
+}
+table.wikitable.tabelle-zaehler:not(.sortable) tbody tr:not(:first-child):not(.tabelle-zaehler-versteckt):not(.tabelle-zaehler-kein)::before,
+table.wikitable.tabelle-zaehler.sortable tbody tr:not(.tabelle-zaehler-versteckt):not(.tabelle-zaehler-kein)::before {
+	content: attr(data-zaehler-vor) counter(tabZaehler) attr(data-zaehler-nach);
+}
+table.wikitable.tabelle-zaehler:not(.sortable) tbody tr:first-child::before,
+table.wikitable.tabelle-zaehler.sortable thead tr:first-child::before {
+	font-weight: bold;
+	content: attr(data-zaehler-spalte);
+}
+table.wikitable.tabelle-zaehler tr.hintergrundfarbe-basis::before {
+	background-color: var(--hintergrundfarbe-basis);
+}
+table.wikitable.tabelle-zaehler tr.hintergrundfarbe1::before {
+	background-color: var(--hintergrundfarbe1);
+}
+table.wikitable.tabelle-zaehler tr.hintergrundfarbe2::before {
+	background-color: var(--hintergrundfarbe2);
+}
+table.wikitable.tabelle-zaehler tr.hintergrundfarbe3::before {
+	background-color: var(--hintergrundfarbe3);
+}
+table.wikitable.tabelle-zaehler tr.hintergrundfarbe4::before {
+	background-color: var(--hintergrundfarbe4);
+}
+table.wikitable.tabelle-zaehler tr.hintergrundfarbe6::before {
+	background-color: var(--hintergrundfarbe6);
+}
+table.wikitable.tabelle-zaehler tr.hintergrundfarbe7::before {
+	background-color: var(--hintergrundfarbe7);
+}
+table.wikitable.tabelle-zaehler tr.hintergrundfarbe8::before {
+	background-color: var(--hintergrundfarbe8);
+}
+table.wikitable.tabelle-zaehler tr.hintergrundfarbe9::before {
+	background-color: var(--hintergrundfarbe9);
+}
+
+/* prettytable - Dark Mode ready */
+.prettytable {
+	background-color: var(--background-color-interactive-subtle, #f8f9fa);
+	border: 1px solid var(--border-color-base, #a2a9b1);
+	border-collapse: collapse;
+	color: var(--color-base, inherit);
+	margin: 1em 0;
+}
+table.prettytable > * > tr > th,
+table.prettytable > * > tr > td {
+	border: 1px solid var(--border-color-base, #a2a9b1);
+	padding: .2em .4em;
+}
+table.prettytable > * > tr > th {
+	text-align: center;
+}
+table.prettytable > caption {
+	font-weight: bold;
+}
+
+/* Faebdefinition für Inputboxen an mehreren Stelle - ANFANG */
+/* z. B. auf [[Wiktionary:Literaturliste]] u. a.             */
+/* Historischer hellblauer Hintergrund im Hellmodus          */
+.custom-blue-inputbox .mw-inputbox-form,
+.custom-blue-inputbox form {
+	background-color: lightblue !important;
+	padding: 10px;
+}
+
+/* Textfeld behält die Farben des jeweiligen Farbschemas */
+.custom-blue-inputbox input.mw-searchInput {
+	background-color: var(--background-color-base, #fff) !important;
+	color: var(--color-base, #202122) !important;
+}
+
+/* Erzwungener Dunkelmodus */
+@media screen {
+	html.skin-theme-clientpref-night .custom-blue-inputbox .mw-inputbox-form,
+	html.skin-theme-clientpref-night .custom-blue-inputbox form {
+		background-color: var(--background-color-progressive-subtle, #1b223d) !important;
+	}
+}
+
+/* Automatischer Dunkelmodus entsprechend der Betriebssystemeinstellung */
+@media screen and (prefers-color-scheme: dark) {
+	html.skin-theme-clientpref-os .custom-blue-inputbox .mw-inputbox-form,
+	html.skin-theme-clientpref-os .custom-blue-inputbox form {
+		background-color: var(--background-color-progressive-subtle, #1b223d) !important;
+	}
+}
+/* Faebdefinition für Inputboxen an mehreren Stelle - ENDE   */
+
+/* Dunkel-Farbdefinition für [[Vorlage:Babel field]] aus WP abgekupfert - ANFANG */
+/* Erzwungener Dunkelmodus */
+@media screen {
+	html.skin-theme-clientpref-night .darkmode-hintergrundfarbe-basis:not(.notheme .darkmode-hintergrundfarbe-basis) {
+		background-color: var(--hintergrundfarbe-basis) !important;
+		color: var(--color-base) !important;
+	}
+	html.skin-theme-clientpref-night .darkmode-hintergrundfarbe-passiv:not(.notheme .darkmode-hintergrundfarbe-passiv) {
+		background-color: var(--hintergrundfarbe1) !important;
+		color: var(--color-base) !important;
+	}
+	html.skin-theme-clientpref-night .darkmode-hintergrundfarbe-neutral:not(.notheme .darkmode-hintergrundfarbe-neutral) {
+		background-color: var(--hintergrundfarbe5) !important;
+		color: var(--color-base) !important;
+	}
+}
+
+/* Automatischer Dunkelmodus entsprechend der Betriebssystemeinstellung */
+@media screen and (prefers-color-scheme: dark) {
+	html.skin-theme-clientpref-os .darkmode-hintergrundfarbe-basis:not(.notheme .darkmode-hintergrundfarbe-basis) {
+		background-color: var(--hintergrundfarbe-basis) !important;
+		color: var(--color-base) !important;
+	}
+	html.skin-theme-clientpref-os .darkmode-hintergrundfarbe-passiv:not(.notheme .darkmode-hintergrundfarbe-passiv) {
+		background-color: var(--hintergrundfarbe1) !important;
+		color: var(--color-base) !important;
+	}
+	html.skin-theme-clientpref-os .darkmode-hintergrundfarbe-neutral:not(.notheme .darkmode-hintergrundfarbe-neutral) {
+		background-color: var(--hintergrundfarbe5) !important;
+		color: var(--color-base) !important;
+	}
+}
+/* Dunkel-Farbdefinition für [[Vorlage:Babel field]] aus WP abgekupfert - ENDE   */
+
+/* tabellenzeile-neutral ANFANG                                               */
+/* Für Vorlagen mit wenigen Einbindungen und die nur ein bgcolor="#F4F4F4" o. */
+/* background-color: #F4F4F4 für eine oder mehrere Tabellenzeile enthalten    */ 
+/* Für solche Vorlagen ist ein eigenes styles.css nur dafür nicht angebracht  */
+
+.tabellenzeile-neutral {
+	background-color: #f4f4f4;
+	color: #000;
+}
+
+/* Erzwungener Dunkelmodus */
+@media screen {
+	html.skin-theme-clientpref-night .tabellenzeile-neutral {
+		background-color: var(--background-color-neutral-subtle, #202122);
+		color: var(--color-base, #eaecf0);
+	}
+}
+
+/* Automatischer Dunkelmodus entsprechend der Betriebssystemeinstellung */
+@media screen and (prefers-color-scheme: dark) {
+	html.skin-theme-clientpref-os .tabellenzeile-neutral {
+		background-color: var(--background-color-neutral-subtle, #202122);
+		color: var(--color-base, #eaecf0);
+	}
+}
+/* tabellenzeile-neutral ENDE                                                 */

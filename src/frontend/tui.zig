@@ -101,6 +101,10 @@ const State = struct {
     loaded: ?usize = null,
     text: []const u8 = &.{},
     rows: []term.RenderRow = &.{},
+    visual_text: []const u8 = &.{},
+    row_origins: []output.FlowOrigin = &.{},
+    flow_events: std.ArrayList(output.FlowEvent) = .empty,
+    float_unsupported: usize = 0,
     poem_lines: std.ArrayList(term.PoemLine) = .empty,
     wrap_width: usize = 0,
     format_width: usize = 0,
@@ -117,6 +121,9 @@ const State = struct {
         self.section_indices.deinit(self.a);
         self.poem_lines.deinit(self.a);
         self.a.free(self.rows);
+        self.a.free(self.visual_text);
+        self.a.free(self.row_origins);
+        self.flow_events.deinit(self.a);
         self.a.free(self.text);
     }
     fn count(self: State) usize {
@@ -680,7 +687,9 @@ const State = struct {
             defer formatted.deinit();
             var poem_lines: std.ArrayList(term.PoemLine) = .empty;
             defer poem_lines.deinit(self.a);
-            var projection: output.PoemProjection = .{ .frame = &formatted, .allocator = self.a, .lines = &poem_lines, .table_columns = width };
+            var float_flow: output.FloatProjection = .{ .allocator = self.a, .frame = &formatted, .columns = width };
+            defer float_flow.events.deinit(self.a);
+            var projection: output.PoemProjection = .{ .frame = &formatted, .allocator = self.a, .lines = &poem_lines, .table_columns = width, .float_flow = &float_flow };
             if (index) |i| {
                 var source_record = try self.db.recordAlloc(self.a, i);
                 defer source_record.deinit();
@@ -754,25 +763,50 @@ const State = struct {
             };
             self.a.free(self.rows);
             self.rows = &.{};
+            self.a.free(self.visual_text);
+            self.visual_text = &.{};
+            self.a.free(self.row_origins);
+            self.row_origins = &.{};
             self.a.free(self.text);
             self.text = text;
             self.poem_lines.deinit(self.a);
             self.poem_lines = poem_lines;
             poem_lines = .empty;
+            self.flow_events.deinit(self.a);
+            self.flow_events = float_flow.events;
+            float_flow.events = .empty;
             self.loaded = index;
             self.format_width = width;
             self.wrap_width = 0;
             self.scroll = if (preserve_scroll) previous_scroll else 0;
         }
         if (self.wrap_width != width) {
-            const rows = try term.wrapStyledProjected(self.a, self.text, width, self.poem_lines.items);
-            self.a.free(self.rows);
-            self.rows = rows;
+            if (self.flow_events.items.len != 0) {
+                const layout = try output.floatLayoutAlloc(self.a, self.text, width, self.poem_lines.items, self.flow_events.items, self.color);
+                self.a.free(self.rows);
+                self.a.free(self.visual_text);
+                self.a.free(self.row_origins);
+                self.rows = layout.rows;
+                self.visual_text = layout.text;
+                self.row_origins = layout.origins;
+                self.float_unsupported = layout.unsupported;
+            } else {
+                const rows = try term.wrapStyledProjected(self.a, self.text, width, self.poem_lines.items);
+                self.a.free(self.rows);
+                self.a.free(self.visual_text);
+                self.visual_text = &.{};
+                self.a.free(self.row_origins);
+                self.row_origins = &.{};
+                self.float_unsupported = 0;
+                self.rows = rows;
+            }
             self.wrap_width = width;
         }
         self.scroll = @min(self.scroll, self.rows.len -| self.bodyHeight());
         if (self.jump_section) {
-            for (self.rows, 0..) |row, i| {
+            if (self.row_origins.len != 0) {
+                self.scroll = @min(output.flowRowForOffset(self.row_origins, self.section_offset), self.rows.len -| self.bodyHeight());
+            } else for (self.rows, 0..) |row, i| {
                 const offset = @intFromPtr(row.bytes.ptr) - @intFromPtr(self.text.ptr);
                 if (offset > self.section_offset) break;
                 self.scroll = @min(i, self.rows.len -| self.bodyHeight());
@@ -1562,4 +1596,95 @@ test "query viewport measures escaped controls while retaining raw clusters" {
     defer a.free(middle.text);
     try std.testing.expectEqualStrings("a\\u{9b}b", middle.text);
     try std.testing.expectEqual(@as(usize, 7), middle.caret_cells);
+}
+
+
+test "terminal cross section float preserves actual section jumps resize folds record and media routes" {
+    const a = std.testing.allocator;
+    const types = enc.presentation_types;
+    const rows = [_]types.Row{
+        .{ .cells = &.{.{ .spans = &.{.{ .text = "FLOAT_A" }} }} },
+        .{ .cells = &.{.{ .spans = &.{.{ .text = "FLOAT_B" }} }} },
+        .{ .cells = &.{.{ .spans = &.{.{ .text = "FLOAT_C" }} }} },
+        .{ .cells = &.{.{ .spans = &.{.{ .text = "FLOAT_D" }} }} },
+        .{ .cells = &.{.{ .spans = &.{.{ .text = "FLOAT_E" }} }} },
+        .{ .cells = &.{.{ .spans = &.{.{ .text = "FLOAT_F" }} }} },
+        .{ .cells = &.{.{ .spans = &.{.{ .text = "FLOAT_G" }} }} },
+        .{ .cells = &.{.{ .spans = &.{.{ .text = "FLOAT_H" }} }} },
+    };
+    const sections = [_]model.Section{
+        .{ .level = 2, .title = "Poloniera", .blocks = &.{.{ .kind = .table, .table = .{
+            .rows = &rows, .geometry = .{ .width = .{ .unit = .px, .value = 250 } },
+            .style = .{ .float_side = .right, .margins = .{ .top = .{ .unit = .px, .value = 0 }, .right = .{ .unit = .px, .value = 0 }, .bottom = .{ .unit = .px, .value = 0 }, .left = .{ .unit = .px, .value = 20 } } },
+        } }} },
+        .{ .level = 3, .title = "Ahoskera", .blocks = &.{
+            .{ .kind = .list_item, .depth = 2, .list_path = ":*", .spans = &.{.{ .text = "AHO_A" }} },
+            .{ .kind = .list_item, .depth = 2, .list_path = ":*", .spans = &.{.{ .text = "AHO_B" }} },
+        } },
+        .{ .level = 3, .title = "Adjektiboa", .blocks = &.{
+            .{ .kind = .indent, .depth = 1, .list_path = ":", .spans = &.{.{ .text = "ADJ_I" }} },
+            .{ .kind = .list_item, .depth = 2, .list_path = ":#", .spans = &.{.{ .text = "ADJ_L" }} },
+        } },
+    };
+    // Synthetic source-derived shape, not the pending genuine E Reader artifact.
+    const payload = try enc.presentation_codec.encodeAlloc(a, .{ .entry = .{ .title = "dwa", .kind = .language, .language = "poloniera", .language_code = "pl", .sections = &sections, .media = &.{.{ .file = "Icon.svg", .kind = .image, .caption = "" }} } });
+    defer a.free(payload);
+    const other = try enc.presentation_codec.encodeAlloc(a, .{ .entry = .{ .title = "another", .kind = .language, .language = "poloniera", .language_code = "pl", .sections = &.{.{ .level = 2, .title = "Other", .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "OTHER_RECORD" }} }} }} } });
+    defer a.free(other);
+    const metadata = try enc.blob_format.buildLanguageMetadataAlloc(a, "pl", "poloniera");
+    defer a.free(metadata);
+    const bytes = try enc.blob_format.buildAlloc(a, .language, metadata, &.{ .{ .title = "another", .payload = other }, .{ .title = "dwa", .payload = payload } });
+    defer a.free(bytes);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const path = try std.fmt.allocPrint(a, "{s}/sample", .{root});
+    defer a.free(path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = bytes });
+    var db: store.Store = .{ .file = try @import("blob_storage").File.open(std.testing.io, a, path), .allocator = a };
+    defer db.file.deinit();
+    var reading = ReadingState.init(a);
+    defer reading.deinit();
+    try reading.load(std.testing.io, root, "poloniera");
+    reading.data.history_limit = 0;
+    reading.data.allow_images = false;
+    var state: State = .{ .io = std.testing.io, .a = a, .db = &db, .reading = &reading, .label = "poloniera", .theme = .terminal, .color = true, .details = true, .screen = .{ .cols = 56, .rows = 20 } };
+    defer state.deinit();
+    try state.changed();
+    state.selected = (try db.find("dwa")).?;
+    state.focus = .entry;
+    try state.prepare(52);
+    try std.testing.expect(state.row_origins.len != 0 and state.visual_text.len != 0);
+    try std.testing.expectEqual(@as(usize, 0), state.float_unsupported);
+    _ = try state.key(.{ .key = .text, .bytes = .{ ']', 0, 0, 0 }, .len = 1 });
+    try state.prepare(52);
+    try std.testing.expectEqual(@as(usize, 1), state.section);
+    const expected_row = output.flowRowForOffset(state.row_origins, state.section_offset);
+    try std.testing.expectEqual(@min(expected_row, state.rows.len -| state.bodyHeight()), state.scroll);
+    try std.testing.expect(std.mem.indexOf(u8, state.rows[expected_row].bytes, "Ahoskera") != null);
+    state.scroll = 2;
+    state.screen.cols = 40;
+    try state.prepare(36);
+    try std.testing.expectEqual(@as(usize, 1), state.float_unsupported);
+    try std.testing.expectEqual(@min(@as(usize, 2), state.rows.len -| state.bodyHeight()), state.scroll);
+    state.screen.cols = 56;
+    try state.prepare(52);
+    try std.testing.expectEqual(@as(usize, 0), state.float_unsupported);
+    state.section = 0;
+    _ = try state.key(.{ .key = .text, .bytes = .{ 'e', 0, 0, 0 }, .len = 1 });
+    try state.prepare(52);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "FLOAT_A") == null);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "[+]") != null);
+    try std.testing.expectEqual(@as(usize, 0), reading.data.history.len);
+    _ = try state.key(.{ .key = .text, .bytes = .{ 'm', 0, 0, 0 }, .len = 1 });
+    try std.testing.expectEqual(@as(usize, 1), state.media_index);
+    try std.testing.expectEqualStrings("Enable online images/audio in Settings first.", state.notice);
+    state.focus = .matches;
+    _ = try state.key(.{ .key = .up });
+    _ = try state.key(.{ .key = .enter });
+    try state.prepare(52);
+    try std.testing.expectEqualStrings("another", try db.titleAt(state.recordIndex(state.selected)));
+    try std.testing.expect(state.visual_text.len == 0 and state.row_origins.len == 0);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "OTHER_RECORD") != null);
 }

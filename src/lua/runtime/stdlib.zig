@@ -474,15 +474,15 @@ fn basePcall(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffe
         const out = try rt.returnBuffer(result_buffer, 2);
         errdefer if (result_buffer == null) rt.freeResults(out);
         const error_value = try protectedErrorValue(ctx, err);
-        // Engine supplies root_profile only for WIKIDICT_EXPANSION_PROFILE=1.
-        // Preserve caught values and returns; the existing writer bounds diagnostics to 4096 bytes.
+        // The engine's persistent profile counts every caught event, while
+        // retaining only bounded owned examples across page allocator resets.
         if (rt.work_stats.current()) |work| {
-            if (work.root_profile != null) {
+            if (work.root_profile) |profile| {
                 const detail = switch (error_value) {
                     .string => |value| value,
                     else => "",
                 };
-                rt.work_stats.logLine("protected Lua call failed: error={s} value_kind={s} detail={s}\n", .{ @errorName(err), @tagName(error_value), detail });
+                profile.protected_calls.note(err, @tagName(error_value), detail);
             }
         }
         rt.storeReturn(out, 0, .{ .boolean = false });
@@ -531,6 +531,62 @@ test "protected module loading preserves failure payload and package override" {
     try std.testing.expect(overridden[0].boolean);
     try std.testing.expectEqualStrings("override", overridden[1].string);
 }
+test "protected call profile survives page scopes without changing Lua results" {
+    const Probe = struct {
+        fn raise(_: ?*anyopaque, ctx: *rt.Context, args: []const Value) ![]const Value {
+            ctx.setLuaError(args[0]);
+            return error.LuaRaised;
+        }
+        fn succeed(_: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const Value {
+            return &.{};
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), global_abi.count);
+    defer ctx.deinit();
+    const fail = try ctx.newNative(null, Probe.raise);
+    const success = try ctx.newNative(null, Probe.succeed);
+    const table = try ctx.newTable();
+    var profile = try rt.work_stats.RootProfile.init(std.testing.allocator, 0);
+    defer profile.deinit();
+    var out: [2]Value = undefined;
+    const saved: Value = .{ .string = "outer error" };
+    ctx.setLuaError(saved);
+
+    for (0..2) |_| {
+        var page: rt.work_stats.Page = .{ .root_profile = &profile };
+        const prior = rt.work_stats.begin(&page);
+        defer rt.work_stats.end(prior);
+        for ([_]Value{ .{ .string = "TableExpected" }, .{ .table = table }, .nil }) |value| {
+            const result = try basePcall(null, &ctx, &.{ fail, value }, &out);
+            try std.testing.expectEqual(@as(usize, 2), result.len);
+            try std.testing.expect(!result[0].boolean);
+            try std.testing.expectEqual(std.meta.activeTag(value), std.meta.activeTag(result[1]));
+            switch (value) {
+                .string => |text| try std.testing.expectEqualStrings(text, result[1].string),
+                .table => |ptr| try std.testing.expectEqual(ptr, result[1].table),
+                .nil => {},
+                else => unreachable,
+            }
+            try std.testing.expect(ctx.last_error_present);
+            try std.testing.expectEqualStrings(saved.string, ctx.last_error.string);
+        }
+        const ok = try basePcall(null, &ctx, &.{success}, &out);
+        try std.testing.expect(ok[0].boolean);
+        try std.testing.expectError(error.MissingArgument, basePcall(null, &ctx, &.{}, &out));
+    }
+    try std.testing.expectEqual(@as(u64, 6), profile.protected_calls.total);
+    try std.testing.expectEqual(@as(u64, 6), profile.protected_calls.tracked);
+    try std.testing.expectEqual(@as(u64, 0), profile.protected_calls.untracked);
+    try std.testing.expectEqual(@as(usize, 3), profile.protected_calls.len);
+    // Profiling-disabled calls keep their ordinary values without changing a
+    // previous worker's counters or requiring profile allocation.
+    const result = try basePcall(null, &ctx, &.{ fail, .{ .string = "disabled" } }, &out);
+    try std.testing.expectEqualStrings("disabled", result[1].string);
+    try std.testing.expectEqual(@as(u64, 6), profile.protected_calls.total);
+}
+
 test "CPU quota bypasses pcall and xpcall without invoking an error handler" {
     const Probe = struct {
         var now: u64 = 0;

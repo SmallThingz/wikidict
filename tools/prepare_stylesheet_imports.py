@@ -267,9 +267,126 @@ def capture(root, root_css, root_authority, transport=None, wall_seconds=25):
         raise
 
 
+# Explicit offline source derivation, separate from the PT HTTP observation.
+# These fixed pins encode the reviewed selected-property closure. They are not
+# caller assertions of arbitrary range completeness or a claim of skin parity.
+CORE_SCHEMA = 'wikidict.core-default-styles.v1'
+CORE_REVISION = '79b81ba96674efc8a803fc956bc501d347d440d2'
+CORE_POLICY = 'mediawiki-79b81-elements-literal-alignment-v1'
+CORE_RAW_SHA = 'c750bb9f3cfdf543d287ce2a45f87150b8ca35e1fe0944e0636c11a7bcc583bb'
+CORE_NORMALIZED_SHA = '62c5d7bdbe3a9df80b178f5346075ac2e1265fbec423859166be439f509ada86'
+CORE_NAMESPACE_SHA = 'c27eaadbf67364c9eef4848466df97c439fcf36e780f7e47d795a359222e7641'
+CORE_RANGE = {'source_index': 0, 'start': 4824, 'end': 4927,
+              'sha256': '1bfe9721e23c539bf6a8c1312f447178cc0c90799f2888578af30313331497ea'}
+CORE_SOURCES = (
+    ('mediawiki-79b81-elements.less', 'resources/src/mediawiki.skinning/elements.less', 5025, '91b3adb124ea39ea8d3c0f4b4ccabe0b4b407c92a5d4eca495e9f022ed44bb94'),
+    ('mediawiki.mixins.less', 'resources/src/mediawiki.less/mediawiki.mixins.less', 7459, '3dc08902d9913935a32d341648ad08e856a723efea8f6706733fbd2daacea19a'),
+    ('mediawiki.skin.variables.less', 'resources/src/mediawiki.less/mediawiki.skin.variables.less', 206, 'a7e87080020f19b64470e7a61b9aa8267dcc0f74ca6a7fa714ea1bbb4a0ea32f'),
+    ('mediawiki.skin.defaults.less', 'resources/src/mediawiki.less/mediawiki.skin.defaults.less', 19027, '412516b776272f977dd5c54456a4782599b3668ed9bdd2d15ececd0ba119b8a6'),
+)
+CORE_TEMPORAL_SCOPE = 'Offline reviewed core source derivation from version observed 2026-10-06; not historical dump-date deployment or skin equivalence'
+
+
+def core_snapshot(css, root_authority, siteinfo_raw, siteinfo_normalized, namespace, sources):
+    auth = evidence.decode(root_authority)
+    if 'table_styles' in auth:
+        auth = auth['table_styles']['authority']
+    if (not isinstance(auth, dict) or auth.get('wiki') != 'euwiktionary'
+            or auth.get('dump_date') != '20261001' or auth.get('title') != 'MediaWiki:Common.css'
+            or auth.get('content_model') != 'css' or auth.get('decoded_source_bytes') != len(css)
+            or auth.get('decoded_source_sha256') != digest(css)
+            or auth.get('namespace_sha256') != CORE_NAMESPACE_SHA
+            or type(auth.get('page_id')) is not int or auth['page_id'] <= 0
+            or type(auth.get('revision_id')) is not int or auth['revision_id'] <= 0
+            or len(css) > MAX_BYTES):
+        raise ValueError('Core default root authority mismatch')
+    css.decode('utf-8')
+    if (digest(siteinfo_raw) != CORE_RAW_SHA or digest(siteinfo_normalized) != CORE_NORMALIZED_SHA
+            or digest(namespace) != CORE_NAMESPACE_SHA):
+        raise ValueError('Core default siteinfo or namespace mismatch')
+    general = evidence.decode(siteinfo_raw)['query']['general']
+    normalized = evidence.decode(siteinfo_normalized)
+    if (general.get('generator') != 'MediaWiki 1.47.0-wmf.22'
+            or general.get('git-hash') != CORE_REVISION or general.get('wikiid') != auth['wiki']
+            or normalized.get('namespace_registry_sha256') != CORE_NAMESPACE_SHA
+            or normalized.get('raw_response_sha256') != CORE_RAW_SHA
+            or normalized.get('wiki') != auth['wiki'] or normalized.get('date') != auth['dump_date']):
+        raise ValueError('Core default version/edition join mismatch')
+    if set(sources) != {item[0] for item in CORE_SOURCES}:
+        raise ValueError('Incomplete reviewed core source closure')
+    full = []
+    for name, source_path, size, wanted in CORE_SOURCES:
+        raw = sources[name]
+        if len(raw) != size or digest(raw) != wanted:
+            raise ValueError('Changed reviewed core source closure')
+        full.append({'path': source_path, 'bytes': size, 'sha256': wanted, 'text': raw.decode('utf-8')})
+    projected = sources[CORE_SOURCES[0][0]][CORE_RANGE['start']:CORE_RANGE['end']]
+    if digest(projected) != CORE_RANGE['sha256']:
+        raise ValueError('Changed reviewed core projection')
+    return {'schema': CORE_SCHEMA, 'wiki': auth['wiki'], 'dump_date': auth['dump_date'],
+            'namespace_sha256': auth['namespace_sha256'], 'root_css_sha256': digest(css),
+            'root_page_id': auth['page_id'], 'root_revision_id': auth['revision_id'],
+            'core_revision': CORE_REVISION, 'coverage_policy': CORE_POLICY,
+            'siteinfo_raw': siteinfo_raw.decode('utf-8'), 'siteinfo_normalized': siteinfo_normalized.decode('utf-8'),
+            'sources': full, 'projection': dict(CORE_RANGE)}
+
+
+def verify_core_defaults(root, manifest, require_complete=True):
+    expected_names = {'root-common.css', 'root-authority.json', 'siteinfo.raw.json',
+                      'siteinfo.normalized.json', 'namespace-registry.tsv', SNAPSHOT}
+    expected_names |= {item[0] for item in CORE_SOURCES}
+    if (manifest.get('schema') != CORE_SCHEMA or manifest.get('kind') != 'offline-reviewed-source-derivation'
+            or manifest.get('temporal_scope') != CORE_TEMPORAL_SCOPE
+            or manifest.get('coverage_policy') != CORE_POLICY
+            or set(manifest.get('artifacts', {})) != expected_names):
+        raise ValueError('Changed core default derivation manifest')
+    checked_producer(manifest.get('producer'))
+    for name, wanted in manifest['artifacts'].items():
+        if not hash_string(wanted) or digest(read(root / name)) != wanted:
+            raise ValueError('Changed core default derivation evidence')
+    if require_complete:
+        complete = evidence.decode(read(root / COMPLETE))
+        if complete != {'schema': CORE_SCHEMA, 'manifest_sha256': digest(read(root / MANIFEST))}:
+            raise ValueError('Invalid core default derivation completion')
+    expected = core_snapshot(read(root / 'root-common.css', MAX_BYTES), read(root / 'root-authority.json'),
+                             read(root / 'siteinfo.raw.json'), read(root / 'siteinfo.normalized.json'),
+                             read(root / 'namespace-registry.tsv'),
+                             {item[0]: read(root / item[0], MAX_BYTES) for item in CORE_SOURCES})
+    if evidence.decode(read(root / SNAPSHOT)) != expected:
+        raise ValueError('Changed core default snapshot projection')
+    return expected
+
+
+def derive_core_defaults(output, root_css, root_authority, siteinfo_raw, siteinfo_normalized, namespace, source_dir):
+    # No network. Refuse an existing destination and preserve every input byte.
+    artifacts = {'root-common.css': read(root_css, MAX_BYTES), 'root-authority.json': read(root_authority),
+                 'siteinfo.raw.json': read(siteinfo_raw), 'siteinfo.normalized.json': read(siteinfo_normalized),
+                 'namespace-registry.tsv': read(namespace)}
+    artifacts.update({item[0]: read(Path(source_dir) / item[0], MAX_BYTES) for item in CORE_SOURCES})
+    value = core_snapshot(artifacts['root-common.css'], artifacts['root-authority.json'],
+                          artifacts['siteinfo.raw.json'], artifacts['siteinfo.normalized.json'],
+                          artifacts['namespace-registry.tsv'], {item[0]: artifacts[item[0]] for item in CORE_SOURCES})
+    root = Path(output)
+    root.mkdir(parents=True, exist_ok=False)
+    for name, raw in artifacts.items():
+        evidence.put(root / name, raw)
+    evidence.document(root / SNAPSHOT, value)
+    artifacts[SNAPSHOT] = read(root / SNAPSHOT)
+    evidence.document(root / MANIFEST, {'schema': CORE_SCHEMA, 'kind': 'offline-reviewed-source-derivation',
+                      'temporal_scope': CORE_TEMPORAL_SCOPE, 'coverage_policy': CORE_POLICY,
+                      'producer': producer(), 'artifacts': {name: digest(raw) for name, raw in artifacts.items()}})
+    verify(root, require_complete=False)
+    evidence.document(root / COMPLETE, {'schema': CORE_SCHEMA, 'manifest_sha256': digest(read(root / MANIFEST))})
+    return verify(root)
+
+
 def verify(root, require_complete=True):
     root = checked_root(root)
     manifest = evidence.decode(read(root / MANIFEST))
+    if manifest.get('schema') == CUSTOM_SCHEMA:
+        return verify_custom_properties(root, manifest, require_complete)
+    if manifest.get('schema') == CORE_SCHEMA:
+        return verify_core_defaults(root, manifest, require_complete)
     if manifest.get('schema') != SCHEMA or manifest.get('temporal_scope') != TEMPORAL_SCOPE:
         raise ValueError('Changed stylesheet temporal scope/schema')
     checked_producer(manifest.get('producer'))
@@ -331,9 +448,25 @@ def main():
     parser.add_argument('--output', type=Path)
     parser.add_argument('--root-css', type=Path)
     parser.add_argument('--root-authority', type=Path)
+    parser.add_argument('--core-defaults', action='store_true')
+    parser.add_argument('--custom-properties-capture', type=Path)
+    parser.add_argument('--siteinfo-raw', type=Path)
+    parser.add_argument('--siteinfo-normalized', type=Path)
+    parser.add_argument('--namespace-registry', type=Path)
+    parser.add_argument('--core-source-dir', type=Path)
     args = parser.parse_args()
     if args.verify:
         verify(args.verify)
+    elif args.custom_properties_capture:
+        if not all((args.output, args.root_css, args.root_authority)):
+            parser.error('custom properties require root css, authority and retained capture')
+        derive_custom_properties(args.output, args.root_css, args.root_authority, args.custom_properties_capture)
+    elif args.core_defaults:
+        if not all((args.output, args.root_css, args.root_authority, args.siteinfo_raw,
+                    args.siteinfo_normalized, args.namespace_registry, args.core_source_dir)):
+            parser.error('core defaults require exact root, metadata, namespace and source inputs')
+        derive_core_defaults(args.output, args.root_css, args.root_authority, args.siteinfo_raw,
+                             args.siteinfo_normalized, args.namespace_registry, args.core_source_dir)
     else:
         if not all((args.output, args.root_css, args.root_authority)):
             parser.error('capture requires output/root-css/root-authority')
@@ -342,7 +475,7 @@ def main():
 
 def snapshot_summary(path, value):
     raw = read(path)
-    return {'schema': SCHEMA, 'wiki': value['wiki'], 'date': value['dump_date'],
+    return {'schema': value['schema'], 'wiki': value['wiki'], 'date': value['dump_date'],
             'namespace_registry_sha256': value['namespace_sha256'],
             'output_sha256': digest(raw), 'output_bytes': len(raw)}
 
@@ -367,6 +500,232 @@ def capture_artifacts(path, record=None):
     manifest = evidence.decode(read(path.with_name(MANIFEST)))
     return {**manifest['artifacts'], MANIFEST: digest(read(path.with_name(MANIFEST))),
             COMPLETE: digest(read(path.with_name(COMPLETE)))}
+
+
+CUSTOM_SCHEMA = 'wikidict.custom-property-styles.v1'
+CUSTOM_TEMPORAL_SCOPE = 'current anonymous screen stylesheet observation applied to retained source; not historical dump deployment'
+
+
+def custom_page_context(raw, page_url):
+    # Read the actual advertised sources and ancestor spelling; this does not
+    # execute scripts, adopt browser preferences or claim historical API state.
+    from html.parser import HTMLParser
+    text = raw.decode('utf-8')
+    line_starts = [0]
+    for match in re.finditer('\n', text):
+        line_starts.append(match.end())
+
+    class ContextParser(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=False)
+            self.stack = []
+            self.ancestors = None
+            self.links = []
+            self.inline = []
+            self.sequence = []
+            self.style = None
+            self.generator = None
+            self.failed = False
+
+        def handle_starttag(self, tag, attrs):
+            values = dict(attrs)
+            if len(values) != len(attrs):
+                self.failed = True
+            if tag == 'base' and 'href' in values:
+                self.failed = True
+            if tag == 'meta' and values.get('name') == 'generator':
+                self.generator = values.get('content')
+            rel = (values.get('rel') or '').lower().split()
+            if tag == 'link' and 'stylesheet' in rel:
+                href = values.get('href')
+                if (not href or rel != ['stylesheet']
+                        or 'disabled' in values or values.get('title') not in (None, '')
+                        or values.get('type') not in (None, '', 'text/css')
+                        or values.get('media') not in (None, '', 'screen', 'all')):
+                    self.failed = True
+                self.sequence.append(('link', len(self.links)))
+                self.links.append(urllib.parse.urljoin(page_url, href or ''))
+            if tag == 'style':
+                if ('disabled' in values or 'scoped' in values or values.get('title') not in (None, '')
+                        or values.get('media') not in (None, '', 'screen', 'all')
+                        or values.get('type') not in (None, '', 'text/css')):
+                    self.failed = True
+                self.style = []
+            if tag in {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'}:
+                return
+            line, column = self.getpos()
+            character_start = line_starts[line - 1] + column
+            start = len(text[:character_start].encode('utf-8'))
+            item = {'tag': tag, 'classes': values.get('class') or '', 'id': values.get('id') or '',
+                    'inline_css': values.get('style') or '',
+                    '_encoded_attributes': '&' in self.get_starttag_text(),
+                    'root': tag == 'html', 'start': start,
+                    'end': start + len(self.get_starttag_text().encode('utf-8'))}
+            self.stack.append(item)
+            if self.ancestors is None and 'mw-parser-output' in item['classes'].split():
+                self.ancestors = [dict(entry) for entry in self.stack]
+                if any(entry.pop('_encoded_attributes') for entry in self.ancestors):
+                    self.failed = True
+
+        def handle_startendtag(self, tag, attrs):
+            self.handle_starttag(tag, attrs)
+            self.handle_endtag(tag)
+
+        def handle_endtag(self, tag):
+            if tag == 'style' and self.style is not None:
+                self.sequence.append(('inline', len(self.inline)))
+                self.inline.append(''.join(self.style))
+                self.style = None
+            for i in range(len(self.stack) - 1, -1, -1):
+                if self.stack[i]['tag'] == tag:
+                    del self.stack[i:]
+                    break
+
+        def handle_data(self, data):
+            if self.style is not None:
+                self.style.append(data)
+
+        def handle_entityref(self, name):
+            if self.style is not None:
+                self.style.append('&' + name + ';')
+
+        def handle_charref(self, name):
+            if self.style is not None:
+                self.style.append('&#' + name + ';')
+
+    parsed = ContextParser()
+    parsed.feed(text)
+    parsed.close()
+    ancestors = parsed.ancestors
+    if (parsed.failed or not parsed.generator or not ancestors or len(ancestors) < 2 or len(ancestors) > 32
+            or ancestors[0]['tag'] != 'html' or ancestors[1]['tag'] != 'body'
+            or any(item['root'] for item in ancestors[1:]) or not parsed.links or len(parsed.links) > 16):
+        raise ValueError('Unsupported stylesheet page/context structure')
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(page_url).query, strict_parsing=True)
+    skin = query.get('useskin')
+    if (not skin or len(skin) != 1 or not re.fullmatch(r'[a-z0-9-]+', skin[0])
+            or len(query.get('title', [])) != 1 or not query['title'][0]):
+        raise ValueError('An explicit selected skin is required')
+    classes = ancestors[0]['classes'].split()
+    themes = [value for value in classes if value.startswith('skin-theme-clientpref-')]
+    if themes not in (['skin-theme-clientpref-day'], ['skin-theme-clientpref-night']):
+        raise ValueError('Explicit day/night context required; OS preference is unknown')
+    # A selected day/night skin class does not reveal the user's OS media
+    # preference. Conditional prefers-color-scheme rules remain unknown unless
+    # their own selector excludes them (as html...-os does for this day root).
+    return parsed, skin[0], None
+
+
+def custom_snapshot(artifacts):
+    css = artifacts['root-common.css']
+    auth = evidence.decode(artifacts['root-authority.json'])
+    if 'table_styles' in auth:
+        auth = auth['table_styles']['authority']
+    if (auth.get('title') != 'MediaWiki:Common.css' or auth.get('content_model') != 'css'
+            or auth.get('decoded_source_sha256') != digest(css) or auth.get('decoded_source_bytes') != len(css)
+            or not hash_string(auth.get('namespace_sha256')) or not re.fullmatch(r'[a-z0-9_-]+wiktionary', auth.get('wiki', ''))
+            or not re.fullmatch(r'\d{8}', auth.get('dump_date', ''))
+            or type(auth.get('page_id')) is not int or auth['page_id'] <= 0
+            or type(auth.get('revision_id')) is not int or auth['revision_id'] <= 0):
+        raise ValueError('Custom-property root authority mismatch')
+    specification = evidence.decode(artifacts['request-02.json'])
+    page_url = specification['url']
+    parsed_url = urllib.parse.urlsplit(page_url)
+    if (parsed_url.scheme != 'https' or parsed_url.hostname != auth['wiki'][:-10] + '.wiktionary.org'
+            or parsed_url.port is not None or parsed_url.username is not None or parsed_url.fragment):
+        raise ValueError('Page observation edition mismatch')
+    page = artifacts['request-02.response']
+    parsed, skin, dark = custom_page_context(page, page_url)
+    sources = []
+    requested = [(2, page_url, 'text/html')]
+    for n, url in enumerate(parsed.links, 3):
+        endpoint = urllib.parse.urlsplit(url)
+        params = urllib.parse.parse_qs(endpoint.query, strict_parsing=True)
+        if (endpoint.scheme != 'https' or endpoint.netloc != parsed_url.netloc or endpoint.path != '/w/load.php'
+                or endpoint.fragment or params.get('only') != ['styles'] or params.get('skin') != [skin]):
+            raise ValueError('Unadvertised stylesheet origin or selected skin')
+        requested.append((n, url, 'text/css'))
+    expected = {'root-common.css', 'root-authority.json'}
+    for n, url, mime in requested:
+        names = [f'request-{n:02d}{suffix}' for suffix in ('.json', '.receipt.json', '.response')]
+        expected.update(names)
+        spec = evidence.decode(artifacts[names[0]])
+        receipt = evidence.decode(artifacts[names[1]])
+        body = artifacts[names[2]]
+        observed_utc(receipt['started_utc'])
+        observed_utc(receipt['ended_utc'])
+        if (spec.get('url') != url or spec.get('accept') != mime or spec.get('method') != 'GET' or spec.get('retry') is not False
+                or receipt.get('accepted') is not True
+                or receipt.get('status') != 200 or receipt.get('final_url') != url
+                or receipt.get('response_bytes') != len(body) or receipt.get('response_sha256') != digest(body)
+                or receipt.get('headers', {}).get('content-type', '').split(';')[0].strip().lower() != mime
+                or len(body) > MAX_BYTES):
+            raise ValueError('Changed bounded stylesheet request/response')
+        body.decode('utf-8')
+        if mime == 'text/css':
+            sources.append({'url': url, 'css': body.decode('utf-8'), 'bytes': len(body), 'sha256': digest(body)})
+    if set(artifacts) != expected:
+        raise ValueError('Extra or missing custom-property observation artifact')
+    inline_sources = []
+    for n, text in enumerate(parsed.inline):
+        body = text.encode('utf-8')
+        inline_sources.append({'url': page_url + '#inline-style-' + str(n), 'css': text, 'bytes': len(body), 'sha256': digest(body)})
+    sources = [(sources if kind == 'link' else inline_sources)[i] for kind, i in parsed.sequence]
+    if sum(source['bytes'] for source in sources) + len(css) > MAX_BYTES:
+        raise ValueError('Stylesheet closure exceeds bound')
+    return {'schema': CUSTOM_SCHEMA, 'wiki': auth['wiki'], 'dump_date': auth['dump_date'],
+            'namespace_sha256': auth['namespace_sha256'], 'root_css_sha256': digest(css),
+            'root_page_id': auth['page_id'], 'root_revision_id': auth['revision_id'],
+            'temporal_scope': CUSTOM_TEMPORAL_SCOPE,
+            'observed_utc': evidence.decode(artifacts['request-02.receipt.json'])['ended_utc'],
+            'page_url': page_url, 'page_title': urllib.parse.parse_qs(parsed_url.query)['title'][0],
+            'page_html': page.decode('utf-8'), 'page_sha256': digest(page),
+            'generator': parsed.generator, 'skin': skin, 'dark': dark, 'ancestors': parsed.ancestors, 'sources': sources}
+
+
+def derive_custom_properties(output, root_css, root_authority, capture_root):
+    # Replay only already retained ordinary collector responses. No networking,
+    # retries, current preferences, or modifications of the original capture.
+    capture_root = checked_root(capture_root)
+    page_url = evidence.decode(read(capture_root / 'request-02.json'))['url']
+    parsed, _, _ = custom_page_context(read(capture_root / 'request-02.response', MAX_BYTES), page_url)
+    artifacts = {'root-common.css': read(root_css, MAX_BYTES), 'root-authority.json': read(root_authority)}
+    for n in range(2, len(parsed.links) + 3):
+        for suffix in ('.json', '.receipt.json', '.response'):
+            name = f'request-{n:02d}{suffix}'
+            artifacts[name] = read(capture_root / name, MAX_BYTES)
+    value = custom_snapshot(artifacts)
+    root = Path(output)
+    root.mkdir(parents=True, exist_ok=False)
+    for name, raw in artifacts.items():
+        evidence.put(root / name, raw)
+    evidence.document(root / SNAPSHOT, value)
+    artifacts[SNAPSHOT] = read(root / SNAPSHOT)
+    evidence.document(root / MANIFEST, {'schema': CUSTOM_SCHEMA, 'temporal_scope': CUSTOM_TEMPORAL_SCOPE,
+                      'producer': producer(), 'artifacts': {name: digest(raw) for name, raw in artifacts.items()}})
+    verify(root, require_complete=False)
+    evidence.document(root / COMPLETE, {'schema': CUSTOM_SCHEMA, 'manifest_sha256': digest(read(root / MANIFEST))})
+    return verify(root)
+
+
+def verify_custom_properties(root, manifest, require_complete=True):
+    if manifest.get('temporal_scope') != CUSTOM_TEMPORAL_SCOPE:
+        raise ValueError('Changed custom-property temporal scope')
+    checked_producer(manifest.get('producer'))
+    artifacts = {}
+    for name, wanted in manifest.get('artifacts', {}).items():
+        if Path(name).name != name or not hash_string(wanted):
+            raise ValueError('Invalid custom-property artifact')
+        artifacts[name] = read(root / name)
+        if digest(artifacts[name]) != wanted:
+            raise ValueError('Changed custom-property evidence')
+    actual = evidence.decode(artifacts.pop(SNAPSHOT))
+    expected = custom_snapshot(artifacts)
+    if actual != expected:
+        raise ValueError('Changed custom-property snapshot derivation')
+    if require_complete and evidence.decode(read(root / COMPLETE)) != {'schema': CUSTOM_SCHEMA, 'manifest_sha256': digest(read(root / MANIFEST))}:
+        raise ValueError('Incomplete custom-property generation')
+    return expected
 
 
 if __name__ == '__main__':

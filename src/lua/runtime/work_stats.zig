@@ -363,12 +363,204 @@ pub fn noteNativeFailure(address: usize, name: []const u8) void {
     if (page.native_failures) |failures| failures.record(address);
 }
 
+/// Worker-lifetime aggregation of caught pcall diagnostics. These are Lua
+/// results, not uncaught build failures. Exact bounded keys own their page text;
+/// excess or oversized keys retain ordinary diagnostics and an untracked count.
+pub const ProtectedCalls = struct {
+    pub const entry_limit = 16;
+    pub const detail_limit = 512;
+    const kind_limit = 32;
+    const Entry = struct {
+        err: anyerror,
+        kind: [kind_limit]u8,
+        kind_len: u8,
+        detail: [detail_limit]u8,
+        detail_len: u16,
+        count: u64 = 1,
+    };
+    const Notice = enum { none, example, overflow };
+
+    entries: [entry_limit]Entry = undefined,
+    len: usize = 0,
+    total: u64 = 0,
+    tracked: u64 = 0,
+    untracked: u64 = 0,
+    counter_overflow: bool = false,
+    overflow_reported: bool = false,
+
+    fn increment(self: *ProtectedCalls, counter: *u64) void {
+        if (counter.* == std.math.maxInt(u64)) {
+            self.counter_overflow = true;
+        } else counter.* += 1;
+    }
+
+    fn record(self: *ProtectedCalls, err: anyerror, kind: []const u8, detail: []const u8) Notice {
+        self.increment(&self.total);
+        for (self.entries[0..self.len]) |*entry| {
+            if (entry.err == err and
+                std.mem.eql(u8, entry.kind[0..entry.kind_len], kind) and
+                std.mem.eql(u8, entry.detail[0..entry.detail_len], detail))
+            {
+                self.increment(&entry.count);
+                self.increment(&self.tracked);
+                return .none;
+            }
+        }
+        if (self.len == entry_limit or kind.len > kind_limit or detail.len > detail_limit) {
+            self.increment(&self.untracked);
+            if (self.overflow_reported) return .example;
+            self.overflow_reported = true;
+            return .overflow;
+        }
+        const entry = &self.entries[self.len];
+        entry.* = .{
+            .err = err,
+            .kind = undefined,
+            .kind_len = @intCast(kind.len),
+            .detail = undefined,
+            .detail_len = @intCast(detail.len),
+        };
+        @memcpy(entry.kind[0..kind.len], kind);
+        @memcpy(entry.detail[0..detail.len], detail);
+        self.len += 1;
+        self.increment(&self.tracked);
+        return .example;
+    }
+
+    pub fn note(self: *ProtectedCalls, err: anyerror, kind: []const u8, detail: []const u8) void {
+        self.noteToFd(2, err, kind, detail);
+    }
+
+    fn noteToFd(self: *ProtectedCalls, fd: linux.fd_t, err: anyerror, kind: []const u8, detail: []const u8) void {
+        const notice = self.record(err, kind, detail);
+        if (notice == .none) return;
+        if (notice == .overflow)
+            writeDiagnostic(fd, linux.getpid(), "protected Lua call profile overflow: untracked_events_logged=true entry_limit={d} kind_limit={d} detail_limit={d}\n", .{ entry_limit, kind_limit, detail_limit });
+        // Only an exact retained key may suppress an event. Untracked details
+        // keep the ordinary bounded writer, including its truncation marker.
+        writeDiagnostic(fd, linux.getpid(), "protected Lua call failed: error={s} value_kind={s} detail={s}\n", .{ @errorName(err), kind, detail });
+    }
+
+    pub fn log(self: *const ProtectedCalls) void {
+        logLine("worker protected calls: total={d} tracked={d} untracked={d} tracked_distinct={d} counter_overflow={} entry_limit={d} detail_limit={d}\n", .{
+            self.total, self.tracked, self.untracked, self.len, self.counter_overflow, entry_limit, detail_limit,
+        });
+        for (self.entries[0..self.len]) |entry| {
+            logLine("worker protected call count: count={d} error={s} value_kind={s} detail={s}\n", .{
+                entry.count, @errorName(entry.err), entry.kind[0..entry.kind_len], entry.detail[0..entry.detail_len],
+            });
+        }
+    }
+};
+
+test "protected call profile owns keys and aggregates repeated events" {
+    var profile: ProtectedCalls = .{};
+    var kind = "string".*;
+    var detail = "TableExpected".*;
+    try std.testing.expectEqual(ProtectedCalls.Notice.example, profile.record(error.AotCallFailed, &kind, &detail));
+    @memset(&kind, 'x');
+    @memset(&detail, 'x');
+    for (0..99_999) |_| try std.testing.expectEqual(ProtectedCalls.Notice.none, profile.record(error.AotCallFailed, "string", "TableExpected"));
+    try std.testing.expectEqual(@as(usize, 1), profile.len);
+    try std.testing.expectEqual(@as(u64, 100_000), profile.total);
+    try std.testing.expectEqual(profile.total, profile.tracked);
+    try std.testing.expectEqual(profile.total, profile.entries[0].count);
+    try std.testing.expectEqual(@as(u64, 0), profile.untracked);
+    try std.testing.expect(!profile.counter_overflow);
+    try std.testing.expectEqualStrings("TableExpected", profile.entries[0].detail[0..profile.entries[0].detail_len]);
+}
+
+test "protected call profile deduplicates tracked keys and preserves untracked diagnostics" {
+    const Capture = struct {
+        fn note(profile: *ProtectedCalls, kind: []const u8, detail: []const u8, buffer: *[2048]u8) ![]const u8 {
+            // Each selected event is under 1 KiB, including its optional notice.
+            // A private pipe observes the real writer without replacing stderr.
+            var fds: [2]linux.fd_t = undefined;
+            if (linux.errno(linux.pipe2(&fds, .{ .CLOEXEC = true })) != .SUCCESS)
+                return error.DiagnosticTestPipeFailed;
+            defer _ = linux.close(fds[0]);
+            profile.noteToFd(fds[1], error.LuaRaised, kind, detail);
+            _ = linux.close(fds[1]);
+            var used: usize = 0;
+            while (true) {
+                if (used == buffer.len) return error.DiagnosticTestOversizedLine;
+                const n = linux.read(fds[0], buffer[used..].ptr, buffer.len - used);
+                if (linux.errno(n) == .INTR) continue;
+                if (linux.errno(n) != .SUCCESS) return error.DiagnosticTestReadFailed;
+                if (n == 0) break;
+                used += n;
+            }
+            return buffer[0..used];
+        }
+    };
+    var profile: ProtectedCalls = .{};
+    var buffer: [32]u8 = undefined;
+    for (0..ProtectedCalls.entry_limit) |index| {
+        const detail = try std.fmt.bufPrint(&buffer, "failure-{d}", .{index});
+        try std.testing.expectEqual(ProtectedCalls.Notice.example, profile.record(error.LuaRaised, "string", detail));
+    }
+    var output: [2048]u8 = undefined;
+    const first = try Capture.note(&profile, "string", "beyond-capacity", &output);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, first, "protected Lua call profile overflow:"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, first, "protected Lua call failed:"));
+    try std.testing.expect(std.mem.endsWith(u8, first, "detail=beyond-capacity\n"));
+    const distinct = try Capture.note(&profile, "string", "different-untracked-detail", &output);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, distinct, "protected Lua call profile overflow:"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, distinct, "protected Lua call failed:"));
+    try std.testing.expect(std.mem.endsWith(u8, distinct, "detail=different-untracked-detail\n"));
+    const repeated = try Capture.note(&profile, "string", "beyond-capacity", &output);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, repeated, "protected Lua call profile overflow:"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, repeated, "protected Lua call failed:"));
+    try std.testing.expect(std.mem.endsWith(u8, repeated, "detail=beyond-capacity\n"));
+    for (0..97) |_| try std.testing.expectEqual(ProtectedCalls.Notice.example, profile.record(error.LuaRaised, "string", "beyond-capacity"));
+    try std.testing.expectEqual(@as(usize, 0), (try Capture.note(&profile, "string", "failure-0", &output)).len);
+    try std.testing.expectEqual(@as(usize, ProtectedCalls.entry_limit), profile.len);
+    try std.testing.expectEqual(@as(u64, 100), profile.untracked);
+    try std.testing.expectEqual(@as(u64, ProtectedCalls.entry_limit + 1), profile.tracked);
+    try std.testing.expectEqual(profile.tracked + profile.untracked, profile.total);
+    try std.testing.expectEqual(@as(u64, 2), profile.entries[0].count);
+
+    var oversized: ProtectedCalls = .{};
+    const long: [ProtectedCalls.detail_limit + 1]u8 = @splat('q');
+    const oversized_first = try Capture.note(&oversized, "string", &long, &output);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, oversized_first, "protected Lua call profile overflow:"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, oversized_first, "protected Lua call failed:"));
+    try std.testing.expect(std.mem.indexOf(u8, oversized_first, &long) != null);
+    var other_long = long;
+    other_long[other_long.len - 1] = 'r';
+    const oversized_distinct = try Capture.note(&oversized, "string", &other_long, &output);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, oversized_distinct, "protected Lua call profile overflow:"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, oversized_distinct, "protected Lua call failed:"));
+    try std.testing.expect(std.mem.indexOf(u8, oversized_distinct, &other_long) != null);
+    // A long key must not consume a tracked slot or merge into its prefix.
+    try std.testing.expectEqual(ProtectedCalls.Notice.example, oversized.record(error.LuaRaised, "string", long[0..ProtectedCalls.detail_limit]));
+    try std.testing.expectEqual(@as(u64, 2), oversized.untracked);
+    try std.testing.expectEqual(@as(u64, 1), oversized.tracked);
+    try std.testing.expectEqual(@as(usize, 1), oversized.len);
+    const long_kind: [ProtectedCalls.kind_limit + 1]u8 = @splat('k');
+    const oversized_kind = try Capture.note(&oversized, &long_kind, "oversized-kind", &output);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, oversized_kind, "protected Lua call profile overflow:"));
+    try std.testing.expect(std.mem.indexOf(u8, oversized_kind, &long_kind) != null);
+    try std.testing.expect(std.mem.endsWith(u8, oversized_kind, "detail=oversized-kind\n"));
+    try std.testing.expectEqual(@as(u64, 3), oversized.untracked);
+    try std.testing.expectEqual(@as(usize, 1), oversized.len);
+
+    profile.total = std.math.maxInt(u64);
+    profile.tracked = std.math.maxInt(u64);
+    profile.entries[0].count = std.math.maxInt(u64);
+    _ = profile.record(error.LuaRaised, "string", "failure-0");
+    try std.testing.expect(profile.counter_overflow);
+    try std.testing.expectEqual(std.math.maxInt(u64), profile.total);
+    try std.testing.expectEqual(std.math.maxInt(u64), profile.entries[0].count);
+}
+
 /// Module-root calls are counted on every page; CPU time is sampled on 1/32 pages.
 pub const RootProfile = struct {
     allocator: std.mem.Allocator,
     hits: []u64,
     exclusive_ns: []u64,
     sampled_pages: u64 = 0,
+    protected_calls: ProtectedCalls = .{},
 
     pub fn init(allocator: std.mem.Allocator, module_count: usize) !RootProfile {
         const hits = try allocator.alloc(u64, module_count);
@@ -386,6 +578,7 @@ pub const RootProfile = struct {
     }
 
     pub fn logTop(self: *const RootProfile, names: []const []const u8, total_ns: u64) void {
+        self.protected_calls.log();
         logLine("worker module roots: cpu_sample_interval=32 sampled_pages={d} exclusive_ns={d} modules={d}\n", .{
             self.sampled_pages, total_ns, self.hits.len,
         });

@@ -7,6 +7,10 @@ const Registry = @import("namespace_registry").Registry;
 const A = std.mem.Allocator;
 const max_visited_pages = 1_000_000;
 
+test {
+    _ = @import("modules.zig");
+}
+
 const Mapped = struct {
     bytes: []align(std.heap.page_size_min) const u8,
     fn open(io: std.Io, path: []const u8) !Mapped {

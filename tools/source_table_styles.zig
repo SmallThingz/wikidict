@@ -34,7 +34,7 @@ pub const Provenance = struct {
         try jw.write(.{
             .schema = "wikidict.source-table-styles.v2",
             .stylesheet_imports = self.stylesheet_imports.?,
-            .provenance_scope = "exact indexed Common.css plus explicit import snapshot; outer full-input qualification remains separate",
+            .provenance_scope = if (self.stylesheet_imports.?.core != null) "exact indexed Common.css plus reviewed version-bound core projection; outer full-input qualification remains separate" else "exact indexed Common.css plus explicit import snapshot; outer full-input qualification remains separate",
             .wiki = self.wiki,
             .dump_date = self.dump_date,
             .namespace_sha256 = self.namespace_sha256[0..],

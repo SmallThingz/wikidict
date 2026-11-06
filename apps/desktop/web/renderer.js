@@ -208,7 +208,7 @@ function destination(el, value, legacy = '') {
 }
 function legacyDestinations(entry) {
   const candidates = [], counts = new Map();
-  if (['DPR5','DPR6','DPR7','DPR8','DPR9','DPRA','DPRB','DPRC','DPRD'].includes(entry.presentation_version)) return new Map();
+  if (['DPR5','DPR6','DPR7','DPR8','DPR9','DPRA','DPRB','DPRC','DPRD','DPRE'].includes(entry.presentation_version)) return new Map();
   const add = (value, label) => {
     if (value.anchor || value.anchor_fallback) return;
     const id = label.replaceAll(' ','_');
@@ -228,7 +228,7 @@ function styleObject(value){if(value==null)return null;if(typeof value!=='object
 function styleLength(value){if(!value||!['px','em'].includes(value.unit)||typeof value.value!=='number'||!Number.isFinite(value.value)||value.value<0)throw Error('Invalid style length');return value.value+value.unit;}
 function styleBorder(value){if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==1)throw Error('Invalid style border');if(Object.hasOwn(value,'none')){if(!value.none||typeof value.none!=='object'||Array.isArray(value.none)||Object.keys(value.none).length)throw Error('Invalid none border');return 'none';}const solid=value.solid;if(!solid||!canonicalRGB(solid.color))throw Error('Invalid style border color');return styleLength(solid.width)+' solid '+solid.color;}
 function styleEdges(el,name,value){if(!value||typeof value!=='object'||Array.isArray(value))throw Error('Invalid style edges');for(const side of ['top','right','bottom','left'])el.style[name+side[0].toUpperCase()+side.slice(1)]=styleLength(value[side]);}
-function applyTableStyle(el,value){const s=styleObject(value);if(!s)return;for(const key of Object.keys(s))if(!['background','border','collapse','margins'].includes(key))throw Error('Invalid table style field');if(s.background!=null){if(!canonicalRGB(s.background))throw Error('Invalid table background');el.style.backgroundColor=s.background;}if(s.border!=null)el.style.border=styleBorder(s.border);if(s.collapse!=null){if(!['separate','collapse'].includes(s.collapse))throw Error('Invalid border collapse');el.style.borderCollapse=s.collapse;}if(s.margins!=null)styleEdges(el,'margin',s.margins);}
+function applyTableStyle(el,value){const s=styleObject(value);if(!s)return;for(const key of Object.keys(s))if(!['background','border','collapse','margins','float_side'].includes(key))throw Error('Invalid table style field');if(s.background!=null){if(!canonicalRGB(s.background))throw Error('Invalid table background');el.style.backgroundColor=s.background;}if(s.border!=null)el.style.border=styleBorder(s.border);if(s.collapse!=null){if(!['separate','collapse'].includes(s.collapse))throw Error('Invalid border collapse');el.style.borderCollapse=s.collapse;}if(s.margins!=null)styleEdges(el,'margin',s.margins);if(s.float_side!=null&&!['left','right'].includes(s.float_side))throw Error('Invalid table float side');}
 function applyCellStyle(el,value){const s=styleObject(value);if(!s)return;for(const key of Object.keys(s))if(!['border','padding','text_align'].includes(key))throw Error('Invalid cell style field');if(s.border!=null)el.style.border=styleBorder(s.border);if(s.padding!=null)styleEdges(el,'padding',s.padding);if(s.text_align!=null){if(!['left','center','right'].includes(s.text_align))throw Error('Invalid cell text alignment');el.style.textAlign=s.text_align;}}
 function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
   if(depth>16)throw Error('Nested table depth exceeds limit');
@@ -250,7 +250,7 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
     if(cell.blocks!=null){
       if(!Array.isArray(cell.blocks)||cell.spans?.length||cell.nested_table!=null)throw Error('Invalid ordered table cell');
       appendBlocks(td,cell.blocks,block=>blockView(block,onLink,explanations,'',{tableDepth:depth,background:effectiveBackground,header:!!cell.header}));
-    }else if(cell.nested_table!=null){if(typeof cell.nested_table!=='object'||Array.isArray(cell.nested_table)||cell.spans?.length)throw Error('Invalid nested table cell');td.append(tableView(cell.nested_table,onLink,explanations,depth+1,effectiveBackground));}
+    }else if(cell.nested_table!=null){if(typeof cell.nested_table!=='object'||Array.isArray(cell.nested_table)||cell.spans?.length)throw Error('Invalid nested table cell');td.append(cell.nested_table.style?.float_side!=null?blockView({kind:'table',table:cell.nested_table},onLink,explanations,'',{tableDepth:depth,background:effectiveBackground}):tableView(cell.nested_table,onLink,explanations,depth+1,effectiveBackground));}
     else td.append(spans(cell.spans,onLink,false,explanations,false,effectiveBackground));
     tr.append(td);
   }table.append(tr);}return table;
@@ -300,6 +300,7 @@ function visitBlocks(values,visit){
   for(const block of values||[]){visit(block);if(block.table)table(block.table);}
 }
 function blockView(block, onLink, explanations, legacy = '', context = {}) {
+  if(block.text_align!=null&&!['left','center','right'].includes(block.text_align))throw Error('Invalid block text alignment');
   const margin = `${Math.min(Math.max(block.depth || 0,0),8)*.45}rem`;
   if (block.table) {
     const feature = block.feature;
@@ -317,16 +318,30 @@ function blockView(block, onLink, explanations, legacy = '', context = {}) {
       return sample;
     }
     const table = tableView(block.table,onLink,explanations,(context.tableDepth||0)+1,context.background);
-    if(context.tableDepth){table.style.marginInlineStart=margin;return table;}
+    if(context.tableDepth&&!block.table.style?.float_side){table.style.marginInlineStart=margin;return table;}
     const wrap = node('div', null, 'table-scroll'); wrap.style.marginInlineStart = margin; wrap.tabIndex = 0; wrap.setAttribute('aria-label','Scrollable table');
+    if(block.table.style?.float_side){
+      wrap.classList.add('compiled-table-float');wrap.style.cssFloat=block.table.style.float_side;
+      // The scroll box itself floats: its margin box excludes following text.
+      if(block.table.style.margins)styleEdges(wrap,'margin',block.table.style.margins);
+      wrap.style.setProperty('--compiled-float-left',block.table.style.margins?styleLength(block.table.style.margins.left):'0px');
+      wrap.style.setProperty('--compiled-float-right',block.table.style.margins?styleLength(block.table.style.margins.right):'0px');
+      // Keep semantic indentation in addition to the authored physical margin.
+      wrap.style.removeProperty('margin-inline-start');
+      wrap.style.marginInlineStart=`calc(${margin} + var(--compiled-float-inline-margin))`;
+      if(block.table.geometry?.width?.unit==='percent'){wrap.style.width=block.table.geometry.width.value+'%';table.style.width='100%';}
+      for(const side of ['Top','Right','Bottom','Left'])table.style['margin'+side]='0';
+    }
     wrap.append(table); return wrap;
   }
   if (block.kind === 'rule') return node('hr');
-  if (block.kind === 'preformatted') { const pre = node('pre'); if(context.header)pre.style.fontWeight='inherit'; pre.append(spans(block.spans,onLink,true,explanations,false,context.background)); return pre; }
+  if (block.kind === 'preformatted') { const pre = node('pre'); if(block.text_align!=null)pre.style.textAlign=block.text_align; if(context.header)pre.style.fontWeight='inherit'; pre.append(spans(block.spans,onLink,true,explanations,false,context.background)); return pre; }
   const allowed = new Set(['paragraph','definition','example','quotation','list_item','list_detail','indent','term','heading']);
   const kind = allowed.has(block.kind) ? block.kind : 'paragraph';
   const el = node(kind === 'heading'?'h'+(Number.isInteger(block.level)&&block.level>=1&&block.level<=6?block.level:4):'div',null,'block '+kind);
   el.style.marginInlineStart = margin;
+  if(context.tableDepth||block.text_align!=null)el.classList.add('compiled-aligned-block');
+  if(block.text_align!=null)el.style.textAlign=block.text_align;
   if(context.header)el.style.fontWeight='inherit';
   if (kind === 'heading') destination(el, block, legacy);
   const prefix = kind==='definition'?(block.number?`${block.number}.`:'•'):['example','quotation'].includes(kind)?'│':kind==='list_item'?(block.number?`${block.number}.`:'•'):kind==='list_detail'?'↳':'';
@@ -336,6 +351,7 @@ function blockView(block, onLink, explanations, legacy = '', context = {}) {
 function sectionHeadingCompanion(section){
   const first=section.blocks?.[0];
   if(!section.title||!first||first.kind!=='heading'||first.level!==section.level)return null;
+  if(first.text_align!=null)return null;
   let navigable=false,explained=false,styledText=false,visual=false,label='';
   for(const span of first.spans||[]){
     if(span.kind==='line_break'&&span.trail)return null;
@@ -351,7 +367,17 @@ function sectionHeadingCompanion(section){
   return (navigable||explained||styledText||visual||first.depth>0)&&trimmed===section.title?first:null;
 }
 export function renderEntry(entry, onLink, settings = {}, mediaView = () => null, inlineImage = () => {}, imageActionURL = () => null) {
-  const root = document.createDocumentFragment(), references = new Map(), legacy = legacyDestinations(entry);
+  const fragment = document.createDocumentFragment(), references = new Map(), legacy = legacyDestinations(entry);
+  let hasTableFloat=false;
+  const inspectTableFloat=table=>{
+    if(table.style?.float_side!=null){if(!['left','right'].includes(table.style.float_side))throw Error('Invalid table float side');hasTableFloat=true;}
+    for(const row of table.rows||[])for(const cell of row.cells||[])if(cell.nested_table)inspectTableFloat(cell.nested_table);
+  };
+  const inspectFloat=block=>{if(block.table)inspectTableFloat(block.table);};
+  for(const section of entry.sections)visitBlocks(section.blocks,inspectFloat);
+  for(const ref of entry.references||[])if(Array.isArray(ref.blocks))visitBlocks(ref.blocks,inspectFloat);
+  const root=hasTableFloat?node('div',null,'compiled-table-flow'):fragment;
+  if(hasTableFloat)fragment.append(root);
   const headingDestinations = new Set();
   const observeHeading=value=>{for(const id of [value.anchor,value.anchor_fallback,legacy.get(value)])if(id)headingDestinations.add(id);};
   for(const section of entry.sections){observeHeading(section);visitBlocks(section.blocks,block=>{if(block.kind==='heading')observeHeading(block);});}
@@ -456,5 +482,5 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
   const edition=/^[a-z0-9_-]+wiktionary$/.test(entry.source_edition||'')?entry.source_edition.slice(0,-10).replaceAll('_','-'):null;
   const source=edition?'https://'+edition+'.wiktionary.org/':'https://www.wiktionary.org/';
   const credit=node('footer');const link=node('a','Wiktionary contributors');link.href=source+(edition&&entry.source_title?'wiki/'+encodeURIComponent(entry.source_title):'');link.target='_blank';link.rel='noopener';credit.append(link,node('span','CC BY-SA 4.0'));root.append(credit);
-  return root;
+  return fragment;
 }

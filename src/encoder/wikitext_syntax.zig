@@ -423,6 +423,12 @@ fn tagAtWithOpaqueScan(text: []const u8, start: usize, no_more_nowiki_close: ?*b
                 i = region.end - 1;
                 continue;
             }
+            // Cite openers are registered extension tokens, not ordinary HTML.
+            // MediaWiki Preprocessor_Hash ends their attribute text at the first
+            // '>'; an invalid attribute name containing '<' does not cancel the
+            // reference. Keep the normal attribute/name and citation validators.
+            if (!closing and (std.ascii.eqlIgnoreCase(name, "ref") or
+                std.ascii.eqlIgnoreCase(name, "references"))) continue;
             return null;
         }
     }
@@ -1289,4 +1295,57 @@ test "pure equals heading depths retain exact inner bytes and literal protection
     const entity_title = controlHeading("==&#61;&#61;==", null).?;
     try std.testing.expectEqual(@as(u8, 2), entity_title.level);
     try std.testing.expectEqualStrings("&#61;&#61;", entity_title.title);
+}
+
+test "Cite attribute interruption retains first greater-than and valid name" {
+    const cases = [_][]const u8{
+        "<ref name=\"dlce1906\"<[[:Plantilla:DLCE1906]]>note</ref>",
+        "<ref name=\"dlce1906\"<{{DLCE1906|210}}>note</ref>",
+        "<REF name='dlce1906'<bad>note</REF>",
+    };
+    for (cases) |source| {
+        const tag = tagAt(source, 0) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(tag.is("ref") and !tag.closing and !tag.self_closing);
+        try std.testing.expectEqualStrings("dlce1906", tag.attr("name").?);
+        try std.testing.expectEqual((std.mem.indexOfScalar(u8, source, '>') orelse unreachable) + 1, tag.end);
+        const pair = matchingTag(source, tag) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("note", source[tag.end..pair.inner_end]);
+        try std.testing.expectEqual(source.len, pair.end);
+    }
+    const quoted = "<ref name='a<b>tail'>note</ref>";
+    const tag = tagAt(quoted, 0) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("a<b", tag.attr("name").?);
+    try std.testing.expectEqualStrings("tail'>note", quoted[tag.end..matchingTag(quoted, tag).?.inner_end]);
+    // Without a closing quote, '<' is part of the unquoted name value.
+    // It must not be stripped as though it followed a completed assignment.
+    const unquoted = "<ref name=n<[[:Template:Absent]]>note</ref>";
+    const unquoted_tag = tagAt(unquoted, 0) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("n<[[:Template:Absent]]", unquoted_tag.attr("name").?);
+    try std.testing.expectEqualStrings("note", unquoted[unquoted_tag.end..matchingTag(unquoted, unquoted_tag).?.inner_end]);
+    const list = "<references <bad><ref name=x>note</ref></references>";
+    const list_tag = tagAt(list, 0) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(list_tag.is("references"));
+    try std.testing.expectEqualStrings("<ref name=x>note</ref>", list[list_tag.end..matchingTag(list, list_tag).?.inner_end]);
+}
+
+test "Cite interrupted attributes do not widen ordinary HTML or protected scopes" {
+    for ([_][]const u8{
+        "<span name=x<bad>tail</span>",
+        "<unknown name=x<bad>tail</unknown>",
+        "</ref <bad>",
+        "<ref_custom name=x<bad>tail</ref_custom>",
+        "<ref/name=x<bad>tail</ref>",
+        "<ref name=x<bad",
+    }) |source| try std.testing.expect(tagAt(source, 0) == null);
+    const protected = "<nowiki><ref name=x<bad>literal</ref></nowiki>";
+    var scan: OpaqueScan = .{};
+    try std.testing.expectEqual(@as(?usize, protected.len), scan.protectedEnd(protected, 0, null));
+    const nested = "<ref>outer <ref name=x<bad>inner</ref>tail</ref>";
+    const tag = tagAt(nested, 0).?;
+    const pair = matchingTag(nested, tag).?;
+    try std.testing.expectEqualStrings("outer <ref name=x<bad>inner", nested[tag.end..pair.inner_end]);
+    try std.testing.expectEqualStrings("tail</ref>", nested[pair.end..]);
+    const valid = "<ref name=n>note</ref><ref name=n/>";
+    try std.testing.expectEqualStrings("n", tagAt(valid, 0).?.attr("name").?);
+    try std.testing.expect(tagAt(valid, matchingTag(valid, tagAt(valid, 0).?).?.end).?.self_closing);
 }

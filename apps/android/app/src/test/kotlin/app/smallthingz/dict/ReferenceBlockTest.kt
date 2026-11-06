@@ -8,9 +8,9 @@ class ReferenceBlockTest {
     private data class Item(val id: Long, val spans: List<Span> = emptyList(), val blocks: List<Block>? = null,
         val kind: ReferenceKind = ReferenceKind.Note, val presence: Int? = null)
 
-    // Independent literal B/C/D writer. D adds only the image border flag;
+    // Independent literal B/C/D/E writer. D adds only the image border flag;
     // C and D retain the optional ordered reference blocks and table styles.
-    private class Wire(val styles: Boolean, val imageBorders: Boolean = false) {
+    private class Wire(val styles: Boolean, val imageBorders: Boolean = false, val blockLayouts: Boolean = false) {
         val out = ByteArrayOutputStream()
         fun byte(n: Int) { out.write(n) }
         fun u32(n: Long) { repeat(4) { byte((n ushr (it * 8)).toInt() and 255) } }
@@ -42,9 +42,11 @@ class ReferenceBlockTest {
         fun tableStyle(value: TableStyle?) {
             if (!styles) { require(value == null); return }
             byte(if (value == null) 0 else 1); if (value == null) return
-            byte((if (value.background != null) 1 else 0) or (if (value.border != null) 2 else 0) or (if (value.collapse != null) 4 else 0) or (if (value.margins != null) 8 else 0))
+            require(blockLayouts || value.floatSide == null)
+            byte((if (value.background != null) 1 else 0) or (if (value.border != null) 2 else 0) or (if (value.collapse != null) 4 else 0) or (if (value.margins != null) 8 else 0) or (if (value.floatSide != null) 16 else 0))
             value.background?.let(::string); value.border?.let(::border)
             value.collapse?.let { byte(if (it == TableCollapse.Separate) 0 else 1) }; value.margins?.let(::edges)
+            value.floatSide?.let { byte(if (it == TableFloatSide.Left) 0 else 1) }
         }
         fun string(s: String) { val b = s.toByteArray(Charsets.UTF_8); u32(b.size.toLong()); out.write(b) }
         fun spans(values: List<Span>) {
@@ -83,10 +85,15 @@ class ReferenceBlockTest {
             byte(if (b.feature == null) 0 else 1)
             b.feature?.let { listOf(it.kind, it.language, it.data, it.tailKind, it.tail).forEach(::string) }
             string(b.listPath); string(b.number); table(b.table); string(b.anchor); string(b.anchorFallback)
+            require(blockLayouts || b.textAlign == null)
+            if (blockLayouts) {
+                byte(if (b.textAlign == null) 0 else 1)
+                b.textAlign?.let { byte(when (it) { CellTextAlign.Left -> 0; CellTextAlign.Center -> 1; CellTextAlign.Right -> 2 }) }
+            }
         }
     }
     private fun fixture(version: Char, items: List<Item>, sections: List<Section> = emptyList(),
-        display: List<Span> = emptyList(), preamble: List<Span> = emptyList(), media: List<Media> = emptyList()): ByteArray = Wire(version in "CD", version == 'D').apply {
+        display: List<Span> = emptyList(), preamble: List<Span> = emptyList(), media: List<Media> = emptyList()): ByteArray = Wire(version in "CDE", version in "DE", version == 'E').apply {
         out.write("DPR$version".toByteArray(Charsets.US_ASCII))
         spans(display); u32(sections.size.toLong())
         sections.forEach { byte(it.level); string(it.title); string(it.anchor); string(it.anchorFallback); blocks(it.blocks) }
@@ -96,7 +103,7 @@ class ReferenceBlockTest {
             byte(if (item.kind == ReferenceKind.Note) 0 else 1); u32(item.id)
             if (item.kind == ReferenceKind.Note) { u32(1); string("") }
             string("notes"); spans(item.spans)
-            if (version in "CD") {
+            if (version in "CDE") {
                 byte(item.presence ?: if (item.blocks == null) 0 else 1)
                 item.blocks?.let(::blocks)
             }
@@ -392,4 +399,359 @@ class ReferenceBlockTest {
         assertTrue(readingRows(listOf(Section(3, "", listOf(blankHeading)))).any { it.block == blankHeading })
         assertEquals(listOf(image, image), compactSpans(listOf(image, image)))
     }
+
+    @Test fun dpreRetainsBlockAlignmentNestedFloatsAndAllCanonicalDBorderFields() {
+        val image = Span("link", "", "File:EU.svg", image = InlineImage("EU.svg", 13, 12, " ", " ", border = true),
+            fontScale = 0f, fontScaleBasis = FontScaleBasis.NormalBody, foreground = "#123456")
+        val numberBlocks = listOf(Block("paragraph", 0, listOf(Span("text", "one"))),
+            Block("paragraph", 0, listOf(Span("text", "two", fontScale = 2f)), textAlign = CellTextAlign.Center),
+            Block("paragraph", 0, listOf(Span("link", "three", "Target"))))
+        val cell = Cell(emptyList(), false, 2, 1, blocks = numberBlocks,
+            style = CellStyle(textAlign = CellTextAlign.Right))
+        val px0 = StyleLength(StyleLengthUnit.Px, 0f)
+        val margins = StyleEdges(px0, px0, px0, StyleLength(StyleLengthUnit.Px, 20f))
+        val table = Table(emptyList(), listOf(listOf(cell)), style = TableStyle(margins = margins, floatSide = TableFloatSide.Right))
+        val blocks = listOf(Block("table", 0, emptyList(), table = table),
+            Block("paragraph", 0, listOf(image), textAlign = CellTextAlign.Left),
+            heading("After", "After").copy(textAlign = CellTextAlign.Right))
+        val items = listOf(Item(2, blocks = blocks, kind = ReferenceKind.Fragment))
+        val sections = listOf(Section(2, "EU", blocks))
+        assertThrows(IllegalArgumentException::class.java) { decode(fixture('E', items, sections)) }
+        val media = listOf(Media("EU.svg", "image", ""))
+        val encoded = fixture('E', items, sections, media = media)
+        val entry = decode(encoded)
+        assertEquals(media, entry.media)
+        assertEquals(blocks, entry.sections.single().blocks)
+        assertEquals(blocks, entry.references.single().blocks)
+        assertEquals(listOf(null, CellTextAlign.Center, null), entry.sections.single().blocks[0].table!!.rows[0][0].blocks!!.map { it.textAlign })
+        assertEquals(CellTextAlign.Right, entry.sections.single().blocks[0].table!!.rows[0][0].style!!.textAlign)
+        assertTrue(entry.sections.single().blocks[1].spans.single().image!!.border)
+        assertEquals(" ", entry.sections.single().blocks[1].spans.single().image!!.alt)
+        assertEquals(TableFloatSide.Left, TableStyle(floatSide = TableFloatSide.Left).floatSide)
+        // New fields are allowed on all block kinds; no consumer-invented kind restriction.
+        for (kind in listOf("blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "preformatted", "rule")) {
+            val block = Block(kind, 0, emptyList(), textAlign = CellTextAlign.Center)
+            assertEquals(block, decode(fixture('E', listOf(Item(1, blocks = listOf(block))))).references.single().blocks!!.single())
+        }
+    }
+
+    @Test fun dpreKeepsLegacyDefaultsAndRejectsMalformedLayoutSuffixes() {
+        val old = listOf(Block("paragraph", 0, listOf(Span("text", "Legacy"))))
+        assertEquals(decode(fixture('D', listOf(Item(1, blocks = old)))).references,
+            decode(fixture('E', listOf(Item(1, blocks = old)))).references)
+        val marker = "E_tail"
+        val block = Block("heading", 0, listOf(Span("text", "Aligned")), level = 3, anchorFallback = marker, textAlign = CellTextAlign.Center)
+        val valid = fixture('E', listOf(Item(1, blocks = listOf(block))))
+        assertEquals(block, decode(valid).references.single().blocks!!.single())
+        fun locate(bytes: ByteArray, text: String): Int {
+            val needle = text.toByteArray()
+            return bytes.indices.single { it + needle.size <= bytes.size && bytes.copyOfRange(it, it + needle.size).contentEquals(needle) }
+        }
+        val suffix = locate(valid, marker) + marker.length
+        for ((at, value) in listOf(suffix to 2, suffix + 1 to 3, suffix + 1 to 255)) {
+            val bad = valid.copyOf(); bad[at] = value.toByte()
+            assertThrows(Exception::class.java) { decode(bad) }
+        }
+        for (length in valid.indices) assertThrows(Exception::class.java) { decode(valid.copyOf(length)) }
+        val table = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1))),
+            style = TableStyle(background = "#123abc", floatSide = TableFloatSide.Right))
+        val floated = fixture('E', listOf(Item(1, blocks = listOf(Block("table", 0, emptyList(), table = table)))))
+        assertEquals(table, decode(floated).references.single().blocks!!.single().table)
+        val color = locate(floated, "#123abc")
+        for ((at, value) in listOf(color - 5 to 32, color + 7 to 2, color + 7 to 255)) {
+            val bad = floated.copyOf(); bad[at] = value.toByte()
+            assertThrows(Exception::class.java) { decode(bad) }
+        }
+        // C/D must not silently consume E's new table flag or suffix.
+        for (version in listOf('C', 'D')) {
+            val bad = floated.copyOf(); bad[3] = version.code.toByte()
+            assertThrows(Exception::class.java) { decode(bad) }
+        }
+        val nullBlock = fixture('E', listOf(Item(1, blocks = listOf(Block("blank", 0, emptyList())))))
+        // Even an empty E block needs its alignment presence byte.
+        assertEquals(26, Wire(true, true, true).apply { block(Block("blank", 0, emptyList())) }.out.size())
+        assertThrows(Exception::class.java) { decode(nullBlock.copyOf(nullBlock.size - 5)) }
+    }
+
+    @Test fun typedCatalogCapacityIsVersionedAndCountsAudioWithoutCappingMediaOnlyEntries() {
+        fun catalog(count: Int) = List(count) { Media("Asset$it.svg", "image", "caption$it") }
+        fun spans(count: Int) = catalog(count).map { Span("link", "", "File:${it.file}", image = InlineImage(it.file, 30)) }
+        for (version in "CD") {
+            val expected = catalog(128)
+            val bytes = fixture(version, emptyList(), display = spans(128), media = expected)
+            assertEquals(expected, decode(bytes).media)
+            assertEquals(spans(128), decode(bytes).displayTitle)
+            assertThrows(IllegalArgumentException::class.java) {
+                decode(fixture(version, emptyList(), display = spans(129), media = catalog(129)))
+            }
+        }
+        for (count in listOf(128, 129, 193, 256)) {
+            val entry = decode(fixture('E', emptyList(), display = spans(count), media = catalog(count)))
+            assertEquals(catalog(count), entry.media)
+            assertEquals(spans(count), entry.displayTitle)
+            assertEquals(count, entry.inlineImages.size)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            decode(fixture('E', emptyList(), display = spans(257), media = catalog(257)))
+        }
+        val image = spans(1)
+        fun mixed(count: Int) = catalog(1) + List(count - 1) { Media("Audio$it.ogg", "audio", "audio caption") }
+        for ((version, limit) in listOf('C' to 128, 'D' to 128, 'E' to 256)) {
+            assertEquals(mixed(limit), decode(fixture(version, emptyList(), display = image, media = mixed(limit))).media)
+            assertThrows(IllegalArgumentException::class.java) {
+                decode(fixture(version, emptyList(), display = image, media = mixed(limit + 1)))
+            }
+        }
+        for (version in "BCDE") {
+            assertEquals(catalog(257), decode(fixture(version, emptyList(), media = catalog(257))).media)
+        }
+    }
+
+    @Test fun typedCatalogCapacityFindsEverySinkAndPreservesCatalogRejections() {
+        val image = Span("link", "", "File:Asset.svg", image = InlineImage("Asset.svg", 30))
+        val paragraph = Block("paragraph", 0, listOf(image))
+        val media = listOf(Media("Asset.svg", "image", "caption")) + List(128) { Media("Audio$it.ogg", "audio", "") }
+        fun section(block: Block) = listOf(Section(2, "Body", listOf(block)))
+        fun atEverySink(version: Char, assets: List<Media>): List<ByteArray> = listOf(
+            fixture(version, emptyList(), display = listOf(image), media = assets),
+            fixture(version, emptyList(), preamble = listOf(image), media = assets),
+            fixture(version, emptyList(), sections = section(paragraph), media = assets),
+            fixture(version, emptyList(), sections = section(tableBlock(paragraph)), media = assets),
+            fixture(version, emptyList(), sections = section(Block("table", 0, emptyList(),
+                table = Table(listOf(image), listOf(listOf(Cell(emptyList(), false, 1, 1)))))), media = assets),
+            fixture(version, emptyList(), sections = section(Block("table", 0, emptyList(),
+                table = Table(emptyList(), listOf(listOf(Cell(listOf(image), false, 1, 1)))))), media = assets),
+            fixture(version, emptyList(), sections = section(Block("table", 0, emptyList(),
+                table = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1,
+                    nestedTable = Table(emptyList(), listOf(listOf(Cell(listOf(image), false, 1, 1)))))))))), media = assets),
+            fixture(version, listOf(Item(1, spans = listOf(image))), media = assets),
+            fixture(version, listOf(Item(1, blocks = listOf(paragraph))), media = assets))
+        atEverySink('E', media).forEach { bytes ->
+            val entry = decode(bytes)
+            assertEquals(media, entry.media)
+            assertEquals(listOf(image.image!!), entry.inlineImages)
+        }
+        for (version in "CD") atEverySink(version, media).forEach { bytes ->
+            assertThrows(IllegalArgumentException::class.java) { decode(bytes) }
+        }
+        for (bad in listOf(media.drop(1), media + media.first(), listOf(media.first().copy(kind = "audio")) + media.drop(1))) {
+            atEverySink('E', bad).forEach { bytes -> assertThrows(IllegalArgumentException::class.java) { decode(bytes) } }
+        }
+    }
+
+    @Test fun controlledSourceFlagOrder193AndReferencesSurviveEWithoutNativeOutputClaim() {
+        // Controlled wire fixture, NOT a native-produced DE document. Names/order are
+        // authenticated against source-diagnosis01.json SHA25644e0df97165f226ef55e1f9d631f940cb99b97ce5971ccb2465e31ac1a67bb6c.
+        // Full captured reference/body conservation remains a genuine Writer/Reader obligation.
+        val files = listOf(
+            "Flag of Afghanistan.svg",
+            "Flag of Albania.svg",
+            "Flag of Algeria.svg",
+            "Flag of Andorra.svg",
+            "Flag of Angola.svg",
+            "Flag of Antigua and Barbuda.svg",
+            "Flag of Saudi Arabia.svg",
+            "Flag of Argentina.svg",
+            "Flag of Armenia.svg",
+            "Flag of Australia.svg",
+            "Flag of Austria.svg",
+            "Flag of Azerbaijan.svg",
+            "Flag of the Bahamas.svg",
+            "Flag of Bahrain.svg",
+            "Flag of Bangladesh.svg",
+            "Flag of Barbados.svg",
+            "Flag of Belgium.svg",
+            "Flag of Belize.svg",
+            "Flag of Benin.svg",
+            "Flag of Bhutan.svg",
+            "Flag of Belarus.svg",
+            "Flag of Myanmar.svg",
+            "Flag of Bolivia.svg",
+            "Flag of Bosnia and Herzegovina.svg",
+            "Flag of Botswana.svg",
+            "Flag of Brazil.svg",
+            "Flag of Brunei.svg",
+            "Flag of Bulgaria.svg",
+            "Flag of Burkina Faso.svg",
+            "Flag of Burundi.svg",
+            "Flag of Chile.svg",
+            "Flag of the People's Republic of China.svg",
+            "Flag of Croatia.svg",
+            "Flag of Cyprus.svg",
+            "Flag of Chad.svg",
+            "Flag of Montenegro.svg",
+            "Flag of the Czech Republic.svg",
+            "Flag of Denmark.svg",
+            "Flag of the Democratic Republic of the Congo.svg",
+            "Flag of Dominica.svg",
+            "Flag of the Dominican Republic.svg",
+            "Flag of Djibouti.svg",
+            "Flag of Egypt.svg",
+            "Flag of Ecuador.svg",
+            "Flag of Eritrea.svg",
+            "Flag of Estonia.svg",
+            "Flag of Ethiopia.svg",
+            "Flag of Fiji.svg",
+            "Flag of Philippines.svg",
+            "Flag of Finland.svg",
+            "Flag of France.svg",
+            "Flag of Gabon.svg",
+            "Flag of The Gambia.svg",
+            "Flag of Ghana.svg",
+            "Flag of Greece.svg",
+            "Flag of Grenada.svg",
+            "Flag of Georgia.svg",
+            "Flag of Guyana.svg",
+            "Flag of Guatemala.svg",
+            "Flag of Guinea.svg",
+            "Flag of Guinea-Bissau.svg",
+            "Flag of Equatorial Guinea.svg",
+            "Flag of Haiti.svg",
+            "Flag of Spain.svg",
+            "Flag of the Netherlands.svg",
+            "Flag of India.svg",
+            "Flag of Indonesia.svg",
+            "Flag of Iraq.svg",
+            "Flag of Iran.svg",
+            "Flag of Ireland.svg",
+            "Flag of Iceland.svg",
+            "Flag of Israel.svg",
+            "Flag of Jamaica.svg",
+            "Flag of Japan.svg",
+            "Flag of Yemen.svg",
+            "Flag of Jordan.svg",
+            "Flag of Cambodia.svg",
+            "Flag of Cameroon.svg",
+            "Flag of Canada.svg",
+            "Flag of Qatar.svg",
+            "Flag of Kazakhstan.svg",
+            "Flag of Kenya.svg",
+            "Flag of Kyrgyzstan.svg",
+            "Flag of Kiribati.svg",
+            "Flag of Colombia.svg",
+            "Flag of the Comoros.svg",
+            "Flag of the Republic of the Congo.svg",
+            "Flag of South Korea.svg",
+            "Flag of North Korea.svg",
+            "Flag of Costa Rica.svg",
+            "Flag of Cuba.svg",
+            "Flag of Kuwait.svg",
+            "Flag of Laos.svg",
+            "Flag of Lesotho.svg",
+            "Flag of Lebanon.svg",
+            "Flag of Liberia.svg",
+            "Flag of Libya.svg",
+            "Flag of Liechtenstein.svg",
+            "Flag of Lithuania.svg",
+            "Flag of Luxembourg.svg",
+            "Flag of Latvia.svg",
+            "Flag of North Macedonia.svg",
+            "Flag of Madagascar.svg",
+            "Flag of Malawi.svg",
+            "Flag of Maldives.svg",
+            "Flag of Malaysia.svg",
+            "Flag of Mali.svg",
+            "Flag of Malta.svg",
+            "Flag of Morocco.svg",
+            "Flag of Mauritania.svg",
+            "Flag of Mauritius.svg",
+            "Flag of Mexico.svg",
+            "Flag of Federated States of Micronesia.svg",
+            "Flag of Moldova.svg",
+            "Flag of Monaco.svg",
+            "Flag of Mongolia.svg",
+            "Flag of Mozambique.svg",
+            "Flag of Namibia.svg",
+            "Flag of Nauru.svg",
+            "Flag of Nepal.svg",
+            "Flag of Germany.svg",
+            "Flag of Niger.svg",
+            "Flag of Nigeria.svg",
+            "Flag of Nicaragua.svg",
+            "Flag of Norway.svg",
+            "Flag of New Zealand.svg",
+            "Flag of Oman.svg",
+            "Flag of Pakistan.svg",
+            "Flag of Palau.svg",
+            "Flag of Panama.svg",
+            "Flag of Papua New Guinea.svg",
+            "Flag of Paraguay.svg",
+            "Flag of Peru.svg",
+            "Flag of Poland.svg",
+            "Flag of Portugal.svg",
+            "Flag of South Africa.svg",
+            "Flag of the Central African Republic.svg",
+            "Flag of Cape Verde (10-17).svg",
+            "Flag of Russia.svg",
+            "Flag of Romania.svg",
+            "Flag of Rwanda.svg",
+            "Flag of Saint Kitts and Nevis.svg",
+            "Flag of Saint Lucia.svg",
+            "Flag of Saint Vincent and the Grenadines.svg",
+            "Flag of El Salvador.svg",
+            "Flag of Samoa.svg",
+            "Flag of San Marino.svg",
+            "Flag of Senegal.svg",
+            "Flag of Serbia.svg",
+            "Flag of the Seychelles.svg",
+            "Flag of Sierra Leone.svg",
+            "Flag of Singapore.svg",
+            "Flag of Slovakia.svg",
+            "Flag of Slovenia.svg",
+            "Flag of Somalia.svg",
+            "Flag of Sri Lanka.svg",
+            "Flag of the United States.svg",
+            "Flag of Swaziland.svg",
+            "Flag of Sudan.svg",
+            "Flag of Suriname.svg",
+            "Flag of Syria.svg",
+            "Flag of Switzerland.svg",
+            "Flag of Sweden.svg",
+            "Flag of Tajikistan.svg",
+            "Flag of the Republic of China.svg",
+            "Flag of Thailand.svg",
+            "Flag of Tanzania.svg",
+            "Flag of East Timor.svg",
+            "Flag of Togo (3-2).svg",
+            "Flag of Tonga.svg",
+            "Flag of Trinidad and Tobago.svg",
+            "Flag of Tunisia.svg",
+            "Flag of Turkey.svg",
+            "Flag of Turkmenistan.svg",
+            "Flag of Tuvalu.svg",
+            "Flag of Uganda.svg",
+            "Flag of Ukraine.svg",
+            "Flag of Uruguay.svg",
+            "Flag of Uzbekistan.svg",
+            "Flag of Vanuatu.svg",
+            "Flag of the Vatican City.svg",
+            "Flag of Venezuela.svg",
+            "Flag of Hungary.svg",
+            "Flag of the United Kingdom.svg",
+            "Flag of Vietnam.svg",
+            "Flag of Italy.svg",
+            "Flag of Cote d'Ivoire.svg",
+            "Flag of the Marshall Islands.svg",
+            "Flag of the Solomon Islands.svg",
+            "Flag of Sao Tome and Principe.svg",
+            "Flag of Zambia.svg",
+            "Flag of Zimbabwe.svg",
+            "Flag of the United Arab Emirates.svg"
+        )
+        assertEquals(193, files.size)
+        assertEquals(193, files.toSet().size)
+        val flags = files.map { Span("link", "", "File:$it", image = InlineImage(it, 30)) }
+        val rows = flags.mapIndexed { index, flag -> listOf(Cell(listOf(flag, Span("text", " row ${index + 1}")), false, 1, 1)) }
+        val table = Block("table", 0, emptyList(), table = Table(emptyList(), rows))
+        val sections = listOf(Section(2, "Controlled flags", listOf(table)))
+        val reference = listOf(Span("external_link", "Retained reference", "https://example.org/reference", role = "reference"))
+        val media = files.map { Media(it, "image", "") }
+        val entry = decode(fixture('E', listOf(Item(1, spans = reference)), sections = sections, media = media))
+        assertEquals(sections, entry.sections)
+        assertEquals(media, entry.media)
+        assertEquals(files, entry.inlineImages.map { it.file })
+        assertTrue(entry.inlineImages.all { it.widthPx == 30L && it.heightPx == null })
+        assertEquals(listOf(Reference(1, 1, "notes", reference, ReferenceKind.Note)), entry.references)
+    }
+
 }

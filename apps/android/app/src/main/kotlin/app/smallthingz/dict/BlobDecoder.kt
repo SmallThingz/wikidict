@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2-DPRD decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2-DPRE decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
@@ -13,13 +13,14 @@ object BlobDecoder {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val magicVersion = r.byte()
-        require(magicVersion in 50..57 || magicVersion in 65..68) { "Unsupported presentation format" }
-        val version = if (magicVersion in 65..68) 57 else magicVersion
-        r.fontScales = magicVersion in 65..68
-        r.fontScaleBases = magicVersion in 66..68
-        r.tableStyles = magicVersion in 67..68
-        r.inlineImages = magicVersion in 67..68
-        r.imageBorders = magicVersion == 68
+        require(magicVersion in 50..57 || magicVersion in 65..69) { "Unsupported presentation format" }
+        val version = if (magicVersion in 65..69) 57 else magicVersion
+        r.fontScales = magicVersion in 65..69
+        r.fontScaleBases = magicVersion in 66..69
+        r.tableStyles = magicVersion in 67..69
+        r.inlineImages = magicVersion in 67..69
+        r.imageBorders = magicVersion >= 68
+        r.blockLayouts = magicVersion == 69
         r.explanations = version >= 51
         r.colors = version >= 52
         r.anchors = version >= 53
@@ -32,7 +33,7 @@ object BlobDecoder {
             val level = r.byte(); val name = r.string()
             val anchor = if (r.anchors) r.string() else ""
             val fallback = if (r.anchors) r.string() else ""
-            Section(level, name, List(r.count(if (r.anchors) 25 else 17)) { r.block() }, anchor, fallback)
+            Section(level, name, List(r.count(if (r.blockLayouts) 26 else if (r.anchors) 25 else 17)) { r.block() }, anchor, fallback)
         }
         val preamble = r.spans()
         // Preserve typed etymology ownership while retaining the authored section order.
@@ -66,13 +67,19 @@ object BlobDecoder {
             } else null
             val group = r.string()
             val spans = r.spans()
-            val blocks = if (r.inlineImages && r.presence()) List(r.count(25)) { r.block() } else null
+            val blocks = if (r.inlineImages && r.presence()) List(r.count(if (r.blockLayouts) 26 else 25)) { r.block() } else null
             Reference(number, groupNumber, group, spans, referenceKind, blocks)
         }
         val media = List(r.count(9)) { Media(r.string(), r.enum(listOf("image", "audio")), r.string()) }
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }
-        return Entry(title, display, kind, language, code, sections, references, preamble, media,
+        val entry = Entry(title, display, kind, language, code, sections, references, preamble, media,
             etymologySections = etymologySections.toSet())
+        // E extends the semantic catalog capacity; older wire versions retain 128.
+        // Historical media-only entries do not acquire a typed-image catalog limit.
+        require(magicVersion == 69 || entry.inlineImages.isEmpty() || media.size <= 128) {
+            "Too many inline image assets for legacy presentation"
+        }
+        return entry
     }
     private class Reader(bytes: ByteArray) {
         val buffer: ByteBuffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
@@ -90,6 +97,7 @@ object BlobDecoder {
         var tableStyles = false
         var inlineImages = false
         var imageBorders = false
+        var blockLayouts = false
         fun byte(): Int { require(buffer.remaining() >= 1); return buffer.get().toInt() and 255 }
         fun u16(): Int { require(buffer.remaining() >= 2); return buffer.short.toInt() and 65535 }
         fun u32(): Long { require(buffer.remaining() >= 4); return buffer.int.toLong() and 0xffffffffL }
@@ -169,7 +177,7 @@ object BlobDecoder {
         }
         private fun tableStyle(): TableStyle? {
             if (!tableStyles || !presence()) return null
-            val flags = byte(); require(flags in 1..15) { "Invalid table style flags" }
+            val flags = byte(); require(flags in 1..(if (blockLayouts) 31 else 15)) { "Invalid table style flags" }
             val background = if (flags and 1 != 0) styleRgb() else null
             val border = if (flags and 2 != 0) styleBorder() else null
             val collapse = if (flags and 4 != 0) when (byte()) {
@@ -177,7 +185,11 @@ object BlobDecoder {
                 else -> error("Unknown border collapse")
             } else null
             val margins = if (flags and 8 != 0) styleEdges() else null
-            return TableStyle(background, border, collapse, margins)
+            val floatSide = if (flags and 16 != 0) when (byte()) {
+                0 -> TableFloatSide.Left; 1 -> TableFloatSide.Right
+                else -> error("Unknown table float side")
+            } else null
+            return TableStyle(background, border, collapse, margins, floatSide)
         }
         private fun table(depth: Int): Table? {
             if (!presence()) return null
@@ -205,7 +217,7 @@ object BlobDecoder {
                 } else null
                 val content = spans()
                 val child = if (nestedTables) table(depth + 1) else null
-                val blocks = if (cellBlocks && presence()) List(count(25)) { block(depth) } else null
+                val blocks = if (cellBlocks && presence()) List(count(if (blockLayouts) 26 else 25)) { block(depth) } else null
                 Cell(content, header, cols, rowspan, background, child, blocks, cellStyle())
             } }
             return Table(caption, rows, geometry, tableStyle()).also { tableGrid(it) }
@@ -219,7 +231,11 @@ object BlobDecoder {
             val anchor = if (anchors) string() else ""
             val fallback = if (anchors) string() else ""
             require(kind == "heading" || (anchor.isEmpty() && fallback.isEmpty())) { "Only headings may have a destination anchor" }
-            return Block(kind, depth, spans, path, number, table, feature, level, anchor, fallback)
+            val textAlign = if (blockLayouts && presence()) when (byte()) {
+                0 -> CellTextAlign.Left; 1 -> CellTextAlign.Center; 2 -> CellTextAlign.Right
+                else -> error("Unknown block text alignment")
+            } else null
+            return Block(kind, depth, spans, path, number, table, feature, level, anchor, fallback, textAlign)
         }
     }
 }

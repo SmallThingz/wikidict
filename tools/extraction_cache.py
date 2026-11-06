@@ -205,9 +205,15 @@ def cache_path(root, key):
     return root / key
 
 
+def extraction_files(root):
+    # Legacy generations have no full-scan proof and retain the tail guard.
+    proof = "extraction-completion.json"
+    return (*FILES, proof) if os.path.lexists(root / proof) else FILES
+
+
 def walk_assets(root):
     """Return every allowed regular file, including each module source."""
-    names = list(FILES)
+    names = list(extraction_files(root))
     module_root = root / TREE
     if module_root.is_symlink() or not module_root.is_dir():
         raise ValueError("Missing regular modules directory")
@@ -261,7 +267,37 @@ def validate_extraction_completion(root):
         final_page_stream = int(page_fields[0])
     except ValueError as exc:
         raise ValueError("Invalid extraction stream/page id") from exc
-    if final_page_stream != final_stream:
+    proof_path = root / "extraction-completion.json"
+    if os.path.lexists(proof_path):
+        regular(proof_path)
+        with proof_path.open("rb") as stream:
+            raw = stream.read(4097)
+        if len(raw) > 4096:
+            raise ValueError("Oversized extraction completion proof")
+        proof = json.loads(raw)
+        fields = {"schema", "version", "expected_stream_count", "consumed_stream_count", "pages"}
+        if (not isinstance(proof, dict) or set(proof) != fields or
+                proof["schema"] != "wikidict.extraction-completion.v1" or
+                type(proof["version"]) is not int or proof["version"] != 1 or
+                any(type(proof[name]) is not int or not 0 < proof[name] <= 2**64 - 1
+                    for name in ("expected_stream_count", "consumed_stream_count", "pages")) or
+                proof["expected_stream_count"] != proof["consumed_stream_count"] or
+                proof["expected_stream_count"] != final_stream + 1 or
+                not 0 <= final_page_stream <= final_stream):
+            raise ValueError("Invalid extraction completion proof")
+        title_path = root / "page-title-index.bin"
+        regular(title_path)
+        with title_path.open("rb") as stream:
+            header = stream.read(64)
+        if len(header) != 64 or header[:8] != b"DPTIDX01":
+            raise ValueError("Invalid page title index header")
+        kind, capacity, rows, unique, page_size = (
+            int.from_bytes(header[offset:offset + 8], "little") for offset in range(8, 48, 8))
+        if (kind not in (1, 2) or capacity < 8 or capacity & (capacity - 1) or
+                unique > rows or unique > capacity or title_path.stat().st_size != 64 + 16 * capacity or
+                page_size != (root / "page-index.tsv").stat().st_size or rows != proof["pages"]):
+            raise ValueError("Extraction completion page index mismatch")
+    elif final_page_stream != final_stream:
         raise ValueError(
             f"Incomplete extraction: final page stream {final_page_stream} != final stream {final_stream}")
 
@@ -292,7 +328,7 @@ def probe(root, expected, output):
         return MISS
     # Validation is complete before the first link is installed. The cache is
     # immutable and the top-level build lock excludes concurrent replacement.
-    for name in (TREE, *FILES):
+    for name in (TREE, *extraction_files(source)):
         os.symlink((source / name).resolve(strict=True), output / name,
                    target_is_directory=name == TREE)
     print(f"Reusing verified extraction assets: {source}", flush=True)
@@ -339,7 +375,7 @@ def publish(root, expected, source):
         if timing is not None: timing.switch("link_copy")
         temporary = Path(tempfile.mkdtemp(prefix=".part-", dir=root))
         try:
-            for name in FILES:
+            for name in extraction_files(source):
                 original = source / name
                 regular(original)
                 link_or_copy(original, temporary / name)

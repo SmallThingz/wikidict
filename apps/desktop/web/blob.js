@@ -7,7 +7,7 @@ const validInlineImageFile=value=>typeof value==='string'&&value.length>0&&new T
 const roles = ['normal','label','pronunciation','headword','example','quotation','citation','reference'];
 const require = (ok, message='Invalid compiled dictionary') => { if (!ok) throw Error(message); };
 export function decode(bytes, metadata) {
-  let p=0, budget=1000000, explained=false, colored=false, anchored=false, painted=false, nested=false, ordered=false, scaled=false, based=false, referenceItems=false, referenceBlocks=false, imageBorder=false;
+  let p=0, budget=1000000, explained=false, colored=false, anchored=false, painted=false, nested=false, ordered=false, scaled=false, based=false, referenceItems=false, referenceBlocks=false, imageBorder=false, aligned=false;
   const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
   const take=n=>{require(n>=0 && n<=bytes.length-p);const start=p;p+=n;return bytes.subarray(start,p);};
   const byte=()=>take(1)[0], u16=()=>{const at=p;take(2);return view.getUint16(at,true);}, u32=()=>{const at=p;take(4);return view.getUint32(at,true);};
@@ -36,13 +36,14 @@ export function decode(bytes, metadata) {
   const borderStyle=()=>{const kind=tag(['none','solid']);if(kind==='none')return {none:{}};const width=styleLength(),color=string();require(/^#[0-9a-f]{6}$/.test(color));return {solid:{width,color}};};
   const typedStyle=table=>{
     if(!presence())return null;
-    const flags=byte();require(flags!==0&&(flags&~(table?15:7))===0);
+    const flags=byte();require(flags!==0&&(flags&~(table?(aligned?31:15):7))===0);
     const style={};
     if(table){
       if(flags&1){style.background=string();require(/^#[0-9a-f]{6}$/.test(style.background));}
       if(flags&2)style.border=borderStyle();
       if(flags&4)style.collapse=tag(['separate','collapse']);
       if(flags&8)style.margins=edges();
+      if(aligned&&(flags&16))style.float_side=tag(['left','right']);
     }else{
       if(flags&1)style.border=borderStyle();
       if(flags&2)style.padding=edges();
@@ -63,7 +64,7 @@ export function decode(bytes, metadata) {
       const header=presence(),colspan=u16(),rowspan=u16();require(colspan>=1&&colspan<=100&&rowspan>=1&&rowspan<=100);
       const background=colored?rgb():null,values=spans(),cell={header,colspan,rowspan,background,spans:values};
       if(nested){const child=tableValue(depth+1);if(child){require(values.length===0);cell.nested_table=child;}}
-      if(ordered&&presence()){require(values.length===0&&!cell.nested_table);cell.blocks=list(25,()=>block(depth));}
+      if(ordered&&presence()){require(values.length===0&&!cell.nested_table);cell.blocks=list(aligned?26:25,()=>block(depth));}
       if(referenceBlocks){const style=typedStyle(false);if(style)cell.style=style;}
       return cell;
     })}))};
@@ -76,12 +77,13 @@ export function decode(bytes, metadata) {
     value.path=string();value.number=string();
     const table=tableValue(tableDepth+1);if(table)value.table=table;
     value.anchor=anchored?string():'';value.anchor_fallback=anchored?string():'';
+    if(aligned&&presence())value.text_align=tag(['left','center','right']);
     return value;
   };
   const magic=utf8.decode(take(4));
-  require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD','Dictionary contains uncompiled records');
-  imageBorder=magic==='DPRD';referenceBlocks=magic==='DPRC'||imageBorder;based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
-  const entry={...metadata,presentation_version:magic,display_title:spans(),sections:list(anchored?17:9,()=>({level:byte(),title:string(),anchor:anchored?string():'',anchor_fallback:anchored?string():'',blocks:list(anchored?25:17,()=>block())})),preamble_spans:spans()};
+  require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE','Dictionary contains uncompiled records');
+  aligned=magic==='DPRE';imageBorder=magic==='DPRD'||aligned;referenceBlocks=magic==='DPRC'||imageBorder;based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
+  const entry={...metadata,presentation_version:magic,display_title:spans(),sections:list(anchored?17:9,()=>({level:byte(),title:string(),anchor:anchored?string():'',anchor_fallback:anchored?string():'',blocks:list(aligned?26:anchored?25:17,()=>block())})),preamble_spans:spans()};
   list(29,()=>{string();string();const s=index(entry.sections.length);optional(entry.sections.length);const n=entry.sections[s].blocks.length;
     list(18,(_,sense)=>{index(n);optional(sense);indices(n);indices(n);indices(n);if(presence()){string();string();string();}});
     indices(n);indices(n);indices(entry.sections.length);
@@ -97,7 +99,7 @@ export function decode(bytes, metadata) {
       const name=string(),group=string();reference={number,group_number,name,group,spans:spans()};
     }
     if(referenceBlocks){
-      if(presence()){require(reference.spans.length===0);reference.blocks=list(25,()=>block());}
+      if(presence()){require(reference.spans.length===0);reference.blocks=list(aligned?26:25,()=>block());}
     }
     return reference;
   });
@@ -107,7 +109,7 @@ export function decode(bytes, metadata) {
   const inspectTable=value=>{inspect(value.caption);for(const row of value.rows)for(const cell of row.cells){inspect(cell.spans);if(cell.blocks)inspectBlocks(cell.blocks);if(cell.nested_table)inspectTable(cell.nested_table);}};
   const inspectBlocks=values=>{for(const value of values){inspect(value.spans);if(value.table)inspectTable(value.table);}};
   inspect(entry.display_title);inspect(entry.preamble_spans);for(const section of entry.sections)inspectBlocks(section.blocks);for(const ref of entry.references){inspect(ref.spans);if(ref.blocks)inspectBlocks(ref.blocks);}
-  if(images.length)require(entry.media.length<=128);
+  if(images.length)require(entry.media.length<=(aligned?256:128));
   for(const image of images){const matches=entry.media.filter(media=>media.file===image.file);require(matches.length===1&&matches[0].kind==='image','Invalid inline image catalog identity');}
   require(p===bytes.length,'Trailing presentation data');return entry;
 }
@@ -164,7 +166,7 @@ export async function buildIndex(source) {
       rows.push({title:alias.source_key,raw_key:title,source_kind:alias.source_kind,source_title:alias.source_title,offset:p,length});
     }else{
       const magic=utf8.decode(await source.read(p,4));
-      require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD');
+      require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE');
       rows.push({title,offset:p,length});
     }
     require(rows.length<=10000000);p+=length;

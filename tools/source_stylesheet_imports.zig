@@ -17,12 +17,24 @@ pub const Root = struct {
 pub const Proof = struct {
     snapshot_sha256: [64]u8,
     resource_sha256: [64]u8,
-    page_id: u64,
-    revision_id: u64,
+    page_id: u64 = 0,
+    revision_id: u64 = 0,
+    core: ?CoreProof = null,
+    custom: ?CustomProof = null,
     url: []const u8 = leaf_url,
     joined: bool,
     sources: []const styles.SourceRange = &.{},
     pub fn jsonStringify(self: Proof, jw: anytype) !void {
+        if (self.custom) |custom| {
+            try jw.write(.{ .schema = "wikidict.custom-property-style-join.v1", .snapshot_sha256 = self.snapshot_sha256[0..], .joined = self.joined, .custom = custom, .sources = self.sources });
+            return;
+        }
+        if (self.core) |core| {
+            try jw.write(.{ .schema = "wikidict.core-default-style-join.v1",
+                .snapshot_sha256 = self.snapshot_sha256[0..], .projection_sha256 = self.resource_sha256[0..],
+                .joined = self.joined, .core = core, .sources = self.sources });
+            return;
+        }
         try jw.write(.{ .schema = "wikidict.stylesheet-import-join.v1",
             .snapshot_sha256 = self.snapshot_sha256[0..], .resource_sha256 = self.resource_sha256[0..],
             .page_id = self.page_id, .revision_id = self.revision_id, .url = self.url, .joined = self.joined, .sources = self.sources });
@@ -121,6 +133,14 @@ fn flatLeaf(css: []const u8) bool {
 }
 
 pub fn joinAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []const u8) !Joined {
+    if (snapshot_bytes.len > max_snapshot_bytes) return error.InvalidStylesheetImports;
+    const header = try std.json.parseFromSlice(struct { schema: []const u8 }, a, snapshot_bytes, .{ .ignore_unknown_fields = true });
+    defer header.deinit();
+    if (std.mem.eql(u8, header.value.schema, custom_schema)) return joinCustomAlloc(a, root_css, root, snapshot_bytes);
+    if (std.mem.eql(u8, header.value.schema, core_schema)) return joinCoreAlloc(a, root_css, root, snapshot_bytes);
+    return joinImportAlloc(a, root_css, root, snapshot_bytes);
+}
+fn joinImportAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []const u8) !Joined {
     if (snapshot_bytes.len > max_snapshot_bytes) return error.InvalidStylesheetImports;
     const parsed = try std.json.parseFromSlice(Snapshot, a, snapshot_bytes, .{});
     defer parsed.deinit();
@@ -304,4 +324,359 @@ test "nested missing conditional cyclic and sheet-local at rules keep original i
     }
     try std.testing.expect(flatLeaf("/* @import 'not-an-edge'; */ table.X{background:#fff;}"));
     try std.testing.expect(flatLeaf("table.X{content:'@namespace';}"));
+}
+
+// This reviewed closure is an explicit build-input policy, not a renderer
+// class-name rule. It admits only the immutable, variable-independent property
+// projection whose complete source/dependency graph was reviewed. It makes no
+// claim to implement a skin, LESS evaluation, or unrelated core properties.
+const core_schema = "wikidict.core-default-styles.v1";
+const core_revision = "79b81ba96674efc8a803fc956bc501d347d440d2";
+const core_policy = "mediawiki-79b81-elements-literal-alignment-v1";
+const core_url = "https://raw.githubusercontent.com/wikimedia/mediawiki/79b81ba96674efc8a803fc956bc501d347d440d2/resources/src/mediawiki.skinning/elements.less";
+const core_siteinfo_hash = "c750bb9f3cfdf543d287ce2a45f87150b8ca35e1fe0944e0636c11a7bcc583bb";
+const core_normalized_hash = "62c5d7bdbe3a9df80b178f5346075ac2e1265fbec423859166be439f509ada86";
+const core_namespace_hash = "c27eaadbf67364c9eef4848466df97c439fcf36e780f7e47d795a359222e7641";
+const core_projection_hash = "1bfe9721e23c539bf6a8c1312f447178cc0c90799f2888578af30313331497ea";
+const CoreSourcePin = struct { path: []const u8, bytes: usize, sha256: []const u8 };
+const core_source_pins = [_]CoreSourcePin{
+    .{ .path = "resources/src/mediawiki.skinning/elements.less", .bytes = 5025, .sha256 = "91b3adb124ea39ea8d3c0f4b4ccabe0b4b407c92a5d4eca495e9f022ed44bb94" },
+    .{ .path = "resources/src/mediawiki.less/mediawiki.mixins.less", .bytes = 7459, .sha256 = "3dc08902d9913935a32d341648ad08e856a723efea8f6706733fbd2daacea19a" },
+    .{ .path = "resources/src/mediawiki.less/mediawiki.skin.variables.less", .bytes = 206, .sha256 = "a7e87080020f19b64470e7a61b9aa8267dcc0f74ca6a7fa714ea1bbb4a0ea32f" },
+    .{ .path = "resources/src/mediawiki.less/mediawiki.skin.defaults.less", .bytes = 19027, .sha256 = "412516b776272f977dd5c54456a4782599b3668ed9bdd2d15ececd0ba119b8a6" },
+};
+const CoreSnapshot = struct {
+    schema: []const u8,
+    wiki: []const u8,
+    dump_date: []const u8,
+    namespace_sha256: []const u8,
+    root_css_sha256: []const u8,
+    root_page_id: u64,
+    root_revision_id: u64,
+    core_revision: []const u8,
+    coverage_policy: []const u8,
+    siteinfo_raw: []const u8,
+    siteinfo_normalized: []const u8,
+    sources: []const struct { path: []const u8, bytes: usize, sha256: []const u8, text: []const u8 },
+    projection: struct { source_index: usize, start: usize, end: usize, sha256: []const u8 },
+};
+pub const CoreProof = struct {
+    siteinfo_sha256: [64]u8,
+    normalized_siteinfo_sha256: [64]u8,
+    pub fn jsonStringify(self: CoreProof, jw: anytype) !void {
+        try jw.write(.{ .kind = "reviewed-core-default-projection", .core_revision = core_revision,
+            .coverage_policy = core_policy, .generator = "MediaWiki 1.47.0-wmf.22",
+            .siteinfo_sha256 = self.siteinfo_sha256[0..], .normalized_siteinfo_sha256 = self.normalized_siteinfo_sha256[0..],
+            .temporal_scope = "version observed 2026-10-06; not a claim of dump-date deployment or skin equivalence",
+            .source_graph = core_source_pins,
+            .projection = .{ .source_index = 0, .start = 4824, .end = 4927, .sha256 = core_projection_hash },
+        });
+    }
+};
+fn joinCoreAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []const u8) !Joined {
+    const parsed = try std.json.parseFromSlice(CoreSnapshot, a, snapshot_bytes, .{});
+    defer parsed.deinit();
+    const value = parsed.value;
+    if (!std.mem.eql(u8, value.schema, core_schema) or !std.mem.eql(u8, value.wiki, root.wiki) or
+        !std.mem.eql(u8, value.wiki, "euwiktionary") or !std.mem.eql(u8, value.dump_date, root.dump_date) or
+        !std.mem.eql(u8, value.dump_date, "20261001") or !std.mem.eql(u8, value.namespace_sha256, root.namespace_sha256) or
+        !std.mem.eql(u8, value.namespace_sha256, core_namespace_hash) or
+        value.root_page_id != root.page_id or value.root_revision_id != root.revision_id or
+        root.page_id == 0 or root.revision_id == 0 or !std.mem.eql(u8, value.root_css_sha256, &sha256(root_css)) or
+        !std.mem.eql(u8, value.core_revision, core_revision) or !std.mem.eql(u8, value.coverage_policy, core_policy) or
+        !std.mem.eql(u8, &sha256(value.siteinfo_raw), core_siteinfo_hash) or
+        !std.mem.eql(u8, &sha256(value.siteinfo_normalized), core_normalized_hash) or
+        value.sources.len != core_source_pins.len or value.projection.source_index != 0 or
+        value.projection.start != 4824 or value.projection.end != 4927 or
+        !std.mem.eql(u8, value.projection.sha256, core_projection_hash)) return error.InvalidStylesheetImports;
+    // The complete immutable source graph, not caller-selected hashes/ranges,
+    // determines the allowed projection. Raw and normalized metadata are pinned
+    // separately from the namespace-registry hash used by the ordinary loader.
+    for (value.sources, core_source_pins) |source, pin| {
+        if (!std.mem.eql(u8, source.path, pin.path) or source.bytes != pin.bytes or source.text.len != pin.bytes or
+            !std.mem.eql(u8, source.sha256, pin.sha256) or !std.mem.eql(u8, &sha256(source.text), pin.sha256))
+            return error.InvalidStylesheetImports;
+    }
+    const projected = value.sources[0].text[value.projection.start..value.projection.end];
+    if (!std.mem.eql(u8, &sha256(projected), core_projection_hash)) return error.InvalidStylesheetImports;
+    const common_url = try std.fmt.allocPrint(a, "https://eu.wiktionary.org/w/index.php?title=MediaWiki:Common.css&action=raw&oldid={d}", .{root.revision_id});
+    defer a.free(common_url);
+    // Core defaults precede the COMPLETE actual Common.css. Unknown applicable
+    // site declarations remain subject to the ordinary conservative profile.
+    const segments = [_]styles.Source{
+        .{ .css = projected, .base_url = core_url, .byte_start = value.projection.start },
+        .{ .css = root_css, .base_url = common_url },
+    };
+    const profile = try styles.parseSourcesAlloc(a, &segments);
+    return .{ .profile = profile, .proof = .{
+        .snapshot_sha256 = sha256(snapshot_bytes), .resource_sha256 = sha256(projected),
+        .joined = true, .sources = profile.sources, .url = core_url,
+        .core = .{ .siteinfo_sha256 = sha256(value.siteinfo_raw), .normalized_siteinfo_sha256 = sha256(value.siteinfo_normalized) },
+    } };
+}
+
+const CoreDefaultFixture = struct {
+    const snapshot = @embedFile("testdata/core-default-styles/snapshot.json");
+    const css = @embedFile("testdata/core-default-styles/common.css");
+    const root: Root = .{ .wiki = "euwiktionary", .dump_date = "20261001",
+        .namespace_sha256 = core_namespace_hash, .page_id = 4244, .revision_id = 409541 };
+    fn withCss(a: A, css_bytes: []const u8) ![]const u8 {
+        const parsed = try std.json.parseFromSlice(CoreSnapshot, a, snapshot, .{});
+        defer parsed.deinit();
+        var value = parsed.value;
+        const hash = sha256(css_bytes);
+        value.root_css_sha256 = &hash;
+        return std.json.Stringify.valueAlloc(a, value, .{});
+    }
+};
+
+test "reviewed core defaults bind complete source closure before exact Common css" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const F = CoreDefaultFixture;
+    var joined = try joinAlloc(a, F.css, F.root, F.snapshot);
+    defer joined.profile.deinit();
+    try std.testing.expect(joined.proof.joined and joined.proof.core != null);
+    try std.testing.expectEqual(@as(usize, 2), joined.profile.sources.len);
+    try std.testing.expectEqualStrings(core_url, joined.profile.sources[0].base_url);
+    try std.testing.expectEqual(@as(usize, 4824), joined.profile.sources[0].byte_start);
+    try std.testing.expectEqual(@as(usize, 103), joined.profile.sources[0].bytes);
+    try std.testing.expectEqualStrings(core_projection_hash, &joined.profile.sources[0].css_sha256);
+    try std.testing.expectEqualStrings(&sha256(F.css), &joined.profile.sources[1].css_sha256);
+    try std.testing.expectEqual(@as(usize, 0), joined.profile.sources[1].byte_start);
+    try std.testing.expect(joined.profile.sources[1].rule_begin >= joined.profile.sources[0].rule_end);
+    const alignment = try joined.profile.resolveAlignment(a, "div", "center", "", null, "");
+    try std.testing.expect(alignment.specified and !alignment.unresolved);
+    try std.testing.expectEqual(@import("encoder").presentation_types.CellTextAlign.center, alignment.value.?);
+    const proof = try std.json.Stringify.valueAlloc(a, joined.proof, .{});
+    try std.testing.expect(std.mem.indexOf(u8, proof, "wikidict.core-default-style-join.v1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, proof, "reviewed-core-default-projection") != null);
+    // Core git authority must never be represented as an invented wiki page.
+    try std.testing.expect(std.mem.indexOf(u8, proof, "\"page_id\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, proof, "\"revision_id\"") == null);
+}
+
+test "core default snapshot refuses altered versions dependencies projections and root joins" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const F = CoreDefaultFixture;
+    const parsed = try std.json.parseFromSlice(CoreSnapshot, a, F.snapshot, .{});
+    defer parsed.deinit();
+    for (0..7) |case| {
+        var value = parsed.value;
+        switch (case) {
+            0 => value.core_revision = "unreviewed",
+            1 => value.coverage_policy = "caller-claims-complete",
+            2 => value.projection.start += 1,
+            3 => value.projection.end -= 1,
+            4 => value.siteinfo_raw = "{\"query\":{\"general\":{\"generator\":\"MediaWiki 1.48\"}}}",
+            5 => value.siteinfo_normalized = "{}",
+            6 => {
+                const sources = try a.dupe(@TypeOf(value.sources[0]), value.sources);
+                sources[1].text = "/* missing actual mixin dependency */";
+                const forged_hash = sha256(sources[1].text);
+                sources[1].sha256 = try a.dupe(u8, &forged_hash);
+                sources[1].bytes = sources[1].text.len;
+                value.sources = sources;
+            },
+            else => unreachable,
+        }
+        const forged = try std.json.Stringify.valueAlloc(a, value, .{});
+        try std.testing.expectError(error.InvalidStylesheetImports, joinAlloc(a, F.css, F.root, forged));
+    }
+    for (0..5) |case| {
+        var root = F.root;
+        switch (case) {
+            0 => root.wiki = "otherwiktionary",
+            1 => root.dump_date = "20261002",
+            2 => root.namespace_sha256 = core_normalized_hash,
+            3 => root.page_id += 1,
+            4 => root.revision_id += 1,
+            else => unreachable,
+        }
+        try std.testing.expectError(error.InvalidStylesheetImports, joinAlloc(a, F.css, root, F.snapshot));
+    }
+    try std.testing.expectError(error.InvalidStylesheetImports, joinAlloc(a, "changed Common.css", F.root, F.snapshot));
+}
+
+test "site cascade overrides reviewed core defaults and matching unknown rules stay unresolved" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const F = CoreDefaultFixture;
+    // Controlled site successors use the same verified core closure. These
+    // declarations are synthetic cascade controls, not captured EU Common.css.
+    for ([_]struct { css: []const u8, unresolved: bool }{
+        .{ .css = ".center { text-align: right; }", .unresolved = false },
+        .{ .css = ".center:hover { text-align: right; }", .unresolved = true },
+    }) |case| {
+        var joined = try joinAlloc(a, case.css, F.root, try F.withCss(a, case.css));
+        defer joined.profile.deinit();
+        const resolved = try joined.profile.resolveAlignment(a, "div", "center", "", null, "");
+        try std.testing.expect(resolved.specified);
+        try std.testing.expectEqual(case.unresolved, resolved.unresolved);
+        if (case.unresolved) try std.testing.expect(resolved.value == null) else
+            try std.testing.expectEqual(@import("encoder").presentation_types.CellTextAlign.right, resolved.value.?);
+    }
+    // Existing PT proof variant still has its original schema/page identity.
+    var pt = try joinAlloc(a, StylesheetJoinFixture.css, StylesheetJoinFixture.root, StylesheetJoinFixture.snapshot);
+    defer pt.profile.deinit();
+    try std.testing.expect(pt.proof.core == null and pt.proof.joined);
+    const json = try std.json.Stringify.valueAlloc(a, pt.proof, .{});
+    try std.testing.expect(std.mem.indexOf(u8, json, "wikidict.stylesheet-import-join.v1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"page_id\":93693") != null);
+}
+
+const custom_schema = "wikidict.custom-property-styles.v1";
+const CustomSnapshot = struct {
+    schema: []const u8,
+    wiki: []const u8,
+    dump_date: []const u8,
+    namespace_sha256: []const u8,
+    root_css_sha256: []const u8,
+    root_page_id: u64,
+    root_revision_id: u64,
+    temporal_scope: []const u8,
+    observed_utc: []const u8,
+    page_url: []const u8,
+    page_title: []const u8,
+    page_html: []const u8,
+    page_sha256: []const u8,
+    generator: []const u8,
+    skin: []const u8,
+    dark: ?bool,
+    ancestors: []const struct { tag: []const u8, classes: []const u8, id: []const u8, inline_css: []const u8, root: bool, start: usize, end: usize },
+    sources: []const struct { url: []const u8, css: []const u8, bytes: usize, sha256: []const u8 },
+};
+pub const CustomProof = struct {
+    temporal_scope: []const u8,
+    observed_utc: []const u8,
+    page_url: []const u8,
+    page_title: []const u8,
+    page_sha256: [64]u8,
+    generator: []const u8,
+    skin: []const u8,
+    dark: ?bool,
+    source_hashes: []const [64]u8,
+    pub fn jsonStringify(self: CustomProof, jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("temporal_scope"); try jw.write(self.temporal_scope);
+        try jw.objectField("observed_utc"); try jw.write(self.observed_utc);
+        try jw.objectField("page_url"); try jw.write(self.page_url);
+        try jw.objectField("page_title"); try jw.write(self.page_title);
+        try jw.objectField("page_sha256"); try jw.write(self.page_sha256[0..]);
+        try jw.objectField("generator"); try jw.write(self.generator);
+        try jw.objectField("skin"); try jw.write(self.skin);
+        try jw.objectField("dark"); try jw.write(self.dark);
+        try jw.objectField("source_sha256"); try jw.beginArray();
+        for (self.source_hashes) |hash| try jw.write(hash[0..]);
+        try jw.endArray(); try jw.endObject();
+    }
+};
+fn joinCustomAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []const u8) !Joined {
+    const parsed = try std.json.parseFromSlice(CustomSnapshot, a, snapshot_bytes, .{});
+    defer parsed.deinit();
+    const value = parsed.value;
+    if (!std.mem.eql(u8, value.schema, custom_schema) or !std.mem.eql(u8, value.wiki, root.wiki) or
+        !std.mem.eql(u8, value.dump_date, root.dump_date) or !std.mem.eql(u8, value.namespace_sha256, root.namespace_sha256) or
+        !std.mem.eql(u8, value.root_css_sha256, &sha256(root_css)) or value.root_page_id != root.page_id or value.root_revision_id != root.revision_id or
+        root.page_id == 0 or root.revision_id == 0 or
+        !std.mem.eql(u8, value.temporal_scope, "current anonymous screen stylesheet observation applied to retained source; not historical dump deployment") or
+        value.observed_utc.len < 20 or value.generator.len == 0 or value.skin.len == 0 or value.page_title.len == 0 or
+        !std.mem.startsWith(u8, value.page_url, "https://") or
+        value.page_html.len > 1024 * 1024 or !std.mem.eql(u8, value.page_sha256, &sha256(value.page_html)) or
+        value.sources.len == 0 or value.sources.len > 32 or value.ancestors.len < 2 or value.ancestors.len > 32)
+        return error.InvalidStylesheetImports;
+    var profile = try styles.parseAlloc(a, root_css);
+    errdefer profile.deinit();
+    const pa = profile.arena.allocator();
+    const syntax = @import("encoder").wikitext_syntax;
+    const ancestors = try pa.alloc(styles.CustomElement, value.ancestors.len);
+    var preceding: usize = 0;
+    for (value.ancestors, 0..) |item, i| {
+        if (item.start < preceding or item.start >= item.end or item.end > value.page_html.len or
+            item.root != (i == 0) or (i == 0 and !std.mem.eql(u8, item.tag, "html")) or
+            (i == 1 and !std.mem.eql(u8, item.tag, "body"))) return error.InvalidStylesheetImports;
+        const tag = syntax.tagAt(value.page_html, item.start) orelse return error.InvalidStylesheetImports;
+        if (tag.end != item.end or tag.closing or tag.self_closing or !std.mem.eql(u8, tag.name, item.tag) or
+            !std.mem.eql(u8, tag.attr("class") orelse "", item.classes) or !std.mem.eql(u8, tag.attr("id") orelse "", item.id) or
+            !std.mem.eql(u8, tag.attr("style") orelse "", item.inline_css))
+            return error.InvalidStylesheetImports;
+        ancestors[i] = .{ .tag = try pa.dupe(u8, item.tag), .classes = try pa.dupe(u8, item.classes), .id = try pa.dupe(u8, item.id), .root = item.root, .inline_css = try pa.dupe(u8, item.inline_css) };
+        preceding = item.end;
+    }
+    const sources = try pa.alloc(styles.Source, value.sources.len + 1);
+    const hashes = try pa.alloc([64]u8, value.sources.len);
+    var total: usize = root_css.len;
+    for (value.sources, 0..) |source, i| {
+        total = std.math.add(usize, total, source.css.len) catch return error.InvalidStylesheetImports;
+        if (source.bytes != source.css.len or source.css.len > 1024 * 1024 or total > 1024 * 1024 or
+            !std.unicode.utf8ValidateSlice(source.css) or !std.mem.eql(u8, source.sha256, &sha256(source.css)) or
+            !std.mem.startsWith(u8, source.url, "https://")) return error.InvalidStylesheetImports;
+        sources[i] = .{ .css = try pa.dupe(u8, source.css), .base_url = try pa.dupe(u8, source.url) };
+        hashes[i] = sha256(source.css);
+    }
+    // The retained source's complete Common.css is still consulted; the selected
+    // external context does not replace or silently rewrite the dump's input.
+    sources[value.sources.len] = .{ .css = root_css, .base_url = "" };
+    try styles.attachCustomProperties(&profile, sources, .{ .dark = value.dark, .ancestors = ancestors });
+    @constCast(profile.custom_properties.?).page_title = try pa.dupe(u8, value.page_title);
+    return .{ .profile = profile, .proof = .{
+        .snapshot_sha256 = sha256(snapshot_bytes), .resource_sha256 = sha256(snapshot_bytes), .joined = true,
+        .sources = profile.sources, .url = try pa.dupe(u8, value.page_url),
+        .custom = .{ .temporal_scope = try pa.dupe(u8, value.temporal_scope), .observed_utc = try pa.dupe(u8, value.observed_utc),
+            .page_url = try pa.dupe(u8, value.page_url), .page_title = try pa.dupe(u8, value.page_title), .page_sha256 = sha256(value.page_html),
+            .generator = try pa.dupe(u8, value.generator), .skin = try pa.dupe(u8, value.skin), .dark = value.dark, .source_hashes = hashes },
+    } };
+}
+
+const EsCustomPropertyFixture = struct {
+    const snapshot = @embedFile("testdata/es-custom-properties/snapshot.json");
+    const css = @embedFile("testdata/es-ousia/es-common.css");
+    const root: Root = .{ .wiki = "eswiktionary", .dump_date = "20261001", .namespace_sha256 = "2aa89ef33ec87dd31c0f5b43a4cc2e56efd890764a958eab8d49249432bc8fde", .page_id = 20385, .revision_id = 5909987 };
+};
+test "ordinary selected stylesheet join resolves observed Spanish day token without authored fallback" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const F = EsCustomPropertyFixture;
+    var joined = try joinAlloc(a, F.css, F.root, F.snapshot); defer joined.profile.deinit();
+    try std.testing.expect(joined.proof.joined and joined.proof.custom != null);
+    try std.testing.expectEqualStrings("MediaWiki 1.48.0-wmf.3", joined.proof.custom.?.generator);
+    try std.testing.expectEqualStrings("vector-2022", joined.proof.custom.?.skin);
+    try std.testing.expect(joined.proof.custom.?.dark == null);
+    const custom = joined.profile.custom_properties.?;
+    try std.testing.expect(custom.appliesTo("ataujía") and !custom.appliesTo("another title"));
+    const value = try styles.customColorValue(a, custom.root_environment, "var(--color-option-lime,#ff00ff)");
+    try std.testing.expect(value == .known);
+    try std.testing.expectEqualStrings("#1f7a39", value.known);
+    const proof = try std.json.Stringify.valueAlloc(a, joined.proof, .{});
+    try std.testing.expect(std.mem.indexOf(u8, proof, "not historical dump deployment") != null);
+    try std.testing.expect(std.mem.indexOf(u8, proof, "current anonymous screen") != null);
+}
+test "ordinary custom stylesheet join refuses changed root source context and property bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const F = EsCustomPropertyFixture;
+    const parsed = try std.json.parseFromSlice(CustomSnapshot, a, F.snapshot, .{}); defer parsed.deinit();
+    for (0..5) |case| {
+        var value = parsed.value;
+        switch (case) {
+            0 => value.root_revision_id += 1,
+            1 => value.namespace_sha256 = "wrong",
+            2 => value.page_html = "<html></html>",
+            3 => {
+                const sources = try a.dupe(@TypeOf(value.sources[0]), value.sources);
+                sources[0].css = ":root{--color-option-lime:#ff0000}";
+                value.sources = sources;
+            },
+            4 => {
+                const ancestors = try a.dupe(@TypeOf(value.ancestors[0]), value.ancestors);
+                ancestors[0].classes = "skin-theme-clientpref-night";
+                value.ancestors = ancestors;
+            },
+            else => unreachable,
+        }
+        const invalid = try std.json.Stringify.valueAlloc(a, value, .{});
+        try std.testing.expectError(error.InvalidStylesheetImports, joinAlloc(a, F.css, F.root, invalid));
+    }
 }

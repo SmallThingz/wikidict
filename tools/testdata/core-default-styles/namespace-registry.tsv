@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	euwiktionary
+# dump-date	20261001
+# content-language	eu
+-2	Media	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Berezi	Special	first-letter	0	0	0		compile_only	virtual_namespace	Aparteko
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Eztabaida	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	Lankide	User	first-letter	1	0	0		compile_only	standard_build_input
+3	Lankide eztabaida	User talk	first-letter	1	0	0		compile_only	discussion_namespace
+4	Wiktionary	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT
+5	Wiktionary eztabaida	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	Fitxategi	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	Irudi
+7	Fitxategi eztabaida	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	Irudi eztabaida
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	MediaWiki eztabaida	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	Txantiloi	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Txantiloi eztabaida	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	Laguntza	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Laguntza eztabaida	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	Kategoria	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Kategoria eztabaida	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Modulu	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Modulu eztabaida	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace
