@@ -1,0 +1,30 @@
+# wikidict-namespace-registry-v1
+# wiki	cswiktionary
+# dump-date	20261001
+# content-language	cs
+-2	Média	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Speciální	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Diskuse	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Komentár
+2	Uživatel	User	first-letter	1	0	0		compile_only	standard_build_input	Redaktor	Uživatelka	Užívateľ	Užívateľka
+3	Diskuse s uživatelem	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Diskuse s uživatelkou	Diskusia s redaktorom	Diskusia s užívateľkou	Diskusia s užívateľom	Komentár k redaktorovi	Uživatel diskuse	Uživatelka diskuse
+4	Wikislovník	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WS	WT	Wiktionary
+5	Diskuse k Wikislovníku	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Komentár k Wikipédii	Wikislovník diskuse	Wiktionary diskuse	Wiktionary talk
+6	Soubor	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	Obrázok
+7	Diskuse k souboru	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Diskusia k obrázku	Image talk	Komentár k obrázku	Soubor diskuse
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	Diskuse k MediaWiki	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	Komentár k MediaWiki	MediaWiki diskuse
+10	Šablona	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Diskuse k šabloně	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Šablona diskuse
+12	Nápověda	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Diskuse k nápovědě	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Nápověda diskuse
+14	Kategorie	Category	case-sensitive	1	0	0		compile_only	standard_build_input
+15	Diskuse ke kategorii	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Kategorie diskuse
+100	Příloha	Příloha	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+101	Diskuse k příloze	Diskuse k příloze	case-sensitive	1	0	0		compile_only	discussion_namespace	Příloha diskuse
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Modul	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Diskuse k modulu	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Podujatie	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Diskusia k podujatiu	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

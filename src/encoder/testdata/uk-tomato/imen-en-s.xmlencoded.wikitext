@@ -1,0 +1,8 @@
+{| style=&quot;float:right; margin-left:0.5em; margin-bottom:0.5em; border: 1px solid #6699CC; border-collapse:collapse;&quot; cellpadding=&quot;2&quot; rules=&quot;all&quot; width=&quot;210&quot;
+! bgcolor=&quot;#eef9ff&quot; align=&quot;center&quot; width=&quot;50%&quot; | однина
+! bgcolor=&quot;#eef9ff&quot; align=&quot;center&quot; width=&quot;50%&quot; | множина
+|-
+| bgcolor=&quot;#ffffff&quot;  align=&quot;center&quot; | {{{1}}}
+| bgcolor=&quot;#ffffff&quot;  align=&quot;center&quot; | {{aslinks|{{{2|{{{1}}}{{#if:{{{e|}}}|e}}s}}}}}
+|}
+{{імен en|{{PAGENAME}}|{{PAGENAME}}{{#if:{{{e|}}}|e}}s|склади={{{склади|}}}}}{{#ifeq:{{NAMESPACE}}|{{ns:Template}}||&lt;includeonly&gt;[[Категорія:Англійські іменники]]&lt;/includeonly&gt;}}&lt;noinclude&gt;[[Категорія:Шаблони словозміни/en]]&lt;/noinclude&gt;

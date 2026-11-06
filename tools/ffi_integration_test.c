@@ -66,7 +66,7 @@ int main(int argc, char **argv) {
     dict_handle *handle = NULL;
     dict_status status = dict_open(argv[1], strlen(argv[1]), &handle);
     if (!require(status == DICT_OK && handle != NULL, "open")) return 1;
-    if (!require(DICT_ABI_VERSION == 9u && dict_abi_version() == DICT_ABI_VERSION, "ABI version")) return 1;
+    if (!require(DICT_ABI_VERSION == 10u && dict_abi_version() == DICT_ABI_VERSION, "ABI version")) return 1;
     if (image_border) {
         int ok = require(dict_select(handle, NULL, 0, "supplemental", 12) == DICT_OK, "border supplemental selection");
         dict_buffer result = {0};

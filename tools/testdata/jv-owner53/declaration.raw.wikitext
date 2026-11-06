@@ -1,0 +1,13 @@
+<includeonly><span id="{{{{{1}}}}}" class="lang" data-code="{{{1}}}" data-name="{{#invoke:bahasa|getLangName|{{{1}}}}}">{{#if:{{{1|}}}|
+    {{#if:{{#invoke:bahasa|getLangName|{{{1}}}|nocap={{{nocap|}}}}}|
+      [[{{lcfirst:{{#invoke:bahasa|getLangName|{{{1}}}|nocap={{{nocap|}}}}}}}]]
+      |{{#invoke:utilitas|errorcat|bahasa}}
+    }}
+    |{{#invoke:utilitas|errorcat|templat}}
+  }}</span>
+[[Kategori:Tembung {{lcfirst:{{#invoke:bahasa|getLangName|{{{1}}}|nocap={{{nocap|}}}}}}}]]</includeonly><noinclude>
+* {{bahasa|id}}
+* {{bahasa|eo}}
+
+{{dokumentasi}}
+</noinclude>

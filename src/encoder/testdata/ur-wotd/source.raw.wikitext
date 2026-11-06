@@ -1,0 +1,37 @@
+<noinclude>
+{{Word of the day}}
+</noinclude><includeonly>{{#switch:{{FULLPAGENAME}}|Wiktionary:Main Page/Old 2007={{(!}} cellpadding="2" cellspacing="0" width="100%" style="border:1px solid #aaa; background:#f9f9ff"
+{{!}} colspan ="4" style="background:#006699; color:#fff; text-align:center; padding:0.15em" {{!}} '''Word of the Day for <span id="WOTD-rss-date">{{{4}}} {{{5}}}</span>'''
+{{!}}-
+{{!}} '''[[{{{1}}}|<span id="WOTD-rss-title">{{{1}}}</span>]]'''; ''{{{2}}}''
+{{!}} width="1%" {{!}} {{ click | image=Loudspeaker.png | {{#if:{{{audio|}}}|link=Media:{{{audio}}}|link=Media:en-us-{{{1}}}.ogg}} | height=12px | width=12px }}
+{{!}} &nbsp;<sup>[[w:Wikipedia:Media help (Ogg)|help]]</sup>
+{{!}} align=right class="plainlinks" {{!}} {{edit|Wiktionary:Word of the day/{{{4}}} {{{5}}}|edit}}
+{{!}}-
+{{!}} colspan="4" valign="top" {{!}}<div id="WOTD-rss-description">
+# {{{3}}}.</div>
+{{!}}-
+{{!}} colspan="4" valign="top" style="font-size:80%; text-align:center" {{!}}
+[[Wiktionary:Word of the day|About Word of the Day]] - [[Wiktionary:Word of the day/Archive|Archive]] - <span class="plainlinks">[//en.wiktionary.org/w/index.php?title=Template:Word_of_the_day&action=purge Refresh]</span> - [[Wiktionary:Featured word candidates|Nominate a New Word]]
+{{!)}}
+|Wiktionary:Main Page/2009 redesign=<div style="position:relative;"><span style="position:absolute; top:-33px;left:-24px;">[[Image:Writing_star.svg|70px|link={{{1|word}}}]]</span><div style="float:right;font-size:90%;">{{purge|refresh}}</div><div style="font-size:150%; border-bottom:1px solid #AAAAAA; padding-left:40px; white-space:nowrap;">Word of the day<span style="font-size:small;"> &nbsp;for <span id="WOTD-rss-date">{{{4|{{CURRENTMONTHNAME}}}}} {{{5|{{CURRENTDAY}}}}}</span></div></div>
+{{!}}-
+{{!}}'''[[{{{1|word}}}|<span id="WOTD-rss-title">{{{1}}}</span>]]''' ''{{{2}}}''
+{{!}}-
+{{!}} colspan="2" valign="top" {{!}}{{#ifexist:Media:{{{audio|en-us-{{{1}}}.ogg}}}|<div style="float:right">[[Image:{{{audio|en-us-{{{1}}}.ogg}}}|50px|noicon]]</div>}}
+<div id="WOTD-rss-description" style="font-size:100%;">
+# {{{3}}}</div>
+|#DEFAULT=<span style="position:relative;left:-10px;top:-10px;">[[Image:Writing_star.svg|62px|link={{{1|word}}}]]</span>
+{{(!}} cellspacing="0" style="border:3px solid #AABBDD; background:#E9F3FF;width:100%;padding:10px;margin-top:-47px;"
+{{!}}-
+{{!}} colspan="2" {{!}}<div style="float:right" class="plainlinks">{{edit|Wiktionary:Word of the day/{{{4|{{CURRENTMONTHNAME}}}}} {{{5|{{CURRENTDAY}}}}}|edit}}<span style="font-size:100%">, [//en.wiktionary.org/w/index.php?title=Template:Word_of_the_day&action=purge refresh]</div><div style="font-size:150%;border-bottom:1px solid #AAAAAA;padding-left:40px;">Word of the day<font size="2"> &nbsp;for <span id="WOTD-rss-date">{{{4|{{CURRENTMONTHNAME}}}}} {{{5|{{CURRENTDAY}}}}}</span></div>
+{{!}}-
+{{!}}'''[[{{{1|word}}}|<span id="WOTD-rss-title">{{{1}}}</span>]]''' ''{{{2}}}''
+{{!}}-
+{{!}} colspan="2" valign="top" {{!}}{{#ifexist:Media:{{{audio|en-us-{{{1}}}.ogg}}}|<div style="float:right">[[Image:{{{audio|en-us-{{{1}}}.ogg}}}|noicon]]</div>}}
+<div id="WOTD-rss-description">
+# {{{3}}}.</div>
+{{!}}-
+{{!}} colspan="2" valign="top" style="font-size:80%; text-align:center" {{!}}
+[[Wiktionary:Word of the day|About Word of the Day]] • [[Wiktionary:Word of the day/Archive|Archive]]  • [[Wiktionary:Word of the day/Nominations|Nominate a word]] • <span class="plainlinks">[http://toolserver.org/~enwikt/wotd/ RSS feed]</span>
+{{!)}}}}</includeonly><noinclude>{{documentation}}</noinclude>

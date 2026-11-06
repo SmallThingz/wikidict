@@ -1,0 +1,674 @@
+/* Zde uvedené CSS bude ovlivňovat všechny styly */
+
+/**
+ * Globální styly pro MediaWiki
+ * -----------------------------
+ */
+
+/**
+ * Styly pouze pro monitor/displej
+ */
+@media screen {
+
+    /**
+     * @brief Nezobrazovat příslušný obsah
+     *
+     * @author [[meta:User:Danny B.]]
+     */
+    .noscreen {
+        display: none;
+    }
+
+}
+
+/**
+ * styl pro generovaný obsah
+ */
+#toc {
+    clear: left;
+}
+
+/**
+ * stromy kategorií
+ */
+
+#mw-subcategories ul {
+    list-style: none;
+    margin-left: .2em;
+}
+
+span.CategoryTreeLoaded,
+span.CategoryTreeToggle {
+    color: #0645ad;
+}
+
+span.CategoryTreeEmptyBullet {
+    color: #ccc;
+}
+
+/**
+ * zaškrtávací boxy a jejich popisky v [[Speciální:Search]]
+ *
+ * v rozšířeném módu
+ */
+#powersearch label {
+    white-space: nowrap;
+}
+
+/**
+ * bytecounter v [[Speciální:RecentChanges]] a [[Speciální:Watchlist]]
+ */
+
+strong.mw-plusminus-neg {
+    color: #c00;
+}
+
+.mw-plusminus-null {
+    color: #666;
+}
+
+/**
+ * legenda v posledních změnách
+ */
+div.mw-rclegend {
+    border-left: 1px solid #aaa;
+    float: right;
+    font-size: smaller;
+    margin-left: 1em;
+    padding-left: 1em;
+}
+
+/**
+ * varování u editací
+ *
+ * (editace staré verze, zamčené stránky...)
+ */
+.editwarning,
+.mw-editinginterface {
+    background-color: #ffc;
+    border: 2px solid #c00;
+    color: #000;
+    margin: 0 0 1em 0;
+    padding: .5em 1em;
+}
+
+/**
+ * Obecné styly
+ * --------------
+ */
+
+/**
+ * boxy napravo
+ */
+.rightbox,
+table.rightbox {
+    float: right;
+    margin: 0 0 1em 1em;
+}
+
+/**
+ * Specifické styly pro šablony
+ * --------------
+ */
+
+/**
+ * IPA
+ *
+ * s použitím původního stylu
+ * deklaraci s inherit je třeba ponechat včetně prázdného komentáře - css hack kvůli IE6
+ */
+.IPA {
+    font-family: "Chrysanthi Unicode", "Doulos SIL", Gentium, GentiumAlt, Code2000, "TITUS Cyberbit Basic", "DejaVu Sans", "Bitstream Vera Sans", "Bitstream Cyberbit", "Arial Unicode MS", "Lucida Sans Unicode", "Hiragino Kaku Gothic Pro", "Matrix Unicode";
+    font-family /**/:inherit;
+}
+
+/**
+ * SAMPA
+ */
+.SAMPA {
+    font-family: Courier New, Courier, monotype;
+}
+
+/**
+ * SHORTTOC
+ */
+
+#shorttoc,
+#shorttoc #toc {
+    width: 100%;
+}
+
+#shorttoc #toc #toctitle,
+#shorttoc h2,
+#shorttoc ul,
+#shorttoc li {
+    float: left;
+}
+
+#shorttoc #toc span.tocnumber,
+#shorttoc #toc .toctoggle {
+    display: none;
+}
+
+#shorttoc h2,
+#shorttoc ul {
+    margin: 0 .5em 0 0;
+}
+
+#shorttoc li {
+    margin-left: .5em;
+}
+
+
+/**
+ * CATEGORYTOC
+ */
+
+div.categorytoc {
+    display: inline-block;
+}
+
+div.categorytoc h2 {
+    border: none;
+    font-size: 100%;
+    font-weight: bold;
+    padding: 0;
+    text-align: center;
+}
+
+div.categorytoc a {
+    background: none !important;
+    font-family: monospace;
+    padding: 0 !important;
+}
+
+/**
+ * pro [[Šablona:Příklad]]
+ */
+.usageexample {
+    font-style: italic;
+}
+
+/**
+ * pro [[Šablona:Příznaky]]
+ */
+.priznaky {
+    font-style: italic;
+}
+
+/**
+ * Citace
+ */
+cite.citace {
+    font-style: normal;
+}
+
+/**
+ * pro šablony tvarů slov
+ */
+
+table.deklinace,
+table.konjugace,
+table.komparace {
+    background-color: #f9f9f9;
+    border: 1px solid #aaa;
+    border-collapse: collapse;
+    margin-top: 1em;
+}
+
+table.deklinace th, table.deklinace td,
+table.konjugace th, table.konjugace td,
+table.komparace th, table.komparace td {
+    border: 1px solid #aaa;
+    padding: .2em;
+}
+
+table.deklinace th,
+table.konjugace th,
+table.komparace th {
+    background-color: #f2f2f2;
+    text-align: center;
+}
+
+table.deklinace caption,
+table.konjugace caption,
+table.komparace caption {
+    margin-left: inherit;
+    margin-right: inherit;
+}
+
+/**
+ * rody v překladech
+ */
+abbr.genus {
+    font-style: italic;
+}
+
+/**
+ * čísla
+ */
+abbr.numerus {
+    font-style: italic;
+}
+
+/**
+ * přepisy
+ */
+.hiragana-title,
+.katakana-title,
+.kanji-title,
+.romaji-title {
+    font-style: italic;
+}
+
+/**
+ * Vítejte & spol.
+ */
+div.vitejte {
+    background-color: #f9f9f9;
+    color: #000;
+    border: 1px solid #39f;
+    padding: 0 .5em;
+}
+
+/**
+ * Cedule
+ */
+
+div.label {
+    border: medium solid #000;
+    -webkit-border-radius: .5em;
+    -moz-border-radius: .5em;
+    -o-border-radius: .5em;
+    border-radius: .5em;
+    -webkit-box-shadow: .5em .5em .5em #000;
+    -moz-box-shadow: .5em .5em .5em #000;
+    -o-box-shadow: .5em .5em .5em #000;
+    box-shadow: .5em .5em .5em #000;
+    -webkit-box-shadow: .5em .5em .5em rgba(0, 0, 0, 0.7);
+    -moz-box-shadow: .5em .5em .5em rgba(0, 0, 0, 0.7);
+    -o-box-shadow: .5em .5em .5em rgba(0, 0, 0, 0.7);
+    box-shadow: .5em .5em .5em rgba(0, 0, 0, 0.7);
+    overflow: hidden;
+    padding: 1em;
+    width: auto;
+}
+
+div.label-pageinfo {
+    margin: 0 auto 2em auto;
+    text-align: center;
+    width: 40em;
+}
+
+div.label-pageinfo-type-delete {
+    border-color: #c00;
+}
+
+div.label-pageinfo-type-info {
+    border-color: #aaa;
+}
+
+div.label-pageinfo-type-maintenance {
+    border-color: #fabd23;
+}
+
+div.label-pageinfo-type-move {
+    border-color: #909;
+}
+
+div.label-pageinfo-type-status {
+    border-color: #002bb8;
+}
+
+div.label hr {
+    border-color: inherit;
+    border-style: solid;
+    border-width: thin;
+    clear: both;
+    height: 0;
+    margin: 1em 0;
+}
+
+div.label_image {
+    float: left;
+}
+
+div.label_message  {
+    overflow: hidden;
+    width: auto;
+}
+
+div.label_message_headline {
+    font-size: 132%;
+    font-weight: bold;
+    margin: 0 0 .5em 48px;
+    padding-left: 1em;
+    text-align: center;
+}
+
+div.label_message_headline-noimage {
+    margin: 0 0 .5em 0;
+    padding-left: 0;
+}
+
+div.label_message_text {
+    font-style: italic;
+    margin-left: 48px;
+    padding-left: 1em;
+    text-align: justify;
+}
+
+div.label_message_text-noimage {
+    margin-left: 0;
+    padding-left: 0;
+}
+
+div.label_message_text p {
+    margin: 0;
+}
+
+div.label_message_text p + p {
+    margin-top: .5em;
+}
+
+div.label_note {
+    overflow: hidden;
+    width: auto;
+}
+
+div.label_note_text {
+    font-size: smaller;
+    margin: 0 0 0 16px;
+    padding-left: 1em;
+    text-align: justify;
+}
+
+div.label_note_text p {
+    margin: 0;
+}
+
+div.label_note_text p + p {
+    margin-top: .5em;
+}
+
+/* dočasný hack, než bude opraven nedostatek v definicích WikiEditoru */
+
+.wikiEditor-ui-toolbar .label {
+    border-radius: 0;
+    box-shadow: none;
+    padding: 0;
+}
+
+/**
+ * Nálepka
+ */
+
+table.userbox {
+    border: 1px solid #aaa;
+    border-collapse: collapse;
+    height: 45px;
+    width: 240px;
+}
+
+table.userbox td.userbox_id {
+    background-color: #f2f2f2;
+    color: #000;
+    font-size: larger;
+    height: 45px;
+    text-align: center;
+    width: 45px;
+}
+
+table.userbox td.userbox_info {
+    background-color: #f9f9f9;
+    color: #000;
+    font-size: smaller;
+    line-height: 1.25em;
+    padding: .2em .4em;
+}
+
+/**
+ * Aktualizujte kategorii
+ */
+div.Šablona__Aktualizujte_kategorii {
+    display: inline-block;
+    margin-top: 1em;
+}
+
+/**
+ * Hlavní strana
+ */
+
+table.mainpage_sisterprojects_list {
+    text-align: center;
+    width: 100%;
+}
+
+table.mainpage_sisterprojects_list tr.mainpage_sisterprojects_list_projectname {
+    font-weight: bold;
+}
+
+table.mainpage_sisterprojects_list tr.mainpage_sisterprojects_list_projectdesc {
+    font-size: smaller;
+    font-style: italic;
+    line-height: 1.2;
+    vertical-align: top;
+}
+
+table.mainpage_sisterprojects_list td {
+    width: 10%;
+}
+
+/**
+ * Šablona:Překlady
+ */
+
+div.translations > dfn {
+    font-weight: bold;
+    font-style: normal;
+    margin-left: .6em;
+}
+
+div.translations ul {
+    -moz-column-gap: 4em;
+    -webkit-column-gap: 4em;
+    column-gap: 4em;
+    -moz-column-width: 20em;
+    -webkit-column-width: 20em;
+    column-width: 20em;
+}
+
+div.translations ul ul {
+    -moz-column-width: auto;
+    -webkit-column-width: auto;
+    column-width: auto;
+}
+
+/**
+ * Styly pro [[MediaWiki:Edittools]]
+ *
+ * @author [[meta:User:Danny B.]]
+ */
+
+div.mw-editTools {
+    margin-top: 1em;
+}
+
+#mw-editTools-inner {
+    border: 1px solid #ccc;
+    cursor: default;
+    font-family: 'Courier New', monospace;
+    max-height: 10em;
+    overflow: auto;
+    padding: .2em .4em;
+}
+
+#mw-editTools-inner h2 {
+    font-size:inherit;
+    line-height:inherit;
+    margin-top:0;
+    font-family:sans-serif;
+}
+
+#mw-editTools-inner h3 {
+    font-size:inherit;
+    padding-top:0;
+    font-family:sans-serif;
+}
+
+#mw-editTools-inner span.mw-collapsible-toggle {
+    display: block;
+    float: none;
+    font-family: sans-serif;
+}
+
+#mw-editTools-inner p a {
+    background-color: #f7f7f7;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    color: #333;
+    display: inline-block;
+    font-weight: bold;
+    margin: .2em 0;
+    padding: 0em .5em;
+    text-shadow: 0 1px 0 #fff;
+    vertical-align: middle;
+    white-space: nowrap;
+    -webkit-box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2), 0 0 0 2px #fff inset;
+    -moz-box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2), 0 0 0 2px #fff inset;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2), 0 0 0 2px #fff inset;
+}
+
+#mw-editTools-inner p span.space {
+    border: 1px solid transparent;
+    display: inline-block;
+    font-weight: bold;
+    margin: .2em 0;
+    padding: 0em .5em;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+#mw-editTools-inner p a:hover {
+    text-decoration: none;
+    -webkit-box-shadow: 0 1px 0 rgba(0, 0, 0, .2), 0 0 0 2px #fff inset, 0 0 3px 3px rgba(153, 204, 255, .9);
+    -moz-box-shadow: 0 1px 0 rgba(0, 0, 0, .2), 0 0 0 2px #fff inset, 0 0 3px 3px rgba(153, 204, 255, .9);
+    box-shadow: 0 1px 0 rgba(0, 0, 0, .2), 0 0 0 2px #fff inset, 0 0 3px 3px rgba(153, 204, 255, .9);
+}
+
+/**
+ * @brief [[Šablona:Popis udělátka]]
+ *
+ * @author [[meta:User:Danny B.]]
+ */
+
+.gadget-description {
+    display: block;
+}
+
+.gadget-description dfn {
+    display: block;
+    padding: 0 .4em;
+}
+
+.gadget-description dfn:before {
+    cursor: pointer;
+    font-family: 'Courier New', monospace;
+    font-style: normal;
+}
+
+.gadget-description .mw-collapsible dfn:before {
+    content: "▼ ";
+}
+
+.gadget-description .mw-collapsed dfn:before {
+    content: "► ";
+}
+
+.gadget-details {
+    display: block;
+    padding: .2em .4em .2em 1.8em;
+}
+
+#mw-htmlform-gadgets .mw-htmlform-flatlist-item {
+    overflow: auto;
+    width: auto;
+}
+
+#mw-htmlform-gadgets .mw-htmlform-flatlist-item input,
+#mw-htmlform-gadgets .mw-htmlform-flatlist-item label {
+    float: left;
+}
+
+/**
+ * @brief Značky editačního filtru
+ *
+ * @author [[meta:User:Danny B.]]
+ */
+.mw-tag-marker-CHYBA {
+    color: #c00;
+    font-weight: bold;
+}
+
+/**
+ * @brief Odlišení kategorií
+ *
+ * @author [[meta:User:Danny B.]]
+ */
+
+#catlinks a[title^="Kategorie:Monitoring:"],
+body.ns--1 .special a[title^="Kategorie:Monitoring:"] {
+    color: #999;
+}
+
+body.ns-0 #catlinks a[title^="Kategorie:Údržba:"],
+body.ns--1 .special a[title^="Kategorie:Údržba:"] {
+    color: #f80;
+}
+
+
+/**
+ * @brief Odkazy na sesterské projekty
+ *
+ * @author [[meta:User:Danny B.]]
+ */
+span.sisterproject span.sisterproject_image {
+    display: inline-block;
+    height: 16px;
+    width: 16px;
+}
+
+
+/**
+ * @brief Uzavřené žádosti na Nástěnce správců
+ *
+ * @author [[meta:User:Danny B.]]
+ */
+
+body[class*="page-Wikislovník_Nástěnka_správců"] div.uzavrenaZadost {
+	background-color: #f9f9f9;
+	border: 1px solid #aaa;
+	color: #666;
+	font-size: 95%;
+	padding: .2em .4em .2em .8em;
+}
+
+body[class*="page-Wikislovník_Nástěnka_správců"] div.uzavrenaZadost:before {
+	border-bottom: 1px solid #ccc;
+	color: #333;
+	content: "Následující žádost byla již uzavřena.";
+	display: block;
+	font-size: 95%;
+	margin: -.2em -.4em .8em -.8em;
+	padding: .2em .4em;
+}
+
+body[class*="page-Wikislovník_Nástěnka_správců"] div.uzavrenaZadost:after {
+	border-top: 1px solid #ccc;
+	color: #333;
+	content: "Tato žádost již byla některým ze správců uzavřena, proto v diskusi k ní dále nepokračujte.";
+	display: block;
+	font-size: 95%;
+	margin: .8em -.4em -.2em -.8em;
+	padding: .2em .4em;
+}

@@ -1,0 +1,1356 @@
+{
+  "schema": "dict.results.v1",
+  "operation": "lookup",
+  "query": "tomato",
+  "kind": "language",
+  "language": "Esperanto",
+  "match_mode": "exact-utf8",
+  "record_count": 1,
+  "total_matches": 1,
+  "offset": 0,
+  "has_more": false,
+  "matches": [],
+  "entries": [
+    {
+      "organization": {
+        "lexemes": [],
+        "other_sections": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "title": "tomato",
+      "display_title": [],
+      "kind": "language",
+      "language": "Esperanto",
+      "language_code": "eo",
+      "sections": [
+        {
+          "level": 1,
+          "title": "Есперанто",
+          "anchor": "Есперанто",
+          "anchor_fallback": ".D0.95.D1.81.D0.BF.D0.B5.D1.80.D0.B0.D0.BD.D1.82.D0.BE",
+          "blocks": [
+            {
+              "kind": "heading",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Есперанто",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "background": "#d4e4f4",
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "line_break",
+                  "text": "\n",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 1,
+              "anchor": "Есперанто",
+              "anchor_fallback": ".D0.95.D1.81.D0.BF.D0.B5.D1.80.D0.B0.D0.BD.D1.82.D0.BE",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "Морфосинтаксичні ознаки",
+          "anchor": "Морфосинтаксичні_ознаки_2",
+          "anchor_fallback": ".D0.9C.D0.BE.D1.80.D1.84.D0.BE.D1.81.D0.B8.D0.BD.D1.82.D0.B0.D0.BA.D1.81.D0.B8.D1.87.D0.BD.D1.96_.D0.BE.D0.B7.D0.BD.D0.B0.D0.BA.D0.B8_2",
+          "blocks": [
+            {
+              "kind": "table",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": {
+                "caption": [],
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "відмінок",
+                            "target": "відмінок",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#eef9ff"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "однина",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#eef9ff"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "множина",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#eef9ff"
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "Наз.",
+                            "target": "називний",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#eef9ff"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "tomato",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffff"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "tomatoj",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffff"
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "З.",
+                            "target": "знахідний",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#eef9ff"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "tomaton",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffff"
+                      }
+                    ]
+                  }
+                ],
+                "geometry": {
+                  "border": null,
+                  "cell_spacing": null,
+                  "cell_padding": 2,
+                  "width": {
+                    "unit": "px",
+                    "value": 210
+                  }
+                },
+                "style": {
+                  "border": {
+                    "solid": {
+                      "width": {
+                        "unit": "px",
+                        "value": 1
+                      },
+                      "color": "#6699cc"
+                    }
+                  },
+                  "collapse": "collapse",
+                  "float_side": "right"
+                }
+              }
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "|| bgcolor=\"#FFFFFF\" | tomatojn",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "|}",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "Іменник",
+                  "target": "іменник",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ".",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Корінь: ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "--",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "Вимова",
+          "anchor": "Вимова_2",
+          "anchor_fallback": ".D0.92.D0.B8.D0.BC.D0.BE.D0.B2.D0.B0_2",
+          "blocks": [
+            {
+              "kind": "list_item",
+              "depth": 1,
+              "spans": [],
+              "feature": null,
+              "list_path": "*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "Семантичні властивості",
+          "anchor": "Семантичні_властивості_2",
+          "anchor_fallback": ".D0.A1.D0.B5.D0.BC.D0.B0.D0.BD.D1.82.D0.B8.D1.87.D0.BD.D1.96_.D0.B2.D0.BB.D0.B0.D1.81.D1.82.D0.B8.D0.B2.D0.BE.D1.81.D1.82.D1.96_2",
+          "blocks": []
+        },
+        {
+          "level": 4,
+          "title": "Значення",
+          "anchor": "Значення_2",
+          "anchor_fallback": ".D0.97.D0.BD.D0.B0.D1.87.D0.B5.D0.BD.D0.BD.D1.8F_2",
+          "blocks": [
+            {
+              "kind": "definition",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "помідор",
+                  "target": "помідор",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ". ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "[≈ 1]",
+                  "target": "#reference-1",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": true,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "reference"
+                },
+                {
+                  "kind": "link",
+                  "text": "[≠ 1]",
+                  "target": "#reference-2",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": true,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "reference"
+                },
+                {
+                  "kind": "link",
+                  "text": "[▲ 1]",
+                  "target": "#reference-3",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": true,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "reference"
+                },
+                {
+                  "kind": "link",
+                  "text": "[▼ 1]",
+                  "target": "#reference-4",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": true,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "reference"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "◆",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "example-fullblock example-absent-block",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "example-fullblock example-absent-block",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "Немає прикладів слововжитку (див. ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "example-fullblock example-absent-block example-block example-absent",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": "#ff8c00",
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "рекомендації",
+                  "target": "ВС:ЦИТ",
+                  "trail": "",
+                  "language": "",
+                  "classes": "example-fullblock example-absent-block example-block example-absent example-recommendations",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": "#ff8c00",
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ").",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "example-fullblock example-absent-block example-block example-absent",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": "#ff8c00",
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "example-fullblock example-absent-block example-block",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": "#006400",
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "example-fullblock example-absent-block example-block example-details",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": "#006400",
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "example-fullblock example-absent-block example-block example-details",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": "#006400",
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "#",
+              "number": "1",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "term",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Синоніми",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ";",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "term",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Антоніми",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ";",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "term",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Гіпероніми",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ";",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "term",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Гіпоніми",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ";",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 4,
+          "title": "Холоніми",
+          "anchor": "Холоніми",
+          "anchor_fallback": ".D0.A5.D0.BE.D0.BB.D0.BE.D0.BD.D1.96.D0.BC.D0.B8",
+          "blocks": [
+            {
+              "kind": "definition",
+              "depth": 1,
+              "spans": [],
+              "feature": null,
+              "list_path": "#",
+              "number": "1",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 4,
+          "title": "Мероніми",
+          "anchor": "Мероніми",
+          "anchor_fallback": ".D0.9C.D0.B5.D1.80.D0.BE.D0.BD.D1.96.D0.BC.D0.B8",
+          "blocks": [
+            {
+              "kind": "definition",
+              "depth": 1,
+              "spans": [],
+              "feature": null,
+              "list_path": "#",
+              "number": "1",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "Усталені та термінологічні словосполучення, фразеологізми",
+          "anchor": "Усталені_та_термінологічні_словосполучення,_фразеологізми_2",
+          "anchor_fallback": ".D0.A3.D1.81.D1.82.D0.B0.D0.BB.D0.B5.D0.BD.D1.96_.D1.82.D0.B0_.D1.82.D0.B5.D1.80.D0.BC.D1.96.D0.BD.D0.BE.D0.BB.D0.BE.D0.B3.D1.96.D1.87.D0.BD.D1.96_.D1.81.D0.BB.D0.BE.D0.B2.D0.BE.D1.81.D0.BF.D0.BE.D0.BB.D1.83.D1.87.D0.B5.D0.BD.D0.BD.D1.8F.2C_.D1.84.D1.80.D0.B0.D0.B7.D0.B5.D0.BE.D0.BB.D0.BE.D0.B3.D1.96.D0.B7.D0.BC.D0.B8_2",
+          "blocks": [
+            {
+              "kind": "list_item",
+              "depth": 1,
+              "spans": [],
+              "feature": null,
+              "list_path": "*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 4,
+          "title": "Колокації",
+          "anchor": "Колокації",
+          "anchor_fallback": ".D0.9A.D0.BE.D0.BB.D0.BE.D0.BA.D0.B0.D1.86.D1.96.D1.97",
+          "blocks": []
+        },
+        {
+          "level": 4,
+          "title": "Прислів'я та приказки",
+          "anchor": "Прислів'я_та_приказки",
+          "anchor_fallback": ".D0.9F.D1.80.D0.B8.D1.81.D0.BB.D1.96.D0.B2.27.D1.8F_.D1.82.D0.B0_.D0.BF.D1.80.D0.B8.D0.BA.D0.B0.D0.B7.D0.BA.D0.B8",
+          "blocks": []
+        },
+        {
+          "level": 3,
+          "title": "Споріднені слова",
+          "anchor": "Споріднені_слова_2",
+          "anchor_fallback": ".D0.A1.D0.BF.D0.BE.D1.80.D1.96.D0.B4.D0.BD.D0.B5.D0.BD.D1.96_.D1.81.D0.BB.D0.BE.D0.B2.D0.B0_2",
+          "blocks": [
+            {
+              "kind": "table",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": {
+                "caption": [],
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "Найтісніша спорідненість",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "foreground": null,
+                            "font_scale": 0.949999988079071,
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null,
+                        "style": {
+                          "text_align": "left"
+                        }
+                      },
+                      {
+                        "spans": [],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [],
+                        "header": false,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "Етимологія",
+          "anchor": "Етимологія_2",
+          "anchor_fallback": ".D0.95.D1.82.D0.B8.D0.BC.D0.BE.D0.BB.D0.BE.D0.B3.D1.96.D1.8F_2",
+          "blocks": [
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Від ??",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "Джерела",
+          "anchor": "Джерела_2",
+          "anchor_fallback": ".D0.94.D0.B6.D0.B5.D1.80.D0.B5.D0.BB.D0.B0_2",
+          "blocks": []
+        }
+      ],
+      "preamble_spans": [],
+      "references": [
+        {
+          "number": 1,
+          "group_number": 1,
+          "name": "",
+          "group": "≈",
+          "spans": [
+            {
+              "kind": "text",
+              "text": "?",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "foreground": null,
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ]
+        },
+        {
+          "number": 2,
+          "group_number": 1,
+          "name": "",
+          "group": "≠",
+          "spans": [
+            {
+              "kind": "text",
+              "text": "?",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "foreground": null,
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ]
+        },
+        {
+          "number": 3,
+          "group_number": 1,
+          "name": "",
+          "group": "▲",
+          "spans": [
+            {
+              "kind": "text",
+              "text": "?",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "foreground": null,
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ]
+        },
+        {
+          "number": 4,
+          "group_number": 1,
+          "name": "",
+          "group": "▼",
+          "spans": [
+            {
+              "kind": "text",
+              "text": "?",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "foreground": null,
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ]
+        }
+      ],
+      "media": [],
+      "redirect": null,
+      "alias": null
+    }
+  ]
+}

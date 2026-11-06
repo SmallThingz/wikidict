@@ -1,0 +1,193 @@
+{{confundir|uran}}
+
+={{-gsw-}}=
+=={{Substantivo|gsw}}==
+{{elementos|U|Protactinium|Pa|Neptunium|Np}}
+'''Uran'''
+# {{escopo|gsw|elemento químico}} [[urânio]]
+
+==Ver também==
+===No Wikcionário===
+{{tabela periódica/gsw}}
+
+
+={{-de-}}=
+=={{Substantivo|de}}==
+{{elementos|U|Protactinium|Pa|Neptunium|Np}}
+'''{{grifar.Palavra|Uran}}''', {{gramática|n|incont}}
+# {{escopo|de|elemento químico}} [[urânio]]
+
+=={{etimologia|de}}==
+: {{etimo2|la|Uranus|de}}
+
+=={{pronúncia|de}}==
+* AFI: {{AFI|/uˈʀaːn/}} {{áudio|De-Uran.ogg|ouvir|id=de}}
+
+==Ver também==
+===No Wikcionário===
+{{tabela periódica/de}}
+[[Categoria:Monossílabo (Alemão)]]
+
+
+={{-az-}}=
+=={{Substantivo|az}}==
+'''Uran'''
+# {{escopo|az|Astronomia}} [[Urano]]
+# {{escopo|az|Mitologia}} [[Urano]]
+
+==Ver também==
+===No Wikcionário===
+{{sistema solar/az}}
+
+
+={{-nds-}}=
+=={{Substantivo|nds}}==
+{{elementos|U|Protactinium|Pa|Neptunium|Np}}
+'''Uran'''
+# {{escopo|nds|elemento químico}} [[urânio]]
+
+==Ver também==
+===No Wikcionário===
+{{tabela periódica/nds}}
+
+
+={{-bs-}}=
+=={{Substantivo|bs}}==
+'''Uran'''
+# {{escopo|bs|Astronomia}} [[Urano]]
+
+==Ver também==
+===No Wikcionário===
+{{sistema solar/bs}}
+
+
+={{-cs-}}=
+=={{Substantivo|cs}}==
+'''{{grifar.Palavra|Uran}}''', {{gramática|pr|m|anim}}
+# {{escopo|cs|Mitologia}} [[Urano]]
+
+===Declinação===
+{{decl.cs.subst.masc.1.sing|Uran}}
+
+'''{{grifar.Palavra|Uran}}''', {{gramática|pr|m|ina}}
+# {{escopo|cs|Elemento químico}} [[Urano]]
+# {{escopo|cs|Corpo celeste}} [[Urano]]
+
+===Declinação===
+{{decl.cs.subst.masc.2.sing|Uran}}
+
+=={{pronúncia|cs}}==
+* AFI: {{AFI|/ˈʔʊran/}} {{áudio|Cs-Uran.ogg|ouvir|id=cs}}
+
+==Ver também==
+===No Wikcionário===
+{{sistema solar/cs}}
+===Na Wikipédia===
+* {{interwiki|w|cs|Uran}}
+[[Categoria:Monossílabo (Checo)]]
+
+
+={{-hr-}}=
+=={{Substantivo|hr}}==
+'''Uran'''
+# {{escopo|hr|Astronomia}} [[Urano]]
+
+==Ver também==
+===No Wikcionário===
+{{sistema solar/hr}}
+
+
+={{-sl-}}=
+=={{Substantivo|sl}}==
+'''{{grifar.Palavra|Uran}}''', {{gramática|pr|m|anim}}
+# {{escopo|sl|Astronomia}} [[Urano]]
+# {{escopo|sl|Mitologia}} [[Urano]]
+
+==Ver também==
+===No Wikcionário===
+{{sistema solar/sl}}
+
+
+={{-stq-}}=
+=={{Substantivo|stq}}==
+{{elementos|U|Protactinium|Pa|Neptunium|Np}}
+'''{{grifar.Palavra|Uran}}''', {{gramática|n|incont}}
+# {{escopo|stq|elemento químico}} [[urânio]]
+
+==Ver também==
+===No Wikcionário===
+{{tabela periódica/stq}}
+
+
+={{-lb-}}=
+=={{Substantivo|lb}}==
+{{elementos|U|Protactinium|Pa|Neptunium|Np}}
+'''{{grifar.Palavra|Uran}}''', {{gramática|n|incont}}
+# {{escopo|lb|elemento químico}} [[urânio]]
+
+==Ver também==
+===No Wikcionário===
+{{tabela periódica/lb}}
+[[Categoria:Monossílabo (Luxemburguês)]]
+
+
+={{-pms-}}=
+=={{Substantivo|pms}}==
+'''Uran'''
+# {{escopo|pms|corpo celeste}} [[Urano]]
+# {{escopo|pms|Mitologia}} [[Urano]]
+
+==Ver também==
+===No Wikcionário===
+{{sistema solar/pms}}
+
+
+={{-pl-}}=
+=={{Substantivo|pl}}<sup>1</sup>==
+{{paroxítona|U|ran|id=pl}}, {{gramática|m|pr}}
+# {{escopo|pl|corpo celeste}} [[Urano]]
+# {{escopo|pl|mitologia}} [[Urano]]
+==Substantivo<sup<2/sup>==
+'''U.ran''', {{g|n}}
+# {{escopo|pl|elemento químico}} [[urânio]]
+
+=={{pronúncia|pl}}==
+* AFI: {{AFI|/ˈuran/|pl}} {{áudio|Pl-Uran.ogg|ouvir|id=pl}}
+
+==Ver também==
+===No Wikcionário===
+{{verTambém.Ini}}
+* [[Układ Słoneczny]]
+{{verTambém.Fim}}
+{{sistema solar/pl}}
+
+
+={{-sh-}}=
+=={{Substantivo|sh}}==
+'''Uran'''
+# {{escopo|sh|Astronomia}} [[Urano]]
+# {{escopo|sh|Mitologia}} [[Urano]]
+
+==Ver também==
+===No Wikcionário===
+{{sistema solar/sh}}
+
+
+={{-uz-}}=
+=={{Substantivo|uz}}==
+'''Uran'''
+# {{escopo|uz|Astronomia}} [[Urano]]
+
+==Ver também==
+===No Wikcionário===
+{{sistema solar/uz}}
+
+
+={{-vep-}}=
+=={{Substantivo|vep}}==
+'''Uran'''
+# {{escopo|vep|Astronomia}} [[Urano]]
+
+==Ver também==
+===No Wikcionário===
+{{sistema solar/vep}}

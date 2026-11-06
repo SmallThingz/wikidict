@@ -1,0 +1,14 @@
+{| style=&quot;float:right; margin-left:0.5em; margin-bottom:0.5em; border: 1px solid #6699CC; border-collapse:collapse;&quot; cellpadding=&quot;2&quot; rules=&quot;all&quot; width=&quot;210&quot;
+! bgcolor=&quot;#EEF9FF&quot; | [[відмінок]]
+! bgcolor=&quot;#EEF9FF&quot; | однина
+! bgcolor=&quot;#EEF9FF&quot; | множина
+|- 
+| bgcolor=&quot;#EEF9FF&quot; | [[називний|Наз.]]
+| bgcolor=&quot;#FFFFFF&quot; | {{#ifeq:{{{nosn|}}}|||{{grey}}}}{{#ifeq:{{{1|{{{основа|}}}}}}||{{PAGENAME}}|{{{1|{{{основа|}}}}}}}}&lt;/span&gt; || bgcolor=&quot;#FFFFFF&quot; | {{#ifeq:{{{1|{{{основа|}}}}}}||{{PAGENAME}}|{{{1|{{{основа|}}}}}}}}j
+|-
+| bgcolor=&quot;#EEF9FF&quot; | [[знахідний|З.]]
+| bgcolor=&quot;#FFFFFF&quot; |  {{#ifeq:{{{nosn|}}}|||{{grey}}}}{{#ifeq:{{{1|{{{основа|}}}}}}||{{PAGENAME}}|{{{1|{{{основа|}}}}}}}}n&lt;/span&gt; || bgcolor=&quot;#FFFFFF&quot; | {{#ifeq:{{{1|{{{основа|}}}}}}||{{PAGENAME}}|{{{1|{{{основа|}}}}}}}}jn
+|}
+&lt;b&gt;{{{склади|{{{2|}}}}}}&lt;/b&gt;
+
+[[іменник|Іменник]].&lt;includeonly&gt;[[Категорія:Есперанто іменники]]&lt;/includeonly&gt;&lt;noinclude&gt;[[Категорія:Шаблони словозміни/eo]]&lt;/noinclude&gt;

@@ -38,6 +38,8 @@ pub const Span = struct {
     kind: InlineKind = .text,
     text: []const u8 = "",
     target: []const u8 = "",
+    // null retains legacy combined title#fragment; non-null separates components.
+    target_fragment: ?[]const u8 = null,
     trail: []const u8 = "",
     language: []const u8 = "",
     classes: []const u8 = "",
@@ -63,11 +65,12 @@ pub const Span = struct {
     pub fn jsonStringify(self: Span, jw: anytype) !void {
         try jw.beginObject();
         inline for (@typeInfo(Span).@"struct".field_names) |field_name| {
+            const fragment_field = comptime std.mem.eql(u8, field_name, "target_fragment");
             const background_field = comptime std.mem.eql(u8, field_name, "background");
             const scale_field = comptime std.mem.eql(u8, field_name, "font_scale");
             const basis_field = comptime std.mem.eql(u8, field_name, "font_scale_basis");
             const image_field = comptime std.mem.eql(u8, field_name, "image");
-            if ((!image_field or self.image != null) and (!background_field or self.background != null) and
+            if ((!fragment_field or self.target_fragment != null) and (!image_field or self.image != null) and (!background_field or self.background != null) and
                 (!scale_field or (self.font_scale != null and (self.font_scale.? != 1 or self.font_scale_basis == .normal_body))) and
                 (!basis_field or self.font_scale_basis != .context))
             {
@@ -363,6 +366,10 @@ pub fn validInlineImage(value: InlineImage) bool {
     if (value.tooltip) |tooltip| if (!validInlineImageString(tooltip)) return false;
     return true;
 }
+// This new optional component has the same string ceiling/UTF8 contract as wire strings.
+pub fn validTargetFragment(value: []const u8) bool {
+    return value.len <= 32 * 1024 * 1024 and std.unicode.utf8ValidateSlice(value);
+}
 pub fn validInlineImageAction(kind: InlineKind, target: []const u8) bool {
     return switch (kind) {
         .text => target.len == 0,
@@ -384,6 +391,7 @@ fn validateInlineImageMedia(value: InlineImage, media: []const Media) Validation
 }
 fn validateSpanColors(spans: []const Span, media: []const Media) ValidationError!void {
     for (spans) |span| {
+        if (span.target_fragment) |fragment| if (span.kind != .link or !validTargetFragment(fragment)) return error.InvalidPresentation;
         if (span.image) |image| {
             if (span.text.len != 0 or span.trail.len != 0 or !validInlineImage(image) or
                 !validInlineImageAction(span.kind, span.target)) return error.InvalidPresentation;

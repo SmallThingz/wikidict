@@ -15,6 +15,15 @@ def bound_captured_source_fingerprint(cfg, auth):
     return fingerprint
 
 
+def require_presentation_source_contract(binding):
+    """wire names the newest supported format, not every record's selected wire."""
+    assert type(binding) is dict
+    assert type(binding.get('ABI')) is int and binding['ABI'] == 10
+    # DPRF adds explicit components; the normal selector still emits older wires
+    # when those fields are absent. Legacy Reader/Writer checks remain required.
+    assert binding.get('wire') == 'DPRF'
+
+
 def qualification_build_argv(args, cache, native_build_argv, *, family, prefix=None):
     """One source for every normal build's optional captured-source option."""
     assert family in ('prepare', 'full', 'install', 'bundle-pipeline', 'bundle')
@@ -121,11 +130,9 @@ def bound_focus_plan(cfg, binding, source_root):
     return ordered, cases
 
 
-def validate_preparation_plan(cfg, group_binding, expect, ordered_groups, focus_cases):
-    """Reject inconsistent preparation data before any qualification command."""
-    prepared_names=tuple(group_binding['prepared_groups']);selected_ids=[group['id']for group in cfg['groups']]
-    assert cfg['execution_stage'] in ('full','focused-diagnostic') and cfg['focused_expected']>0
-    normal_modes={
+def normal_preparation_modes():
+    """The fixed normal graph order shared by role binding and validation."""
+    return {
      'encoder_compile':('encoder_compile',['presentation_compile.test.','encoder root imports bundle-time presentation modules'],['root.test.encoder root imports bundle-time presentation modules']),
      'encoder_document':('encoder_document',['presentation_document.test.','encoder root imports bundle-time presentation modules'],['root.test.encoder root imports bundle-time presentation modules']),
      'encoder_writer':('encoder_writer',['blob_builder.test.','encoder root imports bundle-time presentation modules'],['root.test.encoder root imports bundle-time presentation modules']),
@@ -135,6 +142,25 @@ def validate_preparation_plan(cfg, group_binding, expect, ordered_groups, focus_
      'closure':('closure_tests',[],[]),
      'tools':('blob_build_tests',[],[]),
     }
+
+
+def canonical_preparation_groups(groups):
+    """Order physical roots without changing selectors or focus priority."""
+    assert type(groups) is list and groups
+    modes = normal_preparation_modes()
+    selected = {}
+    for group in groups:
+        name = group['id']
+        assert name in modes and name not in selected
+        selected[name] = group
+    return [selected[name] for name in modes if name in selected]
+
+
+def validate_preparation_plan(cfg, group_binding, expect, ordered_groups, focus_cases):
+    """Reject inconsistent preparation data before any qualification command."""
+    prepared_names=tuple(group_binding['prepared_groups']);selected_ids=[group['id']for group in cfg['groups']]
+    assert cfg['execution_stage'] in ('full','focused-diagnostic') and cfg['focused_expected']>0
+    normal_modes=normal_preparation_modes()
     assert prepared_names==tuple(name for name in normal_modes if name in selected_ids) and selected_ids==list(prepared_names) and cfg['focused_expected']==len(focus_cases)
     assert group_binding['compile_time_filtered_preparation'] is any(group['compile_time_filtered'] for group in cfg['groups']) and group_binding['prepare_target']=='prepare-tests' and group_binding['prepared_relative_directory']=='bin/wikidict-tests'
     assert group_binding['prepare_test_error_tracing'] is False and group_binding['full_normal_partitioned_graph_required'] is True
@@ -156,6 +182,22 @@ def validate_preparation_plan(cfg, group_binding, expect, ordered_groups, focus_
      assert Counter(group['compiled_expected_occurrences'])==expected and group['compiled_expected_count']==sum(expected.values())
      prepare_filters[prepared]=[];prepare_discovery[prepared]=discovery
     return prepared_names, prepare_filters, prepare_discovery
+
+
+def qualification_binding_plan(cfg, group_binding, expect, source_root):
+    """Derive the binding report from the same required runtime contracts."""
+    ordered, cases = bound_focus_plan(cfg, group_binding, source_root)
+    prepared, _, _ = validate_preparation_plan(cfg, group_binding, expect, ordered, cases)
+    return {
+        'actual_case_order': [dict(group=group['id'], name=name)
+                              for group, _, name, _ in cases],
+        'prepared_groups': list(prepared),
+        'compiled_counts': {group['id']: group['compiled_expected_count']
+                            for group in cfg['groups']},
+        'functional_failures_collected': True,
+        'aggregate_full_gate_retained': True,
+        'normal_full_required': cfg['execution_stage'] == 'full',
+    }
 
 
 def execute_focused_cases(cases, *, binaries, phase, source_root, helper, guard,
@@ -514,7 +556,7 @@ if __name__ == '__main__':
            for number,discovery in enumerate(prepare_discovery[prepared]):
             execute('filtered-discovery-'+prepared+'-'+str(number),[binary['path'],'--dict-run-test',discovery]);auth(binary)
             result['compiled_discovery'].append(dict(name=discovery,binary=binary,command=result['phases'][-1],passed=True,semantic_focus_credit=False,full_suite_credit=False));save()
-          execute_focused_cases(focus_cases,binaries=binaries,phase=phase,source_root=private,helper=w,guard=guard,validate_dynamic=lambda:dynamic['validate'](ds),auth=auth,ref=ref,result=result,save=save,prepare_group=prepare_focus_group,stop_on_failure=True)
+          execute_focused_cases(focus_cases,binaries=binaries,phase=phase,source_root=private,helper=w,guard=guard,validate_dynamic=lambda:dynamic['validate'](ds),auth=auth,ref=ref,result=result,save=save,prepare_group=prepare_focus_group,stop_on_failure=False)
           assert set(binaries)==set(prepared_names) and compile_record['passed']
           for bound_binary in binaries.values():auth(bound_binary)
           assert result['focused_preparation_order']==[group['id']for group in ordered_groups]
@@ -526,10 +568,10 @@ if __name__ == '__main__':
            execute('cli-ffi-install',qualification_build_argv(args,cache,w['native_build_argv'],family='install',prefix=Path(cfg['install_root'])))
            result['cli_ffi_install_pass']=True
            result['installed']={n:ref(Path(cfg['install_root'])/n)for n in ('bin/wikidict','lib/libdictffi.so','include/dict/dict.h')}
-           assert private_binding['ABI']==9 and private_binding['wire']=='DPRE'
+           require_presentation_source_contract(private_binding)
            assert result['installed']['include/dict/dict.h']['sha256']==private_manifest['src/ffi/dict.h']['sha256']
-           assert '#define DICT_ABI_VERSION 9u'+chr(10) in Path(result['installed']['include/dict/dict.h']['path']).read_text()
-           assert 'DICT_ABI_VERSION == 9u && dict_abi_version() == DICT_ABI_VERSION' in (private/'tools/ffi_integration_test.c').read_text()
+           assert '#define DICT_ABI_VERSION 10u'+chr(10) in Path(result['installed']['include/dict/dict.h']['path']).read_text()
+           assert 'DICT_ABI_VERSION == 10u && dict_abi_version() == DICT_ABI_VERSION' in (private/'tools/ffi_integration_test.c').read_text()
            cli=result['installed']['bin/wikidict'];auth(cli)
            result['installed_dynamic_identity']=dynamic['validate'](ds,binary=cli['path']);save()
            full_argv=qualification_build_argv(args,cache,w['native_build_argv'],family='full')

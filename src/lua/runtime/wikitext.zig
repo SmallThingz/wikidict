@@ -26,8 +26,10 @@ const nowiki_marker_prefix = "\x7f'\"`UNIQ--nowiki-";
 const nowiki_marker_suffix = "-QINU`\"'\x7f";
 
 const hiero_marker_prefix = "\x7f'\"`UNIQ--hiero-";
+const isbn_marker_prefix = "\x7f'\"`UNIQ--isbn-";
+const generated_link = dependency.generated_link;
 const StripValue = struct {
-    kind: enum { nowiki, hiero },
+    kind: enum { nowiki, hiero, isbn },
     text: []const u8,
 };
 
@@ -165,6 +167,17 @@ const PoemItem = struct {
     depth: ?u8 = null,
     tag: ?[]const u8 = null,
     body: ?[]const u8 = null,
+    generated_links: []const generated_link.WireRange = &.{},
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("token"); try jw.write(self.token);
+        try jw.objectField("kind"); try jw.write(self.kind);
+        if (self.depth) |value| { try jw.objectField("depth"); try jw.write(value); }
+        if (self.tag) |value| { try jw.objectField("tag"); try jw.write(value); }
+        if (self.body) |value| { try jw.objectField("body"); try jw.write(value); }
+        if (self.generated_links.len != 0) { try jw.objectField("generated_links"); try jw.write(self.generated_links); }
+        try jw.endObject();
+    }
 };
 const PoemMetadata = struct {
     schema: []const u8 = "wikidict.poem-phase.v1",
@@ -172,6 +185,19 @@ const PoemMetadata = struct {
     output_sha256: []const u8,
     display_title_sha256: []const u8,
     items: []const PoemItem,
+    output_links: []const generated_link.WireRange = &.{},
+    display_title_links: []const generated_link.WireRange = &.{},
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        try jw.beginObject();
+        inline for (.{ "schema", "handled", "output_sha256", "display_title_sha256", "items" }) |name| {
+            try jw.objectField(name); try jw.write(@field(self, name));
+        }
+        if (std.mem.eql(u8, self.schema, "wikidict.presentation-phase.v2")) {
+            try jw.objectField("output_links"); try jw.write(self.output_links);
+            try jw.objectField("display_title_links"); try jw.write(self.display_title_links);
+        }
+        try jw.endObject();
+    }
 };
 
 pub const Expander = struct {
@@ -209,6 +235,9 @@ pub const Expander = struct {
     dependency_native_arguments_disabled: bool = false,
     poem_handled_empty: bool = false,
     poem_items: std.ArrayList(PoemItem) = .empty,
+    output_links: std.ArrayList(generated_link.WireRange) = .empty,
+    display_title_links: std.ArrayList(generated_link.WireRange) = .empty,
+    generated_link_counter: usize = 0,
     poem_literal_bytes: usize = 0,
     poem_argument_depth: usize = 0,
     poem_hook_depth: usize = 0,
@@ -293,6 +322,9 @@ pub const Expander = struct {
         self.dependency_native_arguments_disabled = false;
         self.poem_handled_empty = false;
         self.poem_items = .empty;
+        self.output_links = .empty;
+        self.display_title_links = .empty;
+        self.generated_link_counter = 0;
         self.poem_literal_bytes = 0;
         self.poem_argument_depth = 0;
         self.poem_hook_depth = 0;
@@ -591,6 +623,11 @@ pub const Expander = struct {
         if (normalized.ptr != output.ptr or normalized.len != output.len) output_text = dependency.Text.transformed(normalized);
         output = normalized;
         if (self.display_title) |display| self.display_title = try self.normalizeUnknownPoemAlloc(display);
+        const linked = try self.restoreIsbnMarkers(self.runtime.allocator, output, &self.output_links);
+        if (linked.ptr != output.ptr) self.runtime.allocator.free(output);
+        if (linked.ptr != output.ptr or linked.len != output.len) output_text = dependency.Text.transformed(linked);
+        output = linked;
+        if (self.display_title) |display| self.display_title = try self.restoreIsbnMarkers(self.runtime.allocator, display, &self.display_title_links);
         try self.finishPoemMetadata(output);
         // The existing normalization helpers return the original slice when
         // they make no edit. An edited result conservatively loses its ranges.
@@ -830,10 +867,16 @@ pub const Expander = struct {
         try self.poem_items.append(a, .{ .token = token, .kind = kind, .depth = if (kind == .indent) indent else null });
         return token;
     }
-    fn poemLiteral(self: *Expander, tag: []const u8, body: []const u8) anyerror![]const u8 {
+    fn poemLiteral(self: *Expander, tag: []const u8, original_body: []const u8) anyerror![]const u8 {
+        const a = self.page_allocator orelse self.runtime.allocator;
+        const original_counter = self.generated_link_counter;
+        const original_items = self.poem_items.items.len;
+        errdefer { self.generated_link_counter = original_counter; self.poem_items.shrinkRetainingCapacity(original_items); }
+        var links: std.ArrayList(generated_link.WireRange) = .empty;
+        // Explicit source text remains inert even when it spells a private token.
+        const body = if (std.mem.eql(u8, tag, "text")) original_body else try self.restoreIsbnMarkers(a, original_body, &links);
         if (!std.unicode.utf8ValidateSlice(body)) return error.InvalidPoemMetadata;
         if (body.len > max_poem_metadata_bytes -| self.poem_literal_bytes) return error.FrameTooLarge;
-        const a = self.page_allocator orelse self.runtime.allocator;
         var hash: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(body, &hash, .{});
         const digest = std.fmt.bytesToHex(hash, .lower);
@@ -841,6 +884,7 @@ pub const Expander = struct {
         const item = &self.poem_items.items[self.poem_items.items.len - 1];
         item.tag = try a.dupe(u8, tag);
         item.body = try a.dupe(u8, body);
+        item.generated_links = try links.toOwnedSlice(a);
         self.poem_literal_bytes += body.len;
         return token;
     }
@@ -958,7 +1002,7 @@ pub const Expander = struct {
     fn finishPoemMetadata(self: *Expander, output: []const u8) anyerror!void {
         const title = self.display_title orelse "";
         self.poem_metadata = null;
-        if (self.poem_items.items.len == 0 and !self.poem_handled_empty and !poemLooking(output) and !poemLooking(title)) return;
+        if (self.poem_items.items.len == 0 and self.output_links.items.len == 0 and self.display_title_links.items.len == 0 and !self.poem_handled_empty and !poemLooking(output) and !poemLooking(title)) return;
         if (self.poem_items.items.len > 100000 or self.poem_literal_bytes > max_poem_metadata_bytes) return error.InvalidPoemMetadata;
         // An upper bound including every emitted key/separator and exact string
         // escaping is checked before JSON allocation, then actual bytes checked.
@@ -967,15 +1011,20 @@ pub const Expander = struct {
             bound +|= 96 + poemJsonStringSize(item.token);
             if (item.tag) |tag| bound +|= poemJsonStringSize(tag);
             if (item.body) |body| bound +|= poemJsonStringSize(body);
+            for (item.generated_links) |link| bound +|= 160 + poemJsonStringSize(link.value.token) + poemJsonStringSize(link.value.argument) + poemJsonStringSize(link.value.target) + poemJsonStringSize(link.value.label);
             if (bound > max_poem_metadata_bytes) return error.FrameTooLarge;
         }
+        for ([_][]const generated_link.WireRange{ self.output_links.items, self.display_title_links.items }) |links| for (links) |link| {
+            bound +|= 160 + poemJsonStringSize(link.value.token) + poemJsonStringSize(link.value.argument) + poemJsonStringSize(link.value.target) + poemJsonStringSize(link.value.label);
+            if (bound > max_poem_metadata_bytes) return error.FrameTooLarge;
+        };
         var output_hash: [32]u8 = undefined;
         var title_hash: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(output, &output_hash, .{});
         std.crypto.hash.sha2.Sha256.hash(title, &title_hash, .{});
         const output_hex = std.fmt.bytesToHex(output_hash, .lower);
         const title_hex = std.fmt.bytesToHex(title_hash, .lower);
-        const metadata: PoemMetadata = .{ .output_sha256 = &output_hex, .display_title_sha256 = &title_hex, .items = self.poem_items.items };
+        const metadata: PoemMetadata = .{ .schema = if (self.generated_link_counter != 0) "wikidict.presentation-phase.v2" else "wikidict.poem-phase.v1", .output_sha256 = &output_hex, .display_title_sha256 = &title_hex, .items = self.poem_items.items, .output_links = self.output_links.items, .display_title_links = self.display_title_links.items };
         const bytes = try std.json.Stringify.valueAlloc(self.page_allocator orelse self.runtime.allocator, metadata, .{ .emit_null_optional_fields = false });
         if (bytes.len == 0 or bytes.len > max_poem_metadata_bytes) return error.FrameTooLarge;
         self.poem_metadata = bytes;
@@ -986,13 +1035,22 @@ pub const Expander = struct {
     // recursive parse that created them, never by another template source.
     fn appendPoemLiteral(self: *Expander, out: *std.ArrayList(u8), text: []const u8, prepared: bool) anyerror!void {
         const a = self.runtime.allocator;
-        if (self.poem_argument_depth == 0 and std.mem.indexOf(u8, text, poem_prefix) == null)
+        if (self.poem_argument_depth == 0 and std.mem.indexOf(u8, text, poem_prefix) == null and std.mem.indexOf(u8, text, isbn_marker_prefix) == null and std.mem.indexOf(u8, text, generated_link.prefix) == null)
             return preprocess.appendParsingText(a, out, text);
         var no_more_close: [4]bool = @splat(false);
         var no_more_gt = false;
         var pos: usize = 0;
         var copied: usize = 0;
         while (pos < text.len) {
+            const private_prefix: ?[]const u8 = if (std.mem.startsWith(u8, text[pos..], isbn_marker_prefix)) isbn_marker_prefix else if (std.mem.startsWith(u8, text[pos..], generated_link.prefix)) generated_link.prefix else null;
+            if (private_prefix) |prefix_value| {
+                if (prepared and std.mem.eql(u8, prefix_value, isbn_marker_prefix)) if (self.ownedStripMarker(text, pos, isbn_marker_prefix, .isbn)) |marker| { pos = marker.end; continue; };
+                try preprocess.appendParsingText(a, out, text[copied..pos]);
+                try out.appendSlice(a, try self.poemLiteral("text", prefix_value));
+                pos += prefix_value.len;
+                copied = pos;
+                continue;
+            }
             if (std.mem.startsWith(u8, text[pos..], poem_prefix)) {
                 if (prepared) if (self.nativePoemItemLen(text[pos..])) |len| {
                     pos += len;
@@ -1063,13 +1121,24 @@ pub const Expander = struct {
     }
     fn appendPoemLiteralTracked(self: *Expander, out: *dependency.Builder, text: []const u8, prepared: bool, protect_literal_curly: bool, literal_state: *preprocess.ParsingLiteralState) anyerror!void {
         const a = self.runtime.allocator;
-        if (self.poem_argument_depth == 0 and std.mem.indexOf(u8, text, poem_prefix) == null)
+        if (self.poem_argument_depth == 0 and std.mem.indexOf(u8, text, poem_prefix) == null and std.mem.indexOf(u8, text, isbn_marker_prefix) == null and std.mem.indexOf(u8, text, generated_link.prefix) == null)
             return preprocess.appendParsingTextTrackedState(a, out, text, protect_literal_curly, literal_state);
         var no_more_close: [4]bool = @splat(false);
         var no_more_gt = false;
         var pos: usize = 0;
         var copied: usize = 0;
         while (pos < text.len) {
+            const private_prefix: ?[]const u8 = if (std.mem.startsWith(u8, text[pos..], isbn_marker_prefix)) isbn_marker_prefix else if (std.mem.startsWith(u8, text[pos..], generated_link.prefix)) generated_link.prefix else null;
+            if (private_prefix) |prefix_value| {
+                if (prepared and std.mem.eql(u8, prefix_value, isbn_marker_prefix)) if (self.ownedStripMarker(text, pos, isbn_marker_prefix, .isbn)) |marker| { pos = marker.end; continue; };
+                try preprocess.appendParsingTextTrackedState(a, out, text[copied..pos], protect_literal_curly, literal_state);
+                try out.append(a, dependency.Text.untracked(try self.poemLiteral("text", prefix_value)));
+                literal_state.after_boundary = false;
+                literal_state.last_source_byte = null;
+                pos += prefix_value.len;
+                copied = pos;
+                continue;
+            }
             if (std.mem.startsWith(u8, text[pos..], poem_prefix)) {
                 if (prepared) if (self.nativePoemItemLen(text[pos..])) |len| {
                     pos += len;
@@ -3236,6 +3305,13 @@ pub const Expander = struct {
                 return try self.recordDisplayTitle(value);
             }
             if (std.ascii.eqlIgnoreCase(name, "DEFAULTSORT")) return "";
+            if ((self.provider.resolve_parser_function != null and std.mem.eql(u8, name, "isbn")) or (self.provider.resolve_parser_function == null and std.mem.eql(u8, name, "#isbn"))) {
+                const argument = std.mem.trim(u8, try self.expandWikitext(first, params, host_title, depth + 1), " \t\r\n\x00\x0b");
+                // Ordinary parser callbacks eagerly expand extra arguments even
+                // when the callback only consumes its first argument.
+                for (raw_args) |extra| _ = try self.expandWikitext(extra, params, host_title, depth + 1);
+                return self.isbnStrip(argument);
+            }
             if (std.ascii.eqlIgnoreCase(name, "int")) return try self.expandIntParser(head, first, raw_args, params, host_title, depth + 1);
             if (std.ascii.eqlIgnoreCase(name, "ns")) {
                 const raw_ns = std.mem.trim(u8, try self.expandWikitext(first, params, host_title, depth + 1), " \t\r\n");
@@ -3740,12 +3816,16 @@ pub const Expander = struct {
         var out: std.ArrayList(u8) = .empty;
         var search: usize = 0;
         var copied: usize = 0;
-        while (std.mem.indexOfPos(u8, body, search, hiero_marker_prefix)) |at| {
+        while (true) {
+            const hiero_at = std.mem.indexOfPos(u8, body, search, hiero_marker_prefix);
+            const isbn_at = std.mem.indexOfPos(u8, body, search, isbn_marker_prefix);
+            const at = if (hiero_at) |h| if (isbn_at) |i| @min(h, i) else h else isbn_at orelse break;
             search = at + 1;
-            const marker = self.ownedStripMarker(body, at, hiero_marker_prefix, .hiero) orelse continue;
+            const is_isbn = std.mem.startsWith(u8, body[at..], isbn_marker_prefix);
+            const marker = if (is_isbn) self.ownedStripMarker(body, at, isbn_marker_prefix, .isbn) orelse continue else self.ownedStripMarker(body, at, hiero_marker_prefix, .hiero) orelse continue;
             if (at > copied) try out.appendSlice(a, try self.poemLiteral("nowiki", body[copied..at]));
             // This is the final general phase, not a recursive scan of payloads.
-            try out.appendSlice(a, marker.text);
+            try out.appendSlice(a, if (is_isbn) body[at..marker.end] else marker.text);
             search = marker.end;
             copied = marker.end;
         }
@@ -3843,6 +3923,57 @@ pub const Expander = struct {
         }
         try out.appendSlice(a, source[pos..]);
         return out.toOwnedSlice(a);
+    }
+
+    // CoreParserFunctions::isbn returns isHTML. Keep that result in the existing
+    // page-owned general strip state, never interpolate argument bytes as wiki.
+    fn isbnStrip(self: *Expander, argument: []const u8) anyerror!?[]const u8 {
+        const page_a = self.page_allocator orelse self.runtime.allocator;
+        const normalized = (try generated_link.normalizeAlloc(page_a, argument)) orelse return null;
+        if (!generated_link.matches(normalized)) return null; // MediaWiki found=false.
+        // A lexical match can still fail TitleValue construction. Preserve that
+        // callback failure before creating any owned strip value.
+        if (!generated_link.validTargetArgument(normalized)) return error.InvalidIsbnTitleTarget;
+        if (self.strip_values.count() >= generated_link.max_links or self.strip_counter == std.math.maxInt(u32)) return error.FrameTooLarge;
+        const id = self.strip_counter;
+        self.strip_counter += 1;
+        errdefer { self.strip_counter = id; _ = self.strip_values.remove(id); }
+        try self.strip_values.put(page_a, id, .{ .kind = .isbn, .text = normalized });
+        return try std.fmt.allocPrint(self.runtime.allocator, "{s}{X:0>8}{s}", .{ isbn_marker_prefix, id, nowiki_marker_suffix });
+    }
+
+    // The last producer edit records exact offsets while copying actual owned
+    // markers. An equal authored WDGLINK spelling is never a generated range.
+    fn restoreIsbnMarkers(self: *Expander, a: std.mem.Allocator, source: []const u8, links: *std.ArrayList(generated_link.WireRange)) anyerror![]const u8 {
+        if (std.mem.indexOf(u8, source, isbn_marker_prefix) == null) return source;
+        const page_a = self.page_allocator orelse self.runtime.allocator;
+        const original_links = links.items.len;
+        const original_counter = self.generated_link_counter;
+        errdefer { links.shrinkRetainingCapacity(original_links); self.generated_link_counter = original_counter; }
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(a);
+        var pos: usize = 0;
+        while (std.mem.indexOfPos(u8, source, pos, isbn_marker_prefix)) |at| {
+            try out.appendSlice(a, source[pos..at]);
+            const marker = self.ownedStripMarker(source, at, isbn_marker_prefix, .isbn) orelse {
+                try out.append(a, source[at]);
+                pos = at + 1;
+                continue;
+            };
+            const id = self.generated_link_counter;
+            if (id >= generated_link.max_links or out.items.len > std.math.maxInt(u32)) return error.FrameTooLarge;
+            const target = try generated_link.targetAlloc(page_a, marker.text);
+            const label = try std.fmt.allocPrint(page_a, "ISBN {s}", .{marker.text});
+            const token = try generated_link.tokenAlloc(page_a, id, marker.text, target, label);
+            const start = out.items.len;
+            try out.appendSlice(a, token);
+            if (out.items.len > std.math.maxInt(u32)) return error.FrameTooLarge;
+            try links.append(page_a, .{ .start = @intCast(start), .end = @intCast(out.items.len), .value = .{ .token = token, .argument = marker.text, .target = target, .label = label } });
+            self.generated_link_counter += 1;
+            pos = marker.end;
+        }
+        try out.appendSlice(a, source[pos..]);
+        return try out.toOwnedSlice(a);
     }
 
     fn formattedDateSpan(self: *Expander, raw: []const u8, style_raw: ?[]const u8) ![]const u8 {
@@ -4343,9 +4474,21 @@ pub const Expander = struct {
     fn hostFrameParserFunction(raw: ?*anyopaque, a: std.mem.Allocator, raw_name: []const u8, args: *rt.Table) anyerror![]const u8 {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         self.invalidateNativeDependencyArguments();
+        if (std.mem.indexOfScalar(u8, raw_name, 58)) |colon| {
+            const head = raw_name[0..colon];
+            if (try self.resolveParserFunction(head)) |canonical| {
+                if ((self.provider.resolve_parser_function != null and std.mem.eql(u8, canonical, "isbn")) or
+                    (self.provider.resolve_parser_function == null and std.mem.eql(u8, canonical, "#isbn")))
+                    return (try self.isbnStrip(std.mem.trim(u8, raw_name[colon + 1..], " \t\r\n\x00\x0b"))) orelse error.UnsupportedParserFunction;
+            }
+        }
         const name = (try self.resolveParserFunction(raw_name)) orelse return error.UnsupportedParserFunction;
         const first = args.rawGet(.{ .number = 1 });
         const second = args.rawGet(.{ .number = 2 });
+        if ((self.provider.resolve_parser_function != null and std.mem.eql(u8, name, "isbn")) or (self.provider.resolve_parser_function == null and std.mem.eql(u8, name, "#isbn"))) {
+            const argument = if (first) |value| try self.scalarText(value) else "";
+            return (try self.isbnStrip(std.mem.trim(u8, argument, " \t\r\n\x00\x0b"))) orelse error.UnsupportedParserFunction;
+        }
         if (self.provider.resolve_parser_function != null and rt.namespace_registry.magic_words.statisticsId(name) != null) {
             const option: []const u8 = if (first) |value| switch (value) {
                 .nil => "",
@@ -8891,4 +9034,124 @@ test "native Cite raw attributes do not transclude while note bodies and surroun
     try std.testing.expectEqualStrings("Template:DLCE1906", phase.occurrences()[0].title);
     // Active-body allocator failure is never converted to a reference or text.
     try std.testing.expectError(error.OutOfMemory, expander.expandFragment("Page", "<ref name=n<bad>{{Fail}}</ref>", null));
+}
+
+test "captured ISBN alias drives normal tracked and untracked expansion with whole argument strip data" {
+    const aliases = rt.namespace_registry.magic_words;
+    const Source = struct {
+        words: *const aliases.Registry,
+        fn parser(raw: ?*anyopaque, name: []const u8) !?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            return self.words.resolve(name, .parser_function);
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact retained DE isbn row: raw bdf56c039951...; other row is a test
+    // callback used to prove eager evaluation of ignored ordinary arguments.
+    var words = try aliases.Registry.init(a, aliases.parser_header ++ "\n# wiki\tdewiktionary\n# dump-date\t20261001\n# content-language\tde\nisbn\t1\t#isbn\ndisplaytitle\t1\tDISPLAYTITLE\n", "dewiktionary", "20261001", "de");
+    defer words.deinit();
+    var source: Source = .{ .words = &words };
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander: Expander = .{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .ctx = &source, .get = TestProvider.get, .exists = TestProvider.exists, .resolve_parser_function = Source.parser } };
+    const cases = [_]struct { source: []const u8, argument: []const u8, target: []const u8 }{
+        .{ .source = "{{#isbn:978-83-239-9999-7}}", .argument = "978-83-239-9999-7", .target = "Special:Booksources/9788323999997" },
+        .{ .source = "{{#isbn:pre_x123456789x#tail[[A|B]]<b>C</b>\u{2028}end}}", .argument = "pre_x123456789x#tail[[A|B]]<b>C</b>\u{2028}end", .target = "Special:Booksources/pre X123456789X#tail[[A|B]]<b>C</b>\u{2028}end" },
+        .{ .source = "{{#isbn: 123\t45&nbsp;6&#160;7&#xA0;8\u{2007}9x }}", .argument = "123 45 6 7 8 9x", .target = "Special:Booksources/123456789X" },
+    };
+    for (cases) |case| {
+        const output = try expander.expandFragment("Page", case.source, 1_670_803_200);
+        try std.testing.expect(!expander.unsupported_parser_function);
+        try std.testing.expectEqual(@as(usize, 1), expander.output_links.items.len);
+        const item = expander.output_links.items[0];
+        try std.testing.expectEqual(@as(u32, 0), item.start);
+        try std.testing.expectEqual(output.len, @as(usize, item.end));
+        try std.testing.expectEqualStrings(item.value.token, output);
+        try std.testing.expectEqualStrings(case.argument, item.value.argument);
+        try std.testing.expectEqualStrings(case.target, item.value.target);
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "ISBN {s}", .{case.argument}), item.value.label);
+        const metadata = expander.poem_metadata orelse return error.TestUnexpectedResult;
+        const parsed = try std.json.parseFromSlice(PoemMetadata, a, metadata, .{});
+        try std.testing.expectEqualStrings("wikidict.presentation-phase.v2", parsed.value.schema);
+        try std.testing.expectEqualDeep(item.value, parsed.value.output_links[0].value);
+        expander.beginPage("Page", case.source, 1_670_803_200);
+        const params = try runtime.newTable();
+        const intermediate = try expander.expandWikitext(case.source, params, "Page", 0);
+        const untracked = try expander.restoreIsbnMarkers(a, intermediate, &expander.output_links);
+        try expander.finishPoemMetadata(untracked);
+        try std.testing.expectEqualStrings(output, untracked);
+        try std.testing.expectEqualStrings(metadata, expander.poem_metadata.?);
+    }
+    _ = try expander.expandFragment("Page", "{{#isbn:9788323999997|{{DISPLAYTITLE:Page}}}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("Page", expander.display_title.?);
+    try std.testing.expect(!expander.unsupported_parser_function);
+    try std.testing.expectEqualStrings("&#123;&#123;#isbn:short&#125;&#125;", try expander.expandFragment("Page", "{{#isbn:short}}", 1_670_803_200));
+    try std.testing.expect(expander.unsupported_parser_function);
+    try std.testing.expectEqual(@as(usize, 0), expander.output_links.items.len);
+    try std.testing.expect(words.resolve("#ISBN", .parser_function) == null);
+    try std.testing.expect(words.resolve("isbn", .parser_function) == null);
+    const literal = "<nowiki>{{#isbn:9788323999997}}</nowiki>";
+    try std.testing.expectEqualStrings(literal, try expander.expandFragment("Page", literal, 1_670_803_200));
+    try std.testing.expectEqual(@as(usize, 0), expander.output_links.items.len);
+}
+
+test "ISBN native frame general strip values retain page ownership and reset on the next page" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander: Expander = .{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists } };
+    expander.beginPage("Page", "", 1_670_803_200);
+    const args = try runtime.newTable();
+    try args.rawSet(a, .{ .number = 1 }, .{ .string = "9781234567890#tail[[A|B]]<b>C</b>\u{2028}end" });
+    const marker = try Expander.hostFrameParserFunction(&expander, a, "#isbn", args);
+    try std.testing.expect(std.mem.startsWith(u8, marker, isbn_marker_prefix));
+    const inside_nowiki = try expander.finalNowikiBody(a, marker);
+    try std.testing.expectEqualStrings(marker, inside_nowiki);
+    const output = try expander.restoreIsbnMarkers(a, inside_nowiki, &expander.output_links);
+    try expander.finishPoemMetadata(output);
+    try std.testing.expectEqual(@as(usize, 1), expander.output_links.items.len);
+    try std.testing.expectEqualStrings("Special:Booksources/9781234567890#tail[[A|B]]<b>C</b>\u{2028}end", expander.output_links.items[0].value.target);
+    const colon_marker = try Expander.hostFrameParserFunction(&expander, a, "#isbn:9788323999997", try runtime.newTable());
+    try std.testing.expect(std.mem.startsWith(u8, colon_marker, isbn_marker_prefix));
+    try std.testing.expectError(error.UnsupportedParserFunction, Expander.hostFrameParserFunction(&expander, a, "#isbn\u{ff1a}9788323999997", try runtime.newTable()));
+    const body_token = try expander.poemLiteral("poem", colon_marker);
+    const body_item = expander.poem_items.items[expander.poem_items.items.len - 1];
+    try std.testing.expectEqual(@as(usize, 1), body_item.generated_links.len);
+    try std.testing.expectEqualStrings(body_item.generated_links[0].value.token, body_item.body.?);
+    try std.testing.expect(std.mem.indexOf(u8, body_item.body.?, isbn_marker_prefix) == null);
+    try expander.finishPoemMetadata(body_token);
+    const body_metadata = try std.json.parseFromSlice(PoemMetadata, a, expander.poem_metadata.?, .{});
+    try std.testing.expectEqualDeep(body_item.generated_links[0], body_metadata.value.items[0].generated_links[0]);
+    try args.rawSet(a, .{ .number = 1 }, .{ .string = "invalid" });
+    try std.testing.expectError(error.UnsupportedParserFunction, Expander.hostFrameParserFunction(&expander, a, "#isbn", args));
+    for ([_][]const u8{ "9781234567890\nend", "9781234567890\rend", "9781234567890_" }) |argument| {
+        try args.rawSet(a, .{ .number = 1 }, .{ .string = argument });
+        try std.testing.expectError(error.InvalidIsbnTitleTarget, Expander.hostFrameParserFunction(&expander, a, "#isbn", args));
+        const source = try std.fmt.allocPrint(a, "{{{{#isbn:{s}}}}}", .{argument});
+        try std.testing.expectError(error.InvalidIsbnTitleTarget, expander.expandFragment("Invalid", source, 1_670_803_200));
+        try std.testing.expectEqual(@as(usize, 0), expander.strip_values.count());
+        try std.testing.expectEqual(@as(usize, 0), expander.output_links.items.len);
+    }
+    // Same-branch Scribunto LuaEngine915-917 raises a function-not-found error
+    // for core found=false. Do not turn invalid input into an empty success.
+    try std.testing.expectEqualStrings("next", try expander.expandFragment("Next", "next", 1_670_803_200));
+    try std.testing.expectEqual(@as(usize, 0), expander.output_links.items.len);
+    try std.testing.expectEqual(@as(usize, 0), expander.display_title_links.items.len);
+    try std.testing.expectEqual(@as(usize, 0), expander.strip_values.count());
+    try std.testing.expect(expander.poem_metadata == null);
+    try std.testing.expect(expander.ownedStripMarker(marker, 0, isbn_marker_prefix, .isbn) == null);
+    expander.strip_counter = std.math.maxInt(u32);
+    try std.testing.expectError(error.FrameTooLarge, expander.isbnStrip("9788323999997"));
+    try std.testing.expectEqual(std.math.maxInt(u32), expander.strip_counter);
+    try std.testing.expectEqual(@as(usize, 0), expander.strip_values.count());
 }

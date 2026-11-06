@@ -1,0 +1,80 @@
+== [[File:Flag of Italy.svg|40px|border|bandiera italiana]] [[Appendice:Italiano|Italiano]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[verbo|Verbo]]''===
+[[Categoria:Verbi in italiano]] 
+
+====[[transitivo|Transitivo]]====
+[[Categoria:Verbi transitivi_in_italiano]]
+'''uccidere'''<small>&nbsp;([[Appendice:Coniugazioni/Italiano/uccidere|vai alla coniugazione]])</small>
+#  [[togliere]] la [[vita]], [[causare]] la [[morte]] di un essere vivente
+#* ''L'[[investigatore]] [[disse]] senza [[allusione]]: <<[[domanda|Domanda]]: "ma lei... ha mai [[commesso]] un [[delitto]]? Sa cosa significa '''uccidere'''<small></small>?">>''
+#* ''Il [[gelo]] è riuscito ad uccidere  le rose''
+
+=== [[File:Hyph abc.svg|45px]] [[sillabazione|Sillabazione]] ===
+
+; uc | cì | de | re
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/utˈt͡ʃidere/</span>
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+dal [[latino]] ''[[occidere]]'' formato da ''[[ob-]]'' e da ''[[caedĕre]]'' ossia "[[tagliare]], [[uccidere]]"
+
+===[[File:Icona_sinonimi.png|35px]] [[sinonimi|Sinonimi]]===
+
+* [[ammazzare]], [[accoppare]], [[assassinare]], [[massacrare]], [[mettere a morte]], [[freddare]], [[sopprimere]]; [[sterminare]], [[trucidare]], [[decimare]], [[annientare]]; [[accoltellare]], [[strozzare]], [[strangolare]], [[fucilare]], [[impiccare]], [[decapitare]], [[ghigliottinare]]
+* <small>(''per estensione'')</small> far perire,  [[eliminare]], [[fare fuori]]
+* <small>(''senso figurato'')</small> [[abolire]], [[annientare]], [[distruggere]], [[soffocare]]
+* <small>(''senso figurato'')</small> [[sfinire]], [[danneggiare]], [[nuocere]]
+* ''(specialmente animali)'' [[abbattere]]
+
+===[[immagine:Fairytale right blue.png|20px]][[immagine:Fairytale left blue.png|20px]] [[contrario|Contrari]]===
+
+* [[risparmiare]], [[salvare]], [[graziare]]
+* <small>(''per estensione'')</small> [[rinvigorire]], [[vivificare]]
+* <small>(''senso figurato'')</small> [[preservare]]
+
+===[[File:Nuvola apps tree.svg|30px]]  [[parole|Parole]] [[derivate]]===
+
+* [[uccidersi]]
+
+===[[Image:Books-aj.svg aj ashton 01.svg|30px]] [[termine|Termini]] [[correlato|correlati]]===
+
+* [[uccisione]], [[uccisore]], [[opprimere]]
+* <small>(''per estensione'')</small> [[libero]] [[arbitrio]]
+
+===[[immagine:Gnome-go-down.svg|20px]][[immagine:Gnome-go-up.svg|20px]] [[variante|Varianti]]===
+
+* [[occidere]]
+
+=== [[Image:Gnome-globe.svg|30px]] [[traduzione|Traduzione]] ===
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">togliere la vita
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[bretone]]: [[lazhañ]]
+:* [[francese]]: [[tuer]]
+:* [[inglese]]: to [[kill]], to [[slaughter]], to [[slay]] to [[shoot (down)]], to [[murder]]
+| width=1% |
+|bgcolor="beige" valign=top width=48%|
+
+:* [[latino]]: [[absumere]], [[caedere]], [[concidere]], [[deicere]], [[interficere]], [[interimere]], [[iugulare]], [[mactare]], [[necare]], [[occidere]], [[percutere]], [[perimere]]
+:* [[norvegese]]: [[drepe]], [[myrde]], [[ta livet av]]
+:* [[portoghese]]: [[matar]]
+:* [[tedesco]]: [[töten]], [[abtöten]]
+|}</div></div>
+
+<div class="NonModificabile">
+== [[Image:Nuvola apps bookcase.svg|30px|]] [[note|Note]] / [[riferimenti|Riferimenti]] ==
+</div>
+* Enrico Olivetti, [https://www.dizionario-italiano.it/dizionario-italiano.php?lemma=UCCIDERE100 ''Dizionario Italiano Olivetti''] edizione on line su ''[https://www.dizionario-italiano.it www.dizionario-italiano.it]'', Olivetti Media Communication
+* Francesco Sabatini e Vittorio Coletti, [http://dizionari.corriere.it/dizionario_italiano/U/uccidere.shtml ''Il Sabatini Coletti''] edizione online su ''[http://dizionari.corriere.it corriere.it]'', RCS Mediagroup
+* Tullio De Mauro, [https://dizionario.internazionale.it/parola/uccidere ''Il nuovo De Mauro''] edizione online su ''[https://internazionale.it internazionale.it]'', Internazionale
+* AA.VV., [https://www.treccani.it/vocabolario/ricerca/uccidere/ ''Vocabolario Treccani''] edizione online su ''[https://www.treccani.it treccani.it]'', Istituto dell'Enciclopedia Italiana
+* Aldo Gabrielli, [https://grandidizionari.hoepli.it/Dizionario_Italiano/parola/U/uccidere.aspx?query=uccidere ''Grande Grande Libreria Online''] edizione online su ''[https://www.hoepli.it/ hoepli.it]'', Hoepli
+* AA.VV., [https://www.sapere.it/sapere/search.html?q=uccidere&tipo_dizionario=Italiano ''Dizionario di italiano''] edizione on line su ''[https://www.sapere.it sapere.it]'', De Agostini Editore
+* AA.VV., [http://www.garzantilinguistica.it/ricerca/?q=uccidere ''Lemmario italiano''] edizione on line su ''[http://www.garzantilinguistica.it garzantilinguistica.it]'', De Agostini Scuola
+* AA.VV., [https://dizionari.corriere.it/dizionario_sinonimi_contrari/U/uccidere.shtml ''Dizionario dei Sinonimi e dei Contrari''] edizione on line su ''[https://dizionari.corriere.it corriere.it]'', RCS Mediagroup
+*AA.VV., ''Dizionario Sinonimi e contrari, Mariotti, 2006, pagina 595

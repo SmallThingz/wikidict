@@ -970,15 +970,25 @@ class InterleavedPreparationTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
 
-    def test_failed_first_group_retains_batch_outcomes_and_stops_later_preparations(self):
+    def test_failed_first_group_retains_all_independent_outcomes_and_blocks_full(self):
         cfg, proof, expectation = self.plan()
         with self.assertRaisesRegex(AssertionError, 'focused_functional_failure'):
             self.run_fresh(cfg, proof, expectation, failure='tools.test.selected')
-        self.assertEqual(self.events, ['reviewed-language-aliases', 'focused-prepare-tools',
-                         'focus:tools.test.selected', 'focus:tools.test.second'])
-        self.assertEqual([row['passed'] for row in self.result['focused_tests']], [False, True])
-        self.assertEqual(self.result['focused_preparation_order'], ['tools'])
-        self.assertFalse(self.result['all_selected_executed'] or self.result['focused_qualified'])
+        ordered, cases = qualification.bound_focus_plan(cfg, proof, Path(proof['cwd']))
+        expected = ['reviewed-language-aliases']
+        for group in ordered:
+            expected += ['focused-prepare-' + group['id']]
+            expected += ['filtered-discovery-' + group['id'] + '-' + str(number)
+                         for number, _ in enumerate(group['compiled_only_discovery_names'])]
+            expected += ['focus:' + case[2] for case in cases if case[0]['id'] == group['id']]
+        self.assertEqual(self.events, expected)
+        self.assertEqual([row['name'] for row in self.result['focused_tests']],
+                         [case[2] for case in cases])
+        self.assertEqual([row['name'] for row in self.result['focused_tests'] if not row['passed']],
+                         ['tools.test.selected'])
+        self.assertEqual(self.result['focused_preparation_order'], [group['id'] for group in ordered])
+        self.assertTrue(self.result['all_selected_executed'])
+        self.assertFalse(self.result['focused_qualified'])
         self.assertNotIn('fake_full_boundary_reached', self.result)
         self.assertEqual(self.snapshots[-1], self.result)
 
@@ -1274,6 +1284,120 @@ class CapturedFingerprintTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             exec(value['code'], value['namespace'])
         self.assertEqual(value['commands'], [])
+
+
+class PresentationSourceContractTests(unittest.TestCase):
+    def test_abi10_source_requires_dprf_capability_without_relabeling_old_records(self):
+        value = {'ABI': 10, 'wire': 'DPRF', 'selected_patch': {'sha256': 'source'}}
+        original = copy.deepcopy(value)
+        self.assertIsNone(qualification.require_presentation_source_contract(value))
+        self.assertEqual(value, original)
+        for invalid in (None, [], {}, {'ABI': 9, 'wire': 'DPRE'},
+                        {'ABI': 9, 'wire': 'DPRF'}, {'ABI': 10, 'wire': 'DPRE'},
+                        {'ABI': 10, 'wire': 'DPRD'}, {'ABI': 10.0, 'wire': 'DPRF'},
+                        {'ABI': True, 'wire': 'DPRF'}, {'ABI': 10}, {'wire': 'DPRF'}):
+            with self.subTest(binding=invalid), self.assertRaises(AssertionError):
+                qualification.require_presentation_source_contract(invalid)
+
+    def test_worker_checks_capability_before_full_suite_and_preserves_paired_reader_checks(self):
+        import ast
+        text = Path(qualification.__file__).read_text()
+        tree = ast.parse(text)
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name)
+                 and node.func.id == 'require_presentation_source_contract']
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([ast.unparse(arg) for arg in calls[0].args], ['private_binding'])
+        full = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name) and node.func.id == 'execute'
+                and node.args and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == 'full-native-suite']
+        self.assertEqual(len(full), 1)
+        self.assertLess(calls[0].lineno, full[0].lineno)
+        # This old-format fixture remains mandatory even though capability is F.
+        self.assertIn("payload.read_bytes().startswith(b'DPRD')", text)
+        self.assertIn('normal_reader_checks=50', text)
+        self.assertIn('ffi_child_marker_asserted_inside_native_harness=True', text)
+        self.assertIn("result['full_native_pass']=True", text)
+
+
+class BindingContractTests(unittest.TestCase):
+    def fixture(self, selected=None):
+        value = DocumentPartitionPreparationTests().fixture()
+        cfg, proof = value['cfg'], value['group_binding']
+        if selected is not None:
+            cfg['groups'] = [group for group in cfg['groups'] if group['id'] in selected]
+            SupportedRootSubsetTests().bind_selection(cfg, proof)
+        proof['compile_time_filtered_preparation'] = any(
+            group['compile_time_filtered'] for group in cfg['groups'])
+        return cfg, proof, value['expect']
+
+    def plan(self, cfg, proof, expectation):
+        return qualification.qualification_binding_plan(
+            cfg, proof, expectation, Path('/fixture/source'))
+
+    def test_canonical_order_preserves_selected_groups_and_priority(self):
+        cfg, proof, expectation = self.fixture()
+        shuffled = list(reversed(cfg['groups']))
+        before = copy.deepcopy(shuffled)
+        ordered = qualification.canonical_preparation_groups(shuffled)
+        self.assertEqual([group['id'] for group in ordered],
+                         ['encoder_compile', 'encoder_document', 'encoder_writer',
+                          'encoder_support', 'lua', 'closure', 'tools'])
+        self.assertEqual(shuffled, before)
+        self.assertEqual(ordered, cfg['groups'])
+        doc = next(group for group in ordered if group['id'] == 'encoder_document')
+        proof['focus_priority'] = [dict(group=doc['id'], name=doc['test_names'][0])]
+        plan = self.plan(cfg, proof, expectation)
+        self.assertEqual(plan['prepared_groups'][0], 'encoder_compile')
+        self.assertEqual(plan['actual_case_order'][0]['group'], 'encoder_document')
+
+    def test_canonical_order_rejects_unknown_or_duplicate_roots(self):
+        for groups in ([dict(id='unknown')], [dict(id='tools'), dict(id='tools')], []):
+            with self.subTest(groups=groups), self.assertRaises(AssertionError):
+                qualification.canonical_preparation_groups(groups)
+
+    def test_contract_derives_full_gate_and_independent_failure_collection(self):
+        cfg, proof, expectation = self.fixture()
+        for stage, full_required in (('full', True), ('focused-diagnostic', False)):
+            cfg['execution_stage'] = stage
+            plan = self.plan(cfg, proof, expectation)
+            self.assertEqual(len(plan['actual_case_order']), 7)
+            self.assertEqual(plan['compiled_counts'], dict(
+                encoder_compile=2, encoder_document=2, encoder_writer=2,
+                encoder_support=1, lua=1, closure=1, tools=1))
+            self.assertIs(plan['functional_failures_collected'], True)
+            self.assertIs(plan['aggregate_full_gate_retained'], True)
+            self.assertIs(plan['normal_full_required'], full_required)
+
+    def test_required_roles_counts_and_independent_inventory_refuse(self):
+        for key in ('private_manifest', 'private_source_binding'):
+            cfg, proof, expectation = self.fixture()
+            del cfg[key]
+            with self.subTest(missing=key), self.assertRaises(KeyError):
+                self.plan(cfg, proof, expectation)
+        for defect in ('compiled-count', 'source-binding', 'expected-inventory'):
+            cfg, proof, expectation = self.fixture()
+            if defect == 'compiled-count':
+                cfg['groups'][0]['compiled_expected_count'] -= 1
+                proof['groups'] = copy.deepcopy(cfg['groups'])
+            elif defect == 'source-binding':
+                proof['source_binding'] = {'sha256': 'different'}
+            else:
+                expectation['expected']['groups'][0]['expected_occurrences'] = ['foreign.test.name']
+            with self.subTest(defect=defect), self.assertRaises(AssertionError):
+                self.plan(cfg, proof, expectation)
+
+    def test_tools_only_and_mixed_selection_require_matching_structural_flag(self):
+        for selected, expected_flag in ((['tools'], False), (['encoder_document', 'tools'], True)):
+            cfg, proof, expectation = self.fixture(selected)
+            self.assertIs(proof['compile_time_filtered_preparation'], expected_flag)
+            plan = self.plan(cfg, proof, expectation)
+            self.assertEqual(plan['prepared_groups'], selected)
+            self.assertEqual(len(plan['actual_case_order']), len(selected))
+            proof['compile_time_filtered_preparation'] = not expected_flag
+            with self.subTest(selected=selected), self.assertRaises(AssertionError):
+                self.plan(cfg, proof, expectation)
 
 
 if __name__ == '__main__':

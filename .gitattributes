@@ -38,3 +38,14 @@ src/encoder/testdata/et-contraction/source.raw.wikitext -whitespace
 src/encoder/testdata/et-contraction/source.static-template-derived.wikitext -whitespace
 tools/testdata/hy-ten49/raw.wikitext -whitespace
 tools/testdata/hy-ten49/expanded.wikitext -whitespace
+src/encoder/testdata/hy-hogin-batsvel/page.expanded.wikitext -whitespace
+src/encoder/testdata/hy-hogin-batsvel/page.raw.wikitext -whitespace
+src/encoder/testdata/it-uccidere/page.expanded.wikitext -whitespace
+src/encoder/testdata/it-uccidere/page.reference.wikitext -whitespace
+tools/testdata/ko-defamation/page.expanded.wikitext -whitespace
+tools/testdata/ko-defamation/page.raw.wikitext -whitespace
+tools/testdata/sr-serbia51/expanded.wikitext -whitespace
+tools/testdata/sr-serbia51/raw.wikitext -whitespace
+tools/testdata/pt-uran52/expanded.wikitext -whitespace
+tools/testdata/sw-ghuni/sw-language-names.tsv -whitespace
+src/encoder/testdata/uk-tomato/imen-eo.xmlencoded.wikitext -whitespace

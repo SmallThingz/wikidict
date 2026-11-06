@@ -1,0 +1,30 @@
+# wikidict-namespace-registry-v1
+# wiki	itwiktionary
+# dump-date	20261001
+# content-language	it
+-2	Media	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Speciale	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Discussione	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	Utente	User	first-letter	1	0	0		compile_only	standard_build_input
+3	Discussioni utente	User talk	first-letter	1	0	0		compile_only	discussion_namespace
+4	Wikizionario	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	WZ	Wiktionary
+5	Discussioni Wikizionario	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	File	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	Immagine
+7	Discussioni file	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discussioni immagine	Image talk
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	Discussioni MediaWiki	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	Template	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Discussioni template	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	Aiuto	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Discussioni aiuto	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	Categoria	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Discussioni categoria	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+100	Appendice	Appendice	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+101	Discussioni appendice	Discussioni appendice	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Modulo	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Discussioni modulo	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Evento	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Discussioni evento	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

@@ -1,0 +1,31 @@
+<noinclude>
+<div id='mf-wotd' title='word of the day'>
+<span style="position:relative;left:-10px;top:-10px;">[[Image:Writing_star.svg|62px|link=word]]</span>
+{| style="border-spacing:0; border:3px solid #AABBDD; background:#E9F3FF; width:100%; padding:10px; margin-top:-47px;"
+|-
+| colspan="2" |<div style="float:left;" class="plainlinks"><small class="editlink">[//ur.wiktionary.org/w/index.php?title=Wiktionary:Word_of_the_day/October_11&amp;action=edit ترمیم کریں]</small><small class="editlink">, [//ur.wiktionary.org/w/index.php?title=%D8%A2%D8%AC_%DA%A9%D8%A7_%D9%84%D9%81%D8%B8&action=purge تازہ کریں]</small></div><div style="font-size:150%;border-bottom:1px solid #AAAAAA;padding-left:40px;">آج کا لفظ&nbsp;<span style="font-size:small;">:: <span id="WOTD-rss-date">October 11</span></span></div>
+|-
+|'''[[word|<span id="WOTD-rss-title">{{{1}}}</span>]]''' ''{{{2}}}''
+|-
+| colspan="2" style="vertical-align:top;" |
+<div id="WOTD-rss-description">
+# {{{3}}}.</div>
+|-
+| colspan="2" style="font-size:80%; text-align:center; vertical-align:top;" |
+[[ویکی لغت:آج کا لفظ|آج کے لفظ کے متعلق]] • [[ویکی لغت:آج کا لفظ/وثق|وثق]]  • [[ویکی لغت:آج کا لفظ/نامزدگی|کوئی لفظ نامزد کریں]]  • <span class="plainlinks" title="Wiktionary:Feedback">[http://en.wiktionary.org/w/index.php?title=Wiktionary:Feedback&action=edit&section=new&preload=Wiktionary:Feedback%2Fpreload&editintro=Wiktionary:Feedback%2Fintro&preloadtitle=Word%20of%20the%20day%3A%20%5B%5B%7B%7B%7B1%7D%7D%7D%5D%5D فیڈبیک دیں]</span>
+|}
+</div>
+</noinclude><includeonly><span style="position:relative;left:-10px;top:-10px;">[[Image:Writing_star.svg|62px|link=word]]</span>
+{| cellspacing="0" style="border:3px solid #AABBDD; background:#E9F3FF;width:100%;padding:10px;margin-top:-47px;"
+|-
+| colspan="2" |<div style="float:right" class="plainlinks"><small class="editlink">[//ur.wiktionary.org/w/index.php?title=Wiktionary:Word_of_the_day/October_11&amp;action=edit edit]</small><span style="font-size:100%">, [//en.wiktionary.org/w/index.php?title=Template:Word_of_the_day&action=purge refresh]</div><div style="font-size:150%;border-bottom:1px solid #AAAAAA;padding-left:40px;">Word of the day<font size="2"> &nbsp;for <span id="WOTD-rss-date">October 11</span></div>
+|-
+|'''[[word|<span id="WOTD-rss-title">{{{1}}}</span>]]''' ''{{{2}}}''
+|-
+| colspan="2" valign="top" |
+<div id="WOTD-rss-description">
+# {{{3}}}.</div>
+|-
+| colspan="2" valign="top" style="font-size:80%; text-align:center" |
+[[Wiktionary:Word of the day|About Word of the Day]] • [[Wiktionary:Word of the day/Archive|Archive]]  • [[Wiktionary:Word of the day/Nominations|Nominate a word]] • <span class="plainlinks">[http://toolserver.org/~enwikt/wotd/ RSS feed]</span>
+|}</includeonly><noinclude></noinclude>

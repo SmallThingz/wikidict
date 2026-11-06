@@ -27,7 +27,8 @@ typedef enum dict_status {
 // ABI7 additionally requires authoritative typed reference blocks (DPRC).
 // ABI8 additionally requires typed image border decoration (conditional DPRD).
 // ABI9 additionally requires block text alignment and table floats (DPRE).
-#define DICT_ABI_VERSION 9u
+// ABI10 additionally preserves explicit internal target fragment components (DPRF).
+#define DICT_ABI_VERSION 10u
 
 uint32_t dict_abi_version(void);
 

@@ -1,0 +1,3 @@
+&lt;b&gt;{{{склади|}}}&lt;/b&gt;
+
+[[іменник|Іменник]].{{#ifeq:{{NAMESPACE}}|{{ns:Template}}||&lt;includeonly&gt;[[Категорія:Англійські іменники]]&lt;/includeonly&gt;}}&lt;noinclude&gt;[[Категорія:Шаблони словозміни/en]]&lt;/noinclude&gt;

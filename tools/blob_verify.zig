@@ -1,5 +1,6 @@
 const std = @import("std");
 const encoder = @import("encoder");
+const blob_files = @import("blob_files");
 
 const format = encoder.blob_format;
 const catalog = encoder.blob_catalog;
@@ -295,7 +296,7 @@ pub fn main(init: std.process.Init) !void {
     }
     const allocator = std.heap.smp_allocator;
     const root = args[1];
-    try encoder.blob_files.requireComplete(init.io, allocator, root);
+    try blob_files.requireComplete(init.io, allocator, root);
 
     var stats: Stats = .{};
     defer stats.deinit(allocator);

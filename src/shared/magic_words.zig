@@ -35,7 +35,7 @@ const function_ids = [_][]const u8{
     "formatnum",       "plural",           "language",            "padleft",       "padright",        "anchorencode",  "defaultsort",  "pagesincategory", "pagename",      "pagenamee",
     "fullpagename",    "fullpagenamee",    "subpagename",         "subpagenamee",  "rootpagename",    "rootpagenamee", "basepagename", "basepagenamee",   "talkpagename",  "talkpagenamee",
     "subjectpagename", "subjectpagenamee", "namespace",           "namespacee",    "namespacenumber", "talkspace",     "talkspacee",   "subjectspace",    "subjectspacee", "numberofarticles",
-    "numberoffiles",   "numberofusers",    "numberofactiveusers", "numberofpages", "numberofadmins",  "numberofedits", "int",          "special",         "tag",           "formatdate",
+    "numberoffiles",   "numberofusers",    "numberofactiveusers", "numberofpages", "numberofadmins",  "numberofedits", "isbn", "int",          "special",         "tag",           "formatdate",
     "displaytitle",    "expr",             "if",                  "ifeq",          "ifexpr",          "iferror",       "switch",       "ifexist",         "time",          "titleparts",
     "len",             "sub",              "categorytree",        "invoke",        "lst",
 };

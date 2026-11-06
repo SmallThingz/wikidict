@@ -81,6 +81,7 @@ pub const Registry = struct {
     reviewed_varieties: std.StringHashMapUnmanaged(void) = .empty,
     source_banners: std.StringHashMapUnmanaged(?SourceLanguageBanner) = .empty,
     source_paragraphs: std.StringHashMapUnmanaged(?SourceLanguageParagraph) = .empty,
+    source_code_declarations: std.StringHashMapUnmanaged(?[]const u8) = .empty,
     content_code: ?[]const u8 = null,
     link_trail_ranges: []const LinkTrailRange = &default_link_trail_ranges,
     link_trail_configured: bool = false,
@@ -110,6 +111,7 @@ pub const Registry = struct {
         self.reviewed_varieties.deinit(self.arena.allocator());
         self.source_banners.deinit(self.arena.allocator());
         self.source_paragraphs.deinit(self.arena.allocator());
+        self.source_code_declarations.deinit(self.arena.allocator());
         self.arena.deinit();
         self.* = undefined;
     }
@@ -369,6 +371,66 @@ pub const Registry = struct {
         return self.sourceParagraphNameMatches(code_value, proof.label) and
             line.len == proof.label.len + proof.category.len and
             std.mem.startsWith(u8, line, proof.label) and std.mem.endsWith(u8, line, proof.category);
+    }
+
+
+    /// A selected template source proves this declaration role, not a new alias.
+    pub fn addSourceCodeDeclaration(self: *Registry, name: []const u8, category_prefix: []const u8) !void {
+        if (name.len == 0 or category_prefix.len == 0) return;
+        if (self.source_code_declarations.getPtr(name)) |old| {
+            if (old.*) |value| {
+                if (!std.mem.eql(u8, value, category_prefix)) old.* = null;
+            }
+            return;
+        }
+        const a = self.arena.allocator();
+        try self.source_code_declarations.put(a, try a.dupe(u8, name), try a.dupe(u8, category_prefix));
+    }
+
+    pub fn matchesSourceParagraphCall(self: *const Registry, code_value: []const u8, template_name: []const u8, line: []const u8) bool {
+        if (template_name.len == 0) return self.matchesSourceLanguageParagraph(code_value, line);
+        const category = (self.source_code_declarations.get(template_name) orelse return false) orelse return false;
+        if (!self.codes.contains(code_value)) return false;
+        var rest = line;
+        const opening = "==<span id=\"";
+        if (!std.mem.startsWith(u8, rest, opening)) return false;
+        rest = rest[opening.len..];
+        const id_end = std.mem.indexOfScalar(u8, rest, '"') orelse return false;
+        // The code-named template supplies this opaque display id. It is not
+        // ownership evidence; a recognized conflicting spelling still vetoes.
+        const id = rest[0..id_end];
+        const code_prefix = "\" class=\"lang\" data-code=\"";
+        rest = rest[id_end..];
+        if (!std.mem.startsWith(u8, rest, code_prefix)) return false;
+        rest = rest[code_prefix.len..];
+        if (!std.mem.startsWith(u8, rest, code_value)) return false;
+        rest = rest[code_value.len..];
+        const name_prefix = "\" data-name=\"";
+        if (!std.mem.startsWith(u8, rest, name_prefix)) return false;
+        rest = rest[name_prefix.len..];
+        const name_end = std.mem.indexOfScalar(u8, rest, '"') orelse return false;
+        const name = rest[0..name_end];
+        rest = rest[name_end..];
+        const label_prefix = "\">[[";
+        if (!std.mem.startsWith(u8, rest, label_prefix)) return false;
+        rest = rest[label_prefix.len..];
+        const label_end = std.mem.indexOf(u8, rest, "]]</span>\n[[") orelse return false;
+        const label = rest[0..label_end];
+        rest = rest[label_end + "]]</span>\n[[".len ..];
+        if (!std.mem.startsWith(u8, rest, category)) return false;
+        rest = rest[category.len..];
+        if (!std.mem.startsWith(u8, rest, label) or !std.mem.eql(u8, rest[label.len..], "]]==")) return false;
+        // The retained formatter applies lcfirst. The finite profile supports
+        // an unchanged label or its ASCII initial; no Unicode name is invented.
+        if (!std.mem.eql(u8, name, label) and !(name.len == label.len and name.len != 0 and
+            name[0] >= 'A' and name[0] <= 'Z' and label[0] == name[0] + ('a' - 'A') and
+            std.mem.eql(u8, name[1..], label[1..]))) return false;
+        for ([_][]const u8{ id, name, label }) |spelling| {
+            if (spelling.len == 0 or std.mem.indexOfAny(u8, spelling, "[]{}<>|&\"\r\n\t") != null or
+                !std.mem.eql(u8, spelling, std.mem.trim(u8, spelling, " ")) or self.isAmbiguous(spelling)) return false;
+            if (self.resolve(spelling)) |owner| if (!std.mem.eql(u8, owner.code, code_value)) return false;
+        }
+        return true;
     }
 
     pub fn content(self: *const Registry) ?Resolved {

@@ -1,0 +1,338 @@
+'''Србија'''
+[[Категорија:Српски индекс]]__NOEDITSECTION__
+<templatestyles src="Модул:minitoc/styles.css"></templatestyles><div class="NavFrame" data-toggle-category="table of contents" style="max-width:40em;margin:0.5em 0" data-minitoc-length="1"><div class="NavHead" style="background:#eee;padding: 0.25em 0.5em">Језици (1)</div><div class="NavContent" style="text-align:center;padding:0.5em"><span style="white-space:nowrap;">[[#Референце|Референце]]</span><hr>[[#catlinks|Страна категорија]]</div></div><div data-toc-length="1">__TOC__</div>
+==<div id="toc" class="toccolours" ><big><big>[[File:Flag_of_Serbia.svg|border|32px]] Српски</big></big></div>==
+
+=== [[Srbija|Србија]] ([[Викиречник:Српски|српски]], [[Викиречник:Latinica|lat.]] [[Srbija]]) ===
+[[Категорија:sr:Ћирилица]]
+
+{| class="infobox vcard" style="float:right; border:1px solid #AAAAAA; border-collapse:collapse; margin-left:0.5em; margin-bottom:0.5em;" rules="all" cellpadding="3" cellspacing="0"
+! width="65" bgcolor="#F4F4F4" | [[Помоћ:Падеж|Падеж]]
+! bgcolor="#FFFFE0" | [[Помоћ:Једнина|Једнина]]
+! bgcolor="#FFFFE0" | [[Помоћ:Множина|Множина]]
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Номинатив|Номинатив]]'''
+| Србија 
+| Србије
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Генитив|Генитив]]'''
+| Србије 
+| Србија
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Датив|Датив]]'''
+| Србији 
+| Србијама
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Акузатив|Акузатив]]'''
+| Србију 
+| Србије
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Вокатив|Вокатив]]'''
+| Србијо 
+| Србије
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Инструментал|Инструментал]]'''
+| Србијом 
+| Србијама
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Локатив|Локатив]]'''
+| Србији 
+| Србијама
+|}
+
+=== Именица ===
+'''Србија''', ''[[Викиречник:Именица|ж]]''[[Категорија:Српскe именицe]]
+
+[[Датотека:Flag of Serbia.svg|мини|десно|Застава Србије]]
+[[Датотека:Serbia in Europe.svg|мини|десно|Положај Србије у Европи (црвено)]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (IPA) и примери изговора речи">'''Изговор:'''</p>
+:[[Помоћ:МФА|IPA]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">[ˈsř.ˌbɪ.јa] </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Sr-srbija.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:sr-srbija.ogg|датотека]])</td></tr></table>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Раздвајање речи на слогове">'''Слогови:''' Ср-би-ја,&nbsp; [[мн.]] Ср-би-је</p>
+
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+:[1.] Матична држава Срба и свих њених грађана, која се налази у континенталном делу југоисточне Европе.
+</p>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Акроними, скраћени облици писања или изговора">'''Скраћенице:''' 
+: [1.1.] ИСО 3166: [[РС]], СРБ
+: [1.2.] Интернет домен: [[.rs]]
+: [1.3.] [[Ср]]
+: [1.4.] [[Сб]]
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Етимологија речи">'''Порекло:''' 
+: [1.1.] Потиче из прасловенског језика из речи »Срб« које је означавало тамошње племе Срба
+</p>
+
+<div class="toccolours mw-collapsible mw-collapsed">
+<p style="margin-bottom: -0.5em; cursor: help;" title="Речи које се у одређеном контексту равноправно користе или могу користити.">'''Синоними:''' 
+: [1.1.] [[Српска земља и поморска]]<ref>Фототипско издање Светостефанске хрисовуље: [[https://sr.wikipedia.org/wiki/%D0%9F%D0%BE%D0%B2%D0%B5%D1%99%D0%B0_%D0%BA%D1%80%D0%B0%D1%99%D0%B0_%D0%9C%D0%B8%D0%BB%D1%83%D1%82%D0%B8%D0%BD%D0%B0_%D0%BC%D0%B0%D0%BD%D0%B0%D1%81%D1%82%D0%B8%D1%80%D1%83_%D0%91%D0%B0%D1%9A%D1%81%D0%BA%D0%B0#/media/%D0%94%D0%B0%D1%82%D0%BE%D1%82%D0%B5%D0%BA%D0%B0:Svetostefanska_hrisovulja,_XIV_vek,_fototipsko_izdanje.jpg]]</ref> <ref>Светостефанска хрисовуља: [[https://sr.wikipedia.org/wiki/%D0%9F%D0%BE%D0%B2%D0%B5%D1%99%D0%B0_%D0%BA%D1%80%D0%B0%D1%99%D0%B0_%D0%9C%D0%B8%D0%BB%D1%83%D1%82%D0%B8%D0%BD%D0%B0_%D0%BC%D0%B0%D0%BD%D0%B0%D1%81%D1%82%D0%B8%D1%80%D1%83_%D0%91%D0%B0%D1%9A%D1%81%D0%BA%D0%B0]]</ref> 
+: [1.1.] [[Рашка]]<ref>Српска држава Рашка 1184 [[https://sr.wikipedia.org/wiki/%D0%A0%D0%B0%D1%88%D0%BA%D0%B0#/media/%D0%94%D0%B0%D1%82%D0%BE%D1%82%D0%B5%D0%BA%D0%B0:Serbie_de_Nemanja_1184.svg]]</ref> <ref>Рашка: [[https://sr.wikipedia.org/wiki/%D0%A0%D0%B0%D1%88%D0%BA%D0%B0]]</ref>
+</p>
+<div class="mw-collapsible-content">
+
+
+</div>
+</div>
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Примери свакодневне употребе"></p>'''Примери:''' 
+: [1.1.] Сутра путујемо за ''Србију'' и остаћемо две недеље.
+: [1.2.] ''Србија'' је земља кошарке.
+: [1.3.] ''Србија'' је земља снова, у њој се лети и без авиона.
+: [1.4.] Стајали смо на местима, где сам био први пут у животу. Странци су били одушевљени природним лепотама ''Србије'' и само праве селфије и снимају крајолик.
+
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Пробране српске пословице где та реч игра посебну улогу">'''Изреке и пословице:'''
+
+: [1.1] Ој, ''Србијо'' наша мајко мила, Бог те чуво и срећа пратила.
+: [1.2] Ој ''Србијо'', мила мати, увек ћу те својом звати.
+: [1.3] Нико нема што ''Србија'' имаде.
+: [1.4] ''Србија'' је земља добрих људи и велике славе.
+</p>
+
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Асоцијације главне речи">'''Асоцијације:''' 
+: [1.1.] [[Србин|Срби]]
+</p>
+
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Изведенице и сложенице"></p>'''Изведене речи:''' 
+: [1.1.] [[српски]], [[србијански]]
+: [1.1.] [[Србин]], [[Србијанац]] - назив за становника или мушкарца српске националности
+: [1.1.] [[Српкиња]], [[Србијанка]] - назив за становницу или жену српске националности
+
+
+
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Абхаски: [1] -{ [[Сербиа (Serbia)]] [[:ab:Сербиа (Serbia)|☞<sup>ab</sup>]] }-
+
+*Аварски: [1] -{ [[Сербия (Serbija)]] [[:war:Сербия (Serbija)|☞<sup>war</sup>]] }-
+
+*Азербејџански: [1] -{ [[Serbiya]] [[:az:Serbiya|☞<sup>az</sup>]] }-
+
+*Албански: [1] -{ [[Serbia]] [[:sq:Serbia|☞<sup>sq</sup>]] }-
+
+*Арапски: [1] -{ [[صربيا (Srbija)]] [[:ar:صربيا (Srbija)|☞<sup>ar</sup>]] }-
+
+*Астуријски: [1] -{ [[Serbia]] [[:ast:Serbia|☞<sup>ast</sup>]] }-
+
+*Баскијски: [1] -{ [[Serbia]] [[:eu:Serbia|☞<sup>eu</sup>]] }-
+
+*Белоруски: [1] -{ [[Сэрбія (Sеrbija) ž.]] [[:be:Сэрбія (Sеrbija) ž.|☞<sup>be</sup>]] }-
+
+*Бенгалски: [1] -{ [[সার্বিয়া (Sarbija)]] [[:bn:সার্বিয়া (Sarbija)|☞<sup>bn</sup>]] }-
+
+*Бошњачки: [1] -{ [[Србија (Srbija) ž., застарело: Рашка ž.]] [[:bs:Србија (Srbija) ž., застарело: Рашка ž.|☞<sup>bs</sup>]] }-
+
+*Бретонски: [1] -{ [[Serbia]] [[:br:Serbia|☞<sup>br</sup>]] }-
+
+*Бугарски: [1] -{ [[Сърбия (Srbija), застарело: Рашка ž.]] [[:bg:Сърбия (Srbija), застарело: Рашка ž.|☞<sup>bg</sup>]] }-
+
+*Бурмански: [1] -{ [[ဆားဘီးယား (Sarbhija)]] [[:my:ဆားဘီးယား (Sarbhija)|☞<sup>my</sup>]] }-
+
+*Валонски: [1] -{ [[Serbeye]] [[:wa:Serbeye|☞<sup>wa</sup>]] }-
+
+*Велшки: [1] -{ [[Serbia]] [[:cy:Serbia|☞<sup>cy</sup>]] }-
+
+*Вијетнамски: [1] -{ [[Serbia]] [[:vi:Serbia|☞<sup>vi</sup>]] }-
+
+*Галицијски: [1] -{ [[Serbia ž., застарело: Rascia ž. / Rassa ž.]] [[:gl:Serbia ž., застарело: Rascia ž. / Rassa ž.|☞<sup>gl</sup>]] }-
+
+*Гренландски: [1] -{ [[Serbia]] [[:kl:Serbia|☞<sup>kl</sup>]] }-
+
+*Грузијски: [1] -{ [[სერბეთი (Serbeti)]] [[:ka:სერბეთი (Serbeti)|☞<sup>ka</sup>]] }-
+
+*Грчки: [1] -{ [[Σερβία (Servia) ž.]] [[:el:Σερβία (Servia) ž.|☞<sup>el</sup>]] }-
+
+*Гуџаратски : [1] -{ [[સર્બિયા (Sarbija)]] [[:gu:સર્બિયા (Sarbija)|☞<sup>gu</sup>]] }-
+
+*Дански: [1] -{ [[Serbien, застарело: Rascien / Rassa / Rasjka]] [[:da:Serbien, застарело: Rascien / Rassa / Rasjka|☞<sup>da</sup>]] }-
+
+*Енглески: [1] -{ [[Serbia, застарело: Rascia]] [[:en:Serbia, застарело: Rascia|☞<sup>en</sup>]] }-
+
+*Естонски: [1] -{ [[Serbia]] [[:et:Serbia|☞<sup>et</sup>]] }-
+
+*Индонежански: [1] -{ [[Serbia]] [[:id:Serbia|☞<sup>id</sup>]] }-
+
+*Ирски: [1] -{ [[Seirbia]] [[:ga:Seirbia|☞<sup>ga</sup>]] }-
+
+*Исландски: [1] -{ [[Serbía]] [[:is:Serbía|☞<sup>is</sup>]] }-
+
+*Италијански: [1] -{ [[Serbia ž., застарело: Rascia ž. / Rassa ž.]] [[:it:Serbia ž., застарело: Rascia ž. / Rassa ž.|☞<sup>it</sup>]] }-
+
+*Јапански: [1] -{ [[セルビア (Serubia)]] [[:ja:セルビア (Serubia)|☞<sup>ja</sup>]] }-
+
+*Јерменски: [1] -{ [[Սերբիա (Serbia)]] [[:hy:Սերբիա (Serbia)|☞<sup>hy</sup>]] }-
+
+*Казашки: [1] -{ [[Сербия (Serbija)]] [[:kk:Сербия (Serbija)|☞<sup>kk</sup>]] }-
+
+*Каталонски: [1] -{ [[Sèrbia ž., застарело: Raixka ž. / Rassa ž.]] [[:ca:Sèrbia ž., застарело: Raixka ž. / Rassa ž.|☞<sup>ca</sup>]] }-
+
+*Кашупски: [1] -{ [[Serbiô]] [[:csb:Serbiô|☞<sup>csb</sup>]] }-
+
+*Кинески: [1] -{ [[塞尔维亚 (Servija)]] [[:zh:塞尔维亚 (Servija)|☞<sup>zh</sup>]] }-
+
+*Киргиски: [1] -{ [[Сербия (Serbija)]] [[:ky:Сербия (Serbija)|☞<sup>ky</sup>]] }-
+
+*Корејски: [1] -{ [[세르비아 (Srbija)]] [[:ko:세르비아 (Srbija)|☞<sup>ko</sup>]] }-
+
+*Корнишки: [1] -{ [[Serbi]] [[:kw:Serbi|☞<sup>kw</sup>]] }-
+
+*Курдски зазаки: [1] -{ [[Sırbıstan]] [[:zza:Sırbıstan|☞<sup>zza</sup>]] }-
+
+*Курдски курманџи: [1] -{ [[Serbistan / Sirbistan]] [[:kmr:Serbistan / Sirbistan|☞<sup>kmr</sup>]] }-
+
+*Лапонски: [1] -{ [[Serbia]] [[:se:Serbia|☞<sup>se</sup>]] }-
+
+*Лаоски: [1] -{ [[ປະເທດແຊັກບີ ()]] [[:lo:ປະເທດແຊັກບີ ()|☞<sup>lo</sup>]] }-
+
+*Латински: [1] -{ [[Serbia, застарело: Rascia ž.]] [[:la:Serbia, застарело: Rascia ž.|☞<sup>la</sup>]] }-
+
+*Луксембуршки: [1] -{ [[Serbia]] [[:-lb:Serbia|☞<sup>-lb</sup>]] }-
+
+*Летонски: [1] -{ [[Serbija ž.]] [[:lv:Serbija ž.|☞<sup>lv</sup>]] }-
+
+*Лимбуршки: [1] -{ [[Servië]] [[:li:Servië|☞<sup>li</sup>]] }-
+
+*Литвански: [1] -{ [[Serbija ž.]] [[:lt:Serbija ž.|☞<sup>lt</sup>]] }-
+
+*Мађарски: [1] -{ [[Szerbia]] [[:hu:Szerbia|☞<sup>hu</sup>]] }-
+
+*Македонски: [1] -{ [[Србија (Srbija) ž., застарело: Рашка]] [[:mk:Србија (Srbija) ž., застарело: Рашка|☞<sup>mk</sup>]] }-
+
+*Малајалам: [1] -{ [[സെർബിയ (Serbija)]] [[:ml:സെർബിയ (Serbija)|☞<sup>ml</sup>]] }-
+
+*Малајски: [1] -{ [[Serbia]] [[:ms:Serbia|☞<sup>ms</sup>]] }-
+
+*Малтешки: [1] -{ [[Serbja]] [[:mt:Serbja|☞<sup>mt</sup>]] }-
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Манск гелски: [1] -{ [[Serb]] [[:gv:Serb|☞<sup>gv</sup>]] }-
+
+*Маорски: [1] -{ [[Serbia]] [[:mi:Serbia|☞<sup>mi</sup>]] }-
+
+*Маратски: [1] -{ [[सर्बिया (Sabia)]] [[:mr:सर्बिया (Sabia)|☞<sup>mr</sup>]] }-
+
+*Монголски: [1] -{ [[Серби (Serbi)]] [[:mn:Серби (Serbi)|☞<sup>mn</sup>]] }-
+
+*Норвешки: [1] -{ [[Serbia, застарело: Raška ž.]] [[:no:Serbia, застарело: Raška ž.|☞<sup>no</sup>]] }-
+
+*Окситански: [1] -{ [[Serbia]] [[:oc:Serbia|☞<sup>oc</sup>]] }-
+
+*Осетски: [1] -{ [[Серби (Serbi)]] [[:os:Серби (Serbi)|☞<sup>os</sup>]] }-
+
+*Пали: [1] -{ [[सर्बिया (Sabia)]] [[:pi:सर्बिया (Sabia)|☞<sup>pi</sup>]] }-
+
+*Паштунски: [1] -{ [[صربیا ()]] [[:ps:صربیا ()|☞<sup>ps</sup>]] }-
+
+*Пенџабски: [1] -{ [[ਸਰਬੀਆ (Sarabia)]] [[:pa:ਸਰਬੀਆ (Sarabia)|☞<sup>pa</sup>]] }-
+
+*Персијски: [1] -{ [[صربستان (Serbestan)]] [[:fa:صربستان (Serbestan)|☞<sup>fa</sup>]] }-
+
+*Пољски: [1] -{ [[Serbia ž., застарело: Raszka ž.]] [[:pl:Serbia ž., застарело: Raszka ž.|☞<sup>pl</sup>]] }-
+
+*Португалски: [1] -{ [[Sérvia ž.]] [[:pt:Sérvia ž.|☞<sup>pt</sup>]] }-
+
+*Романш: [1] -{ [[Serbia]] [[:rm:Serbia|☞<sup>rm</sup>]] }-
+
+*Румунски: [1] -{ [[Serbia, застарело: Rașca ž. / Rascia ž.]] [[:ro:Serbia, застарело: Rașca ž. / Rascia ž.|☞<sup>ro</sup>]] }-
+
+*Руски: [1] -{ [[Сербия (Serbija) ž., застарело: Рашка ž.]] [[:ru:Сербия (Serbija) ž., застарело: Рашка ž.|☞<sup>ru</sup>]] }-
+
+*Самоански: [1] -{ [[Serbia]] [[:sm:Serbia|☞<sup>sm</sup>]] }-
+
+*Санскрт: [1] -{ [[सर्बिया (Sarbija)]] [[:sa:सर्बिया (Sarbija)|☞<sup>sa</sup>]] }-
+
+*Сардински: [1] -{ [[Serbia]] [[:sc:Serbia|☞<sup>sc</sup>]] }-
+
+*Српскохрватски: [1] -{ [[Србија (Srbija) ž., застарело: Рашка ž.]] [[:sh:Србија (Srbija) ž., застарело: Рашка ž.|☞<sup>sh</sup>]] }-
+
+*Сото: [1] -{ [[Serbia]] [[:st:Serbia|☞<sup>st</sup>]] }-
+
+*Словачки: [1] -{ [[Srbsko s.]] [[:sk:Srbsko s.|☞<sup>sk</sup>]] }-
+
+*Словеначки: [1] -{ [[Srbija ž., застарело: Raška ž.]] [[:sl:Srbija ž., застарело: Raška ž.|☞<sup>sl</sup>]] }-
+
+*Сомалиски: [1] -{ [[Serbia]] [[:so:Serbia|☞<sup>so</sup>]] }-
+
+*Српски доњолужички: [1] -{ [[Serbiska]] [[:dsb:Serbiska|☞<sup>dsb</sup>]] }-
+
+*Српски горњолужички: [1] -{ [[Serbiska]] [[:hsb:Serbiska|☞<sup>hsb</sup>]] }-
+
+*Таџикистански: [1] -{ [[Сербия (Serbija)]] [[:tg:Сербия (Serbija)|☞<sup>tg</sup>]] }-
+
+*Тајски: [1] -{ [[เซอร์เบีย (Shbija)]] [[:th:เซอร์เบีย (Shbija)|☞<sup>th</sup>]] }-
+
+*Тамилски: [1] -{ [[செர்பியா (Serbija)]] [[:ta:செர்பியா (Serbija)|☞<sup>ta</sup>]] }-
+
+*Татарски: [1] -{ [[Сербия (Serbija)]] [[:-tt:Сербия (Serbija)|☞<sup>-tt</sup>]] }-
+
+*Турски: [1] -{ [[Sırbistan]] [[:tr:Sırbistan|☞<sup>tr</sup>]] }-
+
+*Узбечки: [1] -{ [[Serbiya]] [[:uz:Serbiya|☞<sup>uz</sup>]] }-
+
+*Украјински: [1] -{ [[Сербія (Serbija) ž.]] [[:uk:Сербія (Serbija) ž.|☞<sup>uk</sup>]] }-
+
+*Урду: [1] -{ [[سربیا (Srbija)]] [[:ur:سربیا (Srbija)|☞<sup>ur</sup>]] }-
+
+*Фарски: [1] -{ [[Serbia]] [[:fo:Serbia|☞<sup>fo</sup>]] }-
+
+*Фински: [1] -{ [[Serbia]] [[:fi:Serbia|☞<sup>fi</sup>]] }-
+
+*Француски: [1] -{ [[Serbie ž., застарело: Rascie ž.]] [[:fr:Serbie ž., застарело: Rascie ž.|☞<sup>fr</sup>]] }-
+
+*Западнофризијски: [1] -{ [[Servje]] [[:fy:Servje|☞<sup>fy</sup>]] }-
+
+*Хаићански креолски језик: [1] -{ [[Sèbi]] [[:ht:Sèbi|☞<sup>ht</sup>]] }-
+
+*Хебрејски: [1] -{ [[סרביה (Serbija), застарело: בסרבית (Raška)]] [[:he:סרביה (Serbija), застарело: בסרבית (Raška)|☞<sup>he</sup>]] }-
+
+*Хинди: [1] -{ [[सर्बिया (Sabija)]] [[:hi:सर्बिया (Sabija)|☞<sup>hi</sup>]] }-
+
+*Холандски: [1] -{ [[Servië s.]] [[:nl:Servië s.|☞<sup>nl</sup>]] }-
+
+*Хрватски: [1] -{ [[Srbija ž.]] [[:hr:Srbija ž.|☞<sup>hr</sup>]] }-
+
+*Чероки: [1] -{ [[ᏎᎸᏈᏯ]] [[:chr:ᏎᎸᏈᏯ|☞<sup>chr</sup>]] }-
+
+*Чеченски: [1] -{ [[Серби (Sеrbi)]] [[:ce:Серби (Sеrbi)|☞<sup>ce</sup>]] }-
+
+*Чешки: [1] -{ [[Srbsko s.]] [[:cs:Srbsko s.|☞<sup>cs</sup>]] }-
+
+*Шведски: [1] -{ [[Serbien, застарело: Rascien / Rassa / Rasjka]] [[:sv:Serbien, застарело: Rascien / Rassa / Rasjka|☞<sup>sv</sup>]] }-
+
+*Шкотски: [1] -{ [[Serbie]] [[:sco:Serbie|☞<sup>sco</sup>]] }-
+
+*Шкотски гелски: [1] -{ [[Serbia / Seirbia]] [[:gd:Serbia / Seirbia|☞<sup>gd</sup>]] }-
+
+*Шпански: [1] -{ [[Serbia ž., застарело: Rascia ž.]] [[:es:Serbia ž., застарело: Rascia ž.|☞<sup>es</sup>]] }-
+
+|} 
+|}
+
+== Референце ==
+[[:Шаблон:reflist]]
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' 
+: [1] [[:w:Србија|Србија]]</p>
+
+[[Категорија:Државе на српском]]
+<div style="background-color:#F4F4F4; text-align:center;"></div>
+
+<div style="margin:0em; padding:5px; border:solid 2px lightblue; background-color:#F4F4F4; text-align:center; font-size:x-small;" width="50%" >
+'''Државе у Европи:'''
+: [[Албанија]] | [[Андора]] | [[Аустрија]] | [[Белгија]] | [[Белорусија]] | [[Босна и Херцеговина]] | [[Бугарска]] | [[Ватикан]] | [[Грчка]] | [[Данска]] | [[Естонија]] | [[Ирска]] | [[Исланд]] | [[Италија]] | [[Кипар]] | [[Летонија]] | [[Литванија]] | [[Лихтенштајн]] | [[Луксембург]] | [[Македонија]] | [[Малта]] | [[Молдавија]] | [[Монако]] | [[Немачка]] | [[Норвешка]] | [[Пољска]] | [[Португал]] | [[Румунија]] | [[Русија]] | [[Сан Марино]] | [[Словачка]] | [[Словенија]] | [[Србија]] | [[Турска]] | [[Украјина]] | [[Мађарска]] | [[Уједињено Краљевство]] | [[Финска]] | [[Француска]] | [[Холандија]] | [[Хрватска]] | [[Црна Гора]] | [[Чешка]] |[[Швајцарска]] | [[Шведска]] | [[Шпанија]] |
+</div>

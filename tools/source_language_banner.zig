@@ -321,3 +321,20 @@ pub fn messageLinkTarget(source: []const u8, ns: *const namespaces.Registry, cod
     if (!hiddenCategory(rest[0 .. rest.len - "</noinclude>".len], ns, null)) return null;
     return target;
 }
+
+/// This complete selected transclusion names its language in positional field 1.
+/// Its dynamic name formatter changes display text, never the emitted code.
+/// Documentation is wholly excluded; modified executable source grants no proof.
+pub fn parseCodeDeclaration(source: []const u8, ns: *const namespaces.Registry) ?[]const u8 {
+    const input = std.mem.trim(u8, source, " \t\r\n");
+    const included = "<includeonly><span id=\"{{{{{1}}}}}\" class=\"lang\" data-code=\"{{{1}}}\" data-name=\"{{#invoke:bahasa|getLangName|{{{1}}}}}\">{{#if:{{{1|}}}|\n    {{#if:{{#invoke:bahasa|getLangName|{{{1}}}|nocap={{{nocap|}}}}}|\n      [[{{lcfirst:{{#invoke:bahasa|getLangName|{{{1}}}|nocap={{{nocap|}}}}}}}]]\n      |{{#invoke:utilitas|errorcat|bahasa}}\n    }}\n    |{{#invoke:utilitas|errorcat|templat}}\n  }}</span>\n[[Kategori:Tembung {{lcfirst:{{#invoke:bahasa|getLangName|{{{1}}}|nocap={{{nocap|}}}}}}}]]</includeonly>";
+    if (!std.mem.startsWith(u8, input, included)) return null;
+    const tail = input[included.len..];
+    const opening = "<noinclude>";
+    const closing = "</noinclude>";
+    if (!std.mem.startsWith(u8, tail, opening) or !std.mem.endsWith(u8, tail, closing) or tail.len < opening.len + closing.len) return null;
+    if (std.mem.indexOfAny(u8, tail[opening.len .. tail.len - closing.len], "<>") != null) return null;
+    const category_prefix = "Kategori:Tembung ";
+    if (ns.ofTitle(category_prefix).id != 14) return null;
+    return category_prefix;
+}

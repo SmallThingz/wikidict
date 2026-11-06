@@ -1,0 +1,61 @@
+== {{-it-}} ==
+{{-verb-|it}}
+{{Transitivo|it}}
+{{Pn|c}}
+#  [[togliere]] la [[vita]], [[causare]] la [[morte]] di un essere vivente
+#* ''L'[[investigatore]] [[disse]] senza [[allusione]]: <<[[domanda|Domanda]]: "ma lei... ha mai [[commesso]] un [[delitto]]? Sa cosa significa {{Pn}}?">>''
+#* ''Il [[gelo]] è riuscito ad uccidere  le rose''
+
+{{-sill-}}
+; uc | cì | de | re
+
+{{-pron-}}
+{{IPA|/utˈt͡ʃidere/}}
+
+{{-etim-}}
+dal {{la}} ''[[occidere]]'' formato da ''[[ob-]]'' e da ''[[caedĕre]]'' ossia "[[tagliare]], [[uccidere]]"
+
+{{-sin-}}
+* [[ammazzare]], [[accoppare]], [[assassinare]], [[massacrare]], [[mettere a morte]], [[freddare]], [[sopprimere]]; [[sterminare]], [[trucidare]], [[decimare]], [[annientare]]; [[accoltellare]], [[strozzare]], [[strangolare]], [[fucilare]], [[impiccare]], [[decapitare]], [[ghigliottinare]]
+* {{Est}} far perire,  [[eliminare]], [[fare fuori]]
+* {{Fig}} [[abolire]], [[annientare]], [[distruggere]], [[soffocare]]
+* {{Fig}} [[sfinire]], [[danneggiare]], [[nuocere]]
+* ''(specialmente animali)'' [[abbattere]]
+
+{{-ant-}}
+* [[risparmiare]], [[salvare]], [[graziare]]
+* {{Est}} [[rinvigorire]], [[vivificare]]
+* {{Fig}} [[preservare]]
+
+{{-der-}}
+* [[uccidersi]]
+
+{{-rel-}}
+* [[uccisione]], [[uccisore]], [[opprimere]]
+* {{Est}} [[libero]] [[arbitrio]]
+
+{{-var-}}
+* [[occidere]]
+
+{{-trad-}}
+{{Trad1|togliere la vita}}
+:* {{br}}: [[lazhañ]]
+:* {{fr}}: [[tuer]]
+:* {{en}}: to [[kill]], to [[slaughter]], to [[slay]] to [[shoot (down)]], to [[murder]]
+{{mid}}
+:* {{la}}: [[absumere]], [[caedere]], [[concidere]], [[deicere]], [[interficere]], [[interimere]], [[iugulare]], [[mactare]], [[necare]], [[occidere]], [[percutere]], [[perimere]]
+:* {{nb}}: [[drepe]], [[myrde]], [[ta livet av]]
+:* {{pt}}: [[matar]]
+:* {{de}}: [[töten]], [[abtöten]]
+{{Trad2}}
+
+{{-ref-}}
+* {{Fonte|dizit}}
+* {{Fonte|sabco}}
+* {{Fonte|dem}}
+* {{Fonte|trec}}
+* {{Fonte|hoep}}
+* {{Fonte|sape}}
+* {{Fonte|gar}}
+* {{Fonte|sin-co}}
+*AA.VV., ''Dizionario Sinonimi e contrari, Mariotti, 2006, pagina 595

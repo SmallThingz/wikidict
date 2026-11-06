@@ -1,0 +1,1661 @@
+<div class="rellink<nowiki> </nowiki>boilerplate seealso">Não confundir com '''[[:uran]]'''.</div>
+
+=<templatestyles src="Template:cabeçalho-idioma/styles.css" /><span class="cabecalhoIdioma"><span id="alemânico" ><span class="lnklng" id="Alemânico"><span lang="Português" xml:lang="Português">[[alemânico#Português|Alemânico]]</span></span></span></span>[[Categoria:!Entrada (Alemânico)]]=
+==Substantivo[[Categoria:Substantivo (Alemânico)]]==
+{|style="width:20%; float:right; cellpadding:5; cellspacing:2; border:0"
+|colspan=2 style="text-align:center;background-color:#b0ffff;color:black;"|'''[[U]]'''
+|-
+|style="width:50%;text-align:center;background-color:#d0ffff;color:black;"|[[Protactinium|'''&larr;''' Pa]]
+|style="width:50%;text-align:center;background-color:#d0ffff;color:black;"|[[Neptunium|Np '''&rarr;''']] 
+|-
+|}
+'''Uran'''
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Elemento químico (Alemânico)]]elemento químico</span>) [[urânio]]
+
+==Ver também==
+===No Wikcionário===
+<div class="NavFrame" style="clear:both;">
+<div class="NavHead" align="center">A [[Apêndice:Tabela periódica|tabela periódica]] em [[alemânico]]</div>
+<div class="NavContent">
+{| width="100%"
+|- 
+| align="center" |
+{| style="font-size:small;" width="70%"
+|- style="text-align:center" 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>1</sub><br />[[Wasserstoff|H]] 
+| colspan="16" |&nbsp;
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>2</sub><br />[[Helium|He]] 
+|- style="text-align:center" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>3</sub><br />[[Lithium|Li]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>4</sub><br />[[Beryllium|Be]] 
+| colspan="10" |&nbsp;
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>5</sub><br />[[Bor|B]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>6</sub><br />[[Chohlestoff|C]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>7</sub><br />[[Stickstoff|N]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>8</sub><br />[[Sürstoff|O]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>9</sub><br />[[Fluor|F]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>10</sub><br />[[Neon|Ne]] 
+|- style="text-align:center" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>11</sub><br />[[Natrium|Na]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>12</sub><br />[[Magnesium|Mg]] 
+| colspan="10" |&nbsp;
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>13</sub><br />[[Aluminium|Al]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>14</sub><br />[[Silicium|Si]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>15</sub><br />[[Phosphor|P]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>16</sub><br />[[Schwäfel|S]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>17</sub><br />[[Chlor|Cl]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>18</sub><br />[[Argon|Ar]] 
+|- style="text-align:center;background-color:#ffc0c0" 
+| style="border:1px solid black;" bgcolor="ff6666" | <sub>19</sub><br />[[Kalium|K]] 
+| style="border:1px solid black;" bgcolor="ffdead" | <sub>20</sub><br />[[Calcium|Ca]] 
+| style="border:1px solid black;" | <sub>21</sub><br />[[Scandium|Sc]] 
+| style="border:1px solid black;" | <sub>22</sub><br />[[Titan|Ti]] 
+| style="border:1px solid black;" | <sub>23</sub><br />[[Vanadium|V]] 
+| style="border:1px solid black;" | <sub>24</sub><br />[[Chrom|Cr]] 
+| style="border:1px solid black;" | <sub>25</sub><br />[[Mangan|Mn]] 
+| style="border:1px solid black;" | <sub>26</sub><br />[[Iise|Fe]] 
+| style="border:1px solid black;" | <sub>27</sub><br />[[Kobalt|Co]] 
+| style="border:1px solid black;" | <sub>28</sub><br />[[Nickel|Ni]] 
+| style="border:1px solid black;" | <sub>29</sub><br />[[Kupfer|Cu]] 
+| style="border:1px solid black;" | <sub>30</sub><br />[[Zink|Zn]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>31</sub><br />[[Gallium|Ga]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>32</sub><br />[[Germanium|Ge]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>33</sub><br />[[Arsen|As]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>34</sub><br />[[Selen|Se]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>35</sub><br />[[Brom|Br]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>36</sub><br />[[Krypton|Kr]] 
+|- style="text-align:center;background-color:#ffc0c0" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>37</sub><br />[[Rubidium|Rb]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>38</sub><br />[[Strontium|Sr]] 
+| style="border:1px solid black;" | <sub>39</sub><br />[[Yttrium|Y]] 
+| style="border:1px solid black;" | <sub>40</sub><br />[[Zirconium|Zr]] 
+| style="border:1px solid black;" | <sub>41</sub><br />[[Niob|Nb]] 
+| style="border:1px solid black;" | <sub>42</sub><br />[[Molybdän|Mo]] 
+| style="border:1px solid black;" | <sub>43</sub><br />[[Technetium|Tc]] 
+| style="border:1px solid black;" | <sub>44</sub><br />[[Ruthenium|Ru]] 
+| style="border:1px solid black;" | <sub>45</sub><br />[[Rhodium|Rh]] 
+| style="border:1px solid black;" | <sub>46</sub><br />[[Palladium|Pd]] 
+| style="border:1px solid black;" | <sub>47</sub><br />[[Silber|Ag]] 
+| style="border:1px solid black;" | <sub>48</sub><br />[[Cadmium|Cd]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>49</sub><br />[[Indium|In]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>50</sub><br />[[Zinn|Sn]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>51</sub><br />[[Antimon|Sb]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>52</sub><br />[[Tellur|Te]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>53</sub><br />[[Iod|I]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>54</sub><br />[[Xenon|Xe]] 
+|- style="text-align:center" bgcolor="#ffc0c0" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>55</sub><br />[[Cäsium|Cs]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>56</sub><br />[[Barium|Ba]] 
+| style="vertical-align:top;color:black" bgcolor="#ffbfff" |*
+| style="border:1px solid black;" | <sub>72</sub><br />[[Hafnium|Hf]] 
+| style="border:1px solid black;" | <sub>73</sub><br />[[Tantal|Ta]] 
+| style="border:1px solid black;" | <sub>74</sub><br />[[Wolfram|W]] 
+| style="border:1px solid black;" | <sub>75</sub><br />[[Rhenium|Re]] 
+| style="border:1px solid black;" | <sub>76</sub><br />[[Osmium|Os]] 
+| style="border:1px solid black;" | <sub>77</sub><br />[[Iridium|Ir]] 
+| style="border:1px solid black;" | <sub>78</sub><br />[[Platin|Pt]] 
+| style="border:1px solid black;" | <sub>79</sub><br />[[Gold|Au]] 
+| style="border:1px solid black;" | <sub>80</sub><br />[[Quecksilber|Hg]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>81</sub><br />[[Thallium|Tl]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>82</sub><br />[[Blei|Pb]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>83</sub><br />[[Wismut|Bi]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>84</sub><br />[[Polonium|Po]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>85</sub><br />[[Astat|At]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>86</sub><br />[[Radon|Rn]] 
+|- style="text-align:center" bgcolor="#ffc0c0" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>87</sub><br />[[Francium|Fr]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>88</sub><br />[[Radium|Ra]] 
+| style="vertical-align:top;color:black" bgcolor="#ff99cc" |**
+| style="border:1px solid black;" | <sub>104</sub><br />[[Rutherfordium|Rf]] 
+| style="border:1px solid black;" | <sub>105</sub><br />[[Dubnium|Db]] 
+| style="border:1px solid black;" | <sub>106</sub><br />[[Seaborgium|Sg]] 
+| style="border:1px solid black;" | <sub>107</sub><br />[[Bohrium|Bh]] 
+| style="border:1px solid black;" | <sub>108</sub><br />[[Hassium|Hs]] 
+| style="border:1px solid black;" | <sub>109</sub><br />[[Meitnerium|Mt]] 
+| style="border:1px solid black;" | <sub>110</sub><br />[[Darmstadtium|Ds]] 
+| style="border:1px solid black;" | <sub>111</sub><br />[[Roentgenium|Rg]] 
+| style="border:1px solid black;" | <sub>112</sub><br />[[Copernicium|Cn]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>113</sub><br />[[Nihonium|Nh]] 
+| style="border:1px solid black;" | <sub>114</sub><br />[[Flerovium|Fl]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>115</sub><br />[[Moscovium|Mc]] 
+| style="border:1px solid black;" | <sub>116</sub><br />[[Livermorium|Lv]] 
+| style="border:1px dashed black;" bgcolor="#ffff99" | <sub>117</sub><br />[[Tenness|Ts]] 
+| style="border:1px dashed black;" bgcolor="#c0ffff" | <sub>118</sub><br />[[Oganesson|Og]] 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" |&nbsp;
+|- style="text-align:center" bgcolor="#ffbfff" 
+| colspan="2" style="text-align:right;color:black" bgcolor="#fff" |* 
+| style="border:1px solid black;" | <sub>57</sub><br />[[Lanthan|La]] 
+| style="border:1px solid black;" | <sub>58</sub><br />[[Cer|Ce]] 
+| style="border:1px solid black;" | <sub>59</sub><br />[[Praseodym|Pr]] 
+| style="border:1px solid black;" | <sub>60</sub><br />[[Neodym|Nd]] 
+| style="border:1px solid black;" | <sub>61</sub><br />[[Promethium|Pm]] 
+| style="border:1px solid black;" | <sub>62</sub><br />[[Samarium|Sm]] 
+| style="border:1px solid black;" | <sub>63</sub><br />[[Europium|Eu]] 
+| style="border:1px solid black;" | <sub>64</sub><br />[[Gadolinium|Gd]] 
+| style="border:1px solid black;" | <sub>65</sub><br />[[Terbium|Tb]] 
+| style="border:1px solid black;" | <sub>66</sub><br />[[Dysprosium|Dy]] 
+| style="border:1px solid black;" | <sub>67</sub><br />[[Holmium|Ho]] 
+| style="border:1px solid black;" | <sub>68</sub><br />[[Erbium|Er]] 
+| style="border:1px solid black;" | <sub>69</sub><br />[[Thulium|Tm]] 
+| style="border:1px solid black;" | <sub>70</sub><br />[[Ytterbium|Yb]] 
+| style="border:1px solid black;" | <sub>71</sub><br />[[Lutetium|Lu]] 
+|- style="text-align:center" bgcolor="#ff99cc" 
+| colspan="2" style="text-align:right;color:black" bgcolor="#fff" |**
+| style="border:1px solid black;" | <sub>89</sub><br />[[Actinium|Ac]] 
+| style="border:1px solid black;" | <sub>90</sub><br />[[Thorium|Th]] 
+| style="border:1px solid black;" | <sub>91</sub><br />[[Protactinium|Pa]] 
+| style="border:1px solid black;" | <sub>92</sub><br />[[Uran|U]] 
+| style="border:1px solid black;" | <sub>93</sub><br />[[Neptunium|Np]] 
+| style="border:1px solid black;" | <sub>94</sub><br />[[Plutonium|Pu]] 
+| style="border:1px solid black;" | <sub>95</sub><br />[[Americium|Am]] 
+| style="border:1px solid black;" | <sub>96</sub><br />[[Curium|Cm]] 
+| style="border:1px solid black;" | <sub>97</sub><br />[[Berkelium|Bk]] 
+| style="border:1px solid black;" | <sub>98</sub><br />[[Californium|Cf]] 
+| style="border:1px solid black;" | <sub>99</sub><br />[[Einsteinium|Es]] 
+| style="border:1px solid black;" | <sub>100</sub><br />[[Fermium|Fm]] 
+| style="border:1px solid black;" | <sub>101</sub><br />[[Mendelevium|Md]] 
+| style="border:1px solid black;" | <sub>102</sub><br />[[Nobelium|No]] 
+| style="border:1px solid black;" | <sub>103</sub><br />[[Lawrencium|Lr]] 
+|}
+|-
+|}</div></div>
+
+
+=<templatestyles src="Template:cabeçalho-idioma/styles.css" /><span class="cabecalhoIdioma"><span id="alemão" ><span class="lnklng" id="Alemão"><span lang="Português" xml:lang="Português">[[alemão#Português|Alemão]]</span></span></span></span>[[Categoria:!Entrada (Alemão)]]=
+==Substantivo[[Categoria:Substantivo (Alemão)]]==
+{|style="width:20%; float:right; cellpadding:5; cellspacing:2; border:0"
+|colspan=2 style="text-align:center;background-color:#b0ffff;color:black;"|'''[[U]]'''
+|-
+|style="width:50%;text-align:center;background-color:#d0ffff;color:black;"|[[Protactinium|'''&larr;''' Pa]]
+|style="width:50%;text-align:center;background-color:#d0ffff;color:black;"|[[Neptunium|Np '''&rarr;''']] 
+|-
+|}
+'''<span style="border-bottom:1px solid black; display:inline">Uran</span>''', ''neutro'',&nbsp;''incontável''
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Elemento químico (Alemão)]]elemento químico</span>) [[urânio]]
+
+==<span title="Origem e transformação histórica da palavra">Etimologia</span>[[Categoria:Entrada com etimologia (Alemão)|Uran]]==
+: 
+:[[Categoria:Entrada de étimo latino (Alemão)]]Do [[latim]] ''[[Uranus#Latim|Uranus]]''<small><sup> ([[:la:Uranus|<span title="ver no Wikcionário em latim">la</span>]])</sup></small>.
+
+==<span title="Pronúncia da palavra">Pronúncia</span>[[Categoria:Entrada com pronúncia (Alemão)|Uran]]==
+* AFI: [[Ajuda:Guia de pronúncia|<span class="ipa" style="padding: 0 1px; text-decoration: none;">/uˈʀaːn/</span>]] [[Ficheiro:Loudspeaker.svg|15px|link=Ficheiro:De-Uran.ogg]]&nbsp;[[Media:De-Uran.ogg|ouvir]]<sup> [[:Ficheiro:De-Uran.ogg|fonte]] [[Ajuda:Guia de consulta e reprodução/reprodução de arquivos Ogg|?]]</sup> [[Ficheiro:De-Uran.ogg|80px|noicon]][[Categoria:Entrada com áudio (Alemão)|Uran]]
+
+==Ver também==
+===No Wikcionário===
+<div class="NavFrame" style="clear:both;">
+<div class="NavHead" align="center">A [[Apêndice:Tabela periódica|tabela periódica]] em [[alemão]]</div>
+<div class="NavContent">
+{| width="100%"
+|- 
+| align="center" |
+{| style="font-size:small;" width="70%"
+|- style="text-align:center" 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>1</sub><br />[[Wasserstoff|H]] 
+| colspan="16" |&nbsp;
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>2</sub><br />[[Helium|He]] 
+|- style="text-align:center" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>3</sub><br />[[Lithium|Li]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>4</sub><br />[[Beryllium|Be]] 
+| colspan="10" |&nbsp;
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>5</sub><br />[[Bor|B]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>6</sub><br />[[Kohlenstoff|C]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>7</sub><br />[[Stickstoff|N]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>8</sub><br />[[Sauerstoff|O]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>9</sub><br />[[Fluor|F]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>10</sub><br />[[Neon|Ne]] 
+|- style="text-align:center" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>11</sub><br />[[Natrium|Na]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>12</sub><br />[[Magnesium|Mg]] 
+| colspan="10" |&nbsp;
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>13</sub><br />[[Aluminium|Al]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>14</sub><br />[[Silizium|Si]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>15</sub><br />[[Phosphor|P]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>16</sub><br />[[Schwefel|S]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>17</sub><br />[[Chlor|Cl]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>18</sub><br />[[Argon|Ar]] 
+|- style="text-align:center;background-color:#ffc0c0" 
+| style="border:1px solid black;" bgcolor="ff6666" | <sub>19</sub><br />[[Kalium|K]] 
+| style="border:1px solid black;" bgcolor="ffdead" | <sub>20</sub><br />[[Calcium|Ca]] 
+| style="border:1px solid black;" | <sub>21</sub><br />[[Scandium|Sc]] 
+| style="border:1px solid black;" | <sub>22</sub><br />[[Titan|Ti]] 
+| style="border:1px solid black;" | <sub>23</sub><br />[[Vanadium|V]] 
+| style="border:1px solid black;" | <sub>24</sub><br />[[Chrom|Cr]] 
+| style="border:1px solid black;" | <sub>25</sub><br />[[Mangan|Mn]] 
+| style="border:1px solid black;" | <sub>26</sub><br />[[Eisen|Fe]] 
+| style="border:1px solid black;" | <sub>27</sub><br />[[Kobalt|Co]] 
+| style="border:1px solid black;" | <sub>28</sub><br />[[Nickel|Ni]] 
+| style="border:1px solid black;" | <sub>29</sub><br />[[Kupfer|Cu]] 
+| style="border:1px solid black;" | <sub>30</sub><br />[[Zink|Zn]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>31</sub><br />[[Gallium|Ga]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>32</sub><br />[[Germanium|Ge]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>33</sub><br />[[Arsen|As]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>34</sub><br />[[Selen|Se]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>35</sub><br />[[Brom|Br]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>36</sub><br />[[Krypton|Kr]] 
+|- style="text-align:center;background-color:#ffc0c0" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>37</sub><br />[[Rubidium|Rb]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>38</sub><br />[[Strontium|Sr]] 
+| style="border:1px solid black;" | <sub>39</sub><br />[[Yttrium|Y]] 
+| style="border:1px solid black;" | <sub>40</sub><br />[[Zirconium|Zr]] 
+| style="border:1px solid black;" | <sub>41</sub><br />[[Niob|Nb]] 
+| style="border:1px solid black;" | <sub>42</sub><br />[[Molybdän|Mo]] 
+| style="border:1px solid black;" | <sub>43</sub><br />[[Technetium|Tc]] 
+| style="border:1px solid black;" | <sub>44</sub><br />[[Ruthenium|Ru]] 
+| style="border:1px solid black;" | <sub>45</sub><br />[[Rhodium|Rh]] 
+| style="border:1px solid black;" | <sub>46</sub><br />[[Palladium|Pd]] 
+| style="border:1px solid black;" | <sub>47</sub><br />[[Silber|Ag]] 
+| style="border:1px solid black;" | <sub>48</sub><br />[[Cadmium|Cd]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>49</sub><br />[[Indium|In]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>50</sub><br />[[Zinn|Sn]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>51</sub><br />[[Antimon|Sb]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>52</sub><br />[[Tellur|Te]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>53</sub><br />[[Iod|I]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>54</sub><br />[[Xenon|Xe]] 
+|- style="text-align:center" bgcolor="#ffc0c0" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>55</sub><br />[[Caesium|Cs]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>56</sub><br />[[Barium|Ba]] 
+| style="vertical-align:top;color:black" bgcolor="#ffbfff" |*
+| style="border:1px solid black;" | <sub>72</sub><br />[[Hafnium|Hf]] 
+| style="border:1px solid black;" | <sub>73</sub><br />[[Tantal|Ta]] 
+| style="border:1px solid black;" | <sub>74</sub><br />[[Wolfram|W]] 
+| style="border:1px solid black;" | <sub>75</sub><br />[[Rhenium|Re]] 
+| style="border:1px solid black;" | <sub>76</sub><br />[[Osmium|Os]] 
+| style="border:1px solid black;" | <sub>77</sub><br />[[Iridium|Ir]] 
+| style="border:1px solid black;" | <sub>78</sub><br />[[Platin|Pt]] 
+| style="border:1px solid black;" | <sub>79</sub><br />[[Gold|Au]] 
+| style="border:1px solid black;" | <sub>80</sub><br />[[Quecksilber|Hg]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>81</sub><br />[[Thallium|Tl]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>82</sub><br />[[Blei|Pb]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>83</sub><br />[[Bismut|Bi]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>84</sub><br />[[Polonium|Po]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>85</sub><br />[[Astat|At]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>86</sub><br />[[Radon|Rn]] 
+|- style="text-align:center" bgcolor="#ffc0c0" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>87</sub><br />[[Francium|Fr]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>88</sub><br />[[Radium|Ra]] 
+| style="vertical-align:top;color:black" bgcolor="#ff99cc" |**
+| style="border:1px solid black;" | <sub>104</sub><br />[[Rutherfordium|Rf]] 
+| style="border:1px solid black;" | <sub>105</sub><br />[[Dubnium|Db]] 
+| style="border:1px solid black;" | <sub>106</sub><br />[[Seaborgium|Sg]] 
+| style="border:1px solid black;" | <sub>107</sub><br />[[Bohrium|Bh]] 
+| style="border:1px solid black;" | <sub>108</sub><br />[[Hassium|Hs]] 
+| style="border:1px solid black;" | <sub>109</sub><br />[[Meitnerium|Mt]] 
+| style="border:1px solid black;" | <sub>110</sub><br />[[Darmstadtium|Ds]] 
+| style="border:1px solid black;" | <sub>111</sub><br />[[Roentgenium|Rg]] 
+| style="border:1px solid black;" | <sub>112</sub><br />[[Copernicium|Cn]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>113</sub><br />[[Nihonium|Nh]] 
+| style="border:1px solid black;" | <sub>114</sub><br />[[Flerovium|Fl]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>115</sub><br />[[Moscovium|Mc]] 
+| style="border:1px solid black;" | <sub>116</sub><br />[[Livermorium|Lv]] 
+| style="border:1px dashed black;" bgcolor="#ffff99" | <sub>117</sub><br />[[Tenness|Ts]] 
+| style="border:1px dashed black;" bgcolor="#c0ffff" | <sub>118</sub><br />[[Oganesson|Og]] 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" |&nbsp;
+|- style="text-align:center" bgcolor="#ffbfff" 
+| colspan="2" style="text-align:right;color:black" bgcolor="#fff" |* 
+| style="border:1px solid black;" | <sub>57</sub><br />[[Lanthan|La]] 
+| style="border:1px solid black;" | <sub>58</sub><br />[[Cer|Ce]] 
+| style="border:1px solid black;" | <sub>59</sub><br />[[Praseodym|Pr]] 
+| style="border:1px solid black;" | <sub>60</sub><br />[[Neodym|Nd]] 
+| style="border:1px solid black;" | <sub>61</sub><br />[[Promethium|Pm]] 
+| style="border:1px solid black;" | <sub>62</sub><br />[[Samarium|Sm]] 
+| style="border:1px solid black;" | <sub>63</sub><br />[[Europium|Eu]] 
+| style="border:1px solid black;" | <sub>64</sub><br />[[Gadolinium|Gd]] 
+| style="border:1px solid black;" | <sub>65</sub><br />[[Terbium|Tb]] 
+| style="border:1px solid black;" | <sub>66</sub><br />[[Dysprosium|Dy]] 
+| style="border:1px solid black;" | <sub>67</sub><br />[[Holmium|Ho]] 
+| style="border:1px solid black;" | <sub>68</sub><br />[[Erbium|Er]] 
+| style="border:1px solid black;" | <sub>69</sub><br />[[Thulium|Tm]] 
+| style="border:1px solid black;" | <sub>70</sub><br />[[Ytterbium|Yb]] 
+| style="border:1px solid black;" | <sub>71</sub><br />[[Lutetium|Lu]] 
+|- style="text-align:center" bgcolor="#ff99cc" 
+| colspan="2" style="text-align:right;color:black" bgcolor="#fff" |**
+| style="border:1px solid black;" | <sub>89</sub><br />[[Actinium|Ac]] 
+| style="border:1px solid black;" | <sub>90</sub><br />[[Thorium|Th]] 
+| style="border:1px solid black;" | <sub>91</sub><br />[[Protactinium|Pa]] 
+| style="border:1px solid black;" | <sub>92</sub><br />[[Uran|U]] 
+| style="border:1px solid black;" | <sub>93</sub><br />[[Neptunium|Np]] 
+| style="border:1px solid black;" | <sub>94</sub><br />[[Plutonium|Pu]] 
+| style="border:1px solid black;" | <sub>95</sub><br />[[Americium|Am]] 
+| style="border:1px solid black;" | <sub>96</sub><br />[[Curium|Cm]] 
+| style="border:1px solid black;" | <sub>97</sub><br />[[Berkelium|Bk]] 
+| style="border:1px solid black;" | <sub>98</sub><br />[[Californium|Cf]] 
+| style="border:1px solid black;" | <sub>99</sub><br />[[Einsteinium|Es]] 
+| style="border:1px solid black;" | <sub>100</sub><br />[[Fermium|Fm]] 
+| style="border:1px solid black;" | <sub>101</sub><br />[[Mendelevium|Md]] 
+| style="border:1px solid black;" | <sub>102</sub><br />[[Nobelium|No]] 
+| style="border:1px solid black;" | <sub>103</sub><br />[[Lawrencium|Lr]] 
+|}
+|-
+|}</div></div>
+[[Categoria:Monossílabo (Alemão)]]
+
+
+=<templatestyles src="Template:cabeçalho-idioma/styles.css" /><span class="cabecalhoIdioma"><span id="azerbaijano" ><span class="lnklng" id="Azerbaijano"><span lang="Português" xml:lang="Português">[[azerbaijano#Português|Azerbaijano]]</span></span></span></span>[[Categoria:!Entrada (Azerbaijano)]]=
+==Substantivo[[Categoria:Substantivo (Azerbaijano)]]==
+'''Uran'''
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Astronomia (Azerbaijano)]]Astronomia</span>) [[Urano]]
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Mitologia (Azerbaijano)]]Mitologia</span>) [[Urano]]
+
+==Ver também==
+===No Wikcionário===
+<templatestyles src="Template:Barra de navegação/styles.css" /><div class="noprint">
+<div style="clear:both;  background-color:transparent" class="BarFrame mw-collapsible mw-collapsed">
+<div class="BarHead" style="background-color:">O [[Apêndice:Sistema Solar|Sistema Solar]] em [[azerbaijano]]</div>
+
+<div class="BarContent mw-collapsible-content">
+{| border="0" style="width:100%"
+|-
+|<imagemap>
+Image:Solar System XXVII.png
+#Sol
+rect 0 0 90 35 [[sol|Sol]]
+#Mercúrio
+circle 112 18 6 [[Mercúrio]]
+#Vénus
+circle 153 18 8 [[Vénus]]
+#Terra e Lua
+circle 203 8 4 [[lua|Lua]]
+circle 194 18 8 [[Terra]]
+#Marte
+circle 233 18 8 [[Marte]]
+#Ceres
+# - by placing the rectangle code for the asteroid belt AFTER Ceres, Ceres is "on top" (and can co-exist)
+circle 271 18 8 [[Ceres]]
+#Júpiter
+circle 316 18 15 [[Júpiter]]
+#Saturno
+circle 372 18 10 [[Saturno]]
+#Urano
+circle 418 18 9 [[Urano]]
+#Neptuno
+circle 462 18 12 [[Neptuno]]
+#Plutão
+# - by placing the rectangle code for the Kuiper belt AFTER Pluto, Pluto is "on top" (and can co-exist)
+circle 504 18 8 [[Plutão]]
+#Éris
+# - by placing the rectangle code for the Scattered disc AFTER Eris, Eris is "on top" (and can co-exist)
+circle 540 18 8 [[Éris]]
+
+desc none
+# - setting this to "bottom-right" will display a (rather large) icon linking to the graphic, if desired
+
+#Notes:
+#Details on the new coding for clickable images is here: [http://www.mediawiki.org/wiki/Extension:ImageMap]
+#The smaller planets have a bit of an overlap just to ensure they're locatable, especially in the belts.
+#While it may look strange, it's important to keep the codes for a particular system in order. The clickable coding treats the first object created in an area as the one on top.
+# - I've placed moons on "top" so that their smaller circles won't disappear "under" their respective planets or dwarf planets.
+#The "poly" code would be more appropriate for the moons of Jupiter, Saturn, and Uranus. However, there appears to be a bug with that aspect of the code.
+# - I've compensated by using oversized circles for those moon groups, and tucking them UNDER their planets for now.
+#The Sun is a rectangle as that approximates the edge closely enough for the purposes of this template.
+#I've guessed as to the boundaries for the KB, SD, and OC - if they need adjustment, load the image into Paint and use the pencil tool to find the appropriate coordinates.
+</imagemap>
+
+|-
+| [[Günəş]] • [[Merkuri]] • [[Venera]] • [[Yer]] • [[Ay]] • [[Mars]] • ''[[Serera]]'' • [[Yupiter]] • [[Saturn]] • [[Uran]] • [[Neptun]] • ''[[Pluton]]'' • ''[[Erida]]''
+|}
+</div>
+<div class="BarEnd">&nbsp;</div>
+</div></div>
+
+
+=<templatestyles src="Template:cabeçalho-idioma/styles.css" /><span class="cabecalhoIdioma"><span id="baixo saxão" ><span class="lnklng" id="Baixo Saxão"><span lang="Português" xml:lang="Português">[[baixo saxão#Português|Baixo Saxão]]</span></span></span></span>[[Categoria:!Entrada (Baixo Saxão)]]=
+==Substantivo[[Categoria:Substantivo (Baixo Saxão)]]==
+{|style="width:20%; float:right; cellpadding:5; cellspacing:2; border:0"
+|colspan=2 style="text-align:center;background-color:#b0ffff;color:black;"|'''[[U]]'''
+|-
+|style="width:50%;text-align:center;background-color:#d0ffff;color:black;"|[[Protactinium|'''&larr;''' Pa]]
+|style="width:50%;text-align:center;background-color:#d0ffff;color:black;"|[[Neptunium|Np '''&rarr;''']] 
+|-
+|}
+'''Uran'''
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Elemento químico (Baixo Saxão)]]elemento químico</span>) [[urânio]]
+
+==Ver também==
+===No Wikcionário===
+<div class="NavFrame" style="clear:both;">
+<div class="NavHead" align="center">A [[Apêndice:Tabela periódica|tabela periódica]] em [[baixo-saxão]]/[[baixo-alemão]]</div>
+<div class="NavContent">
+{| width="100%"
+|- 
+| align="center" |
+{| style="font-size:small;" width="70%"
+|- style="text-align:center" 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>1</sub><br />[[Waterstoff|H]] 
+| colspan="16" |&nbsp;
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>2</sub><br />[[Helium|He]] 
+|- style="text-align:center" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>3</sub><br />[[Lithium|Li]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>4</sub><br />[[Beryllium|Be]] 
+| colspan="10" |&nbsp;
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>5</sub><br />[[Bor|B]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>6</sub><br />[[Kohlenstoff|C]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>7</sub><br />[[Stickstoff|N]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>8</sub><br />[[Suerstoff|O]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>9</sub><br />[[Fluor|F]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>10</sub><br />[[Neon|Ne]] 
+|- style="text-align:center" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>11</sub><br />[[Natrium|Na]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>12</sub><br />[[Magnesium|Mg]] 
+| colspan="10" |&nbsp;
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>13</sub><br />[[Aluminium|Al]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>14</sub><br />[[Silizium|Si]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>15</sub><br />[[Phosphor|P]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>16</sub><br />[[Swevel|S]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>17</sub><br />[[Chlor|Cl]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>18</sub><br />[[Argon|Ar]] 
+|- style="text-align:center;background-color:#ffc0c0" 
+| style="border:1px solid black;" bgcolor="ff6666" | <sub>19</sub><br />[[Kalium|K]] 
+| style="border:1px solid black;" bgcolor="ffdead" | <sub>20</sub><br />[[Calcium|Ca]] 
+| style="border:1px solid black;" | <sub>21</sub><br />[[Scandium|Sc]] 
+| style="border:1px solid black;" | <sub>22</sub><br />[[Titan|Ti]] 
+| style="border:1px solid black;" | <sub>23</sub><br />[[Vanadium|V]] 
+| style="border:1px solid black;" | <sub>24</sub><br />[[Chrom|Cr]] 
+| style="border:1px solid black;" | <sub>25</sub><br />[[Mangan|Mn]] 
+| style="border:1px solid black;" | <sub>26</sub><br />[[Iesen|Fe]] 
+| style="border:1px solid black;" | <sub>27</sub><br />[[Kobalt|Co]] 
+| style="border:1px solid black;" | <sub>28</sub><br />[[Nickel|Ni]] 
+| style="border:1px solid black;" | <sub>29</sub><br />[[Kopper|Cu]] 
+| style="border:1px solid black;" | <sub>30</sub><br />[[Zink|Zn]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>31</sub><br />[[Gallium|Ga]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>32</sub><br />[[Germanium|Ge]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>33</sub><br />[[Arsen|As]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>34</sub><br />[[Selen|Se]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>35</sub><br />[[Brom|Br]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>36</sub><br />[[Krypton|Kr]] 
+|- style="text-align:center;background-color:#ffc0c0" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>37</sub><br />[[Rubidium|Rb]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>38</sub><br />[[Strontium|Sr]] 
+| style="border:1px solid black;" | <sub>39</sub><br />[[Yttrium|Y]] 
+| style="border:1px solid black;" | <sub>40</sub><br />[[Zircon|Zr]] 
+| style="border:1px solid black;" | <sub>41</sub><br />[[Niob|Nb]] 
+| style="border:1px solid black;" | <sub>42</sub><br />[[Molybdän|Mo]] 
+| style="border:1px solid black;" | <sub>43</sub><br />[[Technetium|Tc]] 
+| style="border:1px solid black;" | <sub>44</sub><br />[[Ruthenium|Ru]] 
+| style="border:1px solid black;" | <sub>45</sub><br />[[Rhodium|Rh]] 
+| style="border:1px solid black;" | <sub>46</sub><br />[[Palladium|Pd]] 
+| style="border:1px solid black;" | <sub>47</sub><br />[[Sülver|Ag]] 
+| style="border:1px solid black;" | <sub>48</sub><br />[[Cadmium|Cd]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>49</sub><br />[[Indium|In]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>50</sub><br />[[Tinn|Sn]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>51</sub><br />[[Antimon|Sb]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>52</sub><br />[[Tellur|Te]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>53</sub><br />[[Jod|I]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>54</sub><br />[[Xenon|Xe]] 
+|- style="text-align:center" bgcolor="#ffc0c0" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>55</sub><br />[[Cäsium|Cs]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>56</sub><br />[[Barium|Ba]] 
+| style="vertical-align:top;color:black" bgcolor="#ffbfff" |*
+| style="border:1px solid black;" | <sub>72</sub><br />[[Hafnium|Hf]] 
+| style="border:1px solid black;" | <sub>73</sub><br />[[Tantal|Ta]] 
+| style="border:1px solid black;" | <sub>74</sub><br />[[Wolfram|W]] 
+| style="border:1px solid black;" | <sub>75</sub><br />[[Rhenium|Re]] 
+| style="border:1px solid black;" | <sub>76</sub><br />[[Osmium|Os]] 
+| style="border:1px solid black;" | <sub>77</sub><br />[[Iridium|Ir]] 
+| style="border:1px solid black;" | <sub>78</sub><br />[[Platin|Pt]] 
+| style="border:1px solid black;" | <sub>79</sub><br />[[Gold|Au]] 
+| style="border:1px solid black;" | <sub>80</sub><br />[[Quecksülver|Hg]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>81</sub><br />[[Thallium|Tl]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>82</sub><br />[[Blie|Pb]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>83</sub><br />[[Wismut|Bi]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>84</sub><br />[[Polonium|Po]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>85</sub><br />[[Astat|At]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>86</sub><br />[[Radon|Rn]] 
+|- style="text-align:center" bgcolor="#ffc0c0" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>87</sub><br />[[Francium|Fr]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>88</sub><br />[[Radium|Ra]] 
+| style="vertical-align:top;color:black" bgcolor="#ff99cc" |**
+| style="border:1px solid black;" | <sub>104</sub><br />[[Rutherfordium|Rf]] 
+| style="border:1px solid black;" | <sub>105</sub><br />[[Dubnium|Db]] 
+| style="border:1px solid black;" | <sub>106</sub><br />[[Seaborgium|Sg]] 
+| style="border:1px solid black;" | <sub>107</sub><br />[[Bohrium|Bh]] 
+| style="border:1px solid black;" | <sub>108</sub><br />[[Hassium|Hs]] 
+| style="border:1px solid black;" | <sub>109</sub><br />[[Meitnerium|Mt]] 
+| style="border:1px solid black;" | <sub>110</sub><br />[[Darmstadtium|Ds]] 
+| style="border:1px solid black;" | <sub>111</sub><br />[[Roentgenium|Rg]] 
+| style="border:1px solid black;" | <sub>112</sub><br />[[Copernicium|Cn]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>113</sub><br />[[Nh|Nh]] 
+| style="border:1px solid black;" | <sub>114</sub><br />[[Flerovium|Fl]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>115</sub><br />[[Mc|Mc]] 
+| style="border:1px solid black;" | <sub>116</sub><br />[[Livermorium|Lv]] 
+| style="border:1px dashed black;" bgcolor="#ffff99" | <sub>117</sub><br />[[Ts|Ts]] 
+| style="border:1px dashed black;" bgcolor="#c0ffff" | <sub>118</sub><br />[[Og|Og]] 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | <small>(×) Este elemento teve o seu nome e símbolo químico revistos em 2016. Esta designação é obsoleta. Se souber a sua nova designação neste idioma, por favor, substitua-a na [[:Categoria:!Predefinição para a tabela periódica|predefinição correspondente]].</small>
+|-
+| colspan="20" | 
+|-
+| colspan="20" | <small>(×) Este elemento teve o seu nome e símbolo químico revistos em 2016. Esta designação é obsoleta. Se souber a sua nova designação neste idioma, por favor, substitua-a na [[:Categoria:!Predefinição para a tabela periódica|predefinição correspondente]].</small>
+|-
+| colspan="20" | 
+|-
+| colspan="20" | <small>(×) Este elemento teve o seu nome e símbolo químico revistos em 2016. Esta designação é obsoleta. Se souber a sua nova designação neste idioma, por favor, substitua-a na [[:Categoria:!Predefinição para a tabela periódica|predefinição correspondente]].</small>
+|-
+| colspan="20" | <small>(×) Este elemento teve o seu nome e símbolo químico revistos em 2016. Esta designação é obsoleta. Se souber a sua nova designação neste idioma, por favor, substitua-a na [[:Categoria:!Predefinição para a tabela periódica|predefinição correspondente]].</small>
+|-
+| colspan="20" |&nbsp;
+|- style="text-align:center" bgcolor="#ffbfff" 
+| colspan="2" style="text-align:right;color:black" bgcolor="#fff" |* 
+| style="border:1px solid black;" | <sub>57</sub><br />[[Lanthan|La]] 
+| style="border:1px solid black;" | <sub>58</sub><br />[[Cer|Ce]] 
+| style="border:1px solid black;" | <sub>59</sub><br />[[Praseodym|Pr]] 
+| style="border:1px solid black;" | <sub>60</sub><br />[[Neodym|Nd]] 
+| style="border:1px solid black;" | <sub>61</sub><br />[[Promethium|Pm]] 
+| style="border:1px solid black;" | <sub>62</sub><br />[[Samarium|Sm]] 
+| style="border:1px solid black;" | <sub>63</sub><br />[[Europium|Eu]] 
+| style="border:1px solid black;" | <sub>64</sub><br />[[Gadolinium|Gd]] 
+| style="border:1px solid black;" | <sub>65</sub><br />[[Terbium|Tb]] 
+| style="border:1px solid black;" | <sub>66</sub><br />[[Dysprosium|Dy]] 
+| style="border:1px solid black;" | <sub>67</sub><br />[[Holmium|Ho]] 
+| style="border:1px solid black;" | <sub>68</sub><br />[[Erbium|Er]] 
+| style="border:1px solid black;" | <sub>69</sub><br />[[Thulium|Tm]] 
+| style="border:1px solid black;" | <sub>70</sub><br />[[Ytterbium|Yb]] 
+| style="border:1px solid black;" | <sub>71</sub><br />[[Lutetium|Lu]] 
+|- style="text-align:center" bgcolor="#ff99cc" 
+| colspan="2" style="text-align:right;color:black" bgcolor="#fff" |**
+| style="border:1px solid black;" | <sub>89</sub><br />[[Actinium|Ac]] 
+| style="border:1px solid black;" | <sub>90</sub><br />[[Thorium|Th]] 
+| style="border:1px solid black;" | <sub>91</sub><br />[[Protactinium|Pa]] 
+| style="border:1px solid black;" | <sub>92</sub><br />[[Uran|U]] 
+| style="border:1px solid black;" | <sub>93</sub><br />[[Neptunium|Np]] 
+| style="border:1px solid black;" | <sub>94</sub><br />[[Plutonium|Pu]] 
+| style="border:1px solid black;" | <sub>95</sub><br />[[Americium|Am]] 
+| style="border:1px solid black;" | <sub>96</sub><br />[[Curium|Cm]] 
+| style="border:1px solid black;" | <sub>97</sub><br />[[Berkelium|Bk]] 
+| style="border:1px solid black;" | <sub>98</sub><br />[[Californium|Cf]] 
+| style="border:1px solid black;" | <sub>99</sub><br />[[Einsteinium|Es]] 
+| style="border:1px solid black;" | <sub>100</sub><br />[[Fermium|Fm]] 
+| style="border:1px solid black;" | <sub>101</sub><br />[[Mendelevium|Md]] 
+| style="border:1px solid black;" | <sub>102</sub><br />[[Nobelium|No]] 
+| style="border:1px solid black;" | <sub>103</sub><br />[[Lawrencium|Lr]] 
+|}
+|-
+|}</div></div>
+
+
+=<templatestyles src="Template:cabeçalho-idioma/styles.css" /><span class="cabecalhoIdioma"><span id="bósnio" ><span class="lnklng" id="Bósnio"><span lang="Português" xml:lang="Português">[[bósnio#Português|Bósnio]]</span></span></span></span>[[Categoria:!Entrada (Bósnio)]]=
+==Substantivo[[Categoria:Substantivo (Bósnio)]]==
+'''Uran'''
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Astronomia (Bósnio)]]Astronomia</span>) [[Urano]]
+
+==Ver também==
+===No Wikcionário===
+<templatestyles src="Template:Barra de navegação/styles.css" /><div class="noprint">
+<div style="clear:both;  background-color:transparent" class="BarFrame mw-collapsible mw-collapsed">
+<div class="BarHead" style="background-color:">O [[Apêndice:Sistema Solar|Sistema Solar]] em [[bósnio]]</div>
+
+<div class="BarContent mw-collapsible-content">
+{| border="0" style="width:100%"
+|-
+|<imagemap>
+Image:Solar System XXVII.png
+#Sol
+rect 0 0 90 35 [[sol|Sol]]
+#Mercúrio
+circle 112 18 6 [[Mercúrio]]
+#Vénus
+circle 153 18 8 [[Vénus]]
+#Terra e Lua
+circle 203 8 4 [[lua|Lua]]
+circle 194 18 8 [[Terra]]
+#Marte
+circle 233 18 8 [[Marte]]
+#Ceres
+# - by placing the rectangle code for the asteroid belt AFTER Ceres, Ceres is "on top" (and can co-exist)
+circle 271 18 8 [[Ceres]]
+#Júpiter
+circle 316 18 15 [[Júpiter]]
+#Saturno
+circle 372 18 10 [[Saturno]]
+#Urano
+circle 418 18 9 [[Urano]]
+#Neptuno
+circle 462 18 12 [[Neptuno]]
+#Plutão
+# - by placing the rectangle code for the Kuiper belt AFTER Pluto, Pluto is "on top" (and can co-exist)
+circle 504 18 8 [[Plutão]]
+#Éris
+# - by placing the rectangle code for the Scattered disc AFTER Eris, Eris is "on top" (and can co-exist)
+circle 540 18 8 [[Éris]]
+
+desc none
+# - setting this to "bottom-right" will display a (rather large) icon linking to the graphic, if desired
+
+#Notes:
+#Details on the new coding for clickable images is here: [http://www.mediawiki.org/wiki/Extension:ImageMap]
+#The smaller planets have a bit of an overlap just to ensure they're locatable, especially in the belts.
+#While it may look strange, it's important to keep the codes for a particular system in order. The clickable coding treats the first object created in an area as the one on top.
+# - I've placed moons on "top" so that their smaller circles won't disappear "under" their respective planets or dwarf planets.
+#The "poly" code would be more appropriate for the moons of Jupiter, Saturn, and Uranus. However, there appears to be a bug with that aspect of the code.
+# - I've compensated by using oversized circles for those moon groups, and tucking them UNDER their planets for now.
+#The Sun is a rectangle as that approximates the edge closely enough for the purposes of this template.
+#I've guessed as to the boundaries for the KB, SD, and OC - if they need adjustment, load the image into Paint and use the pencil tool to find the appropriate coordinates.
+</imagemap>
+
+|-
+| [[Sunce]] • [[Merkur]] • [[Venera]] • [[Zemlja]] • [[Mjesec]] • [[Mars]] • ''[[Cerera]]'' • [[Jupiter]] • [[Saturn]] • [[Uran]] • [[Neptun]] • ''[[Pluton]]'' • ''[[Erida]]''
+|}
+</div>
+<div class="BarEnd">&nbsp;</div>
+</div></div>
+
+
+=<templatestyles src="Template:cabeçalho-idioma/styles.css" /><span class="cabecalhoIdioma"><span id="checo" ><span class="lnklng" id="Checo">[[checo|Checo]]/[[tcheco|Tcheco]]</span></span></span>[[Categoria:!Entrada (Checo)]]=
+==Substantivo[[Categoria:Substantivo (Checo)]]==
+'''<span style="border-bottom:1px solid black; display:inline">Uran</span>''', ''próprio'',&nbsp;''masculino'',&nbsp;''animado''
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Mitologia (Checo)]]Mitologia</span>) [[Urano]]
+
+===Declinação===
+<div class="NavFrame" style="clear:both;">
+<div class="NavHead" align=left>&nbsp; &nbsp; Substantivo masculino animado sem plural</div>
+<div class="NavContent">
+{| border="0" width="100%"
+|- valign="top"
+|
+{| style="margin:0.5em 0.5em 0.5em 0.5em; border: 1px solid #aaa; border-collapse:collapse;" cellpadding="3" rules="all"
+|- style="background:#ffffe0;"
+! style="background:#f4f4f4;" width="80" | [[caso|Caso]]
+! [[singular|Singular]]
+|-
+! style="background:#f4f4f4;" | [[nominativo|Nominativo]]
+| Uran 
+|-
+! style="background:#f4f4f4;" | [[genitivo|Genitivo]]
+| [[Urana]] 
+|-
+! style="background:#f4f4f4;" | [[dativo|Dativo]]
+| Uranovi 
+|-
+! style="background:#f4f4f4;" | [[acusativo|Acusativo]]
+| Urana 
+|-
+! style="background:#f4f4f4;" | [[vocativo|Vocativo]]
+| [[Urane]] 
+|-
+! style="background:#f4f4f4;" | [[locativo|Locativo]]
+| Uranovi 
+|-
+! style="background:#f4f4f4;" | [[instrumental|Instrumental]]
+| Uranem 
+|-
+|}
+|-
+|}</div></div>
+
+'''<span style="border-bottom:1px solid black; display:inline">Uran</span>''', ''próprio'',&nbsp;''masculino'',&nbsp;''inanimado''
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Elemento químico (Checo)]]Elemento químico</span>) [[Urano]]
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Corpo celeste (Checo)]]Corpo celeste</span>) [[Urano]]
+
+===Declinação===
+<div class="NavFrame" style="clear:both;">
+<div class="NavHead" align=left>&nbsp; &nbsp; Substantivo masculino inanimado sem plural</div>
+<div class="NavContent">
+{| border="0" width="100%"
+|- valign="top"
+|
+{| style="margin:0.5em 0.5em 0.5em 0.5em; border: 1px solid #aaa; border-collapse:collapse;" cellpadding="3" rules="all"
+|- style="background:#ffffe0;"
+! style="background:#f4f4f4;" width="80" | [[caso|Caso]]
+! [[singular|Singular]]
+|-
+! style="background:#f4f4f4;" | [[nominativo|Nominativo]]
+| Uran 
+|-
+! style="background:#f4f4f4;" | [[genitivo|Genitivo]]
+| [[Uranu#Checo|Uranu]] 
+|-
+! style="background:#f4f4f4;" | [[dativo|Dativo]]
+| [[Uranu#Checo|Uranu]] 
+|-
+! style="background:#f4f4f4;" | [[acusativo|Acusativo]]
+| Uran 
+|-
+! style="background:#f4f4f4;" | [[vocativo|Vocativo]]
+| Urane 
+|-
+! style="background:#f4f4f4;" | [[locativo|Locativo]]
+| [[Uranu#Checo|Uranu]] 
+|-
+! style="background:#f4f4f4;" | [[instrumental|Instrumental]]
+| Uranem 
+|-
+|}
+|-
+|}</div></div>
+
+==<span title="Pronúncia da palavra">Pronúncia</span>[[Categoria:Entrada com pronúncia (Checo)|Uran]]==
+* AFI: [[Ajuda:Guia de pronúncia|<span class="ipa" style="padding: 0 1px; text-decoration: none;">/ˈʔʊran/</span>]] [[Ficheiro:Loudspeaker.svg|15px|link=Ficheiro:Cs-Uran.ogg]]&nbsp;[[Media:Cs-Uran.ogg|ouvir]]<sup> [[:Ficheiro:Cs-Uran.ogg|fonte]] [[Ajuda:Guia de consulta e reprodução/reprodução de arquivos Ogg|?]]</sup> [[Ficheiro:Cs-Uran.ogg|80px|noicon]][[Categoria:Entrada com áudio (Checo)|Uran]]
+
+==Ver também==
+===No Wikcionário===
+<templatestyles src="Template:Barra de navegação/styles.css" /><div class="noprint">
+<div style="clear:both;  background-color:transparent" class="BarFrame mw-collapsible mw-collapsed">
+<div class="BarHead" style="background-color:">O [[Apêndice:Sistema Solar|Sistema Solar]] em [[checo]]</div>
+
+<div class="BarContent mw-collapsible-content">
+{| border="0" style="width:100%"
+|-
+|<imagemap>
+Image:Solar System XXVII.png
+#Sol
+rect 0 0 90 35 [[sol|Sol]]
+#Mercúrio
+circle 112 18 6 [[Mercúrio]]
+#Vénus
+circle 153 18 8 [[Vénus]]
+#Terra e Lua
+circle 203 8 4 [[lua|Lua]]
+circle 194 18 8 [[Terra]]
+#Marte
+circle 233 18 8 [[Marte]]
+#Ceres
+# - by placing the rectangle code for the asteroid belt AFTER Ceres, Ceres is "on top" (and can co-exist)
+circle 271 18 8 [[Ceres]]
+#Júpiter
+circle 316 18 15 [[Júpiter]]
+#Saturno
+circle 372 18 10 [[Saturno]]
+#Urano
+circle 418 18 9 [[Urano]]
+#Neptuno
+circle 462 18 12 [[Neptuno]]
+#Plutão
+# - by placing the rectangle code for the Kuiper belt AFTER Pluto, Pluto is "on top" (and can co-exist)
+circle 504 18 8 [[Plutão]]
+#Éris
+# - by placing the rectangle code for the Scattered disc AFTER Eris, Eris is "on top" (and can co-exist)
+circle 540 18 8 [[Éris]]
+
+desc none
+# - setting this to "bottom-right" will display a (rather large) icon linking to the graphic, if desired
+
+#Notes:
+#Details on the new coding for clickable images is here: [http://www.mediawiki.org/wiki/Extension:ImageMap]
+#The smaller planets have a bit of an overlap just to ensure they're locatable, especially in the belts.
+#While it may look strange, it's important to keep the codes for a particular system in order. The clickable coding treats the first object created in an area as the one on top.
+# - I've placed moons on "top" so that their smaller circles won't disappear "under" their respective planets or dwarf planets.
+#The "poly" code would be more appropriate for the moons of Jupiter, Saturn, and Uranus. However, there appears to be a bug with that aspect of the code.
+# - I've compensated by using oversized circles for those moon groups, and tucking them UNDER their planets for now.
+#The Sun is a rectangle as that approximates the edge closely enough for the purposes of this template.
+#I've guessed as to the boundaries for the KB, SD, and OC - if they need adjustment, load the image into Paint and use the pencil tool to find the appropriate coordinates.
+</imagemap>
+
+|-
+| [[Slunce]] • [[Merkur]] • [[Venuše]] • [[Země]] • [[Měsíc]] • [[Mars]] • ''[[Ceres]]'' • [[Jupiter]] • [[Saturn]] • [[Uran]] • [[Neptun]] • ''[[Pluto]]'' • ''[[Eris]]''
+|}
+</div>
+<div class="BarEnd">&nbsp;</div>
+</div></div>
+===Na Wikipédia===
+* [[Image:Wikipedia-logo-v2.svg|20px|link=w:cs:Uran]] [[w:cs:Uran|Uran]][[Categoria:!Entrada com correlato na Wikipédia (Checo)]]
+[[Categoria:Monossílabo (Checo)]]
+
+
+=<templatestyles src="Template:cabeçalho-idioma/styles.css" /><span class="cabecalhoIdioma"><span id="croata" ><span class="lnklng" id="Croata"><span lang="Português" xml:lang="Português">[[croata#Português|Croata]]</span></span></span></span>[[Categoria:!Entrada (Croata)]]=
+==Substantivo[[Categoria:Substantivo (Croata)]]==
+'''Uran'''
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Astronomia (Croata)]]Astronomia</span>) [[Urano]]
+
+==Ver também==
+===No Wikcionário===
+<templatestyles src="Template:Barra de navegação/styles.css" /><div class="noprint">
+<div style="clear:both;  background-color:transparent" class="BarFrame mw-collapsible mw-collapsed">
+<div class="BarHead" style="background-color:">O [[Apêndice:Sistema Solar|Sistema Solar]] em [[croata]]</div>
+
+<div class="BarContent mw-collapsible-content">
+{| border="0" style="width:100%"
+|-
+|<imagemap>
+Image:Solar System XXVII.png
+#Sol
+rect 0 0 90 35 [[sol|Sol]]
+#Mercúrio
+circle 112 18 6 [[Mercúrio]]
+#Vénus
+circle 153 18 8 [[Vénus]]
+#Terra e Lua
+circle 203 8 4 [[lua|Lua]]
+circle 194 18 8 [[Terra]]
+#Marte
+circle 233 18 8 [[Marte]]
+#Ceres
+# - by placing the rectangle code for the asteroid belt AFTER Ceres, Ceres is "on top" (and can co-exist)
+circle 271 18 8 [[Ceres]]
+#Júpiter
+circle 316 18 15 [[Júpiter]]
+#Saturno
+circle 372 18 10 [[Saturno]]
+#Urano
+circle 418 18 9 [[Urano]]
+#Neptuno
+circle 462 18 12 [[Neptuno]]
+#Plutão
+# - by placing the rectangle code for the Kuiper belt AFTER Pluto, Pluto is "on top" (and can co-exist)
+circle 504 18 8 [[Plutão]]
+#Éris
+# - by placing the rectangle code for the Scattered disc AFTER Eris, Eris is "on top" (and can co-exist)
+circle 540 18 8 [[Éris]]
+
+desc none
+# - setting this to "bottom-right" will display a (rather large) icon linking to the graphic, if desired
+
+#Notes:
+#Details on the new coding for clickable images is here: [http://www.mediawiki.org/wiki/Extension:ImageMap]
+#The smaller planets have a bit of an overlap just to ensure they're locatable, especially in the belts.
+#While it may look strange, it's important to keep the codes for a particular system in order. The clickable coding treats the first object created in an area as the one on top.
+# - I've placed moons on "top" so that their smaller circles won't disappear "under" their respective planets or dwarf planets.
+#The "poly" code would be more appropriate for the moons of Jupiter, Saturn, and Uranus. However, there appears to be a bug with that aspect of the code.
+# - I've compensated by using oversized circles for those moon groups, and tucking them UNDER their planets for now.
+#The Sun is a rectangle as that approximates the edge closely enough for the purposes of this template.
+#I've guessed as to the boundaries for the KB, SD, and OC - if they need adjustment, load the image into Paint and use the pencil tool to find the appropriate coordinates.
+</imagemap>
+
+|-
+| [[Sunce]] • [[Merkur]] • [[Venera]] • [[Zemlja]] • [[Mjesec]] • [[Mars]] • ''[[Ceres]]'' • [[Jupiter]] • [[Saturn]] • [[Uran]] • [[Neptun]] • ''[[Pluton]]'' • ''[[Eris]]''
+|}
+</div>
+<div class="BarEnd">&nbsp;</div>
+</div></div>
+
+
+=<templatestyles src="Template:cabeçalho-idioma/styles.css" /><span class="cabecalhoIdioma"><span id="esloveno" ><span class="lnklng" id="Esloveno"><span lang="Português" xml:lang="Português">[[esloveno#Português|Esloveno]]</span></span></span></span>[[Categoria:!Entrada (Esloveno)]]=
+==Substantivo[[Categoria:Substantivo (Esloveno)]]==
+'''<span style="border-bottom:1px solid black; display:inline">Uran</span>''', ''próprio'',&nbsp;''masculino'',&nbsp;''animado''
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Astronomia (Esloveno)]]Astronomia</span>) [[Urano]]
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Mitologia (Esloveno)]]Mitologia</span>) [[Urano]]
+
+==Ver também==
+===No Wikcionário===
+<templatestyles src="Template:Barra de navegação/styles.css" /><div class="noprint">
+<div style="clear:both;  background-color:transparent" class="BarFrame mw-collapsible mw-collapsed">
+<div class="BarHead" style="background-color:">O [[Apêndice:Sistema Solar|Sistema Solar]] em [[esloveno]]</div>
+
+<div class="BarContent mw-collapsible-content">
+{| border="0" style="width:100%"
+|-
+|<imagemap>
+Image:Solar System XXVII.png
+#Sol
+rect 0 0 90 35 [[sol|Sol]]
+#Mercúrio
+circle 112 18 6 [[Mercúrio]]
+#Vénus
+circle 153 18 8 [[Vénus]]
+#Terra e Lua
+circle 203 8 4 [[lua|Lua]]
+circle 194 18 8 [[Terra]]
+#Marte
+circle 233 18 8 [[Marte]]
+#Ceres
+# - by placing the rectangle code for the asteroid belt AFTER Ceres, Ceres is "on top" (and can co-exist)
+circle 271 18 8 [[Ceres]]
+#Júpiter
+circle 316 18 15 [[Júpiter]]
+#Saturno
+circle 372 18 10 [[Saturno]]
+#Urano
+circle 418 18 9 [[Urano]]
+#Neptuno
+circle 462 18 12 [[Neptuno]]
+#Plutão
+# - by placing the rectangle code for the Kuiper belt AFTER Pluto, Pluto is "on top" (and can co-exist)
+circle 504 18 8 [[Plutão]]
+#Éris
+# - by placing the rectangle code for the Scattered disc AFTER Eris, Eris is "on top" (and can co-exist)
+circle 540 18 8 [[Éris]]
+
+desc none
+# - setting this to "bottom-right" will display a (rather large) icon linking to the graphic, if desired
+
+#Notes:
+#Details on the new coding for clickable images is here: [http://www.mediawiki.org/wiki/Extension:ImageMap]
+#The smaller planets have a bit of an overlap just to ensure they're locatable, especially in the belts.
+#While it may look strange, it's important to keep the codes for a particular system in order. The clickable coding treats the first object created in an area as the one on top.
+# - I've placed moons on "top" so that their smaller circles won't disappear "under" their respective planets or dwarf planets.
+#The "poly" code would be more appropriate for the moons of Jupiter, Saturn, and Uranus. However, there appears to be a bug with that aspect of the code.
+# - I've compensated by using oversized circles for those moon groups, and tucking them UNDER their planets for now.
+#The Sun is a rectangle as that approximates the edge closely enough for the purposes of this template.
+#I've guessed as to the boundaries for the KB, SD, and OC - if they need adjustment, load the image into Paint and use the pencil tool to find the appropriate coordinates.
+</imagemap>
+
+|-
+| [[Sonce]] • [[Merkur]] • [[Venera]] • [[Zemlja]] • [[Luna]] • [[Mars]] • ''[[Ceres]]'' • [[Jupiter]] • [[Saturn]] • [[Uran]] • [[Neptun]] • ''[[Pluton]]'' • ''[[Êrida]]''
+|}
+</div>
+<div class="BarEnd">&nbsp;</div>
+</div></div>
+
+
+=<templatestyles src="Template:cabeçalho-idioma/styles.css" /><span class="cabecalhoIdioma"><span id="frísio oriental" ><span class="lnklng" id="Frísio Oriental"><span lang="Português" xml:lang="Português">[[frísio oriental#Português|Frísio Oriental]]</span></span></span></span>[[Categoria:!Entrada (Frísio Oriental)]]=
+==Substantivo[[Categoria:Substantivo (Frísio Oriental)]]==
+{|style="width:20%; float:right; cellpadding:5; cellspacing:2; border:0"
+|colspan=2 style="text-align:center;background-color:#b0ffff;color:black;"|'''[[U]]'''
+|-
+|style="width:50%;text-align:center;background-color:#d0ffff;color:black;"|[[Protactinium|'''&larr;''' Pa]]
+|style="width:50%;text-align:center;background-color:#d0ffff;color:black;"|[[Neptunium|Np '''&rarr;''']] 
+|-
+|}
+'''<span style="border-bottom:1px solid black; display:inline">Uran</span>''', ''neutro'',&nbsp;''incontável''
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Elemento químico (Frísio Oriental)]]elemento químico</span>) [[urânio]]
+
+==Ver também==
+===No Wikcionário===
+<div class="NavFrame" style="clear:both;">
+<div class="NavHead" align="center">A [[Apêndice:Tabela periódica|tabela periódica]] em [[frísio oriental|frísio]]/[[frisão oriental]]</div>
+<div class="NavContent">
+{| width="100%"
+|- 
+| align="center" |
+{| style="font-size:small;" width="70%"
+|- style="text-align:center" 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>1</sub><br />[[Woaterstof|H]] 
+| colspan="16" |&nbsp;
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>2</sub><br />[[Helium|He]] 
+|- style="text-align:center" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>3</sub><br />[[Lithium|Li]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>4</sub><br />[[Beryllium|Be]] 
+| colspan="10" |&nbsp;
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>5</sub><br />[[Bor|B]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>6</sub><br />[[Koolestof|C]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>7</sub><br />[[Stikstof|N]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>8</sub><br />[[Suurstof|O]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>9</sub><br />[[Fluor|F]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>10</sub><br />[[Neon|Ne]] 
+|- style="text-align:center" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>11</sub><br />[[Natrium|Na]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>12</sub><br />[[Magnesium|Mg]] 
+| colspan="10" |&nbsp;
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>13</sub><br />[[Aluminium|Al]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>14</sub><br />[[Silicium|Si]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>15</sub><br />[[Phosphor|P]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>16</sub><br />[[Swieuwel|S]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>17</sub><br />[[Chlor|Cl]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>18</sub><br />[[Argon|Ar]] 
+|- style="text-align:center;background-color:#ffc0c0" 
+| style="border:1px solid black;" bgcolor="ff6666" | <sub>19</sub><br />[[Kalium|K]] 
+| style="border:1px solid black;" bgcolor="ffdead" | <sub>20</sub><br />[[Calcium|Ca]] 
+| style="border:1px solid black;" | <sub>21</sub><br />[[Scandium|Sc]] 
+| style="border:1px solid black;" | <sub>22</sub><br />[[Titan|Ti]] 
+| style="border:1px solid black;" | <sub>23</sub><br />[[Vanadium|V]] 
+| style="border:1px solid black;" | <sub>24</sub><br />[[Chrom|Cr]] 
+| style="border:1px solid black;" | <sub>25</sub><br />[[Mangan|Mn]] 
+| style="border:1px solid black;" | <sub>26</sub><br />[[Iersen|Fe]] 
+| style="border:1px solid black;" | <sub>27</sub><br />[[Cobalt|Co]] 
+| style="border:1px solid black;" | <sub>28</sub><br />[[Nikkel|Ni]] 
+| style="border:1px solid black;" | <sub>29</sub><br />[[Kooper|Cu]] 
+| style="border:1px solid black;" | <sub>30</sub><br />[[Zink|Zn]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>31</sub><br />[[Gallium|Ga]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>32</sub><br />[[Germanium|Ge]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>33</sub><br />[[Arsen|As]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>34</sub><br />[[Selen|Se]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>35</sub><br />[[Bromium|Br]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>36</sub><br />[[Krypton|Kr]] 
+|- style="text-align:center;background-color:#ffc0c0" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>37</sub><br />[[Rubidium|Rb]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>38</sub><br />[[Strontium|Sr]] 
+| style="border:1px solid black;" | <sub>39</sub><br />[[Yttrium|Y]] 
+| style="border:1px solid black;" | <sub>40</sub><br />[[Zirconium|Zr]] 
+| style="border:1px solid black;" | <sub>41</sub><br />[[Niob|Nb]] 
+| style="border:1px solid black;" | <sub>42</sub><br />[[Molybdän|Mo]] 
+| style="border:1px solid black;" | <sub>43</sub><br />[[Technetium|Tc]] 
+| style="border:1px solid black;" | <sub>44</sub><br />[[Ruthenium|Ru]] 
+| style="border:1px solid black;" | <sub>45</sub><br />[[Rhodium|Rh]] 
+| style="border:1px solid black;" | <sub>46</sub><br />[[Palladium|Pd]] 
+| style="border:1px solid black;" | <sub>47</sub><br />[[Säälwer|Ag]] 
+| style="border:1px solid black;" | <sub>48</sub><br />[[Cadmium|Cd]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>49</sub><br />[[Indium|In]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>50</sub><br />[[Tin|Sn]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>51</sub><br />[[Antimon|Sb]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>52</sub><br />[[Tellur|Te]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>53</sub><br />[[Iod|I]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>54</sub><br />[[Xenon|Xe]] 
+|- style="text-align:center" bgcolor="#ffc0c0" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>55</sub><br />[[Caesium|Cs]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>56</sub><br />[[Barium|Ba]] 
+| style="vertical-align:top;color:black" bgcolor="#ffbfff" |*
+| style="border:1px solid black;" | <sub>72</sub><br />[[Hafnium|Hf]] 
+| style="border:1px solid black;" | <sub>73</sub><br />[[Tantal|Ta]] 
+| style="border:1px solid black;" | <sub>74</sub><br />[[Wolfram|W]] 
+| style="border:1px solid black;" | <sub>75</sub><br />[[Renium|Re]] 
+| style="border:1px solid black;" | <sub>76</sub><br />[[Osmium|Os]] 
+| style="border:1px solid black;" | <sub>77</sub><br />[[Iridium|Ir]] 
+| style="border:1px solid black;" | <sub>78</sub><br />[[Platin|Pt]] 
+| style="border:1px solid black;" | <sub>79</sub><br />[[Gould|Au]] 
+| style="border:1px solid black;" | <sub>80</sub><br />[[Kwäksäälwer|Hg]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>81</sub><br />[[Thallium|Tl]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>82</sub><br />[[Lood|Pb]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>83</sub><br />[[Bismuth|Bi]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>84</sub><br />[[Polonium|Po]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>85</sub><br />[[Astat|At]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>86</sub><br />[[Radon|Rn]] 
+|- style="text-align:center" bgcolor="#ffc0c0" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>87</sub><br />[[Francium|Fr]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>88</sub><br />[[Radium|Ra]] 
+| style="vertical-align:top;color:black" bgcolor="#ff99cc" |**
+| style="border:1px solid black;" | <sub>104</sub><br />[[Rutherfordium|Rf]] 
+| style="border:1px solid black;" | <sub>105</sub><br />[[Dubnium|Db]] 
+| style="border:1px solid black;" | <sub>106</sub><br />[[Seaborgium|Sg]] 
+| style="border:1px solid black;" | <sub>107</sub><br />[[Bohrium|Bh]] 
+| style="border:1px solid black;" | <sub>108</sub><br />[[Hassium|Hs]] 
+| style="border:1px solid black;" | <sub>109</sub><br />[[Meitnerium|Mt]] 
+| style="border:1px solid black;" | <sub>110</sub><br />[[Darmstadtium|Ds]] 
+| style="border:1px solid black;" | <sub>111</sub><br />[[Roentgenium|Rg]] 
+| style="border:1px solid black;" | <sub>112</sub><br />[[Copernicium|Cn]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>113</sub><br />[[Nh|Nh]] 
+| style="border:1px solid black;" | <sub>114</sub><br />[[Fl|Fl]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>115</sub><br />[[Mc|Mc]] 
+| style="border:1px solid black;" | <sub>116</sub><br />[[Lv|Lv]] 
+| style="border:1px dashed black;" bgcolor="#ffff99" | <sub>117</sub><br />[[Ts|Ts]] 
+| style="border:1px dashed black;" bgcolor="#c0ffff" | <sub>118</sub><br />[[Og|Og]] 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | <small>(×) Este elemento teve o seu nome e símbolo químico revistos em 2016. Esta designação é obsoleta. Se souber a sua nova designação neste idioma, por favor, substitua-a na [[:Categoria:!Predefinição para a tabela periódica|predefinição correspondente]].</small>
+|-
+| colspan="20" |&nbsp;
+|- style="text-align:center" bgcolor="#ffbfff" 
+| colspan="2" style="text-align:right;color:black" bgcolor="#fff" |* 
+| style="border:1px solid black;" | <sub>57</sub><br />[[Lanthan|La]] 
+| style="border:1px solid black;" | <sub>58</sub><br />[[Cerium|Ce]] 
+| style="border:1px solid black;" | <sub>59</sub><br />[[Praseodymium|Pr]] 
+| style="border:1px solid black;" | <sub>60</sub><br />[[Neodymium|Nd]] 
+| style="border:1px solid black;" | <sub>61</sub><br />[[Promethium|Pm]] 
+| style="border:1px solid black;" | <sub>62</sub><br />[[Samarium|Sm]] 
+| style="border:1px solid black;" | <sub>63</sub><br />[[Europium|Eu]] 
+| style="border:1px solid black;" | <sub>64</sub><br />[[Gadolinium|Gd]] 
+| style="border:1px solid black;" | <sub>65</sub><br />[[Terbium|Tb]] 
+| style="border:1px solid black;" | <sub>66</sub><br />[[Dysprosium|Dy]] 
+| style="border:1px solid black;" | <sub>67</sub><br />[[Holmium|Ho]] 
+| style="border:1px solid black;" | <sub>68</sub><br />[[Erbium|Er]] 
+| style="border:1px solid black;" | <sub>69</sub><br />[[Thulium|Tm]] 
+| style="border:1px solid black;" | <sub>70</sub><br />[[Ytterbium|Yb]] 
+| style="border:1px solid black;" | <sub>71</sub><br />[[Lutetium|Lu]] 
+|- style="text-align:center" bgcolor="#ff99cc" 
+| colspan="2" style="text-align:right;color:black" bgcolor="#fff" |**
+| style="border:1px solid black;" | <sub>89</sub><br />[[Actinium|Ac]] 
+| style="border:1px solid black;" | <sub>90</sub><br />[[Thorium|Th]] 
+| style="border:1px solid black;" | <sub>91</sub><br />[[Protactinium|Pa]] 
+| style="border:1px solid black;" | <sub>92</sub><br />[[Uran|U]] 
+| style="border:1px solid black;" | <sub>93</sub><br />[[Neptunium|Np]] 
+| style="border:1px solid black;" | <sub>94</sub><br />[[Plutonium|Pu]] 
+| style="border:1px solid black;" | <sub>95</sub><br />[[Americium|Am]] 
+| style="border:1px solid black;" | <sub>96</sub><br />[[Curium|Cm]] 
+| style="border:1px solid black;" | <sub>97</sub><br />[[Berkelium|Bk]] 
+| style="border:1px solid black;" | <sub>98</sub><br />[[Californium|Cf]] 
+| style="border:1px solid black;" | <sub>99</sub><br />[[Einsteinium|Es]] 
+| style="border:1px solid black;" | <sub>100</sub><br />[[Fermium|Fm]] 
+| style="border:1px solid black;" | <sub>101</sub><br />[[Mendelevium|Md]] 
+| style="border:1px solid black;" | <sub>102</sub><br />[[Nobelium|No]] 
+| style="border:1px solid black;" | <sub>103</sub><br />[[Lawrencium|Lr]] 
+|}
+|-
+|}</div></div>
+
+
+=<templatestyles src="Template:cabeçalho-idioma/styles.css" /><span class="cabecalhoIdioma"><span id="luxemburguês" ><span class="lnklng" id="Luxemburguês"><span lang="Português" xml:lang="Português">[[luxemburguês#Português|Luxemburguês]]</span></span></span></span>[[Categoria:!Entrada (Luxemburguês)]]=
+==Substantivo[[Categoria:Substantivo (Luxemburguês)]]==
+{|style="width:20%; float:right; cellpadding:5; cellspacing:2; border:0"
+|colspan=2 style="text-align:center;background-color:#b0ffff;color:black;"|'''[[U]]'''
+|-
+|style="width:50%;text-align:center;background-color:#d0ffff;color:black;"|[[Protactinium|'''&larr;''' Pa]]
+|style="width:50%;text-align:center;background-color:#d0ffff;color:black;"|[[Neptunium|Np '''&rarr;''']] 
+|-
+|}
+'''<span style="border-bottom:1px solid black; display:inline">Uran</span>''', ''neutro'',&nbsp;''incontável''
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Elemento químico (Luxemburguês)]]elemento químico</span>) [[urânio]]
+
+==Ver também==
+===No Wikcionário===
+<div class="NavFrame" style="clear:both;">
+<div class="NavHead" align="center">A [[Apêndice:Tabela periódica|tabela periódica]] em [[luxemburguês]]</div>
+<div class="NavContent">
+{| width="100%"
+|- 
+| align="center" |
+{| style="font-size:small;" width="70%"
+|- style="text-align:center" 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>1</sub><br />[[Waasserstoff|H]] 
+| colspan="16" |&nbsp;
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>2</sub><br />[[Helium|He]] 
+|- style="text-align:center" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>3</sub><br />[[Lithium|Li]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>4</sub><br />[[Beryllium|Be]] 
+| colspan="10" |&nbsp;
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>5</sub><br />[[Bor|B]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>6</sub><br />[[Kuelestoff|C]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>7</sub><br />[[Stéckstoff|N]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>8</sub><br />[[Sauerstoff|O]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>9</sub><br />[[Fluor|F]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>10</sub><br />[[Neon|Ne]] 
+|- style="text-align:center" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>11</sub><br />[[Natrium|Na]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>12</sub><br />[[Magnesium|Mg]] 
+| colspan="10" |&nbsp;
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>13</sub><br />[[Aluminium|Al]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>14</sub><br />[[Silizium|Si]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>15</sub><br />[[Phosphor|P]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>16</sub><br />[[Schwiefel|S]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>17</sub><br />[[Chlor|Cl]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>18</sub><br />[[Argon|Ar]] 
+|- style="text-align:center;background-color:#ffc0c0" 
+| style="border:1px solid black;" bgcolor="ff6666" | <sub>19</sub><br />[[Kalium|K]] 
+| style="border:1px solid black;" bgcolor="ffdead" | <sub>20</sub><br />[[Kalzium|Ca]] 
+| style="border:1px solid black;" | <sub>21</sub><br />[[Scandium|Sc]] 
+| style="border:1px solid black;" | <sub>22</sub><br />[[Titan|Ti]] 
+| style="border:1px solid black;" | <sub>23</sub><br />[[Vanadium|V]] 
+| style="border:1px solid black;" | <sub>24</sub><br />[[Chrom|Cr]] 
+| style="border:1px solid black;" | <sub>25</sub><br />[[Mangan|Mn]] 
+| style="border:1px solid black;" | <sub>26</sub><br />[[Eisen|Fe]] 
+| style="border:1px solid black;" | <sub>27</sub><br />[[Kobalt|Co]] 
+| style="border:1px solid black;" | <sub>28</sub><br />[[Néckel|Ni]] 
+| style="border:1px solid black;" | <sub>29</sub><br />[[Koffer|Cu]] 
+| style="border:1px solid black;" | <sub>30</sub><br />[[Zénk|Zn]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>31</sub><br />[[Gallium|Ga]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>32</sub><br />[[Germanium|Ge]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>33</sub><br />[[Arsen|As]] 
+| style="border:1px solid black;" bgcolor="#afffa0" | <sub>34</sub><br />[[Selen|Se]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>35</sub><br />[[Brom|Br]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>36</sub><br />[[Krypton|Kr]] 
+|- style="text-align:center;background-color:#ffc0c0" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>37</sub><br />[[Rubidium|Rb]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>38</sub><br />[[Strontium|Sr]] 
+| style="border:1px solid black;" | <sub>39</sub><br />[[Yttrium|Y]] 
+| style="border:1px solid black;" | <sub>40</sub><br />[[Zirkonium|Zr]] 
+| style="border:1px solid black;" | <sub>41</sub><br />[[Niob|Nb]] 
+| style="border:1px solid black;" | <sub>42</sub><br />[[Molybdän|Mo]] 
+| style="border:1px solid black;" | <sub>43</sub><br />[[Technetium|Tc]] 
+| style="border:1px solid black;" | <sub>44</sub><br />[[Ruthenium|Ru]] 
+| style="border:1px solid black;" | <sub>45</sub><br />[[Rhodium|Rh]] 
+| style="border:1px solid black;" | <sub>46</sub><br />[[Palladium|Pd]] 
+| style="border:1px solid black;" | <sub>47</sub><br />[[Sëlwer|Ag]] 
+| style="border:1px solid black;" | <sub>48</sub><br />[[Cadmium|Cd]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>49</sub><br />[[Indium|In]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>50</sub><br />[[Zënn|Sn]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>51</sub><br />[[Antimon|Sb]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>52</sub><br />[[Tellur|Te]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>53</sub><br />[[Iod|I]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>54</sub><br />[[Xenon|Xe]] 
+|- style="text-align:center" bgcolor="#ffc0c0" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>55</sub><br />[[Cäsium|Cs]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>56</sub><br />[[Barium|Ba]] 
+| style="vertical-align:top;color:black" bgcolor="#ffbfff" |*
+| style="border:1px solid black;" | <sub>72</sub><br />[[Hafnium|Hf]] 
+| style="border:1px solid black;" | <sub>73</sub><br />[[Tantal|Ta]] 
+| style="border:1px solid black;" | <sub>74</sub><br />[[Wolfram|W]] 
+| style="border:1px solid black;" | <sub>75</sub><br />[[Rhenium|Re]] 
+| style="border:1px solid black;" | <sub>76</sub><br />[[Osmium|Os]] 
+| style="border:1px solid black;" | <sub>77</sub><br />[[Iridium|Ir]] 
+| style="border:1px solid black;" | <sub>78</sub><br />[[Platin|Pt]] 
+| style="border:1px solid black;" | <sub>79</sub><br />[[Gold|Au]] 
+| style="border:1px solid black;" | <sub>80</sub><br />[[Quecksëlwer|Hg]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>81</sub><br />[[Thallium|Tl]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>82</sub><br />[[Bläi|Pb]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>83</sub><br />[[Bismuth|Bi]] 
+| style="border:1px solid black;" bgcolor="#cccc99" | <sub>84</sub><br />[[Polonium|Po]] 
+| style="border:1px solid black;" bgcolor="#ffff99" | <sub>85</sub><br />[[Astat|At]] 
+| style="border:1px solid black;" bgcolor="#c0ffff" | <sub>86</sub><br />[[Radon|Rn]] 
+|- style="text-align:center" bgcolor="#ffc0c0" 
+| style="border:1px solid black;" bgcolor="#ff6666" | <sub>87</sub><br />[[Francium|Fr]] 
+| style="border:1px solid black;" bgcolor="#ffdead" | <sub>88</sub><br />[[Radium|Ra]] 
+| style="vertical-align:top;color:black" bgcolor="#ff99cc" |**
+| style="border:1px solid black;" | <sub>104</sub><br />[[Rutherfordium|Rf]] 
+| style="border:1px solid black;" | <sub>105</sub><br />[[Dubnium|Db]] 
+| style="border:1px solid black;" | <sub>106</sub><br />[[Seaborgium|Sg]] 
+| style="border:1px solid black;" | <sub>107</sub><br />[[Bohrium|Bh]] 
+| style="border:1px solid black;" | <sub>108</sub><br />[[Hassium|Hs]] 
+| style="border:1px solid black;" | <sub>109</sub><br />[[Meitnerium|Mt]] 
+| style="border:1px solid black;" | <sub>110</sub><br />[[Darmstadtium|Ds]] 
+| style="border:1px solid black;" | <sub>111</sub><br />[[Roentgenium|Rg]] 
+| style="border:1px solid black;" | <sub>112</sub><br />[[Copernicium|Cn]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>113</sub><br />[[Nihonium|Nh]] 
+| style="border:1px solid black;" | <sub>114</sub><br />[[Flerovium|Fl]] 
+| style="border:1px solid black;" bgcolor="#cccccc" | <sub>115</sub><br />[[Moscovium|Mc]] 
+| style="border:1px solid black;" | <sub>116</sub><br />[[Livermorium|Lv]] 
+| style="border:1px dashed black;" bgcolor="#ffff99" | <sub>117</sub><br />[[Tennessine|Ts]] 
+| style="border:1px dashed black;" bgcolor="#c0ffff" | <sub>118</sub><br />[[Oganesson|Og]] 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" | 
+|-
+| colspan="20" |&nbsp;
+|- style="text-align:center" bgcolor="#ffbfff" 
+| colspan="2" style="text-align:right;color:black" bgcolor="#fff" |* 
+| style="border:1px solid black;" | <sub>57</sub><br />[[Lanthan|La]] 
+| style="border:1px solid black;" | <sub>58</sub><br />[[Cer|Ce]] 
+| style="border:1px solid black;" | <sub>59</sub><br />[[Praseodym|Pr]] 
+| style="border:1px solid black;" | <sub>60</sub><br />[[Neodym|Nd]] 
+| style="border:1px solid black;" | <sub>61</sub><br />[[Promethium|Pm]] 
+| style="border:1px solid black;" | <sub>62</sub><br />[[Samarium|Sm]] 
+| style="border:1px solid black;" | <sub>63</sub><br />[[Europium|Eu]] 
+| style="border:1px solid black;" | <sub>64</sub><br />[[Gadolinium|Gd]] 
+| style="border:1px solid black;" | <sub>65</sub><br />[[Terbium|Tb]] 
+| style="border:1px solid black;" | <sub>66</sub><br />[[Dysprosium|Dy]] 
+| style="border:1px solid black;" | <sub>67</sub><br />[[Holmium|Ho]] 
+| style="border:1px solid black;" | <sub>68</sub><br />[[Erbium|Er]] 
+| style="border:1px solid black;" | <sub>69</sub><br />[[Thulium|Tm]] 
+| style="border:1px solid black;" | <sub>70</sub><br />[[Ytterbium|Yb]] 
+| style="border:1px solid black;" | <sub>71</sub><br />[[Lutetium|Lu]] 
+|- style="text-align:center" bgcolor="#ff99cc" 
+| colspan="2" style="text-align:right;color:black" bgcolor="#fff" |**
+| style="border:1px solid black;" | <sub>89</sub><br />[[Actinium|Ac]] 
+| style="border:1px solid black;" | <sub>90</sub><br />[[Thorium|Th]] 
+| style="border:1px solid black;" | <sub>91</sub><br />[[Protactinium|Pa]] 
+| style="border:1px solid black;" | <sub>92</sub><br />[[Uran|U]] 
+| style="border:1px solid black;" | <sub>93</sub><br />[[Neptunium|Np]] 
+| style="border:1px solid black;" | <sub>94</sub><br />[[Plutonium|Pu]] 
+| style="border:1px solid black;" | <sub>95</sub><br />[[Americium|Am]] 
+| style="border:1px solid black;" | <sub>96</sub><br />[[Curium|Cm]] 
+| style="border:1px solid black;" | <sub>97</sub><br />[[Berkelium|Bk]] 
+| style="border:1px solid black;" | <sub>98</sub><br />[[Californium|Cf]] 
+| style="border:1px solid black;" | <sub>99</sub><br />[[Einsteinium|Es]] 
+| style="border:1px solid black;" | <sub>100</sub><br />[[Fermium|Fm]] 
+| style="border:1px solid black;" | <sub>101</sub><br />[[Mendelevium|Md]] 
+| style="border:1px solid black;" | <sub>102</sub><br />[[Nobelium|No]] 
+| style="border:1px solid black;" | <sub>103</sub><br />[[Lawrencium|Lr]] 
+|}
+|-
+|}</div></div>
+[[Categoria:Monossílabo (Luxemburguês)]]
+
+
+=<templatestyles src="Template:cabeçalho-idioma/styles.css" /><span class="cabecalhoIdioma"><span id="piemontês" ><span class="lnklng" id="Piemontês"><span lang="Português" xml:lang="Português">[[piemontês#Português|Piemontês]]</span></span></span></span>[[Categoria:!Entrada (Piemontês)]]=
+==Substantivo[[Categoria:Substantivo (Piemontês)]]==
+'''Uran'''
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Corpo celeste (Piemontês)]]corpo celeste</span>) [[Urano]]
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Mitologia (Piemontês)]]Mitologia</span>) [[Urano]]
+
+==Ver também==
+===No Wikcionário===
+<templatestyles src="Template:Barra de navegação/styles.css" /><div class="noprint">
+<div style="clear:both;  background-color:transparent" class="BarFrame mw-collapsible mw-collapsed">
+<div class="BarHead" style="background-color:">O [[Apêndice:Sistema Solar|Sistema Solar]] em [[piemontês]]</div>
+
+<div class="BarContent mw-collapsible-content">
+{| border="0" style="width:100%"
+|-
+|<imagemap>
+Image:Solar System XXVII.png
+#Sol
+rect 0 0 90 35 [[sol|Sol]]
+#Mercúrio
+circle 112 18 6 [[Mercúrio]]
+#Vénus
+circle 153 18 8 [[Vénus]]
+#Terra e Lua
+circle 203 8 4 [[lua|Lua]]
+circle 194 18 8 [[Terra]]
+#Marte
+circle 233 18 8 [[Marte]]
+#Ceres
+# - by placing the rectangle code for the asteroid belt AFTER Ceres, Ceres is "on top" (and can co-exist)
+circle 271 18 8 [[Ceres]]
+#Júpiter
+circle 316 18 15 [[Júpiter]]
+#Saturno
+circle 372 18 10 [[Saturno]]
+#Urano
+circle 418 18 9 [[Urano]]
+#Neptuno
+circle 462 18 12 [[Neptuno]]
+#Plutão
+# - by placing the rectangle code for the Kuiper belt AFTER Pluto, Pluto is "on top" (and can co-exist)
+circle 504 18 8 [[Plutão]]
+#Éris
+# - by placing the rectangle code for the Scattered disc AFTER Eris, Eris is "on top" (and can co-exist)
+circle 540 18 8 [[Éris]]
+
+desc none
+# - setting this to "bottom-right" will display a (rather large) icon linking to the graphic, if desired
+
+#Notes:
+#Details on the new coding for clickable images is here: [http://www.mediawiki.org/wiki/Extension:ImageMap]
+#The smaller planets have a bit of an overlap just to ensure they're locatable, especially in the belts.
+#While it may look strange, it's important to keep the codes for a particular system in order. The clickable coding treats the first object created in an area as the one on top.
+# - I've placed moons on "top" so that their smaller circles won't disappear "under" their respective planets or dwarf planets.
+#The "poly" code would be more appropriate for the moons of Jupiter, Saturn, and Uranus. However, there appears to be a bug with that aspect of the code.
+# - I've compensated by using oversized circles for those moon groups, and tucking them UNDER their planets for now.
+#The Sun is a rectangle as that approximates the edge closely enough for the purposes of this template.
+#I've guessed as to the boundaries for the KB, SD, and OC - if they need adjustment, load the image into Paint and use the pencil tool to find the appropriate coordinates.
+</imagemap>
+
+|-
+| [[Sol]] • [[Mercuri]] • [[Capelvénere]] • [[Tèra]] • [[Lun-a]] • [[Mart]] • ''[[Céres]]'' • [[Gieuv]] • [[Saturn]] • [[Uran]] • [[Netun]] • ''[[Pluton]]'' • ''[[Eris]]''
+|}
+</div>
+<div class="BarEnd">&nbsp;</div>
+</div></div>
+
+
+=<templatestyles src="Template:cabeçalho-idioma/styles.css" /><span class="cabecalhoIdioma"><span id="polonês" ><span class="lnklng" id="Polonês"><span lang="Português" xml:lang="Português">[[polonês#Português|Polonês]]</span></span></span></span>[[Categoria:!Entrada (Polonês)]]=
+==Substantivo[[Categoria:Substantivo (Polonês)]]<sup>1</sup>==
+'''<u>U</u>.ran[[Categoria:Dissílabo (Polonês)]]'''[[Categoria:Paroxítona (Polonês)]], ''masculino'',&nbsp;''próprio''
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Corpo celeste (Polonês)]]corpo celeste</span>) [[Urano]]
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Mitologia (Polonês)]]mitologia</span>) [[Urano]]
+==Substantivo<sup<2/sup>==
+'''U.ran''', ''neutro''
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Elemento químico (Polonês)]]elemento químico</span>) [[urânio]]
+
+==<span title="Pronúncia da palavra">Pronúncia</span>[[Categoria:Entrada com pronúncia (Polonês)|Uran]]==
+* AFI: [[Ajuda:Guia de pronúncia/Polonês|<span class="ipa" style="padding: 0 1px; text-decoration: none;">/ˈuran/</span>]][[Categoria:Entrada com pronúncia (Polonês)]] [[Ficheiro:Loudspeaker.svg|15px|link=Ficheiro:Pl-Uran.ogg]]&nbsp;[[Media:Pl-Uran.ogg|ouvir]]<sup> [[:Ficheiro:Pl-Uran.ogg|fonte]] [[Ajuda:Guia de consulta e reprodução/reprodução de arquivos Ogg|?]]</sup> [[Ficheiro:Pl-Uran.ogg|80px|noicon]][[Categoria:Entrada com áudio (Polonês)|Uran]]
+
+==Ver também==
+===No Wikcionário===
+<templatestyles src="Template:verTambém.Ini/styles.css" />
+{| style="border:0; width:100%;"
+|-
+| class="vtbm" |
+
+* [[Układ Słoneczny]]
+|}
+<templatestyles src="Template:Barra de navegação/styles.css" /><div class="noprint">
+<div style="clear:both;  background-color:transparent" class="BarFrame mw-collapsible mw-collapsed">
+<div class="BarHead" style="background-color:">O [[Apêndice:Sistema Solar|Sistema Solar]] em [[polonês]]</div>
+
+<div class="BarContent mw-collapsible-content">
+{| border="0" style="width:100%"
+|-
+|<imagemap>
+Image:Solar System XXVII.png
+#Sol
+rect 0 0 90 35 [[sol|Sol]]
+#Mercúrio
+circle 112 18 6 [[Mercúrio]]
+#Vénus
+circle 153 18 8 [[Vénus]]
+#Terra e Lua
+circle 203 8 4 [[lua|Lua]]
+circle 194 18 8 [[Terra]]
+#Marte
+circle 233 18 8 [[Marte]]
+#Ceres
+# - by placing the rectangle code for the asteroid belt AFTER Ceres, Ceres is "on top" (and can co-exist)
+circle 271 18 8 [[Ceres]]
+#Júpiter
+circle 316 18 15 [[Júpiter]]
+#Saturno
+circle 372 18 10 [[Saturno]]
+#Urano
+circle 418 18 9 [[Urano]]
+#Neptuno
+circle 462 18 12 [[Neptuno]]
+#Plutão
+# - by placing the rectangle code for the Kuiper belt AFTER Pluto, Pluto is "on top" (and can co-exist)
+circle 504 18 8 [[Plutão]]
+#Éris
+# - by placing the rectangle code for the Scattered disc AFTER Eris, Eris is "on top" (and can co-exist)
+circle 540 18 8 [[Éris]]
+
+desc none
+# - setting this to "bottom-right" will display a (rather large) icon linking to the graphic, if desired
+
+#Notes:
+#Details on the new coding for clickable images is here: [http://www.mediawiki.org/wiki/Extension:ImageMap]
+#The smaller planets have a bit of an overlap just to ensure they're locatable, especially in the belts.
+#While it may look strange, it's important to keep the codes for a particular system in order. The clickable coding treats the first object created in an area as the one on top.
+# - I've placed moons on "top" so that their smaller circles won't disappear "under" their respective planets or dwarf planets.
+#The "poly" code would be more appropriate for the moons of Jupiter, Saturn, and Uranus. However, there appears to be a bug with that aspect of the code.
+# - I've compensated by using oversized circles for those moon groups, and tucking them UNDER their planets for now.
+#The Sun is a rectangle as that approximates the edge closely enough for the purposes of this template.
+#I've guessed as to the boundaries for the KB, SD, and OC - if they need adjustment, load the image into Paint and use the pencil tool to find the appropriate coordinates.
+</imagemap>
+
+|-
+| [[Słońce]] • [[Merkury]] • [[Wenus]] • [[Ziemia]] • [[Księżyc]] • [[Mars]] • ''[[Ceres]]'' • [[Jowisz]] • [[Saturn]] • [[Uran]] • [[Neptun]] • ''[[Pluton]]'' • ''[[Eris]]''
+|}
+</div>
+<div class="BarEnd">&nbsp;</div>
+</div></div>
+
+
+=<templatestyles src="Template:cabeçalho-idioma/styles.css" /><span class="cabecalhoIdioma"><span id="servocroata" ><span class="lnklng" id="Servocroata"><span lang="Português" xml:lang="Português">[[servocroata#Português|Servocroata]]</span></span></span></span>[[Categoria:!Entrada (Servocroata)]]=
+==Substantivo[[Categoria:Substantivo (Servocroata)]]==
+'''Uran'''
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Astronomia (Servocroata)]]Astronomia</span>) [[Urano]]
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Mitologia (Servocroata)]]Mitologia</span>) [[Urano]]
+
+==Ver também==
+===No Wikcionário===
+<templatestyles src="Template:Barra de navegação/styles.css" /><div class="noprint">
+<div style="clear:both;  background-color:transparent" class="BarFrame mw-collapsible mw-collapsed">
+<div class="BarHead" style="background-color:">O [[Apêndice:Sistema Solar|Sistema Solar]] em [[servocroata]]</div>
+
+<div class="BarContent mw-collapsible-content">
+{| border="0" style="width:100%"
+|-
+|<imagemap>
+Image:Solar System XXVII.png
+#Sol
+rect 0 0 90 35 [[sol|Sol]]
+#Mercúrio
+circle 112 18 6 [[Mercúrio]]
+#Vénus
+circle 153 18 8 [[Vénus]]
+#Terra e Lua
+circle 203 8 4 [[lua|Lua]]
+circle 194 18 8 [[Terra]]
+#Marte
+circle 233 18 8 [[Marte]]
+#Ceres
+# - by placing the rectangle code for the asteroid belt AFTER Ceres, Ceres is "on top" (and can co-exist)
+circle 271 18 8 [[Ceres]]
+#Júpiter
+circle 316 18 15 [[Júpiter]]
+#Saturno
+circle 372 18 10 [[Saturno]]
+#Urano
+circle 418 18 9 [[Urano]]
+#Neptuno
+circle 462 18 12 [[Neptuno]]
+#Plutão
+# - by placing the rectangle code for the Kuiper belt AFTER Pluto, Pluto is "on top" (and can co-exist)
+circle 504 18 8 [[Plutão]]
+#Éris
+# - by placing the rectangle code for the Scattered disc AFTER Eris, Eris is "on top" (and can co-exist)
+circle 540 18 8 [[Éris]]
+
+desc none
+# - setting this to "bottom-right" will display a (rather large) icon linking to the graphic, if desired
+
+#Notes:
+#Details on the new coding for clickable images is here: [http://www.mediawiki.org/wiki/Extension:ImageMap]
+#The smaller planets have a bit of an overlap just to ensure they're locatable, especially in the belts.
+#While it may look strange, it's important to keep the codes for a particular system in order. The clickable coding treats the first object created in an area as the one on top.
+# - I've placed moons on "top" so that their smaller circles won't disappear "under" their respective planets or dwarf planets.
+#The "poly" code would be more appropriate for the moons of Jupiter, Saturn, and Uranus. However, there appears to be a bug with that aspect of the code.
+# - I've compensated by using oversized circles for those moon groups, and tucking them UNDER their planets for now.
+#The Sun is a rectangle as that approximates the edge closely enough for the purposes of this template.
+#I've guessed as to the boundaries for the KB, SD, and OC - if they need adjustment, load the image into Paint and use the pencil tool to find the appropriate coordinates.
+</imagemap>
+
+|-
+| [[Sunce]] • [[Merkur]] • [[Venera]] • [[Zemlja]] • [[Mjesec]] • [[Mars]] • ''[[Cerera]]'' • [[Jupiter]] • [[Saturn]] • [[Uran]] • [[Neptun]] • ''[[Pluton]]'' • ''[[Erida]]''
+|}
+</div>
+<div class="BarEnd">&nbsp;</div>
+</div></div>
+
+
+=<templatestyles src="Template:cabeçalho-idioma/styles.css" /><span class="cabecalhoIdioma"><span id="uzbeque" ><span class="lnklng" id="Uzbeque"><span lang="Português" xml:lang="Português">[[uzbeque#Português|Uzbeque]]</span></span></span></span>[[Categoria:!Entrada (Uzbeque)]]=
+==Substantivo[[Categoria:Substantivo (Uzbeque)]]==
+'''Uran'''
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Astronomia (Uzbeque)]]Astronomia</span>) [[Urano]]
+
+==Ver também==
+===No Wikcionário===
+<templatestyles src="Template:Barra de navegação/styles.css" /><div class="noprint">
+<div style="clear:both;  background-color:transparent" class="BarFrame mw-collapsible mw-collapsed">
+<div class="BarHead" style="background-color:">O [[Apêndice:Sistema Solar|Sistema Solar]] em [[uzbeque]]</div>
+
+<div class="BarContent mw-collapsible-content">
+{| border="0" style="width:100%"
+|-
+|<imagemap>
+Image:Solar System XXVII.png
+#Sol
+rect 0 0 90 35 [[sol|Sol]]
+#Mercúrio
+circle 112 18 6 [[Mercúrio]]
+#Vénus
+circle 153 18 8 [[Vénus]]
+#Terra e Lua
+circle 203 8 4 [[lua|Lua]]
+circle 194 18 8 [[Terra]]
+#Marte
+circle 233 18 8 [[Marte]]
+#Ceres
+# - by placing the rectangle code for the asteroid belt AFTER Ceres, Ceres is "on top" (and can co-exist)
+circle 271 18 8 [[Ceres]]
+#Júpiter
+circle 316 18 15 [[Júpiter]]
+#Saturno
+circle 372 18 10 [[Saturno]]
+#Urano
+circle 418 18 9 [[Urano]]
+#Neptuno
+circle 462 18 12 [[Neptuno]]
+#Plutão
+# - by placing the rectangle code for the Kuiper belt AFTER Pluto, Pluto is "on top" (and can co-exist)
+circle 504 18 8 [[Plutão]]
+#Éris
+# - by placing the rectangle code for the Scattered disc AFTER Eris, Eris is "on top" (and can co-exist)
+circle 540 18 8 [[Éris]]
+
+desc none
+# - setting this to "bottom-right" will display a (rather large) icon linking to the graphic, if desired
+
+#Notes:
+#Details on the new coding for clickable images is here: [http://www.mediawiki.org/wiki/Extension:ImageMap]
+#The smaller planets have a bit of an overlap just to ensure they're locatable, especially in the belts.
+#While it may look strange, it's important to keep the codes for a particular system in order. The clickable coding treats the first object created in an area as the one on top.
+# - I've placed moons on "top" so that their smaller circles won't disappear "under" their respective planets or dwarf planets.
+#The "poly" code would be more appropriate for the moons of Jupiter, Saturn, and Uranus. However, there appears to be a bug with that aspect of the code.
+# - I've compensated by using oversized circles for those moon groups, and tucking them UNDER their planets for now.
+#The Sun is a rectangle as that approximates the edge closely enough for the purposes of this template.
+#I've guessed as to the boundaries for the KB, SD, and OC - if they need adjustment, load the image into Paint and use the pencil tool to find the appropriate coordinates.
+</imagemap>
+
+|-
+| [[Quyosh]] • [[Merkuriy]] • [[Venera]] • [[Yer]] • [[Oy]] • [[Mars]] • ''[[Serera]]'' • [[Yupiter]] • [[Saturn]] • [[Uran]] • [[Neptun]] • ''[[Pluton]]'' • ''[[Erida]]''
+|}
+</div>
+<div class="BarEnd">&nbsp;</div>
+</div></div>
+
+
+=<templatestyles src="Template:cabeçalho-idioma/styles.css" /><span class="cabecalhoIdioma"><span id="vepso" ><span class="lnklng" id="Vepso"><span lang="Português" xml:lang="Português">[[vepso#Português|Vepso]]</span></span></span></span>[[Categoria:!Entrada (Vepso)]]=
+==Substantivo[[Categoria:Substantivo (Vepso)]]==
+'''Uran'''
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo" >[[Categoria:Astronomia (Vepso)]]Astronomia</span>) [[Urano]]
+
+==Ver também==
+===No Wikcionário===
+<templatestyles src="Template:Barra de navegação/styles.css" /><div class="noprint">
+<div style="clear:both;  background-color:transparent" class="BarFrame mw-collapsible mw-collapsed">
+<div class="BarHead" style="background-color:">O [[Apêndice:Sistema Solar|Sistema Solar]] em [[vepso]]</div>
+
+<div class="BarContent mw-collapsible-content">
+{| border="0" style="width:100%"
+|-
+|<imagemap>
+Image:Solar System XXVII.png
+#Sol
+rect 0 0 90 35 [[sol|Sol]]
+#Mercúrio
+circle 112 18 6 [[Mercúrio]]
+#Vénus
+circle 153 18 8 [[Vénus]]
+#Terra e Lua
+circle 203 8 4 [[lua|Lua]]
+circle 194 18 8 [[Terra]]
+#Marte
+circle 233 18 8 [[Marte]]
+#Ceres
+# - by placing the rectangle code for the asteroid belt AFTER Ceres, Ceres is "on top" (and can co-exist)
+circle 271 18 8 [[Ceres]]
+#Júpiter
+circle 316 18 15 [[Júpiter]]
+#Saturno
+circle 372 18 10 [[Saturno]]
+#Urano
+circle 418 18 9 [[Urano]]
+#Neptuno
+circle 462 18 12 [[Neptuno]]
+#Plutão
+# - by placing the rectangle code for the Kuiper belt AFTER Pluto, Pluto is "on top" (and can co-exist)
+circle 504 18 8 [[Plutão]]
+#Éris
+# - by placing the rectangle code for the Scattered disc AFTER Eris, Eris is "on top" (and can co-exist)
+circle 540 18 8 [[Éris]]
+
+desc none
+# - setting this to "bottom-right" will display a (rather large) icon linking to the graphic, if desired
+
+#Notes:
+#Details on the new coding for clickable images is here: [http://www.mediawiki.org/wiki/Extension:ImageMap]
+#The smaller planets have a bit of an overlap just to ensure they're locatable, especially in the belts.
+#While it may look strange, it's important to keep the codes for a particular system in order. The clickable coding treats the first object created in an area as the one on top.
+# - I've placed moons on "top" so that their smaller circles won't disappear "under" their respective planets or dwarf planets.
+#The "poly" code would be more appropriate for the moons of Jupiter, Saturn, and Uranus. However, there appears to be a bug with that aspect of the code.
+# - I've compensated by using oversized circles for those moon groups, and tucking them UNDER their planets for now.
+#The Sun is a rectangle as that approximates the edge closely enough for the purposes of this template.
+#I've guessed as to the boundaries for the KB, SD, and OC - if they need adjustment, load the image into Paint and use the pencil tool to find the appropriate coordinates.
+</imagemap>
+
+|-
+| [[Päiväižen]] • [[Merkurii]] • [[Vener]] • [[Ma]] • [[Kudmaine]] • [[Mars]] • ''[[Ceres]]'' • [[Jupiter]] • [[Saturn]] • [[Uran]] • [[Neptun]] • ''[[Pluton]]'' • ''[[Eris]]''
+|}
+</div>
+<div class="BarEnd">&nbsp;</div>
+</div></div>

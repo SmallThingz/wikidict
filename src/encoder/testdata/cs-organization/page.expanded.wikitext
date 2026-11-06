@@ -1,0 +1,82 @@
+''Možná hledáte'' [[homosexual]].
+
+== čeština ==
+
+=== výslovnost ===
+* [[Wikislovník:Výslovnost|IPA]]: <span title="Toto je transkripce výslovnosti pomocí mezinárodní fonetické abecedy IPA." class="IPA" >[ɦɔmɔsɛksʊaːl]</span>
+
+=== dělení ===
+* ho-mo-se-xuál
+
+=== etymologie ===
+Z německého [[homosexual]], které bylo v 2. polovině devatenáctého století utvořeno jako kompozitum z následujícího latinsko-řeckého základu:<br />starořecké [[ὁμός]] ''(homos)'' — ''stejný, tentýž'' a latinského [[sexualis]], které vychází ze substantiva [[sexus#latina|sexus]], tedy ''„rozseknutí; pohlaví“'', jež souvisí se slovesem [[secare#latina|secāre]].
+
+=== podstatné jméno ===
+* ''rod mužský životný''
+
+==== skloňování ====
+
+{| class="deklinace substantivum"
+|-
+! <span title="substantivum (podstatné jméno)">pád \ číslo</span>
+! <span title="singulár (jednotné číslo)">jednotné</span>
+! <span title="plurál (množné číslo)">množné</span>
+|-
+! <span title="nominativ (1. pád: kdo? co?)">nominativ</span>
+| homosexuál
+| [[homosexuálové]]
+|-
+! <span title="genitiv (2. pád: bez koho? bez čeho?)">genitiv</span>
+| [[homosexuála]]
+| [[homosexuálů]]
+|-
+! <span title="dativ (3. pád: ke komu? k čemu?)">dativ</span>
+| [[homosexuálu]] / [[homosexuálovi]]
+| [[homosexuálům]]
+|-
+! <span title="akuzativ (4. pád: vidíme koho? vidíme co?)">akuzativ</span>
+| [[homosexuála]]
+| [[homosexuály]]
+|-
+! <span title="vokativ (5. pád: oslovujeme, voláme)">vokativ</span>
+| [[homosexuále]]
+| [[homosexuálové]]
+|-
+! <span title="lokál (6. pád: o kom? o čem?)">lokál</span>
+| [[homosexuálu]] / [[homosexuálovi]]
+| [[homosexuálech]]
+|-
+! <span title="instrumentál (7. pád: s kým? s čím?)">instrumentál</span>
+| [[homosexuálem]]
+| [[homosexuály]]
+|}
+
+==== význam ====
+# [[homosexuální]] [[člověk]];<ref name="ascs"><cite class="citace" > ''Akademický slovník cizích slov''.  1. vyd.  Praha : Academia, 1997&#32;(1998 tisk).   Dotisk.  [[w:ISBN|ISBN]]&nbsp;[[Special:BookSources/80-200-0607-9|80-200-0607-9]].   Heslo „homosexuál“, s.&nbsp;296. </cite></ref> [[osoba]] [[pociťující]] [[či]] [[projevující]] [[pohlavní]] [[náklonnost]] k osobám [[stejný|stejného]] [[pohlaví]]
+
+==== překlady ====
+# <div class="translations"><dfn>homosexuální člověk</dfn><ul><li style="page-break-inside: avoid;">angličtina: <span lang="en" dir="ltr" class="translation-item">[[homosexual#angličtina|homosexual]]</span>[[Kategorie:Monitoring:P/1/en]], <span lang="en" dir="ltr" class="translation-item">[[gay#angličtina|gay]]</span>[[Kategorie:Monitoring:P/1/en]]</li><li style="page-break-inside: avoid;">francouzština: <span lang="fr" dir="ltr" class="translation-item">[[homosexuel#francouzština|homosexuel]]</span>&nbsp;<abbr class="genus" title="maskulinum (mužský rod)">m</abbr>[[Kategorie:Monitoring:P/1/fr]]</li><li style="page-break-inside: avoid;">italština: <span lang="it" dir="ltr" class="translation-item">[[omosessuale#italština|omosessuale]]</span>&nbsp;<abbr class="genus" title="maskulinum (mužský rod)">m</abbr>[[Kategorie:Monitoring:P/1/it]], <span lang="it" dir="ltr" class="translation-item">[[uranista#italština|uranista]]</span>&nbsp;<abbr class="genus" title="maskulinum (mužský rod)">m</abbr>[[Kategorie:Monitoring:P/1/it]]</li><li style="page-break-inside: avoid;">němčina: <span lang="de" dir="ltr" class="translation-item">[[Homosexueller#němčina|Homosexueller]]</span>&nbsp;<abbr class="genus" title="maskulinum (mužský rod)">m</abbr>[[Kategorie:Monitoring:P/1/de]], <span lang="de" dir="ltr" class="translation-item">[[Schwule#němčina|Schwule]]</span>&nbsp;<abbr class="genus" title="maskulinum (mužský rod)">m</abbr>[[Kategorie:Monitoring:P/1/de]]</li><li style="page-break-inside: avoid;">ruština: <span lang="ru" dir="ltr" class="translation-item">[[гомосексуалист#ruština|гомосексуалист]]</span>&nbsp;<abbr class="genus" title="maskulinum (mužský rod)">m</abbr>[[Kategorie:Monitoring:P/1/ru]], <span lang="ru" dir="ltr" class="translation-item">[[гомосексуал#ruština|гомосексуал]]</span>&nbsp;<abbr class="genus" title="maskulinum (mužský rod)">m</abbr>[[Kategorie:Monitoring:P/1/ru]], <span lang="ru" dir="ltr" class="translation-item">[[гей#ruština|гей]]</span>&nbsp;<abbr class="genus" title="maskulinum (mužský rod)">m</abbr>[[Kategorie:Monitoring:P/1/ru]]</li><li style="page-break-inside: avoid;">švédština: <span lang="sv" dir="ltr" class="translation-item">[[homosexuell person#švédština|homosexuell person]]</span>[[Kategorie:Monitoring:P/1/sv]], <span lang="sv" dir="ltr" class="translation-item">[[bög#švédština|bög]]</span>[[Kategorie:Monitoring:P/1/sv]]</li></ul></div>
+
+==== synonyma ====
+# [[gay]], <span class="priznaky">(expresivně)</span> [[hošan]], <span class="priznaky">(vulgárně)</span> [[bomerant]]<ref name="Diatelová">DIATELOVÁ, Irena. Urážlivé, vulgární a rasistické projevy na internetových diskusních fórech [online]. 2013 [cit. 2014-05-04]. Bakalářská práce. Masarykova univerzita, Filozofická fakulta. Vedoucí práce Marek Grác. s. 22. Dostupné z: <http://is.muni.cz/th/379183/ff_b />.</ref>, [[buk]]<ref name="Diatelová" />, [[bukál]]<ref name="Diatelová" />, [[bukvice]]<ref name="Diatelová" />, [[buzerant]]<ref name="Diatelová" />, [[komínovrt]], [[teplajzník]], [[richtařina]], [[bůza]], [[mrdkožrout]], [[bukvičák]], [[zadkojeb]], [[buzik]], <ref name="Diatelová" />, [[buzík]]<ref name="Diatelová" />, [[buzna]]<ref name="Diatelová" />, [[buzola]], [[homoděj]], [[homofil]], [[homokláda]]<ref name="Diatelová" />, [[homoprut]], [[homouš]]<ref name="Diatelová" />, [[hulibrk]], [[hulpéro]]<ref name="Diatelová" />, [[kuřbuřt]]<ref name="Diatelová" />, [[řiťopich]]<ref name="Diatelová" />, [[spermohlt]]<ref name="Diatelová" />, [[teplomil]], [[teplouš]]<ref name="Diatelová" />, [[zateplená menšina]]<ref name="Diatelová" />,[[pytlosaj]]<ref name="Diatelová" />,,[[klobásodusič]]<ref name="Diatelová" /> [[pederast]], <span class="priznaky">(argot)</span> [[pytložvejk]]<ref><cite class="citace" >PRAVDOVÁ, Markéta. Termobuk, pytložvejk, marcela. Naučte se, co vás čeká ve vězení.  ''[[w:iDNES.cz|iDNES.cz]]'' [online].    2014-10-09&nbsp;[cit. 2019-12-07].  [https://www.idnes.cz/technet/veda/argot-rec-kriminalniku.A140826_155938_vojenstvi_kuz Dostupné online.]     </cite>[[Kategorie:Monitoring:Citace elektronického periodika/přímé vložení|homosexuál]][[Kategorie:Monitoring:Citace elektronického periodika/periodikum/iDNES.cz|homosexuál]]</ref>, <span class="priznaky">(archaicky)</span> [[samcoložník]], [[mužoložník]]<ref><cite class="citace" id="Reference-Eisner-1992">EISNER, Pavel. ''Chrám i&nbsp;tvrz: kniha o&nbsp;češtině''.    Praha : Lidové noviny, 1992. 666 s.  Fotoreprint z&nbsp;r.&nbsp;1946.  [[w:ISBN|ISBN]]&nbsp;[[Special:BookSources/80-7106-066-6|80-7106-066-6]].   S.&nbsp;129. </cite></ref>, <span class="priznaky">(v&nbsp;obecném jazyce)</span> [[tetička]], [[pindíkomil]]
+
+==== antonyma ====
+# [[heterosexuál]]
+
+==== související ====
+* [[homosexualita]]
+* [[homosexuální]]
+* [[homosexuálně]]
+* [[transsexuál]]
+* [[transsexualita]]
+* [[transsexuální]]
+* [[transsexuálně]]
+
+== poznámky ==
+<references />
+
+== externí odkazy ==
+* <strong class="error"><span class="scribunto-error">Lua error in Modul:SisterProjectLink: Missing 1. parameter (project name)</span></strong>
+* <strong class="error"><span class="scribunto-error">Lua error in Modul:SisterProjectLink: Missing 1. parameter (project name)</span></strong>
+
+[[Kategorie:Česká substantiva]]

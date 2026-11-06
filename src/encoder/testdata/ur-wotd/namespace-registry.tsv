@@ -1,0 +1,46 @@
+# wikidict-namespace-registry-v1
+# wiki	urwiktionary
+# dump-date	20261001
+# content-language	ur
+-2	میڈیا	Media	case-sensitive	0	0	0		compile_only	virtual_namespace	زریعہ	وسیط
+-1	خاص	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	تبادلۂ خیال	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	صارف	User	first-letter	1	0	0		compile_only	standard_build_input
+3	تبادلۂ خیال صارف	User talk	first-letter	1	0	0		compile_only	discussion_namespace
+4	ویکی لغت	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary	ول
+5	تبادلۂ خیال ویکی لغت	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk	تبادلۂ خیال ول
+6	فائل	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	تصویر	ملف
+7	تبادلۂ خیال فائل	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	تبادلۂ خیال تصویر	تبادلۂ خیال ملف
+8	میڈیاویکی	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input	میڈیاوکی
+9	تبادلۂ خیال میڈیاویکی	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	تبادلۂ خیال میڈیاوکی
+10	سانچہ	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	تبادلۂ خیال سانچہ	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	معاونت	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	تبادلۂ خیال معاونت	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	زمرہ	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	تبادلۂ خیال زمرہ	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+100	ضمیمہ	ضمیمہ	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+101	تبادلۂ خیال ضمیمہ	تبادلۂ خیال ضمیمہ	case-sensitive	1	0	0		compile_only	discussion_namespace
+102	کلید	کلید	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+103	تبادلۂ خیال کلید	تبادلۂ خیال کلید	case-sensitive	1	0	0		compile_only	discussion_namespace
+104	اشاریہ	اشاریہ	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Index
+105	تبادلۂ خیال اشاریہ	تبادلۂ خیال اشاریہ	case-sensitive	1	0	0		compile_only	discussion_namespace	Index talk
+106	قوافی	قوافی	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Rhymes
+107	تبادلۂ خیال قوافی	تبادلۂ خیال قوافی	case-sensitive	1	0	0		compile_only	discussion_namespace	Rhymes talk
+108	ماورائے ویکی	ماورائے ویکی	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Transwiki
+109	تبادلۂ خیال ماورائے ویکی	تبادلۂ خیال ماورائے ویکی	case-sensitive	1	0	0		compile_only	discussion_namespace	Transwiki talk
+110	مترادفات	مترادفات	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Thesaurus	تھیسارس
+111	تبادلۂ خیال مترادفات	تبادلۂ خیال مترادفات	case-sensitive	1	0	0		compile_only	discussion_namespace	Thesaurus talk	تبادلۂ خیال تھیسارس
+114	حوالہ جات	حوالہ جات	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Citations
+115	تبادلۂ خیال حوالہ جات	تبادلۂ خیال حوالہ جات	case-sensitive	1	0	0		compile_only	discussion_namespace	Citations talk
+116	فرہنگ اشارات	فرہنگ اشارات	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Sign gloss
+117	تبادلۂ خیال فرہنگ اشارات	تبادلۂ خیال فرہنگ اشارات	case-sensitive	1	0	0		compile_only	discussion_namespace	Sign gloss talk
+118	تعمیرنو	تعمیرنو	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Reconstruction	تعمیر نو
+119	تبادلۂ خیال تعمیرنو	تبادلۂ خیال تعمیرنو	case-sensitive	1	0	0		compile_only	discussion_namespace	Reconstruction talk	تبادلۂ خیال تعمیر نو
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	ماڈیول	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	تبادلۂ خیال ماڈیول	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

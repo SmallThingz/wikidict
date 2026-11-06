@@ -50,7 +50,7 @@ pub const LanguageCodes = struct {
     content_fn: ?*const fn (?*const anyopaque) ?ResolvedLanguage = null,
     boundary_fn: ?*const fn (?*const anyopaque, []const u8) bool = null,
     source_banner_fn: ?*const fn (?*const anyopaque, []const u8, []const u8, u8) bool = null,
-    source_paragraph_fn: ?*const fn (?*const anyopaque, []const u8, []const u8) bool = null,
+    source_paragraph_fn: ?*const fn (?*const anyopaque, []const u8, []const u8, []const u8) bool = null,
     source_category_ctx: ?*anyopaque = null,
     source_category_fn: ?*const fn (?*anyopaque, []const u8) anyerror!?ResolvedLanguage = null,
     link_trail: blobs.document_ir.LinkTrail = .{},
@@ -2198,23 +2198,79 @@ fn languageSections(source: []const u8, context: *const LanguageMarkers) languag
     return iterator;
 }
 
+const RawCodeDeclaration = struct { name: []const u8, code: []const u8 };
+
+fn rawCodeDeclarationLine(codes: LanguageCodes, line: []const u8, required_level: ?u8) ?RawCodeDeclaration {
+    if (line.len == 0 or line[0] != '=') return null;
+    const heading = blobs.wikitext_syntax.controlHeading(line, null) orelse return null;
+    if (required_level) |level| if (heading.level != level) return null;
+    const text = std.mem.trim(u8, heading.title, " \t");
+    if (!std.mem.startsWith(u8, text, "{{") or !std.mem.endsWith(u8, text, "}}")) return null;
+    const body = text[2 .. text.len - 2];
+    const pipe = std.mem.indexOfScalar(u8, body, '|') orelse return null;
+    var name = std.mem.trim(u8, body[0..pipe], " \t");
+    const code = std.mem.trim(u8, body[pipe + 1 ..], " \t");
+    if (name.len == 0 or code.len == 0 or code.len > 64 or
+        std.mem.indexOfAny(u8, name, "{}[]<>|=&\r\n") != null or
+        std.mem.indexOfAny(u8, code, "{}[]<>|=&:# \t\r\n") != null) return null;
+    if (std.mem.indexOfScalar(u8, name, ':') != null) {
+        const ns = codes.namespace_catalog orelse return null;
+        const target = ns.ofTitle(name);
+        if (target.id != 10) return null;
+        name = target.text;
+    }
+    return .{ .name = name, .code = code };
+}
+
 fn rawPrefixParagraphLanguage(codes: LanguageCodes, raw_source: ?[]const u8, source: []const u8, raw_sections: []const language_source.Section, rendered: []const language_source.Section) ?ResolvedLanguage {
     const raw = raw_source orelse return null;
     const namespaces = codes.namespace_catalog orelse return null;
     const matches = codes.source_paragraph_fn orelse return null;
-    if (rendered.len != 0 or raw_sections.len != 1 or !raw_sections[0].hyphen_marker) return null;
+    if (rendered.len != 0 or raw_sections.len != 1) return null;
     const first = raw_sections[0];
     const offset = @intFromPtr(first.source.ptr) - @intFromPtr(raw.ptr);
     if (offset > raw.len or std.mem.trim(u8, raw[0..offset], "\r\n").len != 0) return null;
-    const canonical = resolveSection(codes, first) orelse return null;
     const line = std.mem.trimEnd(u8, first.source[0 .. std.mem.indexOfScalar(u8, first.source, '\n') orelse first.source.len], "\r");
-    if (line.len != canonical.code.len + 6 or !std.mem.startsWith(u8, line, "{{-") or
-        !std.mem.endsWith(u8, line, "-}}") or !std.mem.eql(u8, line[3 .. line.len - 3], canonical.code)) return null;
-    // Preserve the original expanded paragraph, including the exact emitted
-    // hidden category. A label elsewhere in prose supplies no provenance.
+    const declaration = if (!first.hyphen_marker) rawCodeDeclarationLine(codes, line, 2) orelse return null else null;
+    const canonical = if (declaration) |call| codes.resolve(call.code) orelse return null else resolveSection(codes, first) orelse return null;
+    // Preserve the emitted paragraph rather than manufacturing a heading.
+    // A selected declaration source may emit a category on the following line;
+    // MediaWiki has already passed heading recognition before removing it.
     const expanded = std.mem.trimStart(u8, source, "\r\n");
-    const expanded_line = std.mem.trimEnd(u8, expanded[0 .. std.mem.indexOfScalar(u8, expanded, '\n') orelse expanded.len], "\r");
-    if (!matches(codes.ctx, canonical.code, expanded_line)) return null;
+    const first_end = std.mem.indexOfScalar(u8, expanded, '\n') orelse expanded.len;
+    if (first.hyphen_marker) {
+        if (line.len != canonical.code.len + 6 or !std.mem.startsWith(u8, line, "{{-") or
+            !std.mem.endsWith(u8, line, "-}}") or !std.mem.eql(u8, line[3 .. line.len - 3], canonical.code)) return null;
+        const expanded_line = std.mem.trimEnd(u8, expanded[0..first_end], "\r");
+        if (!matches(codes.ctx, canonical.code, "", expanded_line)) return null;
+    } else {
+        const call = declaration orelse return null;
+        if (!std.mem.eql(u8, call.code, canonical.code) or first_end == expanded.len) return null;
+        const second_end = std.mem.indexOfScalarPos(u8, expanded, first_end + 1, '\n') orelse expanded.len;
+        if (second_end > 4096) return null;
+        const prefix = expanded[0..second_end];
+        if (!matches(codes.ctx, canonical.code, call.name, prefix)) return null;
+        // One raw H2 alone is insufficient: later declared deep headings must
+        // not inherit its owner, even if expansion erased their visible heading.
+        var every_heading = language_source.Iterator.init(raw);
+        every_heading.all_heading_levels = true;
+        // Eligibility alone does not split different heading depths. Observe
+        // every physical heading here, then apply the language veto below.
+        every_heading.heading_filter = .{ .ctx = null, .accepts = struct {
+            fn accepts(_: ?*const anyopaque, _: []const u8) bool { return true; }
+        }.accepts };
+        while (every_heading.next()) |later| {
+            if (later.source.ptr == first.source.ptr) continue;
+            // A recognized or ambiguous language boundary vetoes inheritance
+            // even when it lacks the stronger evidence required to own a page.
+            const boundary_heading = std.mem.trim(u8, language_source.classificationSection(later), " \t\r\n");
+            if (codes.isLanguageBoundary(boundary_heading) or boundaryLanguage(codes, later) != null or
+                resolveSection(codes, later) != null or hasExplicitLanguageDeclaration(codes, later)) return null;
+            const later_line = later.source[0 .. std.mem.indexOfScalar(u8, later.source, '\n') orelse later.source.len];
+            if (rawCodeDeclarationLine(codes, later_line, null)) |other|
+                if (matches(codes.ctx, canonical.code, other.name, prefix)) return null;
+        }
+    }
     var categories: language_source.CategoryIterator = .{ .source = source };
     while (categories.next()) |target| {
         const title = namespaces.ofTitle(target);

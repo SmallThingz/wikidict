@@ -174,13 +174,13 @@ pub fn build(b: *std.Build) void {
     addPublicRunStep(b, "build-blobs", "Encode blobs with an already compiled bundle expander", addRunArtifactCommand(b, blob_build_exe, &.{}), &.{});
     blob_build_exe.root_module.addImport("namespace_registry", namespace_registry_mod);
     const blob_merge_exe = addCliExecutable(b, "dict-blob-merge", b.path("tools/blob_merge.zig"), target, optimize, &.{
-        .{ .name = "encoder", .module = encoder_mod },
+        .{ .name = "encoder", .module = blob_encoder_mod },
     });
     blob_merge_exe.root_module.addImport("xz", blob_xz_mod);
     blob_merge_exe.root_module.link_libc = true;
     addPublicRunStep(b, "merge-blobs", "Merge non-overlapping compiled blob shards", addRunArtifactCommand(b, blob_merge_exe, &.{}), &.{});
     const blob_verify_exe = addCliExecutable(b, "dict-blob-verify", b.path("tools/blob_verify.zig"), target, optimize, &.{
-        .{ .name = "encoder", .module = encoder_mod },
+        .{ .name = "encoder", .module = blob_encoder_mod },
     });
     blob_verify_exe.root_module.addImport("xz", blob_xz_mod);
     blob_verify_exe.root_module.link_libc = true;
@@ -248,6 +248,7 @@ pub fn build(b: *std.Build) void {
     const blob_files_mod = b.createModule(.{ .root_source_file = b.path("src/encoder/blob_files.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
     const blob_files_mod_test = b.createModule(.{ .root_source_file = b.path("src/encoder/blob_files.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
     // Encoder and readers share one module identity for this source file.
+    blob_verify_exe.root_module.addImport("blob_files", blob_files_mod);
     encoder_mod.addImport("blob_files", blob_files_mod);
     encoder_mod_test.addImport("blob_files", blob_files_mod_test);
     const reader_name = if (target.result.os.tag == .windows or target.result.os.tag == .wasi) "dict" else "wikidict";
@@ -363,7 +364,10 @@ pub fn build(b: *std.Build) void {
             .target = b.graph.host,
             .optimize = test_optimize,
             .link_libc = true,
-            .imports = &.{.{ .name = "encoder", .module = encoder_mod_test }},
+            .imports = &.{
+                .{ .name = "encoder", .module = blob_encoder_mod_test },
+                .{ .name = "blob_files", .module = blob_files_mod_test },
+            },
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });

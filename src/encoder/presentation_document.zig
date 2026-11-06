@@ -263,6 +263,7 @@ fn validateSpans(a: A, spans: []const compiler.Span, report: ?*Fallbacks) !void 
     // Display protected/code provenance never authorizes an action target.
     // The explicit parameter exception revalidates its complete borrowed source token.
     for (spans) |span| {
+        if (span.generated_link != null and !compiler.hasCompiledGeneratedLinkTarget(span)) return error.InvalidLiteralProvenance;
         if (span.image) |image| {
             try validateText(image.file, report);
             if (!span.image_fields_compiled) {
@@ -273,7 +274,7 @@ fn validateSpans(a: A, spans: []const compiler.Span, report: ?*Fallbacks) !void 
         if (span.kind == .external_link and compiler.unresolvedExternalActionTarget(span.target) and
             !compiler.hasCompiledExternalLiteralParameterTarget(span))
             return error.UncompiledTemplate;
-        if (span.kind == .link and compiler.unresolvedActionTarget(span.target))
+        if (span.kind == .link and compiler.unresolvedActionTarget(span.target) and !compiler.hasCompiledGeneratedLinkTarget(span))
             return error.UncompiledTemplate;
     }
     // Only explicitly generated diagnostic spans may receive boundary spaces.
@@ -9692,4 +9693,437 @@ test "retained FR Lakta Vojo literal nonleading opener preserves complete body a
     try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
     try std.testing.expectEqual(@as(usize, 1), stored.entry.media.len);
     try std.testing.expectEqualStrings("LL-Q143 (epo)-Lepticed7-Lakta Vojo.wav", stored.entry.media[0].file);
+}
+
+test "retained UR word of day hides complete inclusion body preserving visible table actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const title = "آج کا لفظ";
+    const raw = @embedFile("testdata/ur-wotd/source.raw.wikitext");
+    const source = @embedFile("testdata/ur-wotd/source.expanded.wikitext");
+    const Verify = struct {
+        fn hash(value: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(value, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+    };
+    try Verify.hash(raw, "1a8f92f739b7a30be440f14bbca32e15bff7df708bf51e999baeaa99c78624d8");
+    try Verify.hash(source, "66937e9b846026f3c12faa9e6162fcee4d2b23be047700b4f097df58c57987fa");
+    const namespace_source = @embedFile("testdata/ur-wotd/namespace-registry.tsv");
+    const behavior_source = @embedFile("testdata/ur-wotd/behavior-switches.tsv");
+    var namespaces = try NamespaceRegistry.init(a, namespace_source);
+    defer namespaces.deinit();
+    try namespaces.attachInterwikiMap(@embedFile("testdata/ur-wotd/interwiki-map.tsv"));
+    var namespace_sha: [32]u8 = undefined;
+    var behavior_sha: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(namespace_source, &namespace_sha, .{});
+    std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_sha, .{});
+    var behavior = try BehaviorRegistry.init(a, behavior_source, "urwiktionary", "20261001", "ur", namespace_sha);
+    defer behavior.deinit();
+    var images = try ImageRegistry.init(a, @embedFile("testdata/ur-wotd/image-options.tsv"), "urwiktionary", "20261001", "ur", namespace_sha, behavior_sha);
+    defer images.deinit();
+    const hidden_start = std.mem.indexOf(u8, source, "<includeonly>") orelse return error.TestUnexpectedResult;
+    const hidden_close = std.mem.indexOfPos(u8, source, hidden_start, "</includeonly>") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, "<includeonly>"));
+    try std.testing.expect(std.mem.endsWith(u8, source[0..hidden_start], "</noinclude>"));
+    const reference = try std.mem.concat(a, u8, &.{ source[0..hidden_start], source[hidden_close + "</includeonly>".len ..] });
+    var report: Fallbacks = .{};
+    var reference_report: Fallbacks = .{};
+    // Document-context regression using complete retained source and metadata.
+    // The independently selected normal saved-Writer check still owns full
+    // loader/Common.css qualification; no language is inferred from this page.
+    const payload = try compileReportedWithOptionsAlloc(a, title, .language, "Unclassified", "", source, null, .{}, &namespaces, &behavior, &images, &report);
+    const expected = try compileReportedWithOptionsAlloc(a, title, .language, "Unclassified", "", reference, null, .{}, &namespaces, &behavior, &images, &reference_report);
+    try std.testing.expectEqualSlices(u8, expected, payload);
+    try std.testing.expectEqualDeep(reference_report, report);
+    const stored = try codec.decodeAlloc(a, payload, title, .language, .{ .heading = "Unclassified", .code = "" });
+    try std.testing.expectEqualSlices(u8, payload, try codec.encodeAlloc(a, stored));
+    try std.testing.expectEqualStrings("", stored.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.organization.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.media.len);
+    try std.testing.expectEqualStrings("Writing star.svg", stored.entry.media[0].file);
+    const Check = struct {
+        visible: std.ArrayList(u8) = .empty,
+        tables: usize = 0,
+        images: usize = 0,
+        actions: usize = 0,
+        definitions: usize = 0,
+        bold_parameter: usize = 0,
+        italic_parameter: usize = 0,
+        fn spans(self: *@This(), alloc: A, values: []const types.Span) !void {
+            for (values) |span| {
+                try self.visible.appendSlice(alloc, span.text);
+                try self.visible.appendSlice(alloc, span.trail);
+                if (span.kind == .link or span.kind == .external_link) self.actions += 1;
+                if (span.image) |image| {
+                    self.images += 1;
+                    try std.testing.expectEqualStrings("Writing star.svg", image.file);
+                    try std.testing.expectEqual(@as(?u32, 62), image.width_px);
+                    try std.testing.expectEqualStrings("word", span.target);
+                }
+                if (std.mem.eql(u8, span.text, "{{{1}}}")) {
+                    try std.testing.expect(span.kind == .link and span.bold);
+                    try std.testing.expectEqualStrings("word", span.target);
+                    self.bold_parameter += 1;
+                }
+                if (std.mem.eql(u8, span.text, "{{{2}}}")) {
+                    try std.testing.expect(span.italic);
+                    self.italic_parameter += 1;
+                }
+            }
+        }
+        fn blocks(self: *@This(), alloc: A, values: []const types.Block) anyerror!void {
+            for (values) |block| {
+                try self.spans(alloc, block.spans);
+                if (block.kind == .definition) self.definitions += 1;
+                if (block.table) |table| {
+                    self.tables += 1;
+                    try self.spans(alloc, table.caption);
+                    for (table.rows) |row| for (row.cells) |cell| {
+                        if (cell.blocks) |nested| try self.blocks(alloc, nested) else try self.spans(alloc, cell.spans);
+                    };
+                }
+            }
+        }
+    };
+    var check: Check = .{};
+    try check.spans(a, stored.entry.preamble_spans);
+    for (stored.entry.sections) |section| try check.blocks(a, section.blocks);
+    try std.testing.expectEqual(@as(usize, 1), check.tables);
+    try std.testing.expectEqual(@as(usize, 1), check.images);
+    try std.testing.expectEqual(@as(usize, 8), check.actions);
+    try std.testing.expectEqual(@as(usize, 1), check.bold_parameter);
+    try std.testing.expectEqual(@as(usize, 1), check.italic_parameter);
+    for ([_][]const u8{ "آج کا لفظ", "October 11", "{{{3}}}", "آج کے لفظ کے متعلق", "کوئی لفظ نامزد کریں", "فیڈبیک دیں" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, check.visible.items, text) != null);
+    for ([_][]const u8{ "</includeonly>", "Word of the day", "About Word of the Day", "RSS feed" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, check.visible.items, text) == null);
+    const unsafe = [_]compiler.Span{.{ .kind = .link, .text = "label", .target = "{{unresolved}}", .provenance = .protected_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &unsafe, null));
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("</includeonly>"));
+}
+
+test "retained HY hogin batsvel preserves isolated apostrophes complete styled body actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const raw = @embedFile("testdata/hy-hogin-batsvel/page.raw.wikitext");
+    const source = @embedFile("testdata/hy-hogin-batsvel/page.expanded.wikitext");
+    try std.testing.expectEqual(@as(usize, 440), raw.len);
+    try std.testing.expectEqual(@as(usize, 1371), source.len);
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(raw, &hash, .{});
+    try std.testing.expectEqualStrings("67ecc5d5e5ef44c22e747e0014ce9b528c310cc85a769e25e56b93e32b37faf3", &std.fmt.bytesToHex(hash, .lower));
+    std.crypto.hash.sha2.Sha256.hash(source, &hash, .{});
+    try std.testing.expectEqualStrings("8d924c329fee976efdce0f1ca57beadb51e74e6462a5412d9b4afaaf8855bdd8", &std.fmt.bytesToHex(hash, .lower));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, "{{օրն|"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, "։|}ԼՇ}"));
+    // Only the two already source-owned brace boundaries change spelling.
+    // Every apostrophe, HTML child, category, heading and action stays exact.
+    const opened = try std.mem.replaceOwned(u8, a, source, "{{օրն|", "<nowiki>{{</nowiki>օրն|");
+    const reference = try std.mem.replaceOwned(u8, a, opened, "։|}ԼՇ}", "։|<nowiki>}</nowiki>ԼՇ}");
+    var ns = try NamespaceRegistry.init(a, @embedFile("testdata/hy-kalatsekh/namespace-registry.tsv")); defer ns.deinit();
+    const title = "հոգին բացվել";
+    // Renderer/full-page proof only. No edition-default owner, template alias
+    // or organization is fabricated; normal Writer/loader ownership is separate.
+    var actual_report: Fallbacks = .{};
+    var expected_report: Fallbacks = .{};
+    const bytes = try compileReportedWithLinkTrailAlloc(a, title, .language, "Unclassified", "", source, null, .{}, &ns, &actual_report);
+    const expected_bytes = try compileReportedWithLinkTrailAlloc(a, title, .language, "Unclassified", "", reference, null, .{}, &ns, &expected_report);
+    try std.testing.expect(actual_report.literal_markup);
+    expected_report.literal_markup = true;
+    try std.testing.expectEqualDeep(expected_report, actual_report);
+    try std.testing.expectEqualSlices(u8, expected_bytes, bytes);
+    const metadata: format.LanguageMetadata = .{ .code = "", .heading = "Unclassified" };
+    const actual = try codec.decodeAlloc(a, bytes, title, .language, metadata);
+    const expected = try codec.decodeAlloc(a, expected_bytes, title, .language, metadata);
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, actual));
+    try std.testing.expectEqualDeep(actual, try codec.decodeAlloc(a, try codec.encodeAlloc(a, actual), title, .language, metadata));
+    try std.testing.expectEqualStrings("", actual.entry.language_code);
+    try std.testing.expectEqualStrings("Unclassified", actual.entry.language.?);
+    try std.testing.expectEqual(@as(usize, 0), actual.entry.media.len);
+    try std.testing.expectEqual(@as(usize, 0), actual.entry.references.len);
+    var visible: std.ArrayList(u8) = .empty;
+    var painted: [2]usize = @splat(0);
+    var green = false;
+    var internal: usize = 0;
+    var external: usize = 0;
+    const selected = [_][]const u8{ "հոգին բացվում", "կը բացվի հոգիդ" };
+    for (actual.entry.sections) |section| {
+        try visible.appendSlice(a, section.title);
+        for (section.blocks) |block| {
+            try std.testing.expect(block.table == null);
+            for (block.spans) |span| {
+                try visible.appendSlice(a, span.text);
+                try visible.appendSlice(a, span.trail);
+                for (selected, 0..) |word, i| if (std.mem.eql(u8, span.text, word)) {
+                    painted[i] += 1;
+                    try std.testing.expect(span.bold and !span.italic and span.kind == .text and span.target.len == 0);
+                    try std.testing.expectEqualStrings(if (i == 0) "example-fullblock example-block example-select" else "example-select", span.classes);
+                    try std.testing.expectEqualStrings("#edf0ff", span.background orelse return error.TestUnexpectedResult);
+                    if (i == 0) try std.testing.expectEqualStrings("#006400", span.foreground orelse return error.TestUnexpectedResult)
+                    else try std.testing.expect(span.foreground == null);
+                };
+                if (std.mem.indexOf(u8, span.text, "Մեղուների խուլ") != null) {
+                    green = true;
+                    try std.testing.expectEqualStrings("#006400", span.foreground orelse return error.TestUnexpectedResult);
+                }
+                if (span.kind == .link) {
+                    internal += 1;
+                    try std.testing.expectEqualStrings("երևան", span.target);
+                    try std.testing.expectEqualStrings("Երևան", span.text);
+                }
+                if (span.kind == .external_link) {
+                    external += 1;
+                    try std.testing.expectEqualStrings("http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=64&query=%D5%B0%D5%B8%D5%A3%D5%AB%D5%B6_%D5%A2%D5%A1%D6%81%D5%BE%D5%A5%D5%AC", span.target);
+                    try std.testing.expectEqualStrings("Հայերեն դարձվածքների ընդարձակ բացատրական բառարան", span.text);
+                }
+            }
+        }
+    }
+    for (painted) |count| try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expect(green);
+    try std.testing.expectEqual(@as(usize, 1), internal);
+    try std.testing.expectEqual(@as(usize, 1), external);
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, visible.items, "'"));
+    for ([_][]const u8{
+        "Հայերեն դարձվածք", "վատ տրամադրությունն անցնել, սիրտը բացվել", "ու ծավալվում էր։",
+        "{{օրն|- Լա'վ է, լա'վ, մի' վախնար, ", "։|}ԼՇ}", "Աղբյուրներ",
+        "Պետրոս Սարգսի Բեդիրյան", "Երևանի Պետական Համալսարանի Հրատարակչություն", "2011",
+    }) |text| try std.testing.expect(std.mem.indexOf(u8, visible.items, text) != null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "[malformed template]") == null);
+    try std.testing.expect(std.mem.indexOf(u8, visible.items, "Կատեգորիա:") == null);
+}
+
+test "generated ISBN document validates exact semantic proof and preserves full codec without raw target exemptions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const link = @import("missing_dependency").generated_link;
+    const argument = "9781234567890{{literal}}#tail";
+    const target = try link.targetAlloc(a, argument);
+    const label = try std.fmt.allocPrint(a, "ISBN {s}", .{argument});
+    const token = try link.tokenAlloc(a, 0, argument, target, label);
+    const source = try std.mem.concat(a, u8, &.{ "'''", token, "''' [[outside]]" });
+    var output_hash: [32]u8 = undefined;
+    var title_hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &output_hash, .{});
+    std.crypto.hash.sha2.Sha256.hash("", &title_hash, .{});
+    const metadata = try std.json.Stringify.valueAlloc(a, .{
+        .schema = "wikidict.presentation-phase.v2", .handled = true,
+        .output_sha256 = std.fmt.bytesToHex(output_hash, .lower), .display_title_sha256 = std.fmt.bytesToHex(title_hash, .lower),
+        .items = @as([]const compiler.PoemPhaseItem, &.{}),
+        .output_links = @as([]const link.WireRange, &.{.{ .start = 3, .end = @intCast(3 + token.len), .value = .{ .token = token, .argument = argument, .target = target, .label = label } }}),
+        .display_title_links = @as([]const link.WireRange, &.{}),
+    }, .{});
+    const phase = (try parsePoemPhaseAlloc(a, source, null, metadata)) orelse return error.TestUnexpectedResult;
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedWithOptionsAndPoemAlloc(a, "ISBN", .language, "English", "en", source, null, .{}, null, null, null, &report, phase);
+    const isbn_codec = @import("blob_encoder").presentation_codec;
+    const stored = try isbn_codec.decodeAlloc(a, bytes, "ISBN", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualStrings(isbn_codec.explicit_targets_magic, bytes[0..4]);
+    try std.testing.expectEqualStrings("English", stored.entry.language.?);
+    try std.testing.expectEqualStrings("en", stored.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.sections.len);
+    const values = stored.entry.sections[0].blocks[0].spans;
+    try std.testing.expectEqual(@as(usize, 3), values.len);
+    try std.testing.expect(values[0].kind == .link and values[0].bold);
+    try std.testing.expectEqualStrings(target, values[0].target);
+    try std.testing.expectEqualStrings(label, values[0].text);
+    try std.testing.expectEqualStrings("", values[0].target_fragment.?);
+    try std.testing.expectEqualStrings("outside", values[2].target);
+    try std.testing.expectEqualSlices(u8, bytes, try isbn_codec.encodeAlloc(a, stored));
+    var renderer: compiler.Renderer = .{ .a = a, .context = .{ .poem_phase = phase } };
+    const compiled = try renderer.parseSpans(source, .{});
+    try validateSpans(a, compiled, null);
+    const no_proof = [_]compiler.Span{.{ .kind = .link, .text = label, .target = target, .provenance = .protected_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &no_proof, null));
+    const changed = try a.dupe(compiler.Span, compiled);
+    changed[0].target = try a.dupe(u8, changed[0].target);
+    try std.testing.expectError(error.InvalidLiteralProvenance, validateSpans(a, changed, null));
+    var wire = try std.json.parseFromSlice(std.json.Value, a, metadata, .{});
+    wire.value.object.getPtr("schema").?.* = .{ .string = "wikidict.poem-phase.v1" };
+    const wrong_version = try std.json.Stringify.valueAlloc(a, wire.value, .{});
+    try std.testing.expectError(error.InvalidPoemMetadata, parsePoemPhaseAlloc(a, source, null, wrong_version));
+    try std.testing.expectError(error.InvalidPoemMetadata, parsePoemPhaseAlloc(a, try std.mem.concat(a, u8, &.{source, "changed"}), null, metadata));
+}
+
+
+test "retained IT uccidere linked angle quotation preserves complete entry actions styles media tables and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = @embedFile("testdata/it-uccidere/page.expanded.wikitext");
+    const raw = @embedFile("testdata/it-uccidere/page.raw.wikitext");
+    const reference = @embedFile("testdata/it-uccidere/page.reference.wikitext");
+    try std.testing.expectEqual(@as(usize, 5512), source.len);
+    try std.testing.expectEqual(@as(usize, 2009), raw.len);
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &hash, .{});
+    try std.testing.expectEqualStrings("d96670efbbc11cd4159221a38cf6631f68ac20182f6c45267f7a5fb277018fa3", &std.fmt.bytesToHex(hash, .lower));
+    std.crypto.hash.sha2.Sha256.hash(raw, &hash, .{});
+    try std.testing.expectEqualStrings("e41d153c650bc1b23ef4f2f05ab79103b8665d57f0fadbc07f00b8099b100289", &std.fmt.bytesToHex(hash, .lower));
+    // The sole source rewrite encodes only the angle immediately before an
+    // independently parsed ordinary link. Every later byte remains identical.
+    const replacement = try std.mem.replaceOwned(u8, a, source, "<[[", "&lt;[[");
+    try std.testing.expectEqualSlices(u8, replacement, reference);
+    try std.testing.expectEqual(source.len + 3, reference.len);
+    const ns_bytes = @embedFile("testdata/it-uccidere/namespace-registry.tsv");
+    const behavior_bytes = @embedFile("testdata/it-uccidere/behavior-switches.tsv");
+    const image_bytes = @embedFile("testdata/it-uccidere/image-options.tsv");
+    var ns = try NamespaceRegistry.init(a, ns_bytes);
+    defer ns.deinit();
+    var ns_hash: [32]u8 = undefined;
+    var behavior_hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(ns_bytes, &ns_hash, .{});
+    std.crypto.hash.sha2.Sha256.hash(behavior_bytes, &behavior_hash, .{});
+    var behavior = try @import("namespace_registry").behavior_switches.Registry.init(a, behavior_bytes, "itwiktionary", "20261001", "it", ns_hash);
+    defer behavior.deinit();
+    var images = try ImageRegistry.init(a, image_bytes, "itwiktionary", "20261001", "it", ns_hash, behavior_hash);
+    defer images.deinit();
+    // Parser/codec proof under exact retained namespace/image metadata only.
+    // No captured Common.css profile, normal Writer ownership or publication
+    // acceptance is claimed by this complete-source comparison.
+    const actual_bytes = try compileReportedWithOptionsAlloc(a, "uccidere", .language, "Italiano", "it", source, null, .{}, &ns, &behavior, &images, null);
+    const expected_bytes = try compileReportedWithOptionsAlloc(a, "uccidere", .language, "Italiano", "it", reference, null, .{}, &ns, &behavior, &images, null);
+    try std.testing.expectEqualSlices(u8, expected_bytes, actual_bytes);
+    const metadata: format.LanguageMetadata = .{ .code = "it", .heading = "Italiano" };
+    const actual = try codec.decodeAlloc(a, actual_bytes, "uccidere", .language, metadata);
+    const expected = try codec.decodeAlloc(a, expected_bytes, "uccidere", .language, metadata);
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqualSlices(u8, actual_bytes, try codec.encodeAlloc(a, actual));
+    try std.testing.expectEqualDeep(actual, try codec.decodeAlloc(a, try codec.encodeAlloc(a, actual), "uccidere", .language, metadata));
+    const Witness = struct {
+        domanda: usize = 0,
+        quoted_uccidere: usize = 0,
+        tables: usize = 0,
+        links: usize = 0,
+        fn spans(self: *@This(), values: []const types.Span) !void {
+            for (values) |span| {
+                if (span.kind == .link or span.kind == .external_link) self.links += 1;
+                if (std.mem.eql(u8, span.target, "domanda")) {
+                    try std.testing.expectEqualStrings("Domanda", span.text);
+                    try std.testing.expect(span.kind == .link and span.italic);
+                    self.domanda += 1;
+                }
+                if (std.mem.eql(u8, span.text, "uccidere") and span.bold and span.italic) self.quoted_uccidere += 1;
+            }
+        }
+        fn blocks(self: *@This(), values: []const types.Block) anyerror!void {
+            for (values) |block| {
+                try self.spans(block.spans);
+                if (block.table) |nested_table| try self.table(nested_table);
+            }
+        }
+        fn table(self: *@This(), value: types.Table) anyerror!void {
+            self.tables += 1;
+            try self.spans(value.caption);
+            for (value.rows) |row| for (row.cells) |cell| {
+                if (cell.blocks) |blocks_value| {
+                    try self.blocks(blocks_value);
+                } else {
+                    try self.spans(cell.spans);
+                    if (cell.nested_table) |nested| try self.table(nested);
+                }
+            };
+        }
+    };
+    var witness: Witness = .{};
+    for (actual.entry.sections) |section| try witness.blocks(section.blocks);
+    try std.testing.expectEqual(@as(usize, 1), witness.domanda);
+    try std.testing.expectEqual(@as(usize, 1), witness.quoted_uccidere);
+    try std.testing.expect(witness.links > 50 and witness.tables != 0);
+    try std.testing.expect(actual.entry.sections.len > 7 and actual.entry.media.len != 0);
+    // Raw strings still have no source provenance and remain rejected.
+    try std.testing.expectError(error.UncompiledPresentation, compiler.requireCompiledText("<Domanda: ma lei>"));
+}
+
+test "retained HY audit bracket gloss pages preserve whole bodies inline paint actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const Action = struct { target: []const u8, label: []const u8 };
+    const Case = struct { title: []const u8, raw: []const u8, source: []const u8, raw_sha: []const u8, source_sha: []const u8, gloss: []const u8, selected: []const []const u8, green_selected: []const bool, green_probe: []const u8, actions: []const Action };
+    const cases = [_]Case{
+        .{ .title = "հոգին ապականել", .raw = "{{-hy-դար-}}\n\n# մեղանչել, մեղք գործել {{օրն|Բալքի թե [«գուցե»] էստուր համար էր նա էնքան դատ-բեբեդատ անում, տրտնջում, բերանը ավերում, {{ընդգծել|հոգին ապականում}}:|}ԽԱ}\n# \n#\n\n== Աղբյուրներ ==\n# {{Գիրք:ՀԴԸԲԲ}}", .source = "<h2>Հայերեն դարձվածք</h2>\n[[Կատեգորիա:Հայերեն դարձվածքներ]]\n\n# մեղանչել, մեղք գործել {{օրն|Բալքի թե [«գուցե»] էստուր համար էր նա էնքան դատ-բեբեդատ անում, տրտնջում, բերանը ավերում, <span class=\"example-select\" style=\"background-color:#EDF0FF\"><b>հոգին ապականում</b></span>:|}ԽԱ}\n# \n#\n\n== Աղբյուրներ ==\n# <span class=\"citation\" >Պետրոս Սարգսի Բեդիրյան,<nowiki> </nowiki>[http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=64&query=%D5%B0%D5%B8%D5%A3%D5%AB%D5%B6_%D5%A1%D5%BA%D5%A1%D5%AF%D5%A1%D5%B6%D5%A5%D5%AC Հայերեն դարձվածքների ընդարձակ բացատրական բառարան],<nowiki> </nowiki>[[երևան|Երևան]],<nowiki> </nowiki>«Երևանի Պետական Համալսարանի Հրատարակչություն»,<nowiki> </nowiki>2011<nowiki>։</nowiki></span>[[Կատեգորիա:Բառեր «Հայերեն դարձվածքների ընդարձակ բացատրական բառարան» գրքից]]", .raw_sha = "ec1e8887cba691ba681dd88cbd42f4c64bdedabe92b0211c738ed41b2bdbb49f", .source_sha = "d8c085dbc09f9a99e3bfed007a027c0418807535f61f58fa6958bd334a5dc0ca", .gloss = "[«գուցե»]", .selected = &.{ "հոգին ապականում" }, .green_selected = &.{ false }, .green_probe = "", .actions = &.{ .{ .target = "http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=64&query=%D5%B0%D5%B8%D5%A3%D5%AB%D5%B6_%D5%A1%D5%BA%D5%A1%D5%AF%D5%A1%D5%B6%D5%A5%D5%AC", .label = "Հայերեն դարձվածքների ընդարձակ բացատրական բառարան" }, .{ .target = "երևան", .label = "Երևան" } } },
+        .{ .title = "սիրտը իրարով տալ", .raw = "{{-hy-դար-}}\n\n# հուզվել.անհանգստանալ։ {{օրն|- Տյու արե պառկի, Աստված ողորմած ի։ Աղջիկն ըսկուն [«այսպես»] {{ընդգծել|սիրտն իրյար տալով}} կպառկի։|}\n# \n#\n\n== Աղբյուրներ ==\n# {{Գիրք:ՀԴԸԲԲ}}", .source = "<h2>Հայերեն դարձվածք</h2>\n[[Կատեգորիա:Հայերեն դարձվածքներ]]\n\n# հուզվել.անհանգստանալ։ {{օրն|- Տյու արե պառկի, Աստված ողորմած ի։ Աղջիկն ըսկուն [«այսպես»] <span class=\"example-select\" style=\"background-color:#EDF0FF\"><b>սիրտն իրյար տալով</b></span> կպառկի։|}\n# \n#\n\n== Աղբյուրներ ==\n# <span class=\"citation\" >Պետրոս Սարգսի Բեդիրյան,<nowiki> </nowiki>[http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=64&query=%D5%BD%D5%AB%D6%80%D5%BF%D5%A8_%D5%AB%D6%80%D5%A1%D6%80%D5%B8%D5%BE_%D5%BF%D5%A1%D5%AC Հայերեն դարձվածքների ընդարձակ բացատրական բառարան],<nowiki> </nowiki>[[երևան|Երևան]],<nowiki> </nowiki>«Երևանի Պետական Համալսարանի Հրատարակչություն»,<nowiki> </nowiki>2011<nowiki>։</nowiki></span>[[Կատեգորիա:Բառեր «Հայերեն դարձվածքների ընդարձակ բացատրական բառարան» գրքից]]", .raw_sha = "bf5ab1c840607cf29eacc529cfef456ca20e394ca569e1e47e2ff038cfbccd91", .source_sha = "0140a1dbd5a82195ed7ea5e9fe38b219f9264edf1b5e77c2ad0a88006004bad8", .gloss = "[«այսպես»]", .selected = &.{ "սիրտն իրյար տալով" }, .green_selected = &.{ false }, .green_probe = "", .actions = &.{ .{ .target = "http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=64&query=%D5%BD%D5%AB%D6%80%D5%BF%D5%A8_%D5%AB%D6%80%D5%A1%D6%80%D5%B8%D5%BE_%D5%BF%D5%A1%D5%AC", .label = "Հայերեն դարձվածքների ընդարձակ բացատրական բառարան" }, .{ .target = "երևան", .label = "Երևան" } } },
+        .{ .title = "մի ոտքը գերեզմանին (գերեզմանում) դնել", .raw = "{{-hy-դար-}}\n\n# մոտալուտ մահվան սպասել {{օրն|Ինձպես {{ընդգծել|մի ոտքը գերեզմանում դրած}} ծերունին չի կարող զգալ այն, ինչ որ դու կզգաս սիրելիներիս պատկերները տեսնելով։|ՊՊ}} {{օրն|Հայրը իր {{ընդգծել|մեկ ոտքը գերեզմանին}} սև {{ընդգծել|սեմին վրա դրած}}՝ ո՛չ վշտեն անցնիլ կ’ուզե և ո՛չ ալ աղջիկեն։|ՊԴ}} {{օրն|Այսպիսի երեկոներն են {{ընդգծել|մի ոտքը գերեզմանի դռանն սպասող}} ծերերին ուժավորում։|ՊՊ}} {{օրն|Ծեր․․․ {{ընդգծել|մեկ ոտքը գերեզման մոտեցած}} մայրիկի համար կարժե՞ր փճացնել այս երեք հատ հազար տոլարները [դոլարները]։|} {{հմմտ}} {{օրն|Գամված եմ ակողնին։ Անչափ ծանր էր դրությունս և {{ընդգծել|մի ոտքով}} արդեն {{ընդգծել|կանգնել էի հավիտենական ճանապարհի վրա}}։|ԱլԾ}} \n# \n#\n\n== Աղբյուրներ ==\n# {{Գիրք:ՀԴԸԲԲ}}", .source = "<h2>Հայերեն դարձվածք</h2>\n[[Կատեգորիա:Հայերեն դարձվածքներ]]\n\n# մոտալուտ մահվան սպասել <span class=\"example-fullblock \">&#9670;&nbsp;<span class=\"example-block\" style=\"color:darkgreen\">Ինձպես <span class=\"example-select\" style=\"background-color:#EDF0FF\"><b>մի ոտքը գերեզմանում դրած</b></span> ծերունին չի կարող զգալ այն, ինչ որ դու կզգաս սիրելիներիս պատկերները տեսնելով։ </span></span> [[:w:Պերճ Պռոշյան|(Պերճ Պռոշյան)]][[Կատեգորիա:Քաղվածք/Պերճ Պռոշյան]]  <span class=\"example-fullblock \">&#9670;&nbsp;<span class=\"example-block\" style=\"color:darkgreen\">Հայրը իր <span class=\"example-select\" style=\"background-color:#EDF0FF\"><b>մեկ ոտքը գերեզմանին</b></span> սև <span class=\"example-select\" style=\"background-color:#EDF0FF\"><b>սեմին վրա դրած</b></span>՝ ո՛չ վշտեն անցնիլ կ’ուզե և ո՛չ ալ աղջիկեն։ </span></span> [[:w:Պետրոս Դուրյան|Պետրոս Դուրյան]][[Կատեգորիա:Քաղվածք/Պետրոս Դուրյան]]  <span class=\"example-fullblock \">&#9670;&nbsp;<span class=\"example-block\" style=\"color:darkgreen\">Այսպիսի երեկոներն են <span class=\"example-select\" style=\"background-color:#EDF0FF\"><b>մի ոտքը գերեզմանի դռանն սպասող</b></span> ծերերին ուժավորում։ </span></span> [[:w:Պերճ Պռոշյան|(Պերճ Պռոշյան)]][[Կատեգորիա:Քաղվածք/Պերճ Պռոշյան]]  {{օրն|Ծեր․․․ <span class=\"example-select\" style=\"background-color:#EDF0FF\"><b>մեկ ոտքը գերեզման մոտեցած</b></span> մայրիկի համար կարժե՞ր փճացնել այս երեք հատ հազար տոլարները [դոլարները]։|} ''համեմատության համար՝'' <span class=\"example-fullblock \">&#9670;&nbsp;<span class=\"example-block\" style=\"color:darkgreen\">Գամված եմ ակողնին։ Անչափ ծանր էր դրությունս և <span class=\"example-select\" style=\"background-color:#EDF0FF\"><b>մի ոտքով</b></span> արդեն <span class=\"example-select\" style=\"background-color:#EDF0FF\"><b>կանգնել էի հավիտենական ճանապարհի վրա</b></span>։ </span></span> [[:w:Ալեքսանդր Ծատուրյան|(Ալեքսանդր Ծատուրյան)]][[Կատեգորիա:Քաղվածք/Ալեքսանդր Ծատուրյան]]  \n# \n#\n\n== Աղբյուրներ ==\n# <span class=\"citation\" >Պետրոս Սարգսի Բեդիրյան,<nowiki> </nowiki>[http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=64&query=%D5%B4%D5%AB_%D5%B8%D5%BF%D6%84%D5%A8_%D5%A3%D5%A5%D6%80%D5%A5%D5%A6%D5%B4%D5%A1%D5%B6%D5%AB%D5%B6_(%D5%A3%D5%A5%D6%80%D5%A5%D5%A6%D5%B4%D5%A1%D5%B6%D5%B8%D6%82%D5%B4)_%D5%A4%D5%B6%D5%A5%D5%AC Հայերեն դարձվածքների ընդարձակ բացատրական բառարան],<nowiki> </nowiki>[[երևան|Երևան]],<nowiki> </nowiki>«Երևանի Պետական Համալսարանի Հրատարակչություն»,<nowiki> </nowiki>2011<nowiki>։</nowiki></span>[[Կատեգորիա:Բառեր «Հայերեն դարձվածքների ընդարձակ բացատրական բառարան» գրքից]]", .raw_sha = "93d7bcc642654c41f726824a05e17ce0130cc7b03bba077f9d0c52b19238d712", .source_sha = "1f7630ea4423d2095c7098a407e91b25f3967c3839c9c144298f92dce1dcfea3", .gloss = "[դոլարները]", .selected = &.{ "մի ոտքը գերեզմանում դրած", "մեկ ոտքը գերեզմանին", "սեմին վրա դրած", "մի ոտքը գերեզմանի դռանն սպասող", "մեկ ոտքը գերեզման մոտեցած", "մի ոտքով", "կանգնել էի հավիտենական ճանապարհի վրա" }, .green_selected = &.{ true, true, true, true, false, true, true }, .green_probe = "Ինձպես ", .actions = &.{ .{ .target = "w:Պերճ Պռոշյան", .label = "(Պերճ Պռոշյան)" }, .{ .target = "w:Պետրոս Դուրյան", .label = "Պետրոս Դուրյան" }, .{ .target = "w:Պերճ Պռոշյան", .label = "(Պերճ Պռոշյան)" }, .{ .target = "w:Ալեքսանդր Ծատուրյան", .label = "(Ալեքսանդր Ծատուրյան)" }, .{ .target = "http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=64&query=%D5%B4%D5%AB_%D5%B8%D5%BF%D6%84%D5%A8_%D5%A3%D5%A5%D6%80%D5%A5%D5%A6%D5%B4%D5%A1%D5%B6%D5%AB%D5%B6_(%D5%A3%D5%A5%D6%80%D5%A5%D5%A6%D5%B4%D5%A1%D5%B6%D5%B8%D6%82%D5%B4)_%D5%A4%D5%B6%D5%A5%D5%AC", .label = "Հայերեն դարձվածքների ընդարձակ բացատրական բառարան" }, .{ .target = "երևան", .label = "Երևան" } } },
+        .{ .title = "հորն է՞շն եմ", .raw = "{{-hy-դար-}}\n\n# քեզ (նրան...) ինչով եմ (ենք...) պարտական (որ վզիս նստել ես...) {{ժխտ}} {{օրն|-Առավոտից  ինձ ուր ասես քշում ես:Չեղավ:Ես քո հոր էշն եմ (էշը չեմ)։|}} {{օրն|Ցե դադին [«ձեր հոր»]|}էշաղը խոմ չգո հոզա}\n# \n#\n\n== Աղբյուրներ ==\n# {{Գիրք:ՀԴԸԲԲ}}", .source = "<h2>Հայերեն դարձվածք</h2>\n[[Կատեգորիա:Հայերեն դարձվածքներ]]\n\n# քեզ (նրան...) ինչով եմ (ենք...) պարտական (որ վզիս նստել ես...) <span title=\"ժխտական\" style=\"border-bottom: 1px dotted; cursor: help; white-space: nowrap\">(ժխտ․)</span> <span class=\"example-fullblock \">&#9670;&nbsp;<span class=\"example-block\" style=\"color:darkgreen\">-Առավոտից  ինձ ուր ասես քշում ես:Չեղավ:Ես քո հոր էշն եմ (էշը չեմ)։ </span></span>   {{օրն|Ցե դադին [«ձեր հոր»]|}էշաղը խոմ չգո հոզա}\n# \n#\n\n== Աղբյուրներ ==\n# <span class=\"citation\" >Պետրոս Սարգսի Բեդիրյան,<nowiki> </nowiki>[http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=64&query=%D5%B0%D5%B8%D6%80%D5%B6_%D5%A7%D5%9E%D5%B7%D5%B6_%D5%A5%D5%B4 Հայերեն դարձվածքների ընդարձակ բացատրական բառարան],<nowiki> </nowiki>[[երևան|Երևան]],<nowiki> </nowiki>«Երևանի Պետական Համալսարանի Հրատարակչություն»,<nowiki> </nowiki>2011<nowiki>։</nowiki></span>[[Կատեգորիա:Բառեր «Հայերեն դարձվածքների ընդարձակ բացատրական բառարան» գրքից]]", .raw_sha = "dddd3323daa6be4cdcd681c67c959187565580d9be2b88a2662774cd5542ba53", .source_sha = "aae7787d4d2fffaf0990fa0b02f4a42586e0fc8084e0ce742b973ce966fbb671", .gloss = "[«ձեր հոր»]", .selected = &.{  }, .green_selected = &.{  }, .green_probe = "-Առավոտից", .actions = &.{ .{ .target = "http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=64&query=%D5%B0%D5%B8%D6%80%D5%B6_%D5%A7%D5%9E%D5%B7%D5%B6_%D5%A5%D5%B4", .label = "Հայերեն դարձվածքների ընդարձակ բացատրական բառարան" }, .{ .target = "երևան", .label = "Երևան" } } },
+    };
+    var ns = try NamespaceRegistry.init(a, @embedFile("testdata/hy-kalatsekh/namespace-registry.tsv")); defer ns.deinit();
+    for (cases) |case| {
+        var stage: []const u8 = "source authentication";
+        errdefer std.debug.print("HY bracket-gloss case {s}, stage {s}\n", .{ case.title, stage });
+        var hash: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(case.raw, &hash, .{});
+        try std.testing.expectEqualStrings(case.raw_sha, &std.fmt.bytesToHex(hash, .lower));
+        std.crypto.hash.sha2.Sha256.hash(case.source, &hash, .{});
+        try std.testing.expectEqualStrings(case.source_sha, &std.fmt.bytesToHex(hash, .lower));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, case.source, "{{օրն|"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, case.source, "|}"));
+        // Only unmatched brace boundaries receive independent literal provenance.
+        // Every bracket, child, heading, source citation and remaining byte stays.
+        const opened = try std.mem.replaceOwned(u8, a, case.source, "{{օրն|", "<nowiki>{{</nowiki>օրն|");
+        const reference = try std.mem.replaceOwned(u8, a, opened, "|}", "|<nowiki>}</nowiki>");
+        stage = "compile complete source and independent reference";
+        var actual_report: Fallbacks = .{}; var expected_report: Fallbacks = .{};
+        const bytes = try compileReportedWithLinkTrailAlloc(a, case.title, .language, "Unclassified", "", case.source, null, .{}, &ns, &actual_report);
+        const expected_bytes = try compileReportedWithLinkTrailAlloc(a, case.title, .language, "Unclassified", "", reference, null, .{}, &ns, &expected_report);
+        try std.testing.expect(actual_report.literal_markup);
+        expected_report.literal_markup = true;
+        try std.testing.expectEqualDeep(expected_report, actual_report);
+        try std.testing.expectEqualSlices(u8, expected_bytes, bytes);
+        const metadata: format.LanguageMetadata = .{ .code = "", .heading = "Unclassified" };
+        stage = "full Stored and codec parity";
+        const actual = try codec.decodeAlloc(a, bytes, case.title, .language, metadata);
+        const expected = try codec.decodeAlloc(a, expected_bytes, case.title, .language, metadata);
+        try std.testing.expectEqualDeep(expected, actual);
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, actual));
+        try std.testing.expectEqualDeep(actual, try codec.decodeAlloc(a, try codec.encodeAlloc(a, actual), case.title, .language, metadata));
+        try std.testing.expectEqualStrings("", actual.entry.language_code);
+        try std.testing.expectEqualStrings("Unclassified", actual.entry.language.?);
+        try std.testing.expectEqual(@as(usize, 0), actual.entry.media.len);
+        try std.testing.expectEqual(@as(usize, 0), actual.entry.references.len);
+        var visible: std.ArrayList(u8) = .empty;
+        const painted = try a.alloc(usize, case.selected.len); @memset(painted, 0);
+        stage = "source body paint and ordered actions";
+        var green_probe_found = case.green_probe.len == 0;
+        var action_index: usize = 0;
+        for (actual.entry.sections) |section| {
+            try visible.appendSlice(a, section.title);
+            for (section.blocks) |block| {
+                try std.testing.expect(block.table == null);
+                for (block.spans) |span| {
+                    try visible.appendSlice(a, span.text); try visible.appendSlice(a, span.trail);
+                    for (case.selected, 0..) |word, index| if (std.mem.eql(u8, span.text, word)) {
+                        painted[index] += 1;
+                        try std.testing.expect(span.bold and span.kind == .text and span.target.len == 0);
+                        try std.testing.expectEqualStrings("#edf0ff", span.background orelse return error.TestUnexpectedResult);
+                        if (case.green_selected[index]) try std.testing.expectEqualStrings("#006400", span.foreground orelse return error.TestUnexpectedResult)
+                        else try std.testing.expect(span.foreground == null);
+                    };
+                    if (case.green_probe.len != 0 and std.mem.indexOf(u8, span.text, case.green_probe) != null) {
+                        green_probe_found = true;
+                        try std.testing.expectEqualStrings("#006400", span.foreground orelse return error.TestUnexpectedResult);
+                    }
+                    if (span.kind == .link or span.kind == .external_link) {
+                        try std.testing.expect(action_index < case.actions.len);
+                        const action = case.actions[action_index]; action_index += 1;
+                        try std.testing.expectEqualStrings(action.target, span.target);
+                        try std.testing.expectEqualStrings(action.label, span.text);
+                        try std.testing.expect(if (std.mem.startsWith(u8, action.target, "http")) span.kind == .external_link else span.kind == .link);
+                    }
+                }
+            }
+        }
+        try std.testing.expect(green_probe_found);
+        for (painted) |count| try std.testing.expectEqual(@as(usize, 1), count);
+        try std.testing.expectEqual(case.actions.len, action_index);
+        for ([_][]const u8{ case.gloss, "{{օրն|", "|}", "Հայերեն դարձվածք", "Աղբյուրներ", "Պետրոս Սարգսի Բեդիրյան", "2011" }) |body|
+            try std.testing.expect(std.mem.indexOf(u8, visible.items, body) != null);
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, "[malformed template]") == null);
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, "Կատեգորիա:") == null);
+    }
 }

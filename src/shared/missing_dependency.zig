@@ -1,5 +1,6 @@
 const std = @import("std");
 const A = std.mem.Allocator;
+pub const generated_link = @import("generated_link.zig");
 // This is build-only metadata. None of these values enter a semantic record.
 pub const schema = "wikidict.missing-dependency-phase.v1";
 // Reuse the existing source/Poem metadata byte ceiling; the enclosing worker
@@ -14,6 +15,8 @@ pub const Text = struct {
     bytes: []const u8,
     ranges: []const Range = &.{},
     literal_curly_ranges: []const LiteralRange = &.{},
+    generated_links: []const generated_link.Range = &.{},
+    generated_source: ?[]const u8 = null,
     unknown: bool = false,
     pub fn coordinates(self: Text) Coordinates {
         return .{ .ranges = self.ranges, .unknown = self.unknown };
@@ -126,11 +129,13 @@ pub const Builder = struct {
     bytes: std.ArrayList(u8) = .empty,
     ranges: std.ArrayList(Range) = .empty,
     literal_curly_ranges: std.ArrayList(LiteralRange) = .empty,
+    generated_links: std.ArrayList(generated_link.Range) = .empty,
     unknown: bool = false,
     pub fn deinit(self: *Builder, a: A) void {
         self.bytes.deinit(a);
         self.ranges.deinit(a);
         self.literal_curly_ranges.deinit(a);
+        self.generated_links.deinit(a);
     }
     pub fn append(self: *Builder, a: A, source: Text) !void {
         try self.appendSlice(a, source, 0, source.bytes.len);
@@ -143,6 +148,7 @@ pub const Builder = struct {
             previous = r.end;
         }
         try validateLiteralRanges(source);
+        try generated_link.validateRanges(source.bytes, source.generated_source, source.generated_links);
         const base = self.bytes.items.len;
         if (end - start > std.math.maxInt(u32) -| base) return error.InvalidMissingDependencyCopy;
         if (self.literal_curly_ranges.items.len +| source.literal_curly_ranges.len > max_metadata_bytes / @sizeOf(LiteralRange))
@@ -154,6 +160,12 @@ pub const Builder = struct {
                 .start = @intCast(base + @max(start, r.start) - start),
                 .end = @intCast(base + @min(end, r.end) - start),
             });
+        }
+        if (self.generated_links.items.len +| source.generated_links.len > generated_link.max_links) return error.LiteralProvenanceLimit;
+        for (source.generated_links) |link| {
+            if (link.end <= start or link.start >= end) continue;
+            if (link.start < start or link.end > end) return error.InvalidLiteralProvenance;
+            try self.generated_links.append(a, .{ .start = @intCast(base + link.start - start), .end = @intCast(base + link.end - start), .bound = link.bound });
         }
         try self.bytes.ensureUnusedCapacity(a, end - start);
         // Optional provenance stays within the existing metadata ceiling. If
@@ -214,7 +226,9 @@ pub const Builder = struct {
         errdefer a.free(bytes);
         const ranges = try self.ranges.toOwnedSlice(a);
         errdefer a.free(ranges);
-        return .{ .bytes = bytes, .ranges = ranges, .literal_curly_ranges = try self.literal_curly_ranges.toOwnedSlice(a), .unknown = self.unknown };
+        const links = try self.generated_links.toOwnedSlice(a);
+        errdefer a.free(links);
+        return .{ .bytes = bytes, .ranges = ranges, .literal_curly_ranges = try self.literal_curly_ranges.toOwnedSlice(a), .generated_links = links, .generated_source = if (links.len == 0) null else bytes, .unknown = self.unknown };
     }
 };
 fn validateLiteralRanges(source: Text) !void {
@@ -272,7 +286,18 @@ pub fn escapeLiteralCurly(a: A, source: Text) !Text {
         rebased.* = .{ .start = @intCast(start), .end = @intCast(end), .occurrence = r.occurrence };
         previous = r.end;
     }
-    return .{ .bytes = try out.toOwnedSlice(a), .ranges = ranges, .unknown = source.unknown };
+    try generated_link.validateRanges(source.bytes, source.generated_source, source.generated_links);
+    const links = try a.alloc(generated_link.Range, source.generated_links.len);
+    errdefer a.free(links);
+    literal_at = 0;
+    literal_before = 0;
+    for (source.generated_links, links) |link, *rebased| {
+        const start = rebaseLiteralOffset(source.literal_curly_ranges, link.start, &literal_at, &literal_before);
+        const end = rebaseLiteralOffset(source.literal_curly_ranges, link.end, &literal_at, &literal_before);
+        rebased.* = .{ .start = @intCast(start), .end = @intCast(end), .bound = link.bound };
+    }
+    const bytes = try out.toOwnedSlice(a);
+    return .{ .bytes = bytes, .ranges = ranges, .generated_links = links, .generated_source = if (links.len == 0) null else bytes, .unknown = source.unknown };
 }
 fn rebaseLiteralOffset(ranges: []const LiteralRange, offset: usize, at: *usize, before: *usize) usize {
     while (at.* < ranges.len and ranges[at.*].end <= offset) : (at.* += 1)
@@ -412,4 +437,36 @@ test "literal publication rebases missing ranges and refuses unfinalized metadat
 test "literal publication requires exact valid curly ranges" {
     const bad = Text{ .bytes = "{x}", .literal_curly_ranges = &.{.{ .start = 0, .end = 3 }} };
     try std.testing.expectError(error.InvalidLiteralProvenance, escapeLiteralCurly(std.testing.allocator, bad));
+}
+
+test "generated semantic links survive only complete proven copies slices and literal offset edits" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const argument = "9781234567890[[data|only]]";
+    const target = try generated_link.targetAlloc(a, argument);
+    const label = try std.fmt.allocPrint(a, "ISBN {s}", .{argument});
+    const token = try generated_link.tokenAlloc(a, 0, argument, target, label);
+    const bytes = try std.mem.concat(a, u8, &.{ "{", token });
+    const links = try generated_link.bindAlloc(a, bytes, &.{.{ .start = 1, .end = @intCast(bytes.len), .value = .{ .token = token, .argument = argument, .target = target, .label = label } }});
+    const source: Text = .{ .bytes = bytes, .generated_links = links, .generated_source = bytes, .literal_curly_ranges = &.{.{ .start = 0, .end = 1 }} };
+    var out: Builder = .{};
+    defer out.deinit(a);
+    try out.append(a, try slice(a, source, 1, bytes.len));
+    try out.append(a, try duplicate(a, try slice(a, source, 1, bytes.len)));
+    const copied = try out.finish(a);
+    try generated_link.validateRanges(copied.bytes, copied.generated_source, copied.generated_links);
+    try std.testing.expectEqual(@as(usize, 2), copied.generated_links.len);
+    try std.testing.expect(copied.generated_links[0].bound == links[0].bound);
+    try std.testing.expect(copied.generated_links[1].bound == links[0].bound);
+    try std.testing.expectError(error.InvalidLiteralProvenance, slice(a, source, 2, bytes.len));
+    var detached = source;
+    detached.bytes = try a.dupe(u8, bytes);
+    try std.testing.expectError(error.InvalidLiteralProvenance, duplicate(a, detached));
+    const untrusted_copy = Text.transformed(bytes);
+    try std.testing.expectEqual(@as(usize, 0), untrusted_copy.generated_links.len);
+    const escaped = try escapeLiteralCurly(a, source);
+    try std.testing.expectEqualStrings("&#123;", escaped.bytes[0..6]);
+    try std.testing.expectEqual(@as(u32, 6), escaped.generated_links[0].start);
+    try generated_link.validateRanges(escaped.bytes, escaped.generated_source, escaped.generated_links);
 }

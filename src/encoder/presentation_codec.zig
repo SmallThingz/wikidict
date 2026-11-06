@@ -16,33 +16,34 @@ pub const font_scale_basis_magic = "DPRB";
 pub const reference_blocks_magic = "DPRC";
 pub const image_border_magic = "DPRD";
 pub const block_layout_magic = "DPRE";
-const Version = enum { plain, explained, colored, anchored, span_background, nested_tables, cell_blocks, reference_items, font_scale, font_scale_basis, reference_blocks, image_border, block_layout };
+pub const explicit_targets_magic = "DPRF";
+const Version = enum { plain, explained, colored, anchored, span_background, nested_tables, cell_blocks, reference_items, font_scale, font_scale_basis, reference_blocks, image_border, block_layout, explicit_targets };
 fn hasRgb(version: Version) bool {
-    return version == .colored or version == .anchored or version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or version == .block_layout;
+    return version == .colored or version == .anchored or version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or version == .explicit_targets);
 }
 fn hasAnchorFields(version: Version) bool {
-    return version == .anchored or version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or version == .block_layout;
+    return version == .anchored or version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or version == .explicit_targets);
 }
 fn hasSpanBackgroundFields(version: Version) bool {
-    return version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or version == .block_layout;
+    return version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or version == .explicit_targets);
 }
 fn hasNestedFields(version: Version) bool {
-    return version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or version == .block_layout;
+    return version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or version == .explicit_targets);
 }
 fn hasCellBlockFields(version: Version) bool {
-    return version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or version == .block_layout;
+    return version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or version == .explicit_targets);
 }
 fn hasReferenceFields(version: Version) bool {
-    return version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or version == .block_layout;
+    return version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or version == .explicit_targets);
 }
 fn hasFontScaleFields(version: Version) bool {
-    return version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or version == .block_layout;
+    return version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or version == .explicit_targets);
 }
 fn hasFontScaleBasisFields(version: Version) bool {
-    return version == .font_scale_basis or version == .reference_blocks or version == .image_border or version == .block_layout;
+    return version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or version == .explicit_targets);
 }
 fn hasReferenceBlockFields(version: Version) bool {
-    return version == .reference_blocks or version == .image_border or version == .block_layout;
+    return version == .reference_blocks or version == .image_border or (version == .block_layout or version == .explicit_targets);
 }
 const max_items: usize = 1 << 20;
 const max_string_bytes: usize = 32 * 1024 * 1024;
@@ -194,13 +195,20 @@ const Encoder = struct {
             }
         }
         if (hasReferenceBlockFields(self.version)) try self.inlineImage(spanImage(value));
+        const fragment = spanTargetFragment(value);
+        if (fragment) |text| if (!types.validTargetFragment(text)) return error.InvalidPresentation;
+        if (fragment != null and (kind != @intFromEnum(types.InlineKind.link) or self.version != .explicit_targets)) return error.InvalidPresentation;
+        if (self.version == .explicit_targets) {
+            try self.byte(@intFromBool(fragment != null));
+            if (fragment) |text| try self.string(text);
+        }
     }
     fn inlineImage(self: *Encoder, optional: ?types.InlineImage) !void {
         const value = optional orelse {
             try self.byte(0);
             return;
         };
-        if (!types.validInlineImage(value) or (value.border and self.version != .image_border and self.version != .block_layout)) return error.InvalidPresentation;
+        if (!types.validInlineImage(value) or (value.border and self.version != .image_border and self.version != .block_layout and self.version != .explicit_targets)) return error.InvalidPresentation;
         try self.byte(1);
         try self.string(value.file);
         const flags: u8 = @as(u8, @intFromBool(value.width_px != null)) |
@@ -270,7 +278,7 @@ const Encoder = struct {
             try self.byte(0);
             return;
         };
-        if (!types.validTableStyle(value) or (value.float_side != null and self.version != .block_layout)) return error.InvalidPresentation;
+        if (!types.validTableStyle(value) or (value.float_side != null and self.version != .block_layout and self.version != .explicit_targets)) return error.InvalidPresentation;
         try self.byte(1);
         const flags: u8 = @as(u8, @intFromBool(value.background != null)) |
             (@as(u8, @intFromBool(value.border != null)) << 1) |
@@ -375,7 +383,7 @@ const Encoder = struct {
             try self.string(fallbackValue(value));
         }
         const alignment = blockTextAlign(value);
-        if (self.version == .block_layout) {
+        if ((self.version == .block_layout or self.version == .explicit_targets)) {
             try self.byte(@intFromBool(alignment != null));
             if (alignment) |present| try self.enumByte(types.CellTextAlign, present);
         } else if (alignment != null) return error.InvalidPresentation;
@@ -743,6 +751,10 @@ const Reader = struct {
             result.font_scale = if (n == 1 and result.font_scale_basis == .context) null else n;
         }
         if (hasReferenceBlockFields(self.version)) result.image = try self.inlineImage();
+        if (self.version == .explicit_targets and try self.presence()) {
+            if (result.kind != .link) return error.InvalidPresentation;
+            result.target_fragment = try self.string();
+        }
         if (result.image != null and (result.text.len != 0 or result.trail.len != 0 or
             !types.validInlineImageAction(result.kind, result.target))) return error.InvalidPresentation;
         return result;
@@ -751,7 +763,7 @@ const Reader = struct {
         if (!try self.presence()) return null;
         const file = try self.string();
         const flags = try self.byte();
-        const reserved_mask: u8 = if (self.version == .image_border or self.version == .block_layout) 0xe0 else 0xf0;
+        const reserved_mask: u8 = if (self.version == .image_border or (self.version == .block_layout or self.version == .explicit_targets)) 0xe0 else 0xf0;
         if (flags & reserved_mask != 0) return error.InvalidPresentation;
         const value: types.InlineImage = .{
             .file = file,
@@ -765,7 +777,7 @@ const Reader = struct {
         return value;
     }
     fn spans(self: *Reader) ![]const types.Span {
-        const len = try self.count(if (hasReferenceBlockFields(self.version)) 35 else if (hasFontScaleFields(self.version)) 34 else if (hasSpanBackgroundFields(self.version)) 33 else if (hasRgb(self.version)) 32 else if (self.version == .explained) 31 else 27);
+        const len = try self.count(if (self.version == .explicit_targets) 36 else if (hasReferenceBlockFields(self.version)) 35 else if (hasFontScaleFields(self.version)) 34 else if (hasSpanBackgroundFields(self.version)) 33 else if (hasRgb(self.version)) 32 else if (self.version == .explained) 31 else 27);
         const out = try self.a.alloc(types.Span, len);
         for (out) |*value| value.* = try self.span();
         return out;
@@ -814,7 +826,7 @@ const Reader = struct {
     fn tableStyle(self: *Reader) !?types.TableStyle {
         if (!try self.presence()) return null;
         const flags = try self.byte();
-        const reserved_mask: u8 = if (self.version == .block_layout) 0xe0 else 0xf0;
+        const reserved_mask: u8 = if ((self.version == .block_layout or self.version == .explicit_targets)) 0xe0 else 0xf0;
         if (flags == 0 or flags & reserved_mask != 0) return error.InvalidPresentation;
         const value: types.TableStyle = .{
             .background = if (flags & 1 != 0) try self.string() else null,
@@ -892,11 +904,11 @@ const Reader = struct {
             .table = try self.table(),
             .anchor = if (hasAnchorFields(self.version)) try self.string() else "",
             .anchor_fallback = if (hasAnchorFields(self.version)) try self.string() else "",
-            .text_align = if (self.version == .block_layout and try self.presence()) try self.enumValue(types.CellTextAlign) else null,
+            .text_align = if ((self.version == .block_layout or self.version == .explicit_targets) and try self.presence()) try self.enumValue(types.CellTextAlign) else null,
         };
     }
     fn blocks(self: *Reader) ![]const types.Block {
-        const len = try self.count(if (self.version == .block_layout) 26 else 25);
+        const len = try self.count(if ((self.version == .block_layout or self.version == .explicit_targets)) 26 else 25);
         const out = try self.a.alloc(types.Block, len);
         for (out) |*value| value.* = try self.block();
         return out;
@@ -909,7 +921,7 @@ const Reader = struct {
             section.title = try self.string();
             section.anchor = if (hasAnchorFields(self.version)) try self.string() else "";
             section.anchor_fallback = if (hasAnchorFields(self.version)) try self.string() else "";
-            const block_len = try self.count(if (self.version == .block_layout) 26 else if (hasAnchorFields(self.version)) 25 else 17);
+            const block_len = try self.count(if ((self.version == .block_layout or self.version == .explicit_targets)) 26 else if (hasAnchorFields(self.version)) 25 else 17);
             const block_values = try self.a.alloc(types.Block, block_len);
             for (block_values) |*block_value| block_value.* = try self.block();
             section.blocks = block_values;
@@ -1176,10 +1188,11 @@ fn hasAnchors(sections: anytype, references: anytype) bool {
     return referenceBlocksHaveFeature(references, .anchors);
 }
 
-const TreeFeature = enum { explanation, color, background, scale, body_scale, anchors, nested_tables, cell_blocks, styles, images, image_borders, block_layout };
+const TreeFeature = enum { explicit_targets, explanation, color, background, scale, body_scale, anchors, nested_tables, cell_blocks, styles, images, image_borders, block_layout };
 
 fn treeSpansHaveFeature(values: anytype, comptime feature: TreeFeature) bool {
     return switch (feature) {
+        .explicit_targets => spansHaveExplicitTargets(values),
         .explanation => spansHaveExplanation(values),
         .color => spansHaveForeground(values),
         .background => spansHaveBackground(values),
@@ -1257,6 +1270,19 @@ fn hasStyles(sections: anytype, references: anytype) bool {
 fn spansHaveImageBorders(values: anytype) bool {
     for (values) |value| if (spanImage(value)) |image| if (image.border) { return true; };
     return false;
+}
+fn spanTargetFragment(value: anytype) ?[]const u8 {
+    return if (comptime @hasField(@TypeOf(value), "target_fragment")) value.target_fragment else null;
+}
+fn spansHaveExplicitTargets(values: anytype) bool {
+    for (values) |value| if (spanTargetFragment(value) != null) return true;
+    return false;
+}
+fn hasExplicitTargets(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
+    if (spansHaveExplicitTargets(display) or spansHaveExplicitTargets(preamble)) return true;
+    for (sections) |section| if (blocksHaveFeature(section.blocks, .explicit_targets, 0)) return true;
+    for (references) |reference| if (spansHaveExplicitTargets(reference.spans)) return true;
+    return referenceBlocksHaveFeature(references, .explicit_targets);
 }
 fn hasImageBorders(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
     if (spansHaveImageBorders(display) or spansHaveImageBorders(preamble)) return true;
@@ -1340,6 +1366,7 @@ fn versionMagic(version: Version) []const u8 {
         .reference_blocks => reference_blocks_magic,
         .image_border => image_border_magic,
         .block_layout => block_layout_magic,
+        .explicit_targets => explicit_targets_magic,
     };
 }
 
@@ -1347,7 +1374,7 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     if (!std.mem.eql(u8, stored.schema, types.schema)) return error.InvalidPresentation;
     const images = hasInlineImages(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     if (images) try validateImages(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references, stored.entry.media);
-    const version: Version = if (stored.entry.media.len > types.legacy_inline_image_assets or hasBlockLayout(stored.entry.sections, stored.entry.references)) .block_layout else if (hasImageBorders(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .image_border else if (images or hasReferenceBlocks(stored.entry.references) or hasStyles(stored.entry.sections, stored.entry.references)) .reference_blocks else if (hasBodyFontScale(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .font_scale_basis else if (hasFontScale(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .font_scale else if (hasReferenceFragments(stored.entry.references)) .reference_items else if (hasCellBlocks(stored.entry.sections, stored.entry.references)) .cell_blocks else if (hasNestedTables(stored.entry.sections, stored.entry.references)) .nested_tables else if (hasSpanBackground(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .span_background else if (hasAnchors(stored.entry.sections, stored.entry.references)) .anchored else if (hasColor(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .colored else if (hasExplanation(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .explained else .plain;
+    const version: Version = if (hasExplicitTargets(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .explicit_targets else if (stored.entry.media.len > types.legacy_inline_image_assets or hasBlockLayout(stored.entry.sections, stored.entry.references)) .block_layout else if (hasImageBorders(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .image_border else if (images or hasReferenceBlocks(stored.entry.references) or hasStyles(stored.entry.sections, stored.entry.references)) .reference_blocks else if (hasBodyFontScale(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .font_scale_basis else if (hasFontScale(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .font_scale else if (hasReferenceFragments(stored.entry.references)) .reference_items else if (hasCellBlocks(stored.entry.sections, stored.entry.references)) .cell_blocks else if (hasNestedTables(stored.entry.sections, stored.entry.references)) .nested_tables else if (hasSpanBackground(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .span_background else if (hasAnchors(stored.entry.sections, stored.entry.references)) .anchored else if (hasColor(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .colored else if (hasExplanation(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .explained else .plain;
     var encoder: Encoder = .{ .a = a, .version = version };
     defer encoder.deinit();
     try encoder.out.appendSlice(a, versionMagic(version));
@@ -1372,7 +1399,7 @@ pub fn encodeBuildAlloc(
 ) ![]u8 {
     const images = hasInlineImages(display_title, sections, @as([]const types.Span, &.{}), references_value);
     if (images) try validateImages(display_title, sections, @as([]const types.Span, &.{}), references_value, media_value);
-    const version: Version = if (media_value.len > types.legacy_inline_image_assets or hasBlockLayout(sections, references_value)) .block_layout else if (hasImageBorders(display_title, sections, @as([]const types.Span, &.{}), references_value)) .image_border else if (images or hasReferenceBlocks(references_value) or hasStyles(sections, references_value)) .reference_blocks else if (hasBodyFontScale(display_title, sections, @as([]const types.Span, &.{}), references_value)) .font_scale_basis else if (hasFontScale(display_title, sections, @as([]const types.Span, &.{}), references_value)) .font_scale else if (hasReferenceFragments(references_value)) .reference_items else if (hasCellBlocks(sections, references_value)) .cell_blocks else if (hasNestedTables(sections, references_value)) .nested_tables else if (hasSpanBackground(display_title, sections, @as([]const types.Span, &.{}), references_value)) .span_background else if (hasAnchors(sections, references_value)) .anchored else if (hasColor(display_title, sections, @as([]const types.Span, &.{}), references_value)) .colored else if (hasExplanation(display_title, sections, @as([]const types.Span, &.{}), references_value)) .explained else .plain;
+    const version: Version = if (hasExplicitTargets(display_title, sections, @as([]const types.Span, &.{}), references_value)) .explicit_targets else if (media_value.len > types.legacy_inline_image_assets or hasBlockLayout(sections, references_value)) .block_layout else if (hasImageBorders(display_title, sections, @as([]const types.Span, &.{}), references_value)) .image_border else if (images or hasReferenceBlocks(references_value) or hasStyles(sections, references_value)) .reference_blocks else if (hasBodyFontScale(display_title, sections, @as([]const types.Span, &.{}), references_value)) .font_scale_basis else if (hasFontScale(display_title, sections, @as([]const types.Span, &.{}), references_value)) .font_scale else if (hasReferenceFragments(references_value)) .reference_items else if (hasCellBlocks(sections, references_value)) .cell_blocks else if (hasNestedTables(sections, references_value)) .nested_tables else if (hasSpanBackground(display_title, sections, @as([]const types.Span, &.{}), references_value)) .span_background else if (hasAnchors(sections, references_value)) .anchored else if (hasColor(display_title, sections, @as([]const types.Span, &.{}), references_value)) .colored else if (hasExplanation(display_title, sections, @as([]const types.Span, &.{}), references_value)) .explained else .plain;
     var encoder: Encoder = .{ .a = a, .version = version };
     defer encoder.deinit();
     try encoder.out.appendSlice(a, versionMagic(version));
@@ -1421,7 +1448,7 @@ fn decodeImpl(
     metrics: ?*DecodeMetrics,
 ) !types.Stored {
     if (payload.len < magic.len) return error.InvalidPresentation;
-    const version: Version = if (std.mem.eql(u8, payload[0..magic.len], magic)) .plain else if (std.mem.eql(u8, payload[0..explained_magic.len], explained_magic)) .explained else if (std.mem.eql(u8, payload[0..color_magic.len], color_magic)) .colored else if (std.mem.eql(u8, payload[0..anchor_magic.len], anchor_magic)) .anchored else if (std.mem.eql(u8, payload[0..background_magic.len], background_magic)) .span_background else if (std.mem.eql(u8, payload[0..nested_magic.len], nested_magic)) .nested_tables else if (std.mem.eql(u8, payload[0..cell_blocks_magic.len], cell_blocks_magic)) .cell_blocks else if (std.mem.eql(u8, payload[0..reference_items_magic.len], reference_items_magic)) .reference_items else if (std.mem.eql(u8, payload[0..font_scale_magic.len], font_scale_magic)) .font_scale else if (std.mem.eql(u8, payload[0..font_scale_basis_magic.len], font_scale_basis_magic)) .font_scale_basis else if (std.mem.eql(u8, payload[0..reference_blocks_magic.len], reference_blocks_magic)) .reference_blocks else if (std.mem.eql(u8, payload[0..image_border_magic.len], image_border_magic)) .image_border else if (std.mem.eql(u8, payload[0..block_layout_magic.len], block_layout_magic)) .block_layout else return error.InvalidPresentation;
+    const version: Version = if (std.mem.eql(u8, payload[0..magic.len], magic)) .plain else if (std.mem.eql(u8, payload[0..explained_magic.len], explained_magic)) .explained else if (std.mem.eql(u8, payload[0..color_magic.len], color_magic)) .colored else if (std.mem.eql(u8, payload[0..anchor_magic.len], anchor_magic)) .anchored else if (std.mem.eql(u8, payload[0..background_magic.len], background_magic)) .span_background else if (std.mem.eql(u8, payload[0..nested_magic.len], nested_magic)) .nested_tables else if (std.mem.eql(u8, payload[0..cell_blocks_magic.len], cell_blocks_magic)) .cell_blocks else if (std.mem.eql(u8, payload[0..reference_items_magic.len], reference_items_magic)) .reference_items else if (std.mem.eql(u8, payload[0..font_scale_magic.len], font_scale_magic)) .font_scale else if (std.mem.eql(u8, payload[0..font_scale_basis_magic.len], font_scale_basis_magic)) .font_scale_basis else if (std.mem.eql(u8, payload[0..reference_blocks_magic.len], reference_blocks_magic)) .reference_blocks else if (std.mem.eql(u8, payload[0..image_border_magic.len], image_border_magic)) .image_border else if (std.mem.eql(u8, payload[0..block_layout_magic.len], block_layout_magic)) .block_layout else if (std.mem.eql(u8, payload[0..explicit_targets_magic.len], explicit_targets_magic)) .explicit_targets else return error.InvalidPresentation;
     var reader: Reader = .{ .a = a, .version = version, .bytes = payload, .pos = magic.len, .metrics = metrics };
     const display_title = try reader.spans();
     const sections = try reader.sections();
@@ -1451,7 +1478,7 @@ fn decodeImpl(
     } };
     // E is the first wire version admitting more than128 inline-image assets.
     // Do not retroactively restrict media-only legacy records.
-    if (version != .block_layout and media.len > types.legacy_inline_image_assets and
+    if (version != .block_layout and version != .explicit_targets and media.len > types.legacy_inline_image_assets and
         hasInlineImages(display_title, sections, preamble, references)) return error.InvalidPresentation;
     try types.validateStored(stored, expected_title, expected_kind, language_metadata);
     return stored;
@@ -2676,7 +2703,7 @@ test "DPRC reference table tree preserves styles anchors actions and metrics" {
     // Every present feature occurs only inside this footer tree; several are two tables deep.
     // This image-free tree must retain DPRC rather than require the DPRD border feature.
     inline for (comptime std.meta.tags(TreeFeature)) |feature| {
-        const expected = feature != .styles and feature != .images and feature != .image_borders and feature != .block_layout;
+        const expected = feature != .styles and feature != .images and feature != .image_borders and feature != .block_layout and feature != .explicit_targets;
         try std.testing.expectEqual(expected, referenceBlocksHaveFeature(&refs, feature));
     }
     const stored: types.Stored = .{ .entry = .{ .title = "rich", .kind = .supplemental, .references = &refs } };
@@ -2894,7 +2921,7 @@ test "DPRC styles alone select C while all legacy two through B selectors retain
                 spans_value[0].font_scale = 1;
                 spans_value[0].font_scale_basis = .normal_body;
             },
-            .reference_blocks, .image_border, .block_layout => unreachable,
+            .reference_blocks, .image_border, .block_layout, .explicit_targets => unreachable,
         }
         const stored: types.Stored = .{ .entry = .{ .title = "legacy", .kind = .supplemental, .sections = &sections, .references = &refs } };
         try std.testing.expect(!hasStyles(&sections, &refs));
@@ -3471,7 +3498,7 @@ test "DPRE block suffix follows old payload for every block kind and preserves l
     // A frozen empty paragraph is 25 bytes through D; E adds only its suffix.
     const golden = [_]u8{ @intFromEnum(types.BlockKind.paragraph), 0, 0 } ++ @as([22]u8, @splat(0));
     inline for (comptime std.meta.tags(Version)) |version| {
-        if (comptime version != .block_layout) {
+        if (comptime version != .block_layout and version != .explicit_targets) {
             var encoder: Encoder = .{ .a = a, .version = version };
             defer encoder.deinit();
             try encoder.block(types.Block{ .kind = .paragraph, .text_align = null });
@@ -3742,4 +3769,117 @@ test "DPRE extended catalog retains image joins layout and corruption guards" {
     try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
     for ([_][]const u8{ bytes[0 .. bytes.len - 1], try std.mem.concat(a, u8, &.{bytes, &.{0}}) }) |corrupt|
         try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, corrupt, "layout", .supplemental, null));
+}
+
+test "explicit internal target components roundtrip literal hash and preserve legacy payload bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const spans = [_]types.Span{.{ .kind = .link, .text = "ISBN 9781234567890#tail", .target = "Special:Booksources/9781234567890#tail", .target_fragment = "", .bold = true }};
+    const sections = [_]types.Section{.{ .title = "English", .level = 2, .blocks = &.{.{ .kind = .paragraph, .spans = &spans }} }};
+    const expected: types.Stored = .{ .entry = .{ .title = "ISBN", .kind = .language, .language = "English", .language_code = "en", .sections = &sections } };
+    const bytes = try encodeAlloc(a, expected);
+    try std.testing.expectEqualStrings(explicit_targets_magic, bytes[0..4]);
+    const decoded = try decodeAlloc(a, bytes, "ISBN", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualDeep(expected, decoded);
+    try std.testing.expectEqualStrings("", decoded.entry.sections[0].blocks[0].spans[0].target_fragment.?);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    const legacy_spans = [_]types.Span{.{ .kind = .link, .text = "ordinary", .target = "page#section" }};
+    const legacy_sections = [_]types.Section{.{ .title = "English", .level = 2, .blocks = &.{.{ .kind = .paragraph, .spans = &legacy_spans }} }};
+    const legacy: types.Stored = .{ .entry = .{ .title = "legacy", .kind = .language, .language = "English", .language_code = "en", .sections = &legacy_sections } };
+    const old_bytes = try encodeAlloc(a, legacy);
+    try std.testing.expectEqualStrings(magic, old_bytes[0..4]);
+    const old_decoded = try decodeAlloc(a, old_bytes, "legacy", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expect(old_decoded.entry.sections[0].blocks[0].spans[0].target_fragment == null);
+    try std.testing.expectEqualSlices(u8, old_bytes, try encodeAlloc(a, old_decoded));
+    const bad_spans = [_]types.Span{.{ .text = "not an action", .target_fragment = "" }};
+    const bad_sections = [_]types.Section{.{ .title = "English", .level = 2, .blocks = &.{.{ .kind = .paragraph, .spans = &bad_spans }} }};
+    const invalid: types.Stored = .{ .entry = .{ .title = "invalid", .kind = .language, .language = "English", .language_code = "en", .sections = &bad_sections } };
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, invalid));
+}
+test "DPRF validates component kinds and inherits193 and256 inline media capacity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const media = try a.alloc(types.Media, types.max_media_assets + 1);
+    const spans = try a.alloc(types.Span, media.len + 1);
+    spans[0] = .{ .kind = .link, .text = "ISBN 9781234567890#tail", .target = "Special:Booksources/9781234567890#tail", .target_fragment = "" };
+    for (media, spans[1..], 0..) |*asset, *span, index| {
+        const file = try std.fmt.allocPrint(a, "Flag-{d}.svg", .{index});
+        asset.* = .{ .file = file, .kind = .image, .caption = file };
+        span.* = .{ .kind = .link, .target = try std.fmt.allocPrint(a, "File:{s}", .{file}), .image = .{ .file = file, .width_px = 30 } };
+    }
+    for ([_]usize{ 193, 256 }) |count| {
+        const stored: types.Stored = .{ .entry = .{ .title = "explicit catalog", .kind = .supplemental, .display_title = spans[0 .. count + 1], .media = media[0..count] } };
+        try types.validateStored(stored, "explicit catalog", .supplemental, null);
+        const bytes = try encodeAlloc(a, stored);
+        try std.testing.expectEqualStrings(explicit_targets_magic, bytes[0..4]);
+        const decoded = try decodeAlloc(a, bytes, "explicit catalog", .supplemental, null);
+        try std.testing.expectEqualDeep(stored, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+        try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, stored.entry.display_title, stored.entry.sections, stored.entry.organization, stored.entry.references, stored.entry.media));
+    }
+    const overflow: types.Stored = .{ .entry = .{ .title = "explicit catalog", .kind = .supplemental, .display_title = spans, .media = media } };
+    try std.testing.expectError(error.InvalidPresentation, types.validateStored(overflow, "explicit catalog", .supplemental, null));
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, overflow));
+    var raw: Encoder = .{ .a = a, .version = .explicit_targets };
+    defer raw.deinit();
+    try raw.out.appendSlice(a, explicit_targets_magic);
+    try raw.spans(spans);
+    try raw.sections(overflow.entry.sections);
+    try raw.spans(overflow.entry.preamble_spans);
+    try raw.layout(overflow.entry.organization);
+    try raw.references(overflow.entry.references);
+    try raw.media(overflow.entry.media);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, raw.out.items, "explicit catalog", .supplemental, null));
+    for ([_]types.InlineKind{ .text, .external_link, .line_break }) |kind| {
+        var bad = [_]types.Span{.{ .kind = kind, .text = "data", .target = "title", .target_fragment = "" }};
+        const invalid: types.Stored = .{ .entry = .{ .title = "invalid", .kind = .supplemental, .display_title = &bad } };
+        try std.testing.expectError(error.InvalidPresentation, types.validateStored(invalid, "invalid", .supplemental, null));
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, invalid));
+        // Decoder's independent raw-byte kind gate must match model validation.
+        var encoded: Encoder = .{ .a = a, .version = .explicit_targets };
+        defer encoded.deinit();
+        bad[0].kind = .link;
+        try encoded.span(bad[0]);
+        encoded.out.items[0] = @intFromEnum(kind);
+        var reader: Reader = .{ .a = a, .version = .explicit_targets, .bytes = encoded.out.items };
+        try std.testing.expectError(error.InvalidPresentation, reader.span());
+    }
+    const local_spans = [_]types.Span{.{ .kind = .link, .text = "local", .target_fragment = "reference-1" }};
+    const local: types.Stored = .{ .entry = .{ .title = "local", .kind = .supplemental, .display_title = &local_spans } };
+    const local_bytes = try encodeAlloc(a, local);
+    try std.testing.expectEqualDeep(local, try decodeAlloc(a, local_bytes, "local", .supplemental, null));
+    var minimum: Encoder = .{ .a = a, .version = .explicit_targets };
+    defer minimum.deinit();
+    try minimum.span(types.Span{});
+    try std.testing.expectEqual(@as(usize, 36), minimum.out.items.len);
+    var minimum_reader: Reader = .{ .a = a, .version = .explicit_targets, .bytes = minimum.out.items };
+    try std.testing.expectEqualDeep(types.Span{}, try minimum_reader.span());
+    var empty_block: Encoder = .{ .a = a, .version = .explicit_targets };
+    defer empty_block.deinit();
+    try empty_block.block(types.Block{ .kind = .paragraph });
+    try std.testing.expectEqual(@as(usize, 26), empty_block.out.items.len);
+    var block_reader: Reader = .{ .a = a, .version = .explicit_targets, .bytes = empty_block.out.items };
+    try std.testing.expectEqualDeep(types.Block{ .kind = .paragraph }, try block_reader.block());
+}
+
+test "explicit target component strings retain wire UTF8 and size validation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const oversized = try a.alloc(u8, max_string_bytes + 1);
+    for ([_][]const u8{ "\xff", oversized }) |fragment| {
+        const spans = [_]types.Span{.{ .kind = .link, .text = "local", .target_fragment = fragment }};
+        const stored: types.Stored = .{ .entry = .{ .title = "fragment", .kind = .supplemental, .display_title = &spans } };
+        try std.testing.expectError(error.InvalidPresentation, types.validateStored(stored, "fragment", .supplemental, null));
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
+    }
+    // A separately constructed malformed component exercises Reader.string.
+    var encoded: Encoder = .{ .a = a, .version = .explicit_targets };
+    defer encoded.deinit();
+    try encoded.span(types.Span{ .kind = .link, .target_fragment = "X" });
+    encoded.out.items[encoded.out.items.len - 1] = 0xff;
+    var reader: Reader = .{ .a = a, .version = .explicit_targets, .bytes = encoded.out.items };
+    try std.testing.expectError(error.InvalidPresentation, reader.span());
 }
