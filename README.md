@@ -325,6 +325,7 @@ matching, pinned snapshots when the corpus uses them:
 | `--commons-data-snapshot` | Commons JsonConfig |
 | `--category-stats-snapshot` | category counts |
 | `--interface-messages-snapshot` | localized interface messages |
+| `--language-fallbacks-snapshot` | captured language fallback chains |
 | `--category-tree-snapshot` | category membership |
 | `--interwiki-map-snapshot` | interwiki configuration |
 | `--wikibase-sitelinks-snapshot` | Wikibase sitelinks |
@@ -335,6 +336,48 @@ matching, pinned snapshots when the corpus uses them:
 
 These are build inputs only. Missing required state fails closed rather than being
 guessed or deferred to the reader.
+
+For new full-edition builds, prepare a complete interface-message pair before
+native compilation. Reuse an already verified complete pair for the same edition
+and selected context when available. Otherwise use the existing collector's
+`--complete-messages` profile, rather than treating an explicit list of previously
+observed keys as full-edition coverage. For example, with matching prepared inputs:
+
+```sh
+python3 -B tools/prepare_language_messages_v2.py capture \
+  --wiki jawiktionary --date 20261001 \
+  --namespace-registry data/inputs/ja/namespace-registry.tsv \
+  --languages en ja --complete-messages \
+  --api-sources data/inputs/mediawiki-message-sources \
+  --output data/inputs/ja/messages-complete01
+python3 -B tools/prepare_language_messages_v2.py verify \
+  data/inputs/ja/messages-complete01
+```
+
+The source directory must contain the reviewed `ApiQueryAllMessages.php`,
+`MessageCache.php` and `source-receipts01.json`. The verifier requires the pinned
+PHP bytes, revision-specific source URLs and receipts, and the same recorded core
+revision in every API response. Captured metadata reflects current sequential
+observations; the associated dump date does not make it historical dump data.
+The collector bounds responses, rows, requests and elapsed time, and retains raw
+responses, explicit missing values, empty values and fallback evidence.
+
+Keep the complete generation directory and select **both** its
+`interface-messages.tsv` and `language-fallbacks.tsv`, using the corresponding
+snapshot flags above. In `tools/corpus_controller.py` configuration, place their
+exact `{path, bytes, sha256}` descriptors under
+`edition_options.<wiki>.auxiliary_snapshots`, with keys `interface-messages` and
+`language-fallbacks`. Merge these into existing edition options. Both explicit
+roles supersede historical message-generation discovery while retaining normal
+paired replay and namespace/context validation. Do not replace inputs used by a
+running build.
+
+Explicit `--messages` captures remain useful for bounded diagnostics and
+historical evidence. Complete enumeration covers the API's returned keys for the
+selected languages; it does not prove every page-context lookup. Local
+language-suffixed-only pages without a base can be omitted by upstream
+enumeration; exact observed extras can be supplied with `--messages` alongside
+`--complete-messages`. An unobserved key is not an authoritative missing value.
 
 CategoryTree snapshots can be generated from matching Wikimedia SQL/XML dumps with
 `tools/category_tree_snapshot.py`.
