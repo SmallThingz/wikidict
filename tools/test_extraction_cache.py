@@ -26,7 +26,10 @@ class ExtractionCacheTest(unittest.TestCase):
         (self.source / "dump-streams.tsv").write_bytes(b"0\t0\t100\n")
         (self.source / "page-index.tsv").write_bytes(b"0\t0\t10\tTemplate:fixture\n")
         self.root = self.base / "cache"
-        self.expected = {"version": 1, "dump_sha256": "a" * 64,
+        self.expected = {"version": 4, "extractor_args": list(cache.EXTRACTOR_ARGS),
+                         "namespace_registry_sha256": "f" * 64,
+                         "transclusion_redirects_sha256": None, "page_redirects_sha256": None,
+                         "unicode_case": {"libraries": []}, "dump_sha256": "a" * 64,
                          "index_sha256": "d" * 64,
                          "tool": {"extractor_sha256": "b" * 64, "libraries": []}}
 
@@ -42,7 +45,7 @@ class ExtractionCacheTest(unittest.TestCase):
 
     def snapshot_main(self, action, output):
         with mock.patch.object(cache, "tool_identity", return_value=self.expected["tool"]), \
-             mock.patch.object(cache, "unicode_case_identity", return_value={}):
+             mock.patch.object(cache, "unicode_case_identity", return_value={"libraries": []}):
             return cache.main(["extraction_cache.py", action, str(self.root),
                                "extractor", "a" * 64, "d" * 64, str(output)])
 
@@ -166,7 +169,7 @@ class ExtractionCacheTest(unittest.TestCase):
         output = self.base / "footer-output"
         output.mkdir()
         self.assertEqual(0, cache.probe(self.root, self.expected, output))
-        self.assertTrue((output / path.name).is_symlink())
+        self.assertFalse((output / path.name).is_symlink())
         self.assertEqual(path.read_bytes(), (output / path.name).read_bytes())
         (generation / path.name).write_text("{}")
         rejected = self.base / "tampered-output"
@@ -242,13 +245,252 @@ class ExtractionCacheTest(unittest.TestCase):
         self.assertEqual(["--page-index"], original["extractor_args"])
         self.assertNotEqual(original, changed)
 
-    def test_valid_generation_prunes_older_extraction_cache(self):
+    def receipt_snapshot(self, root, dump):
+        import hashlib,os
+        def identity(path, index=False):
+            value=path.stat()
+            return dict(device_major=os.major(value.st_dev),device_minor=os.minor(value.st_dev),
+                        inode=value.st_ino,size=value.st_size,mtime_ns=value.st_mtime_ns,
+                        ctime_ns=0 if index else value.st_ctime_ns)
+        return dict(version=2,source=identity(dump),indexes=[identity(root/name,True)for name in
+                    ('page-index.tsv','page-title-index.bin','dump-streams.tsv')],
+                    namespace_sha256=list(hashlib.sha256(b'namespace fixture').digest()),redirects_sha256=None)
+
+    def test_v4_key_isolated_from_actual_historical_probe_and_validated_v3_fallback(self):
+        import ast
+        # Execute the actual pre-transition probe/validator AST. Its CLI computes
+        # v3, so a v4 generation must remain invisible to that ordinary route.
+        # Exact three v3 functions retained from canonical fa5d5c19.
+        historical = (
+            'def identity(executable, dump_sha256, index_sha256, namespace_sha256, transclusion_redirects_sha256=None, page_redirects_sha256=None):\n'
+            '    if not all(re.fullmatch(r"[0-9a-fA-F]{64}", value)\n'
+            '               for value in (dump_sha256, index_sha256, namespace_sha256)):\n'
+            '        raise ValueError("Invalid verified staged input digest")\n'
+            '    return {"version": EXTRACTION_IDENTITY_VERSION, "extractor_args": list(EXTRACTOR_ARGS),\n'
+            '            "dump_sha256": dump_sha256.lower(),\n'
+            '            "index_sha256": index_sha256.lower(),\n'
+            '            "namespace_registry_sha256": namespace_sha256.lower(),\n'
+            '            "transclusion_redirects_sha256": transclusion_redirects_sha256,\n'
+            '            "page_redirects_sha256": page_redirects_sha256,\n'
+            '            "unicode_case": unicode_case_identity(),\n'
+            '            "tool": tool_identity(executable)}\n'
+            '\n'
+            'def validate(root, expected):\n'
+            '    marker = root / ".complete.json"\n'
+            '    record = read_marker(marker)\n'
+            '    if not isinstance(record, dict):\n'
+            '        return False\n'
+            '    if record.get("identity") != expected:\n'
+            '        return False\n'
+            '    assets = record.get("assets")\n'
+            '    if not isinstance(assets, list) or assets != record_assets(root):\n'
+            '        return False\n'
+            '    validate_extraction_completion(root)\n'
+            '    return True\n'
+            '\n'
+            'def probe(root, expected, output):\n'
+            '    key = hashlib.sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest()\n'
+            '    source = cache_path(root, key)\n'
+            '    if not source.exists():\n'
+            '        return MISS\n'
+            '    try:\n'
+            '        if source.is_symlink() or not validate(source, expected):\n'
+            '            return MISS\n'
+            '    except (OSError, ValueError, json.JSONDecodeError, TypeError):\n'
+            '        return MISS\n'
+            '    # Validation is complete before the first link is installed. The cache is\n'
+            '    # immutable and the top-level build lock excludes concurrent replacement.\n'
+            '    for name in (TREE, *extraction_files(source)):\n'
+            '        os.symlink((source / name).resolve(strict=True), output / name,\n'
+            '                   target_is_directory=name == TREE)\n'
+            '    print(f"Reusing verified extraction assets: {source}", flush=True)\n'
+            '    return 0\n'
+        )
+        tree=ast.parse(historical)
+        scope=dict(cache.__dict__,EXTRACTION_IDENTITY_VERSION=3,
+                   tool_identity=lambda executable:self.expected['tool'],
+                   unicode_case_identity=lambda:self.expected['unicode_case'])
+        functions=[node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name in ('probe','validate','identity')]
+        self.assertEqual(len(functions),3)
+        exec(compile(ast.fix_missing_locations(ast.Module(body=functions,type_ignores=[])),'actual-historical-probe','exec'),scope)
+        legacy_identity=scope['identity']('unused','a'*64,'d'*64,'f'*64)
+        self.assertEqual(legacy_identity,dict(self.expected,version=3))
+        cache.publish(self.root,self.expected,self.source)
+        current=next(p for p in self.root.iterdir() if len(p.name)==64)
+        old_output=self.base/'historical';old_output.mkdir()
+        self.assertEqual(scope['probe'](self.root,legacy_identity,old_output),cache.MISS)
+        self.assertEqual(list(old_output.iterdir()),[])
+        # Install real legacy-format backing, then remove the unrelated v4 key.
+        import shutil
+        shutil.rmtree(current)
+        cache.publish(self.root,legacy_identity,self.source)
+        legacy=next(p for p in self.root.iterdir() if len(p.name)==64)
+        marker=legacy/'.complete.json';record=json.loads(marker.read_text());record.pop('asset_ownership',None);marker.write_text(json.dumps(record))
+        before={str(p.relative_to(legacy)):(p.read_bytes(),p.stat().st_ino)for p in legacy.rglob('*')if p.is_file()}
+        output=self.base/'fallback';output.mkdir()
+        self.assertEqual(cache.probe(self.root,self.expected,output),0)
+        self.assertEqual((output/'page-index.tsv').stat().st_ino,(legacy/'page-index.tsv').stat().st_ino)
+        self.assertFalse((output/'modules').is_symlink())
+        cache.publish(self.root,self.expected,output)
+        self.assertEqual(before,{str(p.relative_to(legacy)):(p.read_bytes(),p.stat().st_ino)for p in legacy.rglob('*')if p.is_file()})
+        # A present corrupt current generation must not silently fall back.
+        current=cache.cache_path(self.root,cache.hashlib.sha256(json.dumps(self.expected,sort_keys=True).encode()).hexdigest())
+        (current/'.complete.json').write_text('{}')
+        rejected=self.base/'rejected';rejected.mkdir()
+        self.assertEqual(cache.probe(self.root,self.expected,rejected),cache.MISS)
+        self.assertEqual(list(rejected.iterdir()),[])
+
+    def test_legacy_generation_survives_new_publication_without_marker_upgrade(self):
+        cache.publish(self.root, self.expected, self.source)
+        old = next(p for p in self.root.iterdir() if len(p.name) == 64)
+        marker = old / '.complete.json'
+        record = json.loads(marker.read_text());record.pop('asset_ownership',None)
+        marker.write_text(json.dumps(record))
+        before = {str(p.relative_to(old)): (p.read_bytes(), p.stat().st_ino) for p in old.rglob('*') if p.is_file()}
+        legacy = self.base / 'legacy';legacy.mkdir()
+        for name in (cache.TREE, *cache.extraction_files(old)):
+            (legacy / name).symlink_to(old / name, target_is_directory=name == cache.TREE)
+        cache.publish(self.root, dict(self.expected, dump_sha256='e'*64), self.source)
+        self.assertEqual(before, {str(p.relative_to(old)): (p.read_bytes(), p.stat().st_ino) for p in old.rglob('*') if p.is_file()})
+        self.assertEqual((legacy/'modules/123.lua').read_bytes(), b'return 1')
+        self.assertTrue(cache.validate(old, self.expected))
+        output=self.base/'fresh';output.mkdir()
+        self.assertEqual(cache.probe(self.root, self.expected, output), 0)
+        cache.publish(self.root, self.expected, self.source)
+        self.assertEqual(marker.read_bytes(), before['.complete.json'][0])
+        self.assertFalse((output/'manifest.jsonl').is_symlink())
+
+    def test_corrupt_legacy_same_key_is_refused_without_rename_or_replacement(self):
+        cache.publish(self.root, self.expected, self.source)
+        old=next(p for p in self.root.iterdir() if len(p.name)==64)
+        marker=old/'.complete.json';record=json.loads(marker.read_text());record.pop('asset_ownership',None);marker.write_text(json.dumps(record))
+        (old/'manifest.jsonl').write_bytes(b'corrupted retained asset')
+        before={str(p.relative_to(old)):(p.read_bytes(),p.stat().st_ino) for p in old.rglob('*') if p.is_file()}
+        with self.assertRaisesRegex(ValueError, 'unproven legacy'):
+            cache.publish(self.root,self.expected,self.source)
+        self.assertEqual(before,{str(p.relative_to(old)):(p.read_bytes(),p.stat().st_ino) for p in old.rglob('*') if p.is_file()})
+        self.assertEqual([old],list(self.root.iterdir()))
+        self.assertEqual(cache.probe(self.root,self.expected,self.base/'unused'),cache.MISS)
+
+    def test_extraction_pruning_keeps_unproven_names_and_stales_but_retires_owned(self):
+        import os,time
+        cache.publish(self.root,self.expected,self.source)
+        old=next(p for p in self.root.iterdir() if len(p.name)==64)
+        owned_marker=json.loads((old/'.complete.json').read_text())
+        unknown=self.root/('c'*64);unknown.mkdir();(unknown/'.complete.json').write_text('{broken')
+        stale=self.root/('.stale-'+'d'*64);stale.mkdir();(stale/'retained').write_bytes(b'legacy')
+        part=self.root/'.part-abandoned';part.mkdir()
+        for p in (stale,part):os.utime(p,(time.time()-90000,)*2)
+        cache.publish(self.root,dict(self.expected,dump_sha256='e'*64),self.source)
+        self.assertFalse(old.exists());self.assertTrue(unknown.exists());self.assertEqual((stale/'retained').read_bytes(),b'legacy');self.assertFalse(part.exists())
+        self.assertEqual(owned_marker['asset_ownership'],cache.EXTRACTION_OWNERSHIP)
+        current=next(p for p in self.root.iterdir() if len(p.name)==64 and p!=unknown)
+        (current/'manifest.jsonl').write_bytes(b'bad owned asset')
+        conflicting=self.root/('.stale-'+current.name);conflicting.mkdir();(conflicting/'legacy').write_bytes(b'keep')
+        with self.assertRaisesRegex(ValueError,'unproven stale'):
+            cache.publish(self.root,dict(self.expected,dump_sha256='e'*64),self.source)
+        self.assertEqual((conflicting/'legacy').read_bytes(),b'keep')
+        self.assertTrue(current.exists())
+        # A token alone, malformed inventory, or mismatched key cannot authorize
+        # retirement, even if a marker otherwise claims the new protocol.
+        current_marker=current/'.complete.json'
+        complete=json.loads(current_marker.read_text())
+        (unknown/'.complete.json').write_text(json.dumps(complete))
+        self.assertFalse(cache.extraction_ownership_proven(unknown))  # key mismatch alone
+        for record in ({'asset_ownership':cache.EXTRACTION_OWNERSHIP},
+                       dict(complete,assets=[]),
+                       dict(complete,assets=[['../escape',1,'a'*64]]),
+                       dict(complete,identity={'forged':'key'})):
+            current_marker.write_text(json.dumps(record))
+            cache.prune_extraction_generations(self.root,unknown)
+            self.assertTrue(current.exists())
+        current_marker.write_text(json.dumps(complete))
+
+
+    def test_owned_extraction_survives_generation_pruning_and_ordinary_reuse(self):
+        import hashlib,os,shutil
+        self.footer_proof();dump=self.base/'dump.xml';dump.write_bytes(b'unchanged indexed dump')
+        receipt=self.receipt_snapshot(self.source,dump)
+        raw=(json.dumps(receipt,sort_keys=True)+'\n').encode();(self.source/'extraction-source.json').write_bytes(raw)
+        self.assertEqual(0,cache.publish(self.root,self.expected,self.source))
+        old=cache.cache_path(self.root,hashlib.sha256(json.dumps(self.expected,sort_keys=True).encode()).hexdigest())
+        retained=self.base/'retained';retained.mkdir();(retained/'namespace-registry.tsv').write_bytes(b'namespace fixture')
+        self.assertEqual(0,cache.probe(self.root,self.expected,retained))
+        assets=cache.record_assets(retained)
+        owned={name:(retained/name).stat().st_ino for name,_,_ in assets}
+        for name in (*cache.extraction_files(retained),cache.TREE):self.assertFalse((retained/name).is_symlink())
+        self.assertEqual(receipt,self.receipt_snapshot(retained,dump))
+        self.assertEqual(raw,(retained/'extraction-source.json').read_bytes())
+        # No synthetic receipt rebind: exact original index inodes/mtime remain.
+        for name in ('page-index.tsv','page-title-index.bin','dump-streams.tsv'):
+            self.assertEqual((old/name).stat().st_ino,(retained/name).stat().st_ino)
+        other=self.base/'other-source';shutil.copytree(self.source,other)
+        (other/'extraction-source.json').write_text(json.dumps(self.receipt_snapshot(other,dump)))
+        shutil.rmtree(self.source)
+        changed=dict(self.expected,tool=dict(extractor_sha256='c'*64,libraries=[]))
+        self.assertEqual(0,cache.publish(self.root,changed,other));self.assertFalse(old.exists())
+        self.assertEqual(assets,cache.record_assets(retained));cache.validate_extraction_completion(retained)
+        self.assertEqual(receipt,self.receipt_snapshot(retained,dump))
+        self.assertEqual(raw,(retained/'extraction-source.json').read_bytes())
+        self.assertEqual(owned,{name:(retained/name).stat().st_ino for name,_,_ in assets})
+        self.assertEqual(b'return 1',(retained/'modules/123.lua').read_bytes())
+        # Ordinary atomic generated-file replacement must not write shared cache bytes.
+        fresh=self.base/'fresh';fresh.mkdir();self.assertEqual(0,cache.probe(self.root,changed,fresh))
+        generation=cache.cache_path(self.root,hashlib.sha256(json.dumps(changed,sort_keys=True).encode()).hexdigest())
+        previous=(generation/'lua-usage.tsv').read_bytes()
+        replacement=fresh/'lua-usage.part';replacement.write_bytes(b'owned new usage')
+        os.replace(replacement,fresh/'lua-usage.tsv');self.assertEqual(previous,(generation/'lua-usage.tsv').read_bytes())
+        # The retained old output is still a regular, complete ordinary input.
+        self.assertEqual(0,cache.publish(self.root,self.expected,retained))
+        final=self.base/'final';final.mkdir();self.assertEqual(0,cache.probe(self.root,self.expected,final))
+        self.assertEqual(receipt,self.receipt_snapshot(final,dump))
+        self.assertEqual(raw,(final/'extraction-source.json').read_bytes())
+
+    def test_cross_device_or_staging_failure_exposes_no_partial_extraction(self):
+        import errno,os
+        self.assertEqual(0,cache.publish(self.root,self.expected,self.source))
+        original=os.link
+        generation=cache.cache_path(self.root,cache.hashlib.sha256(json.dumps(self.expected,sort_keys=True).encode()).hexdigest())
+        for phase in ('metadata','module'):
+            for failure in (errno.EXDEV,errno.EIO):
+                output=self.base/('failure-'+phase+'-'+str(failure));output.mkdir();snapshot=output/'namespace-registry.tsv';snapshot.write_bytes(b'prior snapshot')
+                calls=[]
+                def link(source,destination,**kwargs):
+                    calls.append(str(source))
+                    if (phase=='metadata' and len(calls)==3) or (phase=='module' and Path(source).suffix=='.lua'):
+                        raise OSError(failure,'injected ownership failure')
+                    return original(source,destination,**kwargs)
+                with self.subTest(phase=phase,failure=failure),mock.patch.object(cache.os,'link',side_effect=link):
+                    if failure==errno.EXDEV:self.assertEqual(cache.MISS,cache.probe(self.root,self.expected,output))
+                    else:
+                        with self.assertRaises(OSError):cache.probe(self.root,self.expected,output)
+                self.assertEqual(['namespace-registry.tsv'],[p.name for p in output.iterdir()])
+                self.assertEqual(b'prior snapshot',snapshot.read_bytes())
+                self.assertTrue(cache.validate(generation,self.expected))
+
+    def test_commit_failure_rolls_back_owned_output_and_existing_targets_are_not_replaced(self):
+        self.assertEqual(0,cache.publish(self.root,self.expected,self.source))
+        output=self.base/'commit-failure';output.mkdir();snapshot=output/'namespace-registry.tsv';snapshot.write_bytes(b'prior snapshot')
+        original=Path.rename;calls=[]
+        def rename(source,destination):
+            calls.append(str(destination))
+            if len(calls)==3:raise OSError('injected install failure')
+            return original(source,destination)
+        with mock.patch.object(Path,'rename',rename),self.assertRaises(OSError):cache.probe(self.root,self.expected,output)
+        self.assertEqual(['namespace-registry.tsv'],[p.name for p in output.iterdir()])
+        self.assertEqual(b'prior snapshot',snapshot.read_bytes())
+        prior=output/'manifest.jsonl';prior.write_bytes(b'prior extraction')
+        with self.assertRaisesRegex(ValueError,'Refusing to replace'):cache.probe(self.root,self.expected,output)
+        self.assertEqual(b'prior extraction',prior.read_bytes())
+        self.assertEqual({'namespace-registry.tsv','manifest.jsonl'},{p.name for p in output.iterdir()})
+
+    def test_valid_generation_preserves_unproven_older_extraction_cache(self):
         cache.publish(self.root, self.expected, self.source)
         older = self.root / ("f" * 64)
         older.mkdir()
         (older / ".complete.json").write_text("old")
         self.assertEqual(0, cache.publish(self.root, self.expected, self.source))
-        self.assertFalse(older.exists())
+        self.assertEqual((older / ".complete.json").read_text(), "old")
 
     def test_missing_required_asset_rejected(self):
         (self.source / "page-title-index.bin").unlink()

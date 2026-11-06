@@ -5,6 +5,7 @@ The caller must supply both SHA256 values from its already verified staged
 dump marker. This helper does not reread the multigigabyte dump or stream index.
 """
 import hashlib
+import errno
 import json
 import math
 import os
@@ -17,7 +18,7 @@ import tempfile
 import time
 
 VERSION = 1
-EXTRACTION_IDENTITY_VERSION = 3
+EXTRACTION_IDENTITY_VERSION = 4
 # Keep this equal to the extractor argv in bundle_build.zig. Changing the
 # extraction mode also changes the cache identity, even with the same binary.
 EXTRACTOR_ARGS = ("--page-index",)
@@ -302,10 +303,98 @@ def validate_extraction_completion(root):
             f"Incomplete extraction: final page stream {final_page_stream} != final stream {final_stream}")
 
 
+EXTRACTION_OWNERSHIP = "wikidict.extraction-owned-assets.v1"
+
+
+def extraction_ownership_proven(root):
+    """Bound retirement to a structurally complete marker for this exact key.
+
+    This is an ownership protocol check, not a replacement for the full asset
+    validation required on reuse. Unproven backing is never retired implicitly.
+    """
+    try:
+        if root.is_symlink() or not root.is_dir():
+            return False
+        record = read_marker(root / ".complete.json")
+        if (not isinstance(record, dict) or
+                record.get("asset_ownership") != EXTRACTION_OWNERSHIP or
+                not isinstance(record.get("identity"), dict) or
+                not record["identity"] or not isinstance(record.get("assets"), list)):
+            return False
+        identity_record = record["identity"]
+        digest = lambda value: isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)
+        fields = {"version", "extractor_args", "dump_sha256", "index_sha256",
+                  "namespace_registry_sha256", "transclusion_redirects_sha256",
+                  "page_redirects_sha256", "unicode_case", "tool"}
+        if (set(record) != {"identity", "assets", "asset_ownership"} or
+                set(identity_record) != fields or type(identity_record["version"]) is not int or
+                identity_record["version"] != EXTRACTION_IDENTITY_VERSION or
+                identity_record["extractor_args"] != list(EXTRACTOR_ARGS) or
+                not all(digest(identity_record[name]) for name in
+                        ("dump_sha256", "index_sha256", "namespace_registry_sha256")) or
+                any(identity_record[name] is not None and not digest(identity_record[name]) for name in
+                    ("transclusion_redirects_sha256", "page_redirects_sha256"))):
+            return False
+        tool, unicode_case = identity_record["tool"], identity_record["unicode_case"]
+        if (not isinstance(tool, dict) or set(tool) != {"extractor_sha256", "libraries"} or
+                not digest(tool["extractor_sha256"]) or not isinstance(tool["libraries"], list) or
+                any(not isinstance(row, list) or len(row) != 2 or
+                    not isinstance(row[0], str) or not Path(row[0]).is_absolute() or not digest(row[1])
+                    for row in tool["libraries"]) or
+                not isinstance(unicode_case, dict) or set(unicode_case) != {"libraries"} or
+                not isinstance(unicode_case["libraries"], list) or
+                any(not isinstance(row, dict) or set(row) != {"path", "sha256"} or
+                    not isinstance(row["path"], str) or not Path(row["path"]).is_absolute() or
+                    not digest(row["sha256"]) for row in unicode_case["libraries"])):
+            return False
+        key = hashlib.sha256(json.dumps(identity_record, sort_keys=True).encode()).hexdigest()
+        if root.name not in (key, ".stale-" + key):
+            return False
+        names = []
+        for row in record["assets"]:
+            if (not isinstance(row, list) or len(row) != 3 or
+                    not isinstance(row[0], str) or type(row[1]) is not int or row[1] < 0 or
+                    not isinstance(row[2], str) or not re.fullmatch(r"[0-9a-f]{64}", row[2])):
+                return False
+            name = row[0]
+            if (name not in (*FILES, "extraction-completion.json") and
+                    not (name.startswith(TREE + "/") and
+                         all(part not in ("", ".", "..") for part in name.split("/")))):
+                return False
+            names.append(name)
+        return (names == sorted(set(names)) and set(FILES) <= set(names))
+    except (OSError, ValueError, json.JSONDecodeError, TypeError):
+        return False
+
+
+def prune_extraction_generations(parent, current):
+    # An unmarked legacy name can still back retained symlinks. Never infer
+    # retirement from age, key inequality, or missing/corrupt metadata.
+    for older in parent.iterdir():
+        if (older != current and re.fullmatch(r"[0-9a-f]{64}", older.name) and
+                extraction_ownership_proven(older)):
+            shutil.rmtree(older)
+
+
+def prune_extraction_partials(parent):
+    now = time.time()
+    for path in parent.iterdir():
+        if path.is_symlink() or not path.is_dir():
+            continue
+        abandoned = path.name.startswith(".part-") or (
+            re.fullmatch(r"\.stale-[0-9a-f]{64}", path.name) and
+            extraction_ownership_proven(path))
+        if abandoned and now - path.stat().st_mtime > 24 * 3600:
+            shutil.rmtree(path)
+
+
 def validate(root, expected):
     marker = root / ".complete.json"
     record = read_marker(marker)
     if not isinstance(record, dict):
+        return False
+    if ("asset_ownership" in record and
+            record["asset_ownership"] != EXTRACTION_OWNERSHIP):
         return False
     if record.get("identity") != expected:
         return False
@@ -316,21 +405,84 @@ def validate(root, expected):
     return True
 
 
+def _owned_extraction_link(source, destination):
+    """Link immutable bytes without changing inode-bound SourceReceipt indexes.
+
+    link() changes ctime/nlink. SourceReceipt v2 deliberately zeros index ctime
+    and records no nlink; its full-ctime dump source is never linked here.
+    Consumers must replace generated files atomically, never mutate shared bytes.
+    """
+    source, destination = Path(source), Path(destination)
+    regular(source)
+    before = source.stat()
+    os.link(source, destination, follow_symlinks=False)
+    regular(destination)
+    stable = lambda value: (value.st_dev, value.st_ino, value.st_mode,
+                            value.st_size, value.st_mtime_ns)
+    if stable(before) != stable(destination.stat()) or stable(before) != stable(source.stat()):
+        raise ValueError('Extraction asset identity changed during ownership')
+    return str(destination)
+
+
 def probe(root, expected, output):
     key = hashlib.sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest()
     source = cache_path(root, key)
-    if not source.exists():
-        return MISS
+    validated_identity = expected
+    if not os.path.lexists(source):
+        # Only a missing current key may use the exact historical identity. The
+        # new probe owns those inodes; it never upgrades legacy retirement proof.
+        if expected.get("version") != EXTRACTION_IDENTITY_VERSION:
+            return MISS
+        validated_identity = dict(expected, version=3)
+        legacy_key = hashlib.sha256(json.dumps(validated_identity, sort_keys=True).encode()).hexdigest()
+        source = cache_path(root, legacy_key)
+        if not os.path.lexists(source):
+            return MISS
     try:
-        if source.is_symlink() or not validate(source, expected):
+        if source.is_symlink() or not validate(source, validated_identity):
             return MISS
     except (OSError, ValueError, json.JSONDecodeError, TypeError):
         return MISS
-    # Validation is complete before the first link is installed. The cache is
-    # immutable and the top-level build lock excludes concurrent replacement.
-    for name in (TREE, *extraction_files(source)):
-        os.symlink((source / name).resolve(strict=True), output / name,
-                   target_is_directory=name == TREE)
+    # The normal corpus lock excludes concurrent source/output replacement.
+    # Stage every owned inode before exposing any result. Cache-name pruning
+    # must not invalidate metadata or module bytes held by a retained output.
+    if output.is_symlink() or not output.is_dir():
+        raise ValueError('Expected regular extraction output directory')
+    names = (TREE, *extraction_files(source))
+    if any(os.path.lexists(output / name) for name in names):
+        raise ValueError('Refusing to replace existing extraction output')
+    temporary = Path(tempfile.mkdtemp(prefix='.extraction-probe-', dir=output))
+    installed = []
+    try:
+        try:
+            (temporary / TREE).mkdir()
+            # Link validated asset paths directly. copytree aggregates OSError
+            # into shutil.Error and would hide module-stage EXDEV classification.
+            for name in walk_assets(source):
+                destination = temporary / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                _owned_extraction_link(source / name, destination)
+        except OSError as exc:
+            if exc.errno == errno.EXDEV:
+                # Copying would change the physical indexes in SourceReceipt.
+                # No hit is exposed; the ordinary extraction miss path remains.
+                return MISS
+            raise
+        for name in names:
+            destination = output / name
+            if os.path.lexists(destination):
+                raise ValueError('Extraction output appeared during ownership')
+            (temporary / name).rename(destination)
+            installed.append(destination)
+    except BaseException:
+        for path in reversed(installed):
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        raise
+    finally:
+        shutil.rmtree(temporary)
     print(f"Reusing verified extraction assets: {source}", flush=True)
     return 0
 
@@ -343,7 +495,7 @@ def publish(root, expected, source):
         key = hashlib.sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest()
         destination = cache_path(root, key)
         root.mkdir(parents=True, exist_ok=True)
-        prune_abandoned_partials(root)
+        prune_extraction_partials(root)
         # Refuse symlinks in the producer tree before copytree can follow one.
         if timing is None:
             walk_assets(source)
@@ -357,14 +509,18 @@ def publish(root, expected, source):
             try:
                 if not destination.is_symlink() and validate(destination, expected):
                     if timing is not None: timing.switch("prune")
-                    prune_old_generations(root, destination)
+                    prune_extraction_generations(root, destination)
                     completed = True
                     return 0
             except (OSError, ValueError, json.JSONDecodeError, TypeError):
                 pass
-            # A corrupt directory remains unavailable until the new one is ready.
+            if not extraction_ownership_proven(destination):
+                raise ValueError("Refusing to replace unproven legacy extraction generation")
+            # A corrupt owned directory remains unavailable until the new one is ready.
             stale = root / (".stale-" + key)
             if stale.exists() or stale.is_symlink():
+                if not extraction_ownership_proven(stale):
+                    raise ValueError("Refusing to replace unproven stale extraction backing")
                 if stale.is_dir() and not stale.is_symlink():
                     shutil.rmtree(stale)
                 else:
@@ -390,6 +546,8 @@ def publish(root, expected, source):
                 timing.count(files=len(assets), bytes=sum(row[1] for row in assets))
                 timing.switch("seal_cleanup")
             marker = {"identity": expected, "assets": assets}
+            if expected.get("version") == EXTRACTION_IDENTITY_VERSION:
+                marker["asset_ownership"] = EXTRACTION_OWNERSHIP
             (temporary / ".complete.json").write_text(
                 json.dumps(marker, sort_keys=True, separators=(",", ":")) + "\n")
             temporary.rename(destination)
@@ -403,7 +561,7 @@ def publish(root, expected, source):
             else:
                 stale.unlink()
         # The corpus resource lock admits one build at a time.
-        prune_old_generations(root, destination)
+        prune_extraction_generations(root, destination)
         print(f"Published verified extraction assets: {destination}", flush=True)
         completed = True
         return 0
