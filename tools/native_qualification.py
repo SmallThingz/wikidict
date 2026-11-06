@@ -115,7 +115,8 @@ def validate_preparation_plan(cfg, group_binding, expect, ordered_groups, focus_
 
 
 def execute_focused_cases(cases, *, binaries, phase, source_root, helper, guard,
-                          validate_dynamic, auth, ref, result, save):
+                          validate_dynamic, auth, ref, result, save,
+                          prepare_group=None, stop_on_failure=False):
     """Use the existing exact-name executor and retain group/failure guards."""
     offset = 0
     while offset < len(cases):
@@ -123,6 +124,9 @@ def execute_focused_cases(cases, *, binaries, phase, source_root, helper, guard,
         end = offset + 1
         while end < len(cases) and cases[end][0]['id'] == group['id']:
             end += 1
+        if prepare_group is not None:
+            prepare_group(group)
+        first_row = len(result['focused_tests'])
         guard(); validate_dynamic()
         binary = binaries[group['prepared_group']]
         auth(binary)
@@ -153,6 +157,12 @@ def execute_focused_cases(cases, *, binaries, phase, source_root, helper, guard,
                     command_error=repr(command_error) if command_error is not None else None))
                 save()
                 raise
+        if stop_on_failure and not all(row['passed'] for row in result['focused_tests'][first_row:]):
+            result['focused_qualified'] = False
+            result['focused_evidence_total'] = len(result['focused_tests'])
+            result['all_selected_executed'] = len(result['focused_tests']) == len(cases)
+            save()
+            raise AssertionError('focused_functional_failure')
         offset = end
 
 
@@ -381,7 +391,16 @@ if __name__ == '__main__':
            assert cfg[key]==prior_cfg[key],key
           prior_ordered,prior_cases=bound_focus_plan(prior_cfg,group_binding,private)
           prepared_names,_,prepare_discovery=validate_preparation_plan(prior_cfg,group_binding,expect,prior_ordered,prior_cases)
-          expected_phases=['reviewed-language-aliases']+['focused-prepare-'+group['id']for group in prior_ordered]+['filtered-discovery-'+prepared+'-'+str(number)for prepared in prepared_names for number,_ in enumerate(prepare_discovery[prepared])]+['cli-ffi-install','full-native-suite','bundle-pipeline']
+          execution_plan=prior.get('focused_execution_plan','prepare-all-then-focus.v1')
+          assert execution_plan in ('prepare-all-then-focus.v1','prepare-on-first-use.v1')
+          if execution_plan=='prepare-on-first-use.v1':
+           assert prior['focused_preparation_order']==[group['id']for group in prior_ordered]
+           expected_phases=['reviewed-language-aliases']+[name for group in prior_ordered for name in ['focused-prepare-'+group['id']]+['filtered-discovery-'+group['id']+'-'+str(number)for number,_ in enumerate(prepare_discovery[group['id']])]]
+          else:
+           assert 'focused_preparation_order'not in prior
+           expected_phases=['reviewed-language-aliases']+['focused-prepare-'+group['id']for group in prior_ordered]+['filtered-discovery-'+prepared+'-'+str(number)for prepared in prepared_names for number,_ in enumerate(prepare_discovery[prepared])]
+          expected_phases+=['cli-ffi-install','full-native-suite','bundle-pipeline']
+          result['inherited_focused_execution_plan']=execution_plan
           assert prior['full_native_pass'] and prior['bundle_pipeline_pass'] and prior['cli_ffi_install_pass'] and not prior['bundle_pass']
           phase_names=[p['name']for p in prior['phases']]
           assert phase_names in (expected_phases,expected_phases+['bundle'])
@@ -423,23 +442,34 @@ if __name__ == '__main__':
           assert metadata_counts==[str(cfg['metadata_python_expected'])] and re.search(r'^OK\s*$',metadata_text,re.M),metadata_text
           result['metadata_python']=dict(passed=True,executed=cfg['metadata_python_expected'],native_credit=False,command=result['phases'][-1]);save()
           prepared_prefix=out/'prepared-tests';assert not prepared_prefix.exists()
-          for group in ordered_groups:
+          binaries={};prepared_commands=[]
+          result['focused_execution_plan']='prepare-on-first-use.v1'
+          result['focused_preparation_order']=[]
+          result['compiled_discovery']=[]
+          compile_record=dict(groups=[],commands=prepared_commands,passed=False,binaries=binaries,compile_time_filtered=group_binding['compile_time_filtered_preparation'],external_compile_filters=prepare_filters,fixed_partition_filters={g['id']:g['compile_filter_names'] for g in cfg['groups']},compiled_only_discovery={g['id']:g['compiled_only_discovery_names'] for g in cfg['groups']},full_suite_credit=False,interleaved_with_focus=True)
+          result['compiles'].append(compile_record);save()
+          def prepare_focus_group(group):
            prepared=group['id']
+           if prepared in binaries:
+            auth(binaries[prepared]);return
            argv=prepare_tests_argv(args,cache,prepared_prefix,w['native_build_argv'])
            assert not any(arg.startswith('-Dprepare-test-filter') or arg.startswith('-Dprepare-test-error-tracing') for arg in argv)
            argv+=['-Dprepare-test-group='+prepared]
            execute('focused-prepare-'+prepared,argv)
-          prepared_dir=prepared_prefix/group_binding['prepared_relative_directory'];entries=list(prepared_dir.iterdir())
-          assert {p.name for p in entries}==set(prepared_names) and all(p.is_file()and not p.is_symlink()and os.access(p,os.X_OK)for p in entries)
-          binaries={name:ref(prepared_dir/name)for name in prepared_names}
-          result['compiles'].append(dict(groups=list(binaries),commands=result['phases'][-len(prepared_names):],passed=True,binaries=binaries,compile_time_filtered=group_binding['compile_time_filtered_preparation'],external_compile_filters=prepare_filters,fixed_partition_filters={g['id']:g['compile_filter_names'] for g in cfg['groups']},compiled_only_discovery={g['id']:g['compiled_only_discovery_names'] for g in cfg['groups']},full_suite_credit=False));save()
-          result['compiled_discovery']=[]
-          for prepared in prepared_names:
-           discovery_binary=binaries[prepared];auth(discovery_binary)
+           prepared_commands.append(result['phases'][-1])
+           prepared_dir=prepared_prefix/group_binding['prepared_relative_directory'];entries=list(prepared_dir.iterdir())
+           assert {p.name for p in entries}==set(binaries)|{prepared} and all(p.is_file()and not p.is_symlink()and os.access(p,os.X_OK)for p in entries)
+           binary=ref(prepared_dir/prepared);auth(binary);binaries[prepared]=binary
+           for bound_binary in binaries.values():auth(bound_binary)
+           result['focused_preparation_order'].append(prepared)
+           compile_record['groups']=list(binaries);compile_record['passed']=set(binaries)==set(prepared_names);save()
            for number,discovery in enumerate(prepare_discovery[prepared]):
-            execute('filtered-discovery-'+prepared+'-'+str(number),[discovery_binary['path'],'--dict-run-test',discovery])
-            result['compiled_discovery'].append(dict(name=discovery,binary=discovery_binary,command=result['phases'][-1],passed=True,semantic_focus_credit=False,full_suite_credit=False));save()
-          execute_focused_cases(focus_cases,binaries=binaries,phase=phase,source_root=private,helper=w,guard=guard,validate_dynamic=lambda:dynamic['validate'](ds),auth=auth,ref=ref,result=result,save=save)
+            execute('filtered-discovery-'+prepared+'-'+str(number),[binary['path'],'--dict-run-test',discovery]);auth(binary)
+            result['compiled_discovery'].append(dict(name=discovery,binary=binary,command=result['phases'][-1],passed=True,semantic_focus_credit=False,full_suite_credit=False));save()
+          execute_focused_cases(focus_cases,binaries=binaries,phase=phase,source_root=private,helper=w,guard=guard,validate_dynamic=lambda:dynamic['validate'](ds),auth=auth,ref=ref,result=result,save=save,prepare_group=prepare_focus_group,stop_on_failure=True)
+          assert set(binaries)==set(prepared_names) and compile_record['passed']
+          for bound_binary in binaries.values():auth(bound_binary)
+          assert result['focused_preparation_order']==[group['id']for group in ordered_groups]
           assert [row['name']for row in result['focused_tests']]==[case[2]for case in focus_cases]
           assert len(result['focused_tests'])==cfg['focused_expected'] and cfg['saved_expected']==0
           result['all_selected_executed']=True;result['focused_evidence_total']=len(result['focused_tests']);result['focused_qualified']=all(row['passed']for row in result['focused_tests']);save();assert result['focused_qualified'],'focused_functional_failure'

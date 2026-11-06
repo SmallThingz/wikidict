@@ -402,8 +402,13 @@ class PreparationFailFastTests(unittest.TestCase):
                     and ast.unparse(node.test) == "cfg['execution_stage'] == 'tail'"]
         self.assertEqual(len(branches), 1)
         block = branches[0]
-        end = next(index for index, node in enumerate(block) if isinstance(node, ast.For)
-                   and isinstance(node.iter, ast.Name) and node.iter.id == 'ordered_groups')
+        end = next(index for index, node in enumerate(block) if isinstance(node, ast.FunctionDef)
+                   and node.name == 'prepare_focus_group')
+        preparation = copy.deepcopy(block[end])
+        inspect = next(index for index, node in enumerate(preparation.body) if isinstance(node, ast.Assign)
+                       and any(isinstance(target, ast.Name) and target.id == 'prepared_dir' for target in node.targets))
+        preparation.body = preparation.body[:inspect]
+        calls = ast.parse('for group in ordered_groups:\n prepare_focus_group(group)\n').body
         argv_functions = [node for node in ast.walk(source) if isinstance(node, ast.FunctionDef)
                           and node.name == 'prepare_tests_argv']
         self.assertEqual(len(argv_functions), 1)
@@ -411,7 +416,7 @@ class PreparationFailFastTests(unittest.TestCase):
                         and isinstance(node.test, ast.Compare)
                         and ast.unparse(node.test.left) == "cfg['execution_stage']"]
         self.assertEqual(len(stage_guards), 1)
-        prefix = compile(ast.Module(body=copy.deepcopy(argv_functions + stage_guards + block[:end + 1]),
+        prefix = compile(ast.Module(body=copy.deepcopy(argv_functions + stage_guards + block[:end] + [preparation] + calls),
                                     type_ignores=[]), str(qualification.__file__), 'exec')
         cfg = copy.deepcopy(cfg)
         cfg.setdefault('runtime_python', {'sha256': 'python'})
@@ -421,7 +426,7 @@ class PreparationFailFastTests(unittest.TestCase):
         ordered, cases = qualification.bound_focus_plan(cfg, proof, Path(proof['cwd']))
         metadata = dict(current_manifest=cfg['private_manifest'], runtime_python=cfg['runtime_python'],
                         current_execution_required=True, dependency_files={})
-        result = dict(phases=[])
+        result = dict(phases=[], compiles=[])
         def read(descriptor):
             self.assertEqual(descriptor, cfg['metadata_python_reuse'])
             return metadata
@@ -865,6 +870,210 @@ class CurrentTailRecoveryTests(unittest.TestCase):
                 exec(value['code'], namespace)
             self.assertEqual(value['commands'], [])
             self.assertEqual(value['dynamic_calls'], [])
+
+
+
+class InterleavedPreparationTests(unittest.TestCase):
+    def plan(self):
+        cfg, proof, expectation = PreparationFailFastTests().fixture()
+        # Two obligations in the first priority group prove batch completion on failure.
+        tools = next(group for group in cfg['groups'] if group['id'] == 'tools')
+        tools['test_names'].append('tools.test.second')
+        tools['declaration_names'].append('second')
+        tools['compiled_expected_occurrences'].append('tools.test.second')
+        tools['compiled_expected_count'] += 1
+        proof['prepared_expected_occurrences']['tools'] = list(tools['compiled_expected_occurrences'])
+        next(root for root in expectation['expected']['groups'] if root['root'] == 'blob_build_tests')['expected_occurrences'].append('tools.test.second')
+        SupportedRootSubsetTests().bind_selection(cfg, proof)
+        return cfg, proof, expectation
+
+    def run_fresh(self, cfg, proof, expectation, *, failure=None, discovery_failure=False, extra_binary=False,
+                  mutate_previous_on_prepare=False, mutate_earlier_on_last_focus=False):
+        import ast
+        import os
+        from types import SimpleNamespace
+        root = Path(self.tmp.name)
+        out = root / 'commands'; out.mkdir()
+        phase = out / 'fixed'; phase.mkdir()
+        cfg = copy.deepcopy(cfg)
+        cfg.update(runtime_python={'sha256': 'python'}, metadata_python_reuse={'sha256': 'metadata'},
+                   metadata_python_expected=8, python_bin='/fixture/python')
+        ordered, cases = qualification.bound_focus_plan(cfg, proof, Path(proof['cwd']))
+        result = dict(phases=[], compiles=[], focused_tests=[])
+        events = []; snapshots = []
+        def auth(descriptor):
+            self.assertEqual(FakeExecution.ref(descriptor['path']), descriptor)
+            return Path(descriptor['path'])
+        def read(descriptor):
+            self.assertEqual(descriptor, cfg['metadata_python_reuse'])
+            return dict(current_manifest=cfg['private_manifest'], runtime_python=cfg['runtime_python'],
+                        current_execution_required=True, dependency_files={})
+        def execute(label, argv):
+            events.append(label)
+            if label.startswith('focused-prepare-'):
+                prepared = label.removeprefix('focused-prepare-')
+                prefix = Path(argv[argv.index('--prefix') + 1]) / proof['prepared_relative_directory']
+                prefix.mkdir(parents=True, exist_ok=True)
+                binary = prefix / prepared; binary.write_bytes(prepared.encode()); binary.chmod(0o755)
+                previous = [path for path in prefix.iterdir() if path != binary]
+                if mutate_previous_on_prepare and previous:
+                    previous[0].write_bytes(b'changed by subsequent preparation')
+                if extra_binary:
+                    unwanted = prefix / 'unselected'; unwanted.write_bytes(b'unselected'); unwanted.chmod(0o755)
+            command = dict(status='exited', returncode=0)
+            result['phases'].append(dict(name=label, command=command))
+            if discovery_failure and label.startswith('filtered-discovery-'):
+                raise OSError('discovery refused')
+            if label == 'reviewed-language-aliases':
+                return ('Ran 8 tests in 0.001s\nOK\n', '')
+            return ('', '')
+        def focused(directory, label, argv, source):
+            name = argv[-1]; events.append('focus:' + name)
+            if mutate_earlier_on_last_focus and name == cases[-1][2]:
+                prefix = out / 'prepared-tests' / proof['prepared_relative_directory']
+                earlier = next(path for path in prefix.iterdir() if path != Path(argv[0]))
+                earlier.write_bytes(b'changed by last focused case')
+            self.assertEqual(source, Path(proof['cwd']))
+            (directory / (label + '.stdout')).write_text('ordinary focused outcome\n')
+            (directory / (label + '.stderr')).write_text('')
+            return dict(status='exited', returncode=1 if name == failure else 0)
+        tree = ast.parse(Path(qualification.__file__).read_text())
+        branch = next(node.orelse for node in ast.walk(tree) if isinstance(node, ast.If)
+                      and ast.unparse(node.test) == "cfg['execution_stage'] == 'tail'")
+        finish = next(index for index, node in enumerate(branch) if isinstance(node, ast.If)
+                      and ast.unparse(node.test) == "cfg['execution_stage'] != 'focused-diagnostic'")
+        argv_function = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+                             and node.name == 'prepare_tests_argv')
+        # Native full-suite execution is the only replaced boundary; all preparation,
+        # discovery, focus and qualification predicates above it are actual code.
+        full_boundary = ast.parse("result['fake_full_boundary_reached'] = True").body
+        code = compile(ast.Module(body=copy.deepcopy([argv_function] + branch[:finish] + full_boundary),
+                                  type_ignores=[]), str(qualification.__file__), 'exec')
+        namespace = dict(cfg=cfg, group_binding=proof, expect=expectation, ordered_groups=ordered,
+            focus_cases=cases, private=Path(proof['cwd']), private_manifest={}, out=out, phase=phase,
+            Path=Path, re=re, os=os, args=SimpleNamespace(compiler=Path('/fixture/zig')),
+            cache=Path('/fixture/cache'), read=read, auth=auth, ref=FakeExecution.ref, execute=execute,
+            result=result, save=lambda: snapshots.append(copy.deepcopy(result)), guard=lambda: None,
+            ds=object(), dynamic=dict(validate=lambda state: None),
+            validate_preparation_plan=qualification.validate_preparation_plan,
+            execute_focused_cases=qualification.execute_focused_cases,
+            w=dict(ANSI=re.compile(r'\x1b\[[0-9;]*m'), execute=focused,
+                   native_build_argv=lambda args, cache: [str(args.compiler), 'build', 'test', '-j1']))
+        self.events, self.result, self.snapshots, self.namespace = events, result, snapshots, namespace
+        exec(code, namespace)
+        return result, events, cases
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_failed_first_group_retains_batch_outcomes_and_stops_later_preparations(self):
+        cfg, proof, expectation = self.plan()
+        with self.assertRaisesRegex(AssertionError, 'focused_functional_failure'):
+            self.run_fresh(cfg, proof, expectation, failure='tools.test.selected')
+        self.assertEqual(self.events, ['reviewed-language-aliases', 'focused-prepare-tools',
+                         'focus:tools.test.selected', 'focus:tools.test.second'])
+        self.assertEqual([row['passed'] for row in self.result['focused_tests']], [False, True])
+        self.assertEqual(self.result['focused_preparation_order'], ['tools'])
+        self.assertFalse(self.result['all_selected_executed'] or self.result['focused_qualified'])
+        self.assertNotIn('fake_full_boundary_reached', self.result)
+        self.assertEqual(self.snapshots[-1], self.result)
+
+    def test_all_pass_interleaves_exact_discovery_and_focus_then_reaches_full_once(self):
+        cfg, proof, expectation = self.plan()
+        result, events, cases = self.run_fresh(cfg, proof, expectation)
+        self.assertEqual(events[:5], ['reviewed-language-aliases', 'focused-prepare-tools',
+                         'focus:tools.test.selected', 'focus:tools.test.second', 'focused-prepare-encoder_compile'])
+        ordered, _ = qualification.bound_focus_plan(cfg, proof, Path(proof['cwd']))
+        expected = ['reviewed-language-aliases']
+        for group in ordered:
+            expected += ['focused-prepare-' + group['id']]
+            expected += ['filtered-discovery-' + group['id'] + '-' + str(number)
+                         for number, _ in enumerate(group['compiled_only_discovery_names'])]
+            expected += ['focus:' + case[2] for case in cases if case[0]['id'] == group['id']]
+        self.assertEqual(events, expected)
+        self.assertEqual([row['name'] for row in result['focused_tests']], [case[2] for case in cases])
+        self.assertEqual(len({(row['group'], row['name']) for row in result['focused_tests']}), len(cases))
+        self.assertEqual(set(result['compiles'][0]['binaries']), set(proof['prepared_groups']))
+        self.assertTrue(result['compiles'][0]['passed'] and result['all_selected_executed'] and
+                        result['focused_qualified'] and result['fake_full_boundary_reached'])
+        self.assertEqual(len(result['compiled_discovery']), 3)
+        self.assertTrue(all(not row['semantic_focus_credit'] for row in result['compiled_discovery']))
+
+    def test_cross_group_priority_reentry_preserves_global_cases_and_prepares_each_binary_once(self):
+        cfg, proof, expectation = self.plan()
+        proof['focus_priority'] = [dict(group='tools', name='tools.test.selected'),
+                                   dict(group='lua', name='lua.test.selected'),
+                                   dict(group='tools', name='tools.test.second')]
+        result, events, cases = self.run_fresh(cfg, proof, expectation)
+        self.assertEqual(events[:6], ['reviewed-language-aliases', 'focused-prepare-tools',
+                         'focus:tools.test.selected', 'focused-prepare-lua',
+                         'focus:lua.test.selected', 'focus:tools.test.second'])
+        self.assertEqual(events.count('focused-prepare-tools'), 1)
+        self.assertEqual([row['name'] for row in result['focused_tests']], [case[2] for case in cases])
+        self.assertEqual(result['focused_preparation_order'][:2], ['tools', 'lua'])
+
+    def test_discovery_failure_blocks_focus_later_preparation_and_full(self):
+        cfg, proof, expectation = self.plan(); proof['focus_priority'] = []
+        with self.assertRaisesRegex(OSError, 'discovery refused'):
+            self.run_fresh(cfg, proof, expectation, discovery_failure=True)
+        self.assertEqual(self.events, ['reviewed-language-aliases', 'focused-prepare-encoder_compile',
+                         'filtered-discovery-encoder_compile-0'])
+        self.assertEqual(self.result['focused_tests'], [])
+        self.assertNotIn('fake_full_boundary_reached', self.result)
+
+    def test_unselected_prepared_binary_refuses_before_any_focus(self):
+        cfg, proof, expectation = self.plan()
+        with self.assertRaises(AssertionError):
+            self.run_fresh(cfg, proof, expectation, extra_binary=True)
+        self.assertEqual(self.events, ['reviewed-language-aliases', 'focused-prepare-tools'])
+        self.assertEqual(self.result['focused_tests'], [])
+        self.assertNotIn('fake_full_boundary_reached', self.result)
+
+    def test_later_preparation_mutation_refuses_before_current_discovery_or_focus(self):
+        cfg, proof, expectation = self.plan()
+        with self.assertRaises(AssertionError):
+            self.run_fresh(cfg, proof, expectation, mutate_previous_on_prepare=True)
+        self.assertEqual(self.events, ['reviewed-language-aliases', 'focused-prepare-tools',
+                         'focus:tools.test.selected', 'focus:tools.test.second', 'focused-prepare-encoder_compile'])
+        self.assertEqual(len(self.result['focused_tests']), 2)
+        self.assertEqual(self.result['compiled_discovery'], [])
+        self.assertNotIn('fake_full_boundary_reached', self.result)
+
+    def test_last_focus_mutation_of_earlier_binary_refuses_before_full(self):
+        cfg, proof, expectation = self.plan()
+        with self.assertRaises(AssertionError):
+            self.run_fresh(cfg, proof, expectation, mutate_earlier_on_last_focus=True)
+        self.assertEqual(len(self.result['focused_tests']), cfg['focused_expected'])
+        self.assertTrue(all(row['passed'] for row in self.result['focused_tests']))
+        self.assertNotIn('fake_full_boundary_reached', self.result)
+
+    def test_tail_accepts_exact_recorded_new_order_and_preserves_strict_old_order(self):
+        helper = CurrentTailRecoveryTests(); self.addCleanup(helper.doCleanups)
+        value = helper.fixture(); namespace = value['namespace']; prior = value['objects']['result']
+        cfg, proof = namespace['cfg'], namespace['group_binding']
+        ordered, cases = qualification.bound_focus_plan(cfg, proof, Path(proof['cwd']))
+        by_name = {row['name']: row for row in prior['phases']}
+        names = ['reviewed-language-aliases']
+        for group in ordered:
+            names += ['focused-prepare-' + group['id']]
+            names += ['filtered-discovery-' + group['id'] + '-' + str(number)
+                      for number, _ in enumerate(group['compiled_only_discovery_names'])]
+        names += ['cli-ffi-install', 'full-native-suite', 'bundle-pipeline']
+        prior['phases'] = [by_name[name] for name in names]
+        prior['focused_execution_plan'] = 'prepare-on-first-use.v1'
+        prior['focused_preparation_order'] = [group['id'] for group in ordered]
+        exec(value['code'], namespace)
+        self.assertEqual(namespace['result']['inherited_focused_execution_plan'], 'prepare-on-first-use.v1')
+        self.assertTrue(namespace['result']['full_native_pass'])
+        for defect in ('unknown-plan', 'wrong-order', 'old-phases-new-plan'):
+            trial = helper.fixture(); ns = trial['namespace']; old = trial['objects']['result']
+            old['focused_execution_plan'] = 'prepare-on-first-use.v1'
+            old['focused_preparation_order'] = [group['id'] for group in ordered]
+            if defect == 'unknown-plan': old['focused_execution_plan'] = 'arbitrary'
+            elif defect == 'wrong-order': old['focused_preparation_order'].reverse()
+            with self.subTest(defect=defect), self.assertRaises(AssertionError):
+                exec(trial['code'], ns)
 
 
 if __name__ == '__main__':
