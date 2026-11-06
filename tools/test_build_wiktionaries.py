@@ -599,12 +599,47 @@ class PresentationRetryPolicyTests(unittest.TestCase):
         self.exercise_template_capture(no_capture=True,error_name='InvalidHeadingProjection')
         self.exercise_template_capture(lambda r,p,f:f.write_text(json.dumps(dict(error_name='OtherFailure'))),
                                        error_name='InvalidHeadingProjection')
-        for error in ('OutOfMemory','RenderLimit','InvalidPreContext','OtherFailure'):
+        for error in ('OutOfMemory','Cancelled','InvalidPreContext','OtherFailure'):
             with self.subTest(error=error):
                 self.exercise_template_capture(lambda r,p,f:r.update(error_name=error),error_name='InvalidHeadingProjection')
 
     def test_heading_projection_capture_changed_input_precedes_classification(self):
         self.exercise_template_capture(identity_failure=True,error_name='InvalidHeadingProjection')
+
+    def test_complete_render_limit_capture_stops_first_identical_retry(self):
+        self.exercise_template_capture(error_name='RenderLimit')
+
+    def test_render_limit_capture_requires_current_page_input_and_complete_payload(self):
+        changes=[lambda r,p,f:r.update(invocation_id='stale'),
+                 lambda r,p,f:r.update(invocation_args_sha256='0'*64),
+                 lambda r,p,f:r.update(ordinal=2),
+                 lambda r,p,f:r.update(title_sha256='0'*64),
+                 lambda r,p,f:r['input'].update(dump_path='other'),
+                 lambda r,p,f:r['input'].update(expander_root='other'),
+                 lambda r,p,f:r.update(record_complete=False),
+                 lambda r,p,f:r.update(semantic_acceptance=True),
+                 lambda r,p,f:r['expanded'].update(truncated=True),
+                 lambda r,p,f:r['expanded'].update(unretained=True),
+                 lambda r,p,f:r['expanded'].update(bytes=3*1024*1024),
+                 lambda r,p,f:r['expanded'].update(sha256='0'*64),
+                 lambda r,p,f:Path(r['raw_source']['path']).write_bytes(b'changed'),
+                 lambda r,p,f:Path(r['index_row']['path']).unlink()]
+        for change in changes:
+            with self.subTest(change=change):
+                self.exercise_template_capture(change,error_name='RenderLimit')
+
+    def test_render_limit_generic_exit_unknown_receipt_and_transient_errors_still_retry(self):
+        self.exercise_template_capture(no_capture=True,error_name='RenderLimit')
+        for outer in ('{',json.dumps(dict(error_name='RenderLimit')),
+                      json.dumps(dict(error_name='OtherFailure'))):
+            with self.subTest(outer=outer):
+                self.exercise_template_capture(lambda r,p,f:f.write_text(outer),error_name='RenderLimit')
+        for error in ('OutOfMemory','Cancelled','InputOutput','FileNotFound','InvalidPreContext','OtherFailure'):
+            with self.subTest(error=error):
+                self.exercise_template_capture(lambda r,p,f:r.update(error_name=error),error_name='RenderLimit')
+
+    def test_render_limit_changed_input_precedes_capture_classification(self):
+        self.exercise_template_capture(identity_failure=True,error_name='RenderLimit')
 
 class FailedShardPayloadCleanupTests(unittest.TestCase):
     def fixture(self, root):

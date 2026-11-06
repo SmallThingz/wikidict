@@ -1777,7 +1777,7 @@ def matching_presentation_capture(receipt, invocation_id, invocation_args, start
         if (not isinstance(row,dict) or row.get('schema')!='wikidict.presentation-first-failure.v1'
                 or row.get('record_complete') is not True or row.get('diagnostic_only') is not True
                 or row.get('publication_created') is not False or row.get('semantic_acceptance') is not False
-                or row.get('error_name') not in ('UncompiledTemplate','InvalidHeadingProjection')
+                or row.get('error_name') not in ('UncompiledTemplate','InvalidHeadingProjection','RenderLimit')
                 or row.get('invocation_id')!=invocation_id):return None
         digest=hashlib.sha256()
         for arg in invocation_args:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Add one independently observed message to an immutable language capture.
 
-Replay original v1/v2 evidence unchanged; request only the selected message.
+Replay original v1/v2 or complete evidence unchanged; request only the selected message.
 Fallback bytes and existing rows remain exact. Both observations retain their
 own provenance; paired TSVs keep the existing wire format.
 """
@@ -66,31 +66,52 @@ def document(path, value):
 def base_helper(root):
     manifest = evidence.decode(evidence.small(root / 'interface-messages.manifest.json', MAX_MANIFEST))
     schema = manifest.get('schema') if isinstance(manifest, dict) else None
-    require(schema in (legacy.SCHEMA, v2.SCHEMA), 'Expected original v1/v2 base capture')
+    require(schema in (legacy.SCHEMA, v2.SCHEMA, v2.COMPLETE_SCHEMA),
+            'Expected original v1/v2 or complete base capture')
     return legacy if schema == legacy.SCHEMA else v2
 
 
+def base_profile(base):
+    fields = ('schema', 'generator_sha256', 'keys')
+    if base['schema'] == v2.COMPLETE_SCHEMA:
+        fields = ('schema', 'generator_sha256', 'extra_keys', 'profile', 'api_core', 'coverage_sha256')
+    return {key: base[key] for key in fields}
+
+
+def base_bounds(profile):
+    require(isinstance(profile, dict), 'Invalid base profile')
+    schema = profile.get('schema')
+    require(schema in (legacy.SCHEMA, v2.SCHEMA, v2.COMPLETE_SCHEMA), 'Unknown base profile schema')
+    if schema == v2.COMPLETE_SCHEMA:
+        # Current complete replay independently enforces its payload/TSV limits.
+        # The archive allowance includes bounded tar headers and padding.
+        return v2.COMPLETE_TOTAL_BYTES + (MAX_CHILD_FILES + 10) * 1024, v2.COMPLETE_TSV_BYTES
+    return MAX_ARCHIVE, MAX_CHILD_FILE
+
+
 def archive_base(root, output, helper, records):
+    archive_limit, child_limit = base_bounds(base_profile(records['interface-messages']))
     inventory = helper.capture_artifacts(root / 'interface-messages.tsv', records['interface-messages'])
     require(len(inventory) <= MAX_CHILD_FILES, 'Too many base capture artifacts')
     total = 0
     with tarfile.open(output, 'x', format=tarfile.USTAR_FORMAT) as archive:
         for name, expected in sorted(inventory.items()):
             require(Path(name).name == name and name not in ('.', '..'), 'Invalid base artifact name')
-            raw = evidence.small(root / name, MAX_CHILD_FILE)
+            raw = evidence.small(root / name, child_limit)
             require(evidence.digest(raw) == expected, 'Base artifact changed before archive')
             total += len(raw) + 1024
-            require(total <= MAX_ARCHIVE - 10240, 'Base archive exceeds byte limit')
+            require(total <= archive_limit - 10240, 'Base archive exceeds byte limit')
             info = tarfile.TarInfo(name)
             info.size, info.mode, info.mtime = len(raw), 0o600, 0
             archive.addfile(info, io.BytesIO(raw))
-    require(output.stat().st_size <= MAX_ARCHIVE, 'Base archive exceeds byte limit')
+    require(output.stat().st_size <= archive_limit, 'Base archive exceeds byte limit')
     return inventory
 
 
 @contextmanager
-def replay_base(root):
-    archive_raw = evidence.small(root / ARCHIVE, MAX_ARCHIVE)
+def replay_base(root, profile):
+    archive_limit, child_limit = base_bounds(profile)
+    archive_raw = evidence.small(root / ARCHIVE, archive_limit)
     scratch = evidence.REPO / '.tmp'
     scratch.mkdir(exist_ok=True)
     require(scratch.is_dir() and not scratch.is_symlink(), 'Unsafe replay scratch parent')
@@ -103,13 +124,13 @@ def replay_base(root):
                 require(member.isfile() and Path(name).name == name and name not in ('.', '..')
                         and name not in names and len(names) < MAX_CHILD_FILES,
                         'Invalid or duplicate base archive member')
-                require(0 <= member.size <= MAX_CHILD_FILE, 'Base artifact exceeds byte limit')
+                require(0 <= member.size <= child_limit, 'Base artifact exceeds byte limit')
                 total += member.size
-                require(total <= MAX_ARCHIVE, 'Base payload exceeds byte limit')
+                require(total <= archive_limit, 'Base payload exceeds byte limit')
                 stream = archive.extractfile(member)
                 require(stream is not None, 'Missing base archive data')
                 with stream:
-                    raw = stream.read(MAX_CHILD_FILE + 1)
+                    raw = stream.read(child_limit + 1)
                 require(len(raw) == member.size, 'Truncated base archive member')
                 # Disposable replay scratch, authenticated below and removed by
                 # TemporaryDirectory. Match the existing union extractor: only
@@ -180,8 +201,9 @@ def observation(root, record, base):
     return legacy.parse_messages(evidence.decode(raw), language, [key], base['wiki'], base['content_language']), receipt
 
 
-def owned_payload(root):
+def owned_payload(root, profile):
     """Inspect only this capture's names; other auxiliary snapshots share staging."""
+    archive_limit, child_limit = base_bounds(profile)
     expected = {ARCHIVE, NAMESPACE, PREFIX + 'requested.json', PREFIX + '0001.request.json',
                 *(kind + '.tsv' for kind in KINDS)}
     expected.update(PREFIX + f'0001-{attempt:02d}.' + suffix
@@ -193,7 +215,7 @@ def owned_payload(root):
         if name in markers or not (name.startswith(PREFIX) or name in (kind + '.tsv' for kind in KINDS)):
             continue
         require(name in expected, 'Unexpected union-owned artifact')
-        limit = MAX_ARCHIVE if name == ARCHIVE else MAX_CHILD_FILE
+        limit = archive_limit if name == ARCHIVE else child_limit
         raw = evidence.small(path, limit)
         result[name] = {'size': len(raw), 'sha256': evidence.digest(raw)}
     return dict(sorted(result.items()))
@@ -221,18 +243,20 @@ def verify(root, require_complete=True):
             and record.get('candidate_queries_complete') is True and record.get('corpus_query_closure_proven') is False
             and record.get('fallback_mode') == 'strict' and record.get('message_mode') == 'plain-with-database',
             'Union scope differs')
-    inventory = owned_payload(root)
+    profile = record.get('base_profile')
+    _, child_limit = base_bounds(profile)
+    inventory = owned_payload(root, profile)
     require(inventory == record.get('artifacts'), 'Union artifact inventory differs')
-    with replay_base(root) as (base_root, base_records, base_inventory):
+    with replay_base(root, profile) as (base_root, base_records, base_inventory):
         base = base_records['interface-messages']
-        require(record.get('base_profile') == {k: base[k] for k in ('schema', 'generator_sha256', 'keys')}, 'Base profile differs')
+        require(profile == base_profile(base), 'Base profile differs')
         for key in ('wiki', 'date', 'content_language', 'namespace_registry_sha256'):
             require(record.get(key) == base[key], 'Union/base identity differs')
         namespace = evidence.small(base_root / NAMESPACE, MAX_MANIFEST)
         require(evidence.small(root / NAMESPACE, MAX_MANIFEST) == namespace, 'Union namespace differs from base')
         observed, receipt = observation(root, record, base)
         language, key = selection(record)
-        merged, rows = merged_messages(evidence.small(base_root / 'interface-messages.tsv', MAX_CHILD_FILE),
+        merged, rows = merged_messages(evidence.small(base_root / 'interface-messages.tsv', child_limit),
                                        observed, language, key, base)
         expected_sources = [
             {'role': 'base-capture', 'schema': base['schema'], 'archive': ARCHIVE,
@@ -242,14 +266,14 @@ def verify(root, require_complete=True):
              'accepted_receipt': record['singleton']['accepted_receipt'], 'retrieved_utc': receipt['ended_utc']}]
         require(record.get('sources') == expected_sources, 'Multiple-source provenance differs')
         outputs = {'interface-messages': (merged, rows),
-                   'language-fallbacks': (evidence.small(base_root / 'language-fallbacks.tsv', MAX_CHILD_FILE),
+                   'language-fallbacks': (evidence.small(base_root / 'language-fallbacks.tsv', child_limit),
                                           base_records['language-fallbacks']['rows'])}
         for kind, (raw, count) in outputs.items():
             current = records[kind]
-            require(evidence.small(root / (kind + '.tsv'), MAX_CHILD_FILE) == raw
+            require(evidence.small(root / (kind + '.tsv'), child_limit) == raw
                     and current.get('rows') == count and current.get('output_bytes') == len(raw)
                     and current.get('output_sha256') == evidence.digest(raw), 'Union TSV differs from source evidence')
-    require(owned_payload(root) == inventory, 'Union changed during verification')
+    require(owned_payload(root, profile) == inventory, 'Union changed during verification')
     return records
 
 
@@ -260,8 +284,10 @@ def capture(args, transport=None, sleep=time.sleep):
     helper = base_helper(args.base)
     base_records = helper.verify(args.base)
     base = base_records['interface-messages']
+    profile = base_profile(base)
+    _, child_limit = base_bounds(profile)
     # Reject duplicate/conflicting selections before any output or network work.
-    merged_messages(evidence.small(args.base / 'interface-messages.tsv', MAX_CHILD_FILE),
+    merged_messages(evidence.small(args.base / 'interface-messages.tsv', child_limit),
                     {key: None}, language, key, base)
     require(language in base['fallback_languages'], 'Selected language absent from retained fallback inventory')
     identity = producer()
@@ -275,10 +301,10 @@ def capture(args, transport=None, sleep=time.sleep):
         observed, batch = legacy.request_observation(root, 1, base['wiki'], base['content_language'], specification,
             transport or evidence.get_response, sleep, args.delay, time.monotonic() + args.wall_seconds)
         receipt = evidence.decode(evidence.small(root / batch['accepted_receipt'], MAX_MANIFEST))
-        merged, count = merged_messages(evidence.small(args.base / 'interface-messages.tsv', MAX_CHILD_FILE),
+        merged, count = merged_messages(evidence.small(args.base / 'interface-messages.tsv', child_limit),
                                        observed, language, key, base)
         outputs = {'interface-messages': (merged, count),
-                   'language-fallbacks': (evidence.small(args.base / 'language-fallbacks.tsv', MAX_CHILD_FILE),
+                   'language-fallbacks': (evidence.small(args.base / 'language-fallbacks.tsv', child_limit),
                                           base_records['language-fallbacks']['rows'])}
         for kind, (raw, _) in outputs.items():
             evidence.put(root / (kind + '.tsv'), raw)
@@ -289,8 +315,8 @@ def capture(args, transport=None, sleep=time.sleep):
             'dump_date': None, 'temporal_scope': 'current-api-observation', 'singleton': batch,
             'candidate_queries_complete': True, 'corpus_query_closure_proven': False,
             'fallback_mode': 'strict', 'message_mode': 'plain-with-database',
-            'artifacts': owned_payload(root),
-            'base_profile': {k: base[k] for k in ('schema', 'generator_sha256', 'keys')},
+            'artifacts': owned_payload(root, profile),
+            'base_profile': profile,
             'sources': [{'role': 'base-capture', 'schema': base['schema'], 'archive': ARCHIVE,
                 'manifests': {k + '.manifest.json': base_inventory[k + '.manifest.json'] for k in KINDS},
                 'retrieved_utc': base['retrieved_utc']},

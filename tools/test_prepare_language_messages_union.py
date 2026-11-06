@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import io
+import tarfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -313,6 +315,103 @@ class MessageUnionTest(unittest.TestCase):
             root, _, _ = self.capture(str(index))
             self.rebind(root, lambda record: change(record['producer']))
             with self.subTest(index=index), self.assertRaises(ValueError): union.verify(root)
+
+
+class CompleteBaseUnionTest(unittest.TestCase):
+    def setUp(self):
+        import test_prepare_language_messages_v2 as complete_tests
+        self.complete_tests = complete_tests
+        self.fixture = complete_tests.CompleteMessageTest()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+
+    def capture(self, missing=False, empty=False, large=False):
+        def enlarge(query, value):
+            if large and query.get('amfrom'):
+                value['query']['allmessages'][0]['content'] = 'x' * (3 * 1024 * 1024)
+        with patch.object(os, 'fsync', lambda descriptor: None):
+            args, _, original = self.fixture.collect(mutate=enlarge)
+        self.base = args.output
+        before = {p.name: p.read_bytes() for p in self.base.iterdir()}
+        def singleton(query, value):
+            row = value['query']['allmessages'][0]
+            if missing:
+                row.pop('content'); row['missing'] = True
+            elif empty:
+                row['content'] = ''
+        transport = self.complete_tests.CompleteTransport(singleton)
+        args = SimpleNamespace(base=self.base, language='bn', message='potential-form-tooltip',
+            output=self.fixture.base / 'union', delay=0, wall_seconds=60)
+        records = union.capture(args, transport=transport, sleep=lambda _: None)
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual(parse_qs(urlsplit(transport.calls[0]).query)['ammessages'], ['potential-form-tooltip'])
+        self.assertEqual({p.name: p.read_bytes() for p in self.base.iterdir()}, before)
+        self.assertEqual((args.output / 'language-fallbacks.tsv').read_bytes(), before['language-fallbacks.tsv'])
+        old = before['interface-messages.tsv'].splitlines(keepends=True)
+        new = (args.output / 'interface-messages.tsv').read_bytes().splitlines(keepends=True)
+        self.assertEqual([row for row in new if not row.startswith(b'bn\tpotential-form-tooltip\t')], old)
+        self.assertEqual(records['interface-messages']['rows'], original['interface-messages']['rows'] + 1)
+        self.assertFalse(records['interface-messages']['corpus_query_closure_proven'])
+        self.assertEqual(records['interface-messages']['sources'][0]['retrieved_utc'], original['interface-messages']['retrieved_utc'])
+        return args.output, records
+
+    def rebind(self, root, change=None):
+        hashes = {}
+        for kind in union.KINDS:
+            path = root / (kind + '.manifest.json')
+            record = json.loads(path.read_bytes())
+            record['artifacts'] = union.owned_payload(root, record['base_profile'])
+            if change: change(record)
+            path.write_bytes(union.evidence.encoded(record))
+            hashes[path.name] = union.evidence.digest(path.read_bytes())
+        (root / union.COMPLETE).write_bytes(union.evidence.encoded(dict(schema=union.SCHEMA, manifests=hashes)))
+
+    def test_complete_base_singleton_and_normal_paired_builder_route(self):
+        root, records = self.capture()
+        self.assertEqual(union.verify(root), records)
+        self.assertEqual(records['interface-messages']['base_profile']['schema'], v2.COMPLETE_SCHEMA)
+        for kind in union.KINDS:
+            path = root / (kind + '.tsv')
+            self.assertIs(builder.auxiliary_capture_helper(kind, path), union)
+            self.assertEqual(builder.validated_auxiliary_capture(kind, path, self.complete_tests.WIKI, DATE)[0], records[kind])
+        with self.assertRaisesRegex(ValueError, 'replayed v2'):
+            union.require_preferred_loop(records['interface-messages'])
+
+    def test_complete_base_explicit_missing_remains_negative(self):
+        root, records = self.capture(missing=True)
+        self.assertIn(b'bn\tpotential-form-tooltip\tM\n', (root / 'interface-messages.tsv').read_bytes())
+        self.assertEqual(union.verify(root), records)
+
+    def test_complete_base_empty_value_is_not_missing(self):
+        root, records = self.capture(empty=True)
+        self.assertIn(b'bn\tpotential-form-tooltip\tV\t\n', (root / 'interface-messages.tsv').read_bytes())
+        self.assertEqual(union.verify(root), records)
+
+    def test_complete_large_archive_uses_complete_bounds_only(self):
+        root, records = self.capture(large=True)
+        self.assertGreater((root / union.ARCHIVE).stat().st_size, union.MAX_ARCHIVE)
+        self.assertGreater((root / 'interface-messages.tsv').stat().st_size, union.MAX_CHILD_FILE)
+        self.assertEqual(union.verify(root), records)
+        self.assertEqual(union.base_bounds({'schema': v2.SCHEMA}), (union.MAX_ARCHIVE, union.MAX_CHILD_FILE))
+        with self.assertRaisesRegex(ValueError, 'Unknown'):
+            union.base_bounds({'schema': 'unknown'})
+
+    def test_complete_profile_and_resealed_archived_request_remain_bound(self):
+        root, records = self.capture()
+        self.rebind(root, lambda record: record['base_profile'].update(coverage_sha256='0' * 64))
+        with self.assertRaisesRegex(ValueError, 'Base profile differs'): union.verify(root)
+        self.rebind(root, lambda record: record.update(base_profile=records['interface-messages']['base_profile']))
+        request = self.base / (v2.PREFIX + 'requested.json')
+        data = json.loads(request.read_bytes()); data['api_core'] = 'f' * 40
+        request.write_bytes(union.evidence.encoded(data))
+        self.fixture.rebind(self.base)
+        with tarfile.open(root / union.ARCHIVE, 'w', format=tarfile.USTAR_FORMAT) as archive:
+            for path in sorted(self.base.iterdir()):
+                raw = path.read_bytes(); info = tarfile.TarInfo(path.name)
+                info.size, info.mode, info.mtime = len(raw), 0o600, 0
+                archive.addfile(info, io.BytesIO(raw))
+        self.rebind(root)
+        with self.assertRaises(ValueError): union.verify(root)
 
 
 if __name__ == '__main__':
