@@ -1438,6 +1438,39 @@ test "template parse limits fail publication instead of preserving executable sy
     try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "cat", .language, "English", "en", source.items, null));
 }
 
+// Disallowed source tokens escape only their angles. Independently authored
+// protected angles preserve the complete ordinary body and its actions.
+fn expectDisallowedLiteralCase(a: std.mem.Allocator, source: []const u8, reference: []const u8, visible_reference: ?[]const u8, external_actions: usize) !Fallbacks {
+    const leaked = [_]compiler.Span{.{ .text = source }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &leaked, null));
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report);
+    var expected_report: Fallbacks = .{};
+    const expected_bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", reference, null, &expected_report);
+    try std.testing.expectEqualSlices(u8, expected_bytes, bytes);
+    const actual = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    const expected = try codec.decodeAlloc(a, expected_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, actual));
+    try std.testing.expect(report.unsupported_element and !expected_report.unsupported_element);
+    try std.testing.expectEqual(@as(usize, 0), actual.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 0), actual.entry.media.len);
+    var visible: std.ArrayList(u8) = .empty;
+    var actions: usize = 0;
+    for (actual.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        try visible.appendSlice(a, span.trail);
+        if (span.kind == .external_link) {
+            actions += 1;
+            try std.testing.expectEqualStrings("https://example.test", span.target);
+            try std.testing.expectEqualStrings("https://example.test", span.text);
+        } else try std.testing.expect(span.kind == .text and span.target.len == 0);
+    };
+    try std.testing.expectEqual(external_actions, actions);
+    if (visible_reference) |text| try std.testing.expectEqualStrings(text, visible.items);
+    return report;
+}
+
 test "reported recovery matches MediaWiki literal and formatting fixtures" {
     // Live oracle: tools/check_mediawiki_recovery.py and its fixture file.
     const cases = [_][2][]const u8{
@@ -1455,11 +1488,8 @@ test "reported recovery matches MediaWiki literal and formatting fixtures" {
         defer arena.deinit();
         const a = arena.allocator();
         var report: Fallbacks = .{};
-        // The old MediaWiki literal display oracle is not a permission to ship
-        // active parsed source. Preserve it above as the before-policy witness.
         if (std.mem.eql(u8, case[0], "X <script>y</script> Z")) {
-            try std.testing.expectError(error.UncompiledPresentation, compileReportedAlloc(a, "entry", .language, "English", "en", case[0], null, &report));
-            try std.testing.expect(report.literal_markup);
+            _ = try expectDisallowedLiteralCase(a, case[0], "X <nowiki><</nowiki>script<nowiki>></nowiki>y<nowiki><</nowiki>/script<nowiki>></nowiki> Z", case[1], 0);
             continue;
         }
         const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", case[0], null, &report);
@@ -3923,8 +3953,9 @@ test "angle URL classification leaves HTML and unresolved delimiters strict" {
     const a = arena.allocator();
     for ([_][]const u8{
         "<http:broken>",                         "<http://>",                   "<http://example.test attribute=bad>",
-        "<script>https://example.test</script>", "<https://example.test/a{|b>", "<https://example.test/a[[b]]>",
+        "<https://example.test/a{|b>", "<https://example.test/a[[b]]>",
     }) |source| try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", source, null));
+    _ = try expectDisallowedLiteralCase(a, "<script>https://example.test</script>", "<nowiki><</nowiki>script<nowiki>></nowiki>https://example.test<nowiki><</nowiki>/script<nowiki>></nowiki>", "<script>https://example.test</script>", 1);
     try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "entry", .language, "English", "en", "<https://example.test/{{missing}}>", null));
     // A rejected bracketed destination retains only its independent authored label.
     var rejected_report: Fallbacks = .{};
@@ -5297,7 +5328,7 @@ test "dotted external citation label roundtrips without relaxing raw residual va
 test "iframe literal angles roundtrip without exempting attributes or body validation" {
     var pa_arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer pa_arena.deinit();
     const pa_alloc = pa_arena.allocator();
-    for ([_][]const u8{ "iframe" }) |pa_tag| {
+    for ([_][]const u8{ "iframe", "script", "style", "object", "embed" }) |pa_tag| {
         const pa_source = try std.fmt.allocPrint(pa_alloc, "<{s}>[[Target|linked]]</{s}>", .{pa_tag, pa_tag});
         var pa_report: Fallbacks = .{};
         const pa_bytes = try compileReportedAlloc(pa_alloc, "entry", .language, "English", "en", pa_source, null, &pa_report);
@@ -5316,17 +5347,19 @@ test "iframe literal angles roundtrip without exempting attributes or body valid
         try std.testing.expectEqualStrings(try std.fmt.allocPrint(pa_alloc, "<{s}>linked</{s}>", .{pa_tag, pa_tag}), pa_visible.items);
         try std.testing.expectEqual(@as(usize, 1), pa_actions);
         try std.testing.expect(pa_report.unsupported_element);
+        // Keep each exact former rejected source as an independently escaped
+        // whole-record reference, in addition to its active child-body control.
+        const pa_simple = try std.fmt.allocPrint(pa_alloc, "X <{s}>y</{s}> Z", .{pa_tag, pa_tag});
+        const pa_reference = try std.fmt.allocPrint(pa_alloc, "X <nowiki><</nowiki>{s}<nowiki>></nowiki>y<nowiki><</nowiki>/{s}<nowiki>></nowiki> Z", .{pa_tag, pa_tag});
+        _ = try expectDisallowedLiteralCase(pa_alloc, pa_simple, pa_reference, pa_simple, 0);
         // Protection belongs to the recognized tag token, never the ordinary body.
         const pa_bad_body = try std.fmt.allocPrint(pa_alloc, "<{s}>before |}} after</{s}>", .{pa_tag, pa_tag});
         try std.testing.expectError(error.UncompiledPresentation, compileAlloc(pa_alloc, "entry", .language, "English", "en", pa_bad_body, null));
     }
-    // Existing disallowed-tag rejection contracts outside iframe are unchanged.
-    for ([_][]const u8{ "script", "style", "object", "embed" }) |pa_other_tag| {
-        const pa_other_source = try std.fmt.allocPrint(pa_alloc, "X <{s}>y</{s}> Z", .{pa_other_tag, pa_other_tag});
-        try std.testing.expectError(error.UncompiledPresentation, compileAlloc(pa_alloc, "entry", .language, "English", "en", pa_other_source, null));
-    }
+    // All selected disallowed tokens have the same literal delimiter contract;
+    // their body URLs retain only independently parsed ordinary actions.
+    _ = try expectDisallowedLiteralCase(pa_alloc, "<script>https://example.test</script>", "<nowiki><</nowiki>script<nowiki>></nowiki>https://example.test<nowiki><</nowiki>/script<nowiki>></nowiki>", "<script>https://example.test</script>", 1);
     for ([_][]const u8{
-        "<script>https://example.test</script>",
         "<iframe data-note='{{deferred}}'></iframe>",
         "<iframe data-note='before |} after'></iframe>",
         "<iframe data-note='[https:// broken]'></iframe>",
@@ -5530,11 +5563,12 @@ test "TL layout close routing keeps matched tables and protected action referenc
         "<div>first\ninline |} suffix</div>",
         "[[Target|<div>first\n|} label</div>]]",
         "<ref><div>first\n|} reference</div></ref>",
-        "<div>first\n|} <script>still strict</script></div>",
     }) |strict_source| {
         var report: Fallbacks = .{};
         try std.testing.expectError(error.UncompiledPresentation, compileReportedAlloc(a, "entry", .language, "English", "en", strict_source, null, &report));
     }
+    const disallowed_report = try expectDisallowedLiteralCase(a, "<div>first\n|} <script>still strict</script></div>", "<div>first\n|} <nowiki><</nowiki>script<nowiki>></nowiki>still strict<nowiki><</nowiki>/script<nowiki>></nowiki></div>", null, 0);
+    try std.testing.expect(disallowed_report.malformed_table and disallowed_report.literal_markup);
     const leaked = [_]compiler.Span{.{ .text = "|}" }};
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &leaked, null));
     try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("|}"));
@@ -6099,7 +6133,7 @@ test "underscore literal source proof cannot authorize parsed residual markup or
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &leaked, null));
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &split, null));
     try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("<ref_custom/>"));
-    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "<script>word</script>", null));
+    _ = try expectDisallowedLiteralCase(a, "<script>word</script>", "<nowiki><</nowiki>script<nowiki>></nowiki>word<nowiki><</nowiki>/script<nowiki>></nowiki>", "<script>word</script>", 0);
     try expectUnknownAtomicSourceLiteral(a, "<ref_custom>word", "&lt;ref_custom&gt;word", "<ref_custom>word");
     var report: Fallbacks = .{};
     const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", "word<ref name=n>[[Target]]</ref><references/>", null, &report);
@@ -10413,6 +10447,73 @@ test "computed font authority survives normal document heading scopes and restor
     };
     try std.testing.expectEqual(@as(usize, 4), targets);
     try std.testing.expect(actual_report.unresolved_table_style and reference_report.unresolved_table_style);
+}
+
+test "disallowed HTML delimiters preserve complete literal display body actions styles and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "script", "SCRIPT", "style", "iframe", "object", "embed" }) |tag| {
+        for ([_]bool{ false, true }) |paired| {
+            const close = if (paired) try std.fmt.allocPrint(a, "</{s}>", .{tag}) else "";
+            const reference_close = if (paired) try std.fmt.allocPrint(a, "<nowiki><</nowiki>/{s}<nowiki>></nowiki>", .{tag}) else "";
+            const source = try std.fmt.allocPrint(a, "''before <{s}>body '''bold''' [[Next|next]]{s} after''", .{tag, close});
+            const reference = try std.fmt.allocPrint(a, "''before <nowiki><</nowiki>{s}<nowiki>></nowiki>body '''bold''' [[Next|next]]{s} after''", .{tag, reference_close});
+            var report: Fallbacks = .{};
+            const actual_bytes = try compileReportedAlloc(a, "disallowed tag proof", .language, "English", "en", source, null, &report);
+            const expected_bytes = try compileAlloc(a, "disallowed tag proof", .language, "English", "en", reference, null);
+            try std.testing.expectEqualSlices(u8, expected_bytes, actual_bytes);
+            const actual = try codec.decodeAlloc(a, actual_bytes, "disallowed tag proof", .language, .{ .heading = "English", .code = "en" });
+            const expected = try codec.decodeAlloc(a, expected_bytes, "disallowed tag proof", .language, .{ .heading = "English", .code = "en" });
+            try std.testing.expectEqualDeep(expected, actual);
+            try std.testing.expectEqualSlices(u8, actual_bytes, try codec.encodeAlloc(a, actual));
+            try std.testing.expect(report.unsupported_element and !report.unclosed_formatting);
+            var actions: usize = 0; var bold_seen = false; var visible: std.ArrayList(u8) = .empty;
+            for (actual.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+                try visible.appendSlice(a, span.text); try visible.appendSlice(a, span.trail);
+                try std.testing.expect(span.italic and !span.code);
+                if (span.bold and std.mem.eql(u8, span.text, "bold")) bold_seen = true;
+                if (span.kind == .link) {
+                    actions += 1; try std.testing.expectEqualStrings("Next", span.target); try std.testing.expectEqualStrings("next", span.text);
+                } else try std.testing.expect(span.kind == .text and span.target.len == 0);
+            };
+            try std.testing.expect(bold_seen);
+            try std.testing.expectEqual(@as(usize, 1), actions);
+            try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "before <{s}>body bold next{s} after", .{tag, close}), visible.items);
+        }
+    }
+}
+
+test "disallowed token escape preserves parsed residual guards and protected source boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var parsed = [_]compiler.Span{.{ .text = "<SCRIPT>" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &parsed, null));
+    for ([_]ir.InlineKind{ .link, .external_link }) |kind| {
+        var action = [_]compiler.Span{.{ .kind = kind, .text = "literal label", .target = "{{unexpanded}}", .provenance = .protected_literal }};
+        try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &action, null));
+    }
+    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "bad attribute", .language, "English", "en", "<script data-note=\"{{unexpanded}}\">body", null));
+    for ([_]struct { source: []const u8, literal: bool }{
+        .{ .source = "<nowiki><SCRIPT>[[Hidden]]</nowiki> [[Next]]", .literal = true },
+        .{ .source = "<source><SCRIPT>[[Hidden]]</source> [[Next]]", .literal = true },
+        .{ .source = "<!-- <SCRIPT> [[Hidden]] -->[[Next]]", .literal = false },
+        .{ .source = "<span title=\"&lt;SCRIPT&gt;\">attribute</span> [[Next]]", .literal = false },
+        .{ .source = "<a href=\"Target\">plain anchor body</a> [[Next]]", .literal = false },
+    }) |row| {
+        var report: Fallbacks = .{};
+        const bytes = try compileReportedAlloc(a, "source boundary", .language, "English", "en", row.source, null, &report);
+        const stored = try codec.decodeAlloc(a, bytes, "source boundary", .language, .{ .heading = "English", .code = "en" });
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+        try std.testing.expect(!report.unsupported_element);
+        var actions: usize = 0; var visible: std.ArrayList(u8) = .empty;
+        for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try visible.appendSlice(a, span.text); try visible.appendSlice(a, span.trail);
+            if (span.kind == .link) { actions += 1; try std.testing.expectEqualStrings("Next", span.target); }
+            try std.testing.expect(span.kind != .external_link);
+        };
+        try std.testing.expectEqual(@as(usize, 1), actions);
+        try std.testing.expectEqual(row.literal, std.mem.indexOf(u8, visible.items, "<SCRIPT>[[Hidden]]") != null);
+    }
 }
 
 test "plain HTML H1 owner observation retains top level source and protected boundary exclusions" {

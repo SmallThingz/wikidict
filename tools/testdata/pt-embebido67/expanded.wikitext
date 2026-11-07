@@ -1,0 +1,44 @@
+<div class="rellink">Ver a entrada [[embebido#Português|embebido]].</div>[[Categoria:Página de citação (Português)|embebido]]
+
+
+# [[ensopado]]
+# [[impregnado]]
+#: 1959, Portugal. Junta de Investigações do Ultramar, ''Memórias da Junta de Investigações do Ultramar Volumes 12 a 14'', pag: 62
+#*: ''Outro método consiste em inocular as cotilédones logo após a germinação, arranhando muito ao de leve a epiderme com um palito dos dentes '''embebido''' de bactérias''
+#: '''2014''', ''Raul Brandão, um intelectual no entre-séculos (estudos para Luci Ruas)'', pag: 275
+#*: ''A obra, '''embebida''' no pessimismo finissecular decadentista''
+# [[cravado]]
+#: '''1822''', ''Correio do Rio de Janeiro'', pag: 34
+#*: ''Foi para pilhar os thesoiros defendidos por Sully, que hum ferro sacrilego foi '''embebido''' no coração de Henrique 4''
+#: '''1873''', ''*Thesouro da lingua portugueza 3: E-LYTH.'', pag: 58
+#*: ''Theodomiro tinha já desencravado a espada do escudo de Juliano, em que ficara '''embebida'''.''
+# [[introduzido]]
+#: '''1727''', Rafael Bluteau, ''Vocabulario Portuguez E Latino Supplemento ; pt.1 · Volume 9''
+#*: ''Muitas vezes tem acontecido a Naires, depois de atravessados de parte a parte com huma lança, virem enfiandose, e correndo por ella '''embebida''' no corpo, até chegar ao contrario, e tratarem-no taõ mal, que ambos cahiaõ mortos em um mesmo tempo''
+#: '''1873''', Domingo Vieira, ''Thesouro da lingua portugueza'', pag: 58
+#*: ''Uma taboa '''embebida''' no seu encaixe''
+# [[cercado]] e [[preso]] com força
+#: '''1851''', Alexandre Herculano, ''Lendas e narrativas'', pag: 198
+#*: ''A um aceno de D. Leonor, o donzel metteu a tocha no annel de ferro '''embebido''' na parede, d'onde a tinha tirado, e encaminhou-se para juncto da porta, onde ficou com os braços cruzados, olhos no chão, e immovel como uma estatua.''
+#: '''1963''', Sousa da Silveira, ''Trechos seletos complemento prático às Lições de português do mesmo autor, com uma introdução histórico-gramatical e anotações'', pag: 442
+#* ''Num braço de ferro '''embebido''' na forte sanca de um dos arcos da abóbada , uma tocha ardia''
+#: '''1949''', ''Boletim Exemplar 132'', Brazil. Divisão de Geologia e Mineralogia, pag: 29
+#*: ''O estágio final neste caso também aparece como havendo sido atingido pela ação em massa do magma granínitico '''embebido''' na rocha.''
+#: '''1954''', ''Anuario da Província de Moçambique'', pag: 144
+#*: ''Na altura do Carbono, figuram alguns diamantes, um deles '''embebido''' na rocha - mãe , a kimberlite; provêm estes exemplares da Wesselton Mine, de Kimberley , e foram expressamente obtidos para o na museu.''
+#: '''1965''', Comissão dos Monumentos Nacionais de Moçambique, ''Monumenta Exemplares 1 a 4'', pag: 28
+#*: ''com prováveis bons achados de antecessores do Homem, a exemplo de um crânio, ainda '''embebido''' na rocha''
+#: '''2015''', A. M. Neville, ''Propriedades do Concreto - 5ª Edição'', pag: 112
+#*: ''Por exemplo, uma amostra de rocha pode desagregar no congelamento, mas não necessariamente quando '''embebida''' no concreto''
+# [[integrado]]
+#: '''1838''', ''O Panorama Volume 2'', pag: 202
+#*: ''estar '''embebida''' no corpo do edificio''
+# <templatestyles src="Template:escopo/styles.css" />(<span class="escopo">Informática</span>) [[embutido]]
+#: '''2012''', ''Língua Portuguesa Na Era Digital'', pag: 27
+#*: ''Cabe notar que um gerador automático de texto deste género não representa, em regra, uma aplicação individual, encontrando-se '''embebido''' numa aplicação mais vasta, como é o caso dos sistemas de informação hospitalares''
+#: Carlos J. Costa, ''Desenvolvimento para Web'', pag: ''?''
+#*: ''O código está integrado e '''embebido''' no HTML''
+#: '''2015''', Troy Dimes, ''JavaScript: Um Guia para Aprender a Linguagem de Programação JavaScript'', pag: ''?''
+#*: ''O marcador <SCRIPT> informa o navegador web que se segue código JavaScript. Encontra-se frequentemente '''embebido''' em HTML.''
+
+[[Categoria:Página de citação (Português)|embebido]]

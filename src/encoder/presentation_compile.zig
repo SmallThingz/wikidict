@@ -9286,17 +9286,12 @@ pub const Renderer = struct {
         }
         if (oneOf(tag.name, &.{ "script", "style", "iframe", "object", "embed" })) {
             self.fallbacks.unsupported_element = true;
-            // These disallowed tags are escaped text, not opaque extensions.
-            // Preserve only this literal tag token, then let ordinary body
-            // markup, active switches and protected regions retain their rules.
-            if (tag.is("iframe")) {
-                // Only authored iframe angle delimiters are display literals.
-                // Keep the name and attributes parsed so residual syntax remains
-                // subject to the unchanged document validator.
-                try self.protectedLiteral(input[at .. at + 1], style);
-                try self.literal(input[at + 1 .. tag.end - 1], style);
-                try self.protectedLiteral(input[tag.end - 1 .. tag.end], style);
-            } else try self.literal(input[at..tag.end], style);
+            // Sanitizer escapes every disallowed token's angle delimiters.
+            // Keep names/attributes parsed, so their unresolved syntax and all
+            // ordinary body actions retain the existing strict validators.
+            try self.protectedLiteral(input[at .. at + 1], style);
+            try self.literal(input[at + 1 .. tag.end - 1], style);
+            try self.protectedLiteral(input[tag.end - 1 .. tag.end], style);
             return tag.end;
         }
         // Sanitizer recognizes closing pre as HTML even without an opening
