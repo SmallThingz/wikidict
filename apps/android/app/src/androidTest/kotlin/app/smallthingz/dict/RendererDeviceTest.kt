@@ -205,6 +205,39 @@ internal fun assertCompletePlainTextLayout(layout: androidx.compose.ui.text.Text
 }
 
 class RendererDeviceTest {
+    @Test fun leadingListTableShowsOneMarkerAndContinuationKeepsBodyAndActions() {
+        val floating = mutableStateOf(false)
+        val followed = mutableListOf<EntryLink>()
+        fun table(label: String) = Table(emptyList(), listOf(listOf(
+            Cell(listOf(Span("link", label, target = label)), false, 1, 1))),
+            style = if (floating.value) TableStyle(floatSide = TableFloatSide.Left) else null)
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                val leading = Block("list_item", 1, emptyList(), listPath = "*", table = table("Leading cell"))
+                val continuation = Block("table", 1, emptyList(), listPath = "*", table = table("Continuation cell"))
+                val entry = Entry("Bullet tables", emptyList(), "language", "English", "en",
+                    listOf(Section(3, "Noun", listOf(leading, continuation))), emptyList())
+                DictTheme("light") { androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+                    EntryView(entry, false, {}, onLink = { followed += it },
+                        settings = AppSettings(collapseDetails = false, collapseOtherSections = false))
+                } }
+            } }
+            for (float in listOf(false, true)) {
+                compose.runOnIdle { floating.value = float }
+                compose.onAllNodesWithText("• ", useUnmergedTree = true).assertCountEquals(1)
+                val markerBounds = compose.onNodeWithText("• ", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+                val firstRowBounds = compose.onNodeWithText("Leading cell").fetchSemanticsNode().boundsInRoot
+                assertTrue(markerBounds.right <= firstRowBounds.left + 1f)
+                assertTrue(markerBounds.top < firstRowBounds.bottom && markerBounds.bottom > firstRowBounds.top)
+                compose.onNodeWithText("Leading cell").assertIsDisplayed().performClick()
+                compose.onNodeWithText("Continuation cell").assertIsDisplayed().performClick()
+                compose.runOnIdle {
+                    assertEquals(listOf("Leading cell", "Continuation cell"), followed.takeLast(2).map { it.target })
+                }
+            }
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+    }
+
     @Test fun textDetailsExposeAuthoredAudioCaptionAndAbbreviationWithoutChangingBodyActions() {
         val file = "En-us-girl.ogg"
         val audio = Span("link", file, "File:$file",

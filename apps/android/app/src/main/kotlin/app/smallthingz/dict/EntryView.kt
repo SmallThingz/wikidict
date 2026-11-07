@@ -412,7 +412,17 @@ private fun BlockView(block: Block, onLink: (EntryLink) -> Unit, path: String? =
 @Composable
 private fun BlockContent(block: Block, onLink: (EntryLink) -> Unit, path: String?, inCell: Boolean, gridPath: String) {
     when {
-        block.table != null -> Box(Modifier.padding(start = blockIndentDp(block).dp)) { RenderCompiledTable(block.table, block.feature, gridPath, inCell, path?.let { "$it/table" }.orEmpty(), onLink) }
+        block.table != null -> {
+            val prefix = if (block.kind == "list_item") blockPrefix(block) else ""
+            if (prefix.isEmpty()) {
+                Box(Modifier.padding(start = blockIndentDp(block).dp)) { RenderCompiledTable(block.table, block.feature, gridPath, inCell, path?.let { "$it/table" }.orEmpty(), onLink) }
+            } else Row(Modifier.padding(start = blockIndentDp(block).dp)) {
+                Text(prefix, Modifier.widthIn(min = 28.dp).padding(top = 4.dp, end = 6.dp),
+                    color = canonicalColorArgb(LocalAuthoredBackground.current)?.let { Color(authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)!!) } ?: MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelMedium)
+                Box(Modifier.weight(1f)) { RenderCompiledTable(block.table, block.feature, gridPath, inCell, path?.let { "$it/table" }.orEmpty(), onLink) }
+            }
+        }
         block.kind == "heading" -> CellHeading(block, path, onLink)
         block.kind == "rule" -> HorizontalDivider(color =
             authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)?.let { Color(it) } ?: DividerDefaults.color)
@@ -902,7 +912,8 @@ private fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) -> 
                 if (table == null || block.feature != null) originalWidth else {
                     val metrics = natural(originalWidth)?.let { tableMetricsInWidth(table, it, tableGrid(table).columns, originalWidth) }
                     val margins = if (side == null) metrics?.style?.margins?.horizontal ?: 0 else 0
-                    val width = metrics?.let { it.width.toLong() + margins + (blockIndentDp(block) * density.density).toInt() }
+                    val markerWidth = if (block.kind == "list_item") with(density) { 28.dp.roundToPx() } else 0
+                    val width = metrics?.let { it.width.toLong() + margins + markerWidth + (blockIndentDp(block) * density.density).toInt() }
                         ?: originalWidth.toLong()
                     width.coerceIn(1L, originalWidth.toLong()).toInt()
                 }
