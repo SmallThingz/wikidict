@@ -3847,6 +3847,72 @@ private slots:
     }
 
 
+    void completedDictionaryIgnoresStaleCancelActivation() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        window.loadDataset(fixture_, QStringLiteral("English"), QStringLiteral("language"),
+                           false, QStringLiteral("dog"));
+        QVERIFY(window.loading_);
+        QVERIFY(window.cancelOpening_->isVisible());
+        QVERIFY(window.cancelOpening_->isEnabled());
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("dog"));
+        QVERIFY(!window.cancelOpening_->isVisible());
+        QVERIFY(!window.cancelOpening_->isEnabled());
+        QVERIFY(window.cancelLoad_);
+        QVERIFY(!window.cancelLoad_->load());
+        const auto *api = window.api_.get();
+        const unsigned serial = window.loadSerial_;
+        const auto cancelled = window.cancelLoad_;
+        const QJsonObject entry = window.currentEntry_;
+        const QByteArray json = window.currentJson_;
+        const QString reading = window.reading_->toPlainText();
+        const QString status = window.resultStatus_->text();
+        const QString search = window.search_->text();
+        const int visitIndex = window.visitIndex_;
+        const auto visitCount = window.visits_.size();
+        QSettings settings;
+        QVariantMap savedSettings;
+        for (const QString &key : settings.allKeys()) savedSettings.insert(key, settings.value(key));
+        QStringList history;
+        for (const auto &word : window.learning_.history()) history.append(word.key);
+
+        QSignalSpy clicked(window.cancelOpening_, &QPushButton::clicked);
+        QVERIFY(clicked.isValid());
+        window.cancelOpening_->click(); // A disabled ordinary button cannot activate.
+        QCOMPARE(clicked.size(), 0);
+        // A queued activation can outlive the visible loading affordance. Deliver
+        // that actual signal after the new dictionary has already been published.
+        QVERIFY(QMetaObject::invokeMethod(window.cancelOpening_, "clicked", Qt::QueuedConnection,
+                                          Q_ARG(bool, false)));
+        QCoreApplication::sendPostedEvents(window.cancelOpening_, QEvent::MetaCall);
+        QCOMPARE(clicked.size(), 1);
+        QVERIFY(!window.loading_);
+        QCOMPARE(window.api_.get(), api);
+        QCOMPARE(window.loadSerial_, serial);
+        QVERIFY(window.cancelLoad_ == cancelled);
+        QVERIFY(!cancelled->load());
+        QCOMPARE(window.currentEntry_, entry);
+        QCOMPARE(window.currentJson_, json);
+        QCOMPARE(window.reading_->toPlainText(), reading);
+        QCOMPARE(window.resultStatus_->text(), status);
+        QCOMPARE(window.search_->text(), search);
+        QCOMPARE(window.visitIndex_, visitIndex);
+        QCOMPARE(window.visits_.size(), visitCount);
+        QCOMPARE(title(window), QStringLiteral("dog"));
+        QVERIFY(window.search_->isEnabled());
+        QVERIFY(!window.cancelOpening_->isVisible());
+        QVERIFY(!window.cancelOpening_->isEnabled());
+        QVariantMap afterSettings;
+        for (const QString &key : settings.allKeys()) afterSettings.insert(key, settings.value(key));
+        QCOMPARE(afterSettings, savedSettings);
+        QStringList afterHistory;
+        for (const auto &word : window.learning_.history()) afterHistory.append(word.key);
+        QCOMPARE(afterHistory, history);
+    }
+
     void libraryModalDefersQueuedLoadUntilAfterActualRemoval() {
         QTemporaryDir directory(QStringLiteral(".tmp/ui-modal-remove-XXXXXX"));
         QVERIFY(directory.isValid());

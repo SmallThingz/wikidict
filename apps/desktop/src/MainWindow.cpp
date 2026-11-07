@@ -818,6 +818,7 @@ void MainWindow::setLoading(bool loading) {
     listen_->setEnabled(ready && !currentEntry_.isEmpty());
     if (loading) media_->stopPlayback();
     moreResults_->setEnabled(ready && moreAvailable_);
+    cancelOpening_->setEnabled(loading);
     cancelOpening_->setVisible(loading);
     openingProgress_->setVisible(loading);
     updateNavigation();
@@ -1319,6 +1320,7 @@ void MainWindow::setupUi() {
     connect(language_, &QComboBox::currentIndexChanged, this, [this] { selectDataset(); });
     connect(openButton, &QPushButton::clicked, this, &MainWindow::chooseRoot);
     connect(cancelOpening_, &QPushButton::clicked, this, [this] {
+        if (!loading_) return;
         if (cancelLoad_) cancelLoad_->store(true);
         ++loadSerial_;
         setLoading(false);
