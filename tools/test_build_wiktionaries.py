@@ -573,7 +573,7 @@ class PresentationRetryPolicyTests(unittest.TestCase):
             with self.subTest(change=change):self.exercise_template_capture(change)
 
     def test_template_capture_rejects_other_errors_incomplete_and_foreign_page_context(self):
-        for fields in [dict(error_name='InvalidPreContext'),dict(record_complete=False),dict(publication_created=True),
+        for fields in [dict(error_name='InvalidPreContextExtra'),dict(record_complete=False),dict(publication_created=True),
                        dict(title_truncated=True),dict(title_sha256='0'*64),dict(ordinal=2),dict(namespace=True),dict(page_id=-1)]:
             with self.subTest(fields=fields):self.exercise_template_capture(lambda r,p,f:r.update(fields))
         self.exercise_template_capture(lambda r,p,f:r['input'].update(dump_path='other'))
@@ -641,7 +641,7 @@ class PresentationRetryPolicyTests(unittest.TestCase):
         self.exercise_template_capture(no_capture=True,error_name='InvalidHeadingProjection')
         self.exercise_template_capture(lambda r,p,f:f.write_text(json.dumps(dict(error_name='OtherFailure'))),
                                        error_name='InvalidHeadingProjection')
-        for error in ('OutOfMemory','Cancelled','InvalidPreContext','OtherFailure'):
+        for error in ('OutOfMemory','Cancelled','InvalidPreContextExtra','OtherFailure'):
             with self.subTest(error=error):
                 self.exercise_template_capture(lambda r,p,f:r.update(error_name=error),error_name='InvalidHeadingProjection')
 
@@ -676,12 +676,67 @@ class PresentationRetryPolicyTests(unittest.TestCase):
                       json.dumps(dict(error_name='OtherFailure'))):
             with self.subTest(outer=outer):
                 self.exercise_template_capture(lambda r,p,f:f.write_text(outer),error_name='RenderLimit')
-        for error in ('OutOfMemory','Cancelled','InputOutput','FileNotFound','InvalidPreContext','OtherFailure'):
+        for error in ('OutOfMemory','Cancelled','InputOutput','FileNotFound','InvalidPreContextExtra','OtherFailure'):
             with self.subTest(error=error):
                 self.exercise_template_capture(lambda r,p,f:r.update(error_name=error),error_name='RenderLimit')
 
     def test_render_limit_changed_input_precedes_capture_classification(self):
         self.exercise_template_capture(identity_failure=True,error_name='RenderLimit')
+
+    def test_complete_precontext_capture_stops_first_identical_retry(self):
+        self.exercise_template_capture(error_name='InvalidPreContext')
+
+    def test_precontext_capture_requires_exact_current_complete_payload(self):
+        changes=[lambda r,p,f:r.update(invocation_id='stale'),
+                 lambda r,p,f:r.update(invocation_args_sha256='0'*64),
+                 lambda r,p,f:r.update(ordinal=2),
+                 lambda r,p,f:r['input'].update(dump_path='other'),
+                 lambda r,p,f:r.update(record_complete=False),
+                 lambda r,p,f:r['expanded'].update(truncated=True),
+                 lambda r,p,f:Path(r['raw_source']['path']).write_bytes(b'changed'),
+                 lambda r,p,f:Path(r['index_row']['path']).unlink(),
+                 lambda r,p,f:f.write_text(json.dumps(dict(error_name='InvalidPreContext')))]
+        for change in changes:
+            with self.subTest(change=change):
+                self.exercise_template_capture(change,error_name='InvalidPreContext')
+        self.exercise_template_capture(identity_failure=True,error_name='InvalidPreContext')
+
+    def test_precontext_prose_and_transient_failures_do_not_classify(self):
+        self.exercise_template_capture(no_capture=True,error_name='InvalidPreContext')
+        for error in ('OutOfMemory','Cancelled','InputOutput','FileNotFound','InvalidPreContextExtra'):
+            def prose(row,path,receipt):
+                row['error_name']=error
+                title='InvalidPreContext: literal user title'
+                row.update(title=title,title_bytes=len(title.encode()),title_sha256=hashlib.sha256(title.encode()).hexdigest())
+                payload=Path(row['expanded']['path']);data=b'error: InvalidPreContext\nraw page prose'
+                payload.write_bytes(data)
+                row['expanded'].update(bytes=len(data),retained_bytes=len(data),sha256=hashlib.sha256(data).hexdigest())
+            with self.subTest(error=error):self.exercise_template_capture(prose,error_name='InvalidPreContext')
+
+    def test_precontext_failure_and_capture_survive_payload_retirement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);shard=root/'00000000';calls=[];original=[]
+            tool=fixture_blob_tool(root);command=['dump',str(shard),'--expander-root','bundle']
+            def run(argv,*args,**kwargs):
+                calls.append(argv);shard.mkdir();(shard/'.spool').mkdir()
+                (shard/'.spool/lang-00.tmp').write_bytes(b'disposable partial output')
+                receipt=Path(argv[argv.index('--failure-receipt')+1])
+                path,row=self.template_capture(receipt,argv);row['error_name']='InvalidPreContext';path.write_text(json.dumps(row))
+                capture=shard/'.presentation-first-failure';capture.mkdir()
+                (capture/'capture.json').write_bytes(path.read_bytes())
+                error=subprocess.CalledProcessError(1,argv,output=b'exact stdout',stderr=b'exact stderr')
+                original.append(error);raise error
+            with patch.object(b,'timed_run',side_effect=run):
+                with self.assertRaises(b.DeterministicPresentationFailure) as failed:
+                    b.build_shard_with_retries(tool,command,shard,root/'failures','itwiktionary','20261001',0,2,lambda:None,lambda:self.fail('failed build validated'))
+            self.assertEqual(len(calls),1);self.assertIs(failed.exception.__cause__,original[0])
+            self.assertEqual(failed.exception.output,b'exact stdout');self.assertEqual(failed.exception.stderr,b'exact stderr')
+            capture=Path(failed.exception.failure_receipt);before=capture.read_bytes()
+            self.assertFalse((shard/'.spool/lang-00.tmp').exists())
+            archived=capture.parents[1]/'shard-diagnostics/.presentation-first-failure/capture.json'
+            self.assertEqual(archived.read_bytes(),before)
+            b.remove_artifact_tree(shard)
+            self.assertEqual(capture.read_bytes(),before);self.assertEqual(archived.read_bytes(),before)
 
 class FailedShardPayloadCleanupTests(unittest.TestCase):
     def fixture(self, root):
