@@ -205,6 +205,94 @@ internal fun assertCompletePlainTextLayout(layout: androidx.compose.ui.text.Text
 }
 
 class RendererDeviceTest {
+    @Suppress("DEPRECATION")
+    @Test fun imageActionsWithoutAuthoredAltHavePlatformNamesInOrdinaryAndNativeTrees() {
+        val floating = mutableStateOf(false)
+        val alternative = mutableStateOf<String?>(null)
+        val opened = mutableListOf<String>()
+        val file = "Vraagteken-2.svg"
+        val expectedUrl = "https://he.wiktionary.org/wiki/File%3AVraagteken-2.svg"
+        fun entry(): Entry {
+            val image = Span("link", "", "File:$file", image = InlineImage(file, 15, alt = alternative.value))
+            val body = Block("paragraph", 0, listOf(Span("text", "Image context "), image))
+            val table = Block("table", 0, emptyList(), table = Table(emptyList(), listOf(listOf(
+                Cell(listOf(Span("text", "Float")), false, 1, 1))), style = TableStyle(floatSide = TableFloatSide.Left)))
+            return Entry("Image action names", emptyList(), "language", "English", "en",
+                listOf(Section(2, "", if (floating.value) listOf(table, body) else listOf(body))), emptyList(),
+                media = listOf(Media(file, "image", "")), edition = "hewiktionary-20261001")
+        }
+        val activity = compose.activity
+        fun ownedWindow(): Int = compose.runOnIdle {
+            assertPhysicalActivity(activity)
+            check(activity.hasWindowFocus() && activity.window.decorView.hasWindowFocus())
+            val info = activity.window.decorView.createAccessibilityNodeInfo()
+            try { info.windowId } finally { info.recycle() }
+        }
+        fun namedImage(label: String): android.view.accessibility.AccessibilityNodeInfo? {
+            val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+            val window = ownedWindow()
+            val root = automation.rootInActiveWindow ?: return null
+            val pending = java.util.ArrayDeque<android.view.accessibility.AccessibilityNodeInfo>()
+            pending.add(root)
+            var found: android.view.accessibility.AccessibilityNodeInfo? = null
+            var visited = 0
+            var contextTextSeen = false
+            try {
+                check(root.packageName?.toString() == activity.packageName && root.windowId == window)
+                while (pending.isNotEmpty()) {
+                    val node = pending.removeFirst()
+                    try {
+                        check(++visited <= 512)
+                        val bodyText = node.text?.toString().orEmpty()
+                        contextTextSeen = contextTextSeen || bodyText.contains("Image context \uFFFC")
+                        assertFalse(bodyText.contains("Open image link: $file"))
+                        if (node.packageName?.toString() == activity.packageName &&
+                            node.className?.toString() == "android.widget.ImageView" && node.isEnabled && node.isClickable &&
+                            node.contentDescription?.toString() == label) {
+                            check(found == null) { "Ambiguous named image action" }
+                            found = android.view.accessibility.AccessibilityNodeInfo.obtain(node)
+                        }
+                        for (index in 0 until node.childCount) node.getChild(index)?.let { pending.add(it) }
+                    } finally { node.recycle() }
+                }
+                check(ownedWindow() == window)
+                if (!contextTextSeen) { found?.recycle(); return null }
+                return found
+            } catch (failure: Throwable) { found?.recycle(); throw failure }
+            finally { while (pending.isNotEmpty()) pending.removeFirst().recycle() }
+        }
+        try {
+            compose.activityRule.scenario.onActivity { it.setContent {
+                DictTheme("light") { androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+                    CompositionLocalProvider(androidx.compose.ui.platform.LocalUriHandler provides object : androidx.compose.ui.platform.UriHandler {
+                        override fun openUri(uri: String) { opened += uri }
+                    }) {
+                        Box(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+                            EntryView(entry(), false, {}, onLink = { error("The compiled File action must keep its URI route") },
+                                settings = AppSettings(allowImages = false, allowAudio = false,
+                                    collapseDetails = false, collapseOtherSections = false))
+                        }
+                    }
+                } }
+            } }
+            var count = 0
+            for (native in listOf(false, true)) for (alt in listOf(null, "", " \t", "Authored alternative")) {
+                compose.runOnIdle { floating.value = native; alternative.value = alt }
+                val label = if (alt == "Authored alternative") "Authored alternative" else "Open image link: $file"
+                compose.waitUntil(15000) { namedImage(label)?.let { it.recycle(); true } ?: false }
+                val node = checkNotNull(namedImage(label))
+                try {
+                    assertEquals(label, node.contentDescription?.toString())
+                    if (alt == null || alt.isEmpty()) assertEquals(0, node.childCount)
+                    assertEquals(node.windowId, ownedWindow())
+                    assertTrue(node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
+                } finally { node.recycle() }
+                count++
+                compose.runOnIdle { assertEquals(List(count) { expectedUrl }, opened) }
+            }
+        } finally { compose.activityRule.scenario.onActivity { it.setContent { } } }
+    }
+
     @Test fun leadingListTableShowsOneMarkerAndContinuationKeepsBodyAndActions() {
         val floating = mutableStateOf(false)
         val followed = mutableListOf<EntryLink>()
@@ -492,7 +580,8 @@ class RendererDeviceTest {
             assertTrue(queries.all { it.contains("titles=File%3AFile%3AControlled.png") })
             compose.onAllNodesWithText("Body alternative").assertCountEquals(0)
             val firstNode = compose.onAllNodes(images, useUnmergedTree = true)[0]
-            assertNull(firstNode.fetchSemanticsNode().config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription))
+            assertEquals(listOf("Open image link: File:Controlled.png"),
+                firstNode.fetchSemanticsNode().config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription))
             assertEquals(17f * displayDensity, firstNode.fetchSemanticsNode().boundsInRoot.width, 1f)
             val captured = firstNode.captureToImage().asAndroidBitmap()
             try {

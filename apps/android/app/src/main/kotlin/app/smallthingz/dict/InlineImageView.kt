@@ -123,6 +123,10 @@ internal fun inlineImageFallbackText(image: InlineImage, state: InlineImageAsset
 // Reuse the one existing cache, including its ephemeral-file cleanup. Tests can
 // supply that same controlled cache rather than a second asset implementation.
 internal val LocalInlineImageCache = staticCompositionLocalOf<MediaCache?> { null }
+/** Label an exposed action without inventing authored alt or changing its visible fallback. */
+internal fun inlineImageAccessibilityLabel(image: InlineImage, actionLabel: String?): String? =
+    image.alt?.takeIf { it.isNotBlank() } ?: actionLabel?.let { "$it: ${image.file}" } ?: image.alt
+
 internal val LocalInlineImageOwner = staticCompositionLocalOf<InlineImageViewOwner?> { null }
 
 internal class InlineImageViewOwner(
@@ -284,13 +288,18 @@ private fun InlineImageOccurrence(span: Span, pixels: InlineImagePixels, metrics
         else -> null
     }
     val hasMenu = !image.tooltip.isNullOrEmpty() || ready != null || state == InlineImageAssetState.Failed
+    val accessibilityLabel = inlineImageAccessibilityLabel(image, when {
+        click != null -> "Open image link"
+        hasMenu -> "Image details"
+        else -> null
+    })
     val input = if (click != null) Modifier.combinedClickable(role = Role.Image, onClickLabel = "Open image link",
         onClick = click, onLongClick = if (hasMenu) ({ menu = true }) else null)
         else if (hasMenu) Modifier.combinedClickable(role = Role.Image, onClickLabel = "Image details",
             onClick = { menu = true }, onLongClick = { menu = true }) else Modifier
     Box(Modifier.fillMaxSize().then(input).semantics {
         role = Role.Image
-        image.alt?.let { contentDescription = it }
+        accessibilityLabel?.let { contentDescription = it }
         if (hasMenu) onLongClick(label = "Image details") { menu = true; true }
         stateDescription = (when (state) {
             InlineImageAssetState.Disabled -> "Images disabled"

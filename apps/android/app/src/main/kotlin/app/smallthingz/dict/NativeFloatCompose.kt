@@ -343,8 +343,13 @@ internal fun prepareNativeFloatText(
                             }
                             val hasDetails = !model.tooltip.isNullOrEmpty() || image.state is InlineImageAssetState.Ready ||
                                 image.state is InlineImageAssetState.GeometryUnavailable || image.state == InlineImageAssetState.Failed
+                            val accessibilityLabel = inlineImageAccessibilityLabel(model, when {
+                                click != null -> "Open image link"
+                                hasDetails -> "Image details"
+                                else -> null
+                            })
                             add(FloatInteractionNode(firstImage + image.id, FloatInteractionKind.IMAGE, image.offset, image.offset + 1,
-                                geometry.rectsForRange(image.offset, image.offset + 1), model.alt, model.tooltip, click,
+                                geometry.rectsForRange(image.offset, image.offset + 1), accessibilityLabel, model.tooltip, click,
                                 imageStatus(image.state) + if (unresolved) " Image link source unavailable" else "",
                                 if (hasDetails) ({ details = image }) else null))
                         }

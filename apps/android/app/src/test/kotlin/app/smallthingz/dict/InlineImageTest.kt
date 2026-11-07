@@ -7,6 +7,27 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class InlineImageTest {
+    @Test fun actionableImagesKeepNamesSeparateFromAuthoredAltAndDecorativeFallbacks() {
+        val image = InlineImage("Vraagteken-2.svg", 15)
+        for (alt in listOf(null, "", " \t")) {
+            val occurrence = image.copy(alt = alt)
+            assertEquals("Open image link: Vraagteken-2.svg", inlineImageAccessibilityLabel(occurrence, "Open image link"))
+            assertEquals("Image details: Vraagteken-2.svg", inlineImageAccessibilityLabel(occurrence, "Image details"))
+            assertEquals(alt, inlineImageAccessibilityLabel(occurrence, null))
+            assertEquals(alt, occurrence.alt)
+        }
+        val authored = image.copy(alt = "Authored alternative", tooltip = "Separate advice")
+        assertEquals("Authored alternative", inlineImageAccessibilityLabel(authored, "Open image link"))
+        assertEquals("Authored alternative", inlineImageAccessibilityLabel(authored, "Image details"))
+        assertEquals("Separate advice", authored.tooltip)
+        for (alt in listOf(null, "")) for (state in listOf(InlineImageAssetState.Disabled,
+            InlineImageAssetState.Loading, InlineImageAssetState.Failed)) {
+            assertNull(inlineImageFallbackText(image.copy(alt = alt), state))
+        }
+        assertNull(image.alt)
+        assertEquals(15L, image.widthPx)
+    }
+
     @Test fun matchedClientGeometryAndActualMetricMiddleStayAbsoluteUnderZeroAndSmallText() {
         // Original dimensions authenticated by assets01/result.json cee04d6b;
         // these are client-math controls, not an SVG fetch/rendering claim.
