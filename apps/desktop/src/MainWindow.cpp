@@ -7,6 +7,7 @@
 #include <QApplication>
 #include <QAccessible>
 #include <QAccessibleWidget>
+#include <QAccessibleObject>
 #include <QAbstractTextDocumentLayout>
 #include <QTextCursor>
 #include <QTextLayout>
@@ -119,9 +120,22 @@ private:
     }
 };
 
+class SectionDisclosure;
+
 class ReadingBrowser final : public QTextBrowser {
 public:
-    using QTextBrowser::QTextBrowser;
+    explicit ReadingBrowser(QWidget *parent);
+    void clearDisclosures();
+    void updateDisclosures(const QJsonArray &sections, const QSet<int> &collapsed);
+    SectionDisclosure *focusedDisclosure() const;
+    QList<SectionDisclosure *> disclosures;
+    void notifyDisclosures(bool reordered, const QList<SectionDisclosure *> &changed = {});
+    QHash<int, QPointer<SectionDisclosure>> pendingDisclosureChanges;
+    bool pendingDisclosureReorder = false;
+    bool disclosureNotificationScheduled = false;
+    void notifyDisclosureFocus();
+    QPointer<SectionDisclosure> lastFocusedDisclosure;
+    bool disclosureFocusScheduled = false;
     bool keyboardActivation = false;
     quint64 interaction = 0;
     void restoreAnchor(const QUrl &url) {
@@ -136,19 +150,43 @@ public:
             }
         }
         if (!present) return;
+        const QPointer<ReadingBrowser> guard(this);
         QTextCursor beginning(document());
         beginning.movePosition(QTextCursor::Start);
         setTextCursor(beginning);
+        if (!guard) return;
         for (int i = 0; i <= count; ++i) {
-            if (!QTextBrowser::focusNextPrevChild(true)) break;
+            const bool moved = QTextBrowser::focusNextPrevChild(true);
+            if (!guard) return;
+            if (!moved) break;
             QTextCursor selected = textCursor();
             if (!selected.hasSelection()) continue;
             selected.setPosition(selected.selectionStart());
             selected.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
             if (QUrl(selected.charFormat().anchorHref()) == url) break;
         }
+        notifyDisclosureFocus();
     }
 protected:
+    bool focusNextPrevChild(bool next) override {
+        const QPointer<ReadingBrowser> guard(this);
+        const bool moved = QTextBrowser::focusNextPrevChild(next);
+        if (guard) guard->notifyDisclosureFocus();
+        return moved;
+    }
+    void focusInEvent(QFocusEvent *event) override {
+        const QPointer<ReadingBrowser> guard(this);
+        QTextBrowser::focusInEvent(event);
+        if (guard) guard->notifyDisclosureFocus();
+    }
+    void focusOutEvent(QFocusEvent *event) override {
+        const QPointer<ReadingBrowser> guard(this);
+        QTextBrowser::focusOutEvent(event);
+        if (guard) {
+            if (!guard->hasFocus()) guard->lastFocusedDisclosure.clear();
+            guard->notifyDisclosureFocus();
+        }
+    }
     void keyPressEvent(QKeyEvent *event) override {
         ++interaction;
         if (event->key() == Qt::Key_Space && event->modifiers() == Qt::NoModifier && hasFocus()) {
@@ -213,6 +251,216 @@ protected:
         ++interaction;
         QTextBrowser::mousePressEvent(event);
     }
+    void mouseReleaseEvent(QMouseEvent *event) override {
+        const QPointer<ReadingBrowser> guard(this);
+        QTextBrowser::mouseReleaseEvent(event);
+        if (guard) guard->notifyDisclosureFocus();
+    }
+};
+
+class SectionDisclosure final : public QObject {
+public:
+    explicit SectionDisclosure(ReadingBrowser *owner, int section)
+        : QObject(owner), browser(owner), index(section) {}
+    QPointer<ReadingBrowser> browser;
+    const int index;
+    QString name;
+    bool expanded = false;
+    bool active = true;
+    int position = -1;
+    int end = -1;
+
+    QUrl url() const { return QUrl(QStringLiteral("section:%1").arg(index)); }
+    bool current() const {
+        if (!active || !browser || position < 0) return false;
+        QTextCursor cursor(browser->document());
+        if (position >= browser->document()->characterCount() - 1) return false;
+        cursor.setPosition(position);
+        cursor.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+        return QUrl(cursor.charFormat().anchorHref()) == url();
+    }
+    bool focused() const {
+        if (!current() || !browser->hasFocus()) return false;
+        const auto cursor = browser->textCursor();
+        return cursor.hasSelection() && cursor.selectionStart() == position && cursor.selectionEnd() == end;
+    }
+};
+
+void ReadingBrowser::notifyDisclosures(bool reordered, const QList<SectionDisclosure *> &changed) {
+    pendingDisclosureReorder |= reordered;
+    for (auto *item : changed) pendingDisclosureChanges.insert(item->index, item);
+    if (!QAccessible::isActive()) {
+        pendingDisclosureReorder = false; pendingDisclosureChanges.clear();
+        return;
+    }
+    if (disclosureNotificationScheduled) return;
+    disclosureNotificationScheduled = true;
+    const QPointer<ReadingBrowser> guard(this);
+    QTimer::singleShot(0, this, [guard] {
+        if (!guard) return;
+        guard->disclosureNotificationScheduled = false;
+        const bool reordered = std::exchange(guard->pendingDisclosureReorder, false);
+        const auto changed = std::exchange(guard->pendingDisclosureChanges, {});
+        if (!QAccessible::isActive()) return;
+        if (reordered) {
+            QAccessibleEvent event(guard, QAccessible::ObjectReorder);
+            QAccessible::updateAccessibility(&event);
+        }
+        for (const auto &item : changed) {
+            if (!guard) return;
+            if (!item || !item->current()) continue;
+            QAccessible::State fields; fields.expanded = true; fields.collapsed = true;
+            QAccessibleStateChangeEvent event(item, fields);
+            QAccessible::updateAccessibility(&event);
+        }
+    });
+}
+
+void ReadingBrowser::clearDisclosures() {
+    lastFocusedDisclosure.clear();
+    if (disclosures.isEmpty()) return;
+    const auto previous = std::exchange(disclosures, {});
+    for (auto *item : previous) {
+        item->active = false;
+        item->deleteLater();
+    }
+    notifyDisclosures(true);
+}
+
+void ReadingBrowser::updateDisclosures(const QJsonArray &sections, const QSet<int> &collapsed) {
+    QHash<int, SectionDisclosure *> previous;
+    for (auto *item : std::exchange(disclosures, {})) previous.insert(item->index, item);
+    QList<SectionDisclosure *> changed;
+    bool reordered = false;
+    QSet<int> found;
+    for (auto block = document()->begin(); block.isValid(); block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            if (!fragment.isValid()) continue;
+            const QString href = fragment.charFormat().anchorHref();
+            if (!href.startsWith(QStringLiteral("section:"))) continue;
+            const QUrl url(href);
+            bool ok = false;
+            const int index = url.path().toInt(&ok);
+            if (url.scheme() != QStringLiteral("section") || !ok || index < 0 ||
+                index >= sections.size() || found.contains(index)) continue;
+            found.insert(index);
+            auto *item = previous.take(index);
+            if (!item) { item = new SectionDisclosure(this, index); reordered = true; }
+            const bool expanded = !collapsed.contains(index);
+            if (item->expanded != expanded) changed.append(item);
+            item->expanded = expanded;
+            item->name = sections[index].toObject().value(QStringLiteral("title")).toString();
+            if (item->name.isEmpty()) item->name = QStringLiteral("Section %1").arg(index + 1);
+            item->position = fragment.position();
+            item->end = fragment.position() + fragment.length();
+            auto next = it;
+            while (!(++next).atEnd()) {
+                const auto adjacent = next.fragment();
+                if (!adjacent.isValid() || adjacent.position() != item->end ||
+                    adjacent.charFormat().anchorHref() != href) break;
+                item->end += adjacent.length();
+            }
+            disclosures.append(item);
+        }
+    }
+    reordered |= !previous.isEmpty();
+    for (auto *item : previous) { item->active = false; item->deleteLater(); }
+    notifyDisclosures(reordered, changed);
+}
+
+SectionDisclosure *ReadingBrowser::focusedDisclosure() const {
+    for (auto *item : disclosures) if (item->focused()) return item;
+    return nullptr;
+}
+
+ReadingBrowser::ReadingBrowser(QWidget *parent) : QTextBrowser(parent) {
+    connect(this, &QTextEdit::selectionChanged, this, &ReadingBrowser::notifyDisclosureFocus);
+}
+
+void ReadingBrowser::notifyDisclosureFocus() {
+    if (!QAccessible::isActive()) { lastFocusedDisclosure.clear(); return; }
+    if (disclosureFocusScheduled) return;
+    disclosureFocusScheduled = true;
+    const QPointer<ReadingBrowser> guard(this);
+    QTimer::singleShot(0, this, [guard] {
+        if (!guard) return;
+        guard->disclosureFocusScheduled = false;
+        if (!QAccessible::isActive()) { guard->lastFocusedDisclosure.clear(); return; }
+        // Qt's keyboard anchor traversal does not emit selectionChanged. Query
+        // the final focused anchor after navigation and composition have settled.
+        const QPointer<SectionDisclosure> item(guard->focusedDisclosure());
+        if (guard->lastFocusedDisclosure == item) return;
+        guard->lastFocusedDisclosure = item;
+        if (!item) return;
+        QAccessibleEvent event(item, QAccessible::Focus);
+        QAccessible::updateAccessibility(&event);
+    });
+}
+
+class AccessibleSectionDisclosure final : public QAccessibleObject,
+                                          public QAccessibleActionInterface {
+public:
+    explicit AccessibleSectionDisclosure(SectionDisclosure *item) : QAccessibleObject(item) {}
+    SectionDisclosure *item() const { return static_cast<SectionDisclosure *>(object()); }
+    bool isValid() const override { const auto *value = item(); return value && value->current(); }
+    QAccessibleInterface *parent() const override {
+        const auto *value = item();
+        return value && value->browser ? QAccessible::queryAccessibleInterface(value->browser) : nullptr;
+    }
+    QAccessibleInterface *child(int) const override { return nullptr; }
+    int childCount() const override { return 0; }
+    int indexOfChild(const QAccessibleInterface *) const override { return -1; }
+    QAccessible::Role role() const override { return QAccessible::Button; }
+    QString text(QAccessible::Text type) const override {
+        const auto *value = item();
+        return value && type == QAccessible::Name ? value->name : QString();
+    }
+    QRect rect() const override {
+        const QPointer<SectionDisclosure> value(item());
+        if (!value || !value->current()) return {};
+        const int position = value->position;
+        auto *reader = parent();
+        // The disclosure glyph is separate from the rich heading's lexical links.
+        return reader && reader->textInterface()
+            ? reader->textInterface()->characterRect(position) : QRect();
+    }
+    QAccessible::State state() const override {
+        QAccessible::State state;
+        if (!isValid()) { state.invalid = true; state.invisible = true; return state; }
+        const auto *value = item();
+        state.focusable = true; state.focused = value->focused(); state.expandable = true;
+        state.expanded = value->expanded; state.collapsed = !value->expanded;
+        state.disabled = !value->browser->isEnabled(); state.invisible = !value->browser->isVisible();
+        const QRect viewport(value->browser->viewport()->mapToGlobal(QPoint()), value->browser->viewport()->size());
+        state.offscreen = !viewport.intersects(rect());
+        return state;
+    }
+    void *interface_cast(QAccessible::InterfaceType type) override {
+        if (type == QAccessible::ActionInterface) return static_cast<QAccessibleActionInterface *>(this);
+        return QAccessibleObject::interface_cast(type);
+    }
+    QStringList actionNames() const override { return {pressAction(), toggleAction(), setFocusAction()}; }
+    QStringList keyBindingsForAction(const QString &action) const override {
+        return (action == pressAction() || action == toggleAction()) ? QStringList{QStringLiteral("Space"), QStringLiteral("Enter")} : QStringList();
+    }
+    void doAction(const QString &action) override {
+        const bool activate = action == pressAction() || action == toggleAction();
+        if (!activate && action != setFocusAction()) return;
+        const QPointer<SectionDisclosure> target(item());
+        if (!target || !target->current()) return;
+        const QPointer<ReadingBrowser> browser(target->browser);
+        if (!browser->isVisible() || !browser->isEnabled()) return;
+        const QUrl url = target->url();
+        browser->setFocus(Qt::OtherFocusReason);
+        if (!browser || !target || !target->current()) return;
+        browser->restoreAnchor(url);
+        if (!browser || !target || !target->focused()) return;
+        if (activate) {
+            QKeyEvent event(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            QApplication::sendEvent(browser, &event);
+        }
+    }
 };
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 12, 0)
@@ -229,6 +477,45 @@ public:
     explicit AccessibleReadingBrowser(ReadingBrowser *browser)
         : ReadingAccessibleBase(browser, QAccessible::StaticText), browser_(browser) {}
 
+    int childCount() const override { return ReadingAccessibleBase::childCount() + browser_->disclosures.size(); }
+    QAccessibleInterface *child(int index) const override {
+        const int widgets = ReadingAccessibleBase::childCount();
+        if (index < widgets) return ReadingAccessibleBase::child(index);
+        index -= widgets;
+        return index >= 0 && index < browser_->disclosures.size()
+            ? QAccessible::queryAccessibleInterface(browser_->disclosures[index]) : nullptr;
+    }
+    int indexOfChild(const QAccessibleInterface *child) const override {
+        if (child) {
+            for (qsizetype i = 0; i < browser_->disclosures.size(); ++i)
+                if (child->object() == browser_->disclosures[i]) return ReadingAccessibleBase::childCount() + i;
+        }
+        return ReadingAccessibleBase::indexOfChild(child);
+    }
+    QAccessibleInterface *childAt(int x, int y) const override {
+        const QPointer<ReadingBrowser> browser(browser_);
+        const QRect viewport(browser->viewport()->mapToGlobal(QPoint()), browser->viewport()->size());
+        if (!viewport.contains(x, y)) return ReadingAccessibleBase::childAt(x, y);
+        QList<QPointer<SectionDisclosure>> items;
+        for (auto *item : browser->disclosures) items.append(item);
+        for (const auto &item : items) {
+            if (!browser) return nullptr;
+            if (!item) continue;
+            auto *child = QAccessible::queryAccessibleInterface(item);
+            if (!child || !child->isValid()) continue;
+            const auto state = child->state();
+            if (!browser || !item) return nullptr;
+            if (state.invisible || state.offscreen) continue;
+            const QRect bounds = child->rect();
+            if (!browser || !item) return nullptr;
+            if (bounds.contains(x, y)) return child;
+        }
+        return browser ? ReadingAccessibleBase::childAt(x, y) : nullptr;
+    }
+    QAccessibleInterface *focusChild() const override {
+        if (auto *item = browser_->focusedDisclosure()) return QAccessible::queryAccessibleInterface(item);
+        return ReadingAccessibleBase::focusChild();
+    }
     void *interface_cast(QAccessible::InterfaceType type) override {
         if (type == QAccessible::TextInterface) return static_cast<QAccessibleTextInterface *>(this);
         if (type == QAccessible::EditableTextInterface) return static_cast<QAccessibleEditableTextInterface *>(this);
@@ -435,6 +722,7 @@ QTextBrowser *createReadingBrowser(QWidget *parent) {
     static const bool registered = [] {
         QAccessible::installFactory([](const QString &, QObject *object) -> QAccessibleInterface * {
             if (auto *browser = dynamic_cast<ReadingBrowser *>(object)) return new AccessibleReadingBrowser(browser);
+            if (auto *item = dynamic_cast<SectionDisclosure *>(object)) return new AccessibleSectionDisclosure(item);
             return nullptr;
         });
         return true;
@@ -882,6 +1170,7 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                     title_->setHtml(QStringLiteral("Open your dictionaries"));
                     meta_->setText(QStringLiteral("Your words stay on this computer."));
                     ++readingComposition_;
+                    static_cast<ReadingBrowser *>(reading_)->clearDisclosures();
                     reading_->setHtml(loaded->emptyLibrary
                         ? QStringLiteral("<p>No dictionaries are installed yet.</p><p><a href='library:'>Open Library</a> to import a dictionary, download one, or choose an existing folder.</p>")
                         : QStringLiteral("<p>Could not open this dictionary.</p><p><a href='library:'>Open Library</a> to import a dictionary, download one, or choose an existing folder.</p>"));
@@ -907,6 +1196,7 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                 language_->setCurrentText(api_->language());
             }
             if (resetVisits) { visits_.clear(); visitIndex_ = -1; }
+            static_cast<ReadingBrowser *>(reading_)->clearDisclosures();
             currentEntry_ = {};
             currentJson_.clear();
             media_->setEntry({});
@@ -1066,6 +1356,7 @@ void MainWindow::chooseRoot() {
             api_.reset();
             searchTitles_.clear();
             sampleWords_.clear();
+            static_cast<ReadingBrowser *>(reading_)->clearDisclosures();
             currentEntry_ = {};
             currentJson_.clear();
             json_->clear();
@@ -1339,6 +1630,7 @@ void MainWindow::setupUi() {
             title_->setHtml(QStringLiteral("Open your dictionaries"));
             meta_->setText(QStringLiteral("Your words stay on this computer."));
             ++readingComposition_;
+            static_cast<ReadingBrowser *>(reading_)->clearDisclosures();
             reading_->setHtml(QStringLiteral("<p>Opening cancelled.</p><p><a href='library:'>Open Library</a> to import a dictionary or choose another folder.</p>"));
         }
         resultStatus_->setText(QStringLiteral("Opening cancelled. Choose a folder to try again."));
@@ -1950,6 +2242,7 @@ void MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const st
     if (entries.isEmpty() || !entries.first().isObject()) return;
     if (addVisit) saveVisit();
     currentJson_ = document.toJson(QJsonDocument::Indented);
+    static_cast<ReadingBrowser *>(reading_)->clearDisclosures();
     currentEntry_ = entries.first().toObject();
     // Entry data is plain text and remains unmaterialized while Reading is open.
     json_->clear();
@@ -2073,6 +2366,8 @@ void MainWindow::refreshReading() {
     const int scroll = reading_->verticalScrollBar()->value();
     ++readingComposition_;
     SemanticHtml::setHtml(reading_, entryHtml(currentEntry_));
+    static_cast<ReadingBrowser *>(reading_)->updateDisclosures(
+        currentEntry_.value(QStringLiteral("sections")).toArray(), collapsedSections_);
     reading_->verticalScrollBar()->setValue(scroll);
 }
 

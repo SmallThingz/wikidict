@@ -8902,6 +8902,170 @@ private slots:
         QVERIFY(!plain.contains(QStringLiteral("RICH HISTORICAL BODY")));
         QVERIFY(plain.contains(QStringLiteral("FOLLOWING MEANING")));
 
+        // The rich heading keeps its lexical link; the separate disclosure is a
+        // named native accessible button with the same keyboard activation path.
+        window.resize(640, 600); window.activateWindow();
+        QTRY_VERIFY(window.compactNavigation_);
+        QWidget *readingSwitch = window.compactToolbar_->widgetForAction(window.readingPaneAction_);
+        QVERIFY(readingSwitch);
+        QTRY_VERIFY(readingSwitch->isVisible() && readingSwitch->isEnabled());
+        QTest::mouseClick(readingSwitch, Qt::LeftButton);
+        QTRY_VERIFY(window.reading_->isVisible());
+        QTRY_VERIFY(window.reading_->hasFocus() && QApplication::focusWidget() == window.reading_);
+        auto *readerAccessible = QAccessible::queryAccessibleInterface(window.reading_);
+        QVERIFY(readerAccessible && readerAccessible->textInterface());
+        QAccessibleInterface *disclosure = nullptr;
+        QStringList disclosureNames;
+        for (int i = 0; i < readerAccessible->childCount(); ++i) {
+            auto *child = readerAccessible->child(i);
+            if (!child || child->role() != QAccessible::Button) continue;
+            QVERIFY(child->isValid());
+            QCOMPARE(child->parent(), readerAccessible);
+            QCOMPARE(readerAccessible->indexOfChild(child), i);
+            disclosureNames.append(child->text(QAccessible::Name));
+            if (child->text(QAccessible::Name) == QStringLiteral("Etymology 1")) {
+                QVERIFY(!disclosure); disclosure = child;
+            }
+        }
+        QCOMPARE(disclosureNames.size(), 6);
+        QCOMPARE(disclosureNames.count(QStringLiteral("Same")), 2);
+        QVERIFY(disclosure);
+        const QAccessible::Id disclosureId = QAccessible::uniqueId(disclosure);
+        const QPointer<QObject> disclosureObject(disclosure->object());
+        // Establish a real focus transition rather than requesting focus on an
+        // already-selected disclosure left behind by earlier navigation.
+        window.reading_->setTextCursor(QTextCursor(window.reading_->document()));
+        QVERIFY(window.bookmark_->isVisible() && window.bookmark_->isEnabled());
+        window.bookmark_->setFocus(Qt::OtherFocusReason);
+        QTRY_COMPARE(QApplication::focusWidget(), window.bookmark_);
+        QVERIFY(!window.reading_->textCursor().hasSelection());
+        QVERIFY(!disclosure->state().focused);
+        struct DisclosureEvents {
+            QPointer<QObject> reader, target;
+            int stateChanges = 0, focusEvents = 0, reorders = 0;
+            bool bothExpansionBits = true;
+        } observedEvents{window.reading_, disclosureObject};
+        static DisclosureEvents *observing = nullptr;
+        QVERIFY(!observing);
+        observing = &observedEvents;
+        const bool wasAccessible = QAccessible::isActive();
+        const auto previousHandler = QAccessible::installUpdateHandler([](QAccessibleEvent *event) {
+            if (!observing) return;
+            if (event->object() == observing->reader && event->type() == QAccessible::ObjectReorder)
+                ++observing->reorders;
+            if (event->object() != observing->target) return;
+            if (event->type() == QAccessible::Focus) ++observing->focusEvents;
+            if (event->type() == QAccessible::StateChanged) {
+                ++observing->stateChanges;
+                const auto fields = static_cast<QAccessibleStateChangeEvent *>(event)->changedStates();
+                observing->bothExpansionBits &= fields.expanded && fields.collapsed;
+            }
+        });
+        const auto restoreAccessibilityObserver = qScopeGuard([&] {
+            QAccessible::installUpdateHandler(previousHandler);
+            observing = nullptr;
+            QAccessible::setActive(wasAccessible);
+        });
+        QAccessible::setActive(true);
+        QVERIFY(QAccessible::isActive());
+        auto *disclosureActions = disclosure->actionInterface();
+        QVERIFY(disclosureActions);
+        QVERIFY(disclosureActions->actionNames().contains(QAccessibleActionInterface::toggleAction()));
+        QVERIFY(disclosureActions->actionNames().contains(QAccessibleActionInterface::pressAction()));
+        QVERIFY(disclosureActions->actionNames().contains(QAccessibleActionInterface::setFocusAction()));
+        QVERIFY(disclosure->state().expandable && disclosure->state().collapsed && !disclosure->state().expanded);
+        const QString lexicalHref = window.reading_->document()->find(QStringLiteral("Etymology 1")).charFormat().anchorHref();
+        const QByteArray entryJson = window.currentJson_;
+        disclosureActions->doAction(QAccessibleActionInterface::setFocusAction());
+        QTRY_VERIFY(disclosure->state().focused);
+        QCOMPARE(readerAccessible->focusChild(), disclosure);
+        QTRY_VERIFY(observedEvents.focusEvents > 0);
+        const int focusBeforeReturn = observedEvents.focusEvents;
+        window.bookmark_->setFocus(Qt::OtherFocusReason);
+        QCOMPARE(QApplication::focusWidget(), window.bookmark_);
+        QVERIFY(!disclosure->state().focused);
+        // Return in the same event turn: the intervening real widget focus must
+        // not be lost when queued disclosure notifications are coalesced.
+        disclosureActions->doAction(QAccessibleActionInterface::setFocusAction());
+        QVERIFY(disclosure->state().focused);
+        QTRY_VERIFY(observedEvents.focusEvents > focusBeforeReturn);
+        const int focusBeforeNoop = observedEvents.focusEvents;
+        disclosureActions->doAction(QAccessibleActionInterface::setFocusAction());
+        QCoreApplication::processEvents();
+        QCOMPARE(observedEvents.focusEvents, focusBeforeNoop);
+        const auto selectedHref = [&] {
+            QTextCursor cursor = window.reading_->textCursor();
+            if (!cursor.hasSelection()) return QString();
+            cursor.setPosition(cursor.selectionStart());
+            cursor.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+            return cursor.charFormat().anchorHref();
+        };
+        QCOMPARE(selectedHref(), QStringLiteral("section:1"));
+        const int focusBeforeTab = observedEvents.focusEvents;
+        QVERIFY(window.reading_->isVisible() && QApplication::focusWidget() == window.reading_);
+        QTest::keyClick(window.reading_, Qt::Key_Tab);
+        QCOMPARE(selectedHref(), QStringLiteral("dict:dog"));
+        QVERIFY(!disclosure->state().focused);
+        QCoreApplication::processEvents();
+        QCOMPARE(observedEvents.focusEvents, focusBeforeTab);
+        QTest::keyClick(window.reading_, Qt::Key_Tab, Qt::ShiftModifier);
+        QCOMPARE(selectedHref(), QStringLiteral("section:1"));
+        QTRY_VERIFY(disclosure->state().focused);
+        QTRY_VERIFY(observedEvents.focusEvents > focusBeforeTab);
+        const QTextCursor exactDisclosure = window.reading_->textCursor();
+        QTextCursor mixed = exactDisclosure;
+        mixed.setPosition(exactDisclosure.selectionEnd() + 2, QTextCursor::KeepAnchor);
+        window.reading_->setTextCursor(mixed);
+        QVERIFY(!disclosure->state().focused);
+        QVERIFY(readerAccessible->focusChild() != disclosure);
+        disclosureActions->doAction(QAccessibleActionInterface::setFocusAction());
+        QTRY_VERIFY(disclosure->state().focused);
+        QCOMPARE(window.reading_->textCursor().selectionStart(), exactDisclosure.selectionStart());
+        QCOMPARE(window.reading_->textCursor().selectionEnd(), exactDisclosure.selectionEnd());
+        QVERIFY(window.collapsedSections_.contains(1));
+        QVERIFY(disclosure->rect().isValid());
+        QCOMPARE(readerAccessible->childAt(disclosure->rect().center().x(), disclosure->rect().center().y()), disclosure);
+        const auto checkDisclosure = [&](bool expanded) {
+            QCOMPARE(QAccessible::accessibleInterface(disclosureId), disclosure);
+            QCOMPARE(disclosure->object(), disclosureObject.data());
+            QCOMPARE(disclosure->text(QAccessible::Name), QStringLiteral("Etymology 1"));
+            QCOMPARE(bool(disclosure->state().expanded), expanded);
+            QCOMPARE(bool(disclosure->state().collapsed), !expanded);
+            QVERIFY(disclosure->state().expandable && !disclosure->state().invisible);
+            QCOMPARE(window.collapsedSections_.contains(1), !expanded);
+            QCOMPARE(window.reading_->toPlainText().contains(QStringLiteral("RICH HISTORICAL BODY")), expanded);
+            QCOMPARE(window.currentEntry_, entry);
+            QCOMPARE(window.currentJson_, entryJson);
+            QCOMPARE(window.reading_->document()->find(QStringLiteral("Etymology 1")).charFormat().anchorHref(), lexicalHref);
+        };
+        checkDisclosure(false);
+        const int stateChangesBefore = observedEvents.stateChanges;
+        disclosureActions->doAction(QAccessibleActionInterface::toggleAction());
+        // A second synchronous composition must not discard the pending state event.
+        window.refreshReading();
+        QTRY_VERIFY(observedEvents.stateChanges > stateChangesBefore);
+        QVERIFY(observedEvents.bothExpansionBits);
+        checkDisclosure(true);
+        disclosureActions->doAction(QAccessibleActionInterface::setFocusAction());
+        QTRY_VERIFY(disclosure->state().focused);
+        QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+        QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/rich-disclosure-accessible-%1-expanded.png")
+            .arg(QCoreApplication::applicationPid())));
+        disclosureActions->doAction(QAccessibleActionInterface::pressAction());
+        QTRY_VERIFY(disclosure->state().focused);
+        checkDisclosure(false);
+        QCOMPARE(window.reading_->toPlainText(), plain);
+        QVERIFY(window.reading_->isVisible() && QApplication::focusWidget() == window.reading_);
+        QTest::keyClick(window.reading_, Qt::Key_Space);
+        QTRY_VERIFY(disclosure->state().focused);
+        checkDisclosure(true);
+        QTest::keyClick(window.reading_, Qt::Key_Space);
+        QTRY_VERIFY(disclosure->state().focused);
+        checkDisclosure(false);
+        QCOMPARE(window.reading_->toPlainText(), plain);
+        QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/rich-disclosure-accessible-%1-collapsed.png")
+            .arg(QCoreApplication::applicationPid())));
+
         QVERIFY(clickAnchor(window.reading_, QStringLiteral("section:1")));
         QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("RICH HISTORICAL BODY")));
         QVERIFY(clickAnchor(window.reading_, QStringLiteral("section:1")));
@@ -8931,6 +9095,26 @@ private slots:
         QVERIFY(!window.collapsedSections_.contains(2));
         QVERIFY(clickAnchor(window.reading_, QStringLiteral("dict:dog")));
         QTRY_COMPARE(title(window), QStringLiteral("dog"));
+        const auto replacementEntry = window.currentEntry_;
+        const auto replacementFolds = window.collapsedSections_;
+        if (auto *stale = QAccessible::accessibleInterface(disclosureId)) {
+            QVERIFY(!stale->isValid());
+            stale->actionInterface()->doAction(QAccessibleActionInterface::toggleAction());
+            QCOMPARE(window.currentEntry_, replacementEntry);
+            QCOMPARE(window.collapsedSections_, replacementFolds);
+        }
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(disclosureObject.isNull());
+        QVERIFY(!QAccessible::accessibleInterface(disclosureId));
+        const int reorderBefore = observedEvents.reorders;
+        QJsonObject withoutControls = window.currentEntry_;
+        withoutControls.insert(QStringLiteral("sections"), QJsonArray{});
+        QJsonObject noControlsResponse{{QStringLiteral("entries"), QJsonArray{withoutControls}}};
+        window.renderResponse(QJsonDocument(noControlsResponse).toJson());
+        window.refreshReading();
+        QTRY_VERIFY(observedEvents.reorders > reorderBefore);
+        for (int i = 0; i < readerAccessible->childCount(); ++i)
+            QVERIFY(readerAccessible->child(i)->role() != QAccessible::Button);
     }
 
     void documentBoundaryKeysRevealCursorAfterSectionScroll() {
