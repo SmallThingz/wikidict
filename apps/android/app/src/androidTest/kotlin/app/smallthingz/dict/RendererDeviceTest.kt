@@ -316,12 +316,19 @@ class RendererDeviceTest {
             compose.waitUntil(10000) { requests.size == 5 }
             compose.runOnIdle { requests[4].second.complete(longAnswer) }
             compose.waitUntil(10000) { compose.onAllNodesWithText(longAnswer).fetchSemanticsNodes().size == 1 }
+            // The card merges title and answer semantics; its layout action can belong to the title.
+            val answer = compose.onNodeWithText(longAnswer, useUnmergedTree = true)
             val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
-            compose.onNodeWithText(longAnswer).performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
-            val layout = layouts.single()
-            assertTrue(layout.lineCount > 1)
-            assertFalse(layout.hasVisualOverflow)
-            for (line in 0 until layout.lineCount) assertFalse(layout.isLineEllipsized(line))
+            withRenderedLayoutFailureEvidence("Active card long answer", answer, compose.onRoot(), null,
+                ownedState = { "expectedText=$longAnswer; observedLayoutTexts=" + layouts.map { it.layoutInput.text.text } }) {
+                answer.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                assertEquals(1, layouts.size)
+                val layout = layouts.single()
+                assertEquals(longAnswer, layout.layoutInput.text.text)
+                assertTrue(layout.lineCount > 1)
+                assertFalse(layout.hasVisualOverflow)
+                for (line in 0 until layout.lineCount) assertFalse(layout.isLineEllipsized(line))
+            }
             compose.onNodeWithText("Read").performScrollTo().assertIsDisplayed().performClick()
             compose.runOnIdle {
                 assertEquals(listOf(second), opened)
