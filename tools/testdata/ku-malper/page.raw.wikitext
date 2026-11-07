@@ -1,0 +1,105 @@
+== {{ziman|ku}} ==
+
+=== Bilêvkirin ===
+* {{IPA|ku|/mɑːlˈpɛr/}}
+* {{ku-kîte}}
+
+=== Navdêr ===
+{{navdêr|ku|z=m}}, {{r-ya req}}
+# Sîteya [[înternet]]ê. [[xaneper]], [[websîte]], [[sîte]], [[sayt]]
+# Rûpela yekemîn sîteyeke înternetê, [[serrûpel]].
+
+==== Tewandin ====
+{{ku-tewîn-nav|mê}}
+
+==== Formên alternatîv ====
+{{kol3|ku
+|malpel
+}}
+
+==== Etîmolojî ====
+{{etîmon|ku|:qertaf|mal|per|metn=++|dar=1}}
+
+==== Bi zaravayên din ====
+* {{Z|ckb}}: {{g|ckb|ماڵه‌وه|tr=mallewe}}
+
+==== Werger ====
+{{werger-ser}}
+* {{Z|af}}: {{W+|af|webwerf}}
+* {{Z|sq}}: {{W-|sq|vënd i rrjetës}}
+* {{Z|de}}: {{W+|de|Website|m}}, {{W+|de|Webangebot}}, {{W-|de|Webauftritt|n}}, {{W-|de|Internetauftritt|n}}, {{W-|de|Webpräsenz|m}}, {{W+|de|Internetpräsenz|m}}
+* {{Z|am}}: {{W-|am|ዌብሳይት}}
+* {{Z|az}}: {{W-|az|veb-sayt}}, {{W-|az|sayt}}
+* {{Z|eu}}: {{W-|eu|webgune}}
+* {{Z|be}}: {{W-|be|вэб-са́йт|n}}, {{W-|be|сайт|n}}, {{W-|be|вэб-старо́нка|m}}
+* {{Z|bn}}: {{W-|bn|ওয়েবসাইটি}}
+* {{Z|br}}: {{W-|br|lec'hienn}}
+* {{Z|bg}}: {{W+|bg|уе́бсайт|n}}
+* {{Z|my}}: {{W-|my|ဝက်ဘ်ဆိုဒ်}}
+* {{Z|da}}: {{W-|da|websted}}, {{W+|da|hjemmeside}}, {{W-|da|website}}
+* {{Z|id}}: {{W+|id|situs web}}
+* {{Z|ar}}: {{W-|ar|مَوْقِع وِيب|n}}
+* {{Z|hy}}: {{W-|hy|ցանցակայք}}, {{W-|hy|վեբ կայքը}}
+* {{Z|eo}}: {{W-|eo|retejo}}, {{W-|eo|TTT-ejo}}
+* {{Z|et}}: {{W+|et|veebisait}}
+* {{Z|fa}}: {{W+|fa|وب‌گاه}}, {{W+|fa|تارنما}}, {{W+|fa|پایگاه}}
+* {{Z|fi}}: {{W+|fi|verkkosivusto}}, {{W+|fi|sivusto}}, {{W-|fi|www-sivu}}, {{W+|fi|nettisivu}}, {{W+|fi|kotisivu}}
+* {{Z|fr}}: {{W+|fr|site web|n}}, {{W+|fr|site|n}}, {{W+|fr|site Web|n}}, {{W+|fr|site Internet|n}}
+* {{Z|gd}}: {{W-|gd|làrach-lìn|m}}, {{W-|gd|ionad|n}}, {{W-|gd|eadar-lìon}}
+* {{Z|gu}}: {{W-|gu|જાળસ્થળ}}
+* {{Z|ka}}: {{W-|ka|ვებსაიტი}}
+* {{Z|hi}}: {{W-|hi|जालपृष्ठ}}, {{W-|hi|वेबसाइट}}, {{W-|hi|साइट}}, {{W+|hi|जालस्थल}}
+* {{Z|nl}}: {{W+|nl|website|m}}, {{W+|nl|webstek|n}}
+* {{Z|he}}: {{W+|he|אתר אינטרנט}}
+* {{Z|io}}: {{W-|io|retoloko}}
+* {{Z|en}}: {{W+|en|website}}, {{W+|en|homepage}}
+* {{Z|ia}}: {{W-|ia|sito del web}}
+* {{Z|ga}}: {{W-|ga|suíomh gréasáin |n}}
+* {{Z|it}}: {{W+|it|sito web|n}}, {{W+|it|sito|n}}
+* {{Z|is}}: {{W+|is|vefsetur}}, {{W+|is|vefur|n}}
+* {{Z|ja}}: {{W+|ja|ウェブサイト}}, {{W+|ja|サイト}}
+* {{Z|pam}}: {{W-|pam|karinan-aptas}}
+* {{Z|ca}}: {{W+|ca|pàgina web|m}}, {{W+|ca|lloc web|n}}
+* {{Z|ky}}: {{W-|ky|веб-сайт}}, {{W+|ky|сайт}}
+* {{Z|si}}: {{W-|si|වෙබ්-අඩවිය}}
+* {{Z|ko}}: {{W-|ko|웹사이트}}, {{W+|ko|사이트}}
+* {{Z|la}}: {{W-|la|situs interrētiālis|n}}
+* {{Z|lv}}: {{W-|lv|tīmekļa vietne|m}}
+* {{Z|lo}}: {{W-|lo|ເວັບໄຊຕ໌}}
+* {{Z|lt}}: {{W-|lt|tinklalapis|n}}
+* {{Z|mk}}: {{W-|mk|мре́жно ме́сто}}, {{W-|mk|веб-сајт|n}}, {{W-|mk|сајт|n}}, {{W+|mk|веб-стра́ница|m}}
+* {{Z|mg}}: {{W+|mg|vohikala}}, {{W+|mg|vohikala}}
+* {{Z|ms}}: {{W-|ms|tapak sesawang}}, {{W-|ms|laman sesawang}}, {{W-|ms|laman web}}, {{W-|ms|tapak web}}
+* {{Z|mt}}: {{W-|mt|sit elettroniku|n}}, {{W-|mt|sit|n}}
+* {{Z|mi}}: {{W-|mi|pae tukutuku}}
+* {{Z|mr}}: {{W-|mr|संकेतस्थळ}}, {{W+|mr|वेबसाइट|m}}
+* {{Z|hu}}: {{W+|hu|honlap}}, {{W-|hu|webhely}}
+* {{Z|mn}}: {{W-|mn|вэб сайт}}
+* {{Z|nv}}: {{W-|nv|níłchʼi naaltsoos}}, {{W-|nv|Béésh Łichíʼii biyiʼdóó ił Nahazʼą́ baa Haneʼ}}
+* {{Z|uz}}: {{W-|uz|vebsayt}}
+* {{Z|pl}}: {{W-|pl|witryna internetowa|m}}, {{W-|pl|strona WWW|m}}, {{W+|pl|strona internetowa|m}}
+* {{Z|pt}}: {{W+|pt|sítio|n}}, {{W+|pt|site|n}}, {{W+|pt|website|n}}, {{W-|pt|web site|n}}, {{W-|pt|sítio web|n}}, {{W+|pt|saite|n}}, {{W-|pt|sítio na Internet|n}}
+* {{Z|kk}}: {{W-|kk|веб-сайт}}, {{W-|kk|сайт}}
+* {{Z|ro}}: {{W+|ro|site}}, {{W-|ro|site web}}
+* {{Z|ru}}: {{W+|ru|веб-са́йт|n}}, {{W+|ru|сайт|n}}, {{W+|ru|веб-страни́ца|m}}, {{W-|ru|[[страни́ца]] [[интернет]]}}
+* {{Z|sco}}: {{W-|sco|wabsteid}}
+* {{Z|sl}}: {{W-|sl|spletna stran|m}}
+* {{Z|st}}: {{W-|st|websaete}}
+* {{Z|es}}: {{W-|es|sitio web|n}}, {{W+|es|website}}, {{W+|es|página web|m}}, {{W+|es|web|m}}
+* {{Z|sw}}: {{W+|sw|tovuti}}
+* {{Z|sv}}: {{W+|sv|webbplats}}, {{W+|sv|sajt}}, {{W+|sv|webbsajt}}, {{W+|sv|hemsida}}
+* {{Z|tg}}: {{W+|tg|сомона}}, {{W-|tg|сайт}}
+* {{Z|tl}}: {{W-|tl|pahinarya}}
+* {{Z|ta}}: {{W+|ta|வலைத் தளம்}}
+* {{Z|th}}: {{W+|th|เว็บไซต์}}
+* {{Z|ti}}: {{W-|ti|መርበብ መካን}}
+* {{Z|tr}}: {{W+|tr|Web sitesi}}
+* {{Z|tk}}: {{W-|tk|websaýt}}
+* {{Z|uk}}: {{W+|uk|веб-са́йт|n}}, {{W+|uk|сайт|n}}, {{W+|uk|веб-сторі́нка|m}}
+* {{Z|vi}}: {{W+|vi|trang web}}, {{W+|vi|trang mạng}}, {{W-|vi|trang thông tin điện tử}}
+* {{Z|vo}}: {{W-|vo|resodatoped}}
+* {{Z|cy}}: {{W+|cy|gwefan|n}}, {{W+|cy|safwe}}
+* {{Z|km}}: {{W-|km|វិបសាយ}}, {{W-|km|ស្ថានបណ្ដាញ}}
+* {{Z|yi}}: {{W-|yi|וועבזײַטל}}
+* {{Z|el}}: {{W+|el|ιστότοπος|n}}, {{W+|el|ιστοχώρος|n}}
+{{werger-bin}}

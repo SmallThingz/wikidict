@@ -4573,6 +4573,8 @@ test "generated reference markers preserve bracket adjacency and validate author
         .{ .source = "''[<ref>citation</ref>'' tail [[Target|label]]", .visible = "[[1] tail label", .marker = "[1]" },
         .{ .source = "''[<ref group='note'>citation</ref>'' tail [[Target|label]]", .visible = "[[note 1] tail label", .marker = "[note 1]", .group = "note" },
         .{ .source = "''word<ref group='n&amp;o'>citation</ref>]'' tail [[Target|label]]", .visible = "word[n&o 1]] tail label", .marker = "[n&o 1]", .group = "n&o" },
+        .{ .source = "''word<ref group='bad]]name'>citation</ref>]'' tail [[Target|label]]", .visible = "word[bad]]name 1]] tail label", .marker = "[bad]]name 1]", .group = "bad]]name" },
+        .{ .source = "''word<ref group='bad[[name'>citation</ref>]'' tail [[Target|label]]", .visible = "word[bad[[name 1]] tail label", .marker = "[bad[[name 1]", .group = "bad[[name" },
     };
     for (cases) |case| {
         var report: Fallbacks = .{};
@@ -4634,8 +4636,6 @@ test "generated reference markers preserve bracket adjacency and validate author
     }
     for ([_][]const u8{
         "word]__NOTOC__]tail",
-        "word<ref group='bad]]name'>citation</ref>]",
-        "word<ref group='bad[[name'>citation</ref>]",
     }) |source| {
         var report: Fallbacks = .{};
         try std.testing.expectError(error.UncompiledPresentation, compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report));
@@ -9740,6 +9740,47 @@ test "retained UR word of day hides complete inclusion body preserving visible t
     try std.testing.expectEqualDeep(reference_report, report);
     const stored = try codec.decodeAlloc(a, payload, title, .language, .{ .heading = "Unclassified", .code = "" });
     try std.testing.expectEqualSlices(u8, payload, try codec.encodeAlloc(a, stored));
+    // Preserve the complete retained page against the prior visible sizing:
+    // only the two spans owned by the explicit small keyword may change.
+    // The native reader uses CSS Fonts 3's UA keyword table relative to its
+    // reading-body medium, not the captured browser's unknown pixel settings.
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, "font-size:small;"));
+    const old_sizing_source = try std.mem.replaceOwned(u8, a, source, "font-size:small;", "font-size:100%;");
+    var old_sizing_report: Fallbacks = .{};
+    const old_sizing_payload = try compileReportedWithOptionsAlloc(a, title, .language, "Unclassified", "", old_sizing_source, null, .{}, &namespaces, &behavior, &images, &old_sizing_report);
+    try std.testing.expectEqualDeep(report, old_sizing_report);
+    var style_reference = try codec.decodeAlloc(a, old_sizing_payload, title, .language, .{ .heading = "Unclassified", .code = "" });
+    try std.testing.expectEqual(@as(usize, 1), style_reference.entry.sections.len);
+    const style_sections = try a.dupe(types.Section, style_reference.entry.sections);
+    style_reference.entry.sections = style_sections;
+    try std.testing.expectEqual(@as(usize, 2), style_sections[0].blocks.len);
+    const style_blocks = try a.dupe(types.Block, style_sections[0].blocks);
+    style_sections[0].blocks = style_blocks;
+    var style_table = style_blocks[1].table orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 4), style_table.rows.len);
+    const style_rows = try a.dupe(types.Row, style_table.rows);
+    style_table.rows = style_rows;
+    const style_cells = try a.dupe(types.Cell, style_rows[0].cells);
+    try std.testing.expectEqual(@as(usize, 1), style_cells.len);
+    style_rows[0].cells = style_cells;
+    try std.testing.expect(style_cells[0].blocks == null);
+    const style_spans = try a.dupe(types.Span, style_cells[0].spans);
+    style_cells[0].spans = style_spans;
+    var changed_spans: usize = 0;
+    for (style_spans) |*span| {
+        if (std.mem.eql(u8, span.text, ":: ") or std.mem.eql(u8, span.text, "October 11")) {
+            try std.testing.expectEqual(@as(?f32, 1.5), span.font_scale);
+            try std.testing.expectEqual(types.FontScaleBasis.context, span.font_scale_basis);
+            span.font_scale = 8.0 / 9.0;
+            span.font_scale_basis = .normal_body;
+            changed_spans += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 2), changed_spans);
+    style_blocks[1].table = style_table;
+    try std.testing.expectEqualDeep(style_reference, stored);
+    try std.testing.expectEqualSlices(u8, payload, try codec.encodeAlloc(a, style_reference));
+
     try std.testing.expectEqualStrings("", stored.entry.language_code);
     try std.testing.expectEqual(@as(usize, 0), stored.entry.organization.lexemes.len);
     try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
@@ -10126,4 +10167,216 @@ test "retained HY audit bracket gloss pages preserve whole bodies inline paint a
         try std.testing.expect(std.mem.indexOf(u8, visible.items, "[malformed template]") == null);
         try std.testing.expect(std.mem.indexOf(u8, visible.items, "Կատեգորիա:") == null);
     }
+}
+
+test "generated reference group labels preserve literal identity styles and independent target validation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const groups = [_][]const u8{ "{{ja}}", "{{zh}}", "bad[[name", "bad]]name", "a|b", "ISBN 9780000000000", "https://example.org", "__NOTOC__", "&lt;b&gt;paint&lt;/b&gt;", "&#39;&#39;word&#39;&#39;" };
+    const visible_groups = [_][]const u8{ "{{ja}}", "{{zh}}", "bad[[name", "bad]]name", "a|b", "ISBN 9780000000000", "https://example.org", "__NOTOC__", "<b>paint</b>", "''word''" };
+    for (groups, visible_groups) |group, visible_group| {
+        const source = try std.fmt.allocPrint(a, "''word<ref name=n group=\"{s}\">'''Book''' [[Target|label]]</ref>]'' tail<ref name=n group=\"{s}\"/><references group=\"{s}\"/>", .{ group, group, group });
+        var report: Fallbacks = .{};
+        const payload = try compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report);
+        const stored = try codec.decodeAlloc(a, payload, "entry", .language, .{ .heading = "English", .code = "en" });
+        try std.testing.expectEqualSlices(u8, payload, try codec.encodeAlloc(a, stored));
+        try std.testing.expectEqual(@as(usize, 1), stored.entry.references.len);
+        const ref = stored.entry.references[0];
+        try std.testing.expectEqualStrings(visible_group, ref.group);
+        try std.testing.expectEqualStrings("n", ref.name);
+        try std.testing.expectEqual(@as(usize, 1), ref.number);
+        try std.testing.expectEqual(@as(?u32, 1), ref.group_number);
+        var markers: usize = 0;
+        var italic_markers: usize = 0;
+        for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (span.role != .reference) continue;
+            markers += 1;
+            if (span.italic) italic_markers += 1;
+            try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "[{s} 1]", .{visible_group}), span.text);
+            try std.testing.expectEqual(types.InlineKind.link, span.kind);
+            try std.testing.expectEqualStrings("#reference-1", span.target);
+            try std.testing.expect(span.superscript and !span.bold);
+            try std.testing.expectEqualStrings("", span.trail);
+        };
+        try std.testing.expectEqual(@as(usize, 2), markers);
+        try std.testing.expectEqual(@as(usize, 1), italic_markers);
+        var book = false;
+        var action = false;
+        for (ref.spans) |span| {
+            if (std.mem.eql(u8, span.text, "Book")) book = span.bold and span.kind == .text;
+            if (std.mem.eql(u8, span.text, "label")) action = span.kind == .link and std.mem.eql(u8, span.target, "Target");
+        }
+        try std.testing.expect(book and action);
+    }
+    // Only the generated display label is protected. Raw source runs and
+    // action targets keep their existing, independent rejection predicates.
+    for ([_][]const u8{ "{{ja}}", "bad[[name", "bad]]name" }) |raw|
+        try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(raw));
+    var behavior_report: Fallbacks = .{};
+    try std.testing.expectError(error.UncompiledPresentation, compileReportedAlloc(a, "entry", .language, "English", "en", "word]__NOTOC__]tail", null, &behavior_report));
+    try std.testing.expect(behavior_report.literal_markup);
+    var bad_target = [_]compiler.Span{.{ .text = "[{{ja}} 1]", .kind = .link, .role = .reference, .target = "{{ja}}", .provenance = .protected_literal }};
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &bad_target, null));
+    var raw_body = [_]compiler.Span{.{ .text = "{{ja}}" }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw_body, null));
+}
+
+test "retained JA Gyosha preserves complete body grouped references media actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const title = "御者";
+    const raw = @embedFile("testdata/ja-gyosha/source.raw.wikitext");
+    const source = @embedFile("testdata/ja-gyosha/source.expanded.wikitext");
+    const namespace_source = @embedFile("testdata/ja-gyosha/namespace-registry.tsv");
+    const behavior_source = @embedFile("testdata/ja-gyosha/behavior-switches.tsv");
+    const css = @embedFile("testdata/ja-gyosha/common.css");
+    const Check = struct {
+        fn hash(value: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(value, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        fn restoreMarkers(alloc: A, spans: []const types.Span) !usize {
+            var count: usize = 0;
+            for (@constCast(spans)) |*span| {
+                if (span.role != .reference) continue;
+                const old = [_][]const u8{ "[ja-ref 1]", "[ja-ref 2]", "[zh-ref 1]", "[zh-ref 2]" };
+                const new = [_][]const u8{ "[{{ja}} 1]", "[{{ja}} 2]", "[{{zh}} 1]", "[{{zh}} 2]" };
+                var found = false;
+                for (old, new, 0..) |before, after, i| if (std.mem.eql(u8, span.text, before)) {
+                    try std.testing.expectEqual(types.InlineKind.link, span.kind);
+                    try std.testing.expectEqualStrings(try std.fmt.allocPrint(alloc, "#reference-{d}", .{i + 1}), span.target);
+                    try std.testing.expect(span.superscript);
+                    span.text = after;
+                    found = true;
+                    break;
+                };
+                try std.testing.expect(found);
+                count += 1;
+            }
+            return count;
+        }
+    };
+    try Check.hash(raw, "224a86a9bcf9626d016d690da7778b9668030be5a2fe746c32330a6b2cac1e82");
+    try Check.hash(source, "8b351486a4cc57eb29da30e48e5e13ded3682b58cc5355e8da86d96dfdc43336");
+    try Check.hash(css, "95fdf56f8f086c846dd690c2d99fdb95565445f5b9b4eddabf1d8e657b7ac923");
+    try std.testing.expect(std.mem.indexOf(u8, raw, "=={{L|ja}}==") != null);
+    try std.testing.expect(std.mem.indexOf(u8, raw, "=={{L|zh}}==") != null);
+    var namespaces = try NamespaceRegistry.init(a, namespace_source);
+    defer namespaces.deinit();
+    try namespaces.attachInterwikiMap(@embedFile("testdata/ja-gyosha/interwiki-map.tsv"));
+    var namespace_sha: [32]u8 = undefined;
+    var behavior_sha: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(namespace_source, &namespace_sha, .{});
+    std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_sha, .{});
+    var behavior = try BehaviorRegistry.init(a, behavior_source, "jawiktionary", "20261001", "ja", namespace_sha);
+    defer behavior.deinit();
+    var images = try ImageRegistry.init(a, @embedFile("testdata/ja-gyosha/image-options.tsv"), "jawiktionary", "20261001", "ja", namespace_sha, behavior_sha);
+    defer images.deinit();
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, css);
+    defer styles.deinit();
+    // Same-length ordinary group names provide a complete-body reference
+    // compilation. Only four stored group identities and their generated labels
+    // are restored below; every other encoded field must remain byte-identical.
+    const ordinary = try a.dupe(u8, source);
+    for ([_][]const u8{ "{{ja}}", "{{zh}}" }, [_][]const u8{ "ja-ref", "zh-ref" }) |from, to| {
+        const attr = try std.fmt.allocPrint(a, "group=\"{s}\"", .{from});
+        try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, source, attr));
+        var pos: usize = 0;
+        while (std.mem.indexOfPos(u8, ordinary, pos, attr)) |at| {
+            @memcpy(ordinary[at + 7 ..][0..from.len], to);
+            pos = at + attr.len;
+        }
+    }
+    var report: Fallbacks = .{};
+    var ordinary_report: Fallbacks = .{};
+    // This is the complete captured document, not an asserted Writer ownership
+    // result. Raw ja/zh declarations above remain available to the normal Writer.
+    const payload = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, title, .language, "Unclassified", "", .{ .bytes = source }, null, .{}, &namespaces, &behavior, &images, &report, null, &styles);
+    const ordinary_payload = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, title, .language, "Unclassified", "", .{ .bytes = ordinary }, null, .{}, &namespaces, &behavior, &images, &ordinary_report, null, &styles);
+    try std.testing.expectEqualDeep(ordinary_report, report);
+    const stored = try codec.decodeAlloc(a, payload, title, .language, .{ .heading = "Unclassified", .code = "" });
+    try std.testing.expectEqualSlices(u8, payload, try codec.encodeAlloc(a, stored));
+    const expected = try codec.decodeAlloc(a, ordinary_payload, title, .language, .{ .heading = "Unclassified", .code = "" });
+    try std.testing.expectEqual(@as(usize, 4), expected.entry.references.len);
+    for (@constCast(expected.entry.references), 0..) |*ref, i| {
+        try std.testing.expectEqual(types.ReferenceKind.note, ref.kind);
+        try std.testing.expectEqualStrings(if (i < 2) "ja-ref" else "zh-ref", ref.group);
+        try std.testing.expectEqual(@as(usize, i + 1), ref.number);
+        try std.testing.expectEqual(@as(?u32, @intCast(i % 2 + 1)), ref.group_number);
+        try std.testing.expectEqualStrings("", ref.name);
+        ref.group = if (i < 2) "{{ja}}" else "{{zh}}";
+    }
+    var restored: usize = try Check.restoreMarkers(a, expected.entry.preamble_spans);
+    for (expected.entry.sections) |section| for (section.blocks) |block| {
+        try std.testing.expect(block.table == null);
+        restored += try Check.restoreMarkers(a, block.spans);
+    };
+    try std.testing.expectEqual(@as(usize, 4), restored);
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), payload);
+    try std.testing.expectEqualStrings("", stored.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.media.len);
+    try std.testing.expectEqual(types.MediaKind.image, stored.entry.media[0].kind);
+    try std.testing.expectEqualStrings("Delphi Museum 09 Wagenlenker.jpg", stored.entry.media[0].file);
+    var visible: std.ArrayList(u8) = .empty;
+    var japanese_heading = false;
+    var chinese_heading = false;
+    var definitions: usize = 0;
+    var bold_headword = false;
+    var pronunciation_superscript = false;
+    const targets = [_][]const u8{ "側近", "侍従", "御#日本語", "者#日本語", "御#中国語", "者#中国語", "ぎょしゃ座", "御者台", "騎手", "馬方" };
+    var found: [targets.len]bool = @splat(false);
+    for (stored.entry.sections) |section| {
+        if (std.mem.eql(u8, section.title, "日本語")) japanese_heading = true;
+        if (std.mem.eql(u8, section.title, "中国語")) chinese_heading = true;
+        try visible.appendSlice(a, section.title);
+        for (section.blocks) |block| {
+            try std.testing.expect(block.table == null);
+            if (block.kind == .definition) definitions += 1;
+            for (block.spans) |span| {
+                try visible.appendSlice(a, span.text);
+                try visible.appendSlice(a, span.trail);
+                if (span.bold and std.mem.eql(u8, span.target, "御#日本語")) bold_headword = true;
+                if (span.superscript and span.role != .reference and (std.mem.eql(u8, span.text, "4") or std.mem.eql(u8, span.text, "3"))) pronunciation_superscript = true;
+                for (targets, 0..) |target, i| if (span.kind == .link and std.mem.eql(u8, span.target, target)) { found[i] = true; };
+            }
+        }
+    }
+    try std.testing.expect(japanese_heading and chinese_heading and bold_headword and pronunciation_superscript);
+    try std.testing.expectEqual(@as(usize, 4), definitions);
+    for (found) |present| try std.testing.expect(present);
+    for ([_][]const u8{ "ぎょしゃ", "表記", "coachman", "driver", "postilion", "charioteer", "αμαξάς", "ηνίοχος", "ἡνίοχος", "kočí", "vozka", "forman", "važnyčiotojas", "yùzhě", "ㄩˋ ㄓㄜˇ", "yiwjee", "yùjhě", "[{{ja}} 1]", "[{{ja}} 2]", "[{{zh}} 1]", "[{{zh}} 2]" }) |value| {
+        errdefer std.debug.print("JA Gyosha missing visible witness: {s}\n", .{value});
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, value) != null);
+    }
+    var external: usize = 0;
+    var author_actions: usize = 0;
+    const citation_targets = [_][]const u8{
+        "http://iss.ndl.go.jp/api/openurl?ndl_jpno=43022818",
+        "http://dl.ndl.go.jp/info:ndljp/pid/954645/607",
+        "http://iss.ndl.go.jp/api/openurl?ndl_jpno=55008098",
+        "http://dl.ndl.go.jp/info:ndljp/pid/992954/203",
+    };
+    var citations_found: [citation_targets.len]bool = @splat(false);
+    for (stored.entry.references, 0..) |ref, i| {
+        try std.testing.expectEqualStrings(if (i < 2) "{{ja}}" else "{{zh}}", ref.group);
+        for (ref.spans) |span| if (span.kind == .external_link) {
+            external += 1;
+            for (citation_targets, 0..) |target, index| if (std.mem.eql(u8, span.target, target)) { citations_found[index] = true; };
+            if (std.mem.eql(u8, span.text, "上田万年") or std.mem.eql(u8, span.text, "松井簡治")) {
+                try std.testing.expect(std.mem.startsWith(u8, span.target, "https://ja.wikipedia.org/wiki/"));
+                author_actions += 1;
+            }
+        };
+        if (i >= 2) {
+            var text: std.ArrayList(u8) = .empty;
+            for (ref.spans) |span| { try text.appendSlice(a, span.text); try text.appendSlice(a, span.trail); }
+            try std.testing.expectEqualStrings("学研漢和大辞典", text.items);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 6), external);
+    try std.testing.expectEqual(@as(usize, 2), author_actions);
+    for (citations_found) |present| try std.testing.expect(present);
 }

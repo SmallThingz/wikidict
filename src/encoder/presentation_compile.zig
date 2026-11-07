@@ -5254,12 +5254,9 @@ pub const Renderer = struct {
             try std.fmt.allocPrint(self.a, "[{d}]", .{ref.group_number.?})
         else
             try std.fmt.allocPrint(self.a, "[{s} {d}]", .{ group, ref.group_number.? });
-        // Only the wrapper and number are synthesized. Preserve ordinary
-        // validation for authored group text without splitting one action span.
-        requireCompiledText(group) catch {
-            try self.text(marker, s);
-            return;
-        };
+        // Cite armors its generated label with safeEncodeAttribute before
+        // recursive parsing. The authored group is display-only here; its
+        // exact identity stays in refs, and the synthesized target is validated.
         s.provenance = .protected_literal;
         try self.text(marker, s);
     }
@@ -7652,13 +7649,14 @@ pub const Renderer = struct {
         return true;
     }
 
-    const RelativeFontSize = struct { value: ?f32 };
+    const RelativeFontSize = struct { value: ?f32, normal_body: bool = false };
     fn htmlRelativeFontSize(self: *Renderer, tag: syntax.Tag, parent: ?f32) Error!?RelativeFontSize {
         // Select the winning UA default/author declaration before resolving
         // against the parent. A losing default or declaration may overflow
         // even when the winning value is zero or inherits the parent.
         var selected_factor: ?f32 = if (tag.is("big")) 1.2 else if (tag.is("small")) 1.0 / 1.2 else null;
         var selected_inherit = false;
+        var selected_absolute = false;
         const css = (try self.semanticAttribute(tag, "style")) orelse "";
         var position: usize = 0;
         var important_seen = false;
@@ -7676,12 +7674,15 @@ pub const Renderer = struct {
             }
             if (important_seen and !important) continue;
             const inherited = std.ascii.eqlIgnoreCase(value, "inherit") or std.ascii.eqlIgnoreCase(value, "unset");
-            const factor: ?f32 = if (inherited) null else relative_font.parseRelative(value) orelse continue;
+            const absolute = if (inherited) null else relative_font.absoluteKeyword(value);
+            const factor: ?f32 = if (inherited) null else absolute orelse relative_font.parseRelative(value) orelse continue;
             selected_factor = factor;
             selected_inherit = inherited;
+            selected_absolute = absolute != null;
             important_seen = important;
         }
         if (selected_inherit) return .{ .value = parent };
+        if (selected_absolute) return .{ .value = selected_factor.?, .normal_body = true };
         return if (selected_factor) |factor| .{ .value = try relative_font.resolve(parent, factor) } else null;
     }
 
@@ -10022,6 +10023,28 @@ pub const Renderer = struct {
     // Link syntax has already become complete anchors when MediaWiki converts
     // manual raw bodies. Prove only complete ordinary links here, keeping their
     // target punctuation separate from the conversion grammar in visible text.
+    // Internal targets become link holders before conversion. Permit decoded
+    // entity transport only inside an already explicit fragment; the raw title
+    // and namespace domain and every unsupported decoded delimiter stay strict.
+    fn manualConversionInternalTarget(raw: []const u8) bool {
+        if (raw.len == 0) return false;
+        var at: usize = 0;
+        var in_fragment = false;
+        while (at < raw.len) {
+            if (raw[at] == '#') in_fragment = true;
+            var scratch: [4]u8 = undefined;
+            const decoded = if (raw[at] == '&') decodeEntity(raw[at..], &scratch, false) else null;
+            const part = if (decoded) |value| value.bytes else raw[at .. at + 1];
+            if (std.mem.indexOfAny(u8, part, "[]{}|;<>\r\n") != null) return false;
+            if (decoded != null) {
+                if (!in_fragment or std.mem.indexOf(u8, part, "\xef\xbf\xbd") != null) return false;
+                for (part) |byte| if (std.ascii.isControl(byte)) return false;
+            }
+            at += if (decoded) |value| value.consumed else 1;
+        }
+        return true;
+    }
+
     fn manualConversionLinkedScope(self: *Renderer, body: []const u8, allow_links: bool) bool {
         // Core parses a complete anchor before conversion. A colon in its
         // visible label has the generated anchor prefix, not a variant prefix.
@@ -10042,7 +10065,7 @@ pub const Renderer = struct {
                 if (link_node.kind != (if (internal) ir.InlineKind.link else ir.InlineKind.external_link) or
                     links.cursor <= scan or link_node.target.len == 0 or link_node.text.len == 0 or
                     link_node.link_empty_label or link_node.link_label_restored_close or
-                    std.mem.indexOfAny(u8, link_node.target, "[]{}|;<>\r\n") != null or
+                    (if (internal) !manualConversionInternalTarget(link_node.target) else std.mem.indexOfAny(u8, link_node.target, "[]{}|;<>\r\n") != null) or
                     std.mem.indexOf(u8, link_node.target, "=>") != null or
                     std.mem.indexOf(u8, link_node.target, "=&gt;") != null) return false;
                 // Media/category transclusions are not ordinary link scopes.
@@ -10109,7 +10132,7 @@ pub const Renderer = struct {
         while (scan < body.len) : (scan += 1) {
             if (body[scan] != '<') continue;
             const tag = syntax.tagAt(body, scan) orelse return error.UncompiledPresentation;
-            if (!(tag.is("b") or tag.is("i") or tag.is("strong") or tag.is("em") or tag.is("span")) or tag.self_closing) return error.UncompiledPresentation;
+            if (!(tag.is("b") or tag.is("i") or tag.is("strong") or tag.is("em") or tag.is("span") or tag.is("small") or tag.is("del")) or tag.self_closing) return error.UncompiledPresentation;
             if (tag.closing) {
                 if (count == 0 or !std.ascii.eqlIgnoreCase(stack[count - 1], tag.name)) return error.UncompiledPresentation;
                 count -= 1;
@@ -13454,7 +13477,8 @@ pub const Renderer = struct {
         var result = inherited;
         result.custom_properties = try self.customElement(tag, inherited);
         if (try self.htmlRelativeFontSize(tag, inherited.font_scale)) |resolved| {
-            result.font_scale = if (inherited.font_scale_basis == .normal_body) resolved.value orelse 1 else resolved.value;
+            if (resolved.normal_body) result.font_scale_basis = .normal_body;
+            result.font_scale = if (result.font_scale_basis == .normal_body) resolved.value orelse 1 else resolved.value;
             result.font_scale_set = true;
         }
         const foreground = try self.authoredColorIn(tag, "color", if (tag.is("font")) "color" else null, inherited.foreground, self.customParent(result));
@@ -14889,7 +14913,8 @@ pub const Renderer = struct {
         var effective = inherited;
         effective.custom_properties = try self.customElement(tag, inherited);
         if (try self.htmlRelativeFontSize(tag, inherited.font_scale)) |resolved| {
-            effective.font_scale = if (inherited.font_scale_basis == .normal_body) resolved.value orelse 1 else resolved.value;
+            if (resolved.normal_body) effective.font_scale_basis = .normal_body;
+            effective.font_scale = if (effective.font_scale_basis == .normal_body) resolved.value orelse 1 else resolved.value;
             effective.font_scale_set = true;
         }
         const foreground = try self.authoredColorIn(tag, "color", null, inherited.foreground, self.customParent(effective));
@@ -45433,4 +45458,198 @@ test "ordinary square gloss proof rejects actions child syntax malformed boundar
         "{{name|[gloss] [[Target]]|}", "{{name|[gloss] ''quoted''|}", "{{name|[gloss] {|cell|}",
     }) |source| try std.testing.expect(Renderer.malformedLiteralGlossArgumentSingleBraceEnd(source, 0) == null);
     try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("before |} after"));
+}
+
+
+test "manual raw conversion preserves complete small deletion scope and following actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    ns.language_conversion = &.{ "ku", "ku-arab", "ku-latn" };
+    var behavior = try ManualConversionTest.behavior(a, &ns); defer behavior.deinit();
+    const raw = "before -{wep sai<small><del>t</del></small>}- after [[Next|next]]";
+    // The raw body is a distinct recursive inline scope. An attribute-free
+    // span models that boundary without adding style, text or action authority.
+    const reference = "before <span>wep sai<small><del>t</del></small></span> after [[Next|next]]";
+    var actual_renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+    var expected_renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+    const actual = try FormattingScopeTest.encode(a, &actual_renderer, try actual_renderer.renderBody(raw));
+    const expected = try FormattingScopeTest.encode(a, &expected_renderer, try expected_renderer.renderBody(reference));
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqual(@as(usize, 1), actual.entry.sections.len);
+    try std.testing.expectEqual(@as(usize, 1), actual.entry.sections[0].blocks.len);
+    var deleted: usize = 0; var actions: usize = 0;
+    for (actual.entry.sections[0].blocks[0].spans) |span| {
+        if (std.mem.eql(u8, span.text, "t")) {
+            deleted += 1;
+            try std.testing.expect(span.kind == .text and span.target.len == 0 and span.strike and !span.small and !span.bold and !span.italic);
+            try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.00001);
+        }
+        if (span.kind == .link) {
+            actions += 1;
+            try std.testing.expectEqualStrings("Next", span.target);
+            try std.testing.expectEqualStrings("next", span.text);
+            try std.testing.expect(!span.strike and span.font_scale == null);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), deleted);
+    try std.testing.expectEqual(@as(usize, 1), actions);
+    const codec = @import("blob_encoder").presentation_codec;
+    const bytes = try codec.encodeAlloc(a, actual);
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), bytes);
+    const decoded = try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" });
+    try std.testing.expectEqualDeep(actual, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+}
+
+test "manual small deletion conversion keeps strict rule protected and structural domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    ns.language_conversion = &.{ "ku", "ku-arab", "ku-latn" };
+    var behavior = try ManualConversionTest.behavior(a, &ns); defer behavior.deinit();
+    for ([_][]const u8{
+        "-{<small><del>t</small></del>}-", "-{<small><del>t</del>}-", "-{<small/>t}-",
+        "-{<small>t}-tail</small>", "-{<code>t</code>}-", "-{<table><tr><td>t</td></tr></table>}-",
+        "-{<small>outer -{inner}-</small>}-", "-{<small>ku:one</small>}-", "-{R|<small>t</small>}-",
+        "-{<small>t\n# item</small>}-", "-{<small><del>t</del></small>",
+    }) |raw| {
+        var renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+        try std.testing.expectError(error.UncompiledPresentation, renderer.parseSpans(raw, .{}));
+    }
+    const raw = "-{wep sai<small><del>t</del></small>}-";
+    var missing: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns } };
+    try std.testing.expectError(error.UncompiledPresentation, missing.parseSpans(raw, .{}));
+    var code: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+    try std.testing.expectError(error.UncompiledPresentation, code.parseSpans(raw, .{ .code = true }));
+    var literal: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+    const protected = try std.fmt.allocPrint(a, "<nowiki>{s}</nowiki>", .{raw});
+    const spans = try literal.parseSpans(protected, .{});
+    try std.testing.expectEqualStrings(raw, try flattened(a, spans));
+    for (spans) |span| try std.testing.expect(span.kind == .text and span.target.len == 0 and !span.flags.strike and span.font_scale == null);
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(raw));
+}
+
+
+test "manual conversion internal fragment entities retain ordinary title semantics and strict domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    ns.language_conversion = &.{ "ku", "ku-arab", "ku-latn" };
+    var behavior = try ManualConversionTest.behavior(a, &ns); defer behavior.deinit();
+    for ([_]struct { source: []const u8, reference: []const u8, target: []const u8 }{
+        .{ .source = "-{[[Target#part&#95;two|label]]}-", .reference = "[[Target#part_two|label]]", .target = "Target#part two" },
+        .{ .source = "-{[[Target#part&#x5f;two|label]]}-", .reference = "[[Target#part_two|label]]", .target = "Target#part two" },
+        .{ .source = "-{[[Target#part&amp;two|label]]}-", .reference = "[[Target#part&two|label]]", .target = "Target#part&two" },
+    }) |row| {
+        var renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+        var reference_renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+        const actual = try FormattingScopeTest.encode(a, &renderer, try renderer.renderBody(row.source));
+        const expected = try FormattingScopeTest.encode(a, &reference_renderer, try reference_renderer.renderBody(row.reference));
+        try std.testing.expectEqualDeep(expected, actual);
+        var actions: usize = 0;
+        for (actual.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (span.kind == .link) {
+                actions += 1;
+                try std.testing.expectEqualStrings(row.target, span.target);
+                try std.testing.expectEqualStrings("label", span.text);
+                try std.testing.expect(span.target_fragment == null);
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), actions);
+        const codec = @import("blob_encoder").presentation_codec;
+        const bytes = try codec.encodeAlloc(a, actual);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), bytes);
+        const decoded = try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" });
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+    }
+    for ([_][]const u8{
+        "Target&#95;part#fragment", "&#67;ategory:Target#fragment", "Target#raw;choice", "Target#x&#59;choice",
+        "Target#x&#x7c;choice", "Target#x&#123;", "Target#x&lt;", "Target#x&#x3e;", "Target#x&#10;",
+        "Target#x&#13;", "Target#x&#9;", "Target#x&#0;", "Target#x&#xfffd;", "Target#x&amp;gt;",
+    }) |raw_target| try std.testing.expect(!Renderer.manualConversionInternalTarget(raw_target));
+    for ([_][]const u8{
+        "-{[[Category:Target#x&#95;y|label]]}-", "-{[[File:Target#x&#95;y|label]]}-",
+        "-{[https://example.test/#x&#95;y label]}-", "-{[[Target#x&#59;y|label]]}-",
+        "-{[[Target#x&#95;y|label:ku;other]]}-", "-{[[Target#x&#95;y|label] }-",
+    }) |raw| {
+        var renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+        try std.testing.expectError(error.UncompiledPresentation, renderer.parseSpans(raw, .{}));
+    }
+}
+
+test "absolute font keywords reset to native reading medium and preserve cascade inheritance and scopes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const cases = [_]struct { keyword: []const u8, factor: f32 }{
+        .{ .keyword = "xx-small", .factor = 3.0 / 5.0 },
+        .{ .keyword = "x-small", .factor = 3.0 / 4.0 },
+        .{ .keyword = "small", .factor = 8.0 / 9.0 },
+        .{ .keyword = "medium", .factor = 1 },
+        .{ .keyword = "large", .factor = 6.0 / 5.0 },
+        .{ .keyword = "x-large", .factor = 3.0 / 2.0 },
+        .{ .keyword = "xx-large", .factor = 2 },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(a, "<span style='font-size:200%'>before<span style='font-size:{s}'>absolute<span style='font-size:50%'>child</span><span style='font-size:inherit'>inherit</span></span>after</span>outside", .{case.keyword});
+        const parsed = try r.parseSpans(source, .{});
+        var hits: usize = 0;
+        for (parsed) |span| {
+            if (std.mem.eql(u8, span.text, "absolute") or std.mem.eql(u8, span.text, "inherit")) {
+                try std.testing.expectEqual(FontScaleBasis.normal_body, span.font_scale_basis);
+                try std.testing.expectApproxEqAbs(case.factor, span.font_scale.?, 0.000001);
+                hits += 1;
+            } else if (std.mem.eql(u8, span.text, "child")) {
+                try std.testing.expectEqual(FontScaleBasis.normal_body, span.font_scale_basis);
+                try std.testing.expectApproxEqAbs(case.factor * 0.5, span.font_scale.?, 0.000001);
+                hits += 1;
+            } else if (std.mem.eql(u8, span.text, "before") or std.mem.eql(u8, span.text, "after")) {
+                try std.testing.expectEqual(FontScaleBasis.context, span.font_scale_basis);
+                try std.testing.expectEqual(@as(?f32, 2), span.font_scale);
+                hits += 1;
+            } else if (std.mem.eql(u8, span.text, "outside")) {
+                try std.testing.expectEqual(FontScaleBasis.context, span.font_scale_basis);
+                try std.testing.expect(span.font_scale == null);
+                hits += 1;
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 6), hits);
+    }
+    const cascade = [_]struct { declarations: []const u8, value: f32, absolute: bool }{
+        .{ .declarations = "font-size:small; font-size:150%", .value = 3, .absolute = false },
+        .{ .declarations = "font-size:150%; font-size: SMALL !important; font-size:200%", .value = 8.0 / 9.0, .absolute = true },
+        .{ .declarations = "font-size:small; font-size:inherit", .value = 2, .absolute = false },
+        .{ .declarations = "font-size:small; font-size:unset", .value = 2, .absolute = false },
+        .{ .declarations = "font-size:small; font-size:unknown", .value = 8.0 / 9.0, .absolute = true },
+    };
+    for (cascade) |case| {
+        const source = try std.fmt.allocPrint(a, "<span style='{s}'>", .{case.declarations});
+        const tag = (try r.semanticTagAt(source, 0)).?;
+        const selected = (try r.htmlRelativeFontSize(tag, 2)).?;
+        try std.testing.expectApproxEqAbs(case.value, selected.value.?, 0.000001);
+        try std.testing.expectEqual(case.absolute, selected.normal_body);
+    }
+    const absolute_tag = (try r.semanticTagAt("<span style='font-size:small'>", 0)).?;
+    const absolute = (try r.htmlRelativeFontSize(absolute_tag, std.math.floatMax(f32))).?;
+    try std.testing.expect(absolute.normal_body);
+    try std.testing.expectApproxEqAbs(@as(f32, 8.0 / 9.0), absolute.value.?, 0.000001);
+    for ([_][]const u8{ "smaller", "larger", "initial", "revert", "revert-layer", "small unknown", "small()", "12px", "calc(1em)" }) |value| {
+        const source = try std.fmt.allocPrint(a, "<span style='font-size:{s}'>", .{value});
+        const tag = (try r.semanticTagAt(source, 0)).?;
+        try std.testing.expect((try r.htmlRelativeFontSize(tag, 2)) == null);
+    }
+    const heading_tag = (try r.semanticTagAt("<h2 style='font-size:medium'>", 0)).?;
+    const heading = try r.htmlHeadingStyle(heading_tag, .{ .font_scale = 2 });
+    try std.testing.expectEqual(FontScaleBasis.normal_body, heading.font_scale_basis);
+    try std.testing.expectEqual(@as(?f32, 1), heading.font_scale);
+    const cell = try r.wikiTableForeground(absolute_tag, .{ .font_scale = 2 });
+    try std.testing.expectEqual(FontScaleBasis.normal_body, cell.font_scale_basis);
+    try std.testing.expectApproxEqAbs(@as(f32, 8.0 / 9.0), cell.font_scale.?, 0.000001);
+    const protected = try r.parseSpans("<nowiki><span style='font-size:small'>literal</span></nowiki>", .{});
+    for (protected) |span| {
+        try std.testing.expectEqual(FontScaleBasis.context, span.font_scale_basis);
+        try std.testing.expect(span.font_scale == null);
+    }
 }

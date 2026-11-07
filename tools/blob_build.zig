@@ -14990,6 +14990,24 @@ test "normal Writer retained ataujia keeps Spanish body bibliography media and h
             spanish += 1;
             try std.testing.expectEqualStrings(owner.heading, actual.language.?);
             try std.testing.expectEqualStrings(owner.heading, item.heading);
+            try std.testing.expectEqual(@as(usize, 1), actual.organization.lexemes.len);
+            const lexical = actual.organization.lexemes[0];
+            try std.testing.expectEqualStrings(owner.heading, lexical.language);
+            try std.testing.expectEqualStrings("Noun", lexical.kind);
+            try std.testing.expectEqual(@as(usize, 2), lexical.section);
+            try std.testing.expectEqual(@as(?usize, 1), lexical.etymology);
+            try std.testing.expectEqual(@as(usize, 1), lexical.definitions.len);
+            try std.testing.expectEqual(@as(usize, 2), lexical.definitions[0].block);
+            try std.testing.expect(lexical.definitions[0].parent == null and lexical.definitions[0].form == null);
+            try std.testing.expect(lexical.definitions[0].examples.len == 0 and lexical.definitions[0].quotations.len == 0 and lexical.definitions[0].notes.len == 0);
+            try std.testing.expectEqualSlices(usize, &.{0}, lexical.introduction);
+            try std.testing.expectEqualSlices(usize, &.{1}, lexical.other_blocks);
+            try std.testing.expectEqual(@as(usize, 0), lexical.related_sections.len);
+            try std.testing.expectEqualSlices(usize, &.{ 0, 1, 3, 4, 5 }, actual.organization.other_sections);
+            try std.testing.expectEqualStrings("Sustantivo femenino", actual.sections[2].title);
+            try std.testing.expectEqual(encoder.presentation_types.BlockKind.term, actual.sections[2].blocks[1].kind);
+            try std.testing.expectEqualStrings("1", actual.sections[2].blocks[1].spans[0].text);
+            try std.testing.expectEqual(encoder.presentation_types.BlockKind.list_detail, actual.sections[2].blocks[2].kind);
             try std.testing.expectEqual(@as(usize, 1), actual.references.len);
             try std.testing.expectEqualStrings("dlce1906", actual.references[0].name);
             notes += actual.references.len;
@@ -18823,4 +18841,366 @@ test "normal Writer retained SR Serbia preserves colon translation labels comple
     // Historical missing phase belongs only to the exact original output hash.
     // The transparent reference has no forged phase; its complete body/codec
     // equality above does not turn it into an ordinary expansion result.
+}
+
+
+test "normal Writer retained KU malper preserves small deletion whole body owner translations table and codec" {
+    const F = struct {
+        const title = "malper";
+        const raw = @embedFile("testdata/ku-malper/page.raw.wikitext");
+        const source = @embedFile("testdata/ku-malper/page.expanded.wikitext");
+        const wrapped = "-{wep sai<small><del>t</del></small>}-";
+        const plain = "wep sai<small><del>t</del></small>";
+        const Translation = struct { language: []const u8, target: []const u8, label: []const u8 };
+        const translations = [_]Translation{
+            .{ .language = "ckb", .target = "ماڵه‌وه#Soranî", .label = "ماڵه‌وه" },
+            .{ .language = "af", .target = "webwerf#Afrîkansî", .label = "webwerf" },
+            .{ .language = "sq", .target = "vënd i rrjetës#Albanî", .label = "vënd i rrjetës" },
+            .{ .language = "de", .target = "Website#Almanî", .label = "Website" },
+            .{ .language = "de", .target = "Webangebot#Almanî", .label = "Webangebot" },
+            .{ .language = "de", .target = "Webauftritt#Almanî", .label = "Webauftritt" },
+            .{ .language = "de", .target = "Internetauftritt#Almanî", .label = "Internetauftritt" },
+            .{ .language = "de", .target = "Webpräsenz#Almanî", .label = "Webpräsenz" },
+            .{ .language = "de", .target = "Internetpräsenz#Almanî", .label = "Internetpräsenz" },
+            .{ .language = "am", .target = "ዌብሳይት#Amharî", .label = "ዌብሳይት" },
+            .{ .language = "az", .target = "veb-sayt#Azerî", .label = "veb-sayt" },
+            .{ .language = "az", .target = "sayt#Azerî", .label = "sayt" },
+            .{ .language = "eu", .target = "webgune#Baskî", .label = "webgune" },
+            .{ .language = "be", .target = "вэб-сайт#Belarusî", .label = "вэб-са́йт" },
+            .{ .language = "be", .target = "сайт#Belarusî", .label = "сайт" },
+            .{ .language = "be", .target = "вэб-старонка#Belarusî", .label = "вэб-старо́нка" },
+            .{ .language = "bn", .target = "ওয়েবসাইটি#Bengalî", .label = "ওয়েবসাইটি" },
+            .{ .language = "br", .target = "lec'hienn#Bretonî", .label = "lec'hienn" },
+            .{ .language = "bg", .target = "уебсайт#Bulgarî", .label = "уе́бсайт" },
+            .{ .language = "my", .target = "ဝက်ဘ်ဆိုဒ်#Burmayî", .label = "ဝက်ဘ်ဆိုဒ်" },
+            .{ .language = "da", .target = "websted#Danmarkî", .label = "websted" },
+            .{ .language = "da", .target = "hjemmeside#Danmarkî", .label = "hjemmeside" },
+            .{ .language = "da", .target = "website#Danmarkî", .label = "website" },
+            .{ .language = "id", .target = "situs web#Endonezyayî", .label = "situs web" },
+            .{ .language = "ar", .target = "موقع ويب#Erebî", .label = "مَوْقِع وِيب" },
+            .{ .language = "hy", .target = "ցանցակայք#Ermenî", .label = "ցանցակայք" },
+            .{ .language = "hy", .target = "վեբ կայքը#Ermenî", .label = "վեբ կայքը" },
+            .{ .language = "eo", .target = "retejo#Esperantoyî", .label = "retejo" },
+            .{ .language = "eo", .target = "TTT-ejo#Esperantoyî", .label = "TTT-ejo" },
+            .{ .language = "et", .target = "veebisait#Estonî", .label = "veebisait" },
+            .{ .language = "fa", .target = "وب‌گاه#Farisî", .label = "وب‌گاه" },
+            .{ .language = "fa", .target = "تارنما#Farisî", .label = "تارنما" },
+            .{ .language = "fa", .target = "پایگاه#Farisî", .label = "پایگاه" },
+            .{ .language = "fi", .target = "verkkosivusto#Fînî", .label = "verkkosivusto" },
+            .{ .language = "fi", .target = "sivusto#Fînî", .label = "sivusto" },
+            .{ .language = "fi", .target = "www-sivu#Fînî", .label = "www-sivu" },
+            .{ .language = "fi", .target = "nettisivu#Fînî", .label = "nettisivu" },
+            .{ .language = "fi", .target = "kotisivu#Fînî", .label = "kotisivu" },
+            .{ .language = "fr", .target = "site web#Fransî", .label = "site web" },
+            .{ .language = "fr", .target = "site#Fransî", .label = "site" },
+            .{ .language = "fr", .target = "site Web#Fransî", .label = "site Web" },
+            .{ .language = "fr", .target = "site Internet#Fransî", .label = "site Internet" },
+            .{ .language = "gd", .target = "làrach-lìn#Gaelîka skotî", .label = "làrach-lìn" },
+            .{ .language = "gd", .target = "ionad#Gaelîka skotî", .label = "ionad" },
+            .{ .language = "gd", .target = "eadar-lìon#Gaelîka skotî", .label = "eadar-lìon" },
+            .{ .language = "gu", .target = "જાળસ્થળ#Gujaratî", .label = "જાળસ્થળ" },
+            .{ .language = "ka", .target = "ვებსაიტი#Gurcî", .label = "ვებსაიტი" },
+            .{ .language = "hi", .target = "जालपृष्ठ#Hindî", .label = "जालपृष्ठ" },
+            .{ .language = "hi", .target = "वेबसाइट#Hindî", .label = "वेबसाइट" },
+            .{ .language = "hi", .target = "साइट#Hindî", .label = "साइट" },
+            .{ .language = "hi", .target = "जालस्थल#Hindî", .label = "जालस्थल" },
+            .{ .language = "nl", .target = "website#Holendî", .label = "website" },
+            .{ .language = "nl", .target = "webstek#Holendî", .label = "webstek" },
+            .{ .language = "he", .target = "אתר אינטרנט#Îbranî", .label = "אתר אינטרנט" },
+            .{ .language = "io", .target = "retoloko#Îdoyî", .label = "retoloko" },
+            .{ .language = "en", .target = "website#Îngilîzî", .label = "website" },
+            .{ .language = "en", .target = "homepage#Îngilîzî", .label = "homepage" },
+            .{ .language = "ia", .target = "sito del web#Înterlîngua", .label = "sito del web" },
+            .{ .language = "ga", .target = "suíomh gréasáin#Îrlendî", .label = "suíomh gréasáin" },
+            .{ .language = "it", .target = "sito web#Îtalî", .label = "sito web" },
+            .{ .language = "it", .target = "sito#Îtalî", .label = "sito" },
+            .{ .language = "is", .target = "vefsetur#Îzlendî", .label = "vefsetur" },
+            .{ .language = "is", .target = "vefur#Îzlendî", .label = "vefur" },
+            .{ .language = "ja", .target = "ウェブサイト#Japonî", .label = "ウェブサイト" },
+            .{ .language = "ja", .target = "サイト#Japonî", .label = "サイト" },
+            .{ .language = "pam", .target = "karinan-aptas#Kapampanganî", .label = "karinan-aptas" },
+            .{ .language = "ca", .target = "pàgina web#Katalanî", .label = "pàgina web" },
+            .{ .language = "ca", .target = "lloc web#Katalanî", .label = "lloc web" },
+            .{ .language = "ky", .target = "веб-сайт#Kirgizî", .label = "веб-сайт" },
+            .{ .language = "ky", .target = "сайт#Kirgizî", .label = "сайт" },
+            .{ .language = "si", .target = "වෙබ්-අඩවිය#Kîngalî", .label = "වෙබ්-අඩවිය" },
+            .{ .language = "ko", .target = "웹사이트#Koreyî", .label = "웹사이트" },
+            .{ .language = "ko", .target = "사이트#Koreyî", .label = "사이트" },
+            .{ .language = "la", .target = "situs interretialis#Latînî", .label = "situs interrētiālis" },
+            .{ .language = "lv", .target = "tīmekļa vietne#Latviyayî", .label = "tīmekļa vietne" },
+            .{ .language = "lo", .target = "ເວັບໄຊຕ໌#Lawsî", .label = "ເວັບໄຊຕ໌" },
+            .{ .language = "lt", .target = "tinklalapis#Lîtwanî", .label = "tinklalapis" },
+            .{ .language = "mk", .target = "мрежно место#Makedonî", .label = "мре́жно ме́сто" },
+            .{ .language = "mk", .target = "веб-сајт#Makedonî", .label = "веб-сајт" },
+            .{ .language = "mk", .target = "сајт#Makedonî", .label = "сајт" },
+            .{ .language = "mk", .target = "веб-страница#Makedonî", .label = "веб-стра́ница" },
+            .{ .language = "mg", .target = "vohikala#Malagasî", .label = "vohikala" },
+            .{ .language = "mg", .target = "vohikala#Malagasî", .label = "vohikala" },
+            .{ .language = "ms", .target = "tapak sesawang#Malezî", .label = "tapak sesawang" },
+            .{ .language = "ms", .target = "laman sesawang#Malezî", .label = "laman sesawang" },
+            .{ .language = "ms", .target = "laman web#Malezî", .label = "laman web" },
+            .{ .language = "ms", .target = "tapak web#Malezî", .label = "tapak web" },
+            .{ .language = "mt", .target = "sit elettroniku#Maltayî", .label = "sit elettroniku" },
+            .{ .language = "mt", .target = "sit#Maltayî", .label = "sit" },
+            .{ .language = "mi", .target = "pae tukutuku#Maorî", .label = "pae tukutuku" },
+            .{ .language = "mr", .target = "संकेतस्थळ#Maratî", .label = "संकेतस्थळ" },
+            .{ .language = "mr", .target = "वेबसाइट#Maratî", .label = "वेबसाइट" },
+            .{ .language = "hu", .target = "honlap#Mecarî", .label = "honlap" },
+            .{ .language = "hu", .target = "webhely#Mecarî", .label = "webhely" },
+            .{ .language = "mn", .target = "вэб сайт#Mongolî", .label = "вэб сайт" },
+            .{ .language = "nv", .target = "níłchʼi naaltsoos#Navajoyî", .label = "níłchʼi naaltsoos" },
+            .{ .language = "nv", .target = "Béésh Łichíʼii biyiʼdóó ił Nahazʼą́ baa Haneʼ#Navajoyî", .label = "Béésh Łichíʼii biyiʼdóó ił Nahazʼą́ baa Haneʼ" },
+            .{ .language = "uz", .target = "vebsayt#Ozbekî", .label = "vebsayt" },
+            .{ .language = "pl", .target = "witryna internetowa#Polonî", .label = "witryna internetowa" },
+            .{ .language = "pl", .target = "strona WWW#Polonî", .label = "strona WWW" },
+            .{ .language = "pl", .target = "strona internetowa#Polonî", .label = "strona internetowa" },
+            .{ .language = "pt", .target = "sítio#Portugalî", .label = "sítio" },
+            .{ .language = "pt", .target = "site#Portugalî", .label = "site" },
+            .{ .language = "pt", .target = "website#Portugalî", .label = "website" },
+            .{ .language = "pt", .target = "web site#Portugalî", .label = "web site" },
+            .{ .language = "pt", .target = "sítio web#Portugalî", .label = "sítio web" },
+            .{ .language = "pt", .target = "saite#Portugalî", .label = "saite" },
+            .{ .language = "pt", .target = "sítio na Internet#Portugalî", .label = "sítio na Internet" },
+            .{ .language = "kk", .target = "веб-сайт#Qazaxî", .label = "веб-сайт" },
+            .{ .language = "kk", .target = "сайт#Qazaxî", .label = "сайт" },
+            .{ .language = "ro", .target = "site#Romanyayî", .label = "site" },
+            .{ .language = "ro", .target = "site web#Romanyayî", .label = "site web" },
+            .{ .language = "ru", .target = "веб-сайт#Rusî", .label = "веб-са́йт" },
+            .{ .language = "ru", .target = "сайт#Rusî", .label = "сайт" },
+            .{ .language = "ru", .target = "веб-страница#Rusî", .label = "веб-страни́ца" },
+            .{ .language = "ru", .target = "страница#Rusî", .label = "страни́ца" },
+            .{ .language = "ru", .target = "интернет#Rusî", .label = "интернет" },
+            .{ .language = "sco", .target = "wabsteid#Skotî", .label = "wabsteid" },
+            .{ .language = "sl", .target = "spletna stran#Slovenî", .label = "spletna stran" },
+            .{ .language = "st", .target = "websaete#Sotoyiya başûr", .label = "websaete" },
+            .{ .language = "es", .target = "sitio web#Spanî", .label = "sitio web" },
+            .{ .language = "es", .target = "website#Spanî", .label = "website" },
+            .{ .language = "es", .target = "página web#Spanî", .label = "página web" },
+            .{ .language = "es", .target = "web#Spanî", .label = "web" },
+            .{ .language = "sw", .target = "tovuti#Swahîlî", .label = "tovuti" },
+            .{ .language = "sv", .target = "webbplats#Swêdî", .label = "webbplats" },
+            .{ .language = "sv", .target = "sajt#Swêdî", .label = "sajt" },
+            .{ .language = "sv", .target = "webbsajt#Swêdî", .label = "webbsajt" },
+            .{ .language = "sv", .target = "hemsida#Swêdî", .label = "hemsida" },
+            .{ .language = "tg", .target = "сомона#Tacikî", .label = "сомона" },
+            .{ .language = "tg", .target = "сайт#Tacikî", .label = "сайт" },
+            .{ .language = "tl", .target = "pahinarya#Tagalogî", .label = "pahinarya" },
+            .{ .language = "ta", .target = "வலைத் தளம்#Tamîlî", .label = "வலைத் தளம்" },
+            .{ .language = "th", .target = "เว็บไซต์#Tayî", .label = "เว็บไซต์" },
+            .{ .language = "ti", .target = "መርበብ መካን#Tigrînî", .label = "መርበብ መካን" },
+            .{ .language = "tr", .target = "Web sitesi#Tirkî", .label = "Web sitesi" },
+            .{ .language = "tk", .target = "websaýt#Tirkmenî", .label = "websaýt" },
+            .{ .language = "uk", .target = "веб-сайт#Ûkraynî", .label = "веб-са́йт" },
+            .{ .language = "uk", .target = "сайт#Ûkraynî", .label = "сайт" },
+            .{ .language = "uk", .target = "веб-сторінка#Ûkraynî", .label = "веб-сторі́нка" },
+            .{ .language = "vi", .target = "trang web#Viyetnamî", .label = "trang web" },
+            .{ .language = "vi", .target = "trang mạng#Viyetnamî", .label = "trang mạng" },
+            .{ .language = "vi", .target = "trang thông tin điện tử#Viyetnamî", .label = "trang thông tin điện tử" },
+            .{ .language = "vo", .target = "resodatoped#Volapûkî", .label = "resodatoped" },
+            .{ .language = "cy", .target = "gwefan#Weylsî", .label = "gwefan" },
+            .{ .language = "cy", .target = "safwe#Weylsî", .label = "safwe" },
+            .{ .language = "km", .target = "វិបសាយ#Ximêrî", .label = "វិបសាយ" },
+            .{ .language = "km", .target = "ស្ថានបណ្ដាញ#Ximêrî", .label = "ស្ថានបណ្ដាញ" },
+            .{ .language = "yi", .target = "וועבזײַטל#Yidîşî", .label = "וועבזײַטל" },
+            .{ .language = "el", .target = "ιστότοπος#Yûnanî", .label = "ιστότοπος" },
+            .{ .language = "el", .target = "ιστοχώρος#Yûnanî", .label = "ιστοχώρος" },
+        };
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        const Scan = struct {
+            visible: std.ArrayList(u8) = .empty,
+            definitions: usize = 0,
+            tables: usize = 0,
+            cells: usize = 0,
+            headers: usize = 0,
+            deleted: usize = 0,
+            headword: bool = false,
+            translation_index: usize = 0,
+            fn spans(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Span, translation_scope: bool) !void {
+                for (values) |span| {
+                    try self.visible.appendSlice(a, span.text);
+                    try self.visible.appendSlice(a, span.trail);
+                    if (std.mem.eql(u8, span.text, title) and span.bold) self.headword = true;
+                    if (std.mem.eql(u8, span.text, "t") and std.mem.eql(u8, span.language, "lo-Latn")) {
+                        self.deleted += 1;
+                        try std.testing.expect(span.kind == .text and span.target.len == 0 and span.strike and !span.small and !span.bold and !span.italic);
+                        try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.00001);
+                    }
+                    if (translation_scope and span.kind == .link and span.language.len != 0) {
+                        try std.testing.expect(self.translation_index < translations.len);
+                        const translation = translations[self.translation_index];
+                        errdefer std.debug.print("KU source translation {d}: target={s} text={s} language={s}\n", .{ self.translation_index, span.target, span.text, span.language });
+                        try std.testing.expectEqualStrings(translation.target, span.target);
+                        try std.testing.expectEqualStrings(translation.label, span.text);
+                        try std.testing.expectEqualStrings(translation.language, span.language);
+                        self.translation_index += 1;
+                    }
+                }
+            }
+            fn table(self: *@This(), a: std.mem.Allocator, value: encoder.presentation_types.Table, translation_scope: bool) anyerror!void {
+                self.tables += 1;
+                const row_cells = [_]usize{ 1, 3, 3, 3, 3, 3, 3, 1, 3, 3, 3, 3 };
+                try std.testing.expectEqual(row_cells.len, value.rows.len);
+                try std.testing.expect(value.geometry == null and value.style == null);
+                try self.spans(a, value.caption, translation_scope);
+                for (value.rows, row_cells, 0..) |row, expected_cells, row_index| {
+                    try std.testing.expectEqual(expected_cells, row.cells.len);
+                    for (row.cells) |cell| {
+                        self.cells += 1;
+                        if (cell.header) self.headers += 1;
+                        try std.testing.expect(cell.background == null);
+                        try std.testing.expectEqual(@as(u16, if (row_index == 0 or row_index == 7) 3 else 1), cell.colspan);
+                        if (cell.blocks) |cell_blocks| try self.blocks(a, cell_blocks, translation_scope) else try self.spans(a, cell.spans, translation_scope);
+                        try std.testing.expect(cell.nested_table == null);
+                    }
+                }
+            }
+            fn blocks(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Block, translation_scope: bool) anyerror!void {
+                for (values) |block| {
+                    if (block.kind == .definition) self.definitions += 1;
+                    try self.spans(a, block.spans, translation_scope);
+                    if (block.table) |value| try self.table(a, value, translation_scope);
+                    try self.visible.append(a, '\n');
+                }
+            }
+            fn entry(self: *@This(), a: std.mem.Allocator, value: encoder.presentation_types.Entry) !void {
+                try self.spans(a, value.preamble_spans, false);
+                for (value.sections) |section| {
+                    try self.visible.appendSlice(a, section.title);
+                    try self.visible.append(a, '\n');
+                    const translation_scope = std.mem.eql(u8, section.title, "Werger") or std.mem.eql(u8, section.title, "Bi zaravayên din");
+                    try self.blocks(a, section.blocks, translation_scope);
+                }
+                try std.testing.expectEqual(@as(usize, 0), value.media.len);
+                try std.testing.expectEqual(@as(usize, 0), value.references.len);
+            }
+        };
+    };
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var checkpoint: []const u8 = "exact source and captured profiles";
+    errdefer std.debug.print("KU malper checkpoint={s}\n", .{checkpoint});
+    try std.testing.expectEqual(@as(usize, 5264), F.raw.len);
+    try std.testing.expectEqual(@as(usize, 42122), F.source.len);
+    try F.hash(F.raw, "243a6f90894f09de6ff49e7af80ebbcaa1fe617d1968fc040c9e02366f17e113");
+    try F.hash(F.source, "9a9eae2a0018f7ea2e9e27309c24662d7b260fd89f01ac00baeabb3792d6443f");
+    try F.hash(@embedFile("testdata/ku-malper/page.index-row.tsv"), "38940e2e9780747fdf3f737ca20c20084ee3a5354652642867b40aa6050e9886");
+    try std.testing.expect(std.mem.startsWith(u8, F.raw, "== {{ziman|ku}} =="));
+    try std.testing.expect(std.mem.startsWith(u8, F.source, "== <span class=\"besazimani\" id=\"ku\">[[:Kategorî:Kurmancî|Kurmancî]][[Kategorî:Kurmancî]]</span> =="));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, F.wrapped));
+    // This real parent already isolates the complete converter body, unlike
+    // the prefix-bearing direct control. Its independent reference stays bare.
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source,
+        "<span lang=\"lo-Latn\" class=\"tr Latn\">" ++ F.wrapped ++ "</span>"));
+    try std.testing.expectEqual(@as(usize, 269), std.mem.count(u8, F.source, "-{"));
+    // Ordinary internal links decode entities, then normalize underscores to spaces.
+    // Pin the four authored spellings independently of the normalized target oracle.
+    for ([_][]const u8{
+        "[[:làrach-lìn#Gaelîka&#95;skotî|làrach-lìn]]",
+        "[[:ionad#Gaelîka&#95;skotî|ionad]]",
+        "[[:eadar-lìon#Gaelîka&#95;skotî|eadar-lìon]]",
+        "[[:websaete#Sotoyiya&#95;başûr|websaete]]",
+    }) |raw_link| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, raw_link));
+    var reference = try std.mem.replaceOwned(u8, a, F.source, F.wrapped, F.plain);
+    // Match Title::newFromText entity decoding before link holders/conversion.
+    // Change only these four complete target spellings, keeping every label.
+    for ([_][]const u8{
+        "[[:làrach-lìn#Gaelîka&#95;skotî|làrach-lìn]]",
+        "[[:ionad#Gaelîka&#95;skotî|ionad]]",
+        "[[:eadar-lìon#Gaelîka&#95;skotî|eadar-lìon]]",
+        "[[:websaete#Sotoyiya&#95;başûr|websaete]]",
+    }) |raw_link| {
+        const decoded_link = try std.mem.replaceOwned(u8, a, raw_link, "&#95;", "_");
+        reference = try std.mem.replaceOwned(u8, a, reference, raw_link, decoded_link);
+    }
+    // The one raw-display wrapper and four safe entity transports are the only
+    // reference changes. Whole body/styles/actions and all other268rules stay.
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/ku-malper/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/ku-malper/interwiki-map.tsv"));
+    try ns.attachLanguageConversion(@embedFile("testdata/ku-malper/namespace-siteinfo.raw.json"));
+    const variants = ns.language_conversion orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3), variants.len);
+    try std.testing.expectEqualStrings("ku", variants[0]);
+    try std.testing.expectEqualStrings("ku-arab", variants[1]);
+    try std.testing.expectEqualStrings("ku-latn", variants[2]);
+    const behavior_source = @embedFile("testdata/ku-malper/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var behavior_sha: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_sha, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/ku-malper/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_sha); defer images.deinit();
+    const css = @embedFile("testdata/ku-malper/common.css");
+    try F.hash(css, "70ffa31511d9a4ad9f17ad7bcf741dc767bdb78b40ca4222d1441a0477e7be2d");
+    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    checkpoint = "normal captured canonical language loader";
+    const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ku-malper-metadata", .{tmp.sub_path});
+    try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{ metadata_root, "modules" }));
+    const files = .{
+        .{ "language-registry.tsv", @embedFile("testdata/ku-malper/language-registry.tsv") },
+        .{ "manifest.jsonl", @embedFile("testdata/ku-qaz/canonical-modules.jsonl") },
+        .{ "modules/1358088.lua", @embedFile("testdata/ku-qaz/canonical-forward.lua") },
+        .{ "modules/875909.lua", @embedFile("testdata/ku-qaz/canonical-names.lua") },
+    };
+    inline for (files) |file| try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ metadata_root, file[0] }), .data = file[1] });
+    var registry = try loadLanguageRegistry(io, a, metadata_root, &ns); defer registry.deinit();
+    // The captured module supplies an exact canonical name, not an uppercase
+    // site-name alias. The raw declaration independently names registered ku.
+    try std.testing.expect(registry.resolveTrusted("Kurmancî") == null);
+    const owner = registry.resolveStrong("kurmancî") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("ku", owner.code);
+    try std.testing.expectEqualStrings("kurmancî", owner.heading);
+    const declared_owner = registry.resolve("ku") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(owner.code, declared_owner.code);
+    try std.testing.expectEqualStrings(owner.heading, declared_owner.heading);
+    var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    var roots: [2][]const u8 = undefined; var stats: [2]encoder.blob_builder.BuildStats = undefined; var manifests: [2][]const u8 = undefined;
+    checkpoint = "normal Writer original and independent wrapper reference";
+    for ([_][]const u8{ F.source, reference }, 0..) |source, index| {
+        roots[index] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ku-malper-{d}", .{ tmp.sub_path, index });
+        var writer = try encoder.blob_builder.Writer.init(io, a, roots[index]); defer writer.deinit(); writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, F.title, source, F.raw, null);
+        stats[index] = try writer.finish(codes);
+        manifests[index] = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[index], encoder.blob_catalog.manifest_filename }), a, .limited(64 * 1024));
+    }
+    try std.testing.expectEqual(@as(usize, 1), stats[0].language_records);
+    try std.testing.expectEqual(stats[1].language_records, stats[0].language_records);
+    try std.testing.expectEqual(stats[1].language_blobs, stats[0].language_blobs);
+    try std.testing.expectEqual(@as(usize, 0), stats[0].supplemental_records);
+    var actual_it = try encoder.blob_catalog.Iterator.init(manifests[0]); var expected_it = try encoder.blob_catalog.Iterator.init(manifests[1]);
+    const item = (try actual_it.next()) orelse return error.TestUnexpectedResult;
+    const expected_item = (try expected_it.next()) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(owner.heading, item.heading);
+    try std.testing.expectEqualStrings(expected_item.heading, item.heading);
+    try std.testing.expect(try actual_it.next() == null and try expected_it.next() == null);
+    checkpoint = "complete original Entry Stored and codec";
+    const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], item.heading, F.title);
+    const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], expected_item.heading, F.title);
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqualStrings(owner.heading, actual.language.?);
+    try std.testing.expectEqualStrings("ku", actual.language_code);
+    const codec = encoder.presentation_codec;
+    const bytes = try codec.encodeAlloc(a, .{ .entry = actual });
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, .{ .entry = expected }), bytes);
+    const decoded = try codec.decodeAlloc(a, bytes, F.title, .language, .{ .heading = owner.heading, .code = "ku" });
+    try std.testing.expectEqualDeep(actual, decoded.entry);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+    checkpoint = "source definitions table translations deleted size and full visible body";
+    var scan: F.Scan = .{}; try scan.entry(a, actual);
+    try std.testing.expectEqual(@as(usize, 2), scan.definitions);
+    try std.testing.expectEqual(@as(usize, 1), scan.tables);
+    try std.testing.expectEqual(@as(usize, 32), scan.cells);
+    try std.testing.expectEqual(@as(usize, 16), scan.headers);
+    try std.testing.expectEqual(@as(usize, 1), scan.deleted);
+    try std.testing.expect(scan.headword);
+    try std.testing.expectEqual(F.translations.len, scan.translation_index);
+    for ([_][]const u8{ "Bilêvkirin", "Navdêr", "Tewandin", "Formên alternatîv", "Etîmolojî", "Bi zaravayên din", "Werger", "/mɑːlˈpɛr/", "mal·per", "Sîteya ", "Rûpela yekemîn sîteyeke înternetê,", "Tewandina malper", "Zayenda mê ya binavkirî", "Zayenda mê ya nebinavkirî", "wep sait" }) |text| {
+        errdefer std.debug.print("KU malper missing body={s}\n", .{text});
+        try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, text) != null);
+    }
+    for ([_][]const u8{ "-{", "}-", "[malformed", "Lua error" }) |residual| try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, residual) == null);
+    const actual_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[0], "fallback-pages.jsonl" }), a, .limited(64 * 1024));
+    const expected_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[1], "fallback-pages.jsonl" }), a, .limited(64 * 1024));
+    try std.testing.expectEqualStrings(expected_report, actual_report);
 }

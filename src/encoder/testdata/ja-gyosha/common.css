@@ -1,0 +1,217 @@
+/* Common CSS for all skins */
+
+/* [[テンプレート:テンプレート文書呼出]] で使用 */
+#disambig {
+	border-top: 3px double #ccc;
+	border-bottom: 3px double #ccc;
+}
+
+/* Metadata */
+table.metadata {
+	border: 1px solid #aaa;
+	display: none;
+}
+
+.metadata-label {
+	color: #aaa;
+}
+
+/* Merge template style */
+/* [[テンプレート:todo]] [[テンプレート:SharedIP]] などで使用。 */
+.messagebox {
+	border: 1px solid #aaa;
+	background: #f9f9f9;
+	width: 80%;
+	margin: 0 auto 1em auto;
+	padding: .2em;
+	text-align: justify;
+}
+.messagebox.merge {
+	border: solid #033 2px;
+	width: 55%;
+	background: #eff;
+	padding: 1em;
+	margin: 1em auto 1em auto;
+}
+.messagebox.cleanup {
+	border: 1px solid #9f9fff;
+	background: #efefff;
+	text-align: center;
+}
+.messagebox.standard-talk {
+	border: 1px solid #c0c090;
+	background: #f8eaba;
+}
+.infobox {
+	border: 1px solid #aaa;
+	background: #f9f9f9;
+	color: black;
+	margin-bottom: 0.5em;
+	margin-left: 1em;
+	padding: .2em;
+	float: right;
+	clear: right;
+}
+.infobox tr {
+	vertical-align: top;
+}
+.infobox caption {
+	margin-left: inherit;
+}
+.infobox.bordered {
+	border-collapse: collapse;
+}
+.infobox.bordered td, .infobox.bordered th {
+	border: 1px solid #aaa;
+}
+.infobox.sisterproject {
+	width: 20em;
+	font-size: 90%;
+}
+
+/* Put a checker background at the image description page only visible if the image has transparent background */
+
+#file img { background: url("//upload.wikimedia.org/wikipedia/commons/5/5d/Checker-16x16.png") repeat }
+
+/* Support for Template:IPA, Template:Unicode and Template:Polytonic. The inherit declaration resets the font for all browsers except MSIE6.  The empty comment must remain. */
+.IPA, .Jones {
+	font-family: 'Chrysanthi Unicode', 'Doulos SIL', 'Gentium', 'GentiumAlt', 'Code2000', 'TITUS Cyberbit Basic', 'DejaVu Sans', 'Bitstream Vera Sans', 'Bitstream Cyberbit', 'Arial Unicode MS', 'Lucida Sans Unicode', 'Hiragino Kaku Gothic Pro', 'Matrix Unicode', sans-serif;
+}
+
+.Unicode {
+	font-family: 'TITUS Cyberbit Basic', 'Code2000', 'Doulos SIL', 'Chrysanthi Unicode', 'Bitstream Cyberbit', 'Bitstream CyberBase', 'Bitstream Vera', 'Thryomanes', 'Gentium', 'GentiumAlt', 'Visual Geez Unicode', 'Lucida Grande', 'Arial Unicode MS', 'Microsoft Sans Serif', 'Lucida Sans Unicode', sans-serif;
+}
+
+.polytonic {
+	font-family: 'Athena', 'Gentium', 'Palatino Linotype', 'Arial Unicode MS', 'Lucida Sans Unicode', 'Lucida Grande', 'Code2000', sans-serif;
+}
+
+.SAMPA, .Webster {
+	font-family: 'Courier',monospace
+}
+
+#wpSave {
+	font-weight: bold;
+}
+
+/* hiddenStructure from Monobook - allows selective hiding of markup in templates */
+.hiddenStructure {
+	display: none;
+	speak: none;
+}
+
+/* [[Template:NavTop]]などで使用 */
+/* source: https://www.mediawiki.org/wiki/MediaWiki:Gadget-NavFrame.css */
+/* Standard Navigationsleisten, aka box hiding thingy
+   from .de.  Documentation at [[Wikipedia:NavFrame]]. */
+div.NavFrame {
+	margin: 0;
+	padding: 4px;
+	border: 1px solid #aaa;
+	text-align: center;
+	border-collapse: collapse;
+	font-size: 95%;
+}
+div.NavFrame + div.NavFrame {
+	border-top-style: none;
+	border-top-style: hidden;
+}
+div.NavPic {
+	background-color: #fff;
+	margin: 0;
+	padding: 2px;
+	/* @noflip */
+	float: left;
+}
+div.NavFrame div.NavHead {
+	height: 1.6em;
+	font-weight: bold;
+	background-color: #ccf;
+}
+div.NavFrame p,
+div.NavFrame div.NavContent,
+div.NavFrame div.NavContent p {
+	font-size: 100%;
+}
+div.NavEnd {
+	margin: 0;
+	padding: 0;
+	line-height: 1px;
+	clear: both;
+}
+.NavToggle {
+	vertical-align: text-top;
+	font-weight: normal;
+	font-size: 90%;
+	margin-right: .5em;
+}
+
+/* [[Template:Pathnav]] */
+.pathnavbox {
+	clear: both;
+	border: 1px outset #eef;
+	padding: 0.3em 0.6em;
+	margin: 0 0 0.5em 0;
+	background-color: #dfd;
+	font-size: 90%;
+}
+.pathnavbox ul {
+	list-style: none none;
+	margin-top: 0;
+	margin-bottom: 0;
+}
+.pathnavbox > ul {
+	margin: 0;
+}
+.pathnavbox ul li {
+	margin: 0;
+}
+
+/* Don't display page title on the main page */
+/* [[w:MediaWiki:Common.css]] 2009.7.17 (Fri.) 07:13 (UTC) */
+body.page-Wiktionary_メインページ #siteSub,
+body.page-Wiktionary_メインページ .subtitle,
+body.page-Wiktionary_メインページ h1.firstHeading,
+body.page-Wiktionary_メインページ h1.pagetitle {
+	display: none;
+}
+
+/* [[テンプレート:Side box]]で使用。 */
+body.mediawiki table.mbox-small {   /* For the "small=yes" option. */
+	clear: right;
+	float: right;
+	margin: 4px 0 4px 1em;
+	width: 238px;
+	font-size: 88%;
+	line-height: 1.25em;
+}
+body.mediawiki table.mbox-small-left {	 /* For the "small=left" option. */
+	margin: 4px 1em 4px 0;
+	width: 238px;
+	border-collapse: collapse;
+	font-size: 88%;
+	line-height: 1.25em;
+}
+
+/* ja.wikt customized */
+table.tiny, table.tiny th, table.tiny td { /* テーブルの罫線を細くする; 2006-05-30 https://ja.wiktionary.org/w/index.php?oldid=69668#CSS.E3.81.AE.E5.88.A9.E7.94.A8 */
+	border: 1px solid #000;
+}
+
+/* copied multi-column list styling by [[:en:User:Kephir]] from [[:en:MediaWiki:Common.css]] as of 2014-01-18T12:21:35Z 
+[[:en:Special:Diff/25078157]], as per [[Wiktionary:管理者伝言板]] 2018-08-03T14:22:01Z [[Special:Diff/1209899]] */
+/* multi-column lists */
+li {
+	column-break-inside: avoid;
+	page-break-inside: avoid;
+	break-inside: avoid;
+	-webkit-column-break-inside: avoid;
+	-webkit-page-break-inside: avoid;
+	-webkit-break-inside: avoid;
+	-o-column-break-inside: avoid;
+	-o-page-break-inside: avoid;
+	-o-break-inside: avoid;
+	-moz-column-break-inside: avoid;
+	-moz-page-break-inside: avoid;
+	-moz-break-inside: avoid;
+}

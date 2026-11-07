@@ -1,0 +1,38 @@
+# wikidict-namespace-registry-v1
+# wiki	kuwiktionary
+# dump-date	20261001
+# content-language	ku
+-2	Medya	Media	case-sensitive	0	0	0		compile_only	virtual_namespace	میدیا
+-1	Taybet	Special	first-letter	0	0	0		compile_only	virtual_namespace	تایبەت
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Gotûbêj	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Nîqaş	وتووێژ
+2	Bikarhêner	User	first-letter	1	0	0		compile_only	standard_build_input	بەکارھێنەر
+3	Gotûbêja bikarhêner	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Bikarhêner nîqaş	Gotûbêja bikarhêner	لێدوانی بەکارھێنەر
+4	Wîkîferheng	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WF	WT	Wiktionary
+5	Gotûbêja Wîkîferhengê	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Gotûbêja Wîkîferhengê	Wiktionary talk	Wîkîferheng gotûbêj	Wîkîferheng nîqaş
+6	Wêne	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	پەڕگە
+7	Gotûbêja wêneyî	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Gotûbêja wêneyî	Image talk	Wêne nîqaş	وتووێژی پەڕگە
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input	میدیاویکی
+9	Gotûbêja MediaWiki	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	Gotûbêja MediaWiki	MediaWiki nîqaş	وتووێژی میدیاویکی
+10	Şablon	Template	case-sensitive	1	0	0		compile_only	standard_build_input	داڕێژە
+11	Gotûbêja şablonê	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Gotûbêja şablonê	Şablon nîqaş	وتووێژی داڕێژە
+12	Alîkarî	Help	case-sensitive	1	0	0		compile_only	standard_build_input	یارمەتی
+13	Gotûbêja alîkariyê	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Alîkarî nîqaş	Gotûbêja alîkariyê	وتووێژی یارمەتی
+14	Kategorî	Category	case-sensitive	0	0	0		compile_only	standard_build_input	پۆل
+15	Gotûbêja kategoriyê	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Gotûbêja kategoriyê	Kategorî nîqaş	وتووێژی پۆل
+100	Pêvek	Pêvek	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+101	Gotûbêja pêvekê	Gotûbêja pêvekê	case-sensitive	1	0	0		compile_only	discussion_namespace	Gotûbêja pêvekê	Pêvek nîqas
+102	Nimînok	Nimînok	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+103	Gotûbêja nimînokê	Gotûbêja nimînokê	case-sensitive	1	0	0		compile_only	discussion_namespace	Gotûbêja nimînokê	Nimînok nîqas
+104	Portal	Portal	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+105	Gotûbêja portalê	Gotûbêja portalê	case-sensitive	1	0	0		compile_only	discussion_namespace	Gotûbêja portalê	Portal nîqas
+106	Tewandin	Tewandin	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+107	Gotûbêja tewandinê	Gotûbêja tewandinê	case-sensitive	1	0	0		compile_only	discussion_namespace	Gotûbêja tewandinê
+108	Jinûvesazî	Jinûvesazî	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+109	Gotûbêja jinûvesaziyê	Gotûbêja jinûvesaziyê	case-sensitive	1	0	0		compile_only	discussion_namespace	Gotûbêja jinûvesaziyê
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace	TimedText talk
+828	Modul	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Gotûbêja modulê	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Gotûbêja modulê
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Event talk

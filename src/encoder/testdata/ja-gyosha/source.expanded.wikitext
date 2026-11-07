@@ -1,0 +1,41 @@
+
+==日本語==
+===名詞===
+[[File:Delphi Museum 09 Wagenlenker.jpg|thumb|140px|デルフォイの馭者（ぎょしゃ）像<br />（[[:w:en:Charioteer of Delphi|Charioteer of Delphi]]）]]
+<strong class="Jpan headword" lang="ja">[[御#日本語|御]][[者#日本語|者]]</strong> (<span class="headword-tr manual-tr tr" dir="ltr">ぎょしゃ</span>)[[カテゴリ:日本語 |きよしや ぎょしゃ]][[カテゴリ:日本語 名詞|きよしや ぎょしゃ]]
+#[[側近]]の者、[[侍従]]<sup title="要出典"><nowiki>[</nowiki>[[Wiktionary:出典を明記する|''要出典'']]<nowiki>]</nowiki></sup>[[Category:出典を必要とする記事]]。
+#（馬車に乗って）馬を操る人（その職業）。
+====表記====
+*「[[w:同音の漢字による書きかえ|同音の漢字による書きかえ]]」（1956年）には、「馭者」の書きかえとして「御者」が掲げられているが、それ以前からどちらの表記も用いられている。例えば、大日本国語辞典には「ぎょしゃ」の項に「御者」と「馭者」の両方が掲げられている<ref group="{{ja}}">[[w:上田萬年|上田万年]]、[[w:松井簡治|松井簡治]]『大日本国語辞典』 金港堂書籍、第1巻、1915年10月8日、紙面1189ページ、デジタル607ページ、全国書誌番号：[http://iss.ndl.go.jp/api/openurl?ndl_jpno=43022818 43022818]、国立国会図書館デジタルライブラリー pid [http://dl.ndl.go.jp/info:ndljp/pid/954645/607 954645/607]</ref>。言海には「御者」だけが掲げられている<ref group="{{ja}}">大槻文彦編、1889年～1891年『言海　日本辞書』（全4冊）、紙面362ページ、デジタル203ページ、全国書誌番号：[http://iss.ndl.go.jp/api/openurl?ndl_jpno=55008098 55008098]、国立国会図書館デジタルライブラリー pid [http://dl.ndl.go.jp/info:ndljp/pid/992954/203 992954/203]</ref>。
+====熟語====
+* [[ぎょしゃ座]]
+* [[御者台]]
+====類義語====
+* [[騎手]]
+* [[馬方]]
+====翻訳====
+*英語: <span class="Unicode" style="font-family:TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Thryomanes, Gentium, GentiumAlt, Visual Geez Unicode, Lucida Grande, Tahoma, Arial Unicode MS, Microsoft Sans Serif, Lucida Sans Unicode; text-decoration: none"><span class="Latn" lang="en">[[coachman#英語|coachman]]</span><span class="tpos">&nbsp;<sup>[[:en:coachman|(en)]]</sup></span></span>, <span class="Unicode" style="font-family:TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Thryomanes, Gentium, GentiumAlt, Visual Geez Unicode, Lucida Grande, Tahoma, Arial Unicode MS, Microsoft Sans Serif, Lucida Sans Unicode; text-decoration: none"><span class="Latn" lang="en">[[driver#英語|driver]]</span><span class="tpos">&nbsp;<sup>[[:en:driver|(en)]]</sup></span></span>, <span class="Unicode" style="font-family:TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Thryomanes, Gentium, GentiumAlt, Visual Geez Unicode, Lucida Grande, Tahoma, Arial Unicode MS, Microsoft Sans Serif, Lucida Sans Unicode; text-decoration: none"><span class="Latn" lang="en">[[postilion#英語|postilion]]</span><span class="tpos">&nbsp;<sup>[[:en:postilion|(en)]]</sup></span></span>, <span class="Unicode" style="font-family:TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Thryomanes, Gentium, GentiumAlt, Visual Geez Unicode, Lucida Grande, Tahoma, Arial Unicode MS, Microsoft Sans Serif, Lucida Sans Unicode; text-decoration: none"><span class="Latn" lang="en">[[charioteer#英語|charioteer]]</span><span class="tpos">&nbsp;<sup>[[:en:charioteer|(en)]]</sup></span></span>
+*ギリシア語: <span class="Unicode" style="font-family:TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Thryomanes, Gentium, GentiumAlt, Visual Geez Unicode, Lucida Grande, Tahoma, Arial Unicode MS, Microsoft Sans Serif, Lucida Sans Unicode; text-decoration: none"><span class="Grek" lang="el">[[αμαξάς#ギリシア語|αμαξάς]]</span><span class="tpos">&nbsp;<sup>[[:el:αμαξάς|(el)]]</sup></span>&nbsp;<templatestyles src="モジュール:gender and number/styles.css"></templatestyles><span class="gender">男性</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="el-Latn" class="tr Latn">amaxás</span><span class="mention-gloss-paren annotation-paren">)</span></span>, <span class="Unicode" style="font-family:TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Thryomanes, Gentium, GentiumAlt, Visual Geez Unicode, Lucida Grande, Tahoma, Arial Unicode MS, Microsoft Sans Serif, Lucida Sans Unicode; text-decoration: none"><span class="Grek" lang="el">[[ηνίοχος#ギリシア語|ηνίοχος]]</span><span class="tpos">&nbsp;<sup>[[:el:ηνίοχος|(el)]]</sup></span>&nbsp;<templatestyles src="モジュール:gender and number/styles.css"></templatestyles><span class="gender">男性</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="el-Latn" class="tr Latn">iníochos</span><span class="mention-gloss-paren annotation-paren">)</span></span>
+*:古典ギリシア語: <span class="Unicode" style="font-family:TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Thryomanes, Gentium, GentiumAlt, Visual Geez Unicode, Lucida Grande, Tahoma, Arial Unicode MS, Microsoft Sans Serif, Lucida Sans Unicode; text-decoration: none"><span class="polytonic" lang="grc">[[ἡνίοχος#古典ギリシア語|ἡνίοχος]]</span><span class="tpos">&nbsp;<sup>[[:grc:ἡνίοχος|(grc)]]</sup></span>&nbsp;<templatestyles src="モジュール:gender and number/styles.css"></templatestyles><span class="gender">男性</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="grc-Latn" class="tr Latn">hēníokhos</span><span class="mention-gloss-paren annotation-paren">)</span></span>
+*チェコ語: <span class="Unicode" style="font-family:TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Thryomanes, Gentium, GentiumAlt, Visual Geez Unicode, Lucida Grande, Tahoma, Arial Unicode MS, Microsoft Sans Serif, Lucida Sans Unicode; text-decoration: none"><span class="Latn" lang="cs">[[kočí#チェコ語|kočí]]</span><span class="tpos">&nbsp;<sup>[[:cs:kočí|(cs)]]</sup></span>&nbsp;<templatestyles src="モジュール:gender and number/styles.css"></templatestyles><span class="gender">男性</span></span>, <span class="Unicode" style="font-family:TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Thryomanes, Gentium, GentiumAlt, Visual Geez Unicode, Lucida Grande, Tahoma, Arial Unicode MS, Microsoft Sans Serif, Lucida Sans Unicode; text-decoration: none"><span class="Latn" lang="cs">[[vozka#チェコ語|vozka]]</span><span class="tpos">&nbsp;<sup>[[:cs:vozka|(cs)]]</sup></span>&nbsp;<templatestyles src="モジュール:gender and number/styles.css"></templatestyles><span class="gender">男性</span></span>, <span class="Unicode" style="font-family:TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Thryomanes, Gentium, GentiumAlt, Visual Geez Unicode, Lucida Grande, Tahoma, Arial Unicode MS, Microsoft Sans Serif, Lucida Sans Unicode; text-decoration: none"><span class="Latn" lang="cs">[[forman#チェコ語|forman]]</span><span class="tpos">&nbsp;<sup>[[:cs:forman|(cs)]]</sup></span>&nbsp;<templatestyles src="モジュール:gender and number/styles.css"></templatestyles><span class="gender">男性</span></span>
+*リトアニア語: <span class="Unicode" style="font-family:TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Thryomanes, Gentium, GentiumAlt, Visual Geez Unicode, Lucida Grande, Tahoma, Arial Unicode MS, Microsoft Sans Serif, Lucida Sans Unicode; text-decoration: none"><span class="Latn" lang="lt">[[važnyčiotojas#リトアニア語|važnyčiotojas]]</span><span class="tpos">&nbsp;<sup>[[:lt:važnyčiotojas|(lt)]]</sup></span>&nbsp;<templatestyles src="モジュール:gender and number/styles.css"></templatestyles><span class="gender">男性</span></span>
+====脚注====
+<references group="{{ja}}"/>
+
+==中国語==
+===発音===
+*官話:
+**標準中国語:
+*:[[w:拼音|拼音]]: yùzhě
+*:[[w:注音符号|注音符号]]: ㄩˋ ㄓㄜˇ
+*:[[w:ウェード式|ウェード式]]: yü<sup>4</sup> cheh<sup>3</sup>
+*:[[w:国語ローマ字|国語ローマ字]]: yiwjee
+*:[[w:通用拼音|通用拼音]]: yùjhě
+*:[[w:国際音声記号|IPA]]<small style="vertical-align: super; font-size: 75%;">([[付録:中国語の発音表記|?]])</small>: <span class="IPA">/y⁵¹ ʈ͡ʂɤ²¹⁴⁻²¹⁽⁴⁾/</span>[[カテゴリ:中国語|yu4zhe3]][[カテゴリ:中国語 国際音声記号あり|yu4zhe3]]
+===名詞===
+<span lang="zh" style="font-family: 'Lucida Sans Unicode', 'Arial Bold', 'Arial', sans-serif;" xml:lang="zh">'''[[:御#中国語|御]] [[:者#中国語|者]]'''</span>
+#[[側近]]の者、[[侍従]]<ref group="{{zh}}">学研漢和大辞典</ref>。
+#（馬車に乗って）馬を操る人（その職業）<ref group="{{zh}}">学研漢和大辞典</ref>。
+[[カテゴリ:中国語|yu4zhe3]][[カテゴリ:中国語_名詞|yu4zhe3]]
+====脚注====
+<references group="{{zh}}"/>

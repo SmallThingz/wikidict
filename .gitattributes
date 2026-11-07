@@ -49,3 +49,7 @@ tools/testdata/sr-serbia51/raw.wikitext -whitespace
 tools/testdata/pt-uran52/expanded.wikitext -whitespace
 tools/testdata/sw-ghuni/sw-language-names.tsv -whitespace
 src/encoder/testdata/uk-tomato/imen-eo.xmlencoded.wikitext -whitespace
+
+# Preserve exact captured JA/KU regression source bytes.
+src/encoder/testdata/ja-gyosha/common.css -whitespace
+tools/testdata/ku-malper/page.expanded.wikitext -whitespace

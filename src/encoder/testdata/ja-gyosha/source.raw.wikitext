@@ -1,0 +1,34 @@
+{{kana-DEFAULTSORT|ぎょしゃ}}
+=={{L|ja}}==
+==={{noun}}===
+[[File:Delphi Museum 09 Wagenlenker.jpg|thumb|140px|デルフォイの馭者（ぎょしゃ）像<br />（[[:w:en:Charioteer of Delphi|Charioteer of Delphi]]）]]
+{{ja-noun|ぎょしゃ}}
+#[[側近]]の者、[[侍従]]{{要出典}}。
+#（馬車に乗って）馬を操る人（その職業）。
+====表記====
+*「[[w:同音の漢字による書きかえ|同音の漢字による書きかえ]]」（1956年）には、「馭者」の書きかえとして「御者」が掲げられているが、それ以前からどちらの表記も用いられている。例えば、大日本国語辞典には「ぎょしゃ」の項に「御者」と「馭者」の両方が掲げられている<ref group="{{ja}}">{{書誌・大日本国語辞典|1|1189|607}}</ref>。言海には「御者」だけが掲げられている<ref group="{{ja}}">{{書誌・言海|362|203}}</ref>。
+===={{prov}}====
+* [[ぎょしゃ座]]
+* [[御者台]]
+===={{syn}}====
+* [[騎手]]
+* [[馬方]]
+===={{trans}}====
+*{{T|en}}: {{t|en|coachman}}, {{t|en|driver}}, {{t|en|postilion}}, {{t|en|charioteer}}
+*{{T|el}}: {{t|el|αμαξάς|m}}, {{t|el|ηνίοχος|m}}
+*:{{T|grc}}: {{t|grc|ἡνίοχος|m}}
+*{{T|cs}}: {{t|cs|kočí|m}}, {{t|cs|vozka|m}}, {{t|cs|forman|m}}
+*{{T|lt}}: {{t|lt|važnyčiotojas|m}}
+====脚注====
+<references group="{{ja}}"/>
+
+=={{L|zh}}==
+==={{pron}}===
+{{cmn-pron|yùzhě}}
+==={{noun}}===
+{{zhchars}}
+#[[側近]]の者、[[侍従]]<ref group="{{zh}}">学研漢和大辞典</ref>。
+#（馬車に乗って）馬を操る人（その職業）<ref group="{{zh}}">学研漢和大辞典</ref>。
+{{zh-cat|yu4zhe3|名詞}}
+====脚注====
+<references group="{{zh}}"/>

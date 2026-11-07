@@ -29,6 +29,17 @@ pub fn parseRelative(raw: []const u8) ?f32 {
     return result;
 }
 
+// Native reader UA absolute-size table, following CSS Fonts 3 section 3.5.
+// The existing normal-body reading size is our medium. These values reset the
+// ancestor scale; they are not a claim about a captured browser's pixel sizes.
+pub fn absoluteKeyword(raw: []const u8) ?f32 {
+    const value = std.mem.trim(u8, raw, " \t\r\n\x0c");
+    const names = .{ "xx-small", "x-small", "small", "medium", "large", "x-large", "xx-large" };
+    const factors = [_]f32{ 3.0 / 5.0, 3.0 / 4.0, 8.0 / 9.0, 1, 6.0 / 5.0, 3.0 / 2.0, 2 };
+    inline for (names, factors) |name, factor| if (std.ascii.eqlIgnoreCase(value, name)) return factor;
+    return null;
+}
+
 fn nonzeroMantissa(value: []const u8) bool {
     for (value) |c| {
         if (c == 'e' or c == 'E') break;
