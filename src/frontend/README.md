@@ -8,7 +8,7 @@ The shipped reader has three native surfaces over the same compiled dictionary d
 
 The invocation name selects the surface in the same process. The CLI and TUI require no Qt libraries. The GUI invocation loads the installed desktop library from `../lib` relative to the real executable; install the desktop component into the same prefix as `wikidict`.
 
-The separate [desktop repository](https://github.com/SmallThingz/wikidict-desktop) owns the Qt and web interfaces. There is no read-time Lua, template, or wikitext execution. Lua/templates/wikitext are bundle-time compiler inputs only.
+The Qt and web interfaces live in [apps/desktop](../../apps/desktop/README.md), alongside the [Android application](../../apps/android/README.md). Both application histories are preserved in this repository. There is no read-time Lua, template, or wikitext execution. Lua/templates/wikitext are bundle-time compiler inputs only.
 
 ## C ABI
 
@@ -22,7 +22,7 @@ Every record is a self-contained compiled presentation document. Readers deseria
 
 ## Qt application
 
-Build the native GUI in [wikidict-desktop](https://github.com/SmallThingz/wikidict-desktop). Qt uses Widgets and C++20. History, bookmarks, learning scores and UI settings are persisted locally with `QSettings`; quizzes, flashcards, unscramble and random-word navigation consume the same compiled dictionary data.
+Build the native GUI from this repository using the [desktop build instructions](../../apps/desktop/README.md#native-qt-reader). Qt uses Widgets and C++20. History, bookmarks, learning scores and UI settings are persisted locally with `QSettings`; quizzes, flashcards, unscramble and random-word navigation consume the same compiled dictionary data.
 
 ## Validation
 
