@@ -355,6 +355,7 @@ def _owned_sample(child_pid, child_start, known, supervisor_pid, preexisting=fro
         info = table[pid]
         if info['state'] == 'Z' and info['threads'] <= 1:
             continue
+        accounting = 'smaps_rollup'
         try:
             lines = Path('/proc', str(pid), 'smaps_rollup').read_text().splitlines()
             pss_kib = next(int(line.split()[1]) for line in lines if line.startswith('Pss:'))
@@ -365,6 +366,7 @@ def _owned_sample(child_pid, child_start, known, supervisor_pid, preexisting=fro
             alternate = _thread_accounting(pid)
             if alternate is not None:
                 pss_kib, threads = alternate
+                accounting = 'thread_smaps_rollup'
             else:
                 fresh = _process_table().get(pid)
                 if fresh is None or fresh['start'] != info['start']:
@@ -390,18 +392,22 @@ def _owned_sample(child_pid, child_start, known, supervisor_pid, preexisting=fro
                     pss += pss_kib * 1024
                     rss += info['rss']
                     tasks += threads
-                    live[pid] = info
+                    live[pid] = dict(info, pss_bytes=pss_kib * 1024,
+                                     measured_tasks=threads,
+                                     accounting='released_mm_rss_fallback')
                     continue
                 # ENOENT during exit/exec may persist beyond one sample. RSS
                 # is an upper bound for PSS, so charge it until smaps returns.
                 pss_kib = (fresh['rss'] + 1023) // 1024
                 threads = fresh['threads']
+                accounting = 'rss_fallback'
         except (OSError, ValueError, StopIteration) as error:
             raise ContainmentUnavailable(f'Cannot measure owned process {pid}: {error}') from error
         pss += pss_kib * 1024
         rss += info['rss']
         tasks += threads
-        live[pid] = info
+        live[pid] = dict(info, pss_bytes=pss_kib * 1024,
+                         measured_tasks=threads, accounting=accounting)
     return {'pss_bytes': pss, 'rss_bytes': rss, 'tasks': tasks, 'live': live}
 
 
@@ -818,11 +824,14 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
               'disk_limit': 'sampled free-space reserve; expansion and concurrent writes are not bounded',
               'wall_seconds': wall_seconds, 'deadline_monotonic': started + wall_seconds, 'peak_pss_bytes': 0,
               'peak_rss_bytes': 0, 'peak_tasks': 0, 'termination_reason': 'starting',
-              'cleanup_complete': False}
+              'cleanup_complete': False, 'runtime_started': False,
+              'admission_refused': False}
+    admission_observed = False
     reason = None
     try:
         # Refuse before creating a child when the reserve is already spent.
         _check_watchdog_observation(report, host_observation)
+        admission_observed = True
         # The supervisor and guardian share the build's selected CPU set.
         os.sched_setaffinity(0, cpus)
         if libc.prctl(37, ctypes.byref(was_subreaper), 0, 0, 0) != 0 or \
@@ -926,6 +935,7 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
                                  pass_fds=(proof_read, guardian_identity_write,
                                            guardian_ack_read),
                                  start_new_session=True, preexec_fn=child_setup)
+        report['runtime_started'] = True
         os.close(guardian_identity_write)
         guardian_identity_write = None
         os.close(guardian_ack_read)
@@ -969,6 +979,24 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
                 report.get('peak_child_pss_bytes', 0), sample['pss_bytes'])
             report['peak_watchdog_overhead_pss_bytes'] = max(
                 report.get('peak_watchdog_overhead_pss_bytes', 0), overhead_pss)
+            if aggregate_pss > report['peak_pss_bytes']:
+                # Retain this sequential sample, not independently peaked rows.
+                # No additional /proc reads or command-line capture are needed.
+                processes = [dict(role='child_tree', pid=pid,
+                                  start_time_ticks=info['start'], parent_pid=info['ppid'],
+                                  pss_bytes=info['pss_bytes'], rss_bytes=info['rss'],
+                                  tasks=info['measured_tasks'], accounting=info['accounting'])
+                             for pid, info in sorted(sample['live'].items())]
+                for role, pid, birth, usage in (
+                        ('supervisor', os.getpid(), supervisor_start, supervisor_usage),
+                        ('guardian', guardian.pid, guardian_info['start'], guardian_usage)):
+                    processes.append(dict(role=role, pid=pid, start_time_ticks=birth,
+                                          pss_bytes=usage['pss_bytes'], rss_bytes=usage['rss_bytes'],
+                                          tasks=usage['tasks'], accounting='smaps_rollup'))
+                report['peak_pss_observation'] = dict(
+                    sample_finished_unix=time.time(), elapsed_seconds=elapsed,
+                    sequential_sample=True, pss_bytes=aggregate_pss,
+                    rss_bytes=aggregate_rss, tasks=aggregate_tasks, processes=processes)
             report['peak_pss_bytes'] = max(report['peak_pss_bytes'], aggregate_pss)
             report['peak_rss_bytes'] = max(report['peak_rss_bytes'], aggregate_rss)
             report['peak_tasks'] = max(report['peak_tasks'], aggregate_tasks)
@@ -999,6 +1027,13 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
         reason = ('disk_free_floor' if isinstance(error, _DiskFloorReached) else
                   'interrupted' if isinstance(error, KeyboardInterrupt) else 'monitor_error')
         report['error'] = str(error)
+        admission = report.get('host_pressure_guard', {})
+        if (not admission_observed and child is None and guardian is None
+                and admission.get('last_check') == 'admission'
+                and admission.get('stopped') is True
+                and admission.get('stop_reason') in ('host_ram_admission_reserve', 'host_pressure_observation_failed')):
+            report['admission_refused'] = True
+            report['admission_reason'] = admission['stop_reason']
     finally:
         if old_int is not None:
             signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -1105,11 +1140,20 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
                 signal.signal(signal.SIGTERM, old_term)
             report['elapsed_seconds'] = time.monotonic() - started
             report['termination_reason'] = reason or 'monitor_error'
+            report['runtime_started'] = child is not None
+            report['cleanup_scope'] = ('watchdog_owned_processes' if child is not None or guardian is not None
+                                       else 'no_child_or_guardian_launched')
+            # Legacy closure remains false without the child/guardian join. The
+            # no-launch scope does not certify the outer owner's process closure.
             # Operational failure is independent of the exact owned-tree join.
             report['cleanup_complete'] = (child_reaped and descendants_empty
                                           and guardian_disarmed and guardian_joined)
             _write_watchdog_report(report_path, report)
     if reason != 'child_exit':
+        if report['admission_refused']:
+            raise ContainmentUnavailable(
+                f"Watchdog admission refused: {report['admission_reason']}; "
+                f'runtime_started=false; see {report_path}')
         raise ContainmentUnavailable(f'Watchdog stopped build: {reason}; see {report_path}')
     return child.returncode
 

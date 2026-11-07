@@ -387,7 +387,7 @@ class ResourceLimitsTest(unittest.TestCase):
         observer.sample()
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(limits.subprocess, 'Popen') as launch:
-                with self.assertRaisesRegex(limits.ContainmentUnavailable, 'monitor_error'):
+                with self.assertRaisesRegex(limits.ContainmentUnavailable, 'admission refused: host_ram_admission_reserve; runtime_started=false'):
                     limits.supervise_watchdog(
                         argv=['-c', 'raise SystemExit(99)'],
                         report_path=Path(tmp) / 'watchdog.json', wall_seconds=10,
@@ -397,8 +397,38 @@ class ResourceLimitsTest(unittest.TestCase):
             report = json.loads((Path(tmp) / 'watchdog.json').read_text())
             self.assertEqual(report['error'], 'Host pressure safety stop: host_ram_admission_reserve')
             self.assertNotIn('child_pid', report)
+            self.assertNotIn('guardian_pid', report)
+            self.assertFalse(report['runtime_started'])
+            self.assertEqual(report['termination_reason'], 'monitor_error')
+            self.assertTrue(report['admission_refused'])
+            self.assertEqual(report['admission_reason'], 'host_ram_admission_reserve')
             self.assertFalse(report['cleanup_complete'])
+            self.assertEqual(report['cleanup_scope'], 'no_child_or_guardian_launched')
+            self.assertEqual((report['peak_pss_bytes'], report['peak_rss_bytes'], report['peak_tasks']), (0, 0, 0))
             self.assertTrue(report['host_pressure_guard']['stopped'])
+
+    def test_prelaunch_observation_refusal_is_distinct_from_setup_error(self):
+        for observation_error in (True, False):
+            with self.subTest(observation_error=observation_error), tempfile.TemporaryDirectory() as tmp:
+                observer = (self.explicit_host_observer() if observation_error
+                            else Mock(side_effect=limits.ContainmentUnavailable('setup failed')))
+                if observation_error:
+                    observer.sampler = Mock(side_effect=OSError('sample unavailable'))
+                with patch.object(limits.subprocess, 'Popen') as launch:
+                    with self.assertRaises(limits.ContainmentUnavailable):
+                        limits.supervise_watchdog(
+                            argv=['-c', 'raise SystemExit(99)'],
+                            report_path=Path(tmp) / 'watchdog.json', wall_seconds=10,
+                            memory_limit_bytes=64 * 1024**2, max_tasks=4,
+                            host_observation=observer)
+                launch.assert_not_called()
+                report = json.loads((Path(tmp) / 'watchdog.json').read_text())
+                self.assertFalse(report['runtime_started'])
+                self.assertEqual(report['admission_refused'], observation_error)
+                self.assertEqual(report['termination_reason'], 'monitor_error')
+                self.assertEqual(report.get('admission_reason'), 'host_pressure_observation_failed' if observation_error else None)
+                self.assertFalse(report['cleanup_complete'])
+                self.assertEqual(report['cleanup_scope'], 'no_child_or_guardian_launched')
 
     def test_runtime_pressure_policy_preserves_other_failures(self):
         errors = [limits._DiskFloorReached('reserve exhausted'),
@@ -529,6 +559,11 @@ class ResourceLimitsTest(unittest.TestCase):
             report = json.loads(path.read_text())
             guardian = json.loads(path.with_name('watchdog-guardian.json').read_text())
             self.assertEqual(report['error'], 'Cannot identify watchdog child')
+            self.assertEqual(report['termination_reason'], 'monitor_error')
+            self.assertTrue(report['runtime_started'])
+            self.assertFalse(report['admission_refused'])
+            self.assertNotIn('admission_reason', report)
+            self.assertEqual(report['cleanup_scope'], 'watchdog_owned_processes')
             self.assertTrue(hidden)
             self.assertEqual(report['child_identity_source'], 'guardian_handshake')
             self.assertEqual(report['child_start_time_ticks'], guardian['root_start'])
@@ -1037,6 +1072,130 @@ class WatchdogOpenFilesTest(unittest.TestCase):
 
     def test_watchdog_real_child_android_open_files_8192(self):
         self.run_child_open_files(8192)
+
+
+class WatchdogPeakObservationTest(unittest.TestCase):
+    @staticmethod
+    def update(report, sample, *, elapsed, supervisor=None, guardian=None):
+        # Execute the actual supervisor's accounting/update block without a job.
+        import ast
+        import inspect
+        from types import SimpleNamespace
+        function = ast.parse(inspect.getsource(limits.supervise_watchdog)).body[0]
+        blocks = [node.body for node in ast.walk(function) if isinstance(node, ast.While)
+                  and any(isinstance(row, ast.Assign) and isinstance(row.targets[0], ast.Name)
+                          and row.targets[0].id == 'overhead_pss' for row in node.body)]
+        assert len(blocks) == 1
+        block = blocks[0]
+        begin = next(i for i, row in enumerate(block) if isinstance(row, ast.Assign)
+                     and isinstance(row.targets[0], ast.Name) and row.targets[0].id == 'overhead_pss')
+        end = next(i for i, row in enumerate(block) if isinstance(row, ast.Assign)
+                   and ast.unparse(row.targets[0]) == "report['elapsed_seconds']")
+        code = compile(ast.Module(body=block[begin:end + 1], type_ignores=[]), '<actual-peak-update>', 'exec')
+        usage = dict(pss_bytes=1024, rss_bytes=2048, tasks=1)
+        namespace = dict(sample=sample, supervisor_usage=supervisor or usage,
+                         guardian_usage=guardian or usage, supervisor_start=9,
+                         guardian=SimpleNamespace(pid=91), guardian_info={'start': 8},
+                         report=report, started=10.0, time=limits.time, os=limits.os)
+        with patch.object(limits.time, 'monotonic', return_value=10.0 + elapsed), \
+             patch.object(limits.os, 'getpid', return_value=90):
+            exec(code, namespace)
+
+    @staticmethod
+    def report():
+        return dict(peak_pss_bytes=0, peak_rss_bytes=0, peak_tasks=0)
+
+    def test_peak_captures_owned_contributions_without_extra_process_reads(self):
+        table = {
+            100: dict(state='S', ppid=1, session=100, threads=1, start=10, rss=4096),
+            101: dict(state='S', ppid=100, session=101, threads=2, start=11, rss=8192),
+            800: dict(state='S', ppid=90, session=800, threads=5, start=8, rss=99999),
+            900: dict(state='S', ppid=1, session=900, threads=5, start=20, rss=99999),
+        }
+        reads = []
+        def read(path):
+            reads.append(str(path))
+            pid = int(path.parent.name)
+            self.assertIn(pid, (100, 101))
+            if path.name == 'smaps_rollup':
+                return 'Pss: ' + ('3' if pid == 100 else '5') + ' kB\n'
+            self.assertEqual(path.name, 'status')
+            return 'Threads: ' + str(table[pid]['threads']) + '\n'
+        known = {900: 19}  # Reused foreign PID must not appear in this sample.
+        with patch.object(limits, '_process_table', return_value=table) as process_table, \
+             patch.object(Path, 'read_text', autospec=True, side_effect=read):
+            sample = limits._owned_sample(100, 10, known, 90, {(800, 8)})
+        process_table.assert_called_once_with()
+        self.assertEqual(len(reads), 4)
+        report = self.report()
+        with patch.object(limits, '_process_table', side_effect=AssertionError('extra process scan')), \
+             patch.object(Path, 'read_text', side_effect=AssertionError('extra process read')), \
+             patch.object(limits.time, 'time', return_value=1234.5):
+            self.update(report, sample, elapsed=7.0,
+                        guardian=dict(pss_bytes=2048, rss_bytes=4096, tasks=1))
+        peak = report['peak_pss_observation']
+        self.assertEqual((peak['sample_finished_unix'], peak['elapsed_seconds']), (1234.5, 7.0))
+        self.assertTrue(peak['sequential_sample'])
+        self.assertEqual((peak['pss_bytes'], peak['rss_bytes'], peak['tasks']), (11264, 18432, 5))
+        self.assertEqual([(r['pid'], r['start_time_ticks'], r['pss_bytes'], r['tasks'])
+                          for r in peak['processes']],
+                         [(100, 10, 3072, 1), (101, 11, 5120, 2), (90, 9, 1024, 1), (91, 8, 2048, 1)])
+        self.assertEqual(sum(r['pss_bytes'] for r in peak['processes']), report['peak_pss_bytes'])
+        self.assertTrue(all(r['accounting'] == 'smaps_rollup' for r in peak['processes']))
+        self.assertEqual([r['role'] for r in peak['processes']], ['child_tree', 'child_tree', 'supervisor', 'guardian'])
+        self.assertNotIn('pss_bytes', table[100])
+        snapshot = json.dumps(peak, sort_keys=True)
+        sample['live'][100]['pss_bytes'] = 0
+        self.assertEqual(json.dumps(peak, sort_keys=True), snapshot)
+        self.assertTrue(all('argv' not in row and 'command' not in row for row in peak['processes']))
+
+    def test_equal_lower_and_new_peak_keep_the_correct_sample(self):
+        def sample(pss, rss, tasks):
+            return dict(pss_bytes=pss, rss_bytes=rss, tasks=tasks,
+                        live={100: dict(start=10, ppid=1, rss=rss, pss_bytes=pss,
+                                        measured_tasks=tasks, accounting='smaps_rollup')})
+        report = self.report()
+        with patch.object(limits.time, 'time', side_effect=[100.0, 200.0]) as clock, \
+             patch.object(limits, '_process_table', side_effect=AssertionError('extra scan')), \
+             patch.object(Path, 'read_text', side_effect=AssertionError('extra read')):
+            self.update(report, sample(100, 200, 1), elapsed=1)
+            first = report['peak_pss_observation']
+            self.update(report, sample(100, 500, 5), elapsed=2)
+            self.assertIs(report['peak_pss_observation'], first)
+            self.update(report, sample(90, 600, 6), elapsed=3)
+            self.assertIs(report['peak_pss_observation'], first)
+            self.assertEqual(first['rss_bytes'], 4296)
+            self.assertEqual((report['peak_rss_bytes'], report['peak_tasks']), (4696, 8))
+            self.assertEqual(report['elapsed_seconds'], 3)
+            self.update(report, sample(101, 100, 1), elapsed=4)
+        self.assertEqual(clock.call_count, 2)
+        self.assertEqual(report['peak_pss_observation']['sample_finished_unix'], 200.0)
+        self.assertEqual(report['peak_pss_observation']['elapsed_seconds'], 4)
+        self.assertEqual(report['peak_pss_bytes'], 2149)
+        self.assertEqual((report['peak_rss_bytes'], report['peak_tasks']), (4696, 8))
+
+    def test_peak_identifies_thread_and_rss_fallback_charges(self):
+        running = {100: dict(state='S', ppid=1, session=100, threads=3,
+                             start=10, vsize=8192, rss=8192)}
+        cases = [('thread_smaps_rollup', (5, 3), running, 5120),
+                 ('rss_fallback', None, running, 8192),
+                 ('released_mm_rss_fallback', None,
+                  {100: dict(running[100], vsize=0, rss=0)}, 8192)]
+        for expected, alternate, fresh, charged in cases:
+            with self.subTest(accounting=expected), \
+                 patch.object(limits, '_process_table', side_effect=[running, fresh]), \
+                 patch.object(Path, 'read_text', side_effect=FileNotFoundError), \
+                 patch.object(limits, '_thread_accounting', return_value=alternate), \
+                 patch.object(limits, '_live_mm_siblings', return_value=False):
+                sample = limits._owned_sample(100, 10, {}, 90)
+            self.assertEqual(sample['pss_bytes'], charged)
+            report = self.report()
+            with patch.object(limits.time, 'time', return_value=123):
+                self.update(report, sample, elapsed=2)
+            row = report['peak_pss_observation']['processes'][0]
+            self.assertEqual((row['pid'], row['start_time_ticks'], row['pss_bytes'], row['accounting']),
+                             (100, 10, charged, expected))
+            self.assertEqual(row['tasks'], 3)
 
 
 if __name__ == '__main__':
