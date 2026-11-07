@@ -5276,8 +5276,9 @@ class PreparedBlobToolsTests(unittest.TestCase):
                 def run(argv):
                     self.install(argv,args)
                     if fail:raise error
+                ticks=[0,1,1.25,2.25,*([] if fail else [3.25]),3.75,4,10]
                 with patch.object(b,'source_fingerprint',return_value=identity['source']), \
-                     patch.object(b,'run_checked',side_effect=run),patch.object(b.time,'monotonic',side_effect=[0,1,4,10]), \
+                     patch.object(b,'run_checked',side_effect=run),patch.object(b.time,'monotonic',side_effect=ticks), \
                      contextlib.redirect_stdout(output):
                     try:
                         with b.build_phase('testwiktionary','20261001','edition_build'):
@@ -5289,6 +5290,10 @@ class PreparedBlobToolsTests(unittest.TestCase):
                 self.assertEqual([(event['phase'],event['seconds']) for event in ends],
                     [('expander_and_blob_tools_prepare',3),('edition_build',10)])
                 self.assertEqual([event['status'] for event in ends],['failure' if fail else 'success']*2)
+                self.assertEqual(ends[0]['pre_verification_seconds'],1)
+                self.assertEqual(ends[0]['command_seconds'],1.5 if fail else 1)
+                if fail:self.assertNotIn('post_verification_seconds',ends[0])
+                else:self.assertEqual(ends[0]['post_verification_seconds'],.5)
                 log=root/'build.log';log.write_text(output.getvalue())
                 evidence=controller.phase_evidence(log,'testwiktionary','20261001',strict=True)
                 self.assertTrue(evidence['production_started']);self.assertEqual(evidence['end'],ends[-1])

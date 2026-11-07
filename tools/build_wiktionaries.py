@@ -1778,39 +1778,52 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
     """Use the existing Zig graph once, then bind its private installed outputs."""
     phase='blob_tools_prepare' if expander_args is None else 'expander_and_blob_tools_prepare'
     with build_phase(edition,date,phase) as outcome:
-        source=source_fingerprint()
-        compiler=shutil.which(zig)
-        if compiler is None:raise ValueError('Zig compiler executable is unavailable')
-        compiler=Path(compiler).resolve(strict=True)
-        compiler_sha=sha256_file(compiler)
-        if build_identity is not None and (source!=build_identity['source'] or compiler_sha!=build_identity['zig_sha256']):
-            raise ValueError('Native blob tool preparation source or compiler differs from build identity')
-        prefix=(workspace/'native-blob-tools').absolute()
-        require_native_tool_directory(prefix)
-        for name in BLOB_TOOL_NAMES:
-            path=prefix/'bin'/name
-            if path.exists() or path.is_symlink():require_private_native_tool(path)
-        command=[str(compiler),'build','-j1','-Doptimize=fast','--prefix',str(prefix),'prepare-blob-tools']
-        if expander_args is not None:
-            command.extend(['--summary','all','build-dictionary','--',*expander_args])
-        run_checked(command)
-        if source_fingerprint()!=source or sha256_file(compiler)!=compiler_sha:
-            raise ValueError('Source or compiler changed during native blob tool preparation')
-        require_native_tool_directory(prefix)
-        tools={}
-        for name in BLOB_TOOL_NAMES:
-            path=prefix/'bin'/name
-            info=require_private_native_tool(path)
-            # These are private install copies, never the shared Zig cache artifacts.
-            path.chmod(stat.S_IMODE(info.st_mode)&~0o222)
-            tools[name]=PreparedBlobTool(path)
-        record=dict(schema='wikidict.prepared-blob-tools.v1',source=source,zig_sha256=compiler_sha,
-                    optimize='fast',tools={name:dict(path=str(tool.path),sha256=tool.sha256,
-                        bytes=tool.stamp[2],mode=stat.S_IMODE(tool.stamp[-1])) for name,tool in tools.items()})
-        # This source/artifact binding survives workspace retirement in the
-        # existing BUILD_PHASE log; no independent receipt or cache is needed.
-        outcome.update(record)
-        return tools
+        started=time.monotonic()
+        command_started=post_started=None
+        try:
+            source=source_fingerprint()
+            compiler=shutil.which(zig)
+            if compiler is None:raise ValueError('Zig compiler executable is unavailable')
+            compiler=Path(compiler).resolve(strict=True)
+            compiler_sha=sha256_file(compiler)
+            if build_identity is not None and (source!=build_identity['source'] or compiler_sha!=build_identity['zig_sha256']):
+                raise ValueError('Native blob tool preparation source or compiler differs from build identity')
+            prefix=(workspace/'native-blob-tools').absolute()
+            require_native_tool_directory(prefix)
+            for name in BLOB_TOOL_NAMES:
+                path=prefix/'bin'/name
+                if path.exists() or path.is_symlink():require_private_native_tool(path)
+            command=[str(compiler),'build','-j1','-Doptimize=fast','--prefix',str(prefix),'prepare-blob-tools']
+            if expander_args is not None:
+                command.extend(['--summary','all','build-dictionary','--',*expander_args])
+            command_started=time.monotonic()
+            run_checked(command)
+            post_started=time.monotonic()
+            if source_fingerprint()!=source or sha256_file(compiler)!=compiler_sha:
+                raise ValueError('Source or compiler changed during native blob tool preparation')
+            require_native_tool_directory(prefix)
+            tools={}
+            for name in BLOB_TOOL_NAMES:
+                path=prefix/'bin'/name
+                info=require_private_native_tool(path)
+                # These are private install copies, never the shared Zig cache artifacts.
+                path.chmod(stat.S_IMODE(info.st_mode)&~0o222)
+                tools[name]=PreparedBlobTool(path)
+            record=dict(schema='wikidict.prepared-blob-tools.v1',source=source,zig_sha256=compiler_sha,
+                        optimize='fast',tools={name:dict(path=str(tool.path),sha256=tool.sha256,
+                            bytes=tool.stamp[2],mode=stat.S_IMODE(tool.stamp[-1])) for name,tool in tools.items()})
+            # This source/artifact binding survives workspace retirement in the
+            # existing BUILD_PHASE log; no independent receipt or cache is needed.
+            outcome.update(record)
+            return tools
+        finally:
+            finished=time.monotonic()
+            # Subintervals are inside phase seconds; absent means not entered.
+            outcome['pre_verification_seconds']=round((command_started if command_started is not None else finished)-started,3)
+            if command_started is not None:
+                outcome['command_seconds']=round((post_started if post_started is not None else finished)-command_started,3)
+            if post_started is not None:
+                outcome['post_verification_seconds']=round(finished-post_started,3)
 
 class DeterministicPresentationFailure(subprocess.CalledProcessError):
     def __init__(self, original, receipt):
