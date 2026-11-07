@@ -37,6 +37,7 @@ pub fn partOfSpeech(title: []const u8) ?[]const u8 {
     // before {{en-adj|-}}; expansion repeats the adjective category and headword.
     // Exact section classification only; the independently resolved owner stays.
     if (std.mem.eql(u8, title, "형용사")) return "Adjective";
+    if (std.mem.eql(u8, title, "부사")) return "Adverb";
     // Retained KY modules p87905/r204198 and p88008/r204200 emit these
     // headings/categories; primary term definitions: enwiki oldid68920211,
     // oldid62332914 and kywiki Сан_атооч oldid445200. POS only, never owner.
@@ -5442,4 +5443,40 @@ test "Urdu actual lexical Reader retains complete definition gender actions and 
     var restored = decoded;
     restored.entry.organization = before.organization;
     try std.testing.expectEqualDeep(types.Stored{ .entry = before }, restored);
+}
+
+
+test "exact Korean adverb heading organizes supplied owner definition without interpreting neighboring labels" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqualStrings("Adverb", partOfSpeech("부사") orelse return error.TestUnexpectedResult);
+    for ([_][]const u8{ "부사형", "부사 2", "부사?", " 부사", "부사 ", "발음", "Unknown 부사", "<nowiki>부사</nowiki>" }) |label|
+        try std.testing.expect(partOfSpeech(label) == null);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody("'''headword'''\n# [[target|meaning]]\n");
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "발음", .level = 3 },
+        .{ .title = "부사", .level = 3, .blocks = blocks },
+        .{ .title = "부사형", .level = 3, .blocks = blocks },
+    };
+    const layout = try buildOwned(a, &sections, "Independently supplied owner");
+    try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+    const lexeme = layout.lexemes[0];
+    try std.testing.expectEqualStrings("Adverb", lexeme.kind);
+    try std.testing.expectEqualStrings("Independently supplied owner", lexeme.language);
+    try std.testing.expectEqual(@as(usize, 1), lexeme.section);
+    try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+    try std.testing.expectEqual(@as(usize, 1), lexeme.definitions[0].block);
+    try std.testing.expectEqual(@as(usize, 0), lexeme.definitions[0].examples.len);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 2 }, layout.other_sections);
+    const unclassified = try buildUnclassified(a, &sections);
+    try std.testing.expectEqual(@as(usize, 1), unclassified.lexemes.len);
+    try std.testing.expectEqualStrings("", unclassified.lexemes[0].language);
+    try std.testing.expectEqualDeep(lexeme.definitions, unclassified.lexemes[0].definitions);
+    const protected_blocks = try renderer.renderBody("<nowiki>===부사===</nowiki>\n<pre>===부사===</pre>\n# body\n");
+    const protected = [_]Section{.{ .title = "Unknown label", .level = 3, .blocks = protected_blocks }};
+    const protected_layout = try buildOwned(a, &protected, "Independently supplied owner");
+    try std.testing.expectEqual(@as(usize, 0), protected_layout.lexemes.len);
+    try std.testing.expectEqualSlices(usize, &.{0}, protected_layout.other_sections);
 }

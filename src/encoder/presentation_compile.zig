@@ -10127,6 +10127,8 @@ pub const Renderer = struct {
         var stack: [max_depth][]const u8 = undefined;
         var count: usize = 0;
         var scan: usize = 0;
+        var complete_link_prefix = false;
+        const has_semicolon = std.mem.indexOfScalar(u8, body, ';') != null;
         while (scan < body.len) {
             const tail = body[scan..];
             if (tail[0] == '[') {
@@ -10145,6 +10147,13 @@ pub const Renderer = struct {
                     if (ns == 6 or ns == 14) return false;
                 };
                 if (!self.manualConversionLinkedScope(link_node.text, false)) return false;
+                // Unescaped interlanguage links can disappear before conversion.
+                // Only a local/explicit ordinary link (or an external anchor)
+                // supplies the HTML prefix needed by the new colon proof.
+                if (!internal or starts(link_node.target, ":") or
+                    std.mem.indexOfScalar(u8, link_node.target, ':') == null or
+                    self.namespaceOfTarget(link_node.target) != null)
+                    complete_link_prefix = true;
                 scan = links.cursor;
                 continue;
             }
@@ -10163,8 +10172,13 @@ pub const Renderer = struct {
                 scan = tag.end;
                 continue;
             }
+            // Links are rendered before ConverterRule splits at its first colon.
+            // A completed anchor in that prefix cannot name a valid variant, so
+            // the whole body is displayed raw. Keep choice separators unsupported
+            // here; a leading plain colon must still follow the existing rule path.
             if (std.mem.indexOfScalar(u8, "[]{}|\r\n", tail[0]) != null or
-                (allow_links and tail[0] == ':') or starts(tail, "=>") or starts(tail, "=&gt;")) return false;
+                (allow_links and tail[0] == ':' and (!complete_link_prefix or has_semicolon)) or
+                starts(tail, "=>") or starts(tail, "=&gt;")) return false;
             scan += 1;
         }
         return count == 0;
@@ -46491,4 +46505,91 @@ test "manual invalid table proof retains aliases valid choices and unsupported s
     // and missing-profile rejection remain the renderer obligations above.
     try requireCompiledText("-{sr:one;sr-ej:two}-");
     try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("-{sr:one;sr-ej:{{unexpanded}}}-"));
+}
+
+test "manual conversion complete link prefix keeps following timestamp colons as raw body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    ns.language_conversion = &.{ "sr", "sr-ec", "sr-el" };
+    var behavior = try ManualConversionTest.behavior(a, &ns); defer behavior.deinit();
+    // The controlled English fixture owns User:, while the full saved Writer
+    // independently loads the genuine Serbian Корисник alias and page bytes.
+    for ([_]struct { source: []const u8, reference: []const u8 }{
+        .{ .source = "before ''-{--[[User:Kaster|Kaster]] 10:05, 31. март 2006. (CEST)}-'' after [[Next|next]]", .reference = "before ''<span>--[[User:Kaster|Kaster]] 10:05, 31. март 2006. (CEST)</span>'' after [[Next|next]]" },
+        .{ .source = "-{[[Target|label]] time:10}-", .reference = "<span>[[Target|label]] time:10</span>" },
+        .{ .source = "-{[https://example.test label] 10:05}-", .reference = "<span>[https://example.test label] 10:05</span>" },
+        .{ .source = "{|\n| -{[[Target|label]] 10:05}-\n|}\nbody<ref>-{[[Citation|note]] 11:06}-</ref><references />", .reference = "{|\n| <span>[[Target|label]] 10:05</span>\n|}\nbody<ref><span>[[Citation|note]] 11:06</span></ref><references />" },
+    }) |row| {
+        var actual_renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+        var expected_renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+        const actual = try FormattingScopeTest.encode(a, &actual_renderer, try actual_renderer.renderBody(row.source));
+        const expected = try FormattingScopeTest.encode(a, &expected_renderer, try expected_renderer.renderBody(row.reference));
+        try std.testing.expectEqualDeep(expected, actual);
+        const codec = @import("blob_encoder").presentation_codec;
+        const bytes = try codec.encodeAlloc(a, actual);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), bytes);
+        try std.testing.expectEqualDeep(actual, try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" }));
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" })));
+    }
+}
+
+test "manual conversion timestamp proof preserves variant choice flags incomplete and protected domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    ns.language_conversion = &.{ "sr", "sr-ec", "sr-el" };
+    var behavior = try ManualConversionTest.behavior(a, &ns); defer behavior.deinit();
+    for ([_][]const u8{
+        "-{sr:[[Target|label]] 10:05}-", "-{10:05 [[Target|label]]}-",
+        "-{[[Target|label]];sr:one}-", "-{[[Target|label]] 10:05;plain}-",
+        "-{[[Target|label]] 10:05=>sr:one}-", "-{R|[[Target|label]] 10:05}-",
+        "-{[[Target|label]] 10:05\n}-", "-{[[Outer|[[Inner]]]] 10:05}-",
+        "-{[[Target|label] 10:05}-", "-{[[File:X.png|label]] 10:05}-",
+        "-{[[Category:X|label]] 10:05}-", "-{[[Target|<ref>note</ref>]] 10:05}-",
+        "-{<small>[[Target|label]] 10:05</small>}-", "-{[[Target|label]] <unknown>x</unknown> 10:05}-",
+        "-{[[Target|label: &amp; value]] 10:05}-",
+    }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+        try std.testing.expectError(error.UncompiledPresentation, renderer.parseSpans(source, .{}));
+    }
+    try ns.attachInterwikiMap(interlanguage_test_map);
+    for ([_][]const u8{
+        "[[en:Page]]sr:text", "[[en:Page|label]] 10:05", "[[unknown:Page|label]] 10:05",
+    }) |body| {
+        var guarded: Renderer = .{ .a = a, .context = .{ .title = "Entry", .namespace_catalog = &ns, .behavior_switches = &behavior, .content_conversion = true, .external_links_prepared = true } };
+        try std.testing.expect(!guarded.manualConversionLinkedScope(body, true));
+        const wrapped = try std.fmt.allocPrint(a, "-{{{s}}}-", .{body});
+        try std.testing.expectError(error.UncompiledPresentation, guarded.parseSpans(wrapped, .{}));
+    }
+    for ([_][]const u8{ "[[Target|label]] 10:05", "[[User:Kaster|Kaster]] 10:05", "[[:en:Page|label]] 10:05", "[https://example.test label] 10:05" }) |body| {
+        var actual_renderer: Renderer = .{ .a = a, .context = .{ .title = "Entry", .namespace_catalog = &ns, .behavior_switches = &behavior } };
+        var expected_renderer: Renderer = .{ .a = a, .context = .{ .title = "Entry", .namespace_catalog = &ns, .behavior_switches = &behavior } };
+        try std.testing.expect(actual_renderer.manualConversionLinkedScope(body, true));
+        const wrapped = try std.fmt.allocPrint(a, "-{{{s}}}-", .{body});
+        const reference = try std.fmt.allocPrint(a, "<span>{s}</span>", .{body});
+        const actual = try FormattingScopeTest.encode(a, &actual_renderer, try actual_renderer.renderBody(wrapped));
+        const expected = try FormattingScopeTest.encode(a, &expected_renderer, try expected_renderer.renderBody(reference));
+        const codec = @import("blob_encoder").presentation_codec;
+        try std.testing.expectEqualDeep(expected, actual);
+        const bytes = try codec.encodeAlloc(a, actual);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), bytes);
+        try std.testing.expectEqualDeep(actual, try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" }));
+    }
+    // Even a talk host or disabled captured magic cannot make an ambiguous
+    // interwiki spelling an independent local-anchor proof for this subset.
+    ns.interwiki_magic = false;
+    var ambiguous: Renderer = .{ .a = a, .context = .{ .title = "Talk:Entry", .namespace_catalog = &ns, .behavior_switches = &behavior } };
+    try std.testing.expect(!ambiguous.manualConversionLinkedScope("[[en:Page|label]] 10:05", true));
+    const source = "-{--[[Корисник:Kaster|Kaster]] 10:05}-";
+    for ([_]Style{ .{ .code = true }, .{ .preserve_whitespace = true } }) |style| {
+        var renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+        try std.testing.expectError(error.UncompiledPresentation, renderer.parseSpans(source, style));
+    }
+    var protected: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+    const nowiki = try std.fmt.allocPrint(a, "<nowiki>{s}</nowiki>", .{source});
+    const spans = try protected.parseSpans(nowiki, .{});
+    try std.testing.expectEqualStrings(source, try flattened(a, spans));
+    for (spans) |span| try std.testing.expect(span.kind == .text and span.target.len == 0 and span.provenance == .protected_literal);
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(source));
 }

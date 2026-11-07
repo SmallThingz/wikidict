@@ -377,6 +377,30 @@ fn pageIndexStart(bytes: []const u8, options: Options) !PageIndexStart {
     };
 }
 
+const SelectedIndexPage = struct { line: []const u8, ordinal: usize };
+
+fn nextSelectedIndexPage(
+    lines: *std.mem.SplitIterator(u8, .scalar),
+    corpus_ordinal: *usize,
+    pages_selected: *usize,
+    reached_eof: *bool,
+    options: Options,
+) ?SelectedIndexPage {
+    while (lines.next()) |line| {
+        if (line.len == 0 or line[0] == '#') continue;
+        const page_ordinal = corpus_ordinal.*;
+        corpus_ordinal.* += 1;
+        if (page_ordinal < options.start_page) continue;
+        if (options.limit_pages) |limit| if (pages_selected.* >= limit) {
+            reached_eof.* = false;
+            return null;
+        };
+        pages_selected.* += 1;
+        return .{ .line = line, .ordinal = page_ordinal };
+    }
+    return null;
+}
+
 fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const u8, namespaces: *const namespace_registry.Registry) !language_registry.Registry {
     var out = language_registry.Registry.empty(a);
     errdefer out.deinit();
@@ -1076,9 +1100,16 @@ const PresentationAudit = struct {
     report_bytes: usize = 0,
     payload_bytes: usize = 0,
     finalized: bool = false,
+    reached_eof: bool = false,
+    index_rows_seen: ?usize = null,
 
     fn init(io: std.Io, a: std.mem.Allocator, root: []const u8, context: AuditInputContext) !PresentationAudit {
         if (context.expanded_byte_cap > 2 * 1024 * 1024) return error.Usage;
+        if (context.index_byte_offset != null) return error.Usage;
+        if (context.requested_limit) |limit| {
+            if (limit == 0) return error.Usage;
+            _ = std.math.add(usize, context.start_page, limit) catch return error.Usage;
+        }
         const leaf = std.fs.path.basename(root);
         if (leaf.len == 0 or std.mem.eql(u8, leaf, ".") or std.mem.eql(u8, leaf, "..")) return error.Usage;
         const parent = try std.Io.Dir.cwd().realPathFileAlloc(io, std.fs.path.dirname(root) orelse ".", a);
@@ -1106,6 +1137,7 @@ const PresentationAudit = struct {
             self.abort(err);
             return err;
         };
+        try self.writeSummary(false, "started");
         return self;
     }
 
@@ -1220,15 +1252,37 @@ const PresentationAudit = struct {
     }
 
     fn writeSummary(self: *PresentationAudit, complete: bool, err: ?[]const u8) !void {
-        try self.writeJson("audit-summary.json", .{ .schema = "wikidict.presentation-audit.summary.v1", .diagnostic_only = true, .inventory_complete = complete, .semantic_acceptance = false, .publication_created = false, .selected = self.selected, .dispatched = self.dispatched, .consumed = self.consumed, .skipped = self.skipped, .direct_aliases = self.direct_aliases, .expansion_fallbacks = self.expansion_fallbacks, .compile_attempts = self.compile_attempts, .succeeded = self.succeeded, .failed = self.failed, .failure_records = self.failure_records, .payload_bytes = self.payload_bytes, .error_name = err });
+        const whole_index = self.context.start_page == 0 and self.context.requested_limit == null;
+        try self.writeJson("audit-summary.json", .{ .schema = "wikidict.presentation-audit.summary.v1", .diagnostic_only = true,
+            .inventory_complete = complete and whole_index, .range_complete = complete,
+            .audit_scope = if (whole_index) "whole-index" else "page-range",
+            .start_page = self.context.start_page, .requested_limit = self.context.requested_limit,
+            .selected_end_exclusive = self.context.start_page +| self.selected,
+            .reached_eof = self.reached_eof, .index_rows_seen = self.index_rows_seen, .semantic_acceptance = false, .publication_created = false, .selected = self.selected, .dispatched = self.dispatched, .consumed = self.consumed, .skipped = self.skipped, .direct_aliases = self.direct_aliases, .expansion_fallbacks = self.expansion_fallbacks, .compile_attempts = self.compile_attempts, .succeeded = self.succeeded, .failed = self.failed, .failure_records = self.failure_records, .payload_bytes = self.payload_bytes, .error_name = err });
     }
 
     fn abort(self: *PresentationAudit, err: anyerror) void {
         if (!self.finalized) self.writeSummary(false, @errorName(err)) catch {};
     }
 
-    fn finish(self: *PresentationAudit, eof: bool, drained: bool) !void {
-        if (self.finalized or !eof or !drained or self.dispatched != self.consumed or self.selected != self.skipped + self.direct_aliases + self.dispatched or self.failed != self.failure_records) return error.IncompletePresentationAudit;
+    fn finish(self: *PresentationAudit, eof: bool, drained: bool, index_rows_seen: usize) !void {
+        if (self.finalized) return error.IncompletePresentationAudit;
+        self.reached_eof = eof;
+        self.index_rows_seen = index_rows_seen;
+        if (!drained or self.dispatched != self.consumed or self.selected != self.skipped + self.direct_aliases + self.dispatched or self.failed != self.failure_records) return error.IncompletePresentationAudit;
+        if (index_rows_seen < self.context.start_page) return error.ShortPageIndex;
+        const selected_end = std.math.add(usize, self.context.start_page, self.selected) catch return error.IncompletePresentationAudit;
+        if (eof) {
+            const expected_end = if (self.context.requested_limit) |limit|
+                @min(index_rows_seen, self.context.start_page + limit)
+            else
+                index_rows_seen;
+            if (selected_end != expected_end) return error.IncompletePresentationAudit;
+        } else {
+            const limit = self.context.requested_limit orelse return error.IncompletePresentationAudit;
+            if (self.selected != limit or selected_end == std.math.maxInt(usize) or index_rows_seen != selected_end + 1)
+                return error.IncompletePresentationAudit;
+        }
         for (self.inputs.items) |before| {
             const after = try auditFileStamp(self.io, self.allocator, before.path);
             defer if (after.sha256) |value| self.allocator.free(value);
@@ -1665,7 +1719,13 @@ fn parseOptions(args: []const []const u8) !Options {
     }
     if ((out.failure_receipt == null) != (out.invocation_id == null)) return error.Usage;
     if (out.audit_presentation_errors and out.failure_receipt != null) return error.Usage;
-    if (out.expander_root.len == 0 or (out.audit_expanded_bytes != null and !out.audit_presentation_errors) or (out.audit_presentation_errors and (out.shard_pages != null or out.start_page != 0 or out.index_byte_offset != null or out.limit_pages != null))) return error.Usage;
+    if (out.expander_root.len == 0 or (out.audit_expanded_bytes != null and !out.audit_presentation_errors) or (out.audit_presentation_errors and (out.shard_pages != null or out.index_byte_offset != null))) return error.Usage;
+    if (out.audit_presentation_errors) {
+        if (out.limit_pages) |limit| {
+            if (limit == 0) return error.Usage;
+            _ = std.math.add(usize, out.start_page, limit) catch return error.Usage;
+        }
+    }
     if (out.shard_pages) |shard_pages| {
         if (out.index_byte_offset == null or out.limit_pages == null or out.limit_pages.? == 0 or
             out.start_page % shard_pages != 0) return error.Usage;
@@ -2396,16 +2456,9 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     var pages_selected: usize = 0;
     var reached_eof = true;
     var next_progress = std.Io.Clock.awake.now(io).toNanoseconds() + 10 * std.time.ns_per_s;
-    while (lines.next()) |line| {
-        if (line.len == 0 or line[0] == '#') continue;
-        const page_ordinal = corpus_ordinal;
-        corpus_ordinal += 1;
-        if (page_ordinal < options.start_page) continue;
-        if (options.limit_pages) |limit| if (pages_selected >= limit) {
-            reached_eof = false;
-            break;
-        };
-        pages_selected += 1;
+    while (nextSelectedIndexPage(&lines, &corpus_ordinal, &pages_selected, &reached_eof, options)) |selected_page| {
+        const line = selected_page.line;
+        const page_ordinal = selected_page.ordinal;
         if (audit) |value| value.selected += 1;
         writer.stats.pages_seen = pages_selected;
         try dispatchIndexedPage(&pool, &writer, &dump, page_index_kind, &namespaces, line, page_ordinal);
@@ -2425,7 +2478,7 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     if (audit) |value| {
         // No finish, coverage, shard publication or normal success path in audit mode.
         if (!std.meta.eql(page_index.identity, try pathIdentity(io, page_index_path))) return error.AuditInputsChanged;
-        try value.finish(reached_eof, true);
+        try value.finish(reached_eof, true, corpus_ordinal);
         diagnostics.printLine("presentation audit complete selected={d} failures={d}; no corpus publication\n", .{ value.selected, value.failed });
         if (value.failed != 0) return error.PresentationAuditFailures;
         return;
@@ -4220,7 +4273,7 @@ fn auditControlSequence(a: std.mem.Allocator, label: []const u8, cap: usize) !vo
         audit.selected = 5;
         audit.dispatched = 5;
         audit.consumed = 5;
-        try audit.finish(true, true);
+        try audit.finish(true, true, audit.selected);
         try auditControlNoPublishedFiles(a, inputs.writer_root);
     }
     try auditControlNoPublishedFiles(a, inputs.writer_root);
@@ -4694,15 +4747,15 @@ test "audit requires EOF drained routing and unchanged actual input bytes" {
         defer audit.deinit();
         if (comptime std.mem.eql(u8, label, "changed-dump")) {
             try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = inputs.context.dump_path, .data = "changed retained dump bytes" });
-            try std.testing.expectError(error.AuditInputsChanged, audit.finish(true, true));
+            try std.testing.expectError(error.AuditInputsChanged, audit.finish(true, true, audit.selected));
             audit.abort(error.AuditInputsChanged);
         } else if (comptime std.mem.eql(u8, label, "appeared-input")) {
             try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ inputs.context.expander_root, "page-index.tsv" }), .data = "newly appeared retained index" });
-            try std.testing.expectError(error.AuditInputsChanged, audit.finish(true, true));
+            try std.testing.expectError(error.AuditInputsChanged, audit.finish(true, true, audit.selected));
             audit.abort(error.AuditInputsChanged);
         } else {
             if (comptime std.mem.eql(u8, label, "routing-mismatch")) audit.dispatched = 1;
-            try std.testing.expectError(error.IncompletePresentationAudit, audit.finish(!std.mem.eql(u8, label, "no-eof"), !std.mem.eql(u8, label, "not-drained")));
+            try std.testing.expectError(error.IncompletePresentationAudit, audit.finish(!std.mem.eql(u8, label, "no-eof"), !std.mem.eql(u8, label, "not-drained"), audit.selected));
             audit.abort(error.IncompletePresentationAudit);
         }
         const summary = try auditControlSummary(a, inputs.audit_root);
@@ -4751,7 +4804,7 @@ test "audit payload exhaustion retains hashes while report exhaustion aborts inc
             audit.selected = 1;
             audit.dispatched = 1;
             audit.consumed = 1;
-            try audit.finish(true, true);
+            try audit.finish(true, true, audit.selected);
             const bytes = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ inputs.audit_root, "failures.jsonl" }), a, .limited(64 * 1024));
             const value = try std.json.parseFromSliceLeaky(std.json.Value, a, std.mem.trim(u8, bytes, "\n"), .{});
             inline for (.{ "raw_source", "expanded" }) |field| {
@@ -7257,7 +7310,7 @@ test "audit records three presentation errors for page and alias boundaries and 
     try std.testing.expectEqual(@as(usize, 8), audit.failed);
     try std.testing.expectEqual(@as(usize, 8), audit.failure_records);
     audit.selected = 10; audit.dispatched = 10; audit.consumed = 10;
-    try audit.finish(true, true);
+    try audit.finish(true, true, audit.selected);
     const summary = try auditControlSummary(a, inputs.audit_root);
     try std.testing.expect(summary.object.get("inventory_complete").?.bool and summary.object.get("diagnostic_only").?.bool);
     try std.testing.expect(!summary.object.get("semantic_acceptance").?.bool and !summary.object.get("publication_created").?.bool);
@@ -13715,6 +13768,28 @@ test "normal Writer retained KO ashnu preserves linked template diagnostic compl
     try std.testing.expectEqualDeep(expected, actual);
     try std.testing.expectEqualStrings("ary", actual.language_code);
     try std.testing.expectEqualStrings(owner.heading, actual.language.?);
+    checkpoint = "authored adverb section and complete owned definition";
+    try std.testing.expectEqual(@as(usize, 1), actual.organization.lexemes.len);
+    const lexeme = actual.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Adverb", lexeme.kind);
+    try std.testing.expectEqualStrings(owner.heading, lexeme.language);
+    try std.testing.expectEqual(@as(usize, 2), lexeme.section);
+    try std.testing.expectEqualStrings("부사", actual.sections[lexeme.section].title);
+    try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+    const definition = lexeme.definitions[0];
+    try std.testing.expectEqual(@as(usize, 1), definition.block);
+    try std.testing.expect(definition.parent == null);
+    try std.testing.expectEqual(@as(usize, 0), definition.examples.len);
+    try std.testing.expectEqualSlices(usize, &.{0}, lexeme.introduction);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, actual.organization.other_sections);
+    const definition_block = actual.sections[lexeme.section].blocks[definition.block];
+    try std.testing.expect(definition_block.kind == .definition);
+    var definition_text: std.ArrayList(u8) = .empty;
+    for (definition_block.spans) |span| {
+        try definition_text.appendSlice(a, span.text);
+        try definition_text.appendSlice(a, span.trail);
+    }
+    try std.testing.expectEqualStrings("잘못 أشنو (ʔašnu, “무엇, 어떤”).", definition_text.items);
     const codec = encoder.presentation_codec;
     const payload = try codec.encodeAlloc(a, .{ .entry = actual });
     const decoded = try codec.decodeAlloc(a, payload, F.title, .language, .{ .code = "ary", .heading = owner.heading });
@@ -20567,5 +20642,386 @@ test "Writer plain HTML H1 uses trusted owner without lending unknown or nested 
         const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, title, .language, .{ .code = if (i == 0) "en" else "", .heading = heading });
         try std.testing.expectEqualDeep(actual, decoded.entry);
         try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    }
+}
+
+test "normal Writer retained SR current events keeps timestamp conversion signatures complete discussion and codec" {
+    const T = encoder.presentation_types;
+    const F = struct {
+        const title = "Тренутни догађаји";
+        const source = @embedFile("testdata/sr-current-events/page.wikitext");
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        const targets = [_][]const u8{
+            "http://www.metak.com/", "https://web.archive.org/web/20091006220820/http://www.krstarica.com/dictionary/", "http://dict.leo.org",
+            "Корисник:Kaster", "User:Саша.Стефановић", "User talk:Саша.Стефановић", "User talk:Саша.Стефановић",
+            "Корисник:Dungodung", "Корисник:Dungodung", "Корисник:Dungodung", "Разговор са корисником:Dungodung",
+            "Корисник:Kaster", "Корисник:Kaster", "Корисник:Crveni Baron", "Разговор са корисником:Crveni Baron", "Корисник:Crveni Baron", "Разговор са корисником:Crveni Baron",
+        };
+        const Scan = struct {
+            visible: std.ArrayList(u8) = .empty,
+            action_index: usize = 0,
+            red_small: bool = false,
+            blue_small: bool = false,
+            gray_small: bool = false,
+            blue_bold: usize = 0,
+            red_bold: bool = false,
+            italic_word: bool = false,
+            fn spans(self: *@This(), a: std.mem.Allocator, values: []const T.Span) !void {
+                for (values) |span| {
+                    try self.visible.appendSlice(a, span.text); try self.visible.appendSlice(a, span.trail);
+                    try std.testing.expect(std.mem.indexOf(u8, span.text, "-{") == null and std.mem.indexOf(u8, span.text, "}-") == null);
+                    if (span.kind == .link or span.kind == .external_link) {
+                        try std.testing.expect(self.action_index < targets.len);
+                        try std.testing.expectEqualStrings(targets[self.action_index], span.target);
+                        try std.testing.expect(span.kind == (if (self.action_index < 3) T.InlineKind.external_link else T.InlineKind.link));
+                        self.action_index += 1;
+                    } else try std.testing.expect(span.kind == .text and span.target.len == 0);
+                    if (std.mem.eql(u8, span.text, "Саша") or std.mem.eql(u8, span.text, "Стефа") or std.mem.eql(u8, span.text, "новић")) {
+                        const scale = span.font_scale orelse return error.TestUnexpectedResult;
+                        try std.testing.expectApproxEqAbs(@as(f32, 0.85), scale, 0.00001);
+                        const color = span.foreground orelse return error.TestUnexpectedResult;
+                        if (std.mem.eql(u8, span.text, "Саша")) { try std.testing.expect(span.bold); try std.testing.expectEqualStrings("#ff0000", color); self.red_small = true; }
+                        if (std.mem.eql(u8, span.text, "Стефа")) { try std.testing.expectEqualStrings("#0000ff", color); self.blue_small = true; }
+                        if (std.mem.eql(u8, span.text, "новић")) { try std.testing.expectEqualStrings("#d3d3d3", color); self.gray_small = true; }
+                    }
+                    if (std.mem.eql(u8, span.text, "Фи") or std.mem.eql(u8, span.text, "ип") or std.mem.eql(u8, span.text, "§")) {
+                        try std.testing.expect(span.bold); try std.testing.expectEqualStrings("#0000ff", span.foreground orelse return error.TestUnexpectedResult); self.blue_bold += 1;
+                    }
+                    if (std.mem.eql(u8, span.text, "л")) { try std.testing.expect(span.bold); try std.testing.expectEqualStrings("#ff0000", span.foreground orelse return error.TestUnexpectedResult); self.red_bold = true; }
+                    if (std.mem.eql(u8, span.text, "exciting")) { try std.testing.expect(span.italic); self.italic_word = true; }
+                }
+            }
+            fn entry(self: *@This(), a: std.mem.Allocator, value: T.Entry) !void {
+                try self.spans(a, value.preamble_spans);
+                for (value.sections) |section| for (section.blocks) |block| {
+                    try std.testing.expect(block.table == null);
+                    try self.spans(a, block.spans);
+                };
+                try std.testing.expectEqual(@as(usize, 0), value.references.len);
+                try std.testing.expectEqual(@as(usize, 0), value.media.len);
+            }
+        };
+    };
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var checkpoint: []const u8 = "complete retained source";
+    errdefer std.debug.print("SR current events checkpoint={s}\n", .{checkpoint});
+    try std.testing.expectEqual(@as(usize, 4467), F.source.len);
+    try F.hash(F.source, "77ae0c2a4061664a19fda8426dc6efd6121ea64ea13448d90c2aea7920c2dc5f");
+    try F.hash(@embedFile("testdata/sr-current-events/page.index-row.tsv"), "25513c65c5ec5ed324f525298bb17d125778156c68857a74439476412a74150d");
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, F.source, "-{"));
+    const signatures = [_][]const u8{
+        "--[[Корисник:Kaster|Kaster]] 10:05, 31. март 2006. (CEST)",
+        "[[Корисник:Crveni Baron|Crveni Baron]] [[Разговор са корисником:Crveni Baron|•]]",
+    };
+    var reference: []const u8 = F.source;
+    for (signatures, [_]usize{ 1, 2 }) |signature, expected_count| {
+        const wrapped = try std.fmt.allocPrint(a, "-{{{s}}}-", .{signature});
+        try std.testing.expectEqual(expected_count, std.mem.count(u8, F.source, wrapped));
+        const replacement = try std.fmt.allocPrint(a, "<span>{s}</span>", .{signature});
+        reference = try std.mem.replaceOwned(u8, a, reference, wrapped, replacement);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, reference, "-{") == null);
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/sr-admiral/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/sr-admiral/interwiki-map.tsv"));
+    try ns.attachLanguageConversion(@embedFile("testdata/sr-admiral/namespace-siteinfo.raw.json"));
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "sr", "sr-ec", "sr-el" }), ns.language_conversion orelse return error.TestUnexpectedResult);
+    const behavior_source = @embedFile("testdata/sr-admiral/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var behavior_sha: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_sha, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/sr-admiral/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_sha); defer images.deinit();
+    const css = @embedFile("testdata/sr-nedelja/common.css");
+    try F.hash(css, "58c27434e6c436e00e12aa98839fc5ae94cad6f233046331bde49d66b7c8b5da");
+    // This exact stylesheet overrides the HTML small default.
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, css, "small {\n\tfont-size: 85%;\n}"));
+    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    checkpoint = "normal captured module language loader";
+    const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/sr-current-events-metadata", .{tmp.sub_path});
+    try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{ metadata_root, "modules" }));
+    const files = .{
+        .{ "language-registry.tsv", @embedFile("testdata/sr-admiral/language-registry.tsv") },
+        .{ "manifest.jsonl", @embedFile("testdata/sr-nedelja/canonical-manifest.jsonl") },
+        .{ "modules/240147.lua", @embedFile("testdata/sr-admiral/canonical-names.lua") },
+    };
+    inline for (files) |file| try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ metadata_root, file[0] }), .data = file[1] });
+    var registry = try loadLanguageRegistry(io, a, metadata_root, &ns); defer registry.deinit();
+    const headings = [_][]const u8{ "Масовни унос", "Масовни унос - 2", "Масовни унос енглеских имена" };
+    for (headings) |heading| try std.testing.expect(registry.resolveStrong(heading) == null);
+    var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    checkpoint = "complete normal Writer raw and independent reference";
+    var roots: [2][]const u8 = undefined;
+    var stats: [2]encoder.blob_builder.BuildStats = undefined;
+    var manifests: [2][]const u8 = undefined;
+    for ([_][]const u8{ F.source, reference }, 0..) |source, i| {
+        roots[i] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/sr-current-events-{d}", .{tmp.sub_path, i});
+        var writer = try encoder.blob_builder.Writer.init(io, a, roots[i]); defer writer.deinit(); writer.language_codes = codes;
+        // Capture raw and expanded are byte-identical. No missing/title/poem
+        // phase was captured; preserve all three absences in both arms.
+        try writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, F.title, source, F.source, null, &.{}, null, null);
+        stats[i] = try writer.finish(codes);
+        manifests[i] = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[i], encoder.blob_catalog.manifest_filename }), a, .limited(64 * 1024));
+    }
+    try std.testing.expectEqual(@as(usize, 1), stats[0].language_records);
+    try std.testing.expectEqual(stats[1].language_records, stats[0].language_records);
+    try std.testing.expectEqual(stats[1].language_blobs, stats[0].language_blobs);
+    try std.testing.expectEqual(@as(usize, 0), stats[0].supplemental_records);
+    var actual_it = try encoder.blob_catalog.Iterator.init(manifests[0]); var expected_it = try encoder.blob_catalog.Iterator.init(manifests[1]);
+    const item = (try actual_it.next()) orelse return error.TestUnexpectedResult;
+    const expected_item = (try expected_it.next()) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Unclassified", item.heading);
+    try std.testing.expectEqualStrings(item.heading, expected_item.heading);
+    try std.testing.expect(try actual_it.next() == null and try expected_it.next() == null);
+    const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], item.heading, F.title);
+    const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], expected_item.heading, F.title);
+    try std.testing.expectEqualStrings("", actual.language_code);
+    try std.testing.expectEqualDeep(expected, actual);
+    const codec = encoder.presentation_codec;
+    const stored: T.Stored = .{ .entry = actual };
+    const bytes = try codec.encodeAlloc(a, stored);
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, .{ .entry = expected }), bytes);
+    const decoded = try codec.decodeAlloc(a, bytes, F.title, .language, .{ .heading = item.heading, .code = actual.language_code });
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+    checkpoint = "independent whole discussion action and style witnesses";
+    for (headings) |heading| {
+        var count: usize = 0;
+        for (actual.sections) |section| if (std.mem.eql(u8, section.title, heading)) { count += 1; };
+        try std.testing.expectEqual(@as(usize, 1), count);
+    }
+    var scan: F.Scan = .{}; try scan.entry(a, actual);
+    try std.testing.expectEqual(F.targets.len, scan.action_index);
+    try std.testing.expect(scan.red_small and scan.blue_small and scan.gray_small and scan.red_bold and scan.italic_word);
+    try std.testing.expectEqual(@as(usize, 3), scan.blue_bold);
+    for ([_][]const u8{ "13:12", "13:21", "13:41", "13:48", "10:05", "21:30", "17:33" }) |stamp|
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, scan.visible.items, stamp));
+    for ([_][]const u8{ "око 2600 српских именица и глагола", "даљњих 10000 ријечи", "Следећи кораци:", "Примјена тих алгоритама. на цјелокупан ријечник", "Ово је одлично", "Dungo ... pa znaš mog favorita", "Важан је био број нових чланака", "Једино што треба да је увијек у реду", "Намеравам да унесем ботом мушка енглеска имена", "Управо уносим енглеска женска имена" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, text) != null);
+}
+
+test "presentation audit range options preserve global ordinals and reject offset shard and empty modes" {
+    const suffix = try parseOptions(&.{ "tool", "dump", "out", "--expander-root", "bundle", "--audit-presentation-errors", "--start-page", "393189" });
+    try std.testing.expectEqual(@as(usize, 393189), suffix.start_page);
+    try std.testing.expect(suffix.limit_pages == null);
+    const bounded = try parseOptions(&.{ "tool", "dump", "out", "--expander-root", "bundle", "--audit-presentation-errors", "--start-page", "2", "--limit-pages", "3" });
+    try std.testing.expectEqual(@as(?usize, 3), bounded.limit_pages);
+    inline for (.{ "--index-byte-offset", "--shard-pages" }) |flag| {
+        try std.testing.expectError(error.Usage, parseOptions(&.{ "tool", "dump", "out", "--expander-root", "bundle", "--audit-presentation-errors", flag, "1" }));
+    }
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "tool", "dump", "out", "--expander-root", "bundle", "--audit-presentation-errors", "--limit-pages", "0" }));
+    const maximum = try std.fmt.allocPrint(std.testing.allocator, "{d}", .{std.math.maxInt(usize)});
+    defer std.testing.allocator.free(maximum);
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "tool", "dump", "out", "--expander-root", "bundle", "--audit-presentation-errors", "--start-page", maximum, "--limit-pages", "1" }));
+}
+
+test "presentation audit range uses actual index iteration for EOF empty and bounded completion" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Case = struct { label: []const u8, bytes: []const u8 = "# header\nfirst\n\n# middle\nsecond\nthird", start: usize, limit: ?usize = null, ordinals: []const usize, eof: bool = true, beyond: bool = false };
+    const cases = [_]Case{
+        .{ .label = "range-whole", .start = 0, .ordinals = &.{ 0, 1, 2 } },
+        .{ .label = "range-suffix", .start = 1, .ordinals = &.{ 1, 2 } },
+        .{ .label = "range-bounded", .start = 1, .limit = 1, .ordinals = &.{1}, .eof = false },
+        .{ .label = "range-exact-eof", .start = 1, .limit = 2, .ordinals = &.{ 1, 2 } },
+        .{ .label = "range-short-tail", .start = 1, .limit = 9, .ordinals = &.{ 1, 2 } },
+        .{ .label = "range-at-eof", .start = 3, .ordinals = &.{} },
+        .{ .label = "range-past-eof", .start = 4, .ordinals = &.{}, .beyond = true },
+        .{ .label = "range-all-bounded-still-partial", .start = 0, .limit = 3, .ordinals = &.{ 0, 1, 2 } },
+        .{ .label = "range-empty-index", .bytes = "# empty\n\n", .start = 0, .ordinals = &.{} },
+    };
+    for (cases) |case| {
+        const inputs = try auditControlInputs(a, case.label, 0);
+        defer std.Io.Dir.cwd().deleteTree(std.testing.io, inputs.root) catch {};
+        var context = inputs.context;
+        context.start_page = case.start;
+        context.requested_limit = case.limit;
+        var audit = try PresentationAudit.init(std.testing.io, a, inputs.audit_root, context);
+        defer audit.deinit();
+        const initial = try auditControlSummary(a, inputs.audit_root);
+        try std.testing.expect(!initial.object.get("range_complete").?.bool);
+        var lines = std.mem.splitScalar(u8, case.bytes, '\n');
+        var ordinal: usize = 0;
+        var selected: usize = 0;
+        var eof = true;
+        const options: Options = .{ .start_page = case.start, .limit_pages = case.limit };
+        while (nextSelectedIndexPage(&lines, &ordinal, &selected, &eof, options)) |page| {
+            try std.testing.expect(selected <= case.ordinals.len);
+            try std.testing.expectEqual(case.ordinals[selected - 1], page.ordinal);
+            audit.selected += 1;
+            // This boundary control classifies supplied rows as skipped; actual
+            // namespace/alias routing is separately exercised below.
+            audit.skipped += 1;
+        }
+        try std.testing.expectEqual(case.ordinals.len, selected);
+        try std.testing.expectEqual(case.eof, eof);
+        if (case.beyond) {
+            try std.testing.expectError(error.ShortPageIndex, audit.finish(eof, true, ordinal));
+            audit.abort(error.ShortPageIndex);
+        } else try audit.finish(eof, true, ordinal);
+        const summary = try auditControlSummary(a, inputs.audit_root);
+        try std.testing.expectEqual(!case.beyond, summary.object.get("range_complete").?.bool);
+        try std.testing.expectEqual(!case.beyond and case.start == 0 and case.limit == null, summary.object.get("inventory_complete").?.bool);
+        try std.testing.expect(!summary.object.get("semantic_acceptance").?.bool and !summary.object.get("publication_created").?.bool);
+        try std.testing.expectEqual(@as(i64, @intCast(case.start)), summary.object.get("start_page").?.integer);
+        try std.testing.expectEqual(@as(i64, @intCast(case.start + selected)), summary.object.get("selected_end_exclusive").?.integer);
+    }
+}
+
+test "presentation audit range routes real alias and compile only namespace without prefix workers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const inputs = try auditControlInputs(a, "range-real-routing", 0);
+    defer std.Io.Dir.cwd().deleteTree(io, inputs.root) catch {};
+    const ns_source = "# wikidict-namespace-registry-v1\n# wiki\ttestwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\n";
+    var namespaces = try namespace_registry.Registry.init(a, ns_source);
+    defer namespaces.deinit();
+    const redirect = "#REDIRECT [[target]]\n";
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = inputs.context.dump_path, .data = redirect });
+    const rows = try std.fmt.allocPrint(a,
+        "# same immutable index\n0\t0\tknown-prefix\t\t1\t101\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t0\t0\n" ++
+        "0\t{d}\tAlias\ttarget\t2\t102\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t0\n\n" ++
+        "0\t0\tTemplate:skip\t\t3\t103\t2026-10-01T00:00:00Z\tUser\twikitext\t10\t1\t0\n" ++
+        "0\t0\ttarget\t\t4\t104\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t0\n", .{redirect.len});
+    const index_path = try std.fs.path.join(a, &.{ inputs.context.expander_root, "page-index.tsv" });
+    const title_path = try std.fs.path.join(a, &.{ inputs.context.expander_root, dump_source.page_title_index_filename });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = rows });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ inputs.context.expander_root, "namespace-registry.tsv" }), .data = ns_source });
+    try dump_source.buildPageTitleIndex(io, a, index_path, title_path);
+    const titles = try std.Io.Dir.cwd().readFileAlloc(io, title_path, a, .limited(4096));
+    const redirect_source = "# wikidict-page-redirects-v1\n# wiki\ttestwiktionary\n# dump-date\t20261001\n# sql-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n2\t0\t746172676574\t\t\n# end\t1\n";
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ inputs.context.expander_root, "page-redirects.tsv" }), .data = redirect_source });
+    var redirects = try encoder.page_redirects.Snapshot.init(a, redirect_source, &namespaces);
+    defer redirects.deinit();
+    var context = inputs.context;
+    context.start_page = 1;
+    context.requested_limit = 2;
+    var audit = try PresentationAudit.init(io, a, inputs.audit_root, context);
+    defer audit.deinit();
+    var dump = try dump_source.SourceReader.open(io, a, a, inputs.context.dump_path, .raw_xml, null);
+    defer dump.deinit();
+    // No executable, completion event or worker slot exists. Any prefix/suffix
+    // dispatch outside the exact selected range cannot be hidden by a worker.
+    var pool: ExpansionPool = .{ .io = io, .allocator = a, .completion = undefined, .slots = &.{}, .page_index_bytes = rows, .page_title_index = try dump_source.PageTitleIndex.init(titles), .page_redirects = &redirects, .audit = &audit };
+    var writer = try encoder.blob_builder.Writer.init(io, a, inputs.writer_root);
+    defer writer.deinit();
+    var lines = std.mem.splitScalar(u8, rows, '\n');
+    var ordinal: usize = 0;
+    var selected: usize = 0;
+    var eof = true;
+    while (nextSelectedIndexPage(&lines, &ordinal, &selected, &eof, .{ .start_page = 1, .limit_pages = 2 })) |page| {
+        try std.testing.expect(page.ordinal == 1 or page.ordinal == 2);
+        audit.selected += 1;
+        try dispatchIndexedPage(&pool, &writer, &dump, .raw_xml, &namespaces, page.line, page.ordinal);
+    }
+    try std.testing.expectEqual(@as(usize, 2), selected);
+    try std.testing.expectEqual(@as(usize, 1), audit.direct_aliases);
+    try std.testing.expectEqual(@as(usize, 1), audit.skipped);
+    try std.testing.expectEqual(@as(usize, 0), audit.dispatched);
+    try std.testing.expectEqual(@as(u64, 1), writer.namespace_coverage.rows.get(0).?.alias_pages);
+    try std.testing.expectEqual(@as(u64, 1), writer.namespace_coverage.rows.get(10).?.compile_only_rows);
+    try auditControlEmptySpools(&writer);
+    try audit.finish(eof, true, ordinal);
+    const summary = try auditControlSummary(a, inputs.audit_root);
+    try std.testing.expect(summary.object.get("range_complete").?.bool and !summary.object.get("inventory_complete").?.bool);
+    try std.testing.expectEqualStrings("page-range", summary.object.get("audit_scope").?.string);
+    try auditControlNoPublishedFiles(a, inputs.writer_root);
+}
+
+test "presentation audit range retains exact failure ordinal and never imports known prefix evidence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const inputs = try auditControlInputs(a, "range-exact-failure", 0);
+    defer std.Io.Dir.cwd().deleteTree(io, inputs.root) catch {};
+    const prior_path = try std.fs.path.join(a, &.{ inputs.root, "known-prefix-failure.json" });
+    const prior = "original unknown first failure remains untouched";
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = prior_path, .data = prior });
+    var context = inputs.context;
+    context.start_page = 1;
+    context.requested_limit = 1;
+    var audit = try PresentationAudit.init(io, a, inputs.audit_root, context);
+    defer audit.deinit();
+    var writer = try encoder.blob_builder.Writer.init(io, a, inputs.writer_root);
+    defer writer.deinit();
+    var lines = std.mem.splitScalar(u8, "known-prefix\nbad-in-range\nnot-selected", '\n');
+    var ordinal: usize = 0;
+    var selected: usize = 0;
+    var eof = true;
+    while (nextSelectedIndexPage(&lines, &ordinal, &selected, &eof, .{ .start_page = 1, .limit_pages = 1 })) |page| {
+        try std.testing.expectEqual(@as(usize, 1), page.ordinal);
+        audit.selected += 1;
+        audit.dispatched += 1;
+        const job: ExpansionJob = .{ .index_offset = 0, .ordinal = @intCast(page.ordinal), .ns = .{ .id = 0, .kind = .language }, .title = page.line, .source = "exact independent raw source" };
+        try std.testing.expect(!try consumePresentationFailure(&writer, job, .{ .source = "expanded failure" }, a, &audit, error.InvalidPreContext));
+        audit.consumed += 1;
+    }
+    try audit.finish(eof, true, ordinal);
+    const failures = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ inputs.audit_root, "failures.jsonl" }), a, .limited(64 * 1024));
+    const row = try std.json.parseFromSliceLeaky(std.json.Value, a, std.mem.trim(u8, failures, "\n"), .{});
+    try std.testing.expectEqual(@as(i64, 1), row.object.get("ordinal").?.integer);
+    try std.testing.expectEqualStrings("InvalidPreContext", row.object.get("error_name").?.string);
+    try std.testing.expectEqualStrings("bad-in-range", row.object.get("title").?.string);
+    try std.testing.expectEqualStrings(prior, try std.Io.Dir.cwd().readFileAlloc(io, prior_path, a, .limited(1024)));
+    const summary = try auditControlSummary(a, inputs.audit_root);
+    try std.testing.expect(summary.object.get("range_complete").?.bool and !summary.object.get("inventory_complete").?.bool);
+    try std.testing.expectEqual(@as(i64, 1), summary.object.get("failed").?.integer);
+    try auditControlEmptySpools(&writer);
+    try auditControlNoPublishedFiles(a, inputs.writer_root);
+}
+
+test "presentation audit range refuses unknown namespace undrained routing and changed input" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    inline for (.{ "unknown-namespace", "not-drained", "routing", "changed-input" }) |label| {
+        const inputs = try auditControlInputs(a, label, 0);
+        defer std.Io.Dir.cwd().deleteTree(io, inputs.root) catch {};
+        var context = inputs.context;
+        context.start_page = 1;
+        var audit = try PresentationAudit.init(io, a, inputs.audit_root, context);
+        defer audit.deinit();
+        var lines = std.mem.splitScalar(u8, "# header\nprefix\n0\t0\tbad\t\t1\t2\t2026-10-01T00:00:00Z\tUser\twikitext\t999\t1\t0\n", '\n');
+        var ordinal: usize = 0;
+        var selected: usize = 0;
+        var eof = true;
+        while (nextSelectedIndexPage(&lines, &ordinal, &selected, &eof, .{ .start_page = 1 })) |page| {
+            audit.selected += 1;
+            if (comptime std.mem.eql(u8, label, "unknown-namespace")) {
+                var namespaces = try namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\ttestwiktionary\n# dump-date\t20261001\n# content-language\ten\n0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n10\tTemplate\tTemplate\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\n14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tinput\n");
+                defer namespaces.deinit();
+                var writer = try encoder.blob_builder.Writer.init(io, a, inputs.writer_root);
+                defer writer.deinit();
+                var pool: ExpansionPool = .{ .io = io, .allocator = a, .completion = undefined, .slots = &.{} };
+                var unused_dump: dump_source.SourceReader = undefined;
+                try std.testing.expectError(error.InvalidNamespace, dispatchIndexedPage(&pool, &writer, &unused_dump, .raw_xml, &namespaces, page.line, page.ordinal));
+                audit.abort(error.InvalidNamespace);
+            } else audit.skipped += 1;
+        }
+        if (comptime std.mem.eql(u8, label, "unknown-namespace")) {
+            try std.testing.expectEqual(@as(usize, 0), audit.failed);
+        } else if (comptime std.mem.eql(u8, label, "changed-input")) {
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = context.dump_path, .data = "changed physical input" });
+            try std.testing.expectError(error.AuditInputsChanged, audit.finish(eof, true, ordinal));
+            audit.abort(error.AuditInputsChanged);
+        } else {
+            if (comptime std.mem.eql(u8, label, "routing")) audit.skipped = 0;
+            try std.testing.expectError(error.IncompletePresentationAudit, audit.finish(eof, !std.mem.eql(u8, label, "not-drained"), ordinal));
+            audit.abort(error.IncompletePresentationAudit);
+        }
+        const summary = try auditControlSummary(a, inputs.audit_root);
+        try std.testing.expect(!summary.object.get("range_complete").?.bool and !summary.object.get("inventory_complete").?.bool);
+        try std.testing.expect(!summary.object.get("semantic_acceptance").?.bool and !summary.object.get("publication_created").?.bool);
     }
 }
