@@ -34,7 +34,6 @@ PILOT = ('aawiktionary', 'abwiktionary', 'afwiktionary', 'akwiktionary',
          'amwiktionary', 'angwiktionary', 'anwiktionary', 'arwiktionary')
 EXCLUDED = frozenset(PILOT[:7])
 WORKERS = (4, 2, 1)
-MEMORY_INITIAL = 4 * 1024**3
 MEMORY = 8 * 1024**3
 
 
@@ -107,15 +106,13 @@ def next_workers(current, watchdog, log_tail=''):
 
 
 def next_resources(workers, memory_limit_bytes, watchdog):
-    # Only this attempt's measured resident-cap event authorizes escalation.
+    # A measured cap event may reduce workers, never raise the fixed job budget.
     if (workers not in WORKERS or type(memory_limit_bytes) is not int
-            or memory_limit_bytes not in (MEMORY_INITIAL, MEMORY)
+            or memory_limit_bytes != MEMORY
             or watchdog.get('termination_reason') != 'sampled_pss_limit'
             or type(watchdog.get('memory_limit_bytes')) is not int
             or watchdog['memory_limit_bytes'] != memory_limit_bytes):
         return None
-    if memory_limit_bytes == MEMORY_INITIAL:
-        return workers, MEMORY
     reduced = next_workers(workers, watchdog)
     return (reduced, MEMORY) if reduced is not None else None
 
@@ -1436,9 +1433,9 @@ def edition_cli_options(cfg, edition):
     return argv
 
 
-def command(cfg, edition, workers, memory_limit_bytes=MEMORY_INITIAL):
-    require(type(memory_limit_bytes) is int and memory_limit_bytes in (MEMORY_INITIAL, MEMORY),
-            'Production memory budget must be 4 or 8 GiB')
+def command(cfg, edition, workers, memory_limit_bytes=MEMORY):
+    require(type(memory_limit_bytes) is int and memory_limit_bytes == MEMORY,
+            'Production memory budget must be 8 GiB')
     source, _ = source_roots(cfg)
     argv = [sys.executable, '-B', str(source / 'tools/build_wiktionaries.py'),
         '--resource-mode', 'watchdog', '--compress-shards', '--watchdog-address-space', 'unlimited',
@@ -1625,7 +1622,7 @@ def accept(cfg, edition, folder, phase, log_ref):
     return accepted
 
 
-def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limit_bytes=MEMORY_INITIAL):
+def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limit_bytes=MEMORY):
     from build_resource_limits import _signal_owned
     folder.mkdir()
     start = dict(attempt_id=folder.name, sequence=sequence, edition=edition, date=cfg['date'],
@@ -1819,7 +1816,7 @@ def main(argv=None):
                     write_json(state / 'campaign-selection.json', campaign, replace=True)
                     continue
             workers = next(x for x in WORKERS if x <= len(os.sched_getaffinity(0)))
-            memory_limit_bytes = MEMORY_INITIAL
+            memory_limit_bytes = MEMORY
             while workers:
                 for lock in locks:
                     lock.check()
