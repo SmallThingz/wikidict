@@ -1,0 +1,177 @@
+=<div style="background-color:#d4e4f4">Українська</div>=
+
+ [[Категорія:Українська мова]]
+===Морфосинтаксичні ознаки===
+<templatestyles src="Шаблон:відмінки/styles.css"/>
+{| class=declension cellpadding="3" rules="all"
+! class=declension-lightblue | [[відмінок]]
+! class=declension-lightblue | однина
+! class=declension-lightblue | множина
+
+|- 
+| class=declension-lightblue | [[називний|Н.]]
+| class=declension-white | Подопри́гора
+| class=declension-white | Подопри́гори
+
+|-
+| class=declension-lightblue | [[родовий|Р.]]
+| class=declension-white | Подопри́гора
+| class=declension-white | Подопри́горів
+
+|-
+| class=declension-lightblue | [[давальний|Д.]]
+| class=declension-white | Подопри́горові, Подопри́гору 
+| class=declension-white | Подопри́горам
+
+|-
+| class=declension-lightblue | [[знахідний|З.]]
+| class=declension-white | Подопри́гора 
+| class=declension-white | Подопри́горів
+
+|-
+| class=declension-lightblue | [[орудний|Ор.]]
+| class=declension-white | Подопри́гором 
+| class=declension-white | Подопри́горами
+
+|-
+| class=declension-lightblue | [[місцевий|М.]]
+| class=declension-white | Подопри́горові, Подопри́горі 
+| class=declension-white | Подопри́горах
+
+|- class="Подопри́горе"
+| class=declension-lightblue | [[кличний|Кл.]]
+| class=declension-white | Подопри́горе 
+| class=declension-white | Подопри́гори
+
+|}[[Категорія:Українські іменники]]<b>По-до-при́-го-ра</b>
+
+[[іменник|Іменник]], істота, чоловічий рід, II [[відміна]]&#32;<nowiki>(</nowiki>тип відмінювання 1*a  за [[:ru:Викисловарь:Использование словаря Зализняка|класифікацією А.&#160;А.&#160;Залізняка]]).[[Категорія:Українські лексеми]][[Категорія:Українські іменники]][[Категорія:Істоти/uk]][[Категорія:Чоловічий рід/uk]][[Категорія:Належить класифікувати за ГСУЛМ/uk|подопригора]][[Категорія:Українські іменники,  відмінювання 1*a]]
+
+Корінь: '''-Подопригор-'''; закінчення: '''-а'''. [[Категорія:Українські слова, тип морфемної будови R-f]]
+
+===Вимова===
+* </li></ul>[[Категорія:Потрібна вимова]]
+* [[Файл:Loudspeaker.svg| |class=skin-invert]]&nbsp;<span class="IPA" style="font-family:Gentium, Gentium Alternative, Arial Unicode MS, TITUS Cyberbit Basic, Lucida Sans Unicode, DejaVu Sans, Segoe UI, Lucida Grande, Charis SIL, Doulos SIL, Code2000;">[[Media:Подопригора.ogg|вимова]]</span><sup>[[w:Wikipedia:Media help (Ogg)|?]], [[:Файл:Подопригора.ogg |файл]]</sup>
+* [[w:Українська фонетика|УФ]]: [<span class="IPA" style="white-space: nowrap;"></span>]
+===Семантичні властивості===
+==== Значення ====
+# українське [[прізвище]]. <span class="example-fullblock example-absent-block">&#9670;&nbsp;<span class="example-block" style="color:darkgreen"><span class="example-absent" style="color:darkorange">Немає прикладів слововжитку (див. [[ВС:ЦИТ|<span class="example-recommendations" style="color:darkorange; font-weight: bold; text-decoration: inherit; -moz-text-decoration-color: darkorange; text-decoration-color: darkorange;">рекомендації</span>]]).</span>[[Категорія:Сторінки без прикладів ужитку]] <span class="example-details" style="font-size:smaller;"> '' <span class="citation-source" style="font-size:smaller;"></span>''</span></span></span>
+==== Синоніми ====
+#
+==== Антоніми ====
+# 
+==== Гіпероніми ====
+# 
+==== Гіпоніми ====
+# 
+==== Холоніми ====
+#
+==== Мероніми ====
+# 
+===Усталені та термінологічні словосполучення, фразеологізми ===
+* 
+==== Колокації ====
+====Прислів'я та приказки ====
+===Споріднені слова===
+{| class ="wikitable mw-collapsible mw-collapsed" style="margin: 0 0 0.2em; border-width: 1px" data-collapsetext="сховати" data-expandtext="показати"
+| style="text-align:left; border-right:0; font-size: 95%; font-weight: bold; padding-left:5px;" width="100%" class="block-head" | Найтісніша спорідненість
+! style="font-size:smaller; border-left:0;" class="block-head"| 
+|-
+| colspan=2 class="block-body"|
+* <span>прізвища:</span> [[Підопригора]]
+|}
+
+===Етимологія===
+Від ??
+
+===Переклад===
+{| class ="wikitable mw-collapsible mw-expanded" style="margin: 0 0 0.2em;" data-collapsetext="сховати" data-expandtext="показати"
+| style="text-align:left; border-right:0; font-size: 95%; font-weight: bold; padding-left:5px;" width="100%" class="block-head"| Список перекладів
+! style="font-size:smaller; border-left:0;" class="block-head"| 
+|-
+| colspan=2 class="block-body"|<div class="plainlist multicol" style="-moz-column-count:2; -webkit-column-count:2; column-count:2; -webkit-column-width: 320px; -moz-column-width: 320px; column-width: 320px; font-size: 95%;">
+* [[російська#Українська|Російська]]<sub style='color:#33C066'>ru</sub>: [[Подопригора#Російська|Подопригора]]&nbsp;<sup>[[:ru:Подопригора|(ru)]]</sup>
+</div>
+|}
+
+=<div style="background-color:#d4e4f4">Російська</div>=
+
+ 
+[[Категорія:Російська мова]]
+
+=== Морфосинтаксичні ознаки ===
+
+
+{| style="float:right; clear:right; margin-left:0.5em; margin-bottom:0.5em; border: 1px solid #6699CC; border-collapse:collapse; max-width:300px;" cellpadding="3" rules="all"
+! bgcolor="#eef9ff" | [[відмінок]]
+! bgcolor="#eef9ff" | [[однина|одн.]]
+! bgcolor="#eef9ff" | [[множина|мн.]]
+|-
+| bgcolor="#eef9ff" | [[називний|Н.]]
+| bgcolor="#ffffff" | Подопри́гора 
+| bgcolor="#ffffff" | Подопри́горы
+|-
+| bgcolor="#eef9ff" | [[родовий|Р.]]
+| bgcolor="#ffffff" | Подопри́гора 
+| bgcolor="#ffffff" | Подопри́горов
+|-
+| bgcolor="#eef9ff" | [[давальний|Д.]]
+| bgcolor="#ffffff" | Подопри́гору
+| bgcolor="#ffffff" | Подопри́горам
+|-
+| bgcolor="#eef9ff" | [[знахідний|З.]]
+| bgcolor="#ffffff" | Подопри́гора 
+| bgcolor="#ffffff" | Подопри́горов
+|-
+| bgcolor="#eef9ff" | [[орудний|О.]]
+| bgcolor="#ffffff" | Подопри́гором 
+| bgcolor="#ffffff" | Подопри́горами
+|-
+| bgcolor="#eef9ff" | [[прийменниковий|П.]]
+| bgcolor="#ffffff" | Подопри́горе
+| bgcolor="#ffffff" | Подопри́горах
+
+|}<b></b>
+
+[[іменник|Іменник]], істота&#32;(тип відмінювання 1*a  за [[:ru:Викисловарь:Использование словаря Зализняка|класифікацією А.&#160;А.&#160;Залізняка]]).[[Категорія:Російські лексеми]][[Категорія:Російські іменники]][[Категорія:Чергування голосних]][[Категорія:Істоти/ru]][[Категорія:Російські іменники,  відмінювання 1*a]]
+
+[[:Шаблон:морфо-кu]]
+
+=== Вимова ===
+* </li></ul>[[Категорія:Потрібна вимова]]
+* [[w:Українська фонетика|УФ]]: [<span class="IPA" style="white-space: nowrap;"></span>]
+=== Семантичні властивості ===
+==== Значення ====
+# [[#Українська|Подопригора]] (аналог укр. слову). <span class="example-fullblock example-absent-block">&#9670;&nbsp;<span class="example-block" style="color:darkgreen"><span class="example-absent" style="color:darkorange">Немає прикладів слововжитку (див. [[ВС:ЦИТ|<span class="example-recommendations" style="color:darkorange; font-weight: bold; text-decoration: inherit; -moz-text-decoration-color: darkorange; text-decoration-color: darkorange;">рекомендації</span>]]).</span>[[Категорія:Сторінки без прикладів ужитку]] <span class="example-details" style="font-size:smaller;"> '' <span class="citation-source" style="font-size:smaller;"></span>''</span></span></span>
+==== Синоніми ====
+# 
+==== Антоніми ====
+# 
+==== Гіпероніми ====
+# 
+==== Гіпоніми ====
+# 
+==== Холоніми ====
+#
+==== Мероніми ====
+# 
+===Усталені та термінологічні словосполучення, фразеологізми ===
+* 
+==== Колокації ====
+====Прислів'я та приказки ====
+===Споріднені слова===
+{| class ="wikitable mw-collapsible mw-collapsed" style="margin: 0 0 0.2em; border-width: 1px" data-collapsetext="сховати" data-expandtext="показати"
+| style="text-align:left; border-right:0; font-size: 95%; font-weight: bold; padding-left:5px;" width="100%" class="block-head" | Найтісніша спорідненість
+! style="font-size:smaller; border-left:0;" class="block-head"| 
+|-
+| colspan=2 class="block-body"|
+|}
+
+=== Етимологія ===
+Від ??
+=== Джерела ===
+[[Категорія:Слова з 11 букв/ru]]
+{{ds|11}uk|}
+[[Категорія:Українські прізвища/ru]]
+[[Категорія:Українські прізвища/uk]]
+[[Категорія:Вікісловник:Статті міжмовної омонімії/2]]

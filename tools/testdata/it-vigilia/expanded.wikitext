@@ -1,0 +1,68 @@
+<templatestyles src="Mbox/common.css" />
+ <table class="plainlinks ombox ombox-notice" role="presentation" style="background-color: #D8E8FF; border:1px solid #A0CCA0; color:#000;"><tr><td class="mbox-image">[[File:Blue_Glass_Arrow.svg|30px]]</td><td class="mbox-text">Vedi anche: [[Vigilia]]</td></tr></table>
+== [[File:Flag of Italy.svg|40px|border|bandiera italiana]] [[Appendice:Italiano|Italiano]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in italiano]] 
+
+'''vigilia'''<small></small> ''f sing'' (''pl.'': [[vigilie]][[Categoria:Lemmi con forme flesse da scrivere]])
+# [[giorno]] o [[tempo]] [[che]] [[precede]] un [[avvenimento]]
+#* alla '''vigilia'''<small></small> del [[fallimento]], della [[scadenza]], della [[partenza]] delle nozze
+# <small>(<i>[[religione]]</i>)</small>[[Categoria:Religione-IT]] giorno [[precedente]] ad una [[festa]]. Originariamente per i [[cattolici]] si passava la sera in [[veglia]] tra [[orazioni]]; successivamente rimase l'[[obbligo]] del [[digiuno]] o del mangiar di [[magro]]
+#* ''Oggi è la vigilia di Natale''
+# <small>(<i>[[letteratura]]</i>)</small>[[Categoria:Letteratura-IT]] veglia in [[studi]], [[meditazioni]], ecc.
+#* le dolci '''vigilia'''<small></small> (Foscolo, ''Sepolcri'')
+#* le lunghe, assidue '''vigilia'''<small></small>
+# (d'armi) veglia delle [[armi]] del nuovo [[cavaliere]] la notte prima della [[cerimonia]] (nei romanzi e nel ''Don Chisciotte'')
+# <small>(<i>[[antico]]</i>)</small>[[Categoria:Parole antiche-IT]] [[salmi]] recitati di notte [[vegliando]] un [[morto]]
+# <small>(<i>[[militare]]</i>)</small>[[Categoria:Militare-IT]] [[guardia]], tempo assegnato ad una guardia, alla [[sentinella]], nella [[notte]]
+
+=== [[File:Hyph abc.svg|45px]] [[sillabazione|Sillabazione]] ===
+
+; vi | gì | lia
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/viˈd͡ʒilja/</span>
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+dal [[latino]] ''[[vigilia]]'', ossia "[[il]] [[fatto]] [[di]] [[vegliare]], [[vigilanza]]"
+
+===[[File:Icona_sinonimi.png|35px]] [[sinonimi|Sinonimi]]===
+
+* <small>(''per estensione'')</small> <small>(<i>[[religione]]</i>)</small>[[Categoria:Religione-IT]] [[astinenza]], [[digiuno]]
+
+===[[File:Nuvola apps tree.svg|30px]]  [[parole|Parole]] [[derivate]]===
+
+*[[antivigilia]]
+
+===[[Image:Isimple system icons web find.png|30px]] [[proverbio|Proverbi]] e [[modo di dire|modi di dire]] ===
+
+*''[[fare vigilia]]'': fare a meno totalmente o parzialmente del [[cibo]] per un lasso di tempo  prestabilito 
+
+=== [[Image:Gnome-globe.svg|30px]] [[traduzione|Traduzione]] ===
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">periodo che precede un  importante avvenimento
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]: [[eve]] 
+:* [[latino]]: [[vigilia]], [[pervigilium]], [[lucubratio]] |}</div></div>
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">religione:giorno di vigilia
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]: [[vigil]]
+|}</div></div>
+
+<div class="NonModificabile">
+== [[Image:Nuvola apps bookcase.svg|30px|]] [[note|Note]] / [[riferimenti|Riferimenti]] ==
+</div>
+* Enrico Olivetti, [https://www.dizionario-italiano.it/dizionario-italiano.php?lemma=VIGILIA100 ''Dizionario Italiano Olivetti''] edizione on line su ''[https://www.dizionario-italiano.it www.dizionario-italiano.it]'', Olivetti Media Communication
+* Nicola Zingarelli, ''Lo Zingarelli 1922: vocabolario della lingua italiana'', Zanichelli editore,  [http://www.archive.org/download/VocabolarioDellaLinguaItaliana/VocabolarioDellaLinguaItaliana_jpg.tar/VocabolarioDellaLinguaItaliana_jpg%2FVocabolarioDellaLinguaItaliana_0852.jpg pagina 1694]
+* AA.VV., [https://www.treccani.it/vocabolario/ricerca/vigilia/ ''Vocabolario Treccani''] edizione online su ''[https://www.treccani.it treccani.it]'', Istituto dell'Enciclopedia Italiana
+* Francesco Sabatini e Vittorio Coletti, [http://dizionari.corriere.it/dizionario_italiano/V/vigilia.shtml ''Il Sabatini Coletti''] edizione online su ''[http://dizionari.corriere.it corriere.it]'', RCS Mediagroup
+* AA.VV., [http://www.garzantilinguistica.it/ricerca/?q=vigilia ''Lemmario italiano''] edizione on line su ''[http://www.garzantilinguistica.it garzantilinguistica.it]'', De Agostini Scuola

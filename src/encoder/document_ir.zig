@@ -952,7 +952,19 @@ fn parseExternalLinkAtBoundary(input: []const u8, start: usize, rejected_opener:
     };
     const body = input[body_start..close];
     var separator: ?usize = null;
+    var enclosed_angle: ?usize = null;
     for (body, 0..) |byte, index| {
+        // Sanitizer escapes both angles around a complete nested absolute URL.
+        // Keep that entire source suffix together before the normal label split.
+        if (byte == '>' and (index + 1 == body.len or externalLabelWhitespaceLen(body, index + 1) != 0)) {
+            if (std.mem.indexOfScalar(u8, body[0..index], '<')) |less_at| {
+                const nested = body[less_at + 1 .. index];
+                if (hasAbsoluteExternalProtocol(nested) and validExternalUrl(nested)) {
+                    enclosed_angle = less_at;
+                    continue;
+                }
+            }
+        }
         // MediaWiki ends the URL before a raw double quote or HTML label,
         // even without whitespace; the boundary remains part of the label.
         // Reuse the existing tag parser; malformed angle text is not a new URL rule.
@@ -971,6 +983,7 @@ fn parseExternalLinkAtBoundary(input: []const u8, start: usize, rejected_opener:
     const less = std.mem.indexOf(u8, raw_target, "&lt;") orelse raw_target.len;
     const greater = std.mem.indexOf(u8, raw_target, "&gt;") orelse raw_target.len;
     var angle = @min(less, greater);
+    if (enclosed_angle) |literal_less| angle = @min(angle, literal_less);
     // Sanitization escapes a literal '<' before a complete nested absolute URL
     // before MediaWiki separates the outer URL from its label. Keep this narrow:
     // broken tags, unfinished attributes and other non-URL suffixes still fail.
@@ -1601,4 +1614,46 @@ test "raw less than before a complete nested URL becomes an exact literal label 
     try std.testing.expectEqualStrings("", encoded.label_prefix);
     const trailing = "[https://outer.test<https://inner.test/b label]]";
     try std.testing.expectEqual(trailing.len - 1, parseExternalLinkAt(trailing, 0).?.end);
+}
+
+test "complete angle enclosed nested URL preserves exact outer target and literal label prefix" {
+    const cases = [_]struct { source: []const u8, target: []const u8, prefix: []const u8, label: []const u8 }{
+        .{ .source = "[http://www.yso.fi/onto/kassu/<http://www.yso.fi/onto/kassu/k11489> Arctica]", .target = "http://www.yso.fi/onto/kassu/", .prefix = "<http://www.yso.fi/onto/kassu/k11489>", .label = "Arctica" },
+        .{ .source = "[https://outer.test/a<https://inner.test/b>]", .target = "https://outer.test/a", .prefix = "<https://inner.test/b>", .label = "" },
+        .{ .source = "[//outer.test/a<https://inner.test/b> ''label'']", .target = "//outer.test/a", .prefix = "<https://inner.test/b>", .label = "''label''" },
+    };
+    for (cases) |case| {
+        const parsed = parseExternalLinkAt(case.source, 0) orelse return error.ExpectedExternalLink;
+        try std.testing.expectEqual(case.source.len, parsed.end);
+        try std.testing.expectEqualStrings(case.target, parsed.target);
+        try std.testing.expectEqualStrings(case.prefix, parsed.label_prefix);
+        try std.testing.expectEqualStrings(case.label, parsed.label);
+        try std.testing.expect(!validExternalUrl(case.source[1 .. 1 + case.target.len + case.prefix.len]));
+    }
+    // The special case is a literal nested absolute URL, not arbitrary broken HTML.
+    for ([_][]const u8{
+        "[https://outer.test<http://inner.test/>> label]",
+        "[https://outer.test<//inner.test/> label]",
+        "[https://outer.test<javascript:bad> label]",
+        "[https://outer.test<broken]",
+        "[https://outer.test<abbr title=\"unfinished]",
+        "[https://outer.test<//relative.test/x label]",
+        "[https://outer.test<javascript:alert(1) label]",
+        "[https://<https://inner.test/ missing outer address]",
+        "[javascript:alert(1)<https://inner.test/ unsafe outer]",
+        "[https://outer.test<https://inner.test/ no close",
+        "[https://outer.test<https://inner.test/ line\nlabel]",
+        "[https://outer.test<https://inner.test/>label]",
+    }) |source| try std.testing.expect(parseExternalLinkAt(source, 0) == null);
+    // Whitespace already ended this unclosed angle's URL in the older path;
+    // ordinary trailing label text must not be reinterpreted as attributes.
+    const older = parseExternalLinkAt("[https://outer.test<http://inner.test/ title=bad> label]", 0) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("<http://inner.test/", older.label_prefix);
+    try std.testing.expectEqualStrings("title=bad> label", older.label);
+    const encoded = parseExternalLinkAt("[https://outer.test/%3Chttps://inner.test/b label]", 0) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("https://outer.test/%3Chttps://inner.test/b", encoded.target);
+    try std.testing.expectEqualStrings("", encoded.label_prefix);
+    const trailing = "[https://outer.test<https://inner.test/b label]]";
+    const extra_close = parseExternalLinkAt(trailing, 0) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(trailing.len - 1, extra_close.end);
 }

@@ -1,0 +1,32 @@
+==Suomi==
+===Substantiivi===
+<b lang="fi" class="hakusana Zzzz">isopihatatar</b> [[Luokka:Suomen sanat|ISOPIHATATAR]][[Luokka:Suomen kielen substantiivit|ISOPIHATATAR]][[Luokka:Suomen kielen käänteissanakirja|RATATAHIPOSI]]
+
+# [[pihatatar|pihatattaren]] alalaji [[species:Polygonum aviculare subsp. aviculare|<span lang="la">''Polygonum aviculare'' subsp.'' aviculare''</span>]]<ref>
+Kassu — kasvien suomenkieliset nimet. Suomen Biologian Seura Vanamo, Aalto-yliopiston Semanttisen laskennan tutkimusryhmä. Päivitettävä julkaisu: [http://www.yso.fi/onto/kassu/<http://www.yso.fi/onto/kassu/k11489> Polygonum aviculare subsp. aviculare] . Viitattu 31.5.2016 päivättyyn versioon</ref>
+
+====Käännökset====
+<div class="käännöskohta" style="clear:both">
+<div class="NavFrame">
+<div class="NavHead" style="text-align:left">'''1. ''Polygonum aviculare ''subsp.'' aviculare'''''</div>
+<div class="NavContent" style="text-align:left">
+{| class="käännöstaulukko" border="0" width="100%"
+|-
+| valign="top" width="48%" style="padding: 0.5em 0.5em 0.5em 0.5em; clear:both; "|
+<div class="plainlinks" style="font-size: 90%;">
+<p>
+''Tälle sanan merkitykselle ei valitettavasti vielä ole lisätty käännöksiä, mutta voit halutessasi [//fi.wiktionary.org/w/index.php?title=:isopihatatar&action=edit lisätä ne].''<br />
+''Huomaa, että voit lisätä vieraskielisiä käännöksiä '''vain suomenkielisille''' sanoille.''<br />
+<small>Etsi käännöksiä: [//fi.wiktionary.org/wiki/Toiminnot:Whatlinkshere/isopihatatar tänne viittaavat sivut], [http://en.wiktionary.org/wiki/isopihatatar englanninkielinen Wikisanakirja].</small>
+</p>
+</div>[[Luokka:Käännökset puuttuvat]]
+|}
+</div>
+</div>
+</div>
+
+====Aiheesta muualla====
+*Laji.fi: [https://laji.fi/taxon/MX.38217 isopihatatar]
+
+==Viitteet==
+<references/>

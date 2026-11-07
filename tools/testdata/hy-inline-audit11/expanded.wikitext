@@ -1,0 +1,27 @@
+<h1>Հայերեն</h1>
+[[Կատեգորիա:Ձայնային ֆայլ չունեցող հայերեն բառահոդվածներ]]
+[[Կատեգորիա:Հայերեն բառեր|կորֆբոլ]]
+*[[միջազգային հնչյունական այբուբեն|ՄՀԱ]]՝ <span class="IPA" lang="">[kɔɾfˈbɔl]</span>
+
+== Ստուգաբանություն ==
+<անգլ. <corf-զամբյուղ, ball-գնդակ> 
+<h2> Գոյական </h2>
+[[Կատեգորիա:Հայերեն գոյականներ]]
+
+# <span title="սպորտային" style="border-bottom: 1px dotted; cursor: help; white-space: nowrap">(սպորտ․)</span>[[Կատեգորիա:Հայերեն բառեր սպորտային իմաստով]]շվեդական թիմային բասկետբոլատիպ գնդակախաղ
+#
+#
+
+
+<div class="NavFrame" id="Թարգմանություն-Թարգմանություն">
+<div class="NavHead" style="text-align:left; ">Թարգմանություն</div>
+<div class="NavContent">
+{| class="translations" role="presentation" style="width:100%;" data-gloss="Թարգմանություն"
+|-
+| style="background-color:#ffffe0; vertical-align:top; width:48%; text-align:left; " |
+
+|}</div></div>
+
+== Աղբյուրներ ==
+* <span class="citation" >Միքայել Իսպիրյան,<nowiki> </nowiki> Մարզանունների բացատրական բառարան,<nowiki> </nowiki>Երևան,<nowiki> </nowiki>1984<nowiki> — </nowiki>180&nbsp;էջ<nowiki>։</nowiki></span>
+[[Կատեգորիա:Բառեր «Մարզանունների բացատրական բառարան» գրքից]]

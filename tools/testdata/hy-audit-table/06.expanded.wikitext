@@ -1,0 +1,51 @@
+<h1>Հայերեն</h1>
+[[File:Hy-նախակարգ.ogg]] [[Կատեգորիա:Ձայնային ֆայլերով հայերեն բառահոդվածներ]]
+[[Կատեգորիա:Հայերեն բառեր|նախակարգ]]
+*[[միջազգային հնչյունական այբուբեն|ՄՀԱ]]՝ <span class="IPA" lang="">[nɑχɑˈkɑɾɡ]</span>
+''Դասական ուղղագրութեամբ՝'' 
+
+[[վանկ|վանկեր]]՝ '''նա•խա•կարգ&nbsp;'''
+== Ստուգաբանություն ==
+
+<h2>Ածական</h2>
+[[Կատեգորիա:Հայերեն ածականներ]]
+# <span title="հնացած" style="border-bottom: 1px dotted; cursor: help; white-space: nowrap">(հնց․)</span>[[Կատեգորիա:Հայերեն բառեր հնացած իմաստով]] նախապես
+==== Հոմանիշներ ====
+# առաջնակարգ
+# նախասահման
+# տե՛ս [[սկզբնական]]
+# տե՛ս [[նախադիր]]
+==== Արտահայտություններ ====
+
+{| class="mw-collapsible mw-collapsed wikitable collapsed" style="margin: 0 0 0.2em;"
+| style="background-color: #CBECFF; text-align:left; border-right:0; font-size: 95%; font-weight: bold; padding-left:5px;" width="100%" class="block-head"| Բաղադրյալ բառեր
+! style="background-color: #CBECFF; font-size:smaller; border-left:0;" class="block-head"| 
+|-
+| colspan=2 bgcolor="#EEF9FF" class="block-body"|<div class="multicol" style="-moz-column-count:2; -webkit-column-count:2; column-count:2; font-size: 95%;">|}
+</div></div>
+{| class="mw-collapsible mw-collapsed wikitable collapsed" style="margin: 0 0 0.2em;"
+| style="background-color: #CBECFF; text-align:left; border-right:0; font-size: 95%; font-weight: bold; padding-left:5px;" width="100%" class="block-head"| Թարգմանություններ
+! style="background-color: #CBECFF; font-size:smaller; border-left:0;" class="block-head"| 
+|-
+| colspan=2 bgcolor="#EEF9FF" class="block-body"|<div class="multicol" style="-moz-column-count:2; -webkit-column-count:2; column-count:2; font-size: 95%;">
+* [[անգլերեն]]՝ 
+* [[գերմաներեն]]՝ 
+* [[դանիերեն]]՝ 
+* [[թուրքերեն]]՝ 
+* [[իսպաներեն]]՝ 
+* [[իտալերեն]]՝ 
+* [[հոլանդերեն]]՝ 
+* [[հունարեն]]՝ 
+* [[շվեդերեն]]՝ 
+* [[պորտուգալերեն]]՝ 
+* [[ռուսերեն]]՝ <span class="Cyrl" lang="ru">[[заранее#ռուսերեն|заранее]]</span><span class="tpos">&nbsp;[[:ru:заранее|(ru)]]</span> &lrm;(<span lang="" class="tr">zaraneje</span>), <span class="Cyrl" lang="ru">[[предварительно обусловленный#ռուսերեն|предварительно обусловленный]]</span><span class="tpos">&nbsp;[[:ru:предварительно обусловленный|(ru)]]</span> &lrm;(<span lang="" class="tr">predvaritelʹno obuslovlennyj</span>), <span class="Cyrl" lang="ru">[[установленный#ռուսերեն|установленный]]</span><span class="tpos">&nbsp;[[:ru:установленный|(ru)]]</span> &lrm;(<span lang="" class="tr">ustanovlennyj</span>), <span class="Cyrl" lang="ru">[[ограниченный#ռուսերեն|ограниченный]]</span><span class="tpos">&nbsp;[[:ru:ограниченный|(ru)]]</span> &lrm;(<span lang="" class="tr">ograničennyj</span>)
+* [[վրացերեն]]՝ 
+* [[ֆրանսերեն]]՝ 
+|}
+
+== Աղբյուրներ ==
+* <span class="citation" >Էդուարդ Բագրատի Աղայան,<nowiki> </nowiki>[http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=24&query=նախակարգ Արդի հայերենի բացատրական բառարան],<nowiki> </nowiki>Երևան,<nowiki> </nowiki>«Հայաստան»,<nowiki> </nowiki>1976<nowiki>։</nowiki></span>
+* <span class="citation" >Հրաչյա Աճառյանի անվան Լեզվի Ինստիտուտ,<nowiki> </nowiki>[http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=29&dt=HY_HY&query=նախակարգ Ժամանակակից հայոց լեզվի բացատրական բառարան],<nowiki> </nowiki>Երևան,<nowiki> </nowiki>«Հայկական ՍՍՀ Գիտությունների Ակադեմիայի Հրատարակչություն»,<nowiki> </nowiki>1969<nowiki>։</nowiki></span>
+* <span class="citation" >Աշոտ Մուրադի Սուքիասյան,<nowiki> </nowiki>[http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=25&dt=HY_HY&query=նախակարգ Հայոց լեզվի հոմանիշների բառարան],<nowiki> </nowiki>Երևան,<nowiki> </nowiki>«Հայկական ՍՍՀ Գիտությունների Ակադեմիայի Հրատարակչություն»,<nowiki> </nowiki>1967<nowiki>։</nowiki></span>
+* <span class="citation" >Աշոտ Մուրադի Սուքիասյան,<nowiki> </nowiki>[http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=47&dt=HY_HY&query=նախակարգ Հայոց լեզվի հոմանիշների բացատրական բառարան],<nowiki> </nowiki>Երևան,<nowiki> </nowiki>«Երևանի Պետական Համալսարան»,<nowiki> </nowiki>2009<nowiki>։</nowiki></span>[[Կատեգորիա:Բառեր «Արդի հայերենի բացատրական բառարան» գրքից]]
+* <span class="citation" >Սերգեյ Աշոտի Գալստյան,<nowiki> </nowiki> Դպրոցական բառակազմական բառարան<nowiki> </nowiki>(Դպրոցական մատենաշար)<nowiki> </nowiki>(խմբ. Հովհաննես Զաքարյան),<nowiki> </nowiki>Երևան,<nowiki> </nowiki>««Զանգակ-97» հրատարակչություն»,<nowiki> </nowiki>2011<nowiki> — </nowiki>230&nbsp;էջ<nowiki>, </nowiki>ISBN 978-99941-1-933-2<nowiki>։</nowiki></span>

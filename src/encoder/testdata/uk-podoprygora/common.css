@@ -1,0 +1,239 @@
+/** Розміщений тут CSS буде застосовуватися до всіх тем оформлення */
+/* Makes redirects appear in italics on [[Special:Allpages]] */
+.allpagesredirect {
+    font-style: italic;
+}
+
+/****************************/
+/* BEGIN LIGHT BLUE SECTION */
+/***************e*************/
+/* Make all non-namespace pages have a light blue content area. This is done by
+   setting the background color for all #content areas to light blue and then
+   overriding it for any #content enclosed in a .ns-0 (main namespace). I then
+   do the same for the "tab" background colors. --Lupo */
+
+#content {
+    background: var(--ukwikt-background-color-lightblue, #F8FCFF); /* a light blue */
+}
+
+#content div.thumb {
+    border-color: var(--ukwikt-background-color-lightblue, #F8FCFF);
+}
+
+.ns-0 * #content {
+    background: var(--background-color-base, #fff);
+}
+
+#mytabs li {
+    background: var(--ukwikt-background-color-lightblue, #F8FCFF);
+}
+
+.ns-0 * #mytabs li {
+    background: var(--background-color-base, #fff);
+}
+
+#mytabs li a {
+    background-color: var(--ukwikt-background-color-lightblue, #F8FCFF);
+}
+
+.ns-0 * #mytabs li a {
+    background-color: var(--background-color-base, #fff);
+}
+
+#p-cactions li {
+    background: var(--ukwikt-background-color-lightblue, #F8FCFF);
+}
+
+.ns-0 * #p-cactions li {
+    background: var(--background-color-base, #fff);
+}
+
+#p-cactions li a {
+    background-color: var(--ukwikt-background-color-lightblue, #F8FCFF);
+}
+
+.ns-0 * #p-cactions li a {
+    background-color: var(--background-color-base, #fff);
+}
+
+.ns-0 * #content div.thumb {
+    border-color: var(--background-color-base, #fff);
+}
+
+/**************************/
+/* END LIGHT BLUE SECTION */
+/**************************/
+
+/* Display "From Wikipedia, the free encyclopedia" */
+#siteSub {
+    display: inline;
+    font-size: 120%;
+    font-weight: normal;
+}
+
+#bodyContent #siteSub a {
+    color: var(--color-emphasized, #101418);
+    text-decoration: none;
+    background-color: transparent;
+    background-image: none;
+    padding-right: 0;
+}
+
+
+
+/* Bold 'edit this page' link to encourage newcomers */
+#ca-edit a { font-weight: bold !important; }
+
+@media print {
+    /* Do not print edit link in templates using Template:Ed
+       Do not print certain classes that shouldn't appear on paper */
+    .editlink, .noprint, .metadata, .dablink { display: none }
+}
+
+.toccolours { 
+   border:1px solid var(--border-color-base, #a2a9b1);
+   background-color: var(--background-color-neutral-subtle, #f8f9fa);
+   color: inherit;
+   padding:5px;
+   font-size: 95%;
+}
+
+/* У меню «Навігація» робимо підкреслення лише при
+наведенні мишею */
+
+.portlet a {
+   text-decoration: none;
+}
+
+.portlet a:hover {
+   text-decoration: underline;
+}
+
+/* Скруглённые углы, для Gecko браузеров, из итальянского раздела */
+
+.pBody {
+   padding: 0.1em 0.1em;
+   -moz-border-radius-topright: 0.5em;
+}
+#p-cactions ul li, #p-cactions ul li a {  
+  -moz-border-radius-topright: 0.5em;
+  -moz-border-radius-topleft: 0.5em;
+}
+#content {
+  -moz-border-radius-topleft: 0.5em;
+}
+
+
+/* Messagebox templates */
+
+.messagebox {
+   border:1px solid var(--border-color-base, #a2a9b1);
+   background-color: var(--background-color-neutral-subtle, #f8f9fa);
+   color: var(--color-base, #202122);
+   width: 80%;
+   margin: 0 auto 1em auto;
+   padding: .2em;
+}
+.messagebox.merge {
+   border: 1px solid #c0b8cc;
+   background-color: #f0e5ff;
+   text-align: center;
+}
+.messagebox.cleanup {
+   border: 1px solid #9f9fff;
+   background-color: #efefff;
+   text-align: center;
+}
+.messagebox.standard-talk {
+   border: 1px solid #c0c090;
+   background-color: #f8eaba;
+}
+
+/* Put a checker background at the image description page only visible if the image has transparent background */
+
+#file img {background: url("//upload.wikimedia.org/wikipedia/commons/5/5d/Checker-16x16.png") repeat;}
+
+/* Support for Template:IPA, Template:Unicode and Template:Polytonic. The inherit declaration resets the font for all browsers except MSIE6.  The empty comment must remain. Please copy any changes to [[:en:Template:IPA fonts]] and [[:en:Template:Unicode fonts]]. */
+.IPA {
+        font-family: "Chrysanthi Unicode", "Doulos SIL", Gentium, GentiumAlt, Code2000, "TITUS Cyberbit Basic", "DejaVu Sans", "Bitstream Cyberbit", "Arial Unicode MS", "Lucida Sans Unicode", "Hiragino Kaku Gothic Pro", "Matrix Unicode";
+        font-family /**/:inherit;
+}
+.Unicode {
+        font-family: Code2000, "TITUS Cyberbit Basic", "Doulos SIL", "Chrysanthi Unicode", "Bitstream Cyberbit", "Bitstream CyberBase", Thryomanes, Gentium, GentiumAlt, "Lucida Grande", "Arial Unicode MS", "Microsoft Sans Serif", "Lucida Sans Unicode";
+        font-family /**/:inherit;
+}
+.latinx {
+        font-family: Code2000, "TITUS Cyberbit Basic", "Microsoft Sans Serif";
+        font-family /**/:inherit;
+}
+.polytonic {
+        font-family: Athena, Gentium, "Palatino Linotype", "Arial Unicode MS", "Lucida Sans Unicode", "Lucida Grande", Code2000; 
+        font-family /**/:inherit;
+}
+
+#wpSave {
+  font-weight: bold;
+}
+ 
+.dablink {
+  font-style:italic;
+  padding-left:2em;
+}
+
+.abbrev
+{
+  border-bottom: 1px dotted;
+  cursor: help;
+  white-space: nowrap;
+  background-color:#CCFFFF;
+  color: var(--color-base, #202122);
+  font-style:italic;
+}
+
+h1 span.mw-editsection *
+{
+	display:none !important;
+}
+
+/* три колонки */
+.col3 {
+	-moz-column-count:3; 
+	-moz-column-gap: 3em; 
+	-webkit-column-count:3; 
+	-webkit-column-gap: 3em; 
+	column-count:3; 
+	column-gap: 3em; 
+	-webkit-column-width: 150px; 
+	-moz-column-width: 150px; 
+	column-width: 150px;
+}
+
+/* Definition of color varibles */
+:root,
+.skin-invert,
+.notheme {
+	--ukwikt-background-color-lightblue: #F8FCFF;
+}
+
+/* Dark mode for various things */
+@media screen {
+	/* Definition of color varibles for dark mode */
+	html.skin-theme-clientpref-night {
+		--ukwikt-background-color-lightblue: #002947;
+	}
+	
+	html.skin-theme-clientpref-night .abbrev {
+		background-color: #002F2F;
+	}
+}
+
+@media screen and (prefers-color-scheme: dark) {
+	/* Definition of color varibles for dark mode */
+	html.skin-theme-clientpref-os {
+		--ukwikt-background-color-lightblue: #002947;
+    }
+    
+    html.skin-theme-clientpref-os .abbrev {
+		background-color: #002F2F;
+	}
+}

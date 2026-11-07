@@ -358,6 +358,9 @@ fn uMatch(ctx_raw: ?*anyopaque, runtime: *rt.Context, args: []const Value, resul
     const source = try stringArg(a, args[0]);
     const pat = try stringArg(a, args[1]);
     const init_index = if (args.len > 2 and args[2] != .nil) try integer(args[2]) else 1;
+    if (init_index == 1) if (upat.singleCodepointBracket(source, pat, normalizer.category)) |matched| {
+        return one(result_buffer, if (matched) .{ .string = source } else .nil);
+    };
     var search = try upat.Search.initWithCache(std.heap.smp_allocator, source, pat, patternCache(runtime));
     defer search.deinit();
     var m: upat.Match = undefined;
@@ -928,4 +931,37 @@ test "invoke cleanup normalizes large results and propagates destination allocat
     try std.testing.expectError(error.OutOfMemory, cleanInvokeTextAlloc(failing.allocator(), catalog, "ASCII"));
     try std.testing.expectError(error.OutOfMemory, cleanInvokeTextAlloc(failing.allocator(), catalog, "\xc3"));
     try std.testing.expectError(error.OutOfMemory, cleanInvokeTextAlloc(failing.allocator(), catalog, &source));
+}
+
+
+test "Unicode bracket entry preserves buffered values coercion errors and fallback" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0);
+    defer runtime.deinit();
+    var normalizer: Normalizer = undefined;
+    normalizer.category = struct { fn call(_: i32) callconv(.c) c_int { return 0; } }.call;
+    var buffer: [1]Value = undefined;
+    const source: []const u8 = "가";
+    const hit = try uMatch(&normalizer, &runtime, &.{ .{ .string = source }, .{ .string = "[가-힣]" } }, &buffer);
+    try std.testing.expectEqual(@as(usize, 1), hit.len);
+    try std.testing.expectEqualStrings(source, hit[0].string);
+    try std.testing.expectEqual(source.ptr, hit[0].string.ptr);
+    const miss = try uMatch(&normalizer, &runtime, &.{ .{ .string = source }, .{ .string = "[a]" } }, &buffer);
+    try std.testing.expect(miss[0] == .nil);
+    const later = try uMatch(&normalizer, &runtime, &.{ .{ .string = source }, .{ .string = "[가-힣]" }, .{ .number = 2 } }, &buffer);
+    try std.testing.expect(later[0] == .nil);
+    const number = try uMatch(&normalizer, &runtime, &.{ .{ .number = 7 }, .{ .string = "[0-9]" }, .nil }, &buffer);
+    try std.testing.expectEqualStrings("7", number[0].string);
+    try std.testing.expectError(error.MissingArgument, uMatch(&normalizer, &runtime, &.{}, &buffer));
+    try std.testing.expectError(error.StringExpected, uMatch(&normalizer, &runtime, &.{ .nil, .{ .string = "[a]" } }, &buffer));
+    try std.testing.expectError(error.InvalidUtf8, uMatch(&normalizer, &runtime, &.{ .{ .string = "\xff" }, .{ .string = "[" } }, &buffer));
+    try std.testing.expectError(error.MalformedPattern, uMatch(&normalizer, &runtime, &.{ .{ .string = "a" }, .{ .string = "[" } }, &buffer));
+    var fail = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    const old_allocator = runtime.allocator;
+    runtime.allocator = fail.allocator();
+    defer runtime.allocator = old_allocator;
+    _ = try uMatch(&normalizer, &runtime, &.{ .{ .string = source }, .{ .string = "[가-힣]" } }, &buffer);
+    try std.testing.expectEqual(@as(usize, 0), fail.allocated_bytes);
+    try std.testing.expectError(error.OutOfMemory, uMatch(&normalizer, &runtime, &.{ .{ .number = 7 }, .{ .string = "[0-9]" } }, &buffer));
 }

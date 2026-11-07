@@ -1,0 +1,48 @@
+<h1>Հայերեն</h1>
+[[Կատեգորիա:Ձայնային ֆայլ չունեցող հայերեն բառահոդվածներ]]
+[[Կատեգորիա:Հայերեն բառեր|հանկարծաբար]]
+*[[միջազգային հնչյունական այբուբեն|ՄՀԱ]]՝ <span class="IPA" lang="">[hɑŋkɑɾt͡sɑˈbɑɾ]</span>
+''Դասական ուղղագրութեամբ՝'' 
+
+[[վանկ|վանկեր]]՝ '''հան•կար•ծա•բար&nbsp;'''
+== Ստուգաբանություն ==
+
+<h2>Մակբայ</h2>
+[[Կատեգորիա:Հայերեն մակբայներ]]
+# անսպասելիորեն, անակնկալ կերպով, հեղակարծուստ
+==== Հոմանիշներ ====
+# հանկարծակի, հանկարծ, հանկարծորեն, հանկարծակիորեն, հանկարծույն, հանկարծուստ, անսպասելիորեն, անակնկալորեն, հեղակարծ, հեղակարծուստ, մեկ էլ <span title="խոսակցական" style="border-bottom: 1px dotted; cursor: help; white-space: nowrap">(խսկց․)</span>[[Կատեգորիա:Հայերեն բառեր խոսակցական իմաստով]], <span title="գավառական" style="border-bottom: 1px dotted; cursor: help; white-space: nowrap">(գվռ․)</span> մեկ էլ նայիմ, հանկասկածի, հականատուտ, վրա գլուխ
+==== Արտահայտություններ ====
+
+{| class="mw-collapsible mw-collapsed wikitable collapsed" style="margin: 0 0 0.2em;"
+| style="background-color: #CBECFF; text-align:left; border-right:0; font-size: 95%; font-weight: bold; padding-left:5px;" width="100%" class="block-head"| Բաղադրյալ բառեր
+! style="background-color: #CBECFF; font-size:smaller; border-left:0;" class="block-head"| 
+|-
+| colspan=2 bgcolor="#EEF9FF" class="block-body"|<div class="multicol" style="-moz-column-count:2; -webkit-column-count:2; column-count:2; font-size: 95%;">|}
+</div></div>
+{| class="mw-collapsible mw-collapsed wikitable collapsed" style="margin: 0 0 0.2em;"
+| style="background-color: #CBECFF; text-align:left; border-right:0; font-size: 95%; font-weight: bold; padding-left:5px;" width="100%" class="block-head"| Թարգմանություններ
+! style="background-color: #CBECFF; font-size:smaller; border-left:0;" class="block-head"| 
+|-
+| colspan=2 bgcolor="#EEF9FF" class="block-body"|<div class="multicol" style="-moz-column-count:2; -webkit-column-count:2; column-count:2; font-size: 95%;">
+* [[անգլերեն]]՝ [[suddenly]], [[all of a sudden]]
+* [[գերմաներեն]]՝ 
+* [[դանիերեն]]՝ 
+* [[թուրքերեն]]՝ 
+* [[իսպաներեն]]՝ 
+* [[իտալերեն]]՝ 
+* [[հոլանդերեն]]՝ 
+* [[հունարեն]]՝ 
+* [[շվեդերեն]]՝ 
+* [[պորտուգալերեն]]՝ 
+* [[ռուսերեն]]՝ <span class="Cyrl" lang="ru">[[вдруг#ռուսերեն|вдруг]]</span><span class="tpos">&nbsp;[[:ru:вдруг|(ru)]]</span> &lrm;(<span lang="" class="tr">vdrug</span>), <span class="Cyrl" lang="ru">[[внезапно#ռուսերեն|внезапно]]</span><span class="tpos">&nbsp;[[:ru:внезапно|(ru)]]</span> &lrm;(<span lang="" class="tr">vnezapno</span>), <span class="Cyrl" lang="ru">[[неожиданно#ռուսերեն|неожиданно]]</span><span class="tpos">&nbsp;[[:ru:неожиданно|(ru)]]</span> &lrm;(<span lang="" class="tr">neožidanno</span>), <span class="Cyrl" lang="ru">[[нечаянно.#ռուսերեն|нечаянно.]]</span><span class="tpos">&nbsp;[[:ru:нечаянно.|(ru)]]</span> &lrm;(<span lang="" class="tr">nečajanno.</span>)
+* [[վրացերեն]]՝ 
+* [[ֆրանսերեն]]՝ 
+|}
+
+== Աղբյուրներ ==
+* <span class="citation" >Էդուարդ Բագրատի Աղայան,<nowiki> </nowiki>[http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=24&query=հանկարծաբար Արդի հայերենի բացատրական բառարան],<nowiki> </nowiki>Երևան,<nowiki> </nowiki>«Հայաստան»,<nowiki> </nowiki>1976<nowiki>։</nowiki></span>
+* <span class="citation" >Հրաչյա Աճառյանի անվան Լեզվի Ինստիտուտ,<nowiki> </nowiki>[http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=29&dt=HY_HY&query=հանկարծաբար Ժամանակակից հայոց լեզվի բացատրական բառարան],<nowiki> </nowiki>Երևան,<nowiki> </nowiki>«Հայկական ՍՍՀ Գիտությունների Ակադեմիայի Հրատարակչություն»,<nowiki> </nowiki>1969<nowiki>։</nowiki></span>
+* <span class="citation" >Աշոտ Մուրադի Սուքիասյան,<nowiki> </nowiki>[http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=25&dt=HY_HY&query=հանկարծաբար Հայոց լեզվի հոմանիշների բառարան],<nowiki> </nowiki>Երևան,<nowiki> </nowiki>«Հայկական ՍՍՀ Գիտությունների Ակադեմիայի Հրատարակչություն»,<nowiki> </nowiki>1967<nowiki>։</nowiki></span>
+* <span class="citation" >Աշոտ Մուրադի Սուքիասյան,<nowiki> </nowiki>[http://www.nayiri.com/imagedDictionaryBrowser.jsp?dictionaryId=47&dt=HY_HY&query=հանկարծաբար Հայոց լեզվի հոմանիշների բացատրական բառարան],<nowiki> </nowiki>Երևան,<nowiki> </nowiki>«Երևանի Պետական Համալսարան»,<nowiki> </nowiki>2009<nowiki>։</nowiki></span>[[Կատեգորիա:Բառեր «Արդի հայերենի բացատրական բառարան» գրքից]]
+* <span class="citation" >Սերգեյ Աշոտի Գալստյան,<nowiki> </nowiki> Դպրոցական բառակազմական բառարան<nowiki> </nowiki>(Դպրոցական մատենաշար)<nowiki> </nowiki>(խմբ. Հովհաննես Զաքարյան),<nowiki> </nowiki>Երևան,<nowiki> </nowiki>««Զանգակ-97» հրատարակչություն»,<nowiki> </nowiki>2011<nowiki> — </nowiki>230&nbsp;էջ<nowiki>, </nowiki>ISBN 978-99941-1-933-2<nowiki>։</nowiki></span>

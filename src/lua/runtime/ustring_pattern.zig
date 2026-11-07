@@ -330,6 +330,31 @@ fn findDecoded(source: []const u21, pat: []const u21, category: CategoryFn, init
     return match;
 }
 
+// null preserves the complete matcher for every unsupported or invalid shape.
+// Decode into fixed storage; class membership is the original matcher's logic.
+pub fn singleCodepointBracket(source: []const u8, pat: []const u8, category: CategoryFn) ?bool {
+    if (source.len == 0 or source.len > 4 or pat.len < 3 or pat.len > 64 or pat[0] != '[') return null;
+    const source_width = std.unicode.utf8ByteSequenceLength(source[0]) catch return null;
+    if (source_width != source.len) return null;
+    const cp = std.unicode.utf8Decode(source) catch return null;
+    var storage: [64]u21 = undefined;
+    var count: usize = 0;
+    var offset: usize = 0;
+    while (offset < pat.len) {
+        const width = std.unicode.utf8ByteSequenceLength(pat[offset]) catch return null;
+        if (width > pat.len - offset) return null;
+        storage[count] = std.unicode.utf8Decode(pat[offset..][0..width]) catch return null;
+        count += 1;
+        offset += width;
+    }
+    const pattern = storage[0..count];
+    const end = classes.bracketEnd(pattern, 0) orelse return null;
+    if (end != pattern.len) return null;
+    const prepared: classes.Prepared = .{};
+    const matcher: Matcher = .{ .source = &.{cp}, .pattern = pattern, .category = category, .prepared = &prepared };
+    return matcher.bracketClass(cp, 0, end);
+}
+
 pub const Search = struct {
     source_bytes: []const u8,
     source: Decoded,
@@ -723,4 +748,57 @@ test "borrowed search survives cache saturation by nested searches" {
 
 test {
     _ = @import("pattern_cache_tests.zig");
+}
+
+
+test "single codepoint bracket agrees with original Unicode matcher" {
+    const category = struct {
+        fn call(cp: i32) callconv(.c) c_int {
+            return if (cp >= 'A' and cp <= 'Z') 1 else if (cp >= 'a' and cp <= 'z') 2 else if (cp >= '0' and cp <= '9') 9 else 0;
+        }
+    }.call;
+    const subjects = [_][]const u8{ "가", "힣", "ᄌ", "예", "A", "a", "7", "]", "-", "%", "\x00", "𐀀" };
+    const patterns = [_][]const u8{ "[가-힣]", "[^가-힣]", "[ᄌᄍᄎ]", "[예옛옘례롄]", "[]a]", "[^]a]", "[%-]", "[%%]", "[%a]", "[%A]", "[%z]", "[𐀀-𐀂]", "[z-a]", "[a-]" };
+    for (subjects) |source| for (patterns) |pat| {
+        const specialized = singleCodepointBracket(source, pat, category) orelse return error.UnexpectedRefusal;
+        var original = try Search.init(std.testing.allocator, source, pat);
+        defer original.deinit();
+        const found = try original.find(category, 1, true);
+        try std.testing.expectEqual(found != null, specialized);
+        if (found) |m| {
+            try std.testing.expectEqual(@as(u8, 0), m.capture_count);
+            try std.testing.expectEqualStrings(source, original.byteSlice(m.start, m.end));
+        }
+    };
+}
+
+test "single codepoint bracket declines unsupported and malformed shapes" {
+    const category = struct { fn call(_: i32) callconv(.c) c_int { return 0; } }.call;
+    for ([_][]const u8{ "", "가나", "ab", "\xff", "\x80", "\xc2", "\xc0\x80" }) |source|
+        try std.testing.expectEqual(@as(?bool, null), singleCodepointBracket(source, "[가-힣]", category));
+    for ([_][]const u8{ "[", "[a", "[]", "[a]%", "[a]+", "^[a]", "([a])", "[a]$", "[\xff]", "[a%]" }) |pat|
+        try std.testing.expectEqual(@as(?bool, null), singleCodepointBracket("a", pat, category));
+    const oversized = "[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]";
+    try std.testing.expectEqual(@as(?bool, null), singleCodepointBracket("a", oversized, category));
+    for ([_][]const u8{ "\xff", "\x80", "a\x80", "\xc2", "\xc0\x80", "\xed\xa0\x80", "\xf4\x90\x80\x80" }) |source| {
+        try std.testing.expectEqual(@as(?bool, null), singleCodepointBracket(source, "[%a]", category));
+        try std.testing.expectError(error.InvalidUtf8, Search.init(std.testing.allocator, source, "[%a]"));
+    }
+    try std.testing.expectError(error.InvalidUtf8, Search.init(std.testing.allocator, "\xff", "["));
+    var malformed = try Search.init(std.testing.allocator, "a", "[a");
+    defer malformed.deinit();
+    try std.testing.expectError(error.MalformedPattern, malformed.find(category, 1, true));
+}
+
+test "single codepoint bracket removes original temporary decode allocations" {
+    const category = struct { fn call(_: i32) callconv(.c) c_int { return 0; } }.call;
+    var counted = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    {
+        var original = try Search.init(counted.allocator(), "가", "[가-힣]");
+        defer original.deinit();
+        try std.testing.expect((try original.find(category, 1, true)) != null);
+    }
+    try std.testing.expect(counted.allocated_bytes > 0);
+    try std.testing.expectEqual(counted.allocated_bytes, counted.freed_bytes);
+    try std.testing.expectEqual(@as(?bool, true), singleCodepointBracket("가", "[가-힣]", category));
 }

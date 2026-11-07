@@ -171,7 +171,8 @@ pub const HtmlHeadingScopes = struct {
         const scope: LinkHeadingScopes = .{ .source = self.source, .openings = self.openings };
         if (!scope.admits(source, start)) return null;
         if (plainLineHtmlH2(line)) |label| return .{ .level = 2, .title = label };
-        const linked = plainLineHtmlH1(line) orelse linkedLineHtmlH1(line, self.namespace_catalog) orelse return null;
+        const linked = plainLineHtmlH1(line) orelse literalBracketLineHtmlH1(line) orelse
+            linkedLineHtmlH1(line, self.namespace_catalog) orelse return null;
         const filter = self.linked_h1_filter orelse return null;
         if (!filter.accepts(filter.ctx, linked)) return null;
         return .{ .level = 1, .title = linked };
@@ -187,6 +188,15 @@ pub fn plainLineHtmlH2(line: []const u8) ?[]const u8 {
 /// Syntax only; an H1 owner still requires the observed root and trusted filter.
 pub fn plainLineHtmlH1(line: []const u8) ?[]const u8 {
     return plainLineHtmlHeading(line, "h1");
+}
+
+// The interrupted-heading preparation preserves the opening brackets as
+// literal entities. They remain body content, not part of the H1 label. This
+// syntax helper supplies no authority without an observed original root H1.
+pub const literal_h1_prefix = "&#91;&#91;";
+pub fn literalBracketLineHtmlH1(line: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, line, literal_h1_prefix)) return null;
+    return plainLineHtmlH1(line[literal_h1_prefix.len..]);
 }
 
 fn plainLineHtmlHeading(line: []const u8, name: []const u8) ?[]const u8 {
@@ -254,7 +264,8 @@ pub fn mayHaveLanguageHtmlHeading(source: []const u8, namespaces: ?*const @impor
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
         const physical = std.mem.trimEnd(u8, line, "\r");
-        if (plainLineHtmlH1(physical) != null or linkedLineHtmlH1(physical, namespaces) != null) return true;
+        if (plainLineHtmlH1(physical) != null or literalBracketLineHtmlH1(physical) != null or
+            linkedLineHtmlH1(physical, namespaces) != null) return true;
     }
     return false;
 }

@@ -1,0 +1,207 @@
+{
+  "content_language": "fa",
+  "date": "20261001",
+  "namespace_registry_sha256": "48e73904658e7c652903ef531ab2a72beb1b92d98f4067be71aaeeef99b829fe",
+  "profile": "general-and-seven-scribunto-statistics",
+  "query": {
+    "general": {
+      "allcentralidlookupproviders": [
+        "CentralAuth",
+        "local"
+      ],
+      "allunicodefixes": false,
+      "articlepath": "/wiki/$1",
+      "base": "https://fa.wiktionary.org/wiki/%D9%88%DB%8C%DA%A9%DB%8C%E2%80%8C%D9%88%D8%A7%DA%98%D9%87:%D8%B5%D9%81%D8%AD%D9%87%D9%94_%D8%A7%D8%B5%D9%84%DB%8C",
+      "case": "case-sensitive",
+      "categorycollation": "uca-fa-u-kn",
+      "centralidlookupprovider": "CentralAuth",
+      "citeresponsivereferences": true,
+      "dbtype": "mysql",
+      "dbversion": "10.11.16-MariaDB-log",
+      "externallinktarget": false,
+      "fallback": [
+        {
+          "code": "en"
+        }
+      ],
+      "fallback8bitEncoding": "windows-1256",
+      "favicon": "https://fa.wiktionary.org/static/favicon/piece.ico",
+      "galleryoptions": {
+        "captionLength": true,
+        "imageHeight": 120,
+        "imageWidth": 120,
+        "imagesPerRow": 0,
+        "mode": "traditional",
+        "showBytes": true,
+        "showDimensions": true
+      },
+      "generator": "MediaWiki 1.47.0-wmf.22",
+      "git-branch": "wmf/1.47.0-wmf.22",
+      "git-hash": "79b81ba96674efc8a803fc956bc501d347d440d2",
+      "imagelimits": {
+        "0": {
+          "height": 240,
+          "width": 320
+        },
+        "1": {
+          "height": 480,
+          "width": 640
+        },
+        "2": {
+          "height": 600,
+          "width": 800
+        },
+        "3": {
+          "height": 768,
+          "width": 1024
+        },
+        "4": {
+          "height": 1024,
+          "width": 1280
+        },
+        "5": {
+          "height": 2048,
+          "width": 2560
+        }
+      },
+      "imagewhitelistenabled": false,
+      "interwikimagic": true,
+      "invalidusernamechars": "@:>=",
+      "lang": "fa",
+      "langconversion": true,
+      "legaltitlechars": " %!\"$&'()*,\\-.\\/0-9:;=?@A-Z\\\\^_`a-z~\\x80-\\xFF+",
+      "linkconversion": true,
+      "linkprefix": "",
+      "linkprefixcharset": "",
+      "linktrail": "/^([ابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهیآأئؤة‌]+)(.*)$/sDu",
+      "linter": {
+        "high": [
+          "deletable-table-tag",
+          "duplicate-ids",
+          "html5-misnesting",
+          "misc-tidy-replacement-issues",
+          "multiline-html-table-in-list",
+          "multiple-unclosed-formatting-tags",
+          "pwrap-bug-workaround",
+          "self-closed-tag",
+          "template-arg-in-extension-tag",
+          "tidy-font-bug",
+          "tidy-whitespace-bug",
+          "unclosed-quotes-in-heading"
+        ],
+        "low": [
+          "empty-heading",
+          "missing-end-tag",
+          "missing-end-tag-in-heading",
+          "night-mode-unaware-background-color",
+          "obsolete-tag",
+          "pre-expansion",
+          "stripped-tag"
+        ],
+        "medium": [
+          "bogus-image-options",
+          "fostered",
+          "misnested-tag",
+          "multi-colon-escape",
+          "wikilink-in-extlink"
+        ]
+      },
+      "logo": "//fa.wiktionary.org/static/images/project-logos/fawiktionary.png",
+      "magiclinks": {
+        "ISBN": true,
+        "PMID": true,
+        "RFC": true
+      },
+      "mainpage": "ویکی‌واژه:صفحهٔ اصلی",
+      "mainpageisdomainroot": false,
+      "max-page-id": 220198,
+      "maxarticlesize": 2097152,
+      "maxuploadsize": 5368709120,
+      "minuploadchunksize": 1024,
+      "misermode": true,
+      "mobileserver": "https://fa.wiktionary.org",
+      "nofollowdomainexceptions": [
+        "mediawiki.org",
+        "wikibooks.org",
+        "wikimedia.com",
+        "wikimedia.org",
+        "wikinews.org",
+        "wikipedia.org",
+        "wikiquote.org",
+        "wikisource.org",
+        "wikiversity.org",
+        "wiktionary.org",
+        "wikivoyage.org",
+        "wikidata.org",
+        "wikifunctions.org",
+        "tools.wmflabs.org",
+        "toolforge.org",
+        "etherpad.wmflabs.org"
+      ],
+      "nofollowlinks": true,
+      "nofollownsexceptions": [],
+      "pageviewservice-supported-metrics": {
+        "mostviewed": {
+          "pageviews": true,
+          "uniques": false
+        },
+        "pageviews": {
+          "pageviews": true,
+          "uniques": false
+        },
+        "siteviews": {
+          "pageviews": true,
+          "uniques": true
+        }
+      },
+      "phpsapi": "fpm-fcgi",
+      "phpversion": "8.3.35",
+      "readinglists-config": {
+        "deletedRetentionDays": 30,
+        "maxEntriesPerList": 5000,
+        "maxListsPerUser": 100
+      },
+      "readonly": false,
+      "rtl": true,
+      "script": "/w/index.php",
+      "scriptpath": "/w",
+      "server": "//fa.wiktionary.org",
+      "servername": "fa.wiktionary.org",
+      "sitename": "ویکی‌واژه",
+      "thumblimits": {
+        "0": 180,
+        "1": 250,
+        "2": 400
+      },
+      "time": "2026-10-06T01:33:37Z",
+      "timeoffset": 0,
+      "timezone": "UTC",
+      "titleconversion": true,
+      "uploadsenabled": true,
+      "variantarticlepath": false,
+      "wikiid": "fawiktionary",
+      "wmf-config": {
+        "wmfEtcdLastModifiedIndex": 3930249,
+        "wmfMasterDatacenter": "eqiad"
+      },
+      "writeapi": true
+    },
+    "statistics": {
+      "activeusers": 46,
+      "admins": 2,
+      "articles": 114773,
+      "cirrussearch-article-words": 3566673,
+      "edits": 916530,
+      "images": 2,
+      "jobs": 0,
+      "pages": 204954,
+      "queued-massmessages": 0,
+      "users": 47030
+    }
+  },
+  "raw_response_sha256": "ea879055abb0b578582432fd6328ee08bc0ad0e807f6406df5f8aadab16b9e17",
+  "retrieved_utc": "2026-10-06T01:33:37.496315+00:00",
+  "schema": "wikidict.site-info.v2",
+  "temporal_scope": "current-api-observation",
+  "wiki": "fawiktionary"
+}

@@ -1,0 +1,10 @@
+==انگلیسی==
+
+===صفت===
+<span class="headword-line"><strong class="Latn headword" lang="en">progressive</strong> (<span lang="en-Latn" class="headword-tr tr Latn" dir="ltr"><small>transliteration needed</small></span>) (<i>[[Appendix:Glossary#تفضیلی|تفضیلی]]</i> <b class="Latn form-of lang-en تفضیلی-form-of        " lang="en">[[more#English|more]] progressive</b>, <i>[[Appendix:Glossary#عالی|عالی]]</i> <b class="Latn form-of lang-en عالی-form-of        " lang="en">[[most#English|most]] progressive</b>)</span>[[Category:English صفت‌های|PROGRESSIVE]][[Category:Requests for transliteration of English terms|PROGRESSIVE]][[Category:Pages with 0 entries|PROGRESSIVE]]
+
+
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="#FFFFE0" valign="top" width="48%" |
+*[[مستمر]]، [[پیش‌رونده]]، [[پیش‌رو]]|}</div></div>

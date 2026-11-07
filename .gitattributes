@@ -65,3 +65,25 @@ tools/testdata/it-consistente/raw.wikitext -whitespace
 tools/testdata/sr-nedelja/common.css -whitespace
 tools/testdata/sr-nedelja/page.expanded.wikitext -whitespace
 tools/testdata/sr-nedelja/reference.expanded.wikitext -whitespace
+src/encoder/testdata/ta-commonjs-expanded.wikitext -whitespace
+src/encoder/testdata/ta-commonjs-raw.wikitext -whitespace
+src/encoder/testdata/uk-podoprygora/common.css -whitespace
+src/encoder/testdata/uk-podoprygora/source.expanded.wikitext -whitespace
+src/encoder/testdata/uk-podoprygora/source.raw.wikitext -whitespace
+tools/testdata/hy-audit-table/03.expanded.wikitext -whitespace
+tools/testdata/hy-audit-table/06.expanded.wikitext -whitespace
+tools/testdata/hy-audit-table/07.expanded.wikitext -whitespace
+tools/testdata/hy-audit-table/08.expanded.wikitext -whitespace
+tools/testdata/hy-empty-audit/02.expanded.wikitext -whitespace
+tools/testdata/hy-empty-audit/04.expanded.wikitext -whitespace
+tools/testdata/hy-empty-audit/05.expanded.wikitext -whitespace
+tools/testdata/hy-heading-audit10/expanded.wikitext -whitespace
+tools/testdata/hy-heading-audit10/raw.wikitext -whitespace
+tools/testdata/hy-inline-audit11/expanded.wikitext -whitespace
+tools/testdata/hy-inline-audit11/raw.wikitext -whitespace
+tools/testdata/hy-invalid-link09/expanded.wikitext -whitespace
+tools/testdata/hy-invalid-link09/raw.wikitext -whitespace
+tools/testdata/it-vigilia/expanded.wikitext -whitespace
+tools/testdata/it-vigilia/raw.wikitext -whitespace
+# Preserve the exact retained FA progressive source and Common.css bytes.
+src/encoder/testdata/fa-progressive/* -whitespace

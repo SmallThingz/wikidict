@@ -1,0 +1,49 @@
+{{Vedi|Vigilia}}
+== {{-it-}} ==
+{{-sost-|it}}
+{{Pn}} ''f sing'' {{Linkp|vigilie}}
+# [[giorno]] o [[tempo]] [[che]] [[precede]] un [[avvenimento]]
+#* alla {{Pn}} del [[fallimento]], della [[scadenza]], della [[partenza]] delle nozze
+# {{Term|religione|it}} giorno [[precedente]] ad una [[festa]]. Originariamente per i [[cattolici]] si passava la sera in [[veglia]] tra [[orazioni]]; successivamente rimase l'[[obbligo]] del [[digiuno]] o del mangiar di [[magro]]
+#* ''Oggi è la vigilia di Natale''
+# {{Term|letteratura|it}} veglia in [[studi]], [[meditazioni]], ecc.
+#* le dolci {{Pn}} (Foscolo, ''Sepolcri'')
+#* le lunghe, assidue {{Pn}}
+# (d'armi) veglia delle [[armi]] del nuovo [[cavaliere]] la notte prima della [[cerimonia]] (nei romanzi e nel ''Don Chisciotte'')
+# {{Term|antico|it}} [[salmi]] recitati di notte [[vegliando]] un [[morto]]
+# {{Term|militare|it}} [[guardia]], tempo assegnato ad una guardia, alla [[sentinella]], nella [[notte]]
+
+{{-sill-}}
+; vi | gì | lia
+
+{{-pron-}}
+{{IPA|/viˈd͡ʒilja/}}
+
+{{-etim-}}
+dal [[latino]] ''[[vigilia]]'', ossia "[[il]] [[fatto]] [[di]] [[vegliare]], [[vigilanza]]"
+
+{{-sin-}}
+* {{Est}} {{Term|religione|it}} [[astinenza]], [[digiuno]]
+
+{{-der-}}
+*[[antivigilia]]
+
+{{-prov-}}
+*''[[fare vigilia]]'': fare a meno totalmente o parzialmente del [[cibo]] per un lasso di tempo  prestabilito 
+
+{{-trad-}}
+{{Trad1|periodo che precede un  importante avvenimento}}
+:* {{en}}: [[eve]] 
+:* {{la}}: [[vigilia]], [[pervigilium]], [[lucubratio]] {{Trad2}}
+{{Trad2}}
+
+{{Trad1|religione:giorno di vigilia}}
+:* {{en}}: [[vigil]]
+{{Trad2}}
+
+{{-ref-}}
+* {{Fonte|dizit}}
+* {{Fonte|zin|1694|1922}}
+* {{Fonte|trec}}
+* {{Fonte|sabco}}
+* {{Fonte|gar}}

@@ -1,0 +1,871 @@
+/* Any JavaScript here will be loaded for all users on every page load. */
+
+/*</pre>
+==JavaScript standard library==
+<pre>*/
+
+/*</pre>
+===importScript===
+<pre>*/
+
+/**
+ * importScript inserts a javascript page either 
+ *    from Wiktionary: importScript('User:Connel MacKensie/yetanother.js');
+ *    from another Wikimedia wiki: importScript('User:Lupin/insane.js','en.wikipedia.org');
+ *
+ *    by specifying the third argument, an oldid can be passed to ensure that updates to the script are not included.
+ *    by specifying the fourth argument, a specific version of JavaScript can be declared.
+ *
+ *    based on [[w:MediaWiki:Common.js]] 2007-11-29
+**/
+function importScript(page, wiki, oldid, jsver) {
+    //Default to local
+    if(!wiki)
+      wiki=wgScript;
+    else
+      wiki='http://'+escape(wiki)+'/w/index.php';
+ 
+    var url = wiki + '?title='
+             + encodeURIComponent(page.replace(/ /g, '_')).replace(/%2F/ig, '/').replace(/%3A/ig, ':')
+            + (oldid?'&oldid='+encodeURIComponent( oldid ):'')
+            + '&action=raw&ctype=text/javascript';
+ 
+    //Only include scripts once
+    if(loadedScripts[url])
+        return false;
+    loadedScripts[url] = true;
+ 
+    var scriptElem = document.createElement("script");
+    scriptElem.setAttribute("src",url);
+    scriptElem.setAttribute("type", jsver ? "application/javascript;version=" + jsver : "text/javascript");
+    document.getElementsByTagName("head")[0].appendChild(scriptElem);
+    return true;
+}
+
+/*</pre>
+===importExternalScript===
+<pre>*/
+
+/**
+ * importExternalScript inserts a javascript page 
+ *    from anywhere including your local hard drive: importExternalScript('file:///C:/Documents%20and%20Settings/Andrew/My%20Documents/apitest.js');
+ *
+ *    based on importScript above 2008-01-21
+ *    replaced with stub to similar function in wikibits.js 2010-02
+**/
+function importExternalScript(url) {
+    return importScriptURI(url);
+}
+/*</pre>
+=== DOM creation ===
+<pre>*/
+/**
+ * Create a new DOM node for the current document.
+ *    Basic usage:  var mySpan = newNode('span', "Hello World!")
+ *    Supports attributes and event handlers*: var mySpan = newNode('span', {style:"color: red", focus: function(){alert(this)}, id:"hello"}, "World, Hello!")
+ *    Also allows nesting to create trees: var myPar = newNode('p', newNode('b',{style:"color: blue"},"Hello"), mySpan)
+ *
+ * *event handlers, there are some issues with IE6 not registering event handlers on some nodes that are not yet attached to the DOM,
+ * it may be safer to add event handlers later manually.
+**/
+function newNode(tagname){
+
+  var node = document.createElement(tagname);
+  
+  for( var i=1;i<arguments.length;i++ ){
+    
+    if(typeof arguments[i] == 'string'){ //Text
+      node.appendChild( document.createTextNode(arguments[i]) );
+      
+    }else if(typeof arguments[i] == 'object'){ 
+      
+      if(arguments[i].nodeName){ //If it is a DOM Node
+        node.appendChild(arguments[i]);
+        
+      }else{ //Attributes (hopefully)
+        for(var j in arguments[i]){
+          if(j == 'class'){ //Classname different because...
+            node.className = arguments[i][j];
+            
+          }else if(j == 'style'){ //Style is special
+            node.style.cssText = arguments[i][j];
+            
+          }else if(typeof arguments[i][j] == 'function'){ //Basic event handlers
+            try{ node.addEventListener(j,arguments[i][j],false); //W3C
+            }catch(e){try{ node.attachEvent('on'+j,arguments[i][j],"Language"); //MSIE
+            }catch(e){ node['on'+j]=arguments[i][j]; }}; //Legacy
+          
+          }else{
+            node.setAttribute(j,arguments[i][j]); //Normal attributes
+
+          }
+        }
+      }
+    }
+  }
+  
+  return node;
+}
+/*</pre>
+=== CSS ===
+<pre>*/
+
+/* Cross browser CSS - yurk */
+var p_styleSheet=false;
+ 
+window.addCSSRule = function (selector,cssText){
+  if(!p_styleSheet) return setupCSS(selector,cssText);
+  if(p_styleSheet.insertRule){
+    p_styleSheet.insertRule( selector+' { '+cssText+' }', p_styleSheet.cssRules.length );
+  }else if(p_styleSheet.addRule){ //Guess who...
+    p_styleSheet.addRule(selector,cssText);
+  }
+ 
+  function setupCSS(selector,cssText){
+    if(document.styleSheets){
+      var i = document.styleSheets.length-1;
+      while(i>=0){
+        try{ //This loop tries to get around the irritation that some extensions
+             //include external, and thus read-only, stylesheets. Bah.
+          p_styleSheet = document.styleSheets[i];
+          var media = p_styleSheet.media.mediaType?p_styleSheet.media.mediaType:p_styleSheet.media;
+          if( media.indexOf('screen') > -1 || media == '' ){
+            addCSSRule(selector,cssText);
+            return true;
+          }
+        }catch(e){ i--; }
+      }  
+    }
+    //Ok document.stylesheets isn't an option :(... take this for hacky
+    //It might be better to create one <style> element and write into it
+    // but it doesn't work :(
+    window.addCSSRule = function(sel,css){
+      var head = document.getElementsByTagName('head')[0];
+      var text = sel + '{' + css + '}';
+      try { head.innerHTML += '<style type="text/css">' + text + '</style>'; }
+      catch(e) {
+        var style = document.createElement('style');
+        style.setAttribute('type', 'text/css');
+        style.appendChild(document.createTextNode(text));
+        head.appendChild(style);
+      }
+    }
+    addCSSRule(selector,cssText);
+  }
+}
+/*</pre>
+
+===Cookies===
+<pre>*/
+
+function setCookie(cookieName, cookieValue) {
+ var today = new Date();
+ var expire = new Date();
+ var nDays = 30;
+ expire.setTime( today.getTime() + (3600000 * 24 * nDays) );
+ document.cookie = cookieName + "=" + escape(cookieValue)
+                 + ";path=/"
+                 + ";expires="+expire.toGMTString();
+ // We need to delete the more specific paths for the next while. Safe to remove this by July 2011, if not before.
+ document.cookie = cookieName + "=" + ";path=/w" +
+  ";expires=Thu, 01-Jan-1970 00:00:01 GMT";
+ document.cookie = cookieName + "=" + ";path=/wiki" +
+  ";expires=Thu, 01-Jan-1970 00:00:01 GMT";
+}
+
+function getCookie(cookieName) {
+  var start = document.cookie.indexOf( cookieName + "=" );
+  if ( start == -1 ) return "";
+  var len = start + cookieName.length + 1;
+  if ( ( !start ) &&
+    ( cookieName != document.cookie.substring( 0, cookieName.length ) ) )
+      {
+        return "";
+      }
+  var end = document.cookie.indexOf( ";", len );
+  if ( end == -1 ) end = document.cookie.length;
+  return unescape( document.cookie.substring( len, end ) );
+}
+
+function deleteCookie(cookieName) {
+  if ( getCookie(cookieName) ) {
+    document.cookie = cookieName + "=" + ";path=/" +
+    ";expires=Thu, 01-Jan-1970 00:00:01 GMT";
+  }
+}
+
+/*</pre>
+
+==Wiktionary Customisation==
+<pre>*/
+
+//initialize the storage for script options. Gadgets that set script
+//options should also include this line as they are loaded before us.
+if(typeof WiktScriptPrefs == 'undefined') WiktScriptPrefs = {};
+
+/*</pre>
+===[[MediaWiki:Youhavenewmessages]] to display differently for non-newbies with JS than for others===
+<pre>*/
+if (wgUserGroups && wgUserGroups.join("").indexOf("autoconfirmed") > -1)
+{
+    addCSSRule(".msgfornewbies", "display: none");
+}else{
+    addCSSRule(".msgfornonnewbies", "display: none");
+}
+/*</pre>
+
+===[[WT:FEED]]===
+<pre>*/
+if (wgUserName==null)
+{
+   // importScript('User:Conrad.Irwin/feedback.js');
+}
+/*</pre>
+===WT:PREFS===
+<pre>*/
+
+if (getCookie('WiktPrefs') || wgPageName == "Wiktionary:Preferences") {
+   //importScript('User:Connel_MacKenzie/custom.js');
+   //importScript('User:Hippietrail/custom.js');
+}
+
+/*</pre>
+===Edit page javascript===
+<pre>*/
+if (wgAction == 'edit' || wgAction == 'submit' ) importScript('MediaWiki:Edit.js')
+
+addOnloadHook( function () { 
+    if (document.getElementById('editpage-specialchars'))
+        importScript('MediaWiki:Edit.js');
+});
+/*</pre>
+===Page specific extensions===
+<pre>*/
+
+/*</pre>
+====Wiktionary:Main Page====
+<pre>*/
+// Hide the title and "Redirected from" (maybe we should keep the redirected from so's people update their bookmarks ;)
+// Broken in IE!
+if ( wgPageName == 'Wiktionary:Main_Page' && !( wgAction == 'view' || wgAction == 'submit' ) ){
+  addCSSRule('.firstHeading','display: block !important;');
+  addCSSRule('#contentSub','display: inline !important;');
+
+} else if (wgPageName == 'Wiktionary:Main_Page' || wgPageName == 'Wiktionary_talk:Main_Page') 
+    addOnloadHook(function () {
+        addPortletLink('p-lang', 'http://meta.wikimedia.org/wiki/Wiktionary#List_of_Wiktionaries',
+                 'Complete list', 'interwiki-completelist', 'Complete list of Wiktionaries')
+        var nstab = document.getElementById('ca-nstab-project')
+        if (nstab && wgUserLanguage=='en') {
+            while (nstab.firstChild) nstab = nstab.firstChild
+            nstab.nodeValue = 'Main Page'
+        }
+    }
+)
+
+/*</pre>
+====Special:Search====
+<pre>*/
+
+if ( wgPageName == 'Special:Search') {
+    importScript('MediaWiki:SpecialSearch.js');
+}
+addOnloadHook(function () { if(document.getElementById('preloadGuide')) {
+    importScript('MediaWiki:SpecialSearch.js');
+}});
+
+/*</pre>
+====Custom search engines====
+<pre>*/
+
+if( wgPageName=='Help:Tips_and_tricks' ){
+    importScript('MediaWiki:CustomSearch.js');
+}
+
+/*</pre>
+
+====Turn headings in comments into real headings on JavaScript source pages====
+<pre>*/
+
+else if ((wgNamespaceNumber == 2 || wgNamespaceNumber == 8) && wgTitle.lastIndexOf('.js') != -1 && wgAction == 'view') {
+    importScript('MediaWiki:JavascriptHeadings.js');
+}
+
+/*</pre>
+====Geonotice====
+<pre>*/
+/*Ended December 2009
+else if (wgPageName == "Special:Watchlist") //watchlist scripts
+{
+    importScriptURI('http://toolserver.org/~para/geoip.fcgi');
+    addOnloadHook(function() { importScriptURI('http://en.wiktionary.org/w/index.php?title=MediaWiki:Geonotice.js&action=raw&ctype=text/javascript&maxage=3600'); });
+}
+*/
+/*</pre>
+===Add editor.js for editing translations===
+<pre>*/
+
+/** Trial run 2009-04-14. Please disable if causing problems. **/
+importScript('User:Mahir78/editor.js');
+
+/*</pre>
+===Make Citations: tabs ===
+<pre>*/
+function citations_tab(){
+
+  var texts = {
+      // tab id : [ label, hover-text, access-key (c if tab comes first, 3 if last) ]
+      'ca-nstab-main': ['Entry', 'View the dictionary entry', 'c'],
+      'ca-nstab-citations': ['Citations', 'View the citations page', '3'],
+      'ca-nstab-template': ['Template', 'View the template', 'c'],
+      'ca-nstab-documentation': ['Documentation', 'View the documentation', '3']
+  }
+
+  var lookup = new Object(); // {page-title: tab-node} these are looked up and changed to red if missing.
+
+  // Returns [id-of-portlet, node-to-insert-before or null] for inserting the tab.
+  function get_insert_position(id) {
+    var portlet = document.getElementById('p-namespaces') ? 'p-namespaces' : 'p-cactions';
+    var insbef = null;
+
+    if (texts[id][2] == 'c') { // otherwise '3'
+       insbef = document.getElementById(portlet).getElementsByTagName('ul')[0].firstChild;
+    } else if (portlet == 'p-cactions' ) { // 'last' in Monobook means "before Edit"
+      var insbef = document.getElementById('ca-edit');
+      if(! insbef) insbef = document.getElementById('ca-viewsource');
+    }
+
+    return [portlet, insbef];
+  }
+
+  // Add a new namespace with addPortletLink using the lookup table above.
+  function add_namespace_tab(page, id) {
+    var insert = get_insert_position(id);
+    addPortletLink(insert[0], wgArticlePath.replace("$1", page), texts[id][0], id, texts[id][1], texts[id][2], insert[1]); 
+    if (page == wgPageName) { // Can by-pass lookup
+        var tab = document.getElementById(id);
+        tab.className = 'selected';
+        if (wgArticleId == 0) make_tab_red(tab);
+    } else { // lookup the redness with the ajax below
+        lookup[page]=document.getElementById(id);
+    }
+  }
+
+  // Replace the two current tabs with new ones, used when in the third namespace.
+  function change_main_tabs(old_id, new_id, talk_page) {
+    // Remove old tab.
+    var ct = document.getElementById(old_id);
+    ct.parentNode.removeChild(ct);
+    // Add new tab.
+    add_namespace_tab(wgPageName, new_id);
+
+    // Change destination of talk tab.
+    var dt = document.getElementById('ca-talk');
+    var a = dt.getElementsByTagName('a')[0]
+    a.setAttribute('href', wgArticlePath.replace("$1", talk_page));
+    lookup[talk_page] = dt;
+    if(dt.className) dt.className = dt.className.replace('new','');
+  }
+
+  // Change a blue-link to a red-link
+  function make_tab_red(tab){
+    tab.className = tab.className+' new';
+    var a = tab.getElementsByTagName('a')[0];
+    var href = a.getAttribute('href');
+    a.setAttribute('href',href+(href.indexOf('?')>0?'&':'?')+'action=edit&redlink=1');
+  }
+  
+  if( wgCanonicalNamespace == 'Citations' ){  
+    change_main_tabs('ca-nstab-citations', 'ca-nstab-citations', 'Talk:' + wgTitle);
+    add_namespace_tab(wgTitle, 'ca-nstab-main');
+    
+  }else if( wgCanonicalNamespace == '' || wgCanonicalNamespace == 'Talk' ){
+    add_namespace_tab('Citations:'+wgTitle, 'ca-nstab-citations');
+
+  }else if( wgCanonicalNamespace == 'Template' && /\/doc$/.test(wgTitle) ){
+    var baseTitle = wgTitle.replace(/\/doc$/, "");
+    change_main_tabs('ca-nstab-template', 'ca-nstab-documentation', 'Template talk:' + baseTitle);
+    add_namespace_tab('Template:' + baseTitle, 'ca-nstab-template');
+
+  }else if( wgCanonicalNamespace == 'Template' || wgCanonicalNamespace == 'Template_talk' ){
+    add_namespace_tab('Template:'+wgTitle+'/doc', 'ca-nstab-documentation');
+
+  }else{ //Nothing to see here...
+    return false;
+  
+  }
+  
+  //Now check for red pages - would be nicer to use MwJsApi() from editor.js, but possible race-condition
+  var ajaxer = sajax_init_object();
+  if(! ajaxer) return false;
+  
+  var url = wgScriptPath+ '/api.php?format=json&action=query&prop=info&titles=';
+  var spl = '';
+  for(var page in lookup){
+    url+=spl+encodeURIComponent(page);
+    spl='|';
+  }
+  
+  ajaxer.onreadystatechange = function(){
+    if( ajaxer.readyState == 4 ){
+      if( ajaxer.status == 200 ){
+        var resps = eval('(' + ajaxer.responseText + ')');
+        for (var x in resps.query.pages) {
+          if (Number(x) < 0) {
+            make_tab_red(lookup[resps.query.pages[x].title]);
+          }
+        }
+      }
+    }
+  }
+
+  ajaxer.open("GET", url);
+  ajaxer.send('');
+
+}
+
+addOnloadHook( citations_tab );
+
+/*</pre>
+===Import newentrywiz.js===
+<pre>*/
+//addOnloadHook(function(){if(document.getElementById('necblah')){importScript('User:Yair rand/newentrywiz.js');}})
+
+
+/*</pre>
+
+==URL Fixes==
+<pre>*/
+
+/**
+ * doRedirect will redirect if a did you mean box is found, and create a 
+ * "redirected from X" if a rdfrom is passed in the get parameters
+ * The first half is an ugly workaround for Bugzilla:3339, :(
+ * The second half is an ugly workaround for not having serverware support :(
+**/
+
+/*</pre>
+===Did you mean ____ redirects===
+<pre>*/
+
+function doRedirect() {
+  var dym = document.getElementById('did-you-mean')
+  var wiktDYMfrom= decodeURIComponent(window.location.href.replace(/^(.+[&\?]rdfrom=([^&]+).*|.*)?$/,"$2"));
+
+// REDIRECTED FROM
+  if( window.location.href.indexOf('rdfrom=')!=-1 ) {
+    var insertPosition= document.getElementById("siteSub");
+    var div=document.createElement("div");
+    if(insertPosition){
+      div.setAttribute("id","contentSub");
+      var tt=document.createElement('tt');
+      var lnk =document.createElement('a');
+      lnk.setAttribute("href",wgArticlePath.replace("$1",wiktDYMfrom)+ '?redirect=no');
+      lnk.className="new"; //As they are redlinks
+      lnk.appendChild(document.createTextNode(wiktDYMfrom));
+      tt.appendChild(lnk);
+      div.appendChild(document.createTextNode("(Auto-redirected from "));
+      div.appendChild(tt);
+      div.appendChild(document.createTextNode(")"));
+      insertPosition.parentNode.insertBefore(div,insertPosition.nextSibling);
+      } else {
+        alert('No insertposition');
+      }
+
+// DID YOU MEAN
+    }else{
+      if( dym 
+          && !window.location.href.match(/[&\?]redirect=no/)
+          && (getCookie('WiktionaryDisableAutoRedirect') != 'true')
+        ) {
+      var target = dym.firstChild.title;
+      var pagetitle = document.getElementsByTagName('h1')[0].firstChild.nodeValue;
+
+      if( pagetitle != target 
+          && wgArticleId == 0
+          && pagetitle.search(/Editing /g) == -1
+          && !(document.getElementById('contentSub') && document.getElementById('contentSub').innerHTML.indexOf("Redirected from")>=0) // does contentSub always exist
+        ) {
+        document.location = wgArticlePath.replace("$1",encodeURIComponent(target.replace(/\ /g, "_")))
+                          + '?rdfrom=' + encodeURIComponent(pagetitle.replace(/ /g,"_"));
+      }
+    }
+  }
+
+// Random page in a given language
+  document.location.toString().replace(/[?&]rndlang=([^&#]+)[^#]*(?:#(.+))?/, function (m, lang, headlang) {
+    var script = 'http://toolserver.org/~hippietrail/randompage.fcgi';
+
+    var insert = document.getElementById('contentSub');
+    if (headlang) {
+      var heading = document.getElementById(headlang);
+      if (heading) heading = heading.parentNode;
+      if (heading) {
+        insert = newNode('div', {style: 'font-size: 84%; line-height: 1.2em;'});
+        heading.parentNode.insertBefore(insert, heading.nextSibling)
+      }
+    }
+
+    if (!insert || insert.innerHTML != "") return;
+
+    insert.appendChild(newNode('span', {style: 'color: #888;'}, "Another ",
+      newNode('a', {href: script + '?langs=1'}, "Random"), " word in ",
+      newNode('a', {href: script + '?langname=' + lang}, decodeURIComponent(lang))
+    ));
+  });
+}
+
+addOnloadHook(doRedirect);
+
+/*</pre>
+
+===Fix Wikified section titles===
+<pre>*/
+addOnloadHook(function () {
+  // {temp|template}
+  if (/\.7B\.7Btemp\.7C(.*?)\.7D\.7D/.test(window.location.href)) {
+    var url=window.location.href.replace(/\.7B\.7Btemp.7C/g, ".7B.7B");
+    window.location = url;
+  }
+});
+
+addOnloadHook(function () {
+  if(wgAction != 'edit')
+    return;
+  if(! /[?&]section=\d/.test(window.location.href))
+    return;
+  var wpSummary = document.getElementById('wpSummary');
+  if(! wpSummary)
+    return;
+  if(wpSummary.value.substr(0, 3) != '/* ')
+    return;
+  if(wpSummary.value.substr(wpSummary.value.length - 4) != ' */ ')
+    return;
+  wpSummary.value = wpSummary.value.replace(/\{\{temp(late)?\|/g, '{{');
+});
+
+/*</pre>
+== Visibility toggling ==
+<pre>*/
+var VisibilityToggles = {
+    // toggles[category] = [[show, hide],...]; statuses[category] = [true, false,...]; buttons = <li>
+    toggles: {}, statuses: {}, buttons: null,
+
+    // Add a new toggle, adds a Show/Hide category button in the toolbar,
+    // and will call show_function and hide_function once on register, and every alternate click.
+    register: function (category, show_function, hide_function) {
+
+        var id = 0;
+        if (!this.toggles[category]) {
+            this.toggles[category] = [];
+            this.statuses[category] = [];
+        } else {
+            id = this.toggles[category].length;
+        }
+        this.toggles[category].push([show_function, hide_function]);
+        this.statuses[category].push(this.currentStatus(category));
+        this.addGlobalToggle(category);
+
+        (this.statuses[category][id] ? show_function : hide_function)();
+
+        return function () {
+            var statuses = VisibilityToggles.statuses[category];
+            statuses[id] = !statuses[id]
+            VisibilityToggles.checkGlobalToggle(category);
+            return (statuses[id] ? show_function : hide_function)();
+        }
+
+    },
+
+    // Add a new global toggle to the side bar
+    addGlobalToggle: function(category) {
+        if (document.getElementById('p-visibility-'+category))
+            return;
+        if (!this.buttons) {
+            this.buttons = newNode('ul');
+            var toolbox = newNode('div', {'class': "portal portlet", 'id': 'p-visibility'},
+                            newNode('h5', 'Visibility'),
+                            newNode('div', {'class': "pBody body", 'style': 'display:block;'}, this.buttons)
+                          );
+            var sidebar = document.getElementById('mw-panel') || document.getElementById('column-one');
+            var insert = null;
+            if (insert = (document.getElementById('p-lang') || document.getElementById('p-feedback')))
+                sidebar.insertBefore(toolbox, insert);
+            else
+                sidebar.appendChild(toolbox);
+
+        }
+        var status = this.currentStatus(category);
+        var newToggle = newNode('li', newNode('a', {
+            id: 'p-visibility-' + category, 
+            style: 'cursor: pointer',
+            href: '#visibility-' + category,
+            click: function(e)
+            {
+                VisibilityToggles.toggleGlobal(category); 
+                if (e && e.preventDefault)
+                    e.preventDefault();
+                else 
+                    window.event.returnValue = false;
+                return false; 
+            }},
+            (status ? 'Hide ' : 'Show ') + category));
+        for (var i=0; i < this.buttons.childNodes.length; i++) {
+            if (this.buttons.childNodes[i].id < newToggle.id) {
+                this.buttons.insertBefore(newToggle, this.buttons.childNodes[i]);
+                return;
+            }
+        }
+        this.buttons.appendChild(newToggle);
+    },
+
+    // Update the toggle-all buttons when all things are toggled one way
+    checkGlobalToggle: function(category) {
+        var statuses = this.statuses[category];
+        var status = statuses[0];
+        for (var i = 1; i < statuses.length; i++) {
+            if (status != statuses[i])
+                return;
+        }
+        document.getElementById('p-visibility-' + category).innerHTML = (status ? 'Hide ' : 'Show ') + category;
+    },
+
+    // Toggle all un-toggled elements when the global button is clicked
+    toggleGlobal: function(category) {
+        var status = document.getElementById('p-visibility-' + category).innerHTML.indexOf('Show ') == 0;
+        for (var i = 0; i < this.toggles[category].length; i++ ) {
+            if (this.statuses[category][i] != status) {
+                this.toggles[category][i][status ? 0 : 1]();
+                this.statuses[category][i] = status;
+            }
+        }
+        document.getElementById('p-visibility-' + category).innerHTML = (status ? 'Hide ' : 'Show ') + category;
+        var current = getCookie('Visibility');
+        if (!current)
+            current = ";";
+        current = current.replace(';' + category + ';', ';');
+        if (status)
+            current = current + category + ";";
+        setCookie('Visibility', current);
+    },
+
+    currentStatus: function(category) {
+        if (getCookie('WiktionaryPreferencesShowNav') == 'true')
+            return true;
+        else if (getCookie('Visibility').indexOf(';' + category + ';') >= 0)
+            return true;
+        return false; // TODO load this from category specific cookies
+    }
+};
+/*</pre>
+=== NavBars ===
+<pre>*/
+var NavigationBarHide = 'hide ▲';
+var NavigationBarShow = 'show ▼';
+
+function NavToggleCategory(navFrame)
+{
+    var table = navFrame.getElementsByTagName('table')[0];
+    if (table && table.className == "translations")
+        return "translations";
+
+    var heading = navFrame.previousSibling;
+    while (heading) {
+        if (/[hH][4-6]/.test(heading.nodeName)) {
+            if (heading.getElementsByTagName('span')[1]) {
+                return heading.getElementsByTagName('span')[1].innerHTML.toLowerCase();
+                }
+            else {
+                return heading.getElementsByTagName('span')[0].innerHTML.toLowerCase();
+                }
+            }
+        else if (/[hH][1-3]/.test(heading.nodeName)) 
+            break;
+        heading = heading.previousSibling;
+    }
+    return "other boxes";
+};
+function createNavToggle(navFrame)
+{
+    var navHead, navToggle, navContent;
+    for (var j=0; j < navFrame.childNodes.length; j++) {
+        var div = navFrame.childNodes[j];
+        switch (div.className) {
+            case 'NavHead':
+                navHead = div;
+                break;
+            case 'NavContent':
+                navContent = div;
+                break;
+        }
+    }
+    if (!navHead || !navContent)
+        return;
+    // Step 1, don't react when a subitem is clicked.
+    for (var i=0; i<navHead.childNodes.length; i++) {
+        var child = navHead.childNodes[i];
+        if (child.nodeType == 1) {
+            child.onclick = function (e)
+            {
+                if (e && e.stopPropagation)
+                    e.stopPropagation();
+                else
+                    window.event.cancelBubble = true;
+            }
+        }
+    }
+    // Step 2, toggle visibility when bar is clicked.
+    // NOTE This function was chosen due to some funny behaviour in Safari.
+    navToggle = newNode('a', {href: 'javascript:(function(){})()'}, '');
+    navHead.insertBefore(newNode('span', {'class': 'NavToggle'}, '[', navToggle, ']'), navHead.firstChild);
+
+    navHead.style.cursor = "pointer";
+    navHead.onclick = VisibilityToggles.register(NavToggleCategory(navFrame),
+        function show() {
+            navToggle.innerHTML = NavigationBarHide;
+            if (navContent)
+                navContent.style.display = "block";
+        },
+        function hide() {
+            navToggle.innerHTML = NavigationBarShow;
+            if (navContent)
+                navContent.style.display = "none";
+        });
+};
+
+addOnloadHook( function ()
+{
+    var divs;
+    if (document.getElementsByClassName)
+        divs = document.getElementsByClassName('NavFrame');
+    else
+        divs = document.getElementsByTagName('div');
+
+    for (var i=0; i<divs.length; i++) {
+        // NOTE: some templates use a class of NavFrame for the style, but for legacy reasons, are not NavFrames
+        if (divs[i].className == "NavFrame") {
+            createNavToggle(divs[i]);
+        }
+    }
+
+});
+
+/*</pre>
+
+===Hidden Quotes===
+<pre>*/
+
+function setupHiddenQuotes(li)
+{
+   var HQToggle, liComp;
+   var HQShow = 'quotations ▼';
+   var HQHide = 'quotations ▲';
+   for (var k = 0; k < li.childNodes.length; k++) {
+      // Look at each component of the definition.
+      liComp = li.childNodes[k];
+      // If we find a ul or dl, we have quotes or example sentences, and thus need a button.
+      if (/^(ul|UL)$/.test(liComp.nodeName)) {
+         HQToggle = newNode('a', {href: 'javascript:(function(){})()'}, '');
+         li.insertBefore(newNode('span', {'class': 'HQToggle', 'style': 'font-size:0.65em'}, ' [', HQToggle, ']'), liComp);
+         HQToggle.onclick = VisibilityToggles.register('quotations',          
+            function show() {
+               HQToggle.innerHTML = HQHide;
+               for (var child = li.firstChild; child != null; child = child.nextSibling) {
+                  if (/^(ul|UL)$/.test(child.nodeName)) {
+                     child.style.display = 'block';
+                     }
+                  }
+               },
+            function hide() {
+               HQToggle.innerHTML = HQShow;
+               for (var child = li.firstChild; child != null; child = child.nextSibling) {
+                  if (/^(ul|UL)$/.test(child.nodeName)) {
+                     child.style.display = 'none';
+                     }
+                  }
+               });
+
+         break;
+         }
+      }
+   }            
+               
+addOnloadHook( function () 
+{
+   if (wgNamespaceNumber == 0) {
+      var ols, lis, li;
+      // First, find all the ordered lists, i.e. all the series of definitions.
+      var ols = document.getElementsByTagName('ol');
+      for(var i = 0; i < ols.length; i++) {
+         // Then, for every set, find all the individual definitions.
+         for (var j = 0; j < ols[i].childNodes.length; j++) {
+            li = ols[i].childNodes[j];
+            if (li.nodeName.toUpperCase() == 'LI') {
+               setupHiddenQuotes(li);
+               }
+            }
+         }
+      }
+   });
+
+/*</pre>
+
+== Interproject links ==
+<pre>*/
+
+/*
+#########
+### ProjectLinks
+###  by [[user:Pathoschild]] (idea from an older, uncredited script)
+###    * generates a sidebar list of links to other projects from {{projectlinks}}
+#########
+*/
+function Projectlinks() {
+        var elements = new Array();
+        var spans = document.getElementsByTagName('span');
+        
+        // filter for projectlinks
+        for (var i=0, j=0; i<spans.length; i++) {
+                if (spans[i].className == 'interProject') {
+                        elements[j] = spans[i].getElementsByTagName('a')[0];
+                        j++;
+                }
+        }
+
+        if (j == 0)
+            return;
+        
+        // sort alphabetically
+        function sortbylabel(a,b) {
+                // get labels
+                a = a.innerHTML.replace(/^.*<a[^>]*>(.*)<\/a>.*$/i,'$1');
+                b = b.innerHTML.replace(/^.*<a[^>]*>(.*)<\/a>.*$/i,'$1');
+
+                // return sort order
+                if (a < b) return -1;
+                if (a > b) return 1;
+                return 0;
+        }
+        elements.sort(sortbylabel);
+        
+        // Create the list of project links
+        var pllist = newNode('ul');
+        for (var i=0; i<elements.length; i++) {
+                pllist.appendChild(newNode('li', elements[i]));
+        }
+        var projectBox = newNode('div', {'class': 'portlet portal', id: 'p-projects'}, 
+            newNode('h5', 'In other projects'),
+            newNode('div', {'class': 'pBody body'}, pllist)
+        );
+
+        var insert = document.getElementById('p-tb');
+        if (!insert)
+            return;
+
+        if (insert.nextSibling)
+            insert.parentNode.insertBefore(projectBox, insert.nextSibling);
+        else
+            insert.parentNode.appendChild(projectBox);
+}
+
+addOnloadHook(Projectlinks);

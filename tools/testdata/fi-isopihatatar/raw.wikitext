@@ -1,0 +1,16 @@
+==Suomi==
+===Substantiivi===
+{{fi-subs}}
+
+# [[pihatatar|pihatattaren]] alalaji {{takso|Polygonum aviculare subsp. aviculare}}<ref>{{lähde-kassu|<http://www.yso.fi/onto/kassu/k11489>|Polygonum aviculare subsp. aviculare}}. Viitattu 31.5.2016 päivättyyn versioon</ref>
+
+====Käännökset====
+{{kohta|1|''Polygonum aviculare ''subsp.'' aviculare''|
+
+|loppu}}
+
+====Aiheesta muualla====
+*{{muualla-laji.fi|id=MX.38217|viitattu=28.9.2026}}
+
+==Viitteet==
+<references/>
