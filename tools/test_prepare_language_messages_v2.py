@@ -1,5 +1,7 @@
 """Strict bounded v2 message capture, paired profiles and exact chunk replay."""
 import copy
+import contextlib
+import io
 import hashlib
 import json
 from pathlib import Path
@@ -374,6 +376,51 @@ class MessageV2Test(unittest.TestCase):
         self.assertTrue(capture.verify(args.output)['interface-messages']['candidate_queries_complete'])
 
 
+    def test_normal_cli_plans_native_phonos_keys_without_changing_historical_scope(self):
+        baseline, _, prior = self.collect(17, 'prior-explicit')
+        before = {p.name: p.read_bytes() for p in baseline.output.iterdir()}
+        output = self.base / 'normal-cli'
+        transport = Transport()
+        original = capture.capture
+        def offline(args):
+            return original(args, transport=transport, sleep=lambda _: None)
+        argv = ['prepare_language_messages_v2.py', 'capture', '--wiki', WIKI,
+                '--date', DATE, '--namespace-registry', str(self.namespace),
+                '--output', str(output), '--languages', 'bn', 'en',
+                '--messages', 'Phonos-aria-error', 'Key-003', '--delay', '1']
+        with mock.patch.object(capture.sys, 'argv', argv), mock.patch.object(capture, 'capture', side_effect=offline), contextlib.redirect_stdout(io.StringIO()):
+            capture.main()
+        records = capture.verify(output)
+        wanted = {'Phonos-aria-error', 'phonos-player-aria-description', 'Key-003', 'parser-template-loop-warning'}
+        self.assertEqual(set(records['interface-messages']['keys']), wanted)
+        self.assertEqual(records['interface-messages']['rows'], 8)
+        rows = (output / 'interface-messages.tsv').read_text()
+        for language in ('bn', 'en'):
+            self.assertIn(language + '\tphonos-aria-error\tV\tবাংলা Phonos-aria-error', rows)
+            self.assertIn(language + '\tphonos-player-aria-description\tV\tবাংলা phonos-player-aria-description', rows)
+            self.assertIn(language + '\tkey-003\tM\n', rows)
+        for kind in capture.KINDS:
+            self.assertEqual(builder.validated_auxiliary_capture(kind, output / (kind + '.tsv'), WIKI, DATE)[0], records[kind])
+        self.assertEqual(capture.verify(baseline.output), prior)
+        self.assertEqual(before, {p.name: p.read_bytes() for p in baseline.output.iterdir()})
+        self.assertNotIn('phonos-aria-error', prior['interface-messages']['keys'])
+
+    def test_normal_cli_native_plan_preserves_bound_and_fails_before_transport(self):
+        output = self.base / 'too-many-planned'
+        transport = Transport()
+        original = capture.capture
+        def offline(args):
+            return original(args, transport=transport, sleep=lambda _: None)
+        argv = ['prepare_language_messages_v2.py', 'capture', '--wiki', WIKI,
+                '--date', DATE, '--namespace-registry', str(self.namespace),
+                '--output', str(output), '--messages', *keys(66)]
+        with mock.patch.object(capture.sys, 'argv', argv), mock.patch.object(capture, 'capture', side_effect=offline):
+            with self.assertRaisesRegex(ValueError, 'excessive requested'):
+                capture.main()
+        self.assertFalse(output.exists())
+        self.assertEqual(transport.calls, [])
+
+
 class CompleteTransport:
     core = '115ff4de72eec9482447f6ad2a93444f3f78fddd'
 
@@ -648,6 +695,29 @@ class CompleteMessageTest(unittest.TestCase):
             self.assertEqual(capture.COMPLETE_RESPONSE_BYTES, 16 * 1024 * 1024)
             response.url = 'https://other.example/w/api.php'
             with self.assertRaisesRegex(ValueError, 'redirect endpoint'): capture.complete_response(url, 5)
+
+
+    def test_normal_complete_cli_supplements_both_native_phonos_dependencies(self):
+        output = self.base / 'normal-complete-cli'
+        transport = CompleteTransport()
+        original = capture.capture
+        def offline(args):
+            return original(args, transport=transport, sleep=lambda _: None)
+        argv = ['prepare_language_messages_v2.py', 'capture', '--wiki', WIKI,
+                '--date', DATE, '--namespace-registry', str(self.namespace),
+                '--output', str(output), '--languages', 'bn', 'en',
+                '--complete-messages', '--api-sources', str(self.sources)]
+        with mock.patch.object(capture.sys, 'argv', argv), mock.patch.object(capture, 'capture', side_effect=offline), contextlib.redirect_stdout(io.StringIO()):
+            capture.main()
+        records = capture.verify(output)
+        self.assertEqual(set(records['interface-messages']['extra_keys']),
+                         {'parser-template-loop-warning', 'phonos-aria-error', 'phonos-player-aria-description'})
+        rows = (output / 'interface-messages.tsv').read_text()
+        for language in ('bn', 'en'):
+            for key in ('phonos-aria-error', 'phonos-player-aria-description'):
+                self.assertIn(language + '\t' + key + '\t', rows)
+        for kind in capture.KINDS:
+            self.assertEqual(builder.validated_auxiliary_capture(kind, output / (kind + '.tsv'), WIKI, DATE)[0], records[kind])
 
 
 if __name__ == '__main__':

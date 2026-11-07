@@ -918,6 +918,21 @@ def require_preferred_loop(record):
         raise ValueError('Preferred loop messages require the loop-warning key')
 
 
+# These are implicit native Phonos requests, not edition-specific template keys.
+# Plan them for new ordinary CLI captures; historical replay and explicit
+# diagnostic-library selections keep their recorded scope and verifier rules.
+NATIVE_CAPTURE_MESSAGE_KEYS = frozenset({
+    'phonos-aria-error', 'phonos-player-aria-description',
+})
+
+
+def planned_capture_messages(messages):
+    selected = set(messages)
+    normalized = {normalize_key(key) for key in selected}
+    return sorted(selected | {key for key in NATIVE_CAPTURE_MESSAGE_KEYS
+                              if normalize_key(key) not in normalized})
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
@@ -944,6 +959,8 @@ def main():
             parser.error('--complete-messages requires --api-sources')
         if not args.complete_messages and (not args.messages or args.api_sources is not None):
             parser.error('Explicit v2 capture requires --messages and no --api-sources')
+    if args.command == 'capture':
+        args.messages = planned_capture_messages(args.messages)
     manifests = capture(args) if args.command == 'capture' else verify(args.output)
     print(json.dumps({kind: {k: record[k] for k in ('wiki', 'date', 'content_language', 'rows',
         'output_sha256', 'temporal_scope')} for kind, record in manifests.items()}, sort_keys=True))
