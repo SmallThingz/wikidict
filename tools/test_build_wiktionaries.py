@@ -1709,6 +1709,68 @@ class BuildTest(PreparedToolsFixture):
         self.assertEqual(len(started),2)
         self.assertIn(4,[call.args[0] for call in budget.call_args_list])
 
+    def test_small_shard_batch_syncs_all_targets_before_any_raw_unlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); language=root/'languages';language.mkdir()
+            raws=[root/'aliases.wikblb',language/'a.wikblb',language/'b.wikblb']
+            for raw in raws:raw.write_bytes(b'WIKBLB08'+b'x'*20)
+            events=[];real_unlink=b.unlink_artifact
+            def encode(paths,block):
+                self.assertEqual(block,1048576);self.assertEqual(set(paths),set(raws))
+                for raw in paths:Path(str(raw)+'.xz').write_bytes(lzma.compress(raw.read_bytes()))
+                events.append(('encode',None))
+            def sync(parent):
+                events.append(('sync',parent))
+                self.assertTrue(all(Path(str(raw)+'.xz').exists() for raw in raws))
+            def unlink(raw):
+                self.assertEqual({x[1] for x in events if x[0]=='sync'},{root,language})
+                events.append(('unlink',raw));real_unlink(raw)
+            with patch.object(b,'compress_small_batch_keep',side_effect=encode), \
+                 patch.object(b,'sync_shard_directory',side_effect=sync),patch.object(b,'unlink_artifact',side_effect=unlink):
+                b.compress_verified_shard(root)
+            self.assertEqual([x[0] for x in events],['encode','sync','sync','unlink','unlink','unlink','sync','sync'])
+            self.assertTrue(all(not raw.exists() for raw in raws))
+
+    def test_small_shard_batch_sync_and_later_unlink_failures_remain_recoverable(self):
+        for failure in ('directory','unlink'):
+            with self.subTest(failure=failure),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);raws=[root/f'{n}.wikblb' for n in range(3)]
+                for raw in raws:
+                    raw.write_bytes(b'WIKBLB08'+b'x'*20)
+                    Path(str(raw)+'.xz').write_bytes(lzma.compress(raw.read_bytes()))
+                real_unlink=b.unlink_artifact
+                def sync(parent):
+                    if failure=='directory':raise OSError('directory sync failed')
+                def unlink(raw):
+                    if raw==raws[1]:raise OSError('later unlink failed')
+                    real_unlink(raw)
+                with patch.object(b,'sync_shard_directory',side_effect=sync), \
+                     patch.object(b,'unlink_artifact',side_effect=unlink):
+                    with self.assertRaises(OSError):b.compress_verified_shard(root)
+                for raw in raws:
+                    self.assertEqual(lzma.decompress(Path(str(raw)+'.xz').read_bytes()),b'WIKBLB08'+b'x'*20)
+                if failure=='directory':self.assertTrue(all(raw.exists() for raw in raws))
+                b.compress_verified_shard(root)
+                self.assertTrue(all(not raw.exists() for raw in raws))
+
+    def test_small_shard_batch_is_bounded_and_large_files_keep_serial_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);raws=[root/f'{n:03}.wikblb' for n in range(130)]
+            for raw in raws:raw.write_bytes(b'WIKBLB08x')
+            large=root/'001a.wikblb';large.write_bytes(b'WIKBLB08'+b'x'*65529)
+            calls=[]
+            def encode(paths,block):
+                calls.append(('batch',len(paths)))
+                self.assertLessEqual(len(paths),128)
+                for raw in paths:Path(str(raw)+'.xz').write_bytes(lzma.compress(raw.read_bytes()))
+            def single(raw,block,workers):
+                calls.append(('single',raw.name));self.assertEqual(workers,1)
+                Path(str(raw)+'.xz').write_bytes(lzma.compress(raw.read_bytes()))
+            with patch.object(b,'compress_small_batch_keep',side_effect=encode),patch.object(b,'compress',side_effect=single):
+                b.compress_verified_shard(root)
+            self.assertEqual(calls,[('single','001a.wikblb'),('batch',128),('batch',2)])
+            self.assertTrue(all(not raw.exists() for raw in raws+[large]))
+
     def test_compressed_shard_recovery_preserves_only_verified_copy_on_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);raw=root/'aliases.wikblb';payload=b'WIKBLB08\x08ordinary alias'

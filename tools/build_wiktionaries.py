@@ -23,7 +23,7 @@ import sys
 import threading
 import time
 import uuid
-from compress_blobs import compress, compress_many, default_workers, verify_round_trip
+from compress_blobs import compress, compress_many, compress_small_batch_keep, default_workers, verify_round_trip
 from build_disk_limits import BUILD_DISK_RESERVE_BYTES, require_merge_disk_space, compressed_blob_size
 from build_artifact_root import configure_artifact_root, artifact_path, remove_artifact_tree, unlink_artifact
 from download_wiktionaries import digest, language_registry_snapshot, validate_item, write_language_registry, select_manifest_files, derived_registry_paths, load_input_manifest
@@ -2169,22 +2169,38 @@ def sync_shard_directory(path):
 def compress_verified_shard(shard):
     """Native verification precedes this; all compressed recovery copies survive merge."""
     cleanup_shard_compression_parts(shard)
+    def commit_batch(raws):
+        missing = []
+        for raw in raws:
+            target = Path(str(raw)+'.xz')
+            if target.exists():
+                if not stat.S_ISREG(target.lstat().st_mode): raise ValueError(f'Unsafe compressed shard: {target}')
+                verify_round_trip(raw,target)
+            else:
+                missing.append(raw)
+        if len(missing) > 1:
+            compress_small_batch_keep(missing,1024*1024)
+        elif missing:
+            compress(missing[0],1024*1024,workers=1)
+        parents = sorted({raw.parent for raw in raws})
+        for raw in raws:
+            fd = os.open(Path(str(raw)+'.xz'),os.O_RDONLY|os.O_NOFOLLOW)
+            try: os.fsync(fd)
+            finally: os.close(fd)
+        # Every target and renamed entry is durable before the first raw deletion.
+        for parent in parents: sync_shard_directory(parent)
+        for raw in raws: unlink_artifact(raw)
+        for parent in parents: sync_shard_directory(parent)
+
+    pending = []
     for raw in list(shard_blob_paths(shard)):
         if not raw.name.endswith('.wikblb'): continue
-        target = Path(str(raw)+'.xz')
-        if target.exists():
-            if not stat.S_ISREG(target.lstat().st_mode): raise ValueError(f'Unsafe compressed shard: {target}')
-            verify_round_trip(raw,target)
+        if raw.stat().st_size > 64*1024:
+            commit_batch([raw])
         else:
-            compress(raw,1024*1024,workers=1)
-        # Both target contents and its directory entry precede recovery deletion.
-        fd = os.open(target,os.O_RDONLY|os.O_NOFOLLOW)
-        try: os.fsync(fd)
-        finally: os.close(fd)
-        sync_shard_directory(target.parent)
-        # A raw-unlink failure preserves both copies; resume rechecks equivalence.
-        unlink_artifact(raw)
-        sync_shard_directory(target.parent)
+            pending.append(raw)
+            if len(pending) == 128: commit_batch(pending); pending = []
+    if pending: commit_batch(pending)
 
 
 def extraction_cache_args(cache_root, staged):

@@ -30,6 +30,35 @@ def _validate_raw_blob(path):
         if source.read(8)!=b'WIKBLB08':
             raise ValueError('Expected WIKBLB08: '+str(path))
 
+def compress_small_batch_keep(paths, block_size):
+    """Publish a bounded small-file batch, retaining every raw recovery copy."""
+    paths = [Path(path) for path in paths]
+    if not 1 <= len(paths) <= 128 or len(set(paths)) != len(paths):
+        raise ValueError('Small compression batch must have 1 through 128 unique files')
+    parts = [Path(str(path) + '.xz.part') for path in paths]
+    targets = [Path(str(path) + '.xz') for path in paths]
+    for path, part, target in zip(paths, parts, targets):
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 64*1024:
+            raise ValueError('Expected small regular blob: ' + str(path))
+        _validate_raw_blob(path)
+        if part.exists() or part.is_symlink(): raise FileExistsError(part)
+        if target.exists() or target.is_symlink(): raise FileExistsError(target)
+    started = time.perf_counter()
+    try:
+        subprocess.run(['xz', '-0', '--threads=1', f'--block-size={block_size}',
+                        '--keep', '--suffix=.xz.part', '--', *map(str, paths)], check=True)
+        for path, part in zip(paths, parts):
+            fd = os.open(part, os.O_RDONLY | os.O_NOFOLLOW)
+            try: os.fsync(fd)
+            finally: os.close(fd)
+            verify_round_trip(path, part)
+        # No raw is retired here; the shard owner must first sync renamed entries.
+        for part, target in zip(parts, targets): os.replace(part, target)
+        print(f'small batch: {len(paths)} blobs; {time.perf_counter()-started:.3f}s; verified; raw retained', flush=True)
+    finally:
+        for part in parts: part.unlink(missing_ok=True)
+
+
 def _compress_batch(paths, block_size):
     paths=list(paths)
     if not paths:return

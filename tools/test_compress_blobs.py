@@ -156,5 +156,78 @@ class SmallXzBatchCleanupTests(unittest.TestCase):
         self.assert_clean_parts()
 
 
+class SmallKeepBatchTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.paths = [self.root / f'{i}.wikblb' for i in range(3)]
+        for i, path in enumerate(self.paths): path.write_bytes(b'WIKBLB08' + bytes([65+i])*32)
+
+    def encode(self, argv, *, check):
+        self.assertTrue(check)
+        self.assertEqual(argv[:6], ['xz', '-0', '--threads=1', '--block-size=1048576', '--keep', '--suffix=.xz.part'])
+        self.assertEqual(argv[6], '--')
+        self.assertEqual(list(map(Path, argv[7:])), self.paths)
+        for path in self.paths:
+            Path(str(path)+'.xz.part').write_bytes(lzma.compress(path.read_bytes(), preset=0))
+
+    def test_verified_batch_keeps_raw_and_renames_only_after_all_roundtrips(self):
+        events = []; real_verify = compress_blobs.verify_round_trip; real_replace = compress_blobs.os.replace
+        def verify(path, part):
+            events.append(('verify', path)); real_verify(path, part)
+        def replace(part, target):
+            self.assertEqual(sum(x[0]=='verify' for x in events), 3)
+            self.assertTrue(all(path.exists() for path in self.paths))
+            events.append(('rename', target)); real_replace(part, target)
+        with mock.patch.object(compress_blobs.subprocess, 'run', side_effect=self.encode) as run, \
+             mock.patch.object(compress_blobs, 'verify_round_trip', side_effect=verify), \
+             mock.patch.object(compress_blobs.os, 'replace', side_effect=replace):
+            compress_blobs.compress_small_batch_keep(self.paths, 1048576)
+        self.assertEqual(run.call_count, 1)
+        for path in self.paths: self.assertEqual(lzma.decompress(Path(str(path)+'.xz').read_bytes()), path.read_bytes())
+        self.assertEqual(list(self.root.glob('*.part')), [])
+
+    def test_batch_bounds_and_existing_recovery_refused_before_launch(self):
+        bad = [[], self.paths*2, [self.paths[0]]*129]
+        self.paths[0].write_bytes(b'WIKBLB08'+b'x'*65529)
+        bad.append(self.paths)
+        with mock.patch.object(compress_blobs.subprocess, 'run') as run:
+            for paths in bad:
+                with self.assertRaises(ValueError): compress_blobs.compress_small_batch_keep(paths, 1048576)
+            self.paths[0].write_bytes(b'WIKBLB08ok')
+            part = Path(str(self.paths[1])+'.xz.part'); part.write_bytes(b'old recovery')
+            with self.assertRaises(FileExistsError): compress_blobs.compress_small_batch_keep(self.paths, 1048576)
+            self.assertEqual(part.read_bytes(), b'old recovery')
+            run.assert_not_called()
+
+    def test_encoder_corruption_sync_and_rename_failures_preserve_raw(self):
+        for failure in ('encoder', 'corrupt', 'sync', 'rename'):
+            with self.subTest(failure=failure):
+                for path in self.paths:
+                    Path(str(path)+'.xz').unlink(missing_ok=True)
+                def encode(argv, **kwargs):
+                    self.encode(argv, **kwargs)
+                    if failure == 'encoder': raise subprocess.CalledProcessError(1, argv)
+                    if failure == 'corrupt': Path(str(self.paths[-1])+'.xz.part').write_bytes(b'bad')
+                real_sync = compress_blobs.os.fsync; real_replace = compress_blobs.os.replace
+                def sync(fd):
+                    if failure == 'sync': raise OSError('sync failed')
+                    return real_sync(fd)
+                def replace(src, dst):
+                    if failure == 'rename' and str(self.paths[1]) in str(src): raise OSError('rename failed')
+                    return real_replace(src, dst)
+                with mock.patch.object(compress_blobs.subprocess, 'run', side_effect=encode), \
+                     mock.patch.object(compress_blobs.os, 'fsync', side_effect=sync), \
+                     mock.patch.object(compress_blobs.os, 'replace', side_effect=replace):
+                    with self.assertRaises((OSError, lzma.LZMAError, EOFError, subprocess.CalledProcessError)):
+                        compress_blobs.compress_small_batch_keep(self.paths, 1048576)
+                self.assertTrue(all(path.read_bytes().startswith(b'WIKBLB08') for path in self.paths))
+                self.assertEqual(list(self.root.glob('*.part')), [])
+                for path in self.paths:
+                    target=Path(str(path)+'.xz')
+                    if target.exists(): self.assertEqual(lzma.decompress(target.read_bytes()),path.read_bytes())
+
+
 if __name__ == '__main__':
     unittest.main()
