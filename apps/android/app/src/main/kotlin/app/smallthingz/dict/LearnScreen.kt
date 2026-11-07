@@ -100,8 +100,17 @@ internal fun QuizGame(pool: List<SavedWord>, target: Int, onAnswer: (String, Boo
 @Composable
 internal fun Flashcards(pool: List<SavedWord>, onOpen: (SavedWord) -> Unit, onAnswer: (String, Boolean) -> Unit,
     showEmpty: Boolean = true, libraryRevision: Int = 0, loadStudyClue: suspend (SavedWord) -> String? = { null }) {
-    var card by remember(pool) { mutableStateOf(pool.randomOrNull()) }
-    var revealed by remember(card) { mutableStateOf(false) }
+    var cardKey by rememberSaveable { mutableStateOf(pool.randomOrNull()?.key) }
+    var revealedKey by rememberSaveable { mutableStateOf<String?>(null) }
+    // Retain identity across Read without retaining stale saved-word metadata or a whole pool.
+    val card = remember(pool, cardKey) { pool.firstOrNull { it.key == cardKey } ?: pool.randomOrNull() }
+    val revealed = card != null && revealedKey == card.key
+    SideEffect {
+        if (card?.key != cardKey && (card != null || showEmpty)) {
+            cardKey = card?.key
+            revealedKey = null
+        }
+    }
     val currentLoader by rememberUpdatedState(loadStudyClue)
     val studyClue by key(card, libraryRevision) {
         produceState<String?>(null) {
@@ -116,15 +125,15 @@ internal fun Flashcards(pool: List<SavedWord>, onOpen: (SavedWord) -> Unit, onAn
     }
     Box(Modifier.fillMaxWidth()) { Column(Modifier.padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (card == null) { if (showEmpty) Text("Open or bookmark some words first.") } else card?.let { word ->
-            FilledTonalButton(onClick = { revealed = !revealed }, modifier = Modifier.fillMaxWidth().heightIn(min = 150.dp), shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp)) {
+            FilledTonalButton(onClick = { cardKey = word.key; revealedKey = if (revealed) null else word.key }, modifier = Modifier.fillMaxWidth().heightIn(min = 150.dp), shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp)) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(word.title, style = MaterialTheme.typography.headlineMedium)
                     Text(if (revealed) studyClue ?: word.clue else "Recall the meaning, then tap to reveal.")
                 }
             }
             if (revealed) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { onAnswer(word.key, false); card = pool.filterNot { it.key == word.key }.randomOrNull() ?: word; revealed = false }) { Text("Again") }
-                Button(onClick = { onAnswer(word.key, true); card = pool.filterNot { it.key == word.key }.randomOrNull() ?: word; revealed = false }) { Text("Got it") }
+                OutlinedButton(onClick = { onAnswer(word.key, false); cardKey = (pool.filterNot { it.key == word.key }.randomOrNull() ?: word).key; revealedKey = null }) { Text("Again") }
+                Button(onClick = { onAnswer(word.key, true); cardKey = (pool.filterNot { it.key == word.key }.randomOrNull() ?: word).key; revealedKey = null }) { Text("Got it") }
                 TextButton(onClick = { onOpen(word) }) { Text("Read") }
             }
         }

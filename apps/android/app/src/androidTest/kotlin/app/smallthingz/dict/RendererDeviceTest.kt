@@ -2326,6 +2326,79 @@ class RendererDeviceTest {
         compose.runOnIdle { assertEquals(listOf(oldQuestion.key to true, newQuestion.key to true), answers) }
     }
 
+    @Test fun learnCardsRetainModeAndRevealedOwnerAcrossDisposedScreen() {
+        val first = SavedWord("return-card-a", "alpha", "English", "language", "First meaning", dictionary = "owner-a")
+        val second = SavedWord("return-card-b", "bravo", "English", "language", "Second meaning", dictionary = "owner-b")
+        val replacement = SavedWord("return-card-c", "charlie", "English", "language", "Replacement meaning", dictionary = "owner-c")
+        val pool = mutableStateOf(listOf(first, second))
+        val showLearn = mutableStateOf(true)
+        val opened = mutableListOf<SavedWord>()
+        val disposals = java.util.concurrent.atomic.AtomicInteger()
+        var primary: Throwable? = null
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                val state = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
+                DictTheme("light") { androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+                    androidx.compose.animation.Crossfade(showLearn.value, label = "learn-return-control") { learning ->
+                        if (learning) state.SaveableStateProvider(AppScreen.Learn) {
+                            androidx.compose.runtime.DisposableEffect(Unit) { onDispose { disposals.incrementAndGet() } }
+                            LearnPanel(pool.value, 3, { _, _ -> error("No rating selected") },
+                                { opened += it; showLearn.value = false }, {})
+                        } else androidx.compose.material3.Button(onClick = { showLearn.value = true }) {
+                            androidx.compose.material3.Text("Return to Learn")
+                        }
+                    }
+                } }
+            } }
+            compose.onNodeWithText("Cards").performClick()
+            val selected = pool.value.single { word ->
+                compose.onAllNodesWithText(word.title).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithText(selected.title).performClick()
+            compose.onNodeWithText(selected.clue).assertIsDisplayed()
+            compose.onNodeWithText("Read").performClick()
+            compose.waitUntil(10000) { disposals.get() == 1 }
+            compose.onNodeWithText("Cards").assertDoesNotExist()
+            compose.onNodeWithText(selected.clue).assertDoesNotExist()
+            // Read may update history metadata; the current pool row remains authoritative.
+            val updated = selected.copy(clue = "Current meaning for ${selected.title}", views = selected.views + 1)
+            compose.runOnIdle { pool.value = pool.value.map { if (it.key == selected.key) updated else it } }
+            compose.onNodeWithText("Return to Learn").performClick()
+            compose.onNodeWithText("Cards").assertIsSelected()
+            compose.onNodeWithText(updated.title).assertIsDisplayed()
+            compose.onNodeWithText(updated.clue).assertIsDisplayed()
+            compose.onNodeWithText("Recall the meaning, then tap to reveal.").assertDoesNotExist()
+            compose.onNodeWithText("Read").performClick()
+            compose.waitUntil(10000) { disposals.get() == 2 }
+            compose.runOnIdle {
+                assertEquals(listOf(selected, updated), opened)
+                pool.value = listOf(replacement)
+            }
+            compose.onNodeWithText("Return to Learn").performClick()
+            compose.onNodeWithText("Cards").assertIsSelected()
+            compose.onNodeWithText(replacement.title).assertIsDisplayed()
+            compose.onNodeWithText("Recall the meaning, then tap to reveal.").assertIsDisplayed()
+            compose.onNodeWithText("Open or bookmark at least two different words first.").assertDoesNotExist()
+            compose.onNodeWithText("Read").assertDoesNotExist()
+            compose.onNodeWithText(replacement.clue).assertDoesNotExist()
+            // Even returning to an earlier owner cannot resurrect its obsolete reveal state.
+            compose.runOnIdle { pool.value = listOf(updated) }
+            compose.onNodeWithText(updated.title).assertIsDisplayed()
+            compose.onNodeWithText("Recall the meaning, then tap to reveal.").assertIsDisplayed()
+            compose.onNodeWithText(updated.clue).assertDoesNotExist()
+        } catch (failure: Throwable) {
+            primary = failure
+            throw failure
+        } finally {
+            try {
+                compose.activityRule.scenario.onActivity { it.setContent {} }
+                compose.waitForIdle()
+            } catch (cleanup: Throwable) {
+                primary?.addSuppressed(cleanup) ?: throw cleanup
+            }
+        }
+    }
+
     @Test fun flashcardPoolReplacementStartsUnrevealedAndUsesCurrentOwner() {
         val oldWord = SavedWord("old-card", "alpha", "English", "language", "Old card meaning")
         val newWord = SavedWord("new-card", "bravo", "English", "language", "New card meaning")

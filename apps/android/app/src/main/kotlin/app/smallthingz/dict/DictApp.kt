@@ -19,6 +19,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
@@ -65,6 +66,7 @@ fun DictApp(library: LibraryStore, learning: LearningStore,
     importNavigationRequest: Long = 0L, onImportNavigationHandled: (Long) -> Unit = {},
     onImport: () -> Unit) {
     var screen by rememberSaveable { mutableStateOf(AppScreen.Dictionary) }
+    val learnState = rememberSaveableStateHolder()
     var importLibraryVisit by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
     var dockHidden by remember { mutableStateOf(false) }
@@ -238,7 +240,7 @@ fun DictApp(library: LibraryStore, learning: LearningStore,
                     }
                     AppScreen.Saved -> SavedScreen(learning, false, ::openWord)
                     AppScreen.History -> SavedScreen(learning, true, ::openWord)
-                    AppScreen.Learn -> {
+                    AppScreen.Learn -> learnState.SaveableStateProvider(AppScreen.Learn) {
                         LearnResults(library.revision, learning.data.settings.randomPool, {
                             val hits=LinkedHashMap<String,WordHit>()
                             repeat(64){library.random()?.let{hits[it.key]=it}}
