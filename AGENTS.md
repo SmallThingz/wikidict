@@ -4,6 +4,7 @@
 
 - `main` is the only local branch. Work directly on it; do not create branches/worktrees unless the user explicitly asks.
 - Do not push unless the user explicitly asks.
+- When using collaboration tools, activate follow-up work on an idle or completed agent with `followup_task`. `send_message` only delivers a message; it does not wake the agent. Check actual owner/task status before waiting for a review or job, and reuse the existing owner instead of starting a duplicate.
 - Do not publish GitHub releases, including prereleases, until the user explicitly approves publication again. The application is not production-ready until the user says it is; passing tests or packaging artifacts does not grant release approval.
 - Corpus builds budget 8 GiB independently of host free RAM. The default requires private cgroup limits; explicit `--resource-mode=watchdog` uses sampled best-effort memory/task limits, bounded CPU affinity and a finite deadline when the user accepts that fallback.
 - Check shared-host available RAM and memory pressure before admitting a job. Once admitted, host RAM/PSI changes are telemetry only and must not terminate the job. Preserve the job's own memory, CPU, task and time limits; queue subsequent work instead of killing an admitted job because another workload consumed RAM.
