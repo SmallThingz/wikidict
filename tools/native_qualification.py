@@ -2,6 +2,133 @@
 """Existing native qualification owner/worker, with authenticated per-run data."""
 
 
+FULL_DIAGNOSTIC_ROOTS = (
+    ('closure_tests', 'closure', None), ('provider_tests', 'provider', None),
+    ('storage_unit', 'storage_unit', None), ('namespace_registry_tests', 'namespace_registry', None),
+    ('encoder_compile', 'encoder_compile', 'presentation_compile.test.'),
+    ('encoder_document', 'encoder_document', 'presentation_document.test.'),
+    ('encoder_writer', 'encoder_writer', 'blob_builder.test.'),
+    ('encoder_support', 'encoder_support', None),
+    ('blob_encoder_tests', 'blob_encoder', None), ('blob_decoder_tests', 'blob_decoder', None),
+    ('blob_query_tests', 'blob_query', None), ('wikimedia_dump_tests', 'wikimedia_dump', None),
+    ('lua_tests', 'lua', None), ('lua_core_tests', 'lua_core', None),
+    ('global_index_tests', 'global_index', None), ('program_shapes_tests', 'program_shapes', None),
+    ('lua_abi_tests', 'lua_abi', None), ('lua_stdlib_tests', 'lua_stdlib', None),
+    ('lua_ustring_tests', 'lua_ustring', None), ('lua_scribunto_tests', 'lua_scribunto', None),
+    ('lua_wikitext_tests', 'lua_wikitext', None), ('bundle_protocol_tests', 'bundle_protocol', None),
+    ('bundle_pipeline_tests', 'bundle_pipeline', None), ('blob_build_tests', 'tools', None),
+    ('blob_file_tools_tests', 'blob_file_tools', None), ('missing_dependency_tests', 'missing_dependency', None),
+)
+FUNCTIONAL_TEST_ERRORS = ('TestExpectedEqual', 'TestUnexpectedResult')
+
+
+def full_diagnostic_groups(expected):
+    from collections import Counter
+    groups = expected['groups']
+    assert expected['expected_groups'] == len(groups) == len(FULL_DIAGNOSTIC_ROOTS)
+    assert len({g['root'] for g in groups}) == len(groups)
+    assert {g['root'] for g in groups} == {r for r, _, _ in FULL_DIAGNOSTIC_ROOTS}
+    by_root = {g['root']: g for g in groups}
+    signatures = set()
+    for group in groups:
+        counts = group['expected_occurrences']
+        assert type(counts) is dict and counts
+        assert all(type(n) is str and n and '\n' not in n and type(c) is int and c > 0 for n, c in counts.items())
+        signature = tuple(sorted(counts.items()))
+        assert signature not in signatures, 'Ambiguous normal root inventory'
+        signatures.add(signature)
+    assert sum(sum(g['expected_occurrences'].values()) for g in groups) == expected['expected_total']
+    return [dict(root=root, prepared_group=alias, runtime_filter=runtime_filter,
+                 expected_occurrences=Counter(by_root[root]['expected_occurrences']))
+            for root, alias, runtime_filter in FULL_DIAGNOSTIC_ROOTS]
+
+
+def completed_diagnostic_roots(groups, helper, stdout, stderr):
+    """Only complete, exact normal runner inventories identify executed roots."""
+    from collections import Counter
+    import re
+    signatures = {tuple(sorted(g['expected_occurrences'].items())): g['root'] for g in groups}
+    observed = {}
+    for stream in (stdout, stderr):
+        pending = []
+        for line in helper['ANSI'].sub('', stream).splitlines():
+            status = helper['STATUS'].fullmatch(line)
+            summary = helper['SUMMARY'].fullmatch(line)
+            if status:
+                kind, name = status.groups()
+                assert '\ufffd' not in name
+                if kind == 'error':
+                    # The existing child prints its returned error last, then
+                    # this fixed trailer. Do not classify names/assertion prose.
+                    diagnostic = line.rpartition(' | err: ')[2]
+                    typed = re.search(r'(?:^| )([A-Za-z_][A-Za-z0-9_]*) error return trace unavailable \(enable error tracing for this test build\)  \| exit 1$', diagnostic)
+                    assert typed and typed[1] in FUNCTIONAL_TEST_ERRORS, 'Unproven functional runner termination'
+                assert kind in ('ok', 'error'), 'Resource/leak/crash/skip is not continuation authority'
+                pending.append((kind, name))
+            elif summary:
+                counts = list(map(int, summary.groups()))
+                assert counts == [sum(k == 'ok' for k, _ in pending), sum(k == 'error' for k, _ in pending), 0, 0, 0]
+                signature = tuple(sorted(Counter(n for _, n in pending).items()))
+                root = signatures.get(signature)
+                assert root is not None and root not in observed, 'Unknown or duplicate completed root'
+                observed[root] = dict(failed=bool(counts[1]), statuses=pending)
+                pending = []
+            else:
+                assert not re.match(r'^(?:ok|error|skip|leak|crash) |^pass:', line), 'Malformed runner evidence'
+        assert not pending, 'Incomplete normal root inventory'
+    return observed
+
+
+def failed_full_diagnostic_plan(expected, helper, command, stdout, stderr):
+    """Conservative functional-failure authority, never a full acceptance path."""
+    import re
+    assert command['status'] == 'exited' and type(command['returncode']) is int and command['returncode'] == 1
+    groups = full_diagnostic_groups(expected)
+    text = helper['ANSI'].sub('', stdout + '\n' + stderr)
+    observed = completed_diagnostic_roots(groups, helper, stdout, stderr)
+    failures = sum(v['failed'] for v in observed.values())
+    assert failures > 0
+    # A direct compiler/tool failure must not be mistaken for a blocked test edge.
+    assert re.findall(r'^error:.*$', text, re.M) == ['error: process exited with code 1'] * failures
+    summaries = re.findall(r'^Build Summary: (\d+)/(\d+) steps succeeded \((\d+) failed\)$', text, re.M)
+    assert len(summaries) == 1 and int(summaries[0][2]) == failures
+    direct = re.findall(r'\brun test failure\s*$', text, re.M)
+    assert len(direct) >= failures  # A failed graph node may be displayed through multiple dependency paths.
+    assert not re.search(r'\b(?:compile|translate-c|run exe|run lib).* (?<!transitive )failure\s*$', text, re.M)
+    return dict(groups=groups, observed=observed, remaining=[g for g in groups if g['root'] not in observed])
+
+
+def collect_failed_full_roots(plan, *, helper, prepare, run, guard, auth, save):
+    """Serial existing-root diagnostics; callbacks retain the normal owner caps."""
+    report = dict(diagnostic_only=True, full_suite_credit=False, original_full_failure_preserved=True,
+                  already_executed=list(plan['observed']), roots=[], completed=False)
+    save(report)
+    for group in plan['remaining']:
+        report['current_root'] = group['root']
+        save(report)
+        guard()
+        binary = prepare(group)  # Source/tool/resource/compile errors propagate.
+        auth(binary)
+        guard()
+        command, stdout, stderr = run(group, binary)
+        guard()
+        auth(binary)
+        assert command['status'] == 'exited' and type(command['returncode']) is int and command['returncode'] in (0, 1)
+        text = helper['ANSI'].sub('', stdout + '\n' + stderr)
+        assert not any(line.startswith('error:') for line in text.splitlines()), 'Unexpected tool diagnostic'
+        observed = completed_diagnostic_roots([group], helper, stdout, stderr)
+        assert list(observed) == [group['root']]
+        failed = observed[group['root']]['failed']
+        assert command['returncode'] == int(failed)
+        report['roots'].append(dict(root=group['root'], binary=binary, command=command,
+                                    passed=not failed, exact_inventory=True, full_suite_credit=False))
+        save(report)
+    report['completed'] = True
+    report.pop('current_root', None)
+    save(report)
+    return report
+
+
 def bound_captured_source_fingerprint(cfg, auth):
     """Optional captured CLI identity is the authenticated current inventory digest."""
     if 'captured_source_fingerprint' not in cfg:
@@ -484,11 +611,14 @@ if __name__ == '__main__':
         result=dict(passed=False,status='running',compiles=[],focused_tests=[],saved_tests=[],phases=[],full_native_pass=False,bundle_pipeline_pass=False,bundle_pass=False,cli_ffi_install_pass=False,canonical_source=False,source_copies=False,retained_private_source=str(private))
         result['selected_current_count']=cfg['focused_expected'];result['historical_pass_admission']=False
         def save():w['write'](out/'result.json',result)
+        def execute_outcome(label,argv):
+         guard();dynamic['validate'](ds);command=w['execute'](out,label,argv,private);so=(out/(label+'.stdout')).read_text(errors='replace');se=(out/(label+'.stderr')).read_text(errors='replace');result['phases'].append(dict(name=label,command=command,stdout=ref(out/(label+'.stdout')),stderr=ref(out/(label+'.stderr'))));save();guard();return command,so,se
         def execute(label,argv):
-         guard();dynamic['validate'](ds);command=w['execute'](out,label,argv,private);so=(out/(label+'.stdout')).read_text(errors='replace');se=(out/(label+'.stderr')).read_text(errors='replace');result['phases'].append(dict(name=label,command=command,stdout=ref(out/(label+'.stdout')),stderr=ref(out/(label+'.stderr'))));save();guard();assert command['status']=='exited' and command['returncode']==0,(label,command);return so,se
+         command,so,se=execute_outcome(label,argv);assert command['status']=='exited' and command['returncode']==0,(label,command);return so,se
         save()
         try:
          assert cfg['execution_stage'] in ('full','tail','focused-diagnostic')
+         assert type(cfg.get('collect_unrun_full_roots',False))is bool
          if cfg['execution_stage']=='tail':
           reuse=cfg['tail_reuse'];prior_cfg=read(reuse['configuration']);prior=read(reuse['result']);closed=read(reuse['closure']);released=read(reuse['release'])
           assert bound_captured_source_fingerprint(prior_cfg,auth)==captured_fingerprint
@@ -605,7 +735,26 @@ if __name__ == '__main__':
            cli=result['installed']['bin/wikidict'];auth(cli)
            result['installed_dynamic_identity']=dynamic['validate'](ds,binary=cli['path']);save()
            full_argv=qualification_build_argv(args,cache,w['native_build_argv'],family='full')
-           so,se=execute('full-native-suite',full_argv);native=w['classify'](so,se,standalone=False);assert native['passed'];result['native_inventory']=native;result['grouped_inventory']=inv['validate_grouped'](w,expect['expected'],so,se)
+           full_command,so,se=execute_outcome('full-native-suite',full_argv)
+           if not(full_command['status']=='exited' and type(full_command['returncode'])is int and full_command['returncode']==0):
+            if cfg.get('collect_unrun_full_roots',False):
+             plan=failed_full_diagnostic_plan(expect['expected'],w,full_command,so,se)
+             result['original_full_failure']=result['phases'][-1];save()
+             def diagnostic_save(report):
+              result['failed_full_collection']=report;assert result['full_native_pass']is False;save()
+             def diagnostic_prepare(group):
+              prefix=out/'failed-full-prepared'/group['prepared_group'];assert not prefix.exists()
+              argv=qualification_build_argv(args,cache,w['native_build_argv'],family='prepare',prefix=prefix)+['-Dprepare-test-group='+group['prepared_group']]
+              execute('failed-full-prepare-'+group['root'],argv)
+              directory=prefix/'bin/wikidict-tests';entries=list(directory.iterdir())
+              assert len(entries)==1 and entries[0].name==group['prepared_group'] and entries[0].is_file()and not entries[0].is_symlink()and os.access(entries[0],os.X_OK)
+              binary=ref(entries[0]);auth(binary);return binary
+             def diagnostic_run(group,binary):
+              argv=[binary['path']]+(['--test-filter',group['runtime_filter']]if group['runtime_filter']else[])
+              return execute_outcome('failed-full-run-'+group['root'],argv)
+             collect_failed_full_roots(plan,helper=w,prepare=diagnostic_prepare,run=diagnostic_run,guard=guard,auth=auth,save=diagnostic_save)
+            raise AssertionError(('full-native-suite',full_command))
+           native=w['classify'](so,se,standalone=False);assert native['passed'];result['native_inventory']=native;result['grouped_inventory']=inv['validate_grouped'](w,expect['expected'],so,se)
            for binary in binaries.values():auth(binary)
            text=w['ANSI'].sub('',so+'\n'+se);names=[name for status,name in w['STATUS'].findall(text) if status=='ok'];assert len(names)==cfg['full_native_expected']
            actual={name:sum(n.endswith('.test.'+name) for n in names) for name in expect['required_test_counts']};assert actual==expect['required_test_counts'];result['required_test_counts']=actual

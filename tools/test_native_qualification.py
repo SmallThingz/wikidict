@@ -1243,8 +1243,26 @@ class CapturedFingerprintTests(unittest.TestCase):
         calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
                  and isinstance(node.func, ast.Name) and node.func.id == 'qualification_build_argv']
         families = [next(keyword.value for keyword in call.keywords if keyword.arg == 'family') for call in calls]
-        self.assertEqual(sorted(value.value for value in families if isinstance(value, ast.Constant)),
-                         ['full', 'install', 'prepare'])
+        self.assertEqual({value.value for value in families if isinstance(value, ast.Constant)},
+                         {'full', 'install', 'prepare'})
+        parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+        prepare_owners = []
+        for call in calls:
+            family = next(k.value for k in call.keywords if k.arg == 'family')
+            if not isinstance(family, ast.Constant) or family.value != 'prepare':
+                continue
+            owner = parents[call]
+            while not isinstance(owner, ast.FunctionDef):
+                owner = parents[owner]
+            prepare_owners.append(owner.name)
+        self.assertEqual(sorted(prepare_owners), ['diagnostic_prepare', 'prepare_tests_argv'])
+        diagnostic = [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+                      and node.name == 'diagnostic_prepare']
+        self.assertEqual(len(diagnostic), 1)
+        diagnostic_calls = [node for node in ast.walk(diagnostic[0]) if isinstance(node, ast.Call)
+                            and isinstance(node.func, ast.Name) and node.func.id == 'qualification_build_argv']
+        self.assertEqual(len(diagnostic_calls), 1)
+        self.assertEqual([ast.unparse(k.value) for k in diagnostic_calls[0].keywords if k.arg == 'family'], ["'prepare'"])
         self.assertEqual([ast.unparse(value) for value in families if not isinstance(value, ast.Constant)], ['label'])
         # Bundle labels are the fixed family allowlist; Reader is in the full normal graph.
         self.assertIn("[('bundle-pipeline',['test-bundle-pipeline'],'bundle_pipeline_pass'),('bundle',['test-bundle'],'bundle_pass')]",
@@ -1314,12 +1332,40 @@ class PresentationSourceContractTests(unittest.TestCase):
                  and node.func.id == 'require_presentation_source_contract']
         self.assertEqual(len(calls), 1)
         self.assertEqual([ast.unparse(arg) for arg in calls[0].args], ['private_binding'])
-        full = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name) and node.func.id == 'execute'
-                and node.args and isinstance(node.args[0], ast.Constant)
-                and node.args[0].value == 'full-native-suite']
-        self.assertEqual(len(full), 1)
-        self.assertLess(calls[0].lineno, full[0].lineno)
+        control = FailedFullCollectionTests()
+        code = control.full_boundary(include_capability=True)
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as tmp:
+            private = Path(tmp)
+            header = private / 'dict.h'
+            header.write_text('#define DICT_ABI_VERSION 10u\n')
+            (private / 'tools').mkdir()
+            (private / 'tools/ffi_integration_test.c').write_text('DICT_ABI_VERSION == 10u && dict_abi_version() == DICT_ABI_VERSION')
+            for binding, expected_events in (({'ABI': 9, 'wire': 'DPRF'}, ['capability']),
+                                             ({'ABI': 10, 'wire': 'DPRF'}, ['capability','cli-auth','dynamic','full'])):
+                events = []
+                def capability(value):
+                    events.append('capability')
+                    qualification.require_presentation_source_contract(value)
+                def full(label, argv):
+                    events.append('full')
+                    self.assertEqual(label, 'full-native-suite')
+                    self.assertIn('-Doptimize=safe', argv)
+                    return dict(status='exited',returncode=1), '', ''
+                result = dict(full_native_pass=False, installed={
+                    'include/dict/dict.h': dict(path=str(header),sha256='fixture'),
+                    'bin/wikidict': dict(path='/bound-cli')})
+                ns = dict(require_presentation_source_contract=capability,private_binding=binding,
+                    result=result,private_manifest={'src/ffi/dict.h':{'sha256':'fixture'}},private=private,Path=Path,
+                    auth=lambda value:events.append('cli-auth'),
+                    dynamic={'validate':lambda state,**kw:events.append('dynamic')},ds={},save=lambda:None,
+                    qualification_build_argv=qualification.qualification_build_argv,
+                    args=SimpleNamespace(compiler=Path('/zig')),cache=private/'cache',
+                    w={'native_build_argv':lambda a,c:['/zig','build','test','-j1','-Doptimize=safe']},
+                    execute_outcome=full,cfg={})
+                with self.assertRaises(AssertionError):exec(code,ns)
+                self.assertEqual(events,expected_events)
+                self.assertFalse(result['full_native_pass'])
         # This old-format fixture remains mandatory even though capability is F.
         self.assertIn("payload.read_bytes().startswith(b'DPRD')", text)
         self.assertIn('normal_reader_checks=50', text)
@@ -1516,6 +1562,200 @@ class PreparationTracingTests(unittest.TestCase):
             else:
                 with self.assertRaises(AssertionError): exec(value['code'], namespace)
             self.assertEqual(value['commands'], [])
+
+
+class FailedFullCollectionTests(unittest.TestCase):
+    helper = dict(ANSI=re.compile(r'\x1b\[[0-9;]*m'),
+                  STATUS=re.compile(r'^(ok|error|skip|leak|crash) (.*?)(?: \| .*|)$', re.M),
+                  SUMMARY=re.compile(r'^pass: (\d+)  fail: (\d+)  skip: (\d+)  leak: (\d+)  crash: (\d+)$', re.M))
+
+    def fixture(self):
+        groups = [dict(root=root, expected_occurrences={root+'.test.fixture': 1})
+                  for root, _, _ in qualification.FULL_DIAGNOSTIC_ROOTS]
+        return dict(groups=groups, expected_groups=26, expected_total=26)
+
+    def output(self, groups, failed=()):
+        lines = []
+        for g in groups:
+            bad = g['root'] in failed
+            for name, count in g['expected_occurrences'].items():
+                lines.extend([('error ' if bad else 'ok ')+name+(' | err: TestUnexpectedResult error return trace unavailable (enable error tracing for this test build)  | exit 1' if bad else '')]*count)
+            count = sum(g['expected_occurrences'].values())
+            lines += [f'pass: {0 if bad else count}  fail: {count if bad else 0}  skip: 0  leak: 0  crash: 0']
+        return '\n'.join(lines)+'\n'
+
+    def failed_output(self, expected, index):
+        groups = expected['groups'][:index+1]
+        text = self.output(groups, {groups[-1]['root']})
+        return text+'error: process exited with code 1\nBuild Summary: 3/9 steps succeeded (1 failed)\n+- run test failure\n   +- compile test safe transitive failure\n'
+
+    def plan(self, index=0):
+        e = self.fixture()
+        return qualification.failed_full_diagnostic_plan(e, self.helper,
+                    dict(status='exited', returncode=1), '', self.failed_output(e, index))
+
+    def test_early_and_middle_failure_collect_only_unrun_serial_roots(self):
+        for index in (0, 12):
+            plan = self.plan(index); events=[]; saved=[]
+            def prepare(g):
+                events.append(('prepare', g['root'])); return dict(path=g['root'])
+            def run(g,b):
+                events.append(('run', g['root']));return dict(status='exited',returncode=0),'',self.output([g])
+            report=qualification.collect_failed_full_roots(plan,helper=self.helper,prepare=prepare,run=run,
+                          guard=lambda:None,auth=lambda b:None,save=lambda r:saved.append(copy.deepcopy(r)))
+            remaining=[g['root'] for g in plan['remaining']]
+            self.assertEqual(events,[(action,root) for root in remaining for action in ('prepare','run')])
+            self.assertEqual([r['root'] for r in report['roots']],remaining)
+            self.assertTrue(report['completed']);self.assertFalse(report['full_suite_credit'])
+            self.assertTrue(report['original_full_failure_preserved'])
+            self.assertTrue(all(not r['full_suite_credit'] for r in report['roots']))
+            self.assertNotIn('current_root',saved[-1])
+
+    def test_unknown_duplicate_missing_or_ambiguous_inventory_refuses(self):
+        for defect in ('unknown','duplicate','missing','empty','count','bool','ambiguous'):
+            e=self.fixture()
+            if defect=='unknown':e['groups'][0]['root']='foreign'
+            elif defect=='duplicate':e['groups'][0]['root']=e['groups'][1]['root']
+            elif defect=='missing':e['groups'].pop()
+            elif defect=='empty':e['groups'][0]['expected_occurrences']={}
+            elif defect=='count':e['expected_total']+=1
+            elif defect=='bool':e['groups'][0]['expected_occurrences'][e['groups'][0]['root']+'.test.fixture']=True
+            else:e['groups'][1]['expected_occurrences']=dict(e['groups'][0]['expected_occurrences'])
+            with self.subTest(defect=defect),self.assertRaises(AssertionError):qualification.full_diagnostic_groups(e)
+
+    def test_nonfunctional_full_outcomes_never_authorize_collection(self):
+        e=self.fixture();text=self.failed_output(e,0)
+        variants=[(dict(status='timeout',returncode=1),text),(dict(status='exited',returncode=True),text),
+                  (dict(status='exited',returncode=-9),text),(dict(status='exited',returncode=0),text)]
+        variants += [(dict(status='exited',returncode=1),changed) for changed in (
+            text.replace('TestUnexpectedResult','OutOfMemory'),text.replace(' | exit 1',' | signal 9'),
+            text.replace('TestUnexpectedResult','ContainmentUnavailable'),
+            text.replace('TestUnexpectedResult','UnknownReturnedError'),
+            text.replace('error return trace unavailable (enable error tracing for this test build)','/source/code.zig:99: traced error'),
+            text+'error: compiler executable missing\n',text.replace('+- run test failure','+- compile test failure'),
+            text.replace('(1 failed)','(2 failed)'),text.replace('closure_tests.test.fixture','foreign.test.fixture'),
+            text+self.output(e['groups'][:1]),text.replace('pass: 0  fail: 1','pass: 1  fail: 0'),
+            text.replace('error closure_tests','crash closure_tests'),text.replace('error: process exited with code 1',''),
+            text.replace('pass: 0  fail: 1  skip: 0  leak: 0  crash: 0',''))]
+        for command,se in variants:
+            with self.subTest(command=command,se=se),self.assertRaises(AssertionError):
+                qualification.failed_full_diagnostic_plan(e,self.helper,command,'',se)
+
+    def test_pass_names_and_assertion_prose_are_not_resource_authority(self):
+        e=self.fixture()
+        e['groups'][0]['expected_occurrences']={'site_info.test.site info allocation failures preserve OutOfMemory and release parser storage':1}
+        e['groups'][1]['expected_occurrences']={'provider.test.watchdog Timeout literal user title':1}
+        text=self.failed_output(e,1).replace('TestUnexpectedResult error return',
+                  'expected OutOfMemory ContainmentUnavailable SystemResources from watchdog Timeout input TestUnexpectedResult error return')
+        plan=qualification.failed_full_diagnostic_plan(e,self.helper,dict(status='exited',returncode=1),'',text)
+        self.assertEqual(set(plan['observed']),{'closure_tests','provider_tests'})
+        repeated=text+'|  +- run test failure\n'
+        duplicate=qualification.failed_full_diagnostic_plan(e,self.helper,dict(status='exited',returncode=1),'',repeated)
+        self.assertEqual(duplicate['observed'],plan['observed'])
+        report=qualification.collect_failed_full_roots(plan,helper=self.helper,
+            prepare=lambda g:dict(path=g['root']),run=lambda g,b:(dict(status='exited',returncode=0),'',self.output([g])+'literal OutOfMemory watchdog expected-error prose\n'),
+            guard=lambda:None,auth=lambda b:None,save=lambda r:None)
+        self.assertTrue(report['completed']);self.assertFalse(report['full_suite_credit'])
+
+    def test_compile_guard_and_resource_errors_stop_without_pass_credit(self):
+        for defect in ('compile','guard','auth','resource','tool','unknown','status'):
+            plan=self.plan();events=[];saved=[]
+            def guard():
+                if defect=='guard':raise RuntimeError('source changed')
+            def auth(b):
+                if defect=='auth':raise RuntimeError('binary changed')
+            def prepare(g):
+                events.append('prepare')
+                if defect=='compile':raise RuntimeError('compile failed; command retained')
+                return dict(path=g['root'])
+            def run(g,b):
+                events.append('run');out=self.output([g])
+                if defect=='resource':out=self.output([g],{g['root']}).replace('TestUnexpectedResult','ContainmentUnavailable')
+                if defect=='tool':out=self.output([g],{g['root']})+'error: tool execution failed\n'
+                if defect=='unknown':out=out.replace(g['root'],'unknown')
+                return dict(status='exited',returncode=True if defect=='status' else int(defect in ('resource','tool'))),'',out
+            with self.subTest(defect=defect),self.assertRaises((RuntimeError,AssertionError)):
+                qualification.collect_failed_full_roots(plan,helper=self.helper,prepare=prepare,run=run,guard=guard,auth=auth,save=lambda r:saved.append(copy.deepcopy(r)))
+            self.assertLessEqual(events.count('prepare'),1)
+            self.assertFalse(saved[-1]['completed']);self.assertEqual(saved[-1]['roots'],[])
+            self.assertFalse(saved[-1]['full_suite_credit'])
+
+    def test_later_functional_failure_does_not_hide_remaining_roots(self):
+        plan=self.plan(23);fail=plan['remaining'][0]['root']
+        def run(g,b):return dict(status='exited',returncode=int(g['root']==fail)),'',self.output([g],{fail})
+        report=qualification.collect_failed_full_roots(plan,helper=self.helper,prepare=lambda g:dict(path=g['root']),
+                      run=run,guard=lambda:None,auth=lambda b:None,save=lambda r:None)
+        self.assertEqual([r['passed'] for r in report['roots']],[False,True])
+        self.assertTrue(report['completed']);self.assertFalse(report['full_suite_credit'])
+
+    def full_boundary(self, include_capability=False):
+        import ast
+        tree=ast.parse(Path(qualification.__file__).read_text())
+        def search(node):
+            for _,value in ast.iter_fields(node):
+                if isinstance(value,list):
+                    for i,item in enumerate(value):
+                        if isinstance(item,ast.Assign) and isinstance(item.targets[0],ast.Tuple) and any(isinstance(n,ast.Name) and n.id=='full_command' for n in item.targets[0].elts):
+                            start = i
+                            if include_capability:
+                                matches = [j for j, statement in enumerate(value[:i]) if isinstance(statement,ast.Expr)
+                                           and isinstance(statement.value,ast.Call) and isinstance(statement.value.func,ast.Name)
+                                           and statement.value.func.id=='require_presentation_source_contract']
+                                self.assertEqual(len(matches),1)
+                                start=matches[0]
+                            return value[start:i+2]
+                        if isinstance(item,ast.AST):
+                            found=search(item)
+                            if found:return found
+                elif isinstance(value,ast.AST):
+                    found=search(value)
+                    if found:return found
+        body=search(tree);self.assertGreaterEqual(len(body),2)
+        return compile(ast.fix_missing_locations(ast.Module(body=body,type_ignores=[])),'<actual-full-failure-boundary>','exec')
+
+    def test_actual_worker_boundary_retains_original_failure_and_normal_build_args(self):
+        from types import SimpleNamespace
+        e=self.fixture();recorded=[]
+        with tempfile.TemporaryDirectory() as tmp:
+            out=Path(tmp);cache=out/'same-cache';args=SimpleNamespace(compiler=Path('/zig'),captured_source_fingerprint='a'*64)
+            def build_args(a,c):
+                self.assertIs(a,args);self.assertEqual(c,cache)
+                return ['/zig','build','test','-j1','-Doptimize=safe','-Dtarget=x86_64-native','-Dcpu=baseline','--cache-dir',str(c/'local')]
+            result=dict(full_native_pass=False,phases=[])
+            def execute_outcome(label,argv):
+                recorded.append((label,argv));command=dict(status='exited',returncode=1 if label=='full-native-suite' else 0)
+                result['phases'].append(dict(name=label,command=command))
+                if label=='full-native-suite':return command,'',self.failed_output(e,23)
+                g=next(g for g in qualification.full_diagnostic_groups(e) if label=='failed-full-run-'+g['root'])
+                return command,'',self.output([g])
+            def execute(label,argv):
+                recorded.append((label,argv));prefix=Path(argv[argv.index('--prefix')+1]);alias=argv[-1].split('=',1)[1]
+                d=prefix/'bin/wikidict-tests';d.mkdir(parents=True);f=d/alias;f.write_text('fixture');f.chmod(0o755)
+            ns=dict(cfg={'collect_unrun_full_roots':True},expect={'expected':e},w={'native_build_argv':build_args,**self.helper},
+                    full_argv=['original-full-argv'],args=args,cache=cache,out=out,Path=Path,os=__import__('os'),result=result,
+                    save=lambda:None,guard=lambda:None,auth=lambda b:None,ref=lambda p:dict(path=str(p)),execute=execute,
+                    execute_outcome=execute_outcome,qualification_build_argv=qualification.qualification_build_argv,
+                    failed_full_diagnostic_plan=qualification.failed_full_diagnostic_plan,collect_failed_full_roots=qualification.collect_failed_full_roots)
+            with self.assertRaisesRegex(AssertionError,'full-native-suite'):exec(self.full_boundary(),ns)
+            self.assertFalse(result['full_native_pass']);self.assertTrue(result['failed_full_collection']['completed'])
+            self.assertEqual(result['original_full_failure']['name'],'full-native-suite')
+            self.assertEqual([label for label,_ in recorded],['full-native-suite','failed-full-prepare-blob_file_tools_tests','failed-full-run-blob_file_tools_tests','failed-full-prepare-missing_dependency_tests','failed-full-run-missing_dependency_tests'])
+            for label,argv in recorded:
+                if 'prepare' in label:
+                    self.assertIn('-j2',argv);self.assertIn('-Doptimize=safe',argv)
+                    self.assertIn('-Dcaptured-source-fingerprint='+'a'*64,argv)
+                    self.assertFalse(any(a.startswith('-Dprepare-test-error-tracing') for a in argv))
+                    self.assertEqual(argv[argv.index('--cache-dir')+1],str(cache/'local'))
+
+    def test_default_and_success_boundary_do_not_start_collection(self):
+        for status,code in [('exited',0),('exited',1),('timeout',None)]:
+            result={'full_native_pass':False};calls=[]
+            ns=dict(execute_outcome=lambda *a:(dict(status=status,returncode=code),'',''),full_argv=[],cfg={},result=result,
+                    failed_full_diagnostic_plan=lambda *a:calls.append('forbidden'))
+            if code==0:exec(self.full_boundary(),ns)
+            else:
+                with self.assertRaises(AssertionError):exec(self.full_boundary(),ns)
+            self.assertEqual(calls,[]);self.assertFalse(result['full_native_pass'])
 
 
 if __name__ == '__main__':
