@@ -2,8 +2,119 @@ package app.smallthingz.dict
 
 import org.junit.Assert.*
 import org.junit.Test
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 
 class EntryClueTest {
+
+    private fun sense(text: String, path: String) = Block("definition", path.length,
+        listOf(Span("text", text)), listPath = path)
+
+    @Test fun studyClueKeepsParentAndFirstImmediateMeaningWithoutSelectingDeepestLeaf() {
+        val value = entry(sense("Parent context", "#"), sense("Immediate meaning", "##"),
+            sense("Narrower meaning", "###"), sense("Deepest leaf", "####"), sense("Other meaning", "#"))
+        val before = value.sections
+        assertEquals("Parent context", value.clue())
+        assertEquals("Parent context · Immediate meaning", value.studyClue())
+        assertEquals(before, value.sections)
+    }
+
+    @Test fun blankChildDoesNotPromoteItsGrandchildAndSkippedDepthRetainsNearestParent() {
+        val value = entry(sense("Parent", "#"), sense(" ", "##"), sense("Blank child's descendant", "###"),
+            sense("Next immediate child", "##"))
+        assertEquals("Parent · Next immediate child", value.studyClue())
+        assertEquals("Parent · Authored skipped depth", entry(sense("Parent", "#"),
+            sense("Authored skipped depth", "###")).studyClue())
+    }
+
+    @Test fun studyClueDoesNotCrossSiblingHeadingOrSectionAndKeepsAbsentHierarchyFallback() {
+        val parent = sense("First meaning", "#")
+        val child = sense("Later child", "##")
+        assertEquals("First meaning", entry(parent, sense("Second meaning", "#"), child).studyClue())
+        assertEquals("First meaning", entry(parent, Block("heading", 0, listOf(Span("text", "Other")), level = 4), child).studyClue())
+        assertEquals("First meaning", entry(parent).copy(sections = listOf(Section(3, "First", listOf(parent)),
+            Section(3, "Second", listOf(child)))).studyClue())
+        assertEquals("First meaning", entry(parent.copy(listPath = ""), child).studyClue())
+        assertEquals("First meaning", entry(parent, child.copy(listPath = "")).studyClue())
+        assertEquals("First meaning", entry(parent).studyClue())
+        val empty = entry(sense(" ", "#"), Block("paragraph", 0, listOf(Span("text", "Fallback"))))
+        assertEquals(empty.clue(), empty.studyClue())
+        assertEquals("Definition unavailable.", entry().studyClue())
+    }
+
+    @Test fun studyClueUsesExistingMediaFilterAndUnicodeCapWithoutChangingSavedPreview() {
+        val parent = sense("Parent", "#")
+        val controls = Block("definition", 2, listOf(Span("link", "asset.wav", classes = "wikidict-media")), listPath = "##")
+        val child = sense("x".repeat(410) + "😀tail", "##")
+        val value = entry(parent, controls, child)
+        assertEquals("Parent · " + "x".repeat(410), value.studyClue())
+        assertFalse(Character.isHighSurrogate(value.studyClue().last()))
+        assertEquals("Parent", value.clue())
+    }
+
+    private fun studyEntry(dictionary: String = "dict", context: String? = null): Entry {
+        val hit = WordHit(dictionary, "word", "Language", "language", 0, 1, "1\tword", context, "test-edition")
+        return entry(sense("Parent", "#"), sense("Meaning", "##")).copy(origin = hit,
+            edition = hit.edition, contentDictionary = dictionary)
+    }
+
+    private fun studyWord(value: Entry): SavedWord = checkNotNull(value.origin).let { hit ->
+        SavedWord(hit.key, hit.title, hit.language, hit.kind, value.clue(), dictionary = hit.dictionary,
+            recordKey = hit.recordKey, contextDictionary = hit.contextDictionary, edition = value.edition)
+    }
+
+    @Test fun activeStudyReusesExactOriginOrResolvesOnlyOneSavedWord() = runBlocking {
+        val value = studyEntry()
+        val word = studyWord(value)
+        var lookups = 0; var reads = 0
+        val lookup: suspend (SavedWord) -> WordHit? = { assertEquals(word, it); lookups++; value.origin }
+        val read: suspend (WordHit) -> Entry = { assertEquals(value.origin, it); reads++; value }
+        assertEquals("Parent · Meaning", activeStudyClue(word, listOf(value), lookup, read) { true })
+        assertEquals(0, lookups); assertEquals(0, reads)
+        for (other in listOf(studyEntry("other"), studyEntry(context = "other"), value.copy(edition = "different"))) {
+            assertEquals("Parent · Meaning", activeStudyClue(word, listOf(other), lookup, read) { true })
+        }
+        assertEquals(3, lookups); assertEquals(3, reads)
+        assertEquals("Parent", word.clue)
+    }
+
+    @Test fun activeStudyMissingOrRemovedOriginNeverReadsAndRemovedBodyNeverPublishes() = runBlocking {
+        val value = studyEntry()
+        val word = studyWord(value)
+        assertNull(activeStudyClue(word, emptyList(), { null }, { error("No missing read") }) { true })
+        assertNull(activeStudyClue(word, listOf(value), { value.origin }, { error("No removed read") }) { false })
+        val body = value.copy(contentDictionary = "removed-body")
+        assertNull(activeStudyClue(word, emptyList(), { value.origin }, { body }) { it != "removed-body" })
+        val failure = java.io.IOException("Controlled record failure")
+        try {
+            activeStudyClue(word, emptyList(), { value.origin }, { throw failure }) { true }
+            fail("The UI owns the error fallback")
+        } catch (actual: java.io.IOException) { assertSame(failure, actual) }
+    }
+
+    @Test fun cancelledNonCooperativeStudyReadCannotPublishOverNewCard() = runBlocking {
+        val value = studyEntry()
+        val word = studyWord(value)
+        val release = CompletableDeferred<Unit>()
+        val stale = value.copy(sections = listOf(Section(3, "Any heading",
+            listOf(sense("Stale parent", "#"), sense("Stale meaning", "##")))))
+        var published: String? = null
+        val old = async(start = CoroutineStart.UNDISPATCHED) {
+            val clue = activeStudyClue(word, emptyList(), { value.origin }, {
+                withContext(NonCancellable) { release.await(); stale }
+            }) { true }
+            published = clue
+        }
+        old.cancel()
+        published = activeStudyClue(word, listOf(value), { error("No lookup") }, { error("No read") }) { true }
+        release.complete(Unit); old.join()
+        assertTrue(old.isCancelled)
+        assertEquals("Parent · Meaning", published)
+    }
 
     @Test fun definitionClueKeepsPriorityWithoutSplittingSupplementaryTextAtCap() {
         val prose = Block("paragraph", 0, listOf(Span("text", "Fallback before the definition")))

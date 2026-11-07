@@ -244,7 +244,11 @@ fun DictApp(library: LibraryStore, learning: LearningStore,
                             repeat(64){library.random()?.let{hits[it.key]=it}}
                             hits.values.mapNotNull { try{library.read(it)}catch(e:kotlinx.coroutines.CancellationException){throw e}catch(_:Exception){null} }
                         }) { study, pending, failed, retry ->
-                            LearnScreen(learning, study, ::openWord, ::randomWord, pending, failed, retry)
+                            LearnScreen(learning, study, ::openWord, ::randomWord, pending, failed, retry,
+                                library.revision, { word ->
+                                    activeStudyClue(word, listOfNotNull(selected) + study, library::savedWord, library::read,
+                                        { id -> library.dictionaries.any { it.id == id } })
+                                })
                         }
                     }
                     AppScreen.Settings -> SettingsScreen(learning) { navigation.interrupt {

@@ -16,6 +16,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.draw.clipToBounds
@@ -253,6 +254,91 @@ class RendererDeviceTest {
             compose.runOnIdle { assertEquals(listOf("File:$file"), links) }
         } finally {
             compose.activityRule.scenario.onActivity { it.setContent {} }
+        }
+    }
+
+    @Test fun activeCardClueKeepsFallbackAcrossRevisionCancellationAndScrollableLongAnswer() {
+        val first = SavedWord("first", "First", "English", "language", "First stored preview",
+            dictionary = "first-dictionary", recordKey = "1\tFirst", edition = "test-edition")
+        val second = first.copy(key = "second", title = "Second", clue = "Second stored preview",
+            dictionary = "second-dictionary", recordKey = "1\tSecond")
+        val pool = mutableStateOf(listOf(first))
+        val revision = mutableStateOf(1)
+        val requests = java.util.Collections.synchronizedList(mutableListOf<Pair<SavedWord, kotlinx.coroutines.CompletableDeferred<String?>>>())
+        val opened = mutableListOf<SavedWord>()
+        val longAnswer = "Parent context · " + "A useful descendant meaning with retained context. ".repeat(8)
+        var primaryFailure: Throwable? = null
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                DictTheme("light") {
+                    androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopStart) {
+                          Box(Modifier.height(260.dp)) {
+                            LearnPanel(pool.value, 3, { _, _ -> error("No rating selected") }, { opened += it }, {},
+                                libraryRevision = revision.value, loadStudyClue = { word ->
+                                    val result = kotlinx.coroutines.CompletableDeferred<String?>()
+                                    requests += word to result
+                                    // Deliberately ignore cancellation until released to exercise stale-result protection.
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { result.await() }
+                                })
+                          }
+                        }
+                    }
+                }
+            } }
+            compose.runOnIdle { assertTrue(requests.isEmpty()) }
+            compose.onNodeWithText("Cards").performScrollTo().performClick()
+            compose.waitUntil(10000) { requests.size == 1 }
+            val recall = "Recall the meaning, then tap to reveal."
+            compose.onNodeWithText(recall).performScrollTo().performClick()
+            compose.onNodeWithText(first.clue).assertExists()
+            compose.runOnIdle { revision.value++ }
+            compose.waitUntil(10000) { requests.size == 2 }
+            compose.runOnIdle { requests[1].second.complete("Parent context · Current meaning") }
+            compose.waitUntil(10000) { compose.onAllNodesWithText("Parent context · Current meaning").fetchSemanticsNodes().size == 1 }
+            compose.runOnIdle { requests[0].second.complete("Stale answer") }
+            compose.waitForIdle()
+            compose.onNodeWithText("Stale answer").assertDoesNotExist()
+            compose.onNodeWithText("Parent context · Current meaning").assertExists()
+            compose.runOnIdle { pool.value = listOf(second) }
+            compose.waitUntil(10000) { requests.size == 3 }
+            compose.onNodeWithText(recall).performScrollTo().performClick()
+            compose.onNodeWithText(second.clue).assertExists()
+            compose.runOnIdle { requests[2].second.complete(null) }
+            compose.waitForIdle()
+            compose.onNodeWithText(second.clue).assertExists()
+            compose.runOnIdle { revision.value++ }
+            compose.waitUntil(10000) { requests.size == 4 }
+            compose.runOnIdle { requests[3].second.completeExceptionally(java.io.IOException("Controlled missing record")) }
+            compose.waitForIdle()
+            compose.onNodeWithText(second.clue).assertExists()
+            compose.runOnIdle { revision.value++ }
+            compose.waitUntil(10000) { requests.size == 5 }
+            compose.runOnIdle { requests[4].second.complete(longAnswer) }
+            compose.waitUntil(10000) { compose.onAllNodesWithText(longAnswer).fetchSemanticsNodes().size == 1 }
+            val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+            compose.onNodeWithText(longAnswer).performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            val layout = layouts.single()
+            assertTrue(layout.lineCount > 1)
+            assertFalse(layout.hasVisualOverflow)
+            for (line in 0 until layout.lineCount) assertFalse(layout.isLineEllipsized(line))
+            compose.onNodeWithText("Read").performScrollTo().assertIsDisplayed().performClick()
+            compose.runOnIdle {
+                assertEquals(listOf(second), opened)
+                assertEquals(listOf(first, first, second, second, second), requests.map { it.first })
+                assertEquals("First stored preview", first.clue)
+                assertEquals("Second stored preview", second.clue)
+            }
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            try {
+                synchronized(requests) { requests.forEach { it.second.complete(null) } }
+                compose.activityRule.scenario.onActivity { it.setContent {} }
+            } catch (cleanup: Throwable) {
+                if (primaryFailure != null) primaryFailure.addSuppressed(cleanup) else throw cleanup
+            }
         }
     }
 

@@ -33,16 +33,20 @@ disk; lookups decode the XZ blocks that intersect the requested record.
 
 The **Dictionaries** screen can:
 
-- download from the default catalogue;
+- download from a configured catalogue when it is available;
 - add custom HTTPS `.list` catalogues;
 - import local `.wikblb` or `.wikblb.xz` files;
 - replace or remove installed dictionaries.
 
-Default catalogue:
+Configured default catalogue URL:
 
 ```text
 https://github.com/SmallThingz/wikidict/releases/latest/download/dictionaries.list
 ```
+
+Official releases and their assets are currently withdrawn. During testing, import
+locally built dictionaries or use your own catalogue. The configured URL remains
+unchanged; publication is on hold until explicitly approved again.
 
 The catalogue format is documented in the
 [catalogue documentation](../../docs/catalogues.md).

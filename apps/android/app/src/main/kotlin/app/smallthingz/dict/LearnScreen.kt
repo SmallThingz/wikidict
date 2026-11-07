@@ -23,16 +23,19 @@ private enum class Game { Quiz, Cards, Scramble }
 
 @Composable
 fun LearnScreen(learning: LearningStore, entries: List<Entry>, onOpen: (SavedWord) -> Unit, onRandom: () -> Unit,
-    sampleLoading: Boolean = false, sampleFailed: Boolean = false, onRetry: () -> Unit = {}) {
+    sampleLoading: Boolean = false, sampleFailed: Boolean = false, onRetry: () -> Unit = {},
+    libraryRevision: Int = 0, loadStudyClue: suspend (SavedWord) -> String? = { null }) {
     val data = learning.data
     val pool = remember(entries, data.settings.randomPool, data.bookmarks, data.history) { learning.pool(entries) }
-    LearnPanel(pool, data.settings.quizLength, learning::answer, onOpen, onRandom, sampleLoading, sampleFailed, onRetry)
+    LearnPanel(pool, data.settings.quizLength, learning::answer, onOpen, onRandom, sampleLoading, sampleFailed, onRetry,
+        libraryRevision, loadStudyClue)
 }
 
 @Composable
 internal fun LearnPanel(pool: List<SavedWord>, target: Int, onAnswer: (String, Boolean) -> Unit,
     onOpen: (SavedWord) -> Unit, onRandom: () -> Unit, sampleLoading: Boolean = false,
-    sampleFailed: Boolean = false, onRetry: () -> Unit = {}) {
+    sampleFailed: Boolean = false, onRetry: () -> Unit = {}, libraryRevision: Int = 0,
+    loadStudyClue: suspend (SavedWord) -> String? = { null }) {
     var game by rememberSaveable { mutableStateOf(Game.Quiz) }
     // This bounded screen has one game. Keep its session composed when scrolled away.
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
@@ -55,7 +58,7 @@ internal fun LearnPanel(pool: List<SavedWord>, target: Int, onAnswer: (String, B
         Segments(Game.entries, game, { it.name }, { game = it }, Modifier.fillMaxWidth())
         when (game) {
             Game.Quiz -> QuizGame(pool, target, onAnswer, !sampleLoading && !sampleFailed)
-            Game.Cards -> Flashcards(pool, onOpen, onAnswer, !sampleLoading && !sampleFailed)
+            Game.Cards -> Flashcards(pool, onOpen, onAnswer, !sampleLoading && !sampleFailed, libraryRevision, loadStudyClue)
             Game.Scramble -> ScrambleGame(pool, onAnswer, !sampleLoading && !sampleFailed)
         }
     }
@@ -95,15 +98,28 @@ internal fun QuizGame(pool: List<SavedWord>, target: Int, onAnswer: (String, Boo
     } }
 }
 @Composable
-internal fun Flashcards(pool: List<SavedWord>, onOpen: (SavedWord) -> Unit, onAnswer: (String, Boolean) -> Unit, showEmpty: Boolean = true) {
+internal fun Flashcards(pool: List<SavedWord>, onOpen: (SavedWord) -> Unit, onAnswer: (String, Boolean) -> Unit,
+    showEmpty: Boolean = true, libraryRevision: Int = 0, loadStudyClue: suspend (SavedWord) -> String? = { null }) {
     var card by remember(pool) { mutableStateOf(pool.randomOrNull()) }
     var revealed by remember(card) { mutableStateOf(false) }
+    val currentLoader by rememberUpdatedState(loadStudyClue)
+    val studyClue by key(card, libraryRevision) {
+        produceState<String?>(null) {
+            val word = card ?: return@produceState
+            try {
+                val loaded = currentLoader(word)
+                currentCoroutineContext().ensureActive()
+                value = loaded?.takeIf { it.isNotBlank() }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { currentCoroutineContext().ensureActive() }
+        }
+    }
     Box(Modifier.fillMaxWidth()) { Column(Modifier.padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (card == null) { if (showEmpty) Text("Open or bookmark some words first.") } else card?.let { word ->
             FilledTonalButton(onClick = { revealed = !revealed }, modifier = Modifier.fillMaxWidth().heightIn(min = 150.dp), shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp)) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(word.title, style = MaterialTheme.typography.headlineMedium)
-                    Text(if (revealed) word.clue else "Recall the meaning, then tap to reveal.")
+                    Text(if (revealed) studyClue ?: word.clue else "Recall the meaning, then tap to reveal.")
                 }
             }
             if (revealed) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -113,6 +129,28 @@ internal fun Flashcards(pool: List<SavedWord>, onOpen: (SavedWord) -> Unit, onAn
             }
         }
     } }
+}
+
+/** Reuse a matching decoded entry or read only the active card through normal saved-word resolution. */
+internal suspend fun activeStudyClue(word: SavedWord, entries: List<Entry>,
+    lookup: suspend (SavedWord) -> WordHit?, read: suspend (WordHit) -> Entry,
+    installed: (String) -> Boolean): String? {
+    currentCoroutineContext().ensureActive()
+    val cached = entries.firstOrNull { entry ->
+        val origin = entry.origin
+        word.dictionary != null && origin != null && origin.key == word.key &&
+            origin.dictionary == word.dictionary && origin.recordKey == word.recordKey &&
+            origin.contextDictionary == word.contextDictionary && entry.edition == word.edition.orEmpty() &&
+            entry.isInstalled(installed)
+    }
+    val entry = cached ?: run {
+        val hit = lookup(word) ?: return null
+        currentCoroutineContext().ensureActive()
+        if (!hit.isInstalled(installed)) return null
+        read(hit)
+    }
+    currentCoroutineContext().ensureActive()
+    return entry.takeIf { it.isInstalled(installed) }?.studyClue()
 }
 @Composable
 internal fun ScrambleGame(pool: List<SavedWord>, onAnswer: (String, Boolean) -> Unit, showEmpty: Boolean = true) {

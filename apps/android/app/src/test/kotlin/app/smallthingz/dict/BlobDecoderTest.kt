@@ -332,6 +332,8 @@ class BlobDecoderTest {
         assertTrue(cat.sections.any{it.title.startsWith("Etymology")});assertTrue(cat.media.any{it.kind=="audio"});assertTrue(cat.media.any{it.kind=="image"})
         // This historical fixture has a real parent definition, not a media fallback.
         assertEquals("Terms relating to animals.", cat.clue())
+        assertEquals("Terms relating to animals. · (countable) A mammal of the family Felidae.", cat.studyClue())
+        assertFalse(cat.studyClue().contains("eaten as food"))
     }
     @Test fun truncatedUnknownAndTrailingPayloadsAreRejected() {
         val bytes=records().first().second

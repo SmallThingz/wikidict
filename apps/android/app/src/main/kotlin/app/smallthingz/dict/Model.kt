@@ -230,9 +230,7 @@ data class Entry(
     internal val abbreviations: List<Abbreviation> = entryAbbreviations(this)
     fun clue(): String {
         // Media controls belong in the reader, not a saved word's textual clue.
-        fun preview(block: Block) = textOf(block.spans.filterNot { span ->
-            span.classes.split(previewClassWhitespace).any { it == "wikidict-media" || it == "audiotable" }
-        })
+        fun preview(block: Block) = block.cluePreview()
         val blocks = sections.asSequence().flatMap { it.blocks.asSequence() }
         val definition = blocks.filter { it.kind == "definition" }.map(::preview).firstOrNull { it.isNotBlank() }
         if (definition != null) {
@@ -261,7 +259,43 @@ data class Entry(
         }
         return fallback.toString().ifEmpty { "Definition unavailable." }
     }
+
+    /** A study answer retains its first meaning and one immediate child, never a deepest leaf. */
+    internal fun studyClue(): String {
+        val fallback = clue()
+        for (section in sections) {
+            val index = section.blocks.indexOfFirst { it.kind == "definition" && it.cluePreview().isNotBlank() }
+            if (index < 0) continue
+            val parent = section.blocks[index]
+            val parentDepth = parent.listPath.takeWhile { it == '#' }.length
+            if (parentDepth == 0) return fallback
+            var childDepth: Int? = null
+            for (childIndex in index + 1 until section.blocks.size) {
+                val block = section.blocks[childIndex]
+                if (block.kind == "heading") break
+                if (block.kind != "definition") continue
+                val depth = block.listPath.takeWhile { it == '#' }.length
+                if (depth <= parentDepth) break
+                // Like compiled sense ownership, a skipped depth still attaches to
+                // the nearest preceding ancestor. A blank child owns its descendants.
+                if (childDepth != null && depth > childDepth) continue
+                childDepth = depth
+                val child = block.cluePreview()
+                if (child.isBlank()) continue
+                val text = parent.cluePreview() + " · " + child
+                var end = minOf(text.length, 420)
+                if (end < text.length && Character.isHighSurrogate(text[end - 1]) && Character.isLowSurrogate(text[end])) end--
+                return text.take(end)
+            }
+            return fallback
+        }
+        return fallback
+    }
 }
+
+private fun Block.cluePreview() = textOf(spans.filterNot { span ->
+    span.classes.split(previewClassWhitespace).any { it == "wikidict-media" || it == "audiotable" }
+})
 
 /** Every serialized span sink participates in asset validation, even an empty
  * occurrence. Plain text/heading authority still uses Span.text and trail only. */
