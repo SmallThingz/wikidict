@@ -295,7 +295,7 @@ class WikibaseCaptureTests(unittest.TestCase):
             expected = (header + body).encode()
             with self.subTest(name=name):
                 self.assertEqual(outputs[name + '.tsv'], expected)
-                self.assertEqual(entities.projection_identity(expected,
+                self.assertEqual(entities.projection_identity(io.BytesIO(expected),
                     entities.projection_rows(name, records, terms, self.wiki, self.date, 'ar')),
                     (entities.digest(expected), len(expected)))
 
@@ -304,12 +304,12 @@ class WikibaseCaptureTests(unittest.TestCase):
         raw = ''.join(rows).encode()
         for changed in (raw.replace(b'header', b'Header'), raw[:-1], raw + b'\n'):
             with self.subTest(changed=changed), self.assertRaisesRegex(ValueError, 'exact offline replay'):
-                entities.projection_identity(changed, iter(rows))
+                entities.projection_identity(io.BytesIO(changed), iter(rows))
         with patch.object(entities, 'MAX_OUTPUT_BYTES', len(raw) - 1):
             with self.assertRaisesRegex(ValueError, 'output bound'):
-                entities.projection_identity(raw, iter(rows))
+                entities.projection_identity(io.BytesIO(raw), iter(rows))
         with patch.object(entities, 'MAX_OUTPUT_BYTES', len(raw)):
-            self.assertEqual(entities.projection_identity(raw, iter(rows)), (entities.digest(raw), len(raw)))
+            self.assertEqual(entities.projection_identity(io.BytesIO(raw), iter(rows)), (entities.digest(raw), len(raw)))
 
     def test_cold_validation_streams_projection_and_checks_manifest_accounting(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -478,6 +478,118 @@ class WikibaseCaptureTests(unittest.TestCase):
                 finally:entities._VALIDATED_REPLAY_KEYS.clear()
             fetch.assert_not_called()
             self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in output.iterdir()})
+
+    def test_streamed_inventory_does_not_materialize_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'capture'
+            (manifest, _), _ = self.capture(root)
+            folder = root / entities.DIRECTORY
+            with patch.object(entities, 'regular', side_effect=AssertionError('inventory materialized an artifact')):
+                inventory = entities._ReplayArtifacts(folder, manifest['artifacts'])
+            self.assertEqual(set(inventory), set(manifest['artifacts']))
+            self.assertEqual(inventory['wikibase-seeds.json'], (folder / 'wikibase-seeds.json').read_bytes())
+
+    def test_cold_and_warm_validation_never_materialize_tsv_and_warm_only_loads_manifests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'capture'
+            (manifest, _), _ = self.capture(root)
+            folder = root / entities.DIRECTORY
+            entities._VALIDATED_REPLAY_KEYS.clear()
+            original_regular = entities.regular
+            phase = 'cold'
+            materialized = {'cold': [], 'warm': []}
+            def bounded_regular(path, *args, **kwargs):
+                name = Path(path).name
+                self.assertFalse(name.endswith('.tsv'), 'TSV materialized in ' + phase)
+                if phase == 'warm':
+                    self.assertIn(name, {key + '.manifest.json' for key in entities.NAMES})
+                materialized[phase].append(name)
+                return original_regular(path, *args, **kwargs)
+            with patch.object(entities, 'regular', bounded_regular), \
+                    patch.object(entities, 'render_outputs', side_effect=AssertionError('whole projection materialized')), \
+                    patch.object(entities, 'replay', wraps=entities.replay) as replay:
+                self.assertEqual(entities.validate_snapshot(folder), manifest)
+                self.assertEqual(replay.call_count, 1)
+                phase = 'warm'
+                self.assertEqual(entities.validate_snapshot(folder), manifest)
+                self.assertEqual(replay.call_count, 1)
+            self.assertIn('wikibase-request-000001.raw.json', materialized['cold'])
+            self.assertEqual(sorted(materialized['warm']), sorted(key + '.manifest.json' for key in entities.NAMES))
+
+    def test_lazy_inventory_unknown_names_are_rejected_before_io(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'capture'
+            (manifest, _), _ = self.capture(root)
+            inventory = entities._ReplayArtifacts(root / entities.DIRECTORY, manifest['artifacts'])
+            with patch.object(entities, 'regular', side_effect=AssertionError('unknown artifact read')), \
+                    patch.object(Path, 'open', side_effect=AssertionError('unknown artifact opened')), \
+                    patch.object(Path, 'stat', side_effect=AssertionError('unknown artifact inspected')):
+                for name in ('wikibase-absent.raw.json', 'wikibase-absent.tsv', '../outside.json'):
+                    with self.subTest(name=name), self.assertRaises(KeyError):
+                        inventory[name]
+                    with self.subTest(projection=name), self.assertRaises(KeyError):
+                        inventory.projection(name, iter(()))
+
+    def test_raw_and_projection_changes_after_inventory_are_rejected(self):
+        for name in ('wikibase-request-000001.raw.json', 'wikibase-entities.tsv'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / 'capture'
+                self.capture(root)
+                folder = root / entities.DIRECTORY
+                entities._VALIDATED_REPLAY_KEYS.clear()
+                original_init = entities._ReplayArtifacts.__init__
+                changed = []
+                def inventory_then_change(instance, selected, artifacts):
+                    original_init(instance, selected, artifacts)
+                    path = selected / name
+                    path.chmod(0o644)
+                    with path.open('ab') as stream:
+                        stream.write(b' ')
+                    changed.append(name)
+                with patch.object(entities._ReplayArtifacts, '__init__', inventory_then_change):
+                    with self.assertRaisesRegex(ValueError, 'Changed entity capture artifact|exact offline replay'):
+                        entities.validate_snapshot(folder)
+                self.assertEqual(changed, [name])
+                self.assertFalse(entities._VALIDATED_REPLAY_KEYS)
+
+    def test_resealed_malformed_truncated_and_extra_raw_json_still_replays(self):
+        for mode in ('duplicate-key', 'malformed', 'truncated', 'extra-json'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / 'capture'
+                (manifest, _), _ = self.capture(root)
+                folder = root / entities.DIRECTORY
+                row = manifest['requests'][0]
+                original = (folder / row['response']).read_bytes()
+                changed = {
+                    'duplicate-key': b'{"success":1,"success":1,"entities":{}}',
+                    'malformed': b'{"entities":',
+                    'truncated': original[:-2],
+                    'extra-json': original + b'{}',
+                }[mode]
+                self.rebind(folder, row['response'], changed)
+                receipt = json.loads((folder / row['request']).read_bytes())
+                receipt.update(raw_sha256=entities.digest(changed), raw_bytes=len(changed))
+                self.rebind(folder, row['request'], entities.document(receipt))
+                entities._VALIDATED_REPLAY_KEYS.clear()
+                with patch.object(entities, 'replay', wraps=entities.replay) as replay:
+                    with self.assertRaisesRegex(ValueError, 'Duplicate JSON key|Invalid capture JSON'):
+                        entities.validate_snapshot(folder)
+                    self.assertEqual(replay.call_count, 1)
+                self.assertFalse(entities._VALIDATED_REPLAY_KEYS)
+
+    def test_resealed_projection_truncation_and_extra_bytes_are_rejected(self):
+        for name in (key + '.tsv' for key in entities.NAMES):
+            for mode in ('truncated', 'extra'):
+                with self.subTest(name=name, mode=mode), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp) / 'capture'
+                    self.capture(root)
+                    folder = root / entities.DIRECTORY
+                    raw = (folder / name).read_bytes()
+                    self.rebind(folder, name, raw[:-1] if mode == 'truncated' else raw + b'\n')
+                    entities._VALIDATED_REPLAY_KEYS.clear()
+                    with self.assertRaisesRegex(ValueError, 'exact offline replay'):
+                        entities.validate_snapshot(folder)
+                    self.assertFalse(entities._VALIDATED_REPLAY_KEYS)
 
 if __name__ == '__main__':
     unittest.main()

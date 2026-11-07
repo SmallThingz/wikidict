@@ -76,19 +76,66 @@ def parse_json(raw):
         raise ValueError('Invalid capture JSON') from exc
 
 
-def regular(path, limit=MAX_RESPONSE_BYTES):
+def regular_chunks(path, limit=MAX_RESPONSE_BYTES):
     path = Path(path)
     if path.is_symlink() or not path.is_file() or path.stat().st_size > limit:
         raise ValueError('Missing, unsafe or oversized capture artifact: ' + str(path))
-    chunks = []
     length = 0
     with path.open('rb') as stream:
         while chunk := stream.read(min(1024 * 1024, limit + 1 - length)):
             length += len(chunk)
             if length > limit:
                 raise ValueError('Oversized capture artifact')
-            chunks.append(chunk)
-    return b''.join(chunks)
+            yield chunk
+
+
+def regular(path, limit=MAX_RESPONSE_BYTES):
+    return b''.join(regular_chunks(path, limit))
+
+
+class _ReplayArtifacts:
+    """Authenticate every artifact; retain identities, not the full byte inventory.
+
+    Raw/proof JSON still undergoes the unchanged complete semantic replay.
+    A later materialization rechecks its exact digest, including changes after
+    the initial inventory pass. Nothing survives this validation call.
+    """
+    def __init__(self, root, artifacts):
+        self.root = root
+        self.artifacts = dict(artifacts)
+        for name, expected in self.artifacts.items():
+            if not isinstance(name, str) or Path(name).name != name or not name.startswith('wikibase-'):
+                raise ValueError('Unsafe entity artifact name')
+            hasher = hashlib.sha256()
+            for chunk in regular_chunks(root / name, self.limit(name)):
+                hasher.update(chunk)
+            if not isinstance(expected, str) or hasher.hexdigest() != expected:
+                raise ValueError('Changed entity capture artifact: ' + name)
+
+    @staticmethod
+    def limit(name):
+        return MAX_OUTPUT_BYTES if name.endswith('.tsv') else MAX_PROOF_BYTES if name in BASE_ARTIFACTS else MAX_RESPONSE_BYTES
+
+    def __iter__(self):
+        return iter(self.artifacts)
+
+    def __getitem__(self, name):
+        expected = self.artifacts[name]  # Unknown names must fail before any I/O.
+        raw = regular(self.root / name, self.limit(name))
+        if digest(raw) != expected:
+            raise ValueError('Changed entity capture artifact: ' + name)
+        return raw
+
+    def projection(self, name, rows):
+        expected = self.artifacts[name]
+        path = self.root / name
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_OUTPUT_BYTES:
+            raise ValueError('Missing, unsafe or oversized capture artifact: ' + str(path))
+        with path.open('rb') as stream:
+            result = projection_identity(stream, rows)
+        if result[0] != expected:
+            raise ValueError('Changed entity capture artifact: ' + name)
+        return result
 
 
 def valid_id(value):
@@ -302,7 +349,7 @@ def projection_rows(name, records, terms, wiki, date, content_language):
             yield requested + '\tE\t' + entity['id'] + '\t' + compact(value) + '\n'
 
 
-def projection_identity(raw, rows):
+def projection_identity(stream, rows):
     hasher = hashlib.sha256()
     position = 0
     for row in rows:
@@ -310,11 +357,12 @@ def projection_identity(raw, rows):
         end = position + len(encoded)
         if end > MAX_OUTPUT_BYTES:
             raise ValueError('Entity snapshot exceeds output bound')
-        if not raw.startswith(encoded, position):
+        actual = stream.read(len(encoded))
+        if actual != encoded:
             raise ValueError('Entity projection differs from exact offline replay')
-        hasher.update(encoded)
+        hasher.update(actual)
         position = end
-    if position != len(raw):
+    if stream.read(1):
         raise ValueError('Entity projection differs from exact offline replay')
     return hasher.hexdigest(), position
 
@@ -415,17 +463,9 @@ def validate_snapshot(path, wiki=None, date=None):
     artifacts = manifest.get('artifacts')
     if not isinstance(artifacts, dict) or not BASE_ARTIFACTS.issubset(artifacts):
         raise ValueError('Missing entity capture artifacts')
-    blobs = {}
-    for name, expected in artifacts.items():
-        if not isinstance(name, str) or Path(name).name != name or not name.startswith('wikibase-'):
-            raise ValueError('Unsafe entity artifact name')
-        limit = MAX_OUTPUT_BYTES if name.endswith('.tsv') else MAX_PROOF_BYTES if name in BASE_ARTIFACTS else MAX_RESPONSE_BYTES
-        raw = regular(root / name, limit)
-        if not isinstance(expected, str) or digest(raw) != expected:
-            raise ValueError('Changed entity capture artifact: ' + name)
-        blobs[name] = raw
+    blobs = _ReplayArtifacts(root, artifacts)
     # The paired manifests bind all raw requests, responses, seed/dependency
-    # proofs, namespace evidence and both TSVs. Every bound byte was just read
+    # proofs, namespace evidence and both TSVs. Every bound byte was just streamed
     # and SHA-256 checked above. An exact prior success can omit only the
     # deterministic JSON replay and projection; changed bytes must replay.
     replay_key = (PRODUCER_SHA256, tuple(digest(manifest_bytes[name]) for name in NAMES),
@@ -453,7 +493,7 @@ def validate_snapshot(path, wiki=None, date=None):
         raise ValueError('Entity manifest accounting differs from evidence')
     timestamp(manifest.get('created_utc'))
     for name, other in manifests.items():
-        output_sha256, output_bytes = projection_identity(blobs[name + '.tsv'],
+        output_sha256, output_bytes = blobs.projection(name + '.tsv',
             projection_rows(name, records, terms, actual_wiki, actual_date, content_language))
         if (not isinstance(other, dict) or manifest_common(other) != manifest_common(manifest)
                 or other.get('name') != name or other.get('profile') != PROFILES[name]
