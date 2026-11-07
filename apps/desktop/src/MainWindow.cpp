@@ -74,6 +74,8 @@
 #include <QTextFragment>
 #include <QTextOption>
 #include <QTextTable>
+#include <QHelpEvent>
+#include <QToolTip>
 #include <QTimer>
 #include <QtMath>
 #include <QUrl>
@@ -84,6 +86,80 @@
 #include <cmath>
 #include <array>
 namespace {
+bool showCompiledAdvisory(QTextBrowser *browser, QEvent *event, bool viewportCoordinates = true) {
+    if (event->type() != QEvent::ToolTip) return false;
+    static QPointer<QTextBrowser> displayedOwner;
+    static QString displayedText;
+    const auto *help = static_cast<QHelpEvent *>(event);
+    const QPointer<QTextBrowser> guard(browser);
+    const QPointer<QTextDocument> document(browser->document());
+    const QPoint local = viewportCoordinates ? help->pos() : browser->viewport()->mapFrom(browser, help->pos());
+    const QScrollBar *horizontal = browser->horizontalScrollBar();
+    const int horizontalOffset = browser->isRightToLeft() ? horizontal->maximum() - horizontal->value() : horizontal->value();
+    const QPoint point = local + QPoint(horizontalOffset, browser->verticalScrollBar()->value());
+    const int offset = browser->viewport()->rect().contains(local)
+        ? document->documentLayout()->hitTest(point, Qt::ExactHit) : -1;
+    if (!guard || !document || guard->document() != document) return true;
+    if (!viewportCoordinates && (offset < 0 || offset >= document->characterCount() - 1)) {
+        // A propagated miss (including frame/scrollbar space) must not enter
+        // QTextEdit's nearest-text fallback even if the viewport cleared tracking.
+        const bool dismiss = displayedOwner == guard && QToolTip::text() == displayedText;
+        if (displayedOwner == guard) { displayedOwner.clear(); displayedText.clear(); }
+        event->ignore();
+        if (dismiss) QToolTip::hideText();
+        return true;
+    }
+    const auto hasCompiledAdvice = [](const QTextCharFormat &value) {
+        return value.hasProperty(SemanticHtml::spanAdvisoryProperty)
+            || (value.isImageFormat() && value.hasProperty(SemanticHtml::inlineImageStateProperty)
+                && QUrl(value.toImageFormat().name()).scheme() == SemanticHtml::inlineImageScheme
+                && value.hasProperty(QTextFormat::ImageTitle));
+    };
+    const QTextCharFormat nearestFormat = guard->cursorForPosition(local).charFormat();
+    if (!guard || !document || guard->document() != document) return true;
+    const bool nearestOwned = hasCompiledAdvice(nearestFormat);
+    QTextCharFormat format;
+    if (offset >= 0 && offset < document->characterCount() - 1) {
+        QTextCursor cursor(document);
+        cursor.setPosition(offset); cursor.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+        format = cursor.charFormat();
+    }
+    const bool owned = hasCompiledAdvice(format);
+    if (!owned && offset >= 0 && offset < document->characterCount() - 1 && nearestOwned) {
+        // At the first legacy glyph, cursorForPosition can retain the preceding
+        // owned format. Preserve the exact legacy range instead of that neighbor.
+        displayedOwner.clear(); displayedText.clear();
+        if (format.toolTip().isEmpty()) { event->ignore(); QToolTip::hideText(); }
+        else {
+            event->accept();
+            QToolTip::showText(help->globalPos(), format.toolTip(), guard->viewport());
+        }
+        return true;
+    }
+    if (!owned && !nearestOwned) {
+        // Qt returns without hiding when a blank range has no tooltip. Dismiss
+        // only our still-displayed advice; valid legacy advice delegates below.
+        const bool legacyHit = offset >= 0 && offset < document->characterCount() - 1
+            && !format.toolTip().isEmpty();
+        const bool dismiss = !legacyHit && displayedOwner == guard && QToolTip::text() == displayedText;
+        displayedOwner.clear(); displayedText.clear();
+        if (!dismiss) return false;
+        event->ignore(); QToolTip::hideText(); return true;
+    }
+    if (!owned || format.toolTip().isEmpty()) {
+        displayedOwner.clear(); displayedText.clear();
+        event->ignore(); QToolTip::hideText(); return true;
+    }
+    // QToolTip interprets rich text. Escape only this presentation boundary;
+    // semantic properties and the keyboard Text details retain the raw string.
+    const QString display = QStringLiteral("<span style='white-space:pre-wrap'>%1</span>")
+        .arg(format.toolTip().toHtmlEscaped().replace(QChar('\n'), QStringLiteral("<br>")));
+    event->accept();
+    displayedOwner = guard; displayedText = display;
+    QToolTip::showText(help->globalPos(), display, guard->viewport());
+    return true;
+}
+
 class HeadingBrowser final : public QTextBrowser {
 public:
     explicit HeadingBrowser(QWidget *parent) : QTextBrowser(parent) {
@@ -105,6 +181,16 @@ public:
                 this, [this] { fitHeight(); });
     }
 protected:
+    bool event(QEvent *event) override {
+        // Ignored viewport help propagates here. Keep QTextEdit's nearest-text
+        // fallback from replacing a tooltip that the owned rule just dismissed.
+        if (showCompiledAdvisory(this, event, false)) return true;
+        return QTextBrowser::event(event);
+    }
+    bool viewportEvent(QEvent *event) override {
+        if (showCompiledAdvisory(this, event)) return true;
+        return QTextBrowser::viewportEvent(event);
+    }
     void resizeEvent(QResizeEvent *event) override {
         QTextBrowser::resizeEvent(event);
         fitHeight();
@@ -168,6 +254,14 @@ public:
         notifyDisclosureFocus();
     }
 protected:
+    bool event(QEvent *event) override {
+        if (showCompiledAdvisory(this, event, false)) return true;
+        return QTextBrowser::event(event);
+    }
+    bool viewportEvent(QEvent *event) override {
+        if (showCompiledAdvisory(this, event)) return true;
+        return QTextBrowser::viewportEvent(event);
+    }
     bool focusNextPrevChild(bool next) override {
         const QPointer<ReadingBrowser> guard(this);
         const bool moved = QTextBrowser::focusNextPrevChild(next);
@@ -821,7 +915,8 @@ QJsonArray sectionHeadingSpans(const QJsonObject &section) {
         if (kind == QStringLiteral("text") && !text.isEmpty() &&
             span.value(QStringLiteral("target")).toString().isEmpty() && styled)
             rich = true;
-        if (!span.value(QStringLiteral("explanation")).toString().isEmpty() && (!text.isEmpty() || !trail.isEmpty()))
+        if ((!span.value(QStringLiteral("explanation")).toString().isEmpty()
+             || SemanticHtml::present(span.value(QStringLiteral("tooltip")))) && (!text.isEmpty() || !trail.isEmpty()))
             rich = true;
     }
     const auto edgeSpace = [](QChar c) {
@@ -928,6 +1023,7 @@ QVector<HeadingDestination> headingDestinations(const QJsonObject &entry) {
 // Explicit code/Poem/NBSP/bidi/media metadata never takes this display path.
 bool ordinaryLayoutWhitespaceSpan(const QJsonObject &span, bool allowBreak) {
     if (SemanticHtml::present(span.value(QStringLiteral("image")))) return false;
+    if (SemanticHtml::present(span.value(QStringLiteral("tooltip")))) return false;
     const QString kind = span.value(QStringLiteral("kind")).toString();
     if (kind != QStringLiteral("text") && !(allowBreak && kind == QStringLiteral("line_break"))) return false;
     for (const QString &key : {QStringLiteral("target"), QStringLiteral("trail"), QStringLiteral("language"),
@@ -2339,7 +2435,7 @@ QVector<QPair<QString, QString>> MainWindow::readingExplanations() const {
                 const QTextFragment fragment = it.fragment();
                 if (!fragment.isValid()) continue;
                 const auto format = fragment.charFormat();
-                const QString explanation = format.isImageFormat() ? format.stringProperty(SemanticHtml::inlineImageExplanationProperty) : format.toolTip();
+                const QString explanation = format.isImageFormat() ? format.stringProperty(SemanticHtml::inlineImageExplanationProperty) : SemanticHtml::spanExplanation(format);
                 if (explanation.isEmpty()) { previousEnd = -1; continue; }
                 if (!result.isEmpty() && previousEnd == fragment.position() && result.last().second == explanation)
                     result.last().first += fragment.text();
@@ -2352,12 +2448,68 @@ QVector<QPair<QString, QString>> MainWindow::readingExplanations() const {
     collect(*reading_->document());
     return result;
 }
+QVector<QPair<QString, QString>> MainWindow::readingAdvisories() const {
+    QVector<QPair<QString, QString>> result;
+    // Compiled ranges remain authoritative even when HTML import produces no
+    // fragment (empty text, a break, or an image without an authored alt label).
+    const auto collect = [&](const QJsonArray &spans) {
+        bool adjacent = false;
+        for (const QJsonValue &value : spans) {
+            const QJsonObject span = value.toObject();
+            QJsonValue advice = span.value(QStringLiteral("tooltip"));
+            const QJsonObject image = span.value(QStringLiteral("image")).toObject();
+            const QJsonValue imageAdvice = image.value(QStringLiteral("tooltip"));
+            if (SemanticHtml::present(imageAdvice)) advice = imageAdvice;
+            if (SemanticHtml::present(advice) && !advice.isString())
+                throw DictApiError("invalid semantic advisory text");
+            if (!SemanticHtml::present(advice) || advice.toString().isEmpty()) { adjacent = false; continue; }
+            const QString label = !image.isEmpty() ? image.value(QStringLiteral("alt")).toString()
+                : (span.value(QStringLiteral("kind")).toString() == QStringLiteral("line_break") ? QString()
+                    : span.value(QStringLiteral("text")).toString()) + span.value(QStringLiteral("trail")).toString();
+            if (adjacent && !label.isEmpty() && !result.last().first.isEmpty() && result.last().second == advice.toString())
+                result.last().first += label;
+            else result.append({label, advice.toString()});
+            adjacent = true;
+        }
+    };
+    const auto visitBlock = [&](auto &&visit, const QJsonObject &block, int depth) -> void {
+        const QJsonObject table = block.value(QStringLiteral("table")).toObject();
+        if (table.isEmpty()) { collect(block.value(QStringLiteral("spans")).toArray()); return; }
+        if (depth > 16) throw DictApiError("nested table depth exceeds presentation limit");
+        collect(table.value(QStringLiteral("caption")).toArray());
+        for (const QJsonValue &row : table.value(QStringLiteral("rows")).toArray())
+            for (const QJsonValue &cellValue : row.toObject().value(QStringLiteral("cells")).toArray()) {
+                const QJsonObject cell = cellValue.toObject();
+                const QJsonValue blocks = cell.value(QStringLiteral("blocks"));
+                if (SemanticHtml::present(blocks)) {
+                    for (const QJsonValue &child : blocks.toArray()) visit(visit, child.toObject(), depth + 1);
+                } else {
+                    collect(cell.value(QStringLiteral("spans")).toArray());
+                    if (cell.value(QStringLiteral("nested_table")).isObject())
+                        visit(visit, QJsonObject{{QStringLiteral("table"), cell.value(QStringLiteral("nested_table"))}}, depth + 1);
+                }
+            }
+    };
+    collect(currentEntry_.value(QStringLiteral("display_title")).toArray());
+    collect(currentEntry_.value(QStringLiteral("preamble_spans")).toArray());
+    for (const QJsonValue &section : currentEntry_.value(QStringLiteral("sections")).toArray())
+        for (const QJsonValue &block : section.toObject().value(QStringLiteral("blocks")).toArray())
+            visitBlock(visitBlock, block.toObject(), 1);
+    for (const QJsonValue &value : currentEntry_.value(QStringLiteral("references")).toArray()) {
+        const QJsonObject reference = value.toObject();
+        const QJsonValue blocks = referenceBlocks(reference);
+        if (SemanticHtml::present(blocks)) {
+            for (const QJsonValue &block : blocks.toArray()) visitBlock(visitBlock, block.toObject(), 1);
+        } else collect(reference.value(QStringLiteral("spans")).toArray());
+    }
+    return result;
+}
 void MainWindow::showReaderContextMenu(const QPoint &position) {
     std::unique_ptr<QMenu> menu(reading_->createStandardContextMenu());
     menu->setParent(reading_);
     menu->setObjectName(QStringLiteral("readerContextMenu"));
     QAction *explain = nullptr;
-    if (!readingExplanations().isEmpty()) {
+    if (!readingExplanations().isEmpty() || !readingAdvisories().isEmpty()) {
         menu->addSeparator();
         explain = menu->addAction(QStringLiteral("Text details…"));
         explain->setObjectName(QStringLiteral("entryAbbreviations"));
@@ -2369,7 +2521,8 @@ void MainWindow::showReaderContextMenu(const QPoint &position) {
 }
 void MainWindow::showAbbreviations() {
     const auto explanations = readingExplanations();
-    if (explanations.isEmpty()) return;
+    const auto advisories = readingAdvisories();
+    if (explanations.isEmpty() && advisories.isEmpty()) return;
     auto dialog = std::make_unique<QDialog>(this);
     dialog->setObjectName(QStringLiteral("abbreviationsDialog"));
     dialog->setWindowTitle(QStringLiteral("Text details"));
@@ -2379,7 +2532,13 @@ void MainWindow::showAbbreviations() {
     details->setAccessibleName(QStringLiteral("Text details"));
     details->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
     QStringList lines;
+    if (!explanations.isEmpty() && !advisories.isEmpty()) lines.append(QStringLiteral("Abbreviation expansions"));
     for (const auto &item : explanations) lines.append(item.first + QStringLiteral(": ") + item.second);
+    if (!advisories.isEmpty()) {
+        lines.append(QStringLiteral("Advisory information"));
+        for (const auto &item : advisories)
+            lines.append(item.first.isEmpty() ? item.second : item.first + QStringLiteral(": ") + item.second);
+    }
     details->setPlainText(lines.join(QStringLiteral("\n\n")));
     layout->addWidget(details);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog.get());
@@ -2603,6 +2762,9 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
         QString out;
         for (const QJsonValue &value : parts) {
             const QJsonObject span = value.toObject();
+            const QJsonValue advisory = span.value(QStringLiteral("tooltip"));
+            const bool hasAdvisory = SemanticHtml::present(advisory);
+            if (hasAdvisory && !advisory.isString()) throw DictApiError("invalid semantic span tooltip");
             const QJsonValue basisValue = span.value(QStringLiteral("font_scale_basis"));
             const QString basis = basisValue.isUndefined() ? QStringLiteral("context") : basisValue.toString();
             if ((!basisValue.isUndefined() && !basisValue.isString())
@@ -2636,8 +2798,11 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                 text = SemanticHtml::scaledText(text, numericScale.toDouble(), explanation,
                     normalBody ? SemanticHtml::Basis::NormalBody : SemanticHtml::Basis::Context, readingPointSize_,
                     span.value(QStringLiteral("small")).toBool(), span.value(QStringLiteral("superscript")).toBool(),
-                    span.value(QStringLiteral("subscript")).toBool(), basePoints);
-            if (!explanation.isEmpty())
+                    span.value(QStringLiteral("subscript")).toBool(), basePoints, advisory);
+            else if (hasAdvisory)
+                text = SemanticHtml::scaledText(text, 1, explanation, SemanticHtml::Basis::Context,
+                    0, false, false, false, 0, advisory, true);
+            if (!explanation.isEmpty() && !hasAdvisory)
                 text = QStringLiteral("<span title=\"%1\">%2</span>")
                     .arg(explanation.toHtmlEscaped(), text);
             if (zeroScale)

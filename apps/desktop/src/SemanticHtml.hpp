@@ -32,6 +32,13 @@ inline const QString markerOpen = QStringLiteral("<span data-wikidict-font-scale
 inline const QString scalePrefix = QStringLiteral("wikidict-font-scale:scaled:");
 inline const QString escapedPrefix = QStringLiteral("wikidict-font-scale:escaped:");
 inline const QString reservedPrefix = QStringLiteral("wikidict-font-scale:");
+inline constexpr int spanAdvisoryProperty = QTextFormat::UserProperty + 0x5748;
+inline constexpr int spanExpansionProperty = QTextFormat::UserProperty + 0x5749;
+
+inline QString spanExplanation(const QTextCharFormat &format) {
+    return format.hasProperty(spanAdvisoryProperty)
+        ? format.stringProperty(spanExpansionProperty) : format.toolTip();
+}
 
 enum class Basis { Context, NormalBody };
 inline const QString zeroFontFamilyName = QStringLiteral("Wikidict Zero Probe");
@@ -442,7 +449,7 @@ inline void normalizeImages(QTextDocument *document) {
             QTextImageFormat format = fragment.charFormat().toImageFormat();
             const QUrl url(format.name()); if (url.scheme() != inlineImageScheme) continue;
             const QJsonObject image = inlineImageData(url);
-            format.setProperty(inlineImageExplanationProperty, format.toolTip());
+            format.setProperty(inlineImageExplanationProperty, spanExplanation(format));
             if (present(image.value(QStringLiteral("alt")))) format.setProperty(QTextFormat::ImageAltText, image.value(QStringLiteral("alt")).toString());
             else format.clearProperty(QTextFormat::ImageAltText);
             if (present(image.value(QStringLiteral("tooltip")))) {
@@ -484,8 +491,14 @@ inline void normalizeImages(QTextDocument *document) {
 
 inline QString scaledText(const QString &html, double scale, const QString &tooltip,
                           Basis basis = Basis::Context, qreal normalBodyPoints = 0,
-                          bool small = false, bool superscript = false, bool subscript = false, qreal contextPoints = 0) {
+                          bool small = false, bool superscript = false, bool subscript = false, qreal contextPoints = 0,
+                          const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false) {
     QJsonObject metadata{{"scale", scale}, {"tooltip", tooltip}};
+    if (present(advisory)) {
+        if (!advisory.isString()) throw std::runtime_error("invalid span advisory");
+        metadata.insert(QStringLiteral("advisory"), advisory);
+    }
+    if (metadataOnly) metadata.insert(QStringLiteral("metadata_only"), true);
     if (basis == Basis::NormalBody) {
         metadata.insert(QStringLiteral("basis"), QStringLiteral("normal_body"));
         metadata.insert(QStringLiteral("body_points"), normalBodyPoints);
@@ -508,6 +521,8 @@ struct ScaleInfo {
     qreal normalBodyPoints = 0;
     qreal contextPoints = 0;
     int legacyFlags = 0;
+    QJsonValue advisory;
+    bool metadataOnly = false;
 };
 
 inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) {
@@ -535,13 +550,22 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
         const double scale = value.value(QStringLiteral("scale")).toDouble(-1);
         const QJsonValue basisValue = value.value(QStringLiteral("basis"));
         const bool normalBody = basisValue.isString() && basisValue.toString() == QStringLiteral("normal_body");
+        const QJsonValue metadataValue = value.value(QStringLiteral("metadata_only"));
+        const bool metadataOnly = metadataValue.toBool();
+        const QJsonValue advisory = value.value(QStringLiteral("advisory"));
         if (error.error != QJsonParseError::NoError || !payload.isObject()
             || !value.value(QStringLiteral("scale")).isDouble() || !std::isfinite(scale)
-            || scale < 0 || (!normalBody && scale == 1) || !value.value(QStringLiteral("tooltip")).isString()
+            || scale < 0 || (!normalBody && scale == 1 && !metadataOnly) || !value.value(QStringLiteral("tooltip")).isString()
+            || (!metadataValue.isUndefined() && !metadataValue.isBool())
+            || (present(advisory) && !advisory.isString())
+            || (metadataOnly && (scale != 1 || normalBody || !present(advisory)
+                || value.contains(QStringLiteral("context_points")) || value.contains(QStringLiteral("legacy_flags"))))
             || (!basisValue.isUndefined() && (!basisValue.isString()
                 || (basisValue.toString() != QStringLiteral("context") && !normalBody))))
             throw std::runtime_error("invalid renderer font-scale metadata");
         ScaleInfo info{scale, value.value(QStringLiteral("tooltip")).toString()};
+        info.advisory = advisory;
+        info.metadataOnly = metadataOnly;
         if (normalBody) {
             const QJsonValue body = value.value(QStringLiteral("body_points"));
             const QJsonValue flags = value.value(QStringLiteral("legacy_flags"));
@@ -593,76 +617,83 @@ inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &
             const QString tooltip = format.toolTip();
             const auto marker = markers.constFind(tooltip);
             if (marker != markers.cend()) {
-                const bool adjusted = format.hasProperty(QTextFormat::FontSizeAdjustment);
-                if (marker->scale == 0) {
-                    // Stylesheet rules on outer code/pre can override the HTML family.
-                    format.setFontFamilies(QStringList{zeroFontFamilyName});
-                    format.clearProperty(QTextFormat::BackgroundBrush);
-                    format.setFontWeight(QFont::Normal);
-                    format.setFontStyleStrategy(QFont::StyleStrategy(int(format.font().styleStrategy()) | int(QFont::NoFontMerging)));
-                    auto zero = zeroBlocks.find(block.position());
-                    if (zero == zeroBlocks.end()) {
-                        // Hidden browsers can have no laid-out lines yet. Match
-                        // QTextDocumentLayout6.12's paragraph policy independently:
-                        // default option plus block direction/tabs/alignment and
-                        // leading included, without querying a current line.
-                        QTextOption option = document->defaultTextOption();
-                        const QTextBlockFormat blockFormat = block.blockFormat();
-                        if (blockFormat.hasProperty(QTextFormat::LayoutDirection))
-                            option.setTextDirection(blockFormat.layoutDirection());
-                        option.setTabs(blockFormat.tabPositions());
-                        if (blockFormat.hasProperty(QTextFormat::BlockAlignment))
-                            option.setAlignment(blockFormat.alignment());
-                        zero = zeroBlocks.insert(block.position(), {block, block.charFormat(), option, true, 0});
-                    }
-                    zero->characters += fragment.length();
-                } else {
-                    qreal points;
-                    if (marker->basis == Basis::NormalBody) {
-                        qreal ratio = 1;
-                        if (marker->legacyFlags & 1) {
-                            QFont bodyFont = document->defaultFont();
-                            bodyFont.setPointSizeF(marker->normalBodyPoints);
-                            const QString key = bodyFont.toString() + QLatin1Char(':') + QString::number(marker->legacyFlags);
-                            const auto cached = remainingLegacyRatios.constFind(key);
-                            if (cached != remainingLegacyRatios.cend()) ratio = cached.value();
-                            else {
-                                // Measure only the finite legacy flag/font combinations
-                                // in the NORMAL body context. Heading CSS may replace
-                                // <small>'s adjustment in the imported source fragment.
-                                QTextDocument bodyControl;
-                                bodyControl.setDefaultFont(bodyFont);
-                                bodyControl.setDefaultTextOption(document->defaultTextOption());
-                                bodyControl.documentLayout()->setPaintDevice(document->documentLayout()->paintDevice());
-                                QString legacy = QStringLiteral("X");
-                                if (marker->legacyFlags & 1) legacy = QStringLiteral("<small>%1</small>").arg(legacy);
-                                if (marker->legacyFlags & 2) legacy = QStringLiteral("<sup>%1</sup>").arg(legacy);
-                                if (marker->legacyFlags & 4) legacy = QStringLiteral("<sub>%1</sub>").arg(legacy);
-                                bodyControl.setHtml(legacy);
-                                const QTextCursor control = bodyControl.find(QStringLiteral("X"));
-                                const qreal observed = control.charFormat().font().pointSizeF();
-                                if (control.isNull() || !std::isfinite(observed) || observed <= 0)
-                                    throw std::runtime_error("unresolved legacy body font-size ratio");
-                                ratio = observed / marker->normalBodyPoints;
-                                if (!std::isfinite(ratio) || ratio <= 0)
-                                    throw std::runtime_error("invalid legacy body font-size ratio");
-                                remainingLegacyRatios.insert(key, ratio);
-                            }
+                // Advisory-only metadata must not resolve or reset any font property.
+                if (!marker->metadataOnly) {
+                    const bool adjusted = format.hasProperty(QTextFormat::FontSizeAdjustment);
+                    if (marker->scale == 0) {
+                        // Stylesheet rules on outer code/pre can override the HTML family.
+                        format.setFontFamilies(QStringList{zeroFontFamilyName});
+                        format.clearProperty(QTextFormat::BackgroundBrush);
+                        format.setFontWeight(QFont::Normal);
+                        format.setFontStyleStrategy(QFont::StyleStrategy(int(format.font().styleStrategy()) | int(QFont::NoFontMerging)));
+                        auto zero = zeroBlocks.find(block.position());
+                        if (zero == zeroBlocks.end()) {
+                            // Hidden browsers can have no laid-out lines yet. Match
+                            // QTextDocumentLayout6.12's paragraph policy independently:
+                            // default option plus block direction/tabs/alignment and
+                            // leading included, without querying a current line.
+                            QTextOption option = document->defaultTextOption();
+                            const QTextBlockFormat blockFormat = block.blockFormat();
+                            if (blockFormat.hasProperty(QTextFormat::LayoutDirection))
+                                option.setTextDirection(blockFormat.layoutDirection());
+                            option.setTabs(blockFormat.tabPositions());
+                            if (blockFormat.hasProperty(QTextFormat::BlockAlignment))
+                                option.setAlignment(blockFormat.alignment());
+                            zero = zeroBlocks.insert(block.position(), {block, block.charFormat(), option, true, 0});
                         }
-                        points = boundedFontPoints(marker->normalBodyPoints, marker->scale, maximumFontPoints(document), ratio);
+                        zero->characters += fragment.length();
                     } else {
-                        // Qt overrides raw points in adjusted context fragments;
-                        // the observed effective font is the unscaled control.
-                        points = boundedFontPoints(adjusted || marker->contextPoints == 0 ? format.font().pointSizeF() : marker->contextPoints,
-                            marker->scale, maximumFontPoints(document));
+                        qreal points;
+                        if (marker->basis == Basis::NormalBody) {
+                            qreal ratio = 1;
+                            if (marker->legacyFlags & 1) {
+                                QFont bodyFont = document->defaultFont();
+                                bodyFont.setPointSizeF(marker->normalBodyPoints);
+                                const QString key = bodyFont.toString() + QLatin1Char(':') + QString::number(marker->legacyFlags);
+                                const auto cached = remainingLegacyRatios.constFind(key);
+                                if (cached != remainingLegacyRatios.cend()) ratio = cached.value();
+                                else {
+                                    // Measure only the finite legacy flag/font combinations
+                                    // in the NORMAL body context. Heading CSS may replace
+                                    // <small>'s adjustment in the imported source fragment.
+                                    QTextDocument bodyControl;
+                                    bodyControl.setDefaultFont(bodyFont);
+                                    bodyControl.setDefaultTextOption(document->defaultTextOption());
+                                    bodyControl.documentLayout()->setPaintDevice(document->documentLayout()->paintDevice());
+                                    QString legacy = QStringLiteral("X");
+                                    if (marker->legacyFlags & 1) legacy = QStringLiteral("<small>%1</small>").arg(legacy);
+                                    if (marker->legacyFlags & 2) legacy = QStringLiteral("<sup>%1</sup>").arg(legacy);
+                                    if (marker->legacyFlags & 4) legacy = QStringLiteral("<sub>%1</sub>").arg(legacy);
+                                    bodyControl.setHtml(legacy);
+                                    const QTextCursor control = bodyControl.find(QStringLiteral("X"));
+                                    const qreal observed = control.charFormat().font().pointSizeF();
+                                    if (control.isNull() || !std::isfinite(observed) || observed <= 0)
+                                        throw std::runtime_error("unresolved legacy body font-size ratio");
+                                    ratio = observed / marker->normalBodyPoints;
+                                    if (!std::isfinite(ratio) || ratio <= 0)
+                                        throw std::runtime_error("invalid legacy body font-size ratio");
+                                    remainingLegacyRatios.insert(key, ratio);
+                                }
+                            }
+                            points = boundedFontPoints(marker->normalBodyPoints, marker->scale, maximumFontPoints(document), ratio);
+                        } else {
+                            // Qt overrides raw points in adjusted context fragments;
+                            // the observed effective font is the unscaled control.
+                            points = boundedFontPoints(adjusted || marker->contextPoints == 0 ? format.font().pointSizeF() : marker->contextPoints,
+                                marker->scale, maximumFontPoints(document));
+                        }
+                        if (!std::isfinite(points) || points <= 0)
+                            throw std::runtime_error("invalid resolved presentation font size");
+                        format.clearProperty(QTextFormat::FontSizeAdjustment);
+                        format.clearProperty(QTextFormat::FontPixelSize);
+                        format.setFontPointSize(points);
                     }
-                    if (!std::isfinite(points) || points <= 0)
-                        throw std::runtime_error("invalid resolved presentation font size");
-                    format.clearProperty(QTextFormat::FontSizeAdjustment);
-                    format.clearProperty(QTextFormat::FontPixelSize);
-                    format.setFontPointSize(points);
                 }
-                if (marker->tooltip.isEmpty()) format.clearProperty(QTextFormat::TextToolTip);
+                if (present(marker->advisory)) {
+                    format.setProperty(spanAdvisoryProperty, marker->advisory.toString());
+                    format.setProperty(spanExpansionProperty, marker->tooltip);
+                    format.setToolTip(marker->advisory.toString());
+                } else if (marker->tooltip.isEmpty()) format.clearProperty(QTextFormat::TextToolTip);
                 else format.setToolTip(marker->tooltip);
             } else if (tooltip.startsWith(escapedPrefix)) {
                 format.setToolTip(tooltip.mid(escapedPrefix.size()));

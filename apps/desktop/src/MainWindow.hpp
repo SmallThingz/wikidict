@@ -79,6 +79,7 @@ private:
     void renderResponse(const QByteArray &json, bool addVisit = true, const std::optional<QString> &fragment = std::nullopt);
     void refreshReading();
     QVector<QPair<QString, QString>> readingExplanations() const;
+    QVector<QPair<QString, QString>> readingAdvisories() const;
     void showReaderContextMenu(const QPoint &position);
     void showAbbreviations();
     void resetFolding();

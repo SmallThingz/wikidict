@@ -18,6 +18,8 @@
 #include <QComboBox>
 #include <QClipboard>
 #include <QCloseEvent>
+#include <QHelpEvent>
+#include <QToolTip>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDesktopServices>
@@ -3834,6 +3836,448 @@ private slots:
                 QVERIFY(inkFor(encoded, font) != inkFor(withoutInsertion, font));
             }
         }
+    }
+
+    void genericAdvisoriesPreserveTextGeometryAndKeyboardDetails() {
+        QSettings settings;
+        const bool hadImagePermission = settings.contains(QStringLiteral("media/allowImages"));
+        const QVariant imagePermission = settings.value(QStringLiteral("media/allowImages"));
+        const auto restorePermission = qScopeGuard([&] {
+            if (hadImagePermission) settings.setValue(QStringLiteral("media/allowImages"), imagePermission);
+            else settings.remove(QStringLiteral("media/allowImages"));
+        });
+        settings.setValue(QStringLiteral("media/allowImages"), false);
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 120000);
+        const QString expansion = QStringLiteral("Separate abbreviation expansion");
+        const QString reserved = SemanticHtml::scalePrefix + QStringLiteral("literal <b>literal</b> & \"quoted\"\nnext line");
+        const auto text = [](const QString &label, const QJsonValue &advice) {
+            return QJsonObject{{"kind", "text"}, {"text", label}, {"tooltip", advice}};
+        };
+        // Advisory-only markers must preserve every existing font, paint, action
+        // and layout property, including zero scale and normal-body scale one.
+        for (double scale : {0.0, 1.0, 1.25}) {
+            for (const QString &basis : {QStringLiteral("context"), QStringLiteral("normal_body")}) {
+                QJsonObject original{{"kind", "link"}, {"text", "Advice"}, {"target", "cat"}, {"trail", "!"},
+                    {"explanation", expansion}, {"font_scale", scale}, {"font_scale_basis", basis},
+                    {"small", true}, {"italic", true}, {"background", "#ccffff"}};
+                QJsonObject nullAdvice = original; nullAdvice.insert("tooltip", QJsonValue::Null);
+                QCOMPARE(window.spansHtml(QJsonArray{nullAdvice}), window.spansHtml(QJsonArray{original}));
+                for (const QString &advice : {QString(), reserved, expansion}) {
+                    QJsonObject annotated = original; annotated.insert("tooltip", advice);
+                    for (int surface = 0; surface != 3; ++surface) {
+                        const auto html = [&](const QJsonObject &span) {
+                            const QJsonArray spans{span};
+                            if (surface == 1) return window.blockHtml(QJsonObject{{"kind", "heading"}, {"level", 3}, {"spans", spans}});
+                            if (surface == 2) return window.tableHtml(QJsonObject{{"caption", spans}, {"rows", QJsonArray{
+                                QJsonObject{{"cells", QJsonArray{QJsonObject{{"spans", spans}}}}}}}}, 0);
+                            return window.spansHtml(spans);
+                        };
+                        QTextDocument baseline, actual;
+                        QFont font; font.setPointSizeF(12);
+                        for (auto *document : {&baseline, &actual}) { document->setDefaultFont(font); document->setTextWidth(320); }
+                        SemanticHtml::setHtml(&baseline, html(original));
+                        SemanticHtml::setHtml(&actual, html(annotated));
+                        QCOMPARE(actual.toPlainText(), baseline.toPlainText());
+                        QCOMPARE(actual.characterCount(), baseline.characterCount());
+                        QCOMPARE(actual.documentLayout()->documentSize(), baseline.documentLayout()->documentSize());
+                        for (int offset = 0; offset < actual.characterCount() - 1; ++offset) {
+                            QTextCursor expected(&baseline), observed(&actual);
+                            expected.setPosition(offset); expected.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+                            observed.setPosition(offset); observed.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+                            auto before = expected.charFormat(), after = observed.charFormat();
+                            if (after.hasProperty(SemanticHtml::spanAdvisoryProperty)) {
+                                QCOMPARE(after.toolTip(), advice);
+                                QCOMPARE(SemanticHtml::spanExplanation(after), expansion);
+                            }
+                            for (int property : {int(QTextFormat::TextToolTip), SemanticHtml::spanAdvisoryProperty, SemanticHtml::spanExpansionProperty}) {
+                                before.clearProperty(property); after.clearProperty(property);
+                            }
+                            QCOMPARE(after, before);
+                        }
+                        const auto link = actual.find(QStringLiteral("Advice"));
+                        QVERIFY(!link.isNull());
+                        QCOMPARE(link.charFormat().anchorHref(), QStringLiteral("dict:cat"));
+                        QCOMPARE(link.charFormat().toolTip(), advice);
+                        QCOMPARE(link.selection().toPlainText(), QStringLiteral("Advice"));
+                    }
+                }
+            }
+        }
+        QJsonObject invalid = text(QStringLiteral("bad"), true);
+        QVERIFY_EXCEPTION_THROWN(window.spansHtml(QJsonArray{invalid}), DictApiError);
+
+        QJsonObject linked = text(QStringLiteral("Linked advice"), reserved);
+        linked.insert("kind", "link"); linked.insert("target", "cat");
+        QJsonObject equal = text(QStringLiteral("same"), expansion); equal.insert("explanation", expansion);
+        QJsonObject suppressed = text(QStringLiteral("suppressed"), QString()); suppressed.insert("explanation", expansion);
+        QJsonObject inherited = text(QStringLiteral("legacy"), QJsonValue::Null); inherited.insert("explanation", expansion);
+        QJsonObject legacyEdge = text(QStringLiteral("legacy-edge"), QJsonValue::Null); legacyEdge.insert("explanation", expansion);
+        QJsonObject image{{"kind", "link"}, {"text", ""}, {"target", "File:Tooltip-fixture.svg"},
+            {"tooltip", "Image span advice"}, {"explanation", "Image expansion"},
+            {"image", QJsonObject{{"file", "Tooltip-fixture.svg"}, {"width_px", 20}, {"height_px", 20}}}};
+        QJsonObject emptyImage = image, ownImage = image;
+        auto imageData = image.value("image").toObject(); imageData.insert("tooltip", ""); emptyImage.insert("image", imageData);
+        imageData.insert("tooltip", "Own image advice"); ownImage.insert("image", imageData);
+        const QString imageAdvice = QStringLiteral("<b>literal image</b> & \"quoted\"\nimage line");
+        QJsonObject imageOnly = image, emptyImageOnly = image, legacyImageOnly = image;
+        for (QJsonObject *value : {&imageOnly, &emptyImageOnly, &legacyImageOnly}) value->insert("tooltip", QJsonValue::Null);
+        imageData = image.value("image").toObject(); imageData.insert("tooltip", imageAdvice); imageOnly.insert("image", imageData);
+        imageData.insert("tooltip", ""); emptyImageOnly.insert("image", imageData);
+        QJsonObject lineBreak = text(QString(), QStringLiteral("Break advice")); lineBreak.insert("kind", "line_break");
+        QJsonObject zeroAdvice = text(QStringLiteral("Zero advice label"), QStringLiteral("Zero range advice"));
+        zeroAdvice.insert("font_scale", 0);
+        const QJsonArray body{linked, text(" ", QJsonValue::Null), equal, text(" ", QJsonValue::Null), suppressed,
+            text(" ", QJsonValue::Null), inherited, text(" ", QJsonValue::Null),
+            text("owned/", "Boundary advice"), legacyEdge, lineBreak, text("", "Empty range advice"),
+            text("  ", "Whitespace advice"), image, emptyImage, ownImage, imageOnly, emptyImageOnly, legacyImageOnly, zeroAdvice};
+        const QJsonObject heading{{"kind", "heading"}, {"level", 3}, {"spans", QJsonArray{text("Advised heading", "Heading advice")}}};
+        const QJsonObject cellParagraph{{"kind", "paragraph"}, {"spans", QJsonArray{text("Cell", "Cell advice")}}};
+        const QJsonObject cell{{"blocks", QJsonArray{cellParagraph}}};
+        const QJsonObject row{{"cells", QJsonArray{cell}}};
+        const QJsonObject table{{"caption", QJsonArray{text("Caption", "Caption advice")}}, {"rows", QJsonArray{row}}};
+        const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", body}};
+        const QJsonObject tableBlock{{"kind", "table"}, {"table", table}};
+        const QJsonObject section{{"title", "Advised heading"}, {"level", 3}, {"blocks", QJsonArray{heading, paragraph, tableBlock}}};
+        const QJsonObject referenceParagraph{{"kind", "paragraph"}, {"spans", QJsonArray{text("Reference", "Reference advice")}}};
+        const QJsonObject reference{{"kind", "note"}, {"number", 1}, {"group_number", 1}, {"spans", QJsonArray{}}, {"blocks", QJsonArray{referenceParagraph}}};
+        const QJsonObject entry{{"title", "Tooltip consumer control"}, {"kind", "language"}, {"language", window.api_->language()},
+            {"display_title", QJsonArray{text("Tooltip consumer control", "Title advice")}},
+            {"preamble_spans", QJsonArray{text("Preamble", "Preamble advice")}}, {"sections", QJsonArray{section}},
+            {"references", QJsonArray{reference}}};
+        const QByteArray response = QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson();
+        window.show(); QTRY_VERIFY(window.isVisible());
+        window.resize(640, 600); window.activateWindow();
+        window.renderResponse(response, false);
+        QWidget *readingSwitch = window.compactToolbar_->widgetForAction(window.readingPaneAction_);
+        QVERIFY(readingSwitch);
+        qInfo() << "Advisory surface before readiness" << window.size() << window.isVisible()
+                << window.compactNavigation_ << window.compactToolbar_->isVisible()
+                << readingSwitch->isVisible() << readingSwitch->isEnabled();
+        QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+        const QString frameStem = QStringLiteral(".tmp/ui-screenshots/generic-advisory-%1").arg(QCoreApplication::applicationPid());
+        QVERIFY(window.grab().save(frameStem + QStringLiteral("-surface.png")));
+        QTRY_COMPARE(window.size(), QSize(640, 600));
+        QTRY_VERIFY(window.compactNavigation_);
+        QTRY_VERIFY(readingSwitch->isVisible() && readingSwitch->isEnabled());
+        QCoreApplication::processEvents();
+        QVERIFY(window.grab().save(frameStem + QStringLiteral("-settled-surface.png")));
+        QTest::mouseClick(readingSwitch, Qt::LeftButton);
+        QTRY_VERIFY(window.reading_->isVisible());
+        window.reading_->setFocus(); QTRY_VERIFY(window.reading_->hasFocus());
+        const QString visible = window.reading_->toPlainText();
+        QCOMPARE(visible.count(QStringLiteral("Advised heading")), 1);
+        QCOMPARE(window.currentEntry_, entry);
+        QCOMPARE(QJsonDocument::fromJson(window.currentJson_).object(), QJsonObject({{"entries", QJsonArray{entry}}}));
+        QCOMPARE(window.title_->accessibleName(), QStringLiteral("Tooltip consumer control"));
+        const auto advisories = window.readingAdvisories();
+        QVERIFY(advisories.contains(qMakePair(QString(), QStringLiteral("Empty range advice"))));
+        QVERIFY(advisories.contains(qMakePair(QString(), QStringLiteral("Break advice"))));
+        QVERIFY(advisories.contains(qMakePair(QStringLiteral("  "), QStringLiteral("Whitespace advice"))));
+        QVERIFY(advisories.contains(qMakePair(QString(), QStringLiteral("Image span advice"))));
+        QVERIFY(advisories.contains(qMakePair(QString(), QStringLiteral("Own image advice"))));
+        QVERIFY(advisories.contains(qMakePair(QString(), imageAdvice)));
+        QVERIFY(advisories.contains(qMakePair(QStringLiteral("Zero advice label"), QStringLiteral("Zero range advice"))));
+        for (const QString &label : {QStringLiteral("Title"), QStringLiteral("Preamble"), QStringLiteral("Heading"),
+             QStringLiteral("Caption"), QStringLiteral("Cell"), QStringLiteral("Reference")}) {
+            bool found = false;
+            for (const auto &row : advisories) found = found || row.second == label + QStringLiteral(" advice");
+            QVERIFY(found);
+        }
+        const auto explanations = window.readingExplanations();
+        QVERIFY(explanations.contains(qMakePair(QStringLiteral("same"), expansion)));
+        QVERIFY(explanations.contains(qMakePair(QStringLiteral("suppressed"), expansion)));
+        QVERIFY(explanations.contains(qMakePair(QStringLiteral("legacy"), expansion)));
+        QVERIFY(!explanations.contains(qMakePair(QStringLiteral("Linked advice"), reserved)));
+        QCOMPARE(window.reading_->document()->find(QStringLiteral("suppressed")).charFormat().toolTip(), QString());
+        QCOMPARE(window.reading_->document()->find(QStringLiteral("legacy")).charFormat().toolTip(), expansion);
+        const auto hoverAt = [&](QTextBrowser *browser, const QTextCursor &found, const QString &raw,
+                                 bool browserEvent = false, bool adjacentLegacy = false) {
+            QVERIFY(!found.isNull());
+            QTextCursor start = found; start.setPosition(found.selectionStart());
+            QTextCursor end = start; end.movePosition(QTextCursor::NextCharacter);
+            const QRect first = browser->cursorRect(start), last = browser->cursorRect(end);
+            const int glyphWidth = last.left() - first.left();
+            if (adjacentLegacy) QVERIFY(glyphWidth > 1);
+            const QPoint local(adjacentLegacy ? first.left() + qMax(1, glyphWidth / 4)
+                                              : (first.left() + last.left()) / 2, first.center().y());
+            QVERIFY(browser->viewport()->rect().contains(local));
+            const auto *horizontal = browser->horizontalScrollBar();
+            const int horizontalOffset = browser->isRightToLeft() ? horizontal->maximum() - horizontal->value() : horizontal->value();
+            const QPoint documentPoint = local + QPoint(horizontalOffset, browser->verticalScrollBar()->value());
+            QCOMPARE(browser->document()->documentLayout()->hitTest(documentPoint, Qt::ExactHit), found.selectionStart());
+            if (adjacentLegacy) {
+                QVERIFY(!found.charFormat().hasProperty(SemanticHtml::spanAdvisoryProperty));
+                QVERIFY(browser->cursorForPosition(local).charFormat().hasProperty(SemanticHtml::spanAdvisoryProperty));
+            }
+            const QPoint receiverPoint = browserEvent ? browser->viewport()->mapTo(browser, local) : local;
+            QHelpEvent help(QEvent::ToolTip, receiverPoint, browser->viewport()->mapToGlobal(local));
+            QApplication::sendEvent(browserEvent ? browser : browser->viewport(), &help);
+            if (raw.isEmpty()) { QTRY_VERIFY(!QToolTip::isVisible()); return; }
+            QTRY_VERIFY(QToolTip::isVisible());
+            QTextDocument display; display.setHtml(QToolTip::text());
+            QCOMPARE(display.toPlainText(), raw);
+            QCOMPARE(found.charFormat().toolTip(), raw);
+            QVERIFY(!display.toPlainText().contains(QStringLiteral("<span style=")));
+        };
+        const auto hover = [&](QTextBrowser *browser, const QString &label, const QString &raw) {
+            hoverAt(browser, browser->document()->find(label), raw);
+        };
+        QVERIFY(window.grab().save(frameStem + QStringLiteral("-reading.png")));
+        hover(window.reading_, QStringLiteral("Linked advice"), reserved);
+        hoverAt(window.reading_, window.reading_->document()->find(QStringLiteral("Linked advice")), reserved, true);
+        // A nonempty legacy tooltip must replace owned advice normally.
+        hover(window.reading_, QStringLiteral("egacy"), expansion);
+        hoverAt(window.reading_, window.reading_->document()->find(QStringLiteral("legacy-edge")), expansion, false, true);
+        hover(window.title_, QStringLiteral("Tooltip consumer control"), QStringLiteral("Title advice"));
+        const QPoint blank(window.title_->viewport()->rect().right() - 2, window.title_->viewport()->rect().center().y());
+        const int blankOffset = window.title_->document()->documentLayout()->hitTest(blank, Qt::ExactHit);
+        QVERIFY(blankOffset < 0);
+        const QTextCharFormat blankNearest = window.title_->cursorForPosition(blank).charFormat();
+        qInfo() << "Advisory blank hit" << blankOffset << window.title_->document()->characterCount()
+                << blankNearest.toolTip() << blankNearest.hasProperty(SemanticHtml::spanAdvisoryProperty)
+                << QToolTip::text();
+        QHelpEvent blankHelp(QEvent::ToolTip, blank, window.title_->viewport()->mapToGlobal(blank));
+        QApplication::sendEvent(window.title_->viewport(), &blankHelp);
+        qInfo() << "Advisory blank delivered" << blankHelp.isAccepted() << QToolTip::isVisible() << QToolTip::text();
+        QVERIFY(!blankHelp.isAccepted());
+        if (QToolTip::isVisible())
+            QCOMPARE(QToolTip::text(), QStringLiteral("<span style='white-space:pre-wrap'>Title advice</span>"));
+        QTRY_VERIFY(!QToolTip::isVisible());
+        // A blank point nearest legacy text must not regain its tooltip when
+        // the ignored viewport event propagates after owned tracking is cleared.
+        hover(window.reading_, QStringLiteral("Linked advice"), reserved);
+        const QTextCursor legacyEnd = window.reading_->document()->find(QStringLiteral("legacy"));
+        const QPoint legacyBlank(window.reading_->viewport()->rect().right() - 2,
+                                 window.reading_->cursorRect(legacyEnd).center().y());
+        const auto *legacyHorizontal = window.reading_->horizontalScrollBar();
+        const int legacyHorizontalOffset = window.reading_->isRightToLeft()
+            ? legacyHorizontal->maximum() - legacyHorizontal->value() : legacyHorizontal->value();
+        const QPoint legacyDocumentPoint = legacyBlank + QPoint(legacyHorizontalOffset,
+                                                                window.reading_->verticalScrollBar()->value());
+        QVERIFY(window.reading_->document()->documentLayout()->hitTest(legacyDocumentPoint, Qt::ExactHit) < 0);
+        const QTextCharFormat nearestLegacy = window.reading_->cursorForPosition(legacyBlank).charFormat();
+        QVERIFY(!nearestLegacy.hasProperty(SemanticHtml::spanAdvisoryProperty));
+        QCOMPARE(nearestLegacy.toolTip(), expansion);
+        QHelpEvent legacyBlankHelp(QEvent::ToolTip, legacyBlank, window.reading_->viewport()->mapToGlobal(legacyBlank));
+        QApplication::sendEvent(window.reading_->viewport(), &legacyBlankHelp);
+        QVERIFY(!legacyBlankHelp.isAccepted());
+        QTRY_VERIFY(!QToolTip::isVisible());
+
+        // Scrollbar help is outside the text viewport. Its own accepted advice
+        // still works, while browser-level misses cannot pick offscreen text.
+        QScrollBar *scrollbar = window.reading_->verticalScrollBar();
+        QVERIFY(scrollbar->isVisible());
+        const QPoint barPoint = scrollbar->rect().center();
+        const QPoint browserBarPoint = scrollbar->mapTo(window.reading_, barPoint);
+        QVERIFY(!window.reading_->viewport()->rect().contains(window.reading_->viewport()->mapFrom(window.reading_, browserBarPoint)));
+        hover(window.reading_, QStringLiteral("Linked advice"), reserved);
+        QHelpEvent outsideHelp(QEvent::ToolTip, browserBarPoint, scrollbar->mapToGlobal(barPoint));
+        QApplication::sendEvent(window.reading_, &outsideHelp);
+        QVERIFY(!outsideHelp.isAccepted());
+        QTRY_VERIFY(!QToolTip::isVisible());
+        const QString oldBarTip = scrollbar->toolTip();
+        scrollbar->setToolTip(QStringLiteral("Scrollbar help control"));
+        QHelpEvent barHelp(QEvent::ToolTip, barPoint, scrollbar->mapToGlobal(barPoint));
+        QApplication::sendEvent(scrollbar, &barHelp);
+        scrollbar->setToolTip(oldBarTip);
+        QVERIFY(barHelp.isAccepted());
+        QTRY_VERIFY(QToolTip::isVisible());
+        QCOMPARE(QToolTip::text(), QStringLiteral("Scrollbar help control"));
+        hover(window.reading_, QStringLiteral("Cell"), QStringLiteral("Cell advice"));
+        hover(window.reading_, QStringLiteral("suppressed"), QString());
+        const QString uncataloguedMessage = QStringLiteral("This image is not in the dictionary's media catalogue.");
+        const auto imagesUncatalogued = [&] {
+            int count = 0;
+            for (QTextBlock block = window.reading_->document()->begin(); block.isValid(); block = block.next())
+                for (auto it = block.begin(); !it.atEnd(); ++it) {
+                    const QTextCharFormat format = it.fragment().charFormat();
+                    if (!format.isImageFormat()) continue;
+                    ++count;
+                    if (!format.hasProperty(SemanticHtml::inlineImageStateProperty)
+                        || format.intProperty(SemanticHtml::inlineImageStateProperty) != int(MediaPanel::InlineImageState::Error)
+                        || format.stringProperty(SemanticHtml::inlineImageStatusProperty) != uncataloguedMessage) return false;
+                }
+            return count == 6;
+        };
+        const auto logImageState = [&](const char *phase) {
+            int count = 0;
+            for (QTextBlock block = window.reading_->document()->begin(); block.isValid(); block = block.next())
+                for (auto it = block.begin(); !it.atEnd(); ++it) {
+                    const QTextFragment fragment = it.fragment();
+                    const QTextCharFormat format = fragment.charFormat();
+                    if (!format.isImageFormat()) continue;
+                    qInfo() << "Advisory image readiness" << phase << count++ << fragment.position() << format.properties();
+                }
+            qInfo() << "Advisory image readiness count" << phase << count;
+        };
+        // This fixture has no media catalogue. Its queued resource application
+        // reports the exact catalogue error without registering a network request.
+        logImageState("before");
+        const bool imagesReady = QTest::qWaitFor(imagesUncatalogued, 5000);
+        logImageState(imagesReady ? "ready" : "failed");
+        QVERIFY(imagesReady);
+        QList<QTextImageFormat> formats;
+        QList<int> imagePositions;
+        for (QTextBlock block = window.reading_->document()->begin(); block.isValid(); block = block.next())
+            for (auto it = block.begin(); !it.atEnd(); ++it)
+                if (it.fragment().charFormat().isImageFormat()) {
+                    formats.append(it.fragment().charFormat().toImageFormat());
+                    imagePositions.append(it.fragment().position());
+                }
+        QCOMPARE(formats.size(), 6);
+        QCOMPARE(formats[0].toolTip(), QStringLiteral("Image span advice"));
+        QCOMPARE(formats[1].toolTip(), QString());
+        QCOMPARE(formats[2].toolTip(), QStringLiteral("Own image advice"));
+        QCOMPARE(formats[3].toolTip(), imageAdvice);
+        QCOMPARE(formats[4].toolTip(), QString());
+        QCOMPARE(formats[5].toolTip(), QStringLiteral("Image expansion"));
+        for (int index : {3, 4, 5}) {
+            QVERIFY(!formats[index].hasProperty(SemanticHtml::spanAdvisoryProperty));
+            QCOMPARE(formats[index].hasProperty(QTextFormat::ImageTitle), index != 5);
+            QTextCursor occurrence(window.reading_->document()); occurrence.setPosition(imagePositions[index]);
+            occurrence.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+            const QTextCharFormat cursorBefore = occurrence.charFormat();
+            QTextCharFormat expectedCursor(formats[index]);
+            expectedCursor.clearProperty(QTextFormat::ObjectIndex); // Qt's cursor API projection only.
+            qInfo() << "Advisory image format before" << index << "cursor" << cursorBefore.properties()
+                    << "fragment" << formats[index].properties();
+            QCOMPARE(cursorBefore, expectedCursor);
+            hoverAt(window.reading_, occurrence, formats[index].toolTip());
+            const QTextCharFormat cursorAfter = occurrence.charFormat();
+            if (cursorAfter != cursorBefore)
+                qInfo() << "Advisory image cursor changed" << index << cursorBefore.properties() << cursorAfter.properties();
+            QCOMPARE(cursorAfter, cursorBefore);
+            QTextCharFormat fragmentAfter;
+            bool foundFragment = false;
+            const QTextBlock imageBlock = window.reading_->document()->findBlock(imagePositions[index]);
+            for (auto it = imageBlock.begin(); !it.atEnd(); ++it) {
+                const QTextFragment fragment = it.fragment();
+                if (fragment.position() <= imagePositions[index]
+                    && imagePositions[index] < fragment.position() + fragment.length()) {
+                    fragmentAfter = fragment.charFormat(); foundFragment = true; break;
+                }
+            }
+            QVERIFY(foundFragment);
+            if (fragmentAfter != formats[index])
+                qInfo() << "Advisory image fragment changed" << index << formats[index].properties() << fragmentAfter.properties();
+            QCOMPARE(fragmentAfter, QTextCharFormat(formats[index]));
+            QVERIFY(imagesUncatalogued());
+        }
+        QToolTip::hideText();
+        for (const auto &format : formats) {
+            QCOMPARE(format.stringProperty(SemanticHtml::inlineImageExplanationProperty), QStringLiteral("Image expansion"));
+            QCOMPARE(format.anchorHref(), QStringLiteral("media-source:File%3ATooltip-fixture.svg"));
+            QCOMPARE(format.width(), 20.0); QCOMPARE(format.height(), 20.0);
+        }
+        QTextCursor selected = window.reading_->document()->find(QStringLiteral("Linked advice"));
+        QVERIFY(!selected.isNull()); window.reading_->setTextCursor(selected);
+        const auto selectedText = selected.selection().toPlainText();
+        const QString href = selected.charFormat().anchorHref();
+        QVERIFY(!href.isEmpty());
+        bool inspected = false, expired = false;
+        QTimer deadline; deadline.setSingleShot(true);
+        connect(&deadline, &QTimer::timeout, &window, [&] {
+            expired = true;
+            for (QDialog *dialog : window.findChildren<QDialog *>()) dialog->reject();
+            for (QMenu *menu : window.findChildren<QMenu *>()) menu->close();
+        });
+        deadline.start(3000);
+        QTimer::singleShot(0, &window, [&] {
+            auto *menu = window.findChild<QMenu *>(QStringLiteral("readerContextMenu")); QVERIFY(menu);
+            auto *action = menu->findChild<QAction *>(QStringLiteral("entryAbbreviations")); QVERIFY(action);
+            QTimer::singleShot(0, &window, [&] {
+                auto *dialog = window.findChild<QDialog *>(QStringLiteral("abbreviationsDialog")); QVERIFY(dialog);
+                auto *details = dialog->findChild<QTextBrowser *>(QStringLiteral("abbreviationExplanations")); QVERIFY(details);
+                const QString contents = details->toPlainText();
+                QVERIFY(contents.contains(QStringLiteral("Abbreviation expansions")));
+                QVERIFY(contents.contains(QStringLiteral("Advisory information")));
+                QVERIFY(contents.contains(reserved));
+                QVERIFY(contents.contains(imageAdvice));
+                QVERIFY(contents.contains(QStringLiteral("Empty range advice")));
+                QVERIFY(contents.contains(QStringLiteral("Break advice")));
+                QVERIFY(contents.contains(QStringLiteral("Zero range advice")));
+                QCOMPARE(details->accessibleName(), QStringLiteral("Text details"));
+                QVERIFY(details->textInteractionFlags().testFlag(Qt::TextSelectableByKeyboard));
+                QVERIFY(dialog->grab().save(frameStem + QStringLiteral("-details.png")));
+                inspected = true; dialog->reject();
+            });
+            menu->setActiveAction(action); QTest::keyClick(menu, Qt::Key_Return);
+        });
+        QTest::keyClick(window.reading_, Qt::Key_F10, Qt::ShiftModifier);
+        deadline.stop(); QVERIFY(!expired); QVERIFY(inspected);
+        QTRY_VERIFY(window.reading_->hasFocus());
+        QCOMPARE(window.reading_->textCursor().selection().toPlainText(), selectedText);
+        QCOMPARE(window.reading_->textCursor().charFormat().anchorHref(), href);
+        QCOMPARE(window.reading_->toPlainText(), visible);
+        QCOMPARE(window.currentEntry_, entry);
+        QCOMPARE(QJsonDocument::fromJson(window.currentJson_).object(), QJsonObject({{"entries", QJsonArray{entry}}}));
+        window.resize(900, 600); window.resize(640, 600); window.refreshReading();
+        QCOMPARE(window.reading_->toPlainText(), visible);
+        QCOMPARE(window.readingAdvisories(), advisories);
+        QCOMPARE(window.readingExplanations(), explanations);
+        QCOMPARE(window.currentEntry_, entry);
+        // Text details describes the compiled entry, including folded ranges;
+        // folding does not erase metadata or insert replacement body text.
+        window.collapsedSections_.insert(0); window.refreshReading();
+        QVERIFY(!window.reading_->toPlainText().contains(QStringLiteral("Linked advice")));
+        QCOMPARE(window.readingAdvisories(), advisories);
+        QCOMPARE(window.currentEntry_, entry);
+        window.collapsedSections_.remove(0); window.refreshReading();
+        QCOMPARE(window.reading_->toPlainText(), visible);
+        QCOMPARE(window.readingAdvisories(), advisories);
+        QCOMPARE(window.currentEntry_, entry);
+        // Present-empty heading advice still selects the single rich companion.
+        const QJsonObject emptyHeading{{"kind", "heading"}, {"level", 3},
+            {"spans", QJsonArray{text("Advised heading", QString())}}};
+        const QJsonObject genericParagraph{{"kind", "paragraph"}, {"spans", QJsonArray{linked}}};
+        const QJsonObject genericSection{{"title", "Advised heading"}, {"level", 3}, {"blocks", QJsonArray{emptyHeading, genericParagraph}}};
+        const QJsonObject genericEntry{{"title", "Generic advice only"}, {"kind", "language"}, {"language", window.api_->language()},
+            {"sections", QJsonArray{genericSection}}};
+        window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{genericEntry}}}).toJson(), false);
+        QCOMPARE(window.reading_->toPlainText().count(QStringLiteral("Advised heading")), 1);
+        QCOMPARE(window.reading_->document()->find(QStringLiteral("Advised heading")).charFormat().toolTip(), QString());
+        QVERIFY(window.readingExplanations().isEmpty());
+        QCOMPARE(window.readingAdvisories().size(), 1);
+        window.reading_->setFocus(); QTRY_VERIFY(window.reading_->hasFocus());
+        inspected = false; expired = false; deadline.start(3000);
+        QTimer::singleShot(0, &window, [&] {
+            auto *menu = window.findChild<QMenu *>(QStringLiteral("readerContextMenu")); QVERIFY(menu);
+            auto *action = menu->findChild<QAction *>(QStringLiteral("entryAbbreviations")); QVERIFY(action);
+            QTimer::singleShot(0, &window, [&] {
+                auto *dialog = window.findChild<QDialog *>(QStringLiteral("abbreviationsDialog")); QVERIFY(dialog);
+                auto *details = dialog->findChild<QTextBrowser *>(QStringLiteral("abbreviationExplanations")); QVERIFY(details);
+                QVERIFY(details->toPlainText().contains(QStringLiteral("Advisory information")));
+                QVERIFY(details->toPlainText().contains(reserved));
+                QVERIFY(!details->toPlainText().contains(QStringLiteral("Abbreviation expansions")));
+                inspected = true; dialog->reject();
+            });
+            menu->setActiveAction(action); QTest::keyClick(menu, Qt::Key_Return);
+        });
+        QTest::keyClick(window.reading_, Qt::Key_F10, Qt::ShiftModifier);
+        deadline.stop(); QVERIFY(!expired); QVERIFY(inspected);
+        QTRY_VERIFY(window.reading_->hasFocus());
+        QCOMPARE(window.currentEntry_, genericEntry);
+        // Qt reverses the horizontal content offset for RTL widgets. Use a real
+        // scrolled text range, not an unscrolled direction flag alone.
+        window.reading_->setLayoutDirection(Qt::RightToLeft);
+        window.reading_->setLineWrapMode(QTextEdit::NoWrap);
+        window.reading_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        QJsonObject rtlEntry = genericEntry;
+        const QJsonArray longSpans{text(QStringLiteral("Leading words ").repeated(60), QJsonValue::Null), linked,
+            text(QStringLiteral(" trailing words").repeated(100), QJsonValue::Null)};
+        const QJsonObject longParagraph{{"kind", "paragraph"}, {"spans", longSpans}};
+        rtlEntry.insert("sections", QJsonArray{QJsonObject{{"title", "RTL scroll control"}, {"level", 3}, {"blocks", QJsonArray{longParagraph}}}});
+        window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{rtlEntry}}}).toJson(), false);
+        const QTextCursor rtlLink = window.reading_->document()->find(QStringLiteral("Linked advice")); QVERIFY(!rtlLink.isNull());
+        window.reading_->setTextCursor(rtlLink); window.reading_->ensureCursorVisible();
+        auto *horizontal = window.reading_->horizontalScrollBar();
+        QTRY_VERIFY(horizontal->isVisible() && horizontal->maximum() > 0);
+        QVERIFY(horizontal->value() > 0);
+        QVERIFY(horizontal->maximum() - horizontal->value() != horizontal->value());
+        hover(window.reading_, QStringLiteral("Linked advice"), reserved);
+        QCOMPARE(window.currentEntry_, rtlEntry);
+        QToolTip::hideText();
     }
 
     void abbreviationExplanationsPreserveCopyLinksAndKeyboardAccess() {
