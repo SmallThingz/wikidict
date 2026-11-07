@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 project(DictQt VERSION 0.1.0 LANGUAGES CXX)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Concurrent Network Multimedia Svg)
+find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Concurrent Network Multimedia Svg)
 qt_standard_project_setup()
 
 # Compile product code once under the shipped GUI's compilation contract.
@@ -78,7 +78,7 @@ install(CODE [[
 ]])
 
 if(BUILD_TESTING)
-    find_package(Qt6 6.5 REQUIRED COMPONENTS Test)
+    find_package(Qt6 6.6 REQUIRED COMPONENTS Test)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_library(wikidict-test-settings SHARED ../tests/UnifiedSettingsBootstrap.cpp)
         target_compile_features(wikidict-test-settings PRIVATE cxx_std_20)

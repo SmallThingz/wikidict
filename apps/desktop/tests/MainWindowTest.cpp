@@ -8325,6 +8325,385 @@ private slots:
         QTRY_VERIFY(QApplication::focusWidget() != nullptr && QApplication::focusWidget() != window.reading_);
     }
 
+    void tableOwnedByListItemKeepsMarkerBesideFirstRow() {
+        MainWindow window(fixture_, QStringLiteral("dog"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(640, 600); window.show();
+        const auto px = [](int value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
+        const auto text = [](const QString &value) { return QJsonObject{{"kind", "text"}, {"text", value}}; };
+        QJsonObject heading{{"spans", QJsonArray{QJsonObject{{"kind", "link"}, {"text", "First row link"}, {"target", "cat"}}}}, {"header", true}, {"colspan", 2}};
+        QJsonObject linked{{"spans", QJsonArray{QJsonObject{{"kind", "link"}, {"text", "Linked cell"}, {"target", "dog"}, {"bold", true}, {"underline", true}}}}, {"rowspan", 2}, {"background", "#ffc0cb"}};
+        const QJsonArray rows{QJsonObject{{"cells", QJsonArray{heading}}},
+            QJsonObject{{"cells", QJsonArray{linked, QJsonObject{{"spans", QJsonArray{text("Upper cell")}}}}}},
+            QJsonObject{{"cells", QJsonArray{QJsonObject{{"spans", QJsonArray{text("Final cell")}}, {"background", "#d0ffd0"}}}}}};
+        {
+            // A normal native list ends before this independent semantic table.
+            // Qt may still use its last text block as the table's predecessor.
+            SemanticHtml::setHtml(window.reading_, QStringLiteral("<ol><li>Ordinary item</li></ol>")
+                + window.tableHtml(QJsonObject{{"rows", rows}}, 0));
+            auto *document = window.reading_->document();
+            const QTextCursor item = document->find(QStringLiteral("Ordinary item"));
+            const QTextCursor cell = document->find(QStringLiteral("First row link"));
+            QVERIFY(!item.isNull() && !cell.isNull());
+            QVERIFY(item.block().textList() && cell.currentTable());
+            const QTextBlock before = document->findBlock(cell.currentTable()->firstPosition() - 1);
+            QCOMPARE(before, item.block());
+            QVERIFY(!before.blockFormat().hasProperty(SemanticHtml::tableListOwnerProperty));
+            auto *accessible = QAccessible::queryAccessibleInterface(window.reading_);
+            QVERIFY(accessible && accessible->textInterface());
+            int start = -1, end = -1;
+            const QString itemAttributes = accessible->textInterface()->attributes(item.selectionStart(), &start, &end);
+            QVERIFY(itemAttributes.contains(QStringLiteral("xml-roles:listitem;")));
+            QVERIFY(itemAttributes.contains(QStringLiteral("list-item-label:1.;")));
+            const QString cellAttributes = accessible->textInterface()->attributes(cell.selectionStart(), &start, &end);
+            QVERIFY(start <= cell.selectionStart() && cell.selectionStart() < end);
+            QVERIFY(!cellAttributes.contains(QStringLiteral("xml-roles:listitem;")));
+            QVERIFY(!cellAttributes.contains(QStringLiteral("list-item-label:")));
+            QCOMPARE(cell.charFormat().anchorHref(), QStringLiteral("dict:cat"));
+        }
+        const QString prose = QStringLiteral("Following prose remains selectable and wraps around the actual floated table. ").repeated(10);
+        const QJsonObject following{{"kind", "paragraph"}, {"spans", QJsonArray{text(prose)}}};
+        const QJsonObject ordinary{{"kind", "list_item"}, {"depth", 2}, {"list_path", "##"}, {"number", "9"}, {"spans", QJsonArray{text("Plain sibling")}}};
+        QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+        int caseIndex = 0;
+        for (const QString &label : {QString(), QStringLiteral("3.1")}) {
+            for (const QString &placement : {QStringLiteral("auto"), QStringLiteral("fixed"), QStringLiteral("percent"), QStringLiteral("left"), QStringLiteral("right")}) {
+                QJsonObject style{{"background", "#e9f3ff"}, {"collapse", "collapse"},
+                    {"margins", QJsonObject{{"top", px(0)}, {"right", px(12)}, {"bottom", px(0)}, {"left", px(0)}}}};
+                if (placement == QStringLiteral("left") || placement == QStringLiteral("right")) style.insert("float_side", placement);
+                QJsonObject geometry{{"border", 1}, {"cell_padding", 4}, {"cell_spacing", 0}};
+                if (placement != QStringLiteral("auto")) geometry.insert("width", QJsonObject{
+                    {"unit", placement == QStringLiteral("percent") ? "percent" : "px"}, {"value", placement == QStringLiteral("percent") ? 55 : 240}});
+                const QJsonObject table{{"rows", rows}, {"style", style}, {"geometry", geometry}};
+                int resize = 0;
+                for (const int width : {640, 480, 900, 640}) {
+                    window.resize(width, 600);
+                    QVector<QRectF> baselineGeometry;
+                    QSize baselineViewport;
+                    qreal baselineDocumentWidth = 0;
+                    bool baselineScrollbar = false;
+                    QTextBlockFormat baselineProseFormat;
+                    QString baselineProseText;
+                    QVector<QTextCharFormat> baselineProseCharacters;
+                    QMap<int, QVariant> baselineFormat;
+                    QString baselineText;
+                    QString expectedOwnedText;
+                    QString expectedOwnedAccessibleText;
+                    int baselineAccessibleCount = -1;
+                    QString precedingText;
+                    QMap<int, QVariant> precedingFormat;
+                    QRectF precedingGeometry;
+                    QVector<QTextCharFormat> precedingCharacters;
+                    int baselineTablePosition = -1;
+                    bool insertedMarkerBlock = false;
+                    QImage baselinePixels;
+                    for (const bool owned : {false, true}) {
+                        const QJsonObject source{{"kind", owned ? "list_item" : "table"}, {"depth", 2},
+                            {"list_path", label.isEmpty() ? "**" : "##"}, {"number", label}, {"spans", QJsonArray{}}, {"table", table}};
+                        QJsonObject continuation = source; continuation.insert("kind", "table"); continuation.insert("number", "");
+                        const QJsonObject entry{{"title", "Table list marker"}, {"kind", "language"}, {"language", window.api_->language()},
+                            {"sections", QJsonArray{QJsonObject{{"level", 2}, {"title", "Examples"}, {"blocks", QJsonArray{source, following, continuation, ordinary}}}}}};
+                        const QByteArray response = QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson();
+                        window.renderResponse(response, false);
+                        QTRY_VERIFY(window.reading_->isVisible() && !window.readingFloatLayoutScheduled_);
+                        const QString frame = QStringLiteral(".tmp/ui-screenshots/table-list-native-%1-%2-%3-%4.png")
+                            .arg(caseIndex).arg(resize).arg(owned ? QStringLiteral("owned") : QStringLiteral("continuation")).arg(QCoreApplication::applicationPid());
+                        QVERIFY(window.grab().save(frame));
+                        const QImage pixels = window.reading_->viewport()->grab().toImage();
+                        auto *document = window.reading_->document();
+                        const QTextCursor firstLink = document->find("First row link");
+                        const QTextCursor nextLink = document->find("First row link", firstLink.selectionEnd());
+                        QTextTable *actual = firstLink.currentTable();
+                        QTextTable *next = nextLink.currentTable();
+                        QVERIFY(actual && next && actual != next);
+                        QCOMPARE(actual->parentFrame(), document->rootFrame());
+                        QCOMPARE(next->parentFrame(), document->rootFrame());
+                        for (auto *item : {actual, next}) {
+                            QCOMPARE(item->rows(), 3); QCOMPARE(item->columns(), 2);
+                            QCOMPARE(item->cellAt(0, 0).columnSpan(), 2);
+                            QCOMPARE(item->cellAt(1, 0).rowSpan(), 2);
+                            QCOMPARE(item->cellAt(2, 0).firstPosition(), item->cellAt(1, 0).firstPosition());
+                            QCOMPARE(item->cellAt(1, 0).format().background().color(), QColor("#ffc0cb"));
+                            QCOMPARE(item->cellAt(2, 1).format().background().color(), QColor("#d0ffd0"));
+                        }
+                        QCOMPARE(actual->format().position(), placement == QStringLiteral("left") ? QTextFrameFormat::FloatLeft
+                            : placement == QStringLiteral("right") ? QTextFrameFormat::FloatRight : QTextFrameFormat::InFlow);
+                        auto format = actual->format().properties(); format.remove(QTextFormat::ObjectIndex);
+                        QVector<QRectF> resolved{document->documentLayout()->frameBoundingRect(actual), document->documentLayout()->frameBoundingRect(next)};
+                        const QTextBlock paragraph = document->find("Following prose").block();
+                        QVERIFY(paragraph.isValid());
+                        QCOMPARE(paragraph.text().count(QStringLiteral("Following prose remains selectable and wraps around the actual floated table.")), 10);
+                        const QSize viewportSize = window.reading_->viewport()->size();
+                        const qreal documentWidth = document->textWidth();
+                        const bool scrollbar = window.reading_->verticalScrollBar()->isVisible();
+                        qInfo() << "table-list viewport" << placement << width << owned
+                            << viewportSize << documentWidth << "vertical-scrollbar" << scrollbar;
+                        QCOMPARE(window.reading_->horizontalScrollBar()->maximum(), 0);
+                        QVector<QTextCharFormat> proseCharacters;
+                        for (int i = 0; i < paragraph.text().size(); ++i) {
+                            QTextCursor character(document); character.setPosition(paragraph.position() + i);
+                            character.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+                            proseCharacters.append(character.charFormat());
+                        }
+                        const QPointF origin = document->documentLayout()->blockBoundingRect(paragraph).topLeft();
+                        bool beside = false, below = false;
+                        int covered = 0;
+                        qreal previousBottom = -1;
+                        for (int i = 0; i < paragraph.layout()->lineCount(); ++i) {
+                            const QTextLine line = paragraph.layout()->lineAt(i);
+                            QCOMPARE(line.textStart(), covered);
+                            QVERIFY(line.textLength() > 0);
+                            covered += line.textLength();
+                            const QRectF rect = line.naturalTextRect().translated(origin);
+                            qInfo() << "table-list prose-line" << placement << width << owned << i
+                                << line.textStart() << line.textLength() << rect
+                                << paragraph.text().mid(line.textStart(), line.textLength());
+                            QVERIFY(rect.top() >= previousBottom);
+                            previousBottom = rect.bottom();
+                            QVERIFY(rect.left() >= 0 && rect.right() <= documentWidth);
+                            resolved.append(rect);
+                            beside |= rect.top() < resolved[0].bottom() && rect.bottom() > resolved[0].top();
+                            below |= rect.top() >= resolved[0].bottom();
+                        }
+                        QCOMPARE(covered, paragraph.text().size());
+                        for (auto *item : {actual, next}) {
+                            for (auto block = document->findBlock(item->firstPosition());
+                                 block.isValid() && block.position() <= item->lastPosition(); block = block.next()) {
+                                const QPointF cellOrigin = document->documentLayout()->blockBoundingRect(block).topLeft();
+                                for (int line = 0; line < block.layout()->lineCount(); ++line) {
+                                    const QRectF content = block.layout()->lineAt(line).naturalTextRect().translated(cellOrigin);
+                                    for (int i = 2; i < resolved.size(); ++i)
+                                        QVERIFY2(!content.intersects(resolved[i]), "prose overlaps table content");
+                                }
+                            }
+                        }
+                        if (placement == QStringLiteral("left") || placement == QStringLiteral("right")) { QVERIFY(beside); QVERIFY(below); }
+                        QCOMPARE(window.currentEntry_, entry);
+                        QCOMPARE(QJsonDocument::fromJson(window.currentJson_), QJsonDocument::fromJson(response));
+                        const auto pointFor = [&](QTextCursor selection) {
+                            QTextCursor end(selection); selection.setPosition(selection.selectionStart()); end.setPosition(end.selectionEnd());
+                            return window.reading_->cursorRect(selection).united(window.reading_->cursorRect(end)).center();
+                        };
+                        for (const auto &pair : {qMakePair(firstLink, QStringLiteral("dict:cat")), qMakePair(document->find("Linked cell"), QStringLiteral("dict:dog"))}) {
+                            const QPoint point = pointFor(pair.first);
+                            QCOMPARE(window.reading_->anchorAt(point), pair.second);
+                            const QPoint documentPoint = point + QPoint(window.reading_->horizontalScrollBar()->value(), window.reading_->verticalScrollBar()->value());
+                            const int offset = document->documentLayout()->hitTest(documentPoint, Qt::ExactHit);
+                            QVERIFY(offset >= pair.first.selectionStart() && offset < pair.first.selectionEnd());
+                        }
+                        const QTextBlock before = document->findBlock(actual->firstPosition() - 1);
+                        const QTextBlock beforeNext = document->findBlock(next->firstPosition() - 1);
+                        qInfo().noquote() << "table-list boundary" << placement << width << owned
+                            << "frame" << actual->firstPosition() << actual->lastPosition()
+                            << "preceding-block" << before.position() << before.length() << before.text();
+                        QVERIFY(!beforeNext.textList());
+                        if (!owned) {
+                            QVERIFY(!before.textList()); baselineGeometry = resolved; baselineFormat = format;
+                            baselineViewport = viewportSize; baselineDocumentWidth = documentWidth;
+                            baselineScrollbar = scrollbar; baselineProseFormat = paragraph.blockFormat();
+                            baselineProseText = paragraph.text();
+                            baselineProseCharacters = proseCharacters;
+                            baselineText = document->toPlainText(); baselinePixels = pixels;
+                            precedingText = before.text(); precedingFormat = before.blockFormat().properties();
+                            precedingGeometry = document->documentLayout()->blockBoundingRect(before);
+                            for (int i = 0; i < before.text().size(); ++i) {
+                                QTextCursor character(document); character.setPosition(before.position() + i);
+                                character.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+                                precedingCharacters.append(character.charFormat());
+                            }
+                            baselineTablePosition = actual->firstPosition();
+                            insertedMarkerBlock = !before.text().isEmpty();
+                            expectedOwnedText = baselineText;
+                            auto *baselineAccessible = QAccessible::queryAccessibleInterface(window.reading_);
+                            QVERIFY(baselineAccessible && baselineAccessible->textInterface());
+                            auto *baselineAx = baselineAccessible->textInterface();
+                            baselineAccessibleCount = baselineAx->characterCount();
+                            expectedOwnedAccessibleText = baselineAx->text(0, baselineAccessibleCount);
+                            QCOMPARE(expectedOwnedAccessibleText.size(), baselineAccessibleCount);
+                            QCOMPARE(baselineAccessible->text(QAccessible::Value), baselineText);
+                            // The native list owns one empty structural block,
+                            // never the preceding authored heading/prose.
+                            if (!before.text().isEmpty()) {
+                                expectedOwnedText.insert(actual->firstPosition() - 1, QChar('\n'));
+                                expectedOwnedAccessibleText.insert(actual->firstPosition() - 1, QChar('\n'));
+                            }
+                        } else {
+                            QCOMPARE(format, baselineFormat);
+                            QCOMPARE(paragraph.blockFormat(), baselineProseFormat);
+                            QCOMPARE(paragraph.text(), baselineProseText);
+                            QCOMPARE(proseCharacters, baselineProseCharacters);
+                            const bool floated = placement == QStringLiteral("left") || placement == QStringLiteral("right");
+                            if (floated) {
+                                const qreal advance = resolved[0].top() - baselineGeometry[0].top();
+                                const QRectF markerLine = document->documentLayout()->blockBoundingRect(before);
+                                QVERIFY(advance > 0);
+                                QCOMPARE(advance, markerLine.height());
+                                QCOMPARE(before.layout()->lineCount(), 1);
+                                const qreal widthChange = documentWidth - baselineDocumentWidth;
+                                QCOMPARE(widthChange, qreal(viewportSize.width() - baselineViewport.width()));
+                                QCOMPARE(viewportSize.height(), baselineViewport.height());
+                                if (widthChange != 0) {
+                                    // The extra native line can introduce a scrollbar.
+                                    // Its narrower viewport legitimately changes word breaks.
+                                    QVERIFY(!baselineScrollbar && scrollbar);
+                                    QCOMPARE(widthChange, -qreal(window.reading_->verticalScrollBar()->width()));
+                                }
+                                for (int i = 0; i < 2; ++i) {
+                                    QCOMPARE(resolved[i].size(), baselineGeometry[i].size());
+                                    QCOMPARE(resolved[i].left(), baselineGeometry[i].left()
+                                        + (placement == QStringLiteral("right") ? widthChange : 0));
+                                }
+                                QCOMPARE(resolved[1].top() - resolved.last().bottom(),
+                                    baselineGeometry[1].top() - baselineGeometry.last().bottom());
+                                if (widthChange == 0) {
+                                    QCOMPARE(resolved.size(), baselineGeometry.size());
+                                    for (int i = 0; i < resolved.size(); ++i)
+                                        QCOMPARE(resolved[i], baselineGeometry[i].translated(0, advance));
+                                }
+                            } else {
+                                QCOMPARE(resolved, baselineGeometry);
+                            }
+                            QCOMPARE(document->toPlainText(), expectedOwnedText);
+                            QCOMPARE(actual->firstPosition(), baselineTablePosition + int(insertedMarkerBlock));
+                            if (insertedMarkerBlock) {
+                                QCOMPARE(before.previous().text(), precedingText);
+                                auto expectedPrecedingFormat = precedingFormat;
+                                if (expectedPrecedingFormat.value(QTextFormat::BlockBottomMargin).toDouble() > 0)
+                                    expectedPrecedingFormat[QTextFormat::BlockBottomMargin] = qreal(0);
+                                QCOMPARE(before.previous().blockFormat().properties(), expectedPrecedingFormat);
+                                QRectF expectedHeading = precedingGeometry;
+                                expectedHeading.setWidth(expectedHeading.width() + documentWidth - baselineDocumentWidth);
+                                QCOMPARE(document->documentLayout()->blockBoundingRect(before.previous()), expectedHeading);
+                                QVector<QTextCharFormat> characters;
+                                for (int i = 0; i < before.previous().text().size(); ++i) {
+                                    QTextCursor character(document); character.setPosition(before.previous().position() + i);
+                                    character.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+                                    characters.append(character.charFormat());
+                                }
+                                QCOMPARE(characters, precedingCharacters);
+                                QVERIFY(!before.previous().textList());
+                            }
+                            QVERIFY(before.text().isEmpty()); QVERIFY(before.textList()); QCOMPARE(before.textList()->count(), 1);
+                            QVERIFY(before.blockFormat().hasProperty(SemanticHtml::tableListOwnerProperty));
+                            QCOMPARE(before.blockFormat().intProperty(SemanticHtml::tableListOwnerProperty), actual->objectIndex());
+                            QCOMPARE(before.length(), 1); QCOMPARE(actual->firstPosition(), before.position() + 1);
+                            QCOMPARE(before.textList()->format().indent(), 2);
+                            if (label.isEmpty()) QCOMPARE(before.textList()->format().style(), QTextListFormat::ListDisc);
+                            else QCOMPARE(before.textList()->itemText(before), label + QChar('.'));
+                            if (!floated) QCOMPARE(pixels.size(), baselinePixels.size());
+                            QImage markerlessPixels = baselinePixels;
+                            if (floated) {
+                                // Isolate native marker ink without removing its
+                                // normal line advance or changing the table flow.
+                                QTextCursor markerCursor(before);
+                                const QTextCharFormat original = markerCursor.blockCharFormat();
+                                {
+                                    auto restore = qScopeGuard([&] { markerCursor.setBlockCharFormat(original); });
+                                    QTextCharFormat transparent = original;
+                                    transparent.setForeground(QColor(Qt::transparent));
+                                    markerCursor.setBlockCharFormat(transparent);
+                                    markerlessPixels = window.reading_->viewport()->grab().toImage();
+                                }
+                                QCOMPARE(before.charFormat(), original);
+                                QCOMPARE(document->documentLayout()->frameBoundingRect(actual), resolved[0]);
+                                QCOMPARE(document->toPlainText(), expectedOwnedText);
+                            }
+                            QCOMPARE(markerlessPixels.size(), pixels.size());
+                            QRect changed;
+                            for (int y = 0; y < pixels.height(); ++y) for (int x = 0; x < pixels.width(); ++x)
+                                if (pixels.pixel(x, y) != markerlessPixels.pixel(x, y)) changed = changed.united(QRect(x, y, 1, 1));
+                            QVERIFY2(!changed.isEmpty(), "native list has no visible marker");
+                            const qreal ratio = pixels.devicePixelRatio();
+                            const QRectF markerBox(changed.x() / ratio, changed.y() / ratio, changed.width() / ratio, changed.height() / ratio);
+                            QTextCursor linkStart(firstLink), linkEnd(firstLink);
+                            linkStart.setPosition(firstLink.selectionStart()); linkEnd.setPosition(firstLink.selectionEnd());
+                            const QRect firstRow = window.reading_->cursorRect(linkStart).united(window.reading_->cursorRect(linkEnd));
+                            if (floated) {
+                                QVERIFY2(markerBox.bottom() < firstRow.top(), "floated table must follow the normal marker line");
+                            } else {
+                                QVERIFY2(markerBox.right() < firstRow.left(), "marker overlaps the first row");
+                                QVERIFY2(markerBox.bottom() >= firstRow.top() - 6 && markerBox.top() <= firstRow.bottom() + 6, "native marker is detached from first row");
+                            }
+                            const QRectF markerDocumentBox = markerBox.translated(window.reading_->horizontalScrollBar()->value(), window.reading_->verticalScrollBar()->value());
+                            for (int i = 2; i < resolved.size(); ++i)
+                                QVERIFY2(!markerDocumentBox.intersects(resolved[i]), "native marker overlaps following prose");
+                            QVERIFY(window.reading_->viewport()->rect().contains(markerBox.toAlignedRect()));
+                            auto *accessible = QAccessible::queryAccessibleInterface(window.reading_);
+                            QVERIFY(accessible && accessible->textInterface());
+                            auto *ax = accessible->textInterface();
+                            // Native Qt text ranges retain table-boundary characters
+                            // for offsets; Value is the separate visible plain text.
+                            QCOMPARE(ax->characterCount(), baselineAccessibleCount + int(insertedMarkerBlock));
+                            QCOMPARE(ax->text(0, ax->characterCount()), expectedOwnedAccessibleText);
+                            QCOMPARE(accessible->text(QAccessible::Value), expectedOwnedText);
+                            int attributeStart = -1, attributeEnd = -1;
+                            const QString firstAttributes = ax->attributes(firstLink.selectionStart(), &attributeStart, &attributeEnd);
+                            QVERIFY(firstAttributes.contains(QStringLiteral("xml-roles:listitem;")));
+                            QVERIFY(firstAttributes.contains(QStringLiteral("level:2;")));
+                            QVERIFY(firstAttributes.contains(QStringLiteral("list-item-label:%1;").arg(label.isEmpty() ? QStringLiteral("•") : label + QChar('.'))));
+                            QVERIFY(attributeStart <= firstLink.selectionStart() && attributeEnd > firstLink.selectionStart());
+                            QVERIFY(!ax->attributes(nextLink.selectionStart(), &attributeStart, &attributeEnd).contains(QStringLiteral("xml-roles:listitem;")));
+                            const QRect firstRect = ax->characterRect(firstLink.selectionStart());
+                            QVERIFY(firstRect.isValid());
+                            const int axOffset = ax->offsetAtPoint(firstRect.center());
+                            QVERIFY(axOffset >= firstLink.selectionStart() && axOffset < firstLink.selectionEnd());
+                            QTextCursor selection(document); selection.select(QTextCursor::Document);
+                            window.reading_->setTextCursor(selection); window.reading_->copy();
+                            QCOMPARE(QApplication::clipboard()->text(), expectedOwnedText);
+                            const QString copied = QApplication::clipboard()->mimeData()->html();
+                            QVERIFY(copied.contains(label.isEmpty() ? QStringLiteral("<ul") : QStringLiteral("<ol")));
+                            QTextDocument copiedDocument; SemanticHtml::setHtml(&copiedDocument, copied);
+                            QCOMPARE(copiedDocument.toPlainText(), expectedOwnedText);
+                            bool copiedList = false;
+                            for (QTextBlock b = copiedDocument.begin(); b.isValid(); b = b.next()) if (b.textList()) {
+                                copiedList = true;
+                                if (label.isEmpty()) QCOMPARE(b.textList()->format().style(), QTextListFormat::ListDisc);
+                                else QCOMPARE(b.textList()->itemText(b), label + QChar('.'));
+                            }
+                            QVERIFY(copiedList);
+                            window.reading_->setFocus(); QTRY_VERIFY(window.reading_->hasFocus());
+                            QTest::keyClick(window.reading_, Qt::Key_Home, Qt::ControlModifier);
+                            for (int step = 0; step < 8 && window.reading_->textCursor().charFormat().anchorHref() != QStringLiteral("dict:cat"); ++step)
+                                QTest::keyClick(window.reading_, Qt::Key_Tab);
+                            QCOMPARE(window.reading_->textCursor().charFormat().anchorHref(), QStringLiteral("dict:cat"));
+                        }
+                    }
+                    ++resize;
+                }
+                ++caseIndex;
+            }
+        }
+        const QJsonObject simpleTable{{"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{QJsonObject{{"spans", QJsonArray{text("Counter cell")}}}}}}}}};
+        for (const QJsonArray &emptyRows : {QJsonArray{}, QJsonArray{QJsonObject{{"cells", QJsonArray{}}}}}) {
+            const QJsonObject empty{{"rows", emptyRows}, {"caption", QJsonArray{text("Empty caption")}}};
+            QTextDocument document;
+            const QJsonObject source{{"kind", "list_item"}, {"depth", 1}, {"number", "7"}, {"table", empty}};
+            SemanticHtml::setHtml(&document, window.blockHtml(source));
+            QCOMPARE(document.toPlainText().count(QStringLiteral("7.")), 1);
+            QCOMPARE(document.toPlainText().count(QStringLiteral("Empty caption")), 1);
+            QVERIFY(document.rootFrame()->childFrames().isEmpty());
+            QJsonObject continuation = source; continuation.insert("kind", "table");
+            SemanticHtml::setHtml(&document, window.blockHtml(continuation));
+            QVERIFY(!document.toPlainText().contains(QStringLiteral("7.")));
+            QCOMPARE(document.toPlainText().count(QStringLiteral("Empty caption")), 1);
+        }
+        for (const QString &label : {QStringLiteral("7"), QStringLiteral("0"), QStringLiteral("-2"), QStringLiteral("2147483647"), QStringLiteral("AA"), QStringLiteral("iii"), QStringLiteral("xxvi"), QStringLiteral("<i>")}) {
+            QTextDocument document;
+            const QJsonObject source{{"kind", "list_item"}, {"depth", 1}, {"number", label}, {"table", simpleTable}};
+            SemanticHtml::setHtml(&document, window.blockHtml(source));
+            auto *table = document.find("Counter cell").currentTable(); QVERIFY(table);
+            const QTextBlock before = document.findBlock(table->firstPosition() - 1);
+            QVERIFY(before.textList()); QCOMPARE(before.textList()->itemText(before), label + QChar('.'));
+        }
+        const QTextCursor first = window.reading_->document()->find("First row link");
+        QTextCursor firstEnd(first), firstStart(first); firstStart.setPosition(first.selectionStart()); firstEnd.setPosition(first.selectionEnd());
+        QSignalSpy clicked(window.reading_, &QTextBrowser::anchorClicked);
+        QTest::mouseClick(window.reading_->viewport(), Qt::LeftButton, Qt::NoModifier,
+            window.reading_->cursorRect(firstStart).united(window.reading_->cursorRect(firstEnd)).center());
+        QCOMPARE(clicked.count(), 1); QCOMPARE(clicked.takeFirst().at(0).toUrl(), QUrl("dict:cat"));
+        QTRY_COMPARE(window.currentEntry_.value(QStringLiteral("title")).toString(), QStringLiteral("cat"));
+    }
+
     void nestedTablesKeepTheirCompiledDepth() {
         MainWindow window{QString()};
         const auto block = [](int depth, const QString &caption) {

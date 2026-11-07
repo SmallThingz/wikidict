@@ -19,7 +19,7 @@ wikitext remain build-time concerns in the core project.
 
 - CMake 3.21+
 - C++20 compiler
-- Qt 6.5+ with Core, Gui, Widgets, Concurrent, Network, Multimedia and Svg
+- Qt 6.6+ with Core, Gui, Widgets, Concurrent, Network, Multimedia and Svg
 - Zig 0.17.0 for the core and fixture generator
 - a built Wikidict core CLI and C ABI from this repository
 

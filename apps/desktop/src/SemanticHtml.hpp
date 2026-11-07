@@ -9,6 +9,7 @@
 #include <QFontMetricsF>
 #include <QJsonArray>
 #include <QTextTable>
+#include <QTextList>
 #include <QTextImageFormat>
 #include <QUrl>
 #include <QImage>
@@ -53,6 +54,7 @@ inline qreal boundedFontPoints(qreal base, double scale, qreal maximum, qreal ra
 
 // Table metadata belongs only to generated semantic HTML, never authored text.
 inline const QString tableMarkerOpen = QStringLiteral("<!--wikidict-table-style:");
+inline constexpr int tableListOwnerProperty = QTextFormat::UserProperty + 0x5750;
 struct TableInfo { int ordinal; QJsonObject value; };
 inline bool present(const QJsonValue &value) { return !value.isUndefined() && !value.isNull(); }
 inline QString textAlignment(const QJsonValue &value) {
@@ -98,8 +100,8 @@ inline qreal styleLengthUnits(const QJsonValue &value, const QTextDocument *docu
     const qreal base = unit == QStringLiteral("em") ? containerPoints * defaultDpi / 72 : 1;
     return boundedFontPoints(base, n, maximum);
 }
-inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints, int indent, bool resetTextAlignment = false) {
-    bool styled = resetTextAlignment || present(table.value(QStringLiteral("style")));
+inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints, int indent, bool resetTextAlignment = false, const QString &listMarker = {}) {
+    bool styled = !listMarker.isEmpty() || resetTextAlignment || present(table.value(QStringLiteral("style")));
     if (!styled) {
         for (const QJsonValue &row : table.value(QStringLiteral("rows")).toArray())
             for (const QJsonValue &cell : row.toObject().value(QStringLiteral("cells")).toArray())
@@ -120,6 +122,7 @@ inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints,
     }
     if (!styled) return {};
     QJsonObject metadata{{"container_points", containerPoints}, {"indent", indent}, {"rows", rows}};
+    if (!listMarker.isEmpty()) metadata.insert(QStringLiteral("list_marker"), listMarker);
     if (resetTextAlignment) metadata.insert(QStringLiteral("reset_text_alignment"), true);
     if (present(table.value(QStringLiteral("style")))) metadata.insert(QStringLiteral("style"), table.value(QStringLiteral("style")));
     return tableMarkerOpen + QString::fromLatin1(QJsonDocument(metadata).toJson(QJsonDocument::Compact).toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals)) + QStringLiteral("-->");
@@ -175,6 +178,9 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
     for (const TableInfo &record : records) {
         if (record.ordinal < -1 || record.ordinal >= tables.size()) throw std::runtime_error("table style ordinal mismatch");
         QTextTable *table = record.ordinal < 0 ? nullptr : tables[record.ordinal];
+        const QJsonValue markerValue = record.value.value(QStringLiteral("list_marker"));
+        if (!markerValue.isUndefined() && (!markerValue.isString() || markerValue.toString().isEmpty()))
+            throw std::runtime_error("invalid table list marker");
         const qreal points = record.value.value(QStringLiteral("container_points")).toDouble(-1);
         const int indent = record.value.value(QStringLiteral("indent")).toInt(-1);
         if (!std::isfinite(points) || points <= 0 || indent < 0 || !record.value.value(QStringLiteral("rows")).isArray()) throw std::runtime_error("invalid table style context");
@@ -270,6 +276,76 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                 textAlignment(cellStyle.value(QStringLiteral("text_align")));
             }
             if (index != cells.size()) throw std::runtime_error("table style cell count mismatch");
+        }
+        if (markerValue.isString()) {
+            // The imported frame can directly follow authored heading/prose.
+            // Give the marker its own empty native block in that case; Qt
+            // collapses this block against the table without wrapping its frame.
+            QTextCursor cursor(document);
+            cursor.setPosition(table->firstPosition() - 1);
+            if (cursor.currentFrame() != table->parentFrame() || !cursor.atBlockEnd())
+                throw std::runtime_error("invalid table list boundary");
+            if (!cursor.block().text().isEmpty() || cursor.block().textList()
+                || cursor.blockFormat().hasProperty(QTextFormat::BlockTrailingHorizontalRulerWidth)
+                || cursor.blockFormat().hasProperty(QTextFormat::BackgroundBrush)) {
+                // A direct child table did not consume this block margin. Qt's
+                // empty-before-table collapse would newly activate it; keep the
+                // same rendered boundary without changing any table margin.
+                if (cursor.blockFormat().bottomMargin() > 0) {
+                    QTextBlockFormat preceding = cursor.blockFormat();
+                    preceding.setBottomMargin(0);
+                    cursor.setBlockFormat(preceding);
+                }
+                QTextBlockFormat empty;
+                empty.setTopMargin(0);
+                empty.setBottomMargin(0);
+                cursor.insertBlock(empty, QTextCharFormat());
+            }
+            cursor.setPosition(table->firstPosition() - 1);
+            if (cursor.currentFrame() != table->parentFrame() || cursor.block().length() != 1
+                || table->firstPosition() != cursor.block().position() + 1)
+                throw std::runtime_error("invalid native table list block");
+            const QString marker = markerValue.toString();
+            QTextListFormat list;
+            const int level = qMax(1, (indent - 30) / 16 + 1);
+            list.setIndent(level);
+            if (marker == QStringLiteral("•")) {
+                list.setStyle(QTextListFormat::ListDisc);
+            } else {
+                // The compiler emits decimal, alphabetic, Roman and dotted
+                // labels. Preserve the complete label via Qt's prefix/suffix;
+                // use one ASCII counter character, avoiding integer overflow.
+                int digit = marker.size() - 1;
+                while (digit >= 0 && !((marker[digit] >= QChar('0') && marker[digit] <= QChar('9'))
+                    || (marker[digit] >= QChar('a') && marker[digit] <= QChar('z'))
+                    || (marker[digit] >= QChar('A') && marker[digit] <= QChar('Z')))) --digit;
+                if (digit < 0) throw std::runtime_error("unrepresentable compiled table list label");
+                const QChar counter = marker[digit];
+                const bool decimal = counter >= QChar('0') && counter <= QChar('9');
+                const bool upper = counter >= QChar('A') && counter <= QChar('Z');
+                list.setStyle(decimal ? QTextListFormat::ListDecimal
+                    : upper ? QTextListFormat::ListUpperAlpha : QTextListFormat::ListLowerAlpha);
+                list.setStart(counter.unicode() - (decimal ? '0' : upper ? 'A' : 'a') + (decimal ? 0 : 1));
+                list.setNumberPrefix(marker.left(digit));
+                list.setNumberSuffix(marker.mid(digit + 1));
+            }
+            QTextBlockFormat block = cursor.blockFormat();
+            block.setProperty(tableListOwnerProperty, table->objectIndex());
+            block.setIndent(0);
+            block.setLeftMargin(indent - level * document->indentWidth());
+            block.setAlignment(Qt::AlignLeft);
+            block.setLayoutDirection(Qt::LeftToRight);
+            // A float does not advance the surrounding text flow. Retain the
+            // native list item's ordinary line so its label cannot collide with
+            // following prose. Qt preserves a block with an explicit background
+            // instead of collapsing it into the table; this brush paints nothing.
+            if (format.position() != QTextFrameFormat::InFlow)
+                block.setBackground(QColor(Qt::transparent));
+            cursor.setBlockFormat(block);
+            QTextCharFormat character = cursor.blockCharFormat();
+            character.setFontPointSize(points);
+            cursor.setBlockCharFormat(character);
+            cursor.createList(list);
         }
     }
 }

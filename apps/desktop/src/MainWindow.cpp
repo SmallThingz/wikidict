@@ -651,6 +651,35 @@ public:
             if (format.hasProperty(QTextFormat::ImageTitle)) result += QStringLiteral("image-tooltip:%1;").arg(escaped(format.stringProperty(QTextFormat::ImageTitle)));
             result += QStringLiteral("image-state:%1;").arg(format.intProperty(SemanticHtml::inlineImageStateProperty));
         }
+        QTextBlock listBlock = block;
+        if (!listBlock.textList()) {
+            for (QTextFrame *frame = cursor.currentFrame(); frame && frame != browser_->document()->rootFrame(); frame = frame->parentFrame()) {
+                auto *table = qobject_cast<QTextTable *>(frame);
+                if (!table) continue;
+                const QTextBlock before = browser_->document()->findBlock(frame->firstPosition() - 1);
+                const auto marker = before.blockFormat();
+                // Adjacency alone does not make an ordinary preceding list item
+                // the owner of this table. Only the semantic marker does that.
+                if (before.length() == 1 && before.position() + 1 == table->firstPosition()
+                    && QTextCursor(before).currentFrame() == table->parentFrame()
+                    && marker.hasProperty(SemanticHtml::tableListOwnerProperty)
+                    && marker.intProperty(SemanticHtml::tableListOwnerProperty) == table->objectIndex()
+                    && before.textList()) { listBlock = before; break; }
+            }
+        }
+        if (QTextList *list = listBlock.textList()) {
+            const auto style = list->format().style();
+            QString marker;
+            if (style == QTextListFormat::ListDisc) marker = QStringLiteral("•");
+            else if (style == QTextListFormat::ListCircle) marker = QStringLiteral("○");
+            else if (style == QTextListFormat::ListSquare) marker = QStringLiteral("▪");
+            else if (style != QTextListFormat::ListStyleUndefined) marker = list->itemText(listBlock);
+            marker.replace(QChar('\\'), QStringLiteral("\\\\"));
+            marker.replace(QChar(';'), QStringLiteral("\\;")); marker.replace(QChar(':'), QStringLiteral("\\:"));
+            if (!format.isImageFormat()) result += QStringLiteral("xml-roles:listitem;");
+            result += QStringLiteral("level:%1;list-item-label:%2;")
+                .arg(list->format().indent()).arg(marker);
+        }
         if (font.underline()) result += QStringLiteral("text-underline-type:single;");
         if (font.strikeOut()) result += QStringLiteral("text-line-through-type:single;");
         if (format.verticalAlignment() == QTextCharFormat::AlignSuperScript) result += QStringLiteral("text-position:super;");
@@ -2805,7 +2834,7 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
     return out;
 
 }
-QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDepth, const QString &inheritedBackground, const QString &location, const QString &inheritedAlignment) const {
+QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDepth, const QString &inheritedBackground, const QString &location, const QString &inheritedAlignment, const QString &listMarker) const {
     if (tableDepth > 16) throw DictApiError("nested table depth exceeds presentation limit");
     const int indent = depth > 0 ? 30 + std::clamp(depth - 1, 0, 20) * 16 : 0;
     QString out = QStringLiteral("<table cellspacing='0' cellpadding='5' style='border-collapse:collapse;margin:8px 0;margin-left:%1px'>").arg(indent);
@@ -2900,7 +2929,19 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
         ++rowIndex;
     }
     out += QStringLiteral("</table>");
-    return SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty()) + out;
+    if (!listMarker.isEmpty()) {
+        bool hasCell = false;
+        for (const QJsonValue &row : table.value(QStringLiteral("rows")).toArray())
+            hasCell |= !row.toObject().value(QStringLiteral("cells")).toArray().isEmpty();
+        if (!hasCell) {
+            // No native frame exists for an empty table. Keep its marker as the
+            // ordinary empty list-item text, alongside any retained caption.
+            const QString marker = QStringLiteral("<p style='margin:0;margin-left:%1px'>%2</p>")
+                .arg(qMax(0, indent - 12)).arg(listMarker.toHtmlEscaped());
+            return marker + SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty()) + out;
+        }
+    }
+    return SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty(), listMarker) + out;
 }
 
 QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location, const QString &inheritedAlignment) const {
@@ -2945,7 +2986,13 @@ QString MainWindow::blockContentsHtml(const QJsonObject &block, const QString &c
         const QJsonObject renderedShape{{"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{QJsonObject{}, QJsonObject{}}}}}}};
         return SemanticHtml::tableStyleMarker(renderedShape, readingPointSize_, indent, !alignment.isEmpty()) + html;
     }
-    if (table.isObject()) return tableHtml(table.toObject(), block.value(QStringLiteral("depth")).toInt(), tableDepth, cellBackground, location, alignment);
+    if (table.isObject()) {
+        const QString number = block.value(QStringLiteral("number")).toString();
+        const QString marker = kind == QStringLiteral("list_item")
+            ? (number.isEmpty() ? QStringLiteral("•") : number + QChar('.')) : QString();
+        return tableHtml(table.toObject(), block.value(QStringLiteral("depth")).toInt(), tableDepth,
+            cellBackground, location, alignment, marker);
+    }
     const QJsonArray spans = block.value(QStringLiteral("spans")).toArray();
     const bool poem = hasPoemSpans(spans);
     if (kind == QStringLiteral("paragraph") && block.value(QStringLiteral("depth")).toInt() == 0 &&
