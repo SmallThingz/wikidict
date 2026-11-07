@@ -55,9 +55,114 @@ SOURCE_PINS = {
     'cldr-catalog.json': '699f1ae957db93c25f5947c22b65cb5733b3f47da38ced51a35302024d5700f5',
 }
 
+# Query/name/fallback behavior is unchanged at this recorded revision. Cache
+# initialization and persistent message storage changed, so their source bytes
+# have distinct pins; the older source profile remains unchanged.
+CURRENT_CORE = '0470f6c99a6456a366635bf25a517a1f951de6f5'
+CURRENT_CORE_OVERRIDES = {
+    'LanguageNameUtils.php': '2dc72ee00d7df558f80ec4ef66c1b3665d006989ad63b26702c63372efa4252a',
+    'LocalisationCache.php': '7365013bb8224942d6596110e736d6c2db48a56a6bb9e0adea7cf1fef5265ce4',
+}
+CORE_SOURCE_PATHS = {
+    'ApiQueryLanguageinfo.php': 'includes/Api/ApiQueryLanguageinfo.php',
+    'ApiQuerySiteinfo.php': 'includes/Api/ApiQuerySiteinfo.php',
+    'LanguageCode.php': 'includes/Language/LanguageCode.php',
+    'Names.php': 'includes/Languages/Data/Names.php',
+    'LanguageNameUtils.php': 'includes/Language/LanguageNameUtils.php',
+    'LanguageFallback.php': 'includes/Language/LanguageFallback.php',
+    'LocalisationCache.php': 'includes/Language/LocalisationCache.php',
+}
+CORE_RECEIPTS = 'core-source-receipts.json'
+ITALIAN_SOURCE_PROFILE = 'cldr-e0dd-it-en-v1'
+NAME_SOURCE_SCOPE = 'immutable-public-source-profile-not-deployment-observation'
+ITALIAN_CLDR_COMMIT = 'e0dd4bba29906dd7358e8c095d329f334b7d2374'
+ITALIAN_SOURCE_PINS = {
+    'cldr-en.json': '1067afc386e6c5af9fd7a23dd4309d5cef089b638531bd26f291c120973304a9',
+    'cldr-it.json': '504db5db38eef0245cb53c4cffe02cc509abe3f2eefdc27046a86835996e785b',
+    'cldr-tree.json': 'e7fbd9b5374975e17dd3cb5221e632da3517a10a397e3e45fb1a5fbaf64952e3',
+}
+ITALIAN_SOURCE_PATHS = {
+    'cldr-LanguageNames.php': 'includes/LanguageNames.php',
+    'cldr-Hooks.php': 'includes/Hooks.php',
+    'cldr-en.json': 'i18n/LanguageNames/en.json',
+    'cldr-it.json': 'i18n/LanguageNames/it.json',
+}
+CLDR_RECEIPTS = 'cldr-source-receipts.json'
+
+
+def name_source_config(config):
+    fields = {'name_source_profile', 'name_source_profile_scope'} & set(config)
+    if not fields:
+        return None
+    if (fields != {'name_source_profile', 'name_source_profile_scope'}
+            or config['name_source_profile'] != ITALIAN_SOURCE_PROFILE
+            or config['name_source_profile_scope'] != NAME_SOURCE_SCOPE
+            or config.get('core') != CURRENT_CORE or config.get('languages') != ['it']):
+        raise ValueError('Unreviewed explicit language-name source profile')
+    return config['name_source_profile']
+
+
+def select_name_source(config, profile):
+    if profile is not None:
+        config = {**config, 'name_source_profile': profile, 'name_source_profile_scope': NAME_SOURCE_SCOPE}
+    name_source_config(config)
+    return config
+
+
+def italian_source_tables(root, prefix, sources):
+    tree = evidence.decode(sources['cldr-tree.json'])
+    if (tree.get('sha') != ITALIAN_CLDR_COMMIT or tree.get('truncated') is not False
+            or not isinstance(tree.get('tree'), list)):
+        raise ValueError('Incomplete reviewed CLDR source tree')
+    blobs = {row['path']: row for row in tree['tree'] if row.get('type') == 'blob'}
+    raw = evidence.small(root / (prefix + CLDR_RECEIPTS), MAX_MANIFEST)
+    record = evidence.decode(raw)
+    expected = {**ITALIAN_SOURCE_PATHS, 'cldr-tree.json': None}
+    rows = record.get('sources') if isinstance(record, dict) else None
+    if (not isinstance(record, dict) or record.get('commit') != ITALIAN_CLDR_COMMIT
+            or not isinstance(rows, list) or len(rows) != len(expected)):
+        raise ValueError('Incomplete reviewed CLDR source receipts')
+    found = set()
+    for row in rows:
+        name = row.get('file') if isinstance(row, dict) else None
+        if name not in expected or name in found:
+            raise ValueError('Unexpected or duplicate CLDR source role')
+        path = expected[name]
+        url = (f'https://raw.githubusercontent.com/wikimedia/mediawiki-extensions-cldr/{ITALIAN_CLDR_COMMIT}/{path}'
+               if path else f'https://api.github.com/repos/wikimedia/mediawiki-extensions-cldr/git/trees/{ITALIAN_CLDR_COMMIT}?recursive=1')
+        body = sources[name]
+        if (row.get('source_path') != path or row.get('url') != url or row.get('status') != 200
+                or row.get('bytes') != len(body) or row.get('sha256') != evidence.digest(body)):
+            raise ValueError('Reviewed CLDR source receipt differs')
+        if path:
+            blob = blobs.get(path, {})
+            if (blob.get('size') != len(body) or blob.get('sha') != hashlib.sha1(
+                    b'blob ' + str(len(body)).encode() + b'\0' + body).hexdigest()):
+                raise ValueError('Reviewed CLDR Git blob differs')
+        found.add(name)
+    sources[CLDR_RECEIPTS] = raw
+    tables = {}
+    for locale in ('en', 'it'):
+        data = evidence.decode(sources['cldr-' + locale + '.json'])
+        if not isinstance(data, dict):
+            raise ValueError('Invalid complete CLDR locale table')
+        table = {}
+        for key, value in data.items():
+            if not key.startswith('cldr-language-name-'):
+                continue
+            # Exact LanguageNames::loadLanguage PHP truthiness/filtering.
+            if value in (None, False, '', '0', '-'):
+                continue
+            language = key[19:]
+            if not code(language) or not text(value):
+                raise ValueError('Invalid complete CLDR name row')
+            table[language] = value
+        tables[locale] = table
+    return tables
+
 
 def core_revision(value):
-    if not isinstance(value, str) or value not in CORE_TREE_SHA256:
+    if not isinstance(value, str) or value not in (*CORE_TREE_SHA256, CURRENT_CORE):
         raise ValueError('Unreviewed core source revision')
     return value
 
@@ -86,13 +191,40 @@ def namespace_identity(raw, wiki, date):
     return language
 
 
-def primary_contract(root, prefix=''):
+def primary_contract(root, prefix='', core=CORE, name_source_profile=None):
+    core = core_revision(core)
+    pins = SOURCE_PINS if core != CURRENT_CORE else {**SOURCE_PINS, **CURRENT_CORE_OVERRIDES}
+    if name_source_profile is not None:
+        if name_source_profile != ITALIAN_SOURCE_PROFILE or core != CURRENT_CORE:
+            raise ValueError('Unreviewed primary language-name source profile')
+        pins = {name: digest for name, digest in pins.items()
+                if name not in ('cldr-ar.json', 'cldr-en.json', 'cldr-catalog.json')}
+        pins.update(ITALIAN_SOURCE_PINS)
     sources = {}
-    for name, digest in SOURCE_PINS.items():
+    for name, digest in pins.items():
         raw = evidence.small(root / (prefix + name), MAX_SOURCE)
         if evidence.digest(raw) != digest:
             raise ValueError('Unreviewed primary source: ' + name)
         sources[name] = raw
+    if core == CURRENT_CORE:
+        raw = evidence.small(root / (prefix + CORE_RECEIPTS), MAX_MANIFEST)
+        record = evidence.decode(raw)
+        rows = record.get('sources') if isinstance(record, dict) else None
+        if (not isinstance(record, dict) or record.get('core') != core or not isinstance(rows, list)
+                or len(rows) != len(CORE_SOURCE_PATHS)):
+            raise ValueError('Incomplete reviewed core source receipts')
+        found = set()
+        for row in rows:
+            name = row.get('file') if isinstance(row, dict) else None
+            if name not in CORE_SOURCE_PATHS or name in found:
+                raise ValueError('Unexpected or duplicate core source role')
+            path = CORE_SOURCE_PATHS[name]
+            if (row.get('source_path') != path or row.get('status') != 200
+                    or row.get('url') != f'https://raw.githubusercontent.com/wikimedia/mediawiki/{core}/{path}'
+                    or row.get('bytes') != len(sources[name]) or row.get('sha256') != pins[name]):
+                raise ValueError('Reviewed core source receipt differs')
+            found.add(name)
+        sources[CORE_RECEIPTS] = raw
     source = sources['LanguageCode.php'].decode()
     def mapping(name):
         block = source.split('private const ' + name + ' = [', 1)[1].split('\n\t];', 1)[0]
@@ -102,7 +234,8 @@ def primary_contract(root, prefix=''):
                mapping('NON_STANDARD_LANGUAGE_CODE_MAPPING').items()}
     aliases.update(deprecated)
     aliases = {key: deprecated.get(value, value) for key, value in aliases.items()}
-    tables = source_catalog(sources['cldr-catalog.json'])
+    tables = (italian_source_tables(root, prefix, sources) if name_source_profile else
+              source_catalog(sources['cldr-catalog.json']))
     return sources, aliases, tables
 
 
@@ -194,6 +327,8 @@ def extra_direction_contract(root, values, aliases, prefix='', core=CORE):
     values = extra_direction_codes(values)
     if not values:
         return {}, {}
+    if core not in CORE_TREE_SHA256:
+        raise ValueError('Extra directions require a reviewed tree for the selected core')
     if root is None:
         raise ValueError('Extra directions require pinned primary source evidence')
     sources = {}
@@ -303,7 +438,7 @@ def parse_response(data, wiki, content_language, include_dir, core=CORE):
     return names, mw, directions, continuation
 
 
-def finish_profile(single, mw, aliases, tables, display, fallbacks):
+def finish_profile(single, mw, aliases, tables, display, fallbacks, require_locales=False):
     normalized = aliases.get(display, display)
     if normalized not in fallbacks:
         raise ValueError('Display-language fallback coverage missing: ' + normalized)
@@ -312,6 +447,8 @@ def finish_profile(single, mw, aliases, tables, display, fallbacks):
     chain = list(fallbacks[normalized])
     if normalized != 'en' and (not chain or chain[-1] != 'en'):
         chain.append('en')
+    if require_locales and any(locale not in tables for locale in (normalized, *chain)):
+        raise ValueError('Explicit source profile lacks requested fallback locale')
     # Names::NAMES always defines this code. The captured DEFINED list omits
     # it exactly when UsePigLatinVariant is false (LanguageNameUtils:219-220).
     pig_latin_enabled = 'en-x-piglatin' in mw
@@ -455,6 +592,165 @@ def payload(root):
     return dict(sorted(result.items()))
 
 
+OBSERVATION_SCHEMA = 'wikidict.language-names-offline-source-revalidation.v1'
+OBSERVATION_PREFIX = PREFIX + 'observation.'
+OBSERVATION_VALIDATION = PREFIX + 'offline-validation.json'
+OBSERVATION_GENERATOR = PREFIX + 'observation-generator.py'
+OBSERVATION_GENERATOR_PINS = frozenset((
+    'ab712da858862fa4cb14c6b9f497475a9c35f671ad6cc8d734488d8d2f5614e5',
+))
+CORE_MISMATCH = 'API edition/language/source contract mismatch'
+
+
+def observation_contract(root, core, prefix=''):
+    """Replay one complete response refused solely by its expected core pin."""
+    core = core_revision(core)
+    names = {PREFIX + suffix for suffix in (
+        'namespace-registry.tsv', 'requested.json', 'failure.json',
+        '0001.request.json', '0001-01.receipt.json', '0001-01.raw.json')}
+    names |= {PREFIX + 'source-' + name for name in SOURCE_PINS}
+    files = {}
+    for name in sorted(names):
+        path = root / (prefix + name)
+        if path.is_symlink() or not path.is_file():
+            raise ValueError('Unsafe or missing observation artifact')
+        raw = evidence.small(path, MAX_SOURCE)
+        files[name] = dict(size=len(raw), sha256=evidence.digest(raw))
+    config = evidence.decode(evidence.small(root / (prefix + PREFIX + 'requested.json'), MAX_MANIFEST))
+    expected = {'wiki', 'date', 'content_language', 'languages', 'namespace_registry_sha256', 'scope', 'core'}
+    if (not isinstance(config, dict) or set(config) != expected
+            or config['scope'] != 'explicit-display-mw-all-single-and-enumerated-directions'
+            or not isinstance(config['languages'], list) or len(config['languages']) != 1
+            or not code(config['languages'][0]) or config['core'] == core):
+        raise ValueError('Observation is not a single original display profile')
+    original_core = core_revision(config['core'])
+    # The original source is retained as data and checked, never executed.
+    primary_contract(root, prefix + PREFIX + 'source-', original_core)
+    namespace = evidence.small(root / (prefix + PREFIX + 'namespace-registry.tsv'))
+    if (namespace_identity(namespace, config['wiki'], config['date']) != config['content_language']
+            or evidence.digest(namespace) != config['namespace_registry_sha256']):
+        raise ValueError('Original observation namespace differs')
+    request = evidence.decode(evidence.small(root / (prefix + PREFIX + '0001.request.json'), MAX_MANIFEST))
+    query = request_query(config['languages'][0], True, {})
+    url = evidence.wiktionary_api(config['wiki']) + '?' + urllib.parse.urlencode(sorted(query.items()))
+    if request != dict(query=query, url=url):
+        raise ValueError('Original observation request differs')
+    receipt = evidence.decode(evidence.small(root / (prefix + PREFIX + '0001-01.receipt.json'), MAX_MANIFEST))
+    raw = evidence.small(root / (prefix + PREFIX + '0001-01.raw.json'), MAX_RESPONSE)
+    failure = evidence.decode(evidence.small(root / (prefix + PREFIX + 'failure.json'), MAX_MANIFEST))
+    if (not isinstance(receipt, dict) or receipt.get('accepted') is not False
+            or receipt.get('status') != 200 or receipt.get('error') != CORE_MISMATCH
+            or receipt.get('request') != PREFIX + '0001.request.json'
+            or receipt.get('response') != PREFIX + '0001-01.raw.json'
+            or receipt.get('response_bytes') != len(raw) or receipt.get('response_sha256') != evidence.digest(raw)
+            or not isinstance(failure, dict) or failure.get('error') != CORE_MISMATCH):
+        raise ValueError('Observation is not a retained core-mismatch HTTP response')
+    for key in ('started_utc', 'ended_utc'):
+        value = receipt.get(key)
+        if not isinstance(value, str) or datetime.fromisoformat(value.replace('Z', '+00:00')).tzinfo is None:
+            raise ValueError('Missing original observation timestamp')
+    data = evidence.decode(raw)
+    if parse_response(data, config['wiki'], config['content_language'], True, core)[3]:
+        raise ValueError('Incomplete observation needs continuation; offline replay cannot fetch it')
+    return config, query, data, receipt, namespace, files
+
+
+def replayed_observation(root, manifest, config):
+    if manifest.get('offline_validation') != OBSERVATION_VALIDATION:
+        raise ValueError('Unreviewed offline observation record')
+    record = evidence.decode(evidence.small(root / OBSERVATION_VALIDATION, MAX_MANIFEST))
+    original, query, data, receipt, namespace, files = observation_contract(root, config['core'], OBSERVATION_PREFIX)
+    generator = evidence.small(root / OBSERVATION_GENERATOR, MAX_SOURCE)
+    digest = evidence.digest(generator)
+    expected_keys = {'schema', 'original_core', 'selected_core', 'original_files',
+                     'original_generator_sha256', 'validated_utc', 'transport_repeated'}
+    if (not isinstance(record, dict) or set(record) != expected_keys
+            or record['schema'] != OBSERVATION_SCHEMA or record['original_core'] != original['core']
+            or record['selected_core'] != config['core'] or record['original_files'] != files
+            or digest not in OBSERVATION_GENERATOR_PINS or record['original_generator_sha256'] != digest
+            or record['transport_repeated'] is not False
+            or config != select_name_source({**original, 'core': config['core']}, name_source_config(config))
+            or evidence.small(root / (PREFIX + 'namespace-registry.tsv')) != namespace
+            or manifest.get('started_utc') != receipt['started_utc']
+            or manifest.get('retrieved_utc') != receipt['ended_utc']
+            or manifest.get('requests') != [{'request': OBSERVATION_PREFIX + PREFIX + '0001.request.json',
+                                           'offline_validation': OBSERVATION_VALIDATION}]):
+        raise ValueError('Offline validation differs from preserved observation')
+    validated = record['validated_utc']
+    if (not isinstance(validated, str)
+            or datetime.fromisoformat(validated.replace('Z', '+00:00')).tzinfo is None
+            or datetime.fromisoformat(validated.replace('Z', '+00:00')) < datetime.fromisoformat(receipt['ended_utc'].replace('Z', '+00:00'))):
+        raise ValueError('Invalid offline validation time')
+    archived = {path.name[len(OBSERVATION_PREFIX):] for path in root.iterdir()
+                if path.name.startswith(OBSERVATION_PREFIX)}
+    if archived != set(files):
+        raise ValueError('Extra or missing archived observation evidence')
+    return [(query, data)]
+
+
+def replay_observation(args):
+    """Offline successor; the rejected HTTP receipt remains rejected verbatim."""
+    origin = Path(args.observation)
+    if origin.is_symlink() or not origin.is_dir():
+        raise ValueError('Unsafe observation directory')
+    core = core_revision(args.core)
+    original, query, data, receipt, namespace, files = observation_contract(origin, core)
+    if {path.name for path in origin.iterdir()} != set(files):
+        raise ValueError('Unexpected original observation artifact')
+    generator = evidence.small(args.observation_generator, MAX_SOURCE)
+    generator_sha = evidence.digest(generator)
+    if generator_sha not in OBSERVATION_GENERATOR_PINS:
+        raise ValueError('Unreviewed original observation generator preimage')
+    config = select_name_source({**original, 'core': core}, getattr(args, 'name_source_profile', None))
+    sources, aliases, tables = primary_contract(args.primary_sources, core=core,
+                                               name_source_profile=name_source_config(config))
+    profiles, directions = reconstruct(config, [(query, data)], aliases, tables)
+    output = render(profiles, directions, config['wiki'], config['date'], config['content_language'])
+    producer_identity = producer()
+    root = args.output
+    root.mkdir(parents=True, exist_ok=False)
+    try:
+        for name, identity in files.items():
+            raw = evidence.small(origin / name, MAX_SOURCE)
+            if dict(size=len(raw), sha256=evidence.digest(raw)) != identity:
+                raise ValueError('Original observation changed during replay')
+            evidence.put(root / (OBSERVATION_PREFIX + name), raw)
+        evidence.put(root / OBSERVATION_GENERATOR, generator)
+        evidence.put(root / (PREFIX + 'namespace-registry.tsv'), namespace)
+        evidence.document(root / (PREFIX + 'requested.json'), config)
+        for name, raw in sources.items():
+            evidence.put(root / (PREFIX + 'source-' + name), raw)
+        evidence.document(root / OBSERVATION_VALIDATION, dict(schema=OBSERVATION_SCHEMA,
+            original_core=original['core'], selected_core=core, original_files=files,
+            original_generator_sha256=generator_sha, validated_utc=evidence.utc(), transport_repeated=False))
+        evidence.put(root / (KIND + '.tsv'), output)
+        counts = {language: {scope: len(rows) for scope, rows in scopes.items()} for language, scopes in profiles.items()}
+        manifest = dict(schema=SCHEMA, kind=KIND, header_version=1, **config, **producer_identity,
+            source_url=evidence.wiktionary_api(config['wiki']), dump_date=None,
+            temporal_scope='current-api-observation', started_utc=receipt['started_utc'], retrieved_utc=receipt['ended_utc'],
+            offline_validation=OBSERVATION_VALIDATION,
+            requests=[dict(request=OBSERVATION_PREFIX + PREFIX + '0001.request.json', offline_validation=OBSERVATION_VALIDATION)],
+            artifacts=payload(root), candidate_queries_complete=True, corpus_query_closure_proven=False,
+            profiles=counts, direction_rows=len(directions), source_derived_directions={},
+            direction_provenance='current-api', direction_source_profile_scope=None,
+            rows=sum(sum(count.values()) for count in counts.values()) + len(directions),
+            output_bytes=len(output), output_sha256=evidence.digest(output))
+        if len(evidence.encoded(manifest)) > MAX_MANIFEST or producer() != producer_identity:
+            raise ValueError('Replay manifest too large or producer changed')
+        evidence.document(root / (KIND + '.manifest.json'), manifest)
+        verify(root, require_complete=False)
+        evidence.document(root / COMPLETE, dict(schema=SCHEMA,
+            manifest_sha256=evidence.digest(evidence.small(root / (KIND + '.manifest.json'), MAX_MANIFEST))))
+        return manifest
+    except BaseException as error:
+        for name in (COMPLETE, KIND + '.tsv', KIND + '.manifest.json'):
+            path = root / name
+            if path.exists():
+                path.rename(root / (name + '.unverified'))
+        evidence.document(root / (PREFIX + 'failure.json'), dict(ended_utc=evidence.utc(), error=str(error)))
+        raise
+
+
 def observe(root, number, query, transport, sleep, delay, deadline):
     if number > MAX_REQUESTS:
         raise ValueError('Capture request bound exceeded')
@@ -501,6 +797,7 @@ def observe(root, number, query, transport, sleep, delay, deadline):
 
 
 def reconstruct(config, batches, aliases, tables):
+    source_profile = name_source_config(config)
     profiles, directions, index, inventory = {}, {}, 0, None
     fallbacks = {}
     for display_index, display in enumerate(config['languages']):
@@ -532,7 +829,8 @@ def reconstruct(config, batches, aliases, tables):
         if inventory is not None and inventory != set(single):
             raise ValueError('API language universe changed between display profiles')
         inventory = set(single)
-        profiles[display] = finish_profile(single, mw, aliases, tables, display, fallbacks)
+        profiles[display] = finish_profile(single, mw, aliases, tables, display, fallbacks,
+                                          require_locales=source_profile is not None)
     if index != len(batches) or not directions or config['content_language'] not in directions:
         raise ValueError('Excess requests or incomplete direction inventory')
     for alias, target in aliases.items():
@@ -552,7 +850,12 @@ def capture(args, transport=None, sleep=time.sleep):
     languages = sorted(set(args.languages or [content_language, 'en']))
     if not 1 <= len(languages) <= MAX_PROFILES or any(not code(v) for v in languages):
         raise ValueError('Invalid or excessive explicit display-language profiles')
-    sources, aliases, tables = primary_contract(args.primary_sources)
+    config = select_name_source({'wiki': args.wiki, 'date': args.date, 'content_language': content_language,
+                  'languages': languages, 'namespace_registry_sha256': evidence.digest(namespace),
+                  'scope': 'explicit-display-mw-all-single-and-enumerated-directions', 'core': core},
+                  getattr(args, 'name_source_profile', None))
+    sources, aliases, tables = primary_contract(args.primary_sources, core=core,
+                                               name_source_profile=name_source_config(config))
     extra = sorted(set(getattr(args, 'extra_direction_codes', [])))
     direction_sources, derived = extra_direction_contract(
         getattr(args, 'direction_primary_sources', None), extra, aliases, core=core)
@@ -565,9 +868,6 @@ def capture(args, transport=None, sleep=time.sleep):
             evidence.put(root / (PREFIX + 'source-' + name), raw)
         for name, raw in direction_sources.items():
             evidence.put(root / (PREFIX + 'direction-source-' + name), raw)
-        config = {'wiki': args.wiki, 'date': args.date, 'content_language': content_language,
-                  'languages': languages, 'namespace_registry_sha256': evidence.digest(namespace),
-                  'scope': 'explicit-display-mw-all-single-and-enumerated-directions', 'core': core}
         if extra:
             config.update(extra_direction_codes=extra, direction_profile=DIRECTION_PROFILE)
         evidence.document(root / (PREFIX + 'requested.json'), config)
@@ -646,6 +946,9 @@ def verify(root, require_complete=True):
     config = evidence.decode(evidence.small(root / (PREFIX + 'requested.json'), MAX_MANIFEST))
     expected_keys = {'wiki', 'date', 'content_language', 'languages', 'namespace_registry_sha256', 'scope', 'core'}
     core = core_revision(config.get('core'))
+    source_profile = name_source_config(config)
+    if source_profile:
+        expected_keys |= {'name_source_profile', 'name_source_profile_scope'}
     extra = direction_config(config)
     if extra:
         expected_keys |= {'extra_direction_codes', 'direction_profile'}
@@ -664,7 +967,7 @@ def verify(root, require_complete=True):
     inventory = payload(root)
     if inventory != manifest['artifacts']:
         raise ValueError('Capture evidence inventory differs')
-    _, aliases, tables = primary_contract(root, PREFIX + 'source-')
+    _, aliases, tables = primary_contract(root, PREFIX + 'source-', core, source_profile)
     _, derived = extra_direction_contract(root, extra, aliases, PREFIX + 'direction-source-', core)
     if (manifest.get('source_derived_directions') != derived
             or manifest.get('direction_provenance') != direction_provenance(derived)
@@ -673,8 +976,12 @@ def verify(root, require_complete=True):
     records = manifest.get('requests')
     if not isinstance(records, list) or not 1 <= len(records) <= MAX_REQUESTS:
         raise ValueError('Invalid request inventory')
-    batches = []
-    for record in records:
+    if 'offline_validation' in manifest:
+        batches = replayed_observation(root, manifest, config)
+        direct_records = []
+    else:
+        batches, direct_records = [], records
+    for record in direct_records:
         if any(record.get(key) not in inventory for key in ('request', 'accepted_receipt')):
             raise ValueError('Missing request evidence')
         request = evidence.decode(evidence.small(root / record['request'], MAX_MANIFEST))
@@ -727,14 +1034,20 @@ def main():
     sub = parser.add_subparsers(dest='command', required=True)
     check = sub.add_parser('verify')
     check.add_argument('output', type=Path)
+    replay = sub.add_parser('replay-observation', help='Offline revalidation of one preserved core-mismatch response')
+    for name in ('observation', 'observation-generator', 'primary-sources', 'output'):
+        replay.add_argument('--' + name, required=True, type=Path)
+    replay.add_argument('--core', required=True, choices=sorted((*CORE_TREE_SHA256, CURRENT_CORE)))
+    replay.add_argument('--name-source-profile', choices=[ITALIAN_SOURCE_PROFILE])
     collect = sub.add_parser('capture')
     for name in ('wiki', 'date'):
         collect.add_argument('--' + name, required=True)
     for name in ('namespace-registry', 'primary-sources', 'output'):
         collect.add_argument('--' + name, required=True, type=Path)
     collect.add_argument('--languages', nargs='+', default=[])
-    collect.add_argument('--core', choices=sorted(CORE_TREE_SHA256), default=CORE,
+    collect.add_argument('--core', choices=sorted((*CORE_TREE_SHA256, CURRENT_CORE)), default=CORE,
                          help='Exact reviewed API core revision for this complete capture')
+    collect.add_argument('--name-source-profile', choices=[ITALIAN_SOURCE_PROFILE])
     collect.add_argument('--extra-direction-codes', nargs='+', default=[])
     collect.add_argument('--direction-primary-sources', type=Path)
     collect.add_argument('--delay', type=float, default=1)
@@ -742,7 +1055,12 @@ def main():
     args = parser.parse_args()
     if args.command == 'capture' and args.delay < 1:
         parser.error('Network captures require at least one second between requests')
-    manifest = capture(args) if args.command == 'capture' else verify(args.output)
+    if args.command == 'capture':
+        manifest = capture(args)
+    elif args.command == 'replay-observation':
+        manifest = replay_observation(args)
+    else:
+        manifest = verify(args.output)
     print(json.dumps({key: manifest[key] for key in ('wiki', 'date', 'profiles', 'direction_rows', 'output_sha256')}))
 
 

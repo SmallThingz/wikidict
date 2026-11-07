@@ -340,6 +340,9 @@ def auxiliary_capture_helper(name, path):
         return prepare_date_numbering
     if name=='language-names':
         record=read_small_json(path.with_name(auxiliary_manifest_filename(name)))
+        if isinstance(record,dict) and record.get('schema')=='wikidict.language-names-profile-union.v1':
+            import prepare_language_names_union
+            return prepare_language_names_union
         if isinstance(record,dict) and record.get('schema')=='wikidict.language-names-autonym-capture.v1':
             import prepare_language_names_autonyms
             return prepare_language_names_autonyms
@@ -687,6 +690,7 @@ def _validate_captured_snapshot_context(name,path,capture,selected,capture_root,
             inputs=(('wikibase-namespace-siteinfo.raw.json','namespace-siteinfo.raw.json'),
                     ('wikibase-namespace-capture.complete.json','capture.complete.json')) if name.startswith('wikibase-') else (
                     ('commons-namespace-registry.tsv','namespace-registry.tsv'),) if name=='commons-data' else (
+                    ('base.language-autonyms.namespace-registry.tsv','namespace-registry.tsv'),) if name=='language-names' and bound[0].get('schema')=='wikidict.language-names-profile-union.v1' else (
                     ('language-autonyms.namespace-registry.tsv','namespace-registry.tsv'),) if name=='language-names' and bound[0].get('schema')=='wikidict.language-names-autonym-capture.v1' else (
                     ('language-names.namespace-registry.tsv','namespace-registry.tsv'),) if name=='language-names' else (
                     ('date-numbering.namespace-registry.tsv','namespace-registry.tsv'),) if name=='date-numbering' else (
@@ -728,7 +732,7 @@ def discover_auxiliary_generation(root,directory,names,edition,date):
     helper=auxiliary_capture_helper(names[0],snapshots[names[0]])
     if directory=='site-info' and helper.__name__!='prepare_site_info':
         raise ValueError('Preferred site-info requires its versioned capture profile')
-    if directory=='language-names-autonyms-v1' and helper.__name__!='prepare_language_names_autonyms':
+    if directory=='language-names-autonyms-v1' and helper.__name__ not in ('prepare_language_names_autonyms','prepare_language_names_union'):
         raise ValueError('Preferred autonym names require their versioned capture profile')
     if directory=='language-messages-loop-v1':
         import prepare_language_messages_v2 as messages
@@ -882,7 +886,8 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
         source=Path(source)
         capture=validated_auxiliary_capture(name,source)
         autonym_capture=(name=='language-names' and capture is not None and
-                         capture[0].get('schema')=='wikidict.language-names-autonym-capture.v1')
+                         capture[0].get('schema') in ('wikidict.language-names-autonym-capture.v1',
+                                                    'wikidict.language-names-profile-union.v1'))
         # Keep complete directory-provenance captures separate from other
         # snapshots so strict replay sees only their own recorded payloads.
         folder=destination/name if name in ('stylesheet-imports','commons-data','date-numbering','site-statistics-format','category-statistics-format') or autonym_capture else (

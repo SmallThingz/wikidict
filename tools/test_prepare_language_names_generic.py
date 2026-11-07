@@ -526,6 +526,319 @@ class GenericTest(unittest.TestCase):
 
 
 
+class CurrentCoreSourceTests(unittest.TestCase):
+    def fixture(self, root):
+        sources = {name: ('synthetic source ' + name).encode() for name in names.SOURCE_PINS}
+        sources['LanguageCode.php'] = ("private const DEPRECATED_LANGUAGE_CODE_MAPPING = [\n\t];\n"
+            "private const NON_STANDARD_LANGUAGE_CODE_MAPPING = [\n\t'simple' => 'en-simple',\n\t];\n").encode()
+        historical = {name: names.evidence.digest(raw) for name, raw in sources.items()}
+        current = {name: raw + b' current' for name, raw in sources.items()
+                   if name in names.CURRENT_CORE_OVERRIDES}
+        overrides = {name: names.evidence.digest(raw) for name, raw in current.items()}
+        for name, raw in {**sources, **current}.items():
+            (root / name).write_bytes(raw)
+        rows = []
+        for name, path in names.CORE_SOURCE_PATHS.items():
+            raw = (root / name).read_bytes()
+            rows.append(dict(file=name, source_path=path, status=200, bytes=len(raw),
+                sha256=names.evidence.digest(raw),
+                url=f'https://raw.githubusercontent.com/wikimedia/mediawiki/{names.CURRENT_CORE}/{path}'))
+        receipt = dict(core=names.CURRENT_CORE, sources=rows)
+        (root / names.CORE_RECEIPTS).write_text(json.dumps(receipt))
+        return sources, historical, overrides, receipt
+
+    def test_current_sources_are_distinct_and_historical_profile_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sources, historical, overrides, receipt = self.fixture(root)
+            with patch.dict(names.SOURCE_PINS, historical, clear=True), \
+                    patch.dict(names.CURRENT_CORE_OVERRIDES, overrides, clear=True), \
+                    patch.object(names, 'source_catalog', return_value=TABLES):
+                observed, _, _ = names.primary_contract(root, core=names.CURRENT_CORE)
+                self.assertIn(names.CORE_RECEIPTS, observed)
+                with self.assertRaisesRegex(ValueError, 'Unreviewed primary source'):
+                    names.primary_contract(root)
+                for name, raw in sources.items():
+                    (root / name).write_bytes(raw)
+                self.assertEqual(names.primary_contract(root)[0], sources)
+                with self.assertRaisesRegex(ValueError, 'Unreviewed primary source'):
+                    names.primary_contract(root, core=names.CURRENT_CORE)
+
+    def test_current_receipts_reject_rebound_roles_urls_core_and_bodies(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, historical, overrides, receipt = self.fixture(root)
+            with patch.dict(names.SOURCE_PINS, historical, clear=True), \
+                    patch.dict(names.CURRENT_CORE_OVERRIDES, overrides, clear=True), \
+                    patch.object(names, 'source_catalog', return_value=TABLES):
+                for field, value in (('file', 'other.php'), ('source_path', 'other.php'),
+                        ('status', 404), ('bytes', 1), ('sha256', 'f'*64),
+                        ('url', 'https://raw.githubusercontent.com/wikimedia/mediawiki/master/other.php')):
+                    bad = copy.deepcopy(receipt); bad['sources'][0][field] = value
+                    (root / names.CORE_RECEIPTS).write_text(json.dumps(bad))
+                    with self.subTest(field=field), self.assertRaises(ValueError):
+                        names.primary_contract(root, core=names.CURRENT_CORE)
+                for bad in (dict(receipt, core=names.CORE), dict(receipt, sources=receipt['sources'][:-1]),
+                            dict(receipt, sources=[receipt['sources'][0]]*len(receipt['sources'])), []):
+                    (root / names.CORE_RECEIPTS).write_text(json.dumps(bad))
+                    with self.assertRaises(ValueError):
+                        names.primary_contract(root, core=names.CURRENT_CORE)
+
+    def test_current_revision_does_not_accept_another_response_or_direction_tree(self):
+        data = response(); data['query']['general']['git-hash'] = names.CURRENT_CORE
+        self.assertEqual(names.parse_response(data, 'cawiktionary', 'ca', True, names.CURRENT_CORE)[0]['ca'], 'català')
+        with self.assertRaisesRegex(ValueError, 'source contract mismatch'):
+            names.parse_response(data, 'cawiktionary', 'ca', True, names.CORE)
+        with self.assertRaisesRegex(ValueError, 'reviewed tree'):
+            names.extra_direction_contract(None, ['rmq'], {}, core=names.CURRENT_CORE)
+        self.assertEqual(names.extra_direction_contract(None, [], {}, core=names.CURRENT_CORE), ({}, {}))
+
+    def test_current_core_does_not_waive_source_catalog_inventory(self):
+        data = response(); data['query']['general']['git-hash'] = names.CURRENT_CORE
+        data['query']['languageinfo']['bjj'] = dict(code='bjj', name='Kannauji', dir='ltr', fallbacks=[])
+        config = dict(wiki='cawiktionary', content_language='ca', languages=['ca'], core=names.CURRENT_CORE)
+        with self.assertRaisesRegex(ValueError, 'source key universe'):
+            names.reconstruct(config, [(names.request_query('ca', True, {}), data)], ALIASES, TABLES)
+
+
+class ItalianSourceProfileTests(unittest.TestCase):
+    """Synthetic source contract; real retained-data replay is qualified separately."""
+    def setUp(self):
+        import hashlib
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.historical_sources, historical, overrides, _ = CurrentCoreSourceTests().fixture(self.root)
+        tables = {
+            'en': {'en': 'English', 'it': 'Italian', 'xx': 'Unknown', 'en-x-piglatin': 'Pig Latin'},
+            'it': {'en': 'inglese', 'it': 'italiano', 'zz': '0', 'yy': '-', 'aa': ''},
+        }
+        for locale, table in tables.items():
+            raw = names.evidence.encoded({'@metadata': {'authors': ['synthetic']},
+                                         **{'cldr-language-name-' + k: v for k, v in table.items()}})
+            (self.root / ('cldr-' + locale + '.json')).write_bytes(raw)
+        blobs = []
+        for name, path in names.ITALIAN_SOURCE_PATHS.items():
+            raw = (self.root / name).read_bytes()
+            blobs.append(dict(path=path, type='blob', size=len(raw),
+                              sha=hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest()))
+        (self.root / 'cldr-tree.json').write_bytes(names.evidence.encoded(
+            dict(sha=names.ITALIAN_CLDR_COMMIT, truncated=False, tree=blobs)))
+        pins = {name: names.evidence.digest((self.root / name).read_bytes()) for name in names.ITALIAN_SOURCE_PINS}
+        rows = []
+        for name, path in {**names.ITALIAN_SOURCE_PATHS, 'cldr-tree.json': None}.items():
+            raw = (self.root / name).read_bytes()
+            url = (f'https://raw.githubusercontent.com/wikimedia/mediawiki-extensions-cldr/{names.ITALIAN_CLDR_COMMIT}/{path}'
+                   if path else f'https://api.github.com/repos/wikimedia/mediawiki-extensions-cldr/git/trees/{names.ITALIAN_CLDR_COMMIT}?recursive=1')
+            rows.append(dict(file=name, source_path=path, status=200, bytes=len(raw),
+                             sha256=names.evidence.digest(raw), url=url))
+        (self.root / names.CLDR_RECEIPTS).write_bytes(names.evidence.encoded(
+            dict(commit=names.ITALIAN_CLDR_COMMIT, sources=rows)))
+        for target, value in ((names.SOURCE_PINS, historical),
+                              (names.CURRENT_CORE_OVERRIDES, overrides),
+                              (names.ITALIAN_SOURCE_PINS, pins)):
+            context = patch.dict(target, value, clear=True)
+            context.start(); self.addCleanup(context.stop)
+
+    def source_root(self):
+        return self.root
+
+    def observation(self):
+        rows = {'en': 'inglese', 'it': 'italiano', 'xx': 'Unknown'}
+        data = dict(query=dict(general={'wikiid': 'itwiktionary', 'lang': 'it', 'git-hash': names.CURRENT_CORE},
+            languageinfo={k: dict(code=k, name=v, dir='ltr', fallbacks=[]) for k, v in rows.items()},
+            languages=[dict(code=k, name=rows[k]) for k in ('en', 'it')]))
+        config = dict(wiki='itwiktionary', content_language='it', languages=['it'], core=names.CURRENT_CORE)
+        return names.select_name_source(config, names.ITALIAN_SOURCE_PROFILE), data
+
+    def test_explicit_current_tables_leave_legacy_source_contract_unchanged(self):
+        before = dict(names.SOURCE_PINS)
+        sources, _, tables = names.primary_contract(self.source_root(), core=names.CURRENT_CORE,
+                                                    name_source_profile=names.ITALIAN_SOURCE_PROFILE)
+        self.assertEqual(set(tables), {'en', 'it'})
+        self.assertEqual((len(tables['en']), len(tables['it'])), (4, 2))
+        self.assertEqual(tables['it']['it'], 'italiano')
+        self.assertIn(names.CLDR_RECEIPTS, sources)
+        for name, raw in self.historical_sources.items():
+            (self.root / name).write_bytes(raw)
+        with patch.object(names, 'source_catalog', return_value=TABLES):
+            _, _, old = names.primary_contract(self.root, core='79b81ba96674efc8a803fc956bc501d347d440d2')
+        self.assertEqual(old, TABLES)
+        self.assertEqual(names.SOURCE_PINS, before)
+
+    def test_italian_response_reconstructs_from_complete_synthetic_tables(self):
+        config, data = self.observation()
+        _, aliases, tables = names.primary_contract(self.source_root(), core=names.CURRENT_CORE,
+                                                    name_source_profile=names.ITALIAN_SOURCE_PROFILE)
+        profiles, directions = names.reconstruct(config, [(names.request_query('it', True, {}), data)], aliases, tables)
+        self.assertEqual(profiles['it']['single']['it'], 'italiano')
+        self.assertEqual(profiles['it']['single']['en'], 'inglese')
+        self.assertEqual(profiles['it']['single']['xx'], 'Unknown')
+        self.assertEqual(directions['it'], 'ltr')
+        changed = copy.deepcopy(data)
+        changed['query']['languageinfo']['it']['name'] = 'invented label'
+        with self.assertRaisesRegex(ValueError, 'API name differs'):
+            names.reconstruct(config, [(names.request_query('it', True, {}), changed)], aliases, tables)
+
+    def test_profile_context_and_uncaptured_fallback_refuse(self):
+        config, data = self.observation()
+        for field, value in (('core', names.CORE), ('languages', ['en', 'it']),
+                             ('name_source_profile', 'other'), ('name_source_profile_scope', 'deployed')):
+            changed = {**config, field: value}
+            with self.assertRaisesRegex(ValueError, 'source profile'):
+                names.name_source_config(changed)
+        changed = dict(config); del changed['name_source_profile_scope']
+        with self.assertRaisesRegex(ValueError, 'source profile'):
+            names.name_source_config(changed)
+        _, aliases, tables = names.primary_contract(self.source_root(), core=names.CURRENT_CORE,
+                                                    name_source_profile=names.ITALIAN_SOURCE_PROFILE)
+        data['query']['languageinfo']['it']['fallbacks'] = ['fr']
+        with self.assertRaisesRegex(ValueError, 'fallback locale'):
+            names.reconstruct(config, [(names.request_query('it', True, {}), data)], aliases, tables)
+
+    def test_source_receipt_rebinding_and_changed_table_refuse(self):
+        import shutil
+        for field, value in (('status', 404), ('url', 'https://example.invalid/it.json'),
+                             ('source_path', 'i18n/LanguageNames/fr.json'), ('sha256', '0' * 64)):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / 'sources'; shutil.copytree(self.source_root(), root)
+                path = root / names.CLDR_RECEIPTS; record = json.loads(path.read_text())
+                next(row for row in record['sources'] if row['file'] == 'cldr-it.json')[field] = value
+                path.write_text(json.dumps(record))
+                with self.assertRaisesRegex(ValueError, 'CLDR source receipt differs'):
+                    names.primary_contract(root, core=names.CURRENT_CORE, name_source_profile=names.ITALIAN_SOURCE_PROFILE)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'sources'; shutil.copytree(self.source_root(), root)
+            (root / 'cldr-it.json').write_text('{}')
+            with self.assertRaisesRegex(ValueError, 'Unreviewed primary source'):
+                names.primary_contract(root, core=names.CURRENT_CORE, name_source_profile=names.ITALIAN_SOURCE_PROFILE)
+
+
+class ObservationReplayTests(unittest.TestCase):
+    fixture = CurrentCoreSourceTests.fixture
+    def observation_fixture(self, root):
+        sources, historical, overrides, _ = self.fixture(root)
+        origin = root / 'observation'; origin.mkdir()
+        namespace = ('# wikidict-namespace-registry-v1\n# wiki\tcawiktionary\n'
+                     '# dump-date\t20261001\n# content-language\tca\n').encode()
+        config = dict(wiki='cawiktionary', date='20261001', content_language='ca', languages=['ca'],
+            namespace_registry_sha256=names.evidence.digest(namespace),
+            scope='explicit-display-mw-all-single-and-enumerated-directions', core=names.CORE)
+        query = names.request_query('ca', True, {})
+        data = response(); data['query']['general']['git-hash'] = names.CURRENT_CORE
+        raw = names.evidence.encoded(data)
+        receipt = dict(request=names.PREFIX+'0001.request.json', response=names.PREFIX+'0001-01.raw.json',
+            status=200, accepted=False, error=names.CORE_MISMATCH, response_bytes=len(raw),
+            response_sha256=names.evidence.digest(raw), started_utc='2026-01-01T00:00:00Z',
+            ended_utc='2026-01-01T00:00:01Z')
+        for name, value in sources.items():
+            (origin / (names.PREFIX+'source-'+name)).write_bytes(value)
+        (origin/(names.PREFIX+'namespace-registry.tsv')).write_bytes(namespace)
+        for suffix, value in (('requested.json', config), ('0001-01.receipt.json', receipt),
+                ('failure.json', dict(error=names.CORE_MISMATCH)),
+                ('0001.request.json', dict(query=query, url=names.evidence.wiktionary_api(config['wiki'])+'?'+urllib.parse.urlencode(sorted(query.items()))))):
+            (origin/(names.PREFIX+suffix)).write_bytes(names.evidence.encoded(value))
+        (origin/(names.PREFIX+'0001-01.raw.json')).write_bytes(raw)
+        generator = root/'historical-generator.py';generator.write_bytes(b'synthetic historical source')
+        args = argparse.Namespace(observation=origin, observation_generator=generator,
+            primary_sources=root, output=root/'replayed', core=names.CURRENT_CORE)
+        return args, historical, overrides, names.evidence.digest(generator.read_bytes())
+
+    def run_replay(self, root, inspect):
+        args, historical, overrides, generator = self.observation_fixture(root)
+        with patch.dict(names.SOURCE_PINS, historical, clear=True), \
+                patch.dict(names.CURRENT_CORE_OVERRIDES, overrides, clear=True), \
+                patch.object(names, 'source_catalog', return_value=TABLES), \
+                patch.object(names, 'OBSERVATION_GENERATOR_PINS', frozenset((generator,))), \
+                patch.object(names.evidence, 'get_response', side_effect=AssertionError('offline replay attempted HTTP')):
+            inspect(args)
+
+    def test_offline_replay_preserves_rejection_raw_source_and_original_times(self):
+        with tempfile.TemporaryDirectory() as directory:
+            def check(args):
+                before = {p.name:p.read_bytes() for p in args.observation.iterdir()}
+                manifest = names.replay_observation(args)
+                self.assertEqual(names.verify(args.output), manifest)
+                self.assertEqual({p.name:p.read_bytes() for p in args.observation.iterdir()}, before)
+                for name, raw in before.items():
+                    self.assertEqual((args.output/(names.OBSERVATION_PREFIX+name)).read_bytes(), raw)
+                rejected = json.loads((args.output/(names.OBSERVATION_PREFIX+names.PREFIX+'0001-01.receipt.json')).read_text())
+                self.assertIs(rejected['accepted'], False)
+                self.assertEqual(manifest['retrieved_utc'], rejected['ended_utc'])
+                self.assertEqual(manifest['started_utc'], rejected['started_utc'])
+                record = json.loads((args.output/names.OBSERVATION_VALIDATION).read_text())
+                self.assertIs(record['transport_repeated'], False)
+                self.assertEqual(record['original_core'], names.CORE)
+                self.assertEqual(record['selected_core'], names.CURRENT_CORE)
+                self.assertIn(b'N\tca\tsingle\ten\tangl', (args.output/'language-names.tsv').read_bytes())
+            self.run_replay(Path(directory), check)
+
+    def test_resealed_offline_provenance_and_source_mutations_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            def check(args):
+                names.replay_observation(args)
+                original = {p.name:p.read_bytes() for p in args.output.iterdir()}
+                def rewrite(name, mutate):
+                    value = json.loads((args.output/name).read_text());mutate(value)
+                    (args.output/name).write_bytes(names.evidence.encoded(value))
+                def reseal():
+                    def update(m): m['artifacts'] = names.payload(args.output)
+                    rewrite('language-names.manifest.json', update)
+                    (args.output/names.COMPLETE).write_bytes(names.evidence.encoded(dict(schema=names.SCHEMA,
+                        manifest_sha256=names.evidence.digest((args.output/'language-names.manifest.json').read_bytes()))))
+                for case in ('accepted', 'wrong-error', 'wrong-core', 'unreviewed-generator', 'future-epoch', 'continuation', 'query', 'source', 'extra'):
+                    for p in args.output.iterdir():p.unlink()
+                    for name, raw in original.items():(args.output/name).write_bytes(raw)
+                    prefix = names.OBSERVATION_PREFIX+names.PREFIX
+                    if case in ('accepted', 'wrong-error'):
+                        rewrite(prefix+'0001-01.receipt.json', lambda r:r.update(accepted=True) if case=='accepted' else r.update(error='HTTP refusal'))
+                    elif case=='wrong-core':
+                        rewrite(prefix+'requested.json', lambda r:r.update(core=names.CURRENT_CORE))
+                    elif case=='unreviewed-generator':
+                        (args.output/names.OBSERVATION_GENERATOR).write_bytes(b'unknown source')
+                        rewrite(names.OBSERVATION_VALIDATION, lambda r:r.update(original_generator_sha256=names.evidence.digest(b'unknown source')))
+                    elif case=='future-epoch':
+                        rewrite('language-names.manifest.json', lambda r:r.update(retrieved_utc='2027-01-01T00:00:00Z'))
+                    elif case=='continuation':
+                        rewrite(prefix+'0001-01.raw.json', lambda r:r.update(continue_={'licontinue':'xx'}))
+                        # Use the actual protocol key, then coherently bind its receipt.
+                        rewrite(prefix+'0001-01.raw.json', lambda r:r.update({'continue':r.pop('continue_')}))
+                        raw=(args.output/(prefix+'0001-01.raw.json')).read_bytes()
+                        rewrite(prefix+'0001-01.receipt.json', lambda r:r.update(response_bytes=len(raw), response_sha256=names.evidence.digest(raw)))
+                    elif case=='query':
+                        rewrite(prefix+'0001.request.json', lambda r:r['query'].update(uselang='en'))
+                    elif case=='source':
+                        (args.output/(prefix+'source-LanguageCode.php')).write_bytes(b'wrong source')
+                    else:
+                        (args.output/(names.OBSERVATION_PREFIX+'orphan.json')).write_bytes(b'{}')
+                    # Rebind the outer inventory and archived descriptors too;
+                    # semantic/source replay must reject, not just a stale hash.
+                    def rebind(r):
+                        for name in r['original_files']:
+                            raw=(args.output/(names.OBSERVATION_PREFIX+name)).read_bytes()
+                            r['original_files'][name]=dict(size=len(raw),sha256=names.evidence.digest(raw))
+                    rewrite(names.OBSERVATION_VALIDATION,rebind);reseal()
+                    with self.subTest(case=case), self.assertRaises(ValueError):names.verify(args.output)
+            self.run_replay(Path(directory), check)
+
+    def test_incomplete_or_other_failure_is_not_reclassified_as_core_mismatch(self):
+        for case in ('continuation', 'other-failure', 'extra-request', 'source-universe'):
+            with tempfile.TemporaryDirectory() as directory:
+                def check(args):
+                    if case=='other-failure':
+                        p=args.observation/(names.PREFIX+'0001-01.receipt.json');r=json.loads(p.read_text());r['error']='HTTP403';p.write_bytes(names.evidence.encoded(r))
+                    elif case=='extra-request':
+                        (args.observation/(names.PREFIX+'0002.request.json')).write_bytes(b'{}')
+                    else:
+                        p=args.observation/(names.PREFIX+'0001-01.raw.json');r=json.loads(p.read_text())
+                        if case=='continuation':r['continue']={'continue':'-||','licontinue':'xx'}
+                        else:r['query']['languageinfo']['bjj']=dict(code='bjj',name='Kannauji',dir='ltr',fallbacks=[])
+                        p.write_bytes(names.evidence.encoded(r));receipt=args.observation/(names.PREFIX+'0001-01.receipt.json');v=json.loads(receipt.read_text());v.update(response_bytes=p.stat().st_size,response_sha256=names.evidence.digest(p.read_bytes()));receipt.write_bytes(names.evidence.encoded(v))
+                    with self.subTest(case=case), self.assertRaises(ValueError):names.replay_observation(args)
+                    self.assertFalse(args.output.exists())
+                self.run_replay(Path(directory),check)
+
+
 def support_fixture(root, wiki='nlwiktionary', content='nl', prefix=None):
     prefix = names.SUPPORT_PREFIX if prefix is None else prefix
     source_data = {'LanguageNameUtils.php': b'reviewed synthetic positive-branch source', 'nl.json': b'{"test-message":"value"}'}
