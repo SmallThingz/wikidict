@@ -1862,6 +1862,17 @@ void MainWindow::bindInlineImages() {
                                     pixels.fill(Qt::transparent);
                                     QPainter painter(&pixels); painter.setFont(document->defaultFont()); painter.setPen(widget->palette().color(QPalette::Text));
                                     painter.drawText(pixels.rect(), Qt::AlignCenter | Qt::TextSingleLine, visibleAlt);
+                                } else if (!SemanticHtml::present(image.value(QStringLiteral("alt")))) {
+                                    // Missing alternatives need visible unavailable feedback;
+                                    // explicit empty alt remains decorative and transparent.
+                                    const int side = qMin(18, qMin(pixels.width(), pixels.height()));
+                                    const QRectF marker((pixels.width() - side) / 2.0 + 0.5,
+                                        (pixels.height() - side) / 2.0 + 0.5, side - 1, side - 1);
+                                    QPainter painter(&pixels);
+                                    painter.setPen(QPen(widget->palette().color(QPalette::Text), 1));
+                                    painter.drawRect(marker);
+                                    painter.drawLine(marker.topLeft(), marker.bottomRight());
+                                    painter.drawLine(marker.topRight(), marker.bottomLeft());
                                 }
                             }
                             if (vectors) vectors->setVector(url, ready ? asset.vector : nullptr);

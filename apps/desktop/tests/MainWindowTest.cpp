@@ -8,6 +8,8 @@
 #include <QAccessible>
 #include <QApplication>
 #include <QMimeData>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
 #include <QCheckBox>
 #include <QStandardPaths>
 #include <QCryptographicHash>
@@ -1100,6 +1102,149 @@ private slots:
         QJsonObject zeroAxis = absentImage; zeroAxis.insert("width_px", 0);
         QVERIFY_EXCEPTION_THROWN(SemanticHtml::inlineImageHtml(zeroAxis), std::runtime_error);
         QVERIFY_EXCEPTION_THROWN(window.spansHtml(QJsonArray{occurrence(absentImage, "line_break", "")}), DictApiError);
+    }
+
+
+    void unavailableInlineImagesKeepAlternativesGeometryAndReadyTransparency() {
+        // Hold ordinary media requests in memory: no socket or public opt-in.
+        class HeldReply final : public QNetworkReply {
+        public:
+            HeldReply(const QNetworkRequest &request, QObject *parent) : QNetworkReply(parent) {
+                setRequest(request); setUrl(request.url()); setOperation(QNetworkAccessManager::GetOperation);
+                open(QIODevice::ReadOnly);
+            }
+            void complete(const QByteArray &bytes, NetworkError error = NoError) {
+                if (isFinished()) return;
+                bytes_ = bytes;
+                if (error != NoError) setError(error, QStringLiteral("Controlled unavailable image"));
+                setHeader(QNetworkRequest::ContentLengthHeader, bytes_.size());
+                emit metaDataChanged();
+                if (!bytes_.isEmpty()) emit readyRead();
+                setFinished(true); emit finished();
+            }
+            void abort() override { complete({}, OperationCanceledError); }
+            qint64 bytesAvailable() const override { return bytes_.size() - offset_ + QNetworkReply::bytesAvailable(); }
+        protected:
+            qint64 readData(char *data, qint64 maximum) override {
+                const qint64 count = qMin(maximum, bytes_.size() - offset_);
+                if (count <= 0) return -1;
+                std::copy_n(bytes_.constData() + offset_, count, data); offset_ += count; return count;
+            }
+        private:
+            QByteArray bytes_;
+            qint64 offset_ = 0;
+        };
+        class HeldNetwork final : public QNetworkAccessManager {
+        public:
+            QList<QUrl> urls;
+            QList<QPointer<HeldReply>> replies;
+        protected:
+            QNetworkReply *createRequest(Operation, const QNetworkRequest &request, QIODevice *) override {
+                urls.append(request.url());
+                auto *reply = new HeldReply(request, this); replies.append(reply); return reply;
+            }
+        } network;
+        QSettings().setValue("media/allowImages", false);
+        QSettings().setValue("media/cacheMb", 10);
+        MainWindow window(fixture_, QStringLiteral("dog"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(900, 700); window.show();
+        // Reuse MediaPanel's existing dependency seam; the real document provider
+        // resolves this current panel through MainWindow on every request.
+        delete window.media_;
+        window.media_ = new MediaPanel(window.entryTabs_, &network);
+        window.entryTabs_->insertTab(1, window.media_, QStringLiteral("Media && speech"));
+        const QString file = QStringLiteral("Controlled transparent placeholder.png");
+        const QString cache = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/media-v1/";
+        const QString sourceHost = LibraryStorage::sourceHost(window.api_->root());
+        const QString key = QString::fromLatin1(QCryptographicHash::hash((sourceHost + ":image:" + file).toUtf8(), QCryptographicHash::Sha256).toHex());
+        const QString payloadPath = cache + key + ".bin", metadataPath = cache + key + ".json";
+        QVERIFY(!QFileInfo::exists(payloadPath)); QVERIFY(!QFileInfo::exists(metadataPath));
+        const auto removeFixture = qScopeGuard([&] { QFile::remove(payloadPath); QFile::remove(metadataPath); });
+        const QJsonObject missing{{"file", file}, {"width_px", 62}, {"height_px", 30}, {"tooltip", "Authored tooltip"}};
+        QJsonObject nullAlt = missing; nullAlt.insert("alt", QJsonValue::Null);
+        QJsonObject emptyAlt = missing; emptyAlt.insert("alt", "");
+        QJsonObject authoredAlt = missing; authoredAlt.insert("alt", "Authored alternative");
+        const QList<QJsonObject> alternatives{missing, nullAlt, emptyAlt, authoredAlt};
+        QJsonArray spans;
+        for (int i = 0; i < alternatives.size(); ++i) {
+            spans.append(QJsonObject{{"kind", "text"}, {"text", QString::number(i) + " "}});
+            spans.append(QJsonObject{{"kind", i == 2 ? "text" : "link"}, {"text", ""},
+                {"target", i == 2 ? "" : "cat"}, {"image", alternatives[i]}});
+        }
+        const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", spans}};
+        const QJsonObject entry{{"title", "Unavailable image alternatives"}, {"kind", "language"},
+            {"language", window.api_->language()}, {"sections", QJsonArray{QJsonObject{{"level", 2}, {"title", "Images"}, {"blocks", QJsonArray{paragraph}}}}},
+            {"media", QJsonArray{QJsonObject{{"kind", "image"}, {"file", file}, {"caption", "Controlled transparent artwork"}}}}};
+        window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false);
+        const auto images = [&] {
+            QList<QTextImageFormat> formats;
+            for (QTextBlock block = window.reading_->document()->begin(); block.isValid(); block = block.next())
+                for (auto it = block.begin(); !it.atEnd(); ++it)
+                    if (it.fragment().charFormat().isImageFormat()) formats.append(it.fragment().charFormat().toImageFormat());
+            return formats;
+        };
+        const auto allState = [&](MediaPanel::InlineImageState state) {
+            const auto formats = images();
+            return formats.size() == 4 && std::all_of(formats.begin(), formats.end(), [&](const auto &format) {
+                return format.intProperty(SemanticHtml::inlineImageStateProperty) == int(state);
+            });
+        };
+        const auto hasInk = [](const QImage &pixels) {
+            for (int y = 0; y < pixels.height(); ++y)
+                for (int x = 0; x < pixels.width(); ++x)
+                    if (qAlpha(pixels.pixel(x, y))) return true;
+            return false;
+        };
+        const QString plain = window.reading_->toPlainText();
+        const auto verify = [&](bool ready, const QString &stage) {
+            const auto formats = images(); QCOMPARE(formats.size(), 4);
+            for (int i = 0; i < formats.size(); ++i) {
+                const auto &format = formats[i];
+                const QImage pixels = window.reading_->document()->resource(QTextDocument::ImageResource, QUrl(format.name())).value<QImage>();
+                QVERIFY(!pixels.isNull());
+                QCOMPARE(hasInk(pixels), !ready && i != 2);
+                QCOMPARE(format.anchorHref(), i == 2 ? QString() : QStringLiteral("dict:cat"));
+                QCOMPARE(format.toolTip(), QStringLiteral("Authored tooltip"));
+                QCOMPARE(format.hasProperty(QTextFormat::ImageAltText), i >= 2);
+                if (i >= 2) QCOMPARE(format.stringProperty(QTextFormat::ImageAltText), alternatives[i].value("alt").toString());
+                if (ready || i != 3) { QCOMPARE(format.width(), 62.0); QCOMPARE(format.height(), 30.0); }
+                else QVERIFY(format.width() >= QFontMetricsF(window.reading_->document()->defaultFont()).horizontalAdvance("Authored alternative"));
+                QCOMPARE(format.stringProperty(SemanticHtml::inlineImageStatusProperty).isEmpty(), ready);
+            }
+            QCOMPARE(window.currentEntry_, entry); QCOMPARE(window.reading_->toPlainText(), plain);
+            QVERIFY(window.reading_->accessibleDescription().contains("Authored alternative"));
+            QVERIFY(!window.reading_->accessibleDescription().contains(file));
+            QVERIFY(QDir().mkpath(".tmp/ui-screenshots"));
+            QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/inline-placeholder-%1.png").arg(stage)));
+        };
+        QTRY_VERIFY(allState(MediaPanel::InlineImageState::Disabled));
+        QCOMPARE(network.urls.size(), 0); verify(false, "disabled");
+        auto *permission = window.media_->findChild<QCheckBox *>("mediaAllowImages"); QVERIFY(permission);
+        permission->setChecked(true);
+        QTRY_VERIFY(allState(MediaPanel::InlineImageState::Loading));
+        QCOMPARE(network.urls.size(), 1); QVERIFY(network.replies.last()); verify(false, "loading");
+        network.replies.last()->complete({}, QNetworkReply::ContentNotFoundError);
+        QTRY_VERIFY(allState(MediaPanel::InlineImageState::Error));
+        verify(false, "error");
+        auto *load = window.media_->findChild<QPushButton *>("mediaLoad"); QVERIFY(load && load->isEnabled());
+        load->click();
+        QTRY_VERIFY(allState(MediaPanel::InlineImageState::Loading));
+        QCOMPARE(network.urls.size(), 2); QVERIFY(network.replies.last());
+        const QJsonObject info{{"url", "https://upload.wikimedia.org/wikipedia/commons/0/00/controlled-transparent.png"},
+            {"descriptionurl", "https://commons.wikimedia.org/wiki/File:Controlled_transparent_placeholder.png"},
+            {"width", 62}, {"height", 30}, {"mime", "image/png"}};
+        const QJsonObject page{{"imageinfo", QJsonArray{info}}};
+        network.replies.last()->complete(QJsonDocument(QJsonObject{{"query", QJsonObject{{"pages", QJsonArray{page}}}}}).toJson());
+        QTRY_COMPARE(network.urls.size(), 3); QVERIFY(network.replies.last());
+        QImage transparent(62, 30, QImage::Format_ARGB32_Premultiplied); transparent.fill(Qt::transparent);
+        QByteArray png; QBuffer buffer(&png); QVERIFY(buffer.open(QIODevice::WriteOnly)); QVERIFY(transparent.save(&buffer, "PNG"));
+        network.replies.last()->complete(png);
+        QTRY_VERIFY(allState(MediaPanel::InlineImageState::Ready)); verify(true, "transparent-ready");
+        permission->setChecked(false); QTRY_VERIFY(allState(MediaPanel::InlineImageState::Disabled));
+        verify(false, "disabled-again");
+        permission->setChecked(true); QTRY_VERIFY(allState(MediaPanel::InlineImageState::Ready));
+        QCOMPARE(network.urls.size(), 3); verify(true, "transparent-recovered");
     }
 
     void imageBearingDisclosureRetainsKeyboardActivationAfterRecomposition() {
