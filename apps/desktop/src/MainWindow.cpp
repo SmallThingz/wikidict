@@ -1610,61 +1610,69 @@ void MainWindow::resizeEvent(QResizeEvent *event) {
 void MainWindow::updateReaderLayout() {
     if (!readerContent_ || !navigationLayout_ || !headerLayout_) return;
     const bool compact = readerContent_->width() < 580;
-    if (compact == compactReader_) return;
-    compactReader_ = compact;
-    QFont headingFont = title_->font();
-    headingFont.setPointSize(compact ? 24 : 30);
-    title_->setFont(headingFont);
-    const QJsonArray displayTitle = currentEntry_.value(QStringLiteral("display_title")).toArray();
-    const bool scaledTitle = std::any_of(displayTitle.cbegin(), displayTitle.cend(), [](const QJsonValue &value) {
-        const QJsonValue scale = value.toObject().value(QStringLiteral("font_scale"));
-        return scale.isDouble() && scale.toDouble() >= 0 && (scale.toDouble() != 1
-            || value.toObject().value(QStringLiteral("font_scale_basis")).toString() == QStringLiteral("normal_body"));
-    });
-    if (scaledTitle) {
-        // Numeric sizes include a measured zero-font block floor. Rebuild them
-        // against this surface's changed font without disturbing its selection.
-        const int position = title_->textCursor().position();
-        const int anchor = title_->textCursor().anchor();
-        SemanticHtml::setHtml(title_, spansHtml(displayTitle, 0, {}, {}, headingFont.pointSizeF()));
-        QTextCursor cursor(title_->document());
-        const int last = qMax(0, title_->document()->characterCount() - 1);
-        cursor.setPosition(qBound(0, anchor, last));
-        cursor.setPosition(qBound(0, position, last), QTextCursor::KeepAnchor);
-        title_->setTextCursor(cursor);
+    const bool compactHeader = readerContent_->width() < 720;
+    if (compact != compactReader_) {
+        compactReader_ = compact;
+        QFont headingFont = title_->font();
+        headingFont.setPointSize(compact ? 24 : 30);
+        title_->setFont(headingFont);
+        const QJsonArray displayTitle = currentEntry_.value(QStringLiteral("display_title")).toArray();
+        const bool scaledTitle = std::any_of(displayTitle.cbegin(), displayTitle.cend(), [](const QJsonValue &value) {
+            const QJsonValue scale = value.toObject().value(QStringLiteral("font_scale"));
+            return scale.isDouble() && scale.toDouble() >= 0 && (scale.toDouble() != 1
+                || value.toObject().value(QStringLiteral("font_scale_basis")).toString() == QStringLiteral("normal_body"));
+        });
+        if (scaledTitle) {
+            // Numeric sizes include a measured zero-font block floor. Rebuild them
+            // against this surface's changed font without disturbing its selection.
+            const int position = title_->textCursor().position();
+            const int anchor = title_->textCursor().anchor();
+            SemanticHtml::setHtml(title_, spansHtml(displayTitle, 0, {}, {}, headingFont.pointSizeF()));
+            QTextCursor cursor(title_->document());
+            const int last = qMax(0, title_->document()->characterCount() - 1);
+            cursor.setPosition(qBound(0, anchor, last));
+            cursor.setPosition(qBound(0, position, last), QTextCursor::KeepAnchor);
+            title_->setTextCursor(cursor);
+        }
+        for (auto *widget : std::array<QWidget *, 5>{back_, forward_, sections_, smaller_, larger_})
+            navigationLayout_->removeWidget(widget);
+        for (int column = 0; column < 5; ++column) navigationLayout_->setColumnStretch(column, 0);
+        if (compact) {
+            navigationLayout_->addWidget(back_, 0, 0);
+            navigationLayout_->addWidget(forward_, 0, 1);
+            navigationLayout_->addWidget(sections_, 1, 0, 1, 2);
+            navigationLayout_->addWidget(smaller_, 2, 0);
+            navigationLayout_->addWidget(larger_, 2, 1);
+            navigationLayout_->setColumnStretch(0, 1);
+            navigationLayout_->setColumnStretch(1, 1);
+        } else {
+            navigationLayout_->addWidget(back_, 0, 0);
+            navigationLayout_->addWidget(forward_, 0, 1);
+            navigationLayout_->addWidget(sections_, 0, 2);
+            navigationLayout_->addWidget(smaller_, 0, 3);
+            navigationLayout_->addWidget(larger_, 0, 4);
+            navigationLayout_->setColumnStretch(2, 1);
+        }
+        readerContent_->layout()->setContentsMargins(compact ? 12 : 28, 20, compact ? 12 : 28, 24);
     }
-    for (auto *widget : std::array<QWidget *, 5>{back_, forward_, sections_, smaller_, larger_})
-        navigationLayout_->removeWidget(widget);
+    if (compactHeader == compactHeader_) return;
+    compactHeader_ = compactHeader;
     for (auto *widget : std::array<QWidget *, 3>{readerHeading_, listen_, bookmark_})
         headerLayout_->removeWidget(widget);
-    for (int column = 0; column < 5; ++column) navigationLayout_->setColumnStretch(column, 0);
     for (int column = 0; column < 3; ++column) headerLayout_->setColumnStretch(column, 0);
-    if (compact) {
-        navigationLayout_->addWidget(back_, 0, 0);
-        navigationLayout_->addWidget(forward_, 0, 1);
-        navigationLayout_->addWidget(sections_, 1, 0, 1, 2);
-        navigationLayout_->addWidget(smaller_, 2, 0);
-        navigationLayout_->addWidget(larger_, 2, 1);
-        navigationLayout_->setColumnStretch(0, 1);
-        navigationLayout_->setColumnStretch(1, 1);
+    if (compactHeader) {
+        // Keep the full title width when its actions would crowd a narrow reader.
         headerLayout_->addWidget(readerHeading_, 0, 0, 1, 2);
         headerLayout_->addWidget(listen_, 1, 0);
         headerLayout_->addWidget(bookmark_, 1, 1);
         headerLayout_->setColumnStretch(0, 1);
         headerLayout_->setColumnStretch(1, 1);
     } else {
-        navigationLayout_->addWidget(back_, 0, 0);
-        navigationLayout_->addWidget(forward_, 0, 1);
-        navigationLayout_->addWidget(sections_, 0, 2);
-        navigationLayout_->addWidget(smaller_, 0, 3);
-        navigationLayout_->addWidget(larger_, 0, 4);
-        navigationLayout_->setColumnStretch(2, 1);
         headerLayout_->addWidget(readerHeading_, 0, 0);
         headerLayout_->addWidget(listen_, 0, 1);
         headerLayout_->addWidget(bookmark_, 0, 2);
         headerLayout_->setColumnStretch(0, 1);
     }
-    readerContent_->layout()->setContentsMargins(compact ? 12 : 28, 20, compact ? 12 : 28, 24);
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event) {

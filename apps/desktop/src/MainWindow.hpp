@@ -125,6 +125,7 @@ private:
     QPushButton *smaller_ = nullptr;
     QPushButton *larger_ = nullptr;
     bool compactReader_ = false;
+    bool compactHeader_ = false;
     QSplitter *readerSplit_ = nullptr;
     QWidget *searchPane_ = nullptr;
     QToolBar *compactToolbar_ = nullptr;

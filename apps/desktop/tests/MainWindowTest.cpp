@@ -2821,6 +2821,107 @@ private slots:
         QTRY_VERIFY(window.sections_->geometry().top() <= window.back_->geometry().bottom());
     }
 
+    void narrowLongTitleKeepsFullWidthAndActionFocus() {
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.resize(1180, 780); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_VERIFY(window.isActiveWindow());
+        const QString exactTitle = QStringLiteral("Appendice:Dictionarios/Germano-interlingua/a");
+        const QString href = QStringLiteral("dict:Germano-Interlingua");
+        auto *heading = window.readerHeading_;
+        auto *titleWidget = window.title_;
+        auto *listen = window.listen_;
+        auto *bookmark = window.bookmark_;
+        int step = 0;
+        for (const bool richTitle : {false, true}) {
+            QJsonObject entry{{"title", exactTitle}, {"kind", "supplemental"},
+                {"sections", QJsonArray{QJsonObject{{"title", "Body"}, {"level", 2},
+                    {"blocks", QJsonArray{QJsonObject{{"kind", "paragraph"},
+                        {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Preserved body."}}}}}}}}}}};
+            if (richTitle) entry.insert("display_title", QJsonArray{QJsonObject{
+                {"kind", "link"}, {"text", exactTitle}, {"target", "Germano-Interlingua"}}});
+            window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false);
+            const QByteArray json = window.currentJson_;
+            const QString body = window.reading_->toPlainText();
+            const QString bookmarkName = QAccessible::queryAccessibleInterface(bookmark)->text(QAccessible::Name);
+            for (const int width : {640, 480, 1180, 640}) {
+                QTextCursor selection(titleWidget->document()); selection.setPosition(3);
+                selection.setPosition(18, QTextCursor::KeepAnchor); titleWidget->setTextCursor(selection);
+                bookmark->setFocus(Qt::TabFocusReason);
+                QTRY_VERIFY(bookmark->hasFocus());
+                window.resize(width, 600);
+                QTRY_COMPARE(window.width(), width);
+                QTRY_VERIFY(window.readerContent_->isVisible());
+                QTRY_COMPARE(window.compactReader_, window.readerContent_->width() < 580);
+                const bool stacked = window.readerContent_->width() < 720;
+                QTRY_COMPARE(window.compactHeader_, stacked);
+                QTRY_VERIFY(!window.readingFloatLayoutScheduled_);
+                QCOMPARE(window.readerHeading_, heading);
+                QCOMPARE(window.title_, titleWidget);
+                QCOMPARE(window.listen_, listen);
+                QCOMPARE(window.bookmark_, bookmark);
+                QVERIFY(bookmark->hasFocus());
+                QCOMPARE(titleWidget->toPlainText(), exactTitle);
+                QCOMPARE(titleWidget->accessibleName(), exactTitle);
+                QCOMPARE(QAccessible::queryAccessibleInterface(titleWidget)->text(QAccessible::Name), exactTitle);
+                QCOMPARE(QAccessible::queryAccessibleInterface(listen)->text(QAccessible::Name), QStringLiteral("Listen"));
+                QCOMPARE(QAccessible::queryAccessibleInterface(bookmark)->text(QAccessible::Name), bookmarkName);
+                QCOMPARE(titleWidget->textCursor().anchor(), 3);
+                QCOMPARE(titleWidget->textCursor().position(), 18);
+                QCOMPARE(titleWidget->font().pointSize(), window.compactReader_ ? 24 : 30);
+                const QRect bounds = window.readerContent_->rect();
+                for (auto *widget : std::array<QWidget *, 3>{heading, listen, bookmark}) {
+                    QVERIFY(widget->isVisible());
+                    QVERIFY(bounds.contains(widget->geometry()));
+                }
+                for (auto *button : {listen, bookmark}) {
+                    QVERIFY(button->isEnabled());
+                    QVERIFY(button->width() >= button->minimumSizeHint().width());
+                }
+                if (stacked) {
+                    QTRY_VERIFY(heading->geometry().bottom() < listen->geometry().top());
+                    QVERIFY(heading->geometry().bottom() < bookmark->geometry().top());
+                    QCOMPARE(heading->width(), window.headerLayout_->contentsRect().width());
+                } else {
+                    QVERIFY(heading->geometry().right() < listen->geometry().left());
+                }
+                QTRY_VERIFY(titleWidget->viewport()->height() >= qCeil(titleWidget->document()->size().height()));
+                QStringList lines;
+                for (auto block = titleWidget->document()->begin(); block.isValid(); block = block.next()) {
+                    QVERIFY(block.layout());
+                    for (int line = 0; line < block.layout()->lineCount(); ++line) {
+                        const auto laidOut = block.layout()->lineAt(line);
+                        lines.append(block.text().mid(laidOut.textStart(), laidOut.textLength()));
+                    }
+                    if (richTitle) for (auto it = block.begin(); !it.atEnd(); ++it) {
+                        const auto fragment = it.fragment();
+                        if (fragment.isValid()) QCOMPARE(fragment.charFormat().anchorHref(), href);
+                    }
+                }
+                if (width == 640) {
+                    QVERIFY(stacked && !window.compactReader_);
+                    QVERIFY2(std::any_of(lines.cbegin(), lines.cend(), [](const QString &line) {
+                        return line.contains(QStringLiteral("Dictionarios"));
+                    }), qPrintable(lines.join('|')));
+                }
+                window.larger_->setFocus(Qt::TabFocusReason);
+                QTRY_VERIFY(window.larger_->hasFocus());
+                QTest::keyClick(window.larger_, Qt::Key_Tab);
+                QTRY_VERIFY(listen->hasFocus());
+                QTest::keyClick(listen, Qt::Key_Tab);
+                QTRY_VERIFY(bookmark->hasFocus());
+                QCOMPARE(window.currentEntry_, entry);
+                QCOMPARE(window.currentJson_, json);
+                QCOMPARE(window.reading_->toPlainText(), body);
+                QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+                const QString frame = QStringLiteral(".tmp/ui-screenshots/desktop-long-title-%1-%2-%3.png")
+                    .arg(QCoreApplication::applicationPid()).arg(step++).arg(width);
+                QVERIFY(window.grab().save(frame));
+                qInfo().noquote() << "LONG_TITLE_LAYOUT" << width << richTitle << lines << frame;
+            }
+        }
+    }
+
     void learningDialogRetainsKeyboardFocusCue_data() {
         QTest::addColumn<bool>("keyboardOpen");
         QTest::addColumn<bool>("keyboardClose");
