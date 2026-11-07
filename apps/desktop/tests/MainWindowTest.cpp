@@ -17,6 +17,7 @@
 #include <QAction>
 #include <QComboBox>
 #include <QClipboard>
+#include <QCloseEvent>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDesktopServices>
@@ -2439,6 +2440,149 @@ private slots:
         QSettings learning(QStringLiteral("SmallThingz"), QStringLiteral("Dict"));
         learning.clear();
         learning.sync();
+    }
+
+    void standardWindowExitHonorsModalAndCloseVetoThenPreservesReaderState_data() {
+        QTest::addColumn<int>("standardKey");
+        QTest::newRow("standard-close") << int(QKeySequence::Close);
+        if (!QKeySequence(QKeySequence::Quit).isEmpty())
+            QTest::newRow("standard-quit") << int(QKeySequence::Quit);
+    }
+
+    void standardWindowExitHonorsModalAndCloseVetoThenPreservesReaderState() {
+        QFETCH(int, standardKey);
+        const QKeySequence quit(static_cast<QKeySequence::StandardKey>(standardKey));
+        QVERIFY(!quit.isEmpty());
+        qInfo() << "Tested standard window exit binding:" << standardKey
+                << quit.toString(QKeySequence::PortableText)
+                << "platform Quit binding:" << QKeySequence(QKeySequence::Quit).toString(QKeySequence::PortableText);
+        const bool oldQuitOnLastWindow = QApplication::quitOnLastWindowClosed();
+        const auto restoreQuit = qScopeGuard([oldQuitOnLastWindow] {
+            QApplication::setQuitOnLastWindowClosed(oldQuitOnLastWindow);
+        });
+        QApplication::setQuitOnLastWindowClosed(false);
+        struct CloseProbe final : QObject {
+            int count = 0;
+            bool veto = true;
+            bool eventFilter(QObject *watched, QEvent *event) override {
+                if (event->type() == QEvent::Close) {
+                    ++count;
+                    if (veto) {
+                        static_cast<QCloseEvent *>(event)->ignore();
+                        return true;
+                    }
+                }
+                return QObject::eventFilter(watched, event);
+            }
+        } probe;
+        QByteArray learningBefore;
+        QByteArray geometryBefore;
+        QByteArray splitterBefore;
+        QJsonObject entryBefore;
+        QString bodyBefore;
+        QString savedKey;
+        {
+            MainWindow window(fixture_, QStringLiteral("cat"));
+            window.resize(900, 700);
+            window.show();
+            QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+            QTRY_COMPARE(title(window), QStringLiteral("cat"));
+            QVERIFY(window.openWord(QStringLiteral("dog")));
+            QVERIFY(window.openWord(QStringLiteral("cat")));
+            QTRY_VERIFY(window.bookmark_->isVisible() && window.bookmark_->isEnabled());
+            QTest::mouseClick(window.bookmark_, Qt::LeftButton);
+            savedKey = window.savedWord(window.currentEntry_).key;
+            QVERIFY(window.learning_.isBookmarked(savedKey));
+            window.learning_.answer(savedKey, true);
+            window.learning_.answer(savedKey, false);
+            QSettings learning(QStringLiteral("SmallThingz"), QStringLiteral("Dict"));
+            learning.sync();
+            learningBefore = learning.value(QStringLiteral("learning/state")).toByteArray();
+            entryBefore = window.currentEntry_;
+            bodyBefore = window.reading_->toPlainText();
+            const QByteArray jsonBefore = window.currentJson_;
+            window.installEventFilter(&probe);
+
+            bool modalChecked = false;
+            QTimer::singleShot(0, &window, [&] {
+                auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                QVERIFY(dialog);
+                const auto closeDialog = qScopeGuard([dialog] { dialog->reject(); });
+                QCOMPARE(dialog->objectName(), QStringLiteral("learningDialog"));
+                QTRY_VERIFY(dialog->isVisible());
+                QTRY_VERIFY(QApplication::focusWidget()
+                    && (QApplication::focusWidget() == dialog
+                        || dialog->isAncestorOf(QApplication::focusWidget())));
+                QTest::keySequence(QApplication::focusWidget(), quit);
+                QCoreApplication::processEvents();
+                QCOMPARE(probe.count, 0);
+                QCOMPARE(QApplication::activeModalWidget(), dialog);
+                QVERIFY(window.isVisible());
+                QCOMPARE(window.currentEntry_, entryBefore);
+                modalChecked = true;
+            });
+            window.showLearningDialog(0);
+            QVERIFY(modalChecked);
+
+            window.activateWindow();
+            window.focusSearch();
+            QTRY_COMPARE(QApplication::focusWidget(), window.search_);
+            QTest::keySequence(QApplication::focusWidget(), quit);
+            QCOMPARE(probe.count, 1);
+            QVERIFY(window.isVisible());
+            QCOMPARE(window.currentEntry_, entryBefore);
+            QCOMPARE(window.currentJson_, jsonBefore);
+            QCOMPARE(window.reading_->toPlainText(), bodyBefore);
+            QCOMPARE(learning.value(QStringLiteral("learning/state")).toByteArray(), learningBefore);
+            geometryBefore = window.saveGeometry();
+            splitterBefore = window.readerSplit_->saveState();
+            probe.veto = false;
+            QTest::keySequence(QApplication::focusWidget(), quit);
+            QCOMPARE(probe.count, 2);
+            QVERIFY(!window.isVisible());
+            QCOMPARE(window.currentEntry_, entryBefore);
+        }
+        QSettings settings;
+        settings.sync();
+        QCOMPARE(settings.value(QStringLiteral("reader/root")).toString(), fixture_);
+        QCOMPARE(settings.value(QStringLiteral("reader/language")).toString(), QStringLiteral("English"));
+        QCOMPARE(settings.value(QStringLiteral("reader/lastKind")).toString(), QStringLiteral("language"));
+        QCOMPARE(settings.value(QStringLiteral("reader/lastWord")).toString(), QStringLiteral("cat"));
+        QCOMPARE(settings.value(QStringLiteral("reader/windowGeometry")).toByteArray(), geometryBefore);
+        QCOMPARE(settings.value(QStringLiteral("reader/splitter")).toByteArray(), splitterBefore);
+        QSettings learning(QStringLiteral("SmallThingz"), QStringLiteral("Dict"));
+        learning.sync();
+        QCOMPARE(learning.value(QStringLiteral("learning/state")).toByteArray(), learningBefore);
+        MainWindow reopened{QString()};
+        reopened.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!reopened.loading_ && reopened.api_, 30000);
+        QTRY_COMPARE(title(reopened), QStringLiteral("cat"));
+        QCOMPARE(reopened.api_->root(), fixture_);
+        QCOMPARE(reopened.currentEntry_, entryBefore);
+        QCOMPARE(reopened.reading_->toPlainText(), bodyBefore);
+        QVERIFY(reopened.learning_.isBookmarked(savedKey));
+        QCOMPARE(reopened.learning_.study().value(savedKey).right, 1);
+        QCOMPARE(reopened.learning_.study().value(savedKey).wrong, 1);
+        const QJsonObject before = QJsonDocument::fromJson(learningBefore).object();
+        const QJsonObject after = QJsonDocument::fromJson(
+            learning.value(QStringLiteral("learning/state")).toByteArray()).object();
+        for (const QString &key : {QStringLiteral("bookmarks"), QStringLiteral("study"), QStringLiteral("settings")})
+            QCOMPARE(after.value(key), before.value(key));
+        const QJsonArray historyBefore = before.value(QStringLiteral("history")).toArray();
+        const QJsonArray historyAfter = after.value(QStringLiteral("history")).toArray();
+        QCOMPARE(historyBefore.size(), 2);
+        QCOMPARE(historyAfter.size(), historyBefore.size());
+        for (qsizetype i = 0; i < historyBefore.size(); ++i) {
+            QJsonObject expected = historyBefore.at(i).toObject();
+            const QJsonObject actual = historyAfter.at(i).toObject();
+            if (expected.value(QStringLiteral("key")).toString() == savedKey) {
+                expected.insert(QStringLiteral("views"), expected.value(QStringLiteral("views")).toInt() + 1);
+                QVERIFY(actual.value(QStringLiteral("last_viewed")).toDouble()
+                    >= expected.value(QStringLiteral("last_viewed")).toDouble());
+                expected.insert(QStringLiteral("last_viewed"), actual.value(QStringLiteral("last_viewed")));
+            }
+            QCOMPARE(actual, expected);
+        }
     }
 
     void explicitEmptyRootRemainsTheNormalImportDestination() {

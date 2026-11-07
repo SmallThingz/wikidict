@@ -1758,6 +1758,8 @@ void MainWindow::setupUi() {
         connect(key, &QShortcut::activated, this, action);
     };
     shortcut(QKeySequence::Open, [this] { chooseRoot(); });
+    shortcut(QKeySequence::Close, [this] { close(); });
+    shortcut(QKeySequence::Quit, [this] { close(); });
     shortcut(QKeySequence(QStringLiteral("Ctrl+L")), [this] { focusSearch(true); });
     shortcut(QKeySequence(QStringLiteral("Alt+Left")), [this] { navigate(-1); });
     shortcut(QKeySequence(QStringLiteral("Alt+Right")), [this] { navigate(1); });
