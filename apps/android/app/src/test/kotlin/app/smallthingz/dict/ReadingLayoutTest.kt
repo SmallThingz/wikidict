@@ -356,6 +356,42 @@ class ReadingLayoutTest {
         assertTrue(owners.embedded(listOf(lexical.copy(target = "File:Missing_file.ogg", classes = "wikidict-media"))).isEmpty())
     }
 
+    @Test fun mediaOwnerCatalogsStayIndependentAndKeepLastDuplicate() {
+        val older = Media("Tone.ogg", "audio", "Old caption")
+        val outerTone = Media("Tone.ogg", "audio", "Outer caption")
+        val innerTone = Media("Tone.ogg", "audio", "Inner caption")
+        val outerOnly = Media("Other.ogg", "audio", "Outer only")
+        val innerOnly = Media("Inner.ogg", "audio", "Inner only")
+        val outerCatalog = listOf(older, outerOnly, outerTone)
+        val innerCatalog = listOf(innerTone, innerOnly)
+        val outerOwners = MediaOwners(outerCatalog)
+        val innerOwners = MediaOwners(innerCatalog)
+        val tone = Span("link", "Shared label", target = "Lexical target", classes =
+            "wikidict-media wikidict-media-file-546f6e652e6f6767")
+        val other = tone.copy(classes = "wikidict-media wikidict-media-file-4f746865722e6f6767")
+        val inner = tone.copy(classes = "wikidict-media wikidict-media-file-496e6e65722e6f6767")
+        val spans = listOf(tone, other, tone, inner)
+
+        // Switching catalogs (or returning from a nested reader) cannot reuse
+        // the same filename's metadata from the previous owner.
+        for (owners in listOf(outerOwners, innerOwners, outerOwners)) {
+            val expected = if (owners === outerOwners) listOf(outerTone, outerOnly) else listOf(innerTone, innerOnly)
+            val embedded = owners.embedded(spans)
+            assertEquals(expected, embedded)
+            assertSame(expected.first(), embedded.first())
+            assertEquals("Lexical target", tone.target)
+        }
+        assertTrue(MediaOwners(emptyList()).embedded(spans).isEmpty())
+        // A marker absent from this catalog must not fall back to a usable
+        // legacy File action, nor borrow another live catalog's known token.
+        assertNull(innerOwners.file(other.copy(target = "File:Tone.ogg")))
+        assertNull(outerOwners.file(inner.copy(target = "File:Tone.ogg")))
+        assertNull(outerOwners.file(tone.copy(classes = tone.classes + " wikidict-media-file-4f746865722e6f6767")))
+        assertEquals(listOf(older, outerOnly, outerTone), outerCatalog)
+        assertEquals(listOf(innerTone, innerOnly), innerCatalog)
+        assertEquals(listOf(tone, other, tone, inner), spans)
+    }
+
     @Test fun denseAuthoredMediaCaptionKeepsOneRowWithoutAFileNavigationTarget() {
         val media = Media("Tone.ogg", "audio", "a".repeat(40) + "\n" + "b".repeat(40))
         val classes = "wikidict-media wikidict-media-file-546f6e652e6f6767"

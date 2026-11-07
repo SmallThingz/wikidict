@@ -167,7 +167,7 @@ class PoemDeviceTest {
             compose.activity.setContent { MaterialTheme { CompositionLocalProvider(LocalLayoutDirection provides containerDirection.value) {
                 CompositionLocalProvider(LocalContentColor provides Color.Red) {
                     Box(Modifier.width(240.dp)) {
-                        EntryView(entry, false, {}, onLink = { clicked.add(it) },
+                        EntryView(entry, false, {}, onLink = { clicked.add(it.target) },
                             settings = AppSettings(collapseOtherSections = false, allowImages = false, allowAudio = false))
                     }
                 }

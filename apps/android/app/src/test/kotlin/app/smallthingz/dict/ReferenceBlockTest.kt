@@ -8,9 +8,9 @@ class ReferenceBlockTest {
     private data class Item(val id: Long, val spans: List<Span> = emptyList(), val blocks: List<Block>? = null,
         val kind: ReferenceKind = ReferenceKind.Note, val presence: Int? = null)
 
-    // Independent literal B/C/D/E writer. D adds only the image border flag;
+    // Independent literal B/C/D/E/F writer. D adds only the image border flag;
     // C and D retain the optional ordered reference blocks and table styles.
-    private class Wire(val styles: Boolean, val imageBorders: Boolean = false, val blockLayouts: Boolean = false) {
+    private class Wire(val styles: Boolean, val imageBorders: Boolean = false, val blockLayouts: Boolean = false, val targetFragments: Boolean = false) {
         val out = ByteArrayOutputStream()
         fun byte(n: Int) { out.write(n) }
         fun u32(n: Long) { repeat(4) { byte((n ushr (it * 8)).toInt() and 255) } }
@@ -62,6 +62,8 @@ class ReferenceBlockTest {
                 byte(if (s.fontScale == null) 0 else 1)
                 s.fontScale?.let { u32(it.toRawBits().toLong()); byte(if (s.fontScaleBasis == FontScaleBasis.NormalBody) 1 else 0) }
                 image(s.image)
+                if (targetFragments) { byte(if (s.targetFragment == null) 0 else 1); s.targetFragment?.let(::string) }
+                else require(s.targetFragment == null)
             }
         }
         fun table(t: Table?) {
@@ -93,7 +95,7 @@ class ReferenceBlockTest {
         }
     }
     private fun fixture(version: Char, items: List<Item>, sections: List<Section> = emptyList(),
-        display: List<Span> = emptyList(), preamble: List<Span> = emptyList(), media: List<Media> = emptyList()): ByteArray = Wire(version in "CDE", version in "DE", version == 'E').apply {
+        display: List<Span> = emptyList(), preamble: List<Span> = emptyList(), media: List<Media> = emptyList()): ByteArray = Wire(version in "CDEF", version in "DEF", version in "EF", version == 'F').apply {
         out.write("DPR$version".toByteArray(Charsets.US_ASCII))
         spans(display); u32(sections.size.toLong())
         sections.forEach { byte(it.level); string(it.title); string(it.anchor); string(it.anchorFallback); blocks(it.blocks) }
@@ -103,7 +105,7 @@ class ReferenceBlockTest {
             byte(if (item.kind == ReferenceKind.Note) 0 else 1); u32(item.id)
             if (item.kind == ReferenceKind.Note) { u32(1); string("") }
             string("notes"); spans(item.spans)
-            if (version in "CDE") {
+            if (version in "CDEF") {
                 byte(item.presence ?: if (item.blocks == null) 0 else 1)
                 item.blocks?.let(::blocks)
             }
@@ -473,6 +475,62 @@ class ReferenceBlockTest {
         assertThrows(Exception::class.java) { decode(nullBlock.copyOf(nullBlock.size - 5)) }
     }
 
+    @Test fun dprfPreservesSeparateComponentsAcrossRecursiveSinksAndInheritedLayout() {
+        val links = listOf(Span("link", "legacy", "Page#Noun"),
+            Span("link", "literal", "Special:Booksources/9780306406157#%23?&語", targetFragment = ""),
+            Span("link", "fragment", "Page#literal", targetFragment = "Noun#語"),
+            Span("link", "local", targetFragment = "reference-1"),
+            Span("link", "", "File:Controlled.svg#literal", image = InlineImage("Controlled.svg", 20, border = true), targetFragment = "Caption"))
+        val paragraph = Block("paragraph", 0, links, textAlign = CellTextAlign.Center)
+        val inner = Table(links, listOf(listOf(Cell(links, false, 1, 1))))
+        val outer = Table(links, listOf(listOf(Cell(links, false, 1, 1), Cell(emptyList(), false, 1, 1, nestedTable = inner),
+            Cell(emptyList(), false, 1, 1, blocks = listOf(paragraph)))),
+            style = TableStyle(floatSide = TableFloatSide.Right))
+        val blocks = listOf(paragraph, Block("table", 0, emptyList(), table = outer))
+        val sections = listOf(Section(2, "Body", blocks, "Body"))
+        val items = listOf(Item(1, spans = links), Item(2, blocks = blocks),
+            Item(3, spans = links, kind = ReferenceKind.Fragment), Item(4, blocks = blocks, kind = ReferenceKind.Fragment))
+        val media = listOf(Media("Controlled.svg", "image", "caption"))
+        val entry = decode(fixture('F', items, sections, links, links, media))
+        assertEquals(links, entry.displayTitle)
+        assertEquals(links, entry.preamble)
+        assertEquals(sections, entry.sections)
+        assertEquals(listOf(Reference(1, 1, "notes", links), Reference(2, 1, "notes", emptyList(), blocks = blocks),
+            Reference(3, null, "notes", links, ReferenceKind.Fragment),
+            Reference(4, null, "notes", emptyList(), ReferenceKind.Fragment, blocks)), entry.references)
+        assertEquals(media, entry.media)
+        val legacy = links.take(1)
+        assertEquals(decode(fixture('E', emptyList(), display = legacy)).displayTitle,
+            decode(fixture('F', emptyList(), display = legacy)).displayTitle)
+    }
+
+    @Test fun dprfRejectsInvalidKindPresenceTruncationAndLegacyRelabeling() {
+        val span = Span("link", "label", "Title#literal", targetFragment = "")
+        val valid = fixture('F', emptyList(), display = listOf(span))
+        val spanBytes = Wire(true, true, true, true).apply { spans(listOf(span)) }.out.size()
+        val presence = 4 + spanBytes - 5
+        assertEquals(1, valid[presence].toInt())
+        for (tag in listOf(0, 2, 3)) {
+            val bad = valid.copyOf(); bad[8] = tag.toByte()
+            assertThrows(IllegalArgumentException::class.java) { decode(bad) }
+        }
+        for (value in listOf(2, 255)) {
+            val bad = valid.copyOf(); bad[presence] = value.toByte()
+            assertThrows(Exception::class.java) { decode(bad) }
+        }
+        val huge = valid.copyOf(); repeat(4) { huge[presence + 1 + it] = 0xff.toByte() }
+        assertThrows(Exception::class.java) { decode(huge) }
+        val utf8 = fixture('F', emptyList(), display = listOf(span.copy(targetFragment = "G")))
+        utf8[presence + 5] = 0xff.toByte()
+        assertThrows(Exception::class.java) { decode(utf8) }
+        val legacy = valid.copyOf(); legacy[3] = 'E'.code.toByte()
+        assertThrows(Exception::class.java) { decode(legacy) }
+        for (length in valid.indices) assertThrows(Exception::class.java) { decode(valid.copyOf(length)) }
+        assertThrows(Exception::class.java) { decode(valid + byteArrayOf(0)) }
+        // Count admission must include F's mandatory presence byte, even for an empty span.
+        assertEquals(36, Wire(true, true, true, true).apply { spans(listOf(Span("link", ""))) }.out.size() - 4)
+    }
+
     @Test fun typedCatalogCapacityIsVersionedAndCountsAudioWithoutCappingMediaOnlyEntries() {
         fun catalog(count: Int) = List(count) { Media("Asset$it.svg", "image", "caption$it") }
         fun spans(count: Int) = catalog(count).map { Span("link", "", "File:${it.file}", image = InlineImage(it.file, 30)) }
@@ -485,24 +543,24 @@ class ReferenceBlockTest {
                 decode(fixture(version, emptyList(), display = spans(129), media = catalog(129)))
             }
         }
-        for (count in listOf(128, 129, 193, 256)) {
-            val entry = decode(fixture('E', emptyList(), display = spans(count), media = catalog(count)))
+        for (version in "EF") for (count in listOf(128, 129, 193, 256)) {
+            val entry = decode(fixture(version, emptyList(), display = spans(count), media = catalog(count)))
             assertEquals(catalog(count), entry.media)
             assertEquals(spans(count), entry.displayTitle)
             assertEquals(count, entry.inlineImages.size)
         }
-        assertThrows(IllegalArgumentException::class.java) {
-            decode(fixture('E', emptyList(), display = spans(257), media = catalog(257)))
+        for (version in "EF") assertThrows(IllegalArgumentException::class.java) {
+            decode(fixture(version, emptyList(), display = spans(257), media = catalog(257)))
         }
         val image = spans(1)
         fun mixed(count: Int) = catalog(1) + List(count - 1) { Media("Audio$it.ogg", "audio", "audio caption") }
-        for ((version, limit) in listOf('C' to 128, 'D' to 128, 'E' to 256)) {
+        for ((version, limit) in listOf('C' to 128, 'D' to 128, 'E' to 256, 'F' to 256)) {
             assertEquals(mixed(limit), decode(fixture(version, emptyList(), display = image, media = mixed(limit))).media)
             assertThrows(IllegalArgumentException::class.java) {
                 decode(fixture(version, emptyList(), display = image, media = mixed(limit + 1)))
             }
         }
-        for (version in "BCDE") {
+        for (version in "BCDEF") {
             assertEquals(catalog(257), decode(fixture(version, emptyList(), media = catalog(257))).media)
         }
     }

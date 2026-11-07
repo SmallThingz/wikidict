@@ -37,11 +37,11 @@ internal class EntryNavigationState {
 internal class EntryNavigation(
     private val scope: CoroutineScope,
     private val read: suspend (WordHit) -> Entry,
-    private val link: suspend (String, Entry) -> WordHit?,
+    private val link: suspend (EntryLink, Entry) -> WordHit?,
     private val saved: suspend (SavedWord) -> WordHit?,
     private val random: suspend () -> WordHit?,
     private val initial: suspend () -> WordHit?,
-    private val commit: (WordHit, Entry, String) -> Unit,
+    private val commit: (WordHit, Entry, EntryLink) -> Unit,
     private val loading: (Boolean) -> Unit,
     private val error: suspend (String) -> Unit,
     private val installed: (String) -> Boolean,
@@ -49,7 +49,7 @@ internal class EntryNavigation(
     private val visitsChanged: (EntryVisitState) -> Unit = {},
     private val state: EntryNavigationState = EntryNavigationState(),
 ) {
-    private data class Destination(val hit: WordHit, val target: String = "")
+    private data class Destination(val hit: WordHit, val target: EntryLink = EntryLink(""))
     private val owner = state.attach()
     private enum class Intent { Root, Link, Back }
     private var current: EntryNavigationState.Visit?
@@ -66,7 +66,7 @@ internal class EntryNavigation(
 
     fun open(hit: WordHit): Job = begin { Destination(hit) }
 
-    fun openLink(target: String, entry: Entry): Job = begin(Intent.Link) {
+    fun openLink(target: EntryLink, entry: Entry): Job = begin(Intent.Link) {
         val hit = link(target, entry)
             ?: throw IllegalStateException("This word is not in your installed dictionaries.")
         Destination(hit, target)

@@ -246,6 +246,14 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                         cell.firstCursorPosition().position() != cell.lastCursorPosition().position() ||
                         !cell.firstCursorPosition().charFormat().anchorNames().isEmpty())
                         throw std::runtime_error("table style unexpected cell");
+                    // Collapsed Qt tables paint cell backgrounds, not the frame
+                    // background. The missing source slot still exposes that
+                    // table color; preserve every other filler format property.
+                    if (format.background().style() != Qt::NoBrush) {
+                        QTextTableCellFormat fillerFormat = cell.format().toTableCellFormat();
+                        fillerFormat.setBackground(format.background());
+                        cell.setFormat(fillerFormat);
+                    }
                     continue;
                 }
                 const QJsonObject expected = cells[index++].toObject();

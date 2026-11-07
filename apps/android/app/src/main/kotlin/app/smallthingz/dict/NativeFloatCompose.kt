@@ -151,7 +151,7 @@ private fun imageStatus(state: InlineImageAssetState): String = when (state) {
 internal fun prepareNativeFloatText(
     spans: List<Span>, annotated: AnnotatedString, runs: List<EgyptianTextRun>,
     style: TextStyle, linkColor: Color, media: List<Media>, settings: AppSettings, edition: String,
-    onLink: (String) -> Unit, paragraphGaps: List<Pair<Int, Float>> = emptyList(), containAtEnd: Boolean = false,
+    onLink: (EntryLink) -> Unit, paragraphGaps: List<Pair<Int, Float>> = emptyList(), containAtEnd: Boolean = false,
     indentPixels: Float = 0f, prefix: String = "", prefixStyle: TextStyle? = null,
     heading: Boolean = false, headingActions: List<NativeHeadingAction> = emptyList(),
 ): PreparedNativeFloatText {
@@ -329,7 +329,7 @@ internal fun prepareNativeFloatText(
                         annotated.getLinkAnnotations(0, annotated.length).forEachIndexed { index, range ->
                             add(FloatInteractionNode(index, FloatInteractionKind.LINK, range.start, range.end,
                                 geometry.rectsForRange(range.start, range.end), annotated.subSequence(range.start, range.end), null,
-                                { when (val link = range.item) { is LinkAnnotation.Clickable -> onLink(link.tag); is LinkAnnotation.Url -> uri.openUri(link.url) } }))
+                                { when (val link = range.item) { is LinkAnnotation.Clickable -> link.linkInteractionListener?.onClick(link) ?: onLink(EntryLink(link.tag)); is LinkAnnotation.Url -> uri.openUri(link.url) } }))
                         }
                         val firstImage = annotated.getLinkAnnotations(0, annotated.length).size
                         images.forEach { image ->
@@ -338,7 +338,7 @@ internal fun prepareNativeFloatText(
                             val unresolved = image.span.kind == "link" && image.span.target.startsWith("File:") && url == null
                             val click: (() -> Unit)? = when {
                                 url != null -> { { uri.openUri(url) } }
-                                image.span.kind == "link" && !unresolved -> { { onLink(image.span.target) } }
+                                image.span.kind == "link" && !unresolved -> { { onLink(image.span.entryLink()) } }
                                 else -> null
                             }
                             val hasDetails = !model.tooltip.isNullOrEmpty() || image.state is InlineImageAssetState.Ready ||

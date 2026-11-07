@@ -1360,19 +1360,30 @@ void MainWindow::setupUi() {
     connect(reading_, &QTextBrowser::anchorClicked, this, [this](const QUrl &url) {
         if (url.scheme() == QStringLiteral("dict")) {
             const QString target = url.path(QUrl::FullyDecoded);
-            // Validate the entire compiled target before ordinary fragment handling.
-            if (api_ && !url.hasQuery() && !url.hasFragment() && compiledBookSourcesTarget(target)) {
+            // An actual URL fragment carries the compiled component, including
+            // explicit empty. Legacy links keep their combined target in path.
+            const bool separateFragment = url.hasFragment();
+            const QString word = separateFragment ? target : target.section(QChar('#'), 0, 0);
+            const std::optional<QString> section = separateFragment ?
+                std::optional<QString>(url.fragment(QUrl::FullyDecoded)) :
+                (target.contains(QChar('#')) ? std::optional<QString>(target.section(QChar('#'), 1)) : std::nullopt);
+            const QString bookPrefix = QStringLiteral("Special:Booksources/");
+            const bool canonicalBookSource = word.startsWith(bookPrefix) && word.size() > bookPrefix.size();
+            const bool legacyBookSource = (!section || section->isEmpty()) && compiledBookSourcesTarget(target);
+            if (api_ && !url.hasQuery() && (canonicalBookSource || legacyBookSource)) {
                 const QString host = LibraryStorage::sourceHost(api_->root());
                 if (!host.isEmpty()) {
-                    const QUrl source(QStringLiteral("https://") + host + QStringLiteral("/wiki/") +
-                        QString::fromLatin1(QUrl::toPercentEncoding(target)));
+                    QUrl source(QStringLiteral("https://") + host + QStringLiteral("/wiki/") +
+                        QString::fromLatin1(QUrl::toPercentEncoding(word)));
+                    if (section && !section->isEmpty()) source.setFragment(*section, QUrl::DecodedMode);
                     QDesktopServices::openUrl(source);
                     return;
                 }
+                if (canonicalBookSource) {
+                    statusBar()->showMessage(QStringLiteral("This dictionary does not identify the source edition for this book link."));
+                    return;
+                }
             }
-            const QString word = target.section(QChar('#'), 0, 0);
-            const std::optional<QString> section = target.contains(QChar('#')) ?
-                std::optional<QString>(target.section(QChar('#'), 1)) : std::nullopt;
             if (!word.isEmpty()) {
                 bool explicitOwner = false;
                 if (api_ && !loading_ && api_->kind() == QStringLiteral("language") && section) {
@@ -1386,12 +1397,14 @@ void MainWindow::setupUi() {
                         return;
                     }
                 }
-                if (!openWord(word, section, !explicitOwner && !url.hasQuery() && !url.hasFragment())) return;
+                if (!openWord(word, section, !explicitOwner && !url.hasQuery())) return;
             } else if (section) jumpToFragment(*section);
         }
         else if (url == QUrl(QStringLiteral("library:"))) chooseRoot();
-        else if (url.scheme() == QStringLiteral("media-source") && !url.hasQuery() && !url.hasFragment()) {
-            if (!media_->openInlineImageSource(url.path(QUrl::FullyDecoded)))
+        else if (url.scheme() == QStringLiteral("media-source") && !url.hasQuery()) {
+            const std::optional<QString> fragment = url.hasFragment() ?
+                std::optional<QString>(url.fragment(QUrl::FullyDecoded)) : std::nullopt;
+            if (!media_->openInlineImageSource(url.path(QUrl::FullyDecoded), fragment))
                 statusBar()->showMessage(QStringLiteral("This dictionary does not identify the source for this file link."));
         }
         else if (url.scheme() == QStringLiteral("section")) {
@@ -2253,6 +2266,10 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             if (normalBody && (!numericScale.isDouble() || !std::isfinite(numericScale.toDouble()) || numericScale.toDouble() < 0))
                 throw DictApiError("normal-body font-scale basis requires a numeric scale");
             const QString kind = span.value(QStringLiteral("kind")).toString();
+            const QJsonValue targetFragment = span.value(QStringLiteral("target_fragment"));
+            const bool separateFragment = SemanticHtml::present(targetFragment);
+            if (separateFragment && (kind != QStringLiteral("link") || !targetFragment.isString()))
+                throw DictApiError("invalid semantic link target fragment");
             const QJsonValue image = span.value(QStringLiteral("image"));
             const bool inlineImage = SemanticHtml::present(image);
             if (inlineImage && (kind == QStringLiteral("line_break") || !span.value(QStringLiteral("text")).toString().isEmpty() || !span.value(QStringLiteral("trail")).toString().isEmpty()))
@@ -2316,7 +2333,9 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                 const QString target = span.value(QStringLiteral("target")).toString();
                 const QByteArray encoded = QUrl::toPercentEncoding(target);
                 const QString scheme = inlineImage && target.startsWith(QStringLiteral("File:")) ? QStringLiteral("media-source") : QStringLiteral("dict");
-                text = QStringLiteral("<a href='%1:%2'%3>%4</a>").arg(scheme, QString::fromLatin1(encoded),
+                QString href = scheme + QChar(':') + QString::fromLatin1(encoded);
+                if (separateFragment) href += QChar('#') + QString::fromLatin1(QUrl::toPercentEncoding(targetFragment.toString()));
+                text = QStringLiteral("<a href='%1'%2>%3</a>").arg(href,
                     zeroScale ? QStringLiteral(" style='text-decoration:none'") : QString(), text);
             } else if (kind == QStringLiteral("external_link")) {
                 const QString target = span.value(QStringLiteral("target")).toString();

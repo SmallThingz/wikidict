@@ -18,11 +18,36 @@ internal fun sourcePage(entry: Entry, title: String): String = sourceWiki(entry.
 
 // Match the normalized target emitted by the compiler, including its terminal-X form.
 private val compiledBookSourcesTarget = Regex("Special:BookSources/(?:[0-9]{9}[0-9X]|97[89][0-9]{9}[0-9X])")
+private fun canonicalBookSourcesTarget(title: String): Boolean =
+    title.startsWith("Special:Booksources/") && title.length > "Special:Booksources/".length
 
-internal fun bookSourcesUrl(entry: Entry, target: String): String? {
-    if (!compiledBookSourcesTarget.matches(target) || sourceWiki(entry.edition) == null) return null
-    return sourcePage(entry, target)
+internal fun bookSourcesUrl(entry: Entry, target: EntryLink): String? {
+    val title = target.title
+    val legacy = compiledBookSourcesTarget.matches(target.target) && target.fragment.isEmpty()
+    if ((!legacy && !canonicalBookSourcesTarget(title)) ||
+        sourceWiki(entry.edition) == null) return null
+    return sourcePage(entry, title) + if (target.fragment.isEmpty()) "" else
+        "#" + java.net.URLEncoder.encode(target.fragment, "UTF-8").replace("+", "%20")
 }
+
+/** A canonical source action must not turn into a dictionary lookup when its edition is unknown. */
+internal fun dispatchEntryLink(entry: Entry, target: EntryLink, openSource: (String) -> Unit,
+    openDictionary: (EntryLink) -> Unit, sourceUnavailable: () -> Unit) {
+    val bookSource = bookSourcesUrl(entry, target)
+    when {
+        canonicalBookSourcesTarget(target.title) ->
+            if (bookSource == null) sourceUnavailable() else openSource(bookSource)
+        target.title.startsWith("File:", true) || target.title.startsWith("Image:", true) || bookSource != null ->
+            openSource(bookSource ?: sourceLinkPage(entry, target))
+        else -> openDictionary(target)
+    }
+}
+
+/** Preserve the old source action for combined targets; explicit components stay separate. */
+internal fun sourceLinkPage(entry: Entry, target: EntryLink): String =
+    if (target.targetFragment == null) sourcePage(entry, target.target) else
+        sourcePage(entry, target.title) + if (target.fragment.isEmpty()) "" else
+            "#" + java.net.URLEncoder.encode(target.fragment, "UTF-8").replace("+", "%20")
 
 internal fun mediaHosts(edition: String): List<String> = listOf("commons.wikimedia.org") + listOfNotNull(sourceWiki(edition)?.let { java.net.URI(it).host })
 
@@ -34,8 +59,9 @@ internal fun inlineImageLinkUrl(span: Span, edition: String): String? {
     if (span.kind == "external_link") return externalLinkUrl(span)
     if (span.kind != "link" || !span.target.startsWith("File:")) return null
     val wiki = sourceWiki(edition) ?: return null
-    val title = span.target.substringBefore('#')
-    val fragment = span.target.substringAfter('#', "")
+    val action = span.entryLink()
+    val title = action.title
+    val fragment = action.fragment
     return wiki + "wiki/" + java.net.URLEncoder.encode(title, "UTF-8").replace("+", "%20") +
         if (fragment.isEmpty()) "" else "#" + java.net.URLEncoder.encode(fragment, "UTF-8").replace("+", "%20")
 }

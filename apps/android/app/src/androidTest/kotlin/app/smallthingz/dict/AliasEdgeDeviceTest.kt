@@ -96,11 +96,11 @@ class AliasEdgeDeviceTest {
             assertTrue(noLanguage.redirect!!.followed)
             assertEquals("language",noLanguage.navigationKind)
             assertNull(noLanguage.navigationLanguage)
-            assertNull(library.link("animus",noLanguage))
+            assertNull(library.link(EntryLink("animus"),noLanguage))
             val feature = entry("Feature")
             assertEquals("rhymes",feature.kind)
             assertEquals("Rhymes",feature.redirect!!.fragment)
-            val link = library.link("next",feature)!!
+            val link = library.link(EntryLink("next"),feature)!!
             assertEquals(rhymes.id,link.dictionary)
             assertEquals("rhymes",library.read(link).kind)
             assertEquals("edgewiktionary-20261001",library.read(link).edition)

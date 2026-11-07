@@ -157,7 +157,7 @@ class SpanTrailDeviceTest {
         val clicked = mutableListOf<String>()
         compose.runOnUiThread {
             compose.activity.setContent { MaterialTheme {
-                EntryView(entry, false, {}, onLink = { clicked.add(it) }, settings = AppSettings(collapseOtherSections = false, allowImages = false, allowAudio = false))
+                EntryView(entry, false, {}, onLink = { clicked.add(it.target) }, settings = AppSettings(collapseOtherSections = false, allowImages = false, allowAudio = false))
             } }
         }
         val node = compose.onNodeWithText(before + isolated + after, useUnmergedTree = true)

@@ -34,7 +34,7 @@ class UnicodeIdentityDeviceTest {
             assertNull(library.exact("word",heading,edition))
             val entry = library.read(hit)
             assertEquals(title,entry.title);assertEquals(heading,entry.language)
-            assertEquals(hit.key,library.link(title,entry)!!.key)
+            assertEquals(hit.key,library.link(EntryLink(title),entry)!!.key)
             library.rememberWord(hit)
             assertEquals(hit.key,library.lastWord()!!.key)
             withContext(Dispatchers.Main) { learning.record(entry) }

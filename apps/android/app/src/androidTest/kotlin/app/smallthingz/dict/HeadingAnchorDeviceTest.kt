@@ -47,7 +47,7 @@ class HeadingAnchorDeviceTest {
         try {
             compose.activityRule.scenario.onActivity { activity -> activity.setContent { MaterialTheme {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    EntryView(entry, false, {}, onLink = { forwarded.add(it) },
+                    EntryView(entry, false, {}, onLink = { forwarded.add(it.target) },
                         settings = AppSettings(collapseOtherSections = true, collapseDetails = true),
                         anchorRequest = request.value, onAnchorConsumed = { if (request.value === it) request.value = null })
                 }

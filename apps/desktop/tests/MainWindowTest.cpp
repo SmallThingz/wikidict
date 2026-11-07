@@ -628,7 +628,7 @@ private slots:
         allSeparate = layoutIsSeparate(QStringLiteral("recomposition")) && allSeparate;
         QCOMPARE(window.currentEntry_, entry);
         QCOMPARE(document->toPlainText(), fullText);
-        QFile report(QStringLiteral(".tmp/ui-screenshots/floating-table-reference-geometry.json"));
+        QFile report(QStringLiteral(".tmp/ui-screenshots/floating-table-reference-geometry-%1.json").arg(QCoreApplication::applicationPid()));
         QVERIFY(report.open(QIODevice::WriteOnly | QIODevice::NewOnly));
         const QByteArray reportBytes = QJsonDocument(QJsonObject{{"samples", samples}, {"all_separate", allSeparate}}).toJson();
         QCOMPARE(report.write(reportBytes), qint64(reportBytes.size()));
@@ -1466,6 +1466,115 @@ private slots:
         SemanticHtml::setHtml(&document, window.blockHtml(swatch));
         QVERIFY(!document.find("Cell").isNull());
         QCOMPARE(document.find("Cell").currentTable()->format().position(), QTextFrameFormat::FloatRight);
+    }
+
+    void raggedTableBackgroundKeepsEmptySlotsSpansAndAuthoredColors() {
+        MainWindow window(fixture_, QStringLiteral("dog"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(640, 600);
+        window.show();
+        const auto cell = [](const QString &label) {
+            return QJsonObject{{"spans", label.isEmpty() ? QJsonArray{} : QJsonArray{
+                QJsonObject{{"kind", "text"}, {"text", label}}}}};
+        };
+        QJsonObject heading = cell("Two-column table heading");
+        heading.insert("colspan", 2);
+        QJsonObject linked{{"spans", QJsonArray{QJsonObject{{"kind", "link"},
+            {"text", "Linked source"}, {"target", "Slot target#anchor"}}}}};
+        QJsonObject spanning = cell(QString());
+        spanning.insert("rowspan", 2);
+        spanning.insert("background", "#ffc0cb");
+        QJsonObject explicitEmpty = cell(QString());
+        explicitEmpty.insert("background", "#d0ffd0");
+        const QJsonArray rows{
+            QJsonObject{{"cells", QJsonArray{heading}}},
+            QJsonObject{{"cells", QJsonArray{linked}}},
+            QJsonObject{{"cells", QJsonArray{spanning, cell("Rowspan sibling")}}},
+            QJsonObject{{"cells", QJsonArray{explicitEmpty}}},
+            QJsonObject{{"cells", QJsonArray{cell(QString()), cell("Final sentinel")}}}
+        };
+        for (const bool collapsed : {true, false}) {
+            for (const bool background : {true, false}) {
+                QJsonObject style{{"collapse", collapsed ? "collapse" : "separate"}};
+                if (background) style.insert("background", "#e9f3ff");
+                const QJsonObject table{{"style", style}, {"rows", rows}};
+                const QJsonObject entry{{"title", "Ragged table background"}, {"kind", "language"},
+                    {"language", window.api_->language()}, {"sections", QJsonArray{
+                        QJsonObject{{"level", 2}, {"title", "Table"}, {"blocks", QJsonArray{
+                            QJsonObject{{"kind", "table"}, {"table", table}}}}}}}};
+                const QByteArray response = QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson();
+                window.renderResponse(response, false);
+                QCoreApplication::processEvents();
+                auto *document = window.reading_->document();
+                QTextCursor link = document->find("Linked source");
+                QVERIFY(!link.isNull());
+                QTextTable *actual = link.currentTable();
+                QVERIFY(actual);
+                QCOMPARE(actual->rows(), 5);
+                QCOMPARE(actual->columns(), 2);
+                QCOMPARE(actual->cellAt(0, 0).columnSpan(), 2);
+                QCOMPARE(actual->cellAt(0, 1).firstPosition(), actual->cellAt(0, 0).firstPosition());
+                QCOMPARE(actual->cellAt(2, 0).rowSpan(), 2);
+                QCOMPARE(actual->cellAt(3, 0).firstPosition(), actual->cellAt(2, 0).firstPosition());
+                QCOMPARE(actual->format().borderCollapse(), collapsed);
+                const QTextTableCell filler = actual->cellAt(1, 1);
+                QCOMPARE(filler.row(), 1);
+                QCOMPARE(filler.column(), 1);
+                QCOMPARE(filler.rowSpan(), 1);
+                QCOMPARE(filler.columnSpan(), 1);
+                QCOMPARE(filler.firstPosition(), filler.lastPosition());
+                QVERIFY(filler.firstCursorPosition().charFormat().anchorNames().isEmpty());
+                QCOMPARE(link.charFormat().anchorHref(), QStringLiteral("dict:Slot%20target%23anchor"));
+                QCOMPARE(window.currentEntry_, entry);
+                const QString plain = document->toPlainText();
+                QCOMPARE(plain.count("Two-column table heading"), 1);
+                QCOMPARE(plain.count("Linked source"), 1);
+                QCOMPARE(plain.count("Rowspan sibling"), 1);
+                QCOMPARE(plain.count("Final sentinel"), 1);
+                window.reading_->document()->documentLayout()->documentSize();
+                const QImage pixels = window.reading_->viewport()->grab().toImage();
+                QVERIFY(!pixels.isNull());
+                const QString stem = QStringLiteral("ragged-background-%1-%2-%3")
+                    .arg(collapsed ? "collapse" : "separate").arg(background ? "blue" : "none")
+                    .arg(QCoreApplication::applicationPid());
+                // Save before the paint oracle so an expected-red baseline retains evidence.
+                QVERIFY(pixels.save(QDir::current().filePath(stem + QStringLiteral(".png"))));
+                const qreal dpr = pixels.devicePixelRatio();
+                const auto sample = [&](const QTextTableCell &value, const QColor &wanted) {
+                    const QRect cursor = window.reading_->cursorRect(value.firstCursorPosition());
+                    const QPoint center(cursor.left() + 4, cursor.center().y());
+                    if (!window.reading_->viewport()->rect().contains(QRect(center - QPoint(1, 1), QSize(3, 3))))
+                        return false;
+                    bool equal = true;
+                    for (int y = -1; y <= 1; ++y)
+                        for (int x = -1; x <= 1; ++x) {
+                            const QPoint pixel(qFloor((center.x() + x) * dpr), qFloor((center.y() + y) * dpr));
+                            if (!pixels.rect().contains(pixel) || pixels.pixelColor(pixel) != wanted) equal = false;
+                        }
+                    qInfo() << "RAGGED_BACKGROUND" << stem << value.row() << value.column()
+                            << cursor << wanted << pixels.pixelColor(qFloor(center.x() * dpr), qFloor(center.y() * dpr));
+                    return equal;
+                };
+                // The lower blank viewport is the actual reader canvas, independent of theme.
+                const QColor canvas = pixels.pixelColor(pixels.width() - 5, pixels.height() - 5);
+                const QColor expected = background ? QColor("#e9f3ff") : canvas;
+                const bool fillerPainted = sample(filler, expected);
+                const bool rowSpanPainted = sample(actual->cellAt(3, 0), QColor("#ffc0cb"));
+                const bool explicitPainted = sample(actual->cellAt(3, 1), QColor("#d0ffd0"));
+                const bool authoredEmptyPainted = sample(actual->cellAt(4, 0), expected);
+                QCOMPARE(actual->cellAt(2, 0).format().background().color(), QColor("#ffc0cb"));
+                QCOMPARE(actual->cellAt(3, 1).format().background().color(), QColor("#d0ffd0"));
+                if (background) QCOMPARE(filler.format().background().color(), QColor("#e9f3ff"));
+                else QCOMPARE(filler.format().background().style(), Qt::NoBrush);
+                QVERIFY2(fillerPainted, "Missing source cell must reveal the table background, not a white grid slot");
+                QVERIFY(rowSpanPainted);
+                QVERIFY(explicitPainted);
+                QVERIFY(authoredEmptyPainted);
+                window.refreshReading();
+                QCOMPARE(window.currentEntry_, entry);
+                QCOMPARE(document->toPlainText(), plain);
+            }
+        }
     }
 
     void typedTableStylesKeepFractionalMetricsStructureAndDeviceLimit() {
@@ -6938,6 +7047,135 @@ private slots:
         QCOMPARE(title(bookWindow), ordinary);
         QVERIFY(bookWindow.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
         QCOMPARE(receiver.opened.size(), qsizetype(4));
+    }
+
+    void compiledLinkComponentsKeepLiteralTitleThroughMouseAndKeyboard() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-link-components-XXXXXX"));
+        QVERIFY(directory.isValid());
+        const QString literal = QStringLiteral("cat#Noun");
+        const QString opaque = QString::fromUtf8("Title%23?x&Ω#literal");
+        QVERIFY(prepareCaseTitleFixture(fixture_, directory.path(), {QStringLiteral("cat"), literal, opaque}));
+        MainWindow window(directory.path() + QStringLiteral("/library"), QStringLiteral("cat"));
+        window.resize(640, 600); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        const auto span = [](const QString &target, const QJsonValue &fragment) {
+            QJsonObject value{{"kind", "link"}, {"text", "Component link"}, {"target", target}};
+            if (!fragment.isUndefined()) value.insert("target_fragment", fragment);
+            return value;
+        };
+        struct Case { QString target; QJsonValue fragment; QString expectedTitle; bool keyboard; };
+        const QList<Case> cases{
+            {literal, QJsonValue(QJsonValue::Undefined), QStringLiteral("cat"), false},
+            {literal, QJsonValue(QJsonValue::Null), QStringLiteral("cat"), true},
+            {literal, QStringLiteral(""), literal, false},
+            {literal, QStringLiteral("Noun"), literal, true},
+            {opaque, QStringLiteral(""), opaque, true},
+            {opaque, QString::fromUtf8("Noun#%23?&Ω"), opaque, false}
+        };
+        for (const Case &test : cases) {
+            const bool separate = test.fragment.isString();
+            QString href = QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(test.target));
+            if (separate) href += QChar('#') + QString::fromLatin1(QUrl::toPercentEncoding(test.fragment.toString()));
+            const QUrl transport(href);
+            QCOMPARE(transport.hasFragment(), separate);
+            QCOMPARE(transport.path(QUrl::FullyDecoded), test.target);
+            if (separate) QCOMPARE(transport.fragment(QUrl::FullyDecoded), test.fragment.toString());
+            window.reading_->setHtml(window.spansHtml(QJsonArray{span(test.target, test.fragment)}));
+            QCOMPARE(window.reading_->document()->find(QStringLiteral("Component link")).charFormat().anchorHref(), href);
+            QSignalSpy activated(window.reading_, &QTextBrowser::anchorClicked);
+            if (test.keyboard) {
+                window.reading_->setFocus(); QTRY_VERIFY(window.reading_->hasFocus());
+                QTest::keyClick(window.reading_, Qt::Key_Home, Qt::ControlModifier);
+                QTest::keyClick(window.reading_, Qt::Key_Tab);
+                QVERIFY(window.reading_->textCursor().hasSelection());
+                QTest::keyClick(window.reading_, Qt::Key_Return);
+            } else QVERIFY(clickAnchor(window.reading_, href));
+            QCOMPARE(activated.size(), qsizetype(1));
+            QCOMPARE(activated.first().first().toUrl(), transport);
+            QTRY_COMPARE(title(window), test.expectedTitle);
+            QCOMPARE(window.search_->text(), test.expectedTitle);
+            QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+        }
+        // Same-entry fragment-only actions still use the component, never the
+        // literal title's '#' or a second percent-decoding pass.
+        int nounSection = -1;
+        const QJsonArray sections = window.currentEntry_.value(QStringLiteral("sections")).toArray();
+        for (qsizetype i = 0; i < sections.size(); ++i)
+            if (sections[i].toObject().value(QStringLiteral("title")).toString() == QStringLiteral("Noun")) nounSection = int(i);
+        QVERIFY(nounSection >= 0);
+        window.collapsedSections_.insert(nounSection);
+        window.reading_->setHtml(window.spansHtml(QJsonArray{span(QString(), QStringLiteral("Noun"))}));
+        QVERIFY(clickAnchor(window.reading_, QStringLiteral("dict:#Noun")));
+        QVERIFY(!window.collapsedSections_.contains(nounSection));
+        QCOMPARE(title(window), opaque);
+        QJsonObject invalid = span(literal, true);
+        QVERIFY_EXCEPTION_THROWN(window.spansHtml(QJsonArray{invalid}), DictApiError);
+        invalid = span(literal, QStringLiteral("")); invalid.insert("kind", "external_link");
+        QVERIFY_EXCEPTION_THROWN(window.spansHtml(QJsonArray{invalid}), DictApiError);
+    }
+
+    void compiledBookSourceComponentsUseExactEditionTitleAndFragment() {
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-booksources-components-XXXXXX"));
+        QVERIFY(directory.isValid());
+        QVERIFY(prepareCaseTitleFixture(fixture_, directory.path(), {QStringLiteral("cat")}));
+        const QString library = directory.path() + QStringLiteral("/library");
+        QFile marker(library + QStringLiteral("/.desktop-edition"));
+        QVERIFY(marker.open(QIODevice::WriteOnly));
+        QCOMPARE(marker.write("frwiktionary-20261001\n"), qint64(22)); marker.close();
+        MainWindow window(library, QStringLiteral("cat"));
+        window.resize(640, 600); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        ExternalUrlReceiver receiver;
+        QDesktopServices::setUrlHandler(QStringLiteral("https"), &receiver, "capture");
+        const auto restore = qScopeGuard([] { QDesktopServices::unsetUrlHandler(QStringLiteral("https")); });
+        const QString prefix = QStringLiteral("Special:Booksources/");
+        const auto link = [](const QString &target, const QJsonValue &fragment) {
+            QJsonObject value{{"kind", "link"}, {"text", "Book source"}, {"target", target}, {"bold", true}};
+            if (!fragment.isUndefined()) value.insert("target_fragment", fragment);
+            return value;
+        };
+        struct Case { QString title; QJsonValue fragment; QString expectedPage; QString expectedFragment; };
+        const QList<Case> cases{
+            {prefix + "9780306406157", QJsonValue(QJsonValue::Undefined), prefix + "9780306406157", {}},
+            {prefix + "9780306406157#part", QStringLiteral(""), prefix + "9780306406157#part", {}},
+            {prefix + QString::fromUtf8("%23?x&Ω#literal"), QString::fromUtf8("part#%23?x&Ω"), prefix + QString::fromUtf8("%23?x&Ω#literal"), QString::fromUtf8("part#%23?x&Ω")},
+            {prefix + "legacy#part", QJsonValue(QJsonValue::Null), prefix + "legacy", "part"}
+        };
+        for (const Case &test : cases) {
+            const QJsonObject value = link(test.title, test.fragment);
+            QCOMPARE(value.value("kind").toString(), QStringLiteral("link"));
+            window.reading_->setHtml(window.spansHtml(QJsonArray{value}));
+            const QString href = window.reading_->document()->find(QStringLiteral("Book source")).charFormat().anchorHref();
+            const qsizetype before = receiver.opened.size();
+            if (before % 2) {
+                window.reading_->setFocus(); QTRY_VERIFY(window.reading_->hasFocus());
+                QTest::keyClick(window.reading_, Qt::Key_Home, Qt::ControlModifier);
+                QTest::keyClick(window.reading_, Qt::Key_Tab);
+                QVERIFY(window.reading_->textCursor().hasSelection());
+                QTest::keyClick(window.reading_, Qt::Key_Return);
+            } else QVERIFY(clickAnchor(window.reading_, href));
+            QCOMPARE(receiver.opened.size(), before + 1);
+            const QUrl source = receiver.opened.last();
+            QCOMPARE(source.host(), QStringLiteral("fr.wiktionary.org"));
+            QCOMPARE(source.path(QUrl::FullyDecoded), QStringLiteral("/wiki/") + test.expectedPage);
+            QCOMPARE(source.hasQuery(), false);
+            QCOMPARE(source.hasFragment(), !test.expectedFragment.isEmpty());
+            QCOMPARE(source.fragment(QUrl::FullyDecoded), test.expectedFragment);
+            QCOMPARE(title(window), QStringLiteral("cat"));
+        }
+        MainWindow unlabeled(fixture_, QStringLiteral("cat"));
+        unlabeled.resize(640, 600); unlabeled.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!unlabeled.loading_ && unlabeled.api_, 30000);
+        QVERIFY(LibraryStorage::sourceHost(unlabeled.api_->root()).isEmpty());
+        const qsizetype before = receiver.opened.size();
+        unlabeled.reading_->setHtml(unlabeled.spansHtml(QJsonArray{link(prefix + "literal#title", QStringLiteral(""))}));
+        const QString href = unlabeled.reading_->document()->find(QStringLiteral("Book source")).charFormat().anchorHref();
+        QVERIFY(clickAnchor(unlabeled.reading_, href));
+        QCOMPARE(receiver.opened.size(), before);
+        QCOMPARE(title(unlabeled), QStringLiteral("cat"));
+        QVERIFY(unlabeled.statusBar()->currentMessage().contains(QStringLiteral("source edition")));
     }
 
     void captionOnlyTablesAndFosteredParagraphsKeepVisibleDepth() {

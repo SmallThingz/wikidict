@@ -696,8 +696,8 @@ class LibraryStore private constructor(private val context: Context) {
         helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE dictionary=? AND record_key=substr(?,2) AND COALESCE(context_dictionary,'')=? LIMIT 1",
             arrayOf(word.dictionary,sqlText(word.recordKey.orEmpty()),word.contextDictionary.orEmpty())).use { c -> if(c.moveToFirst()) hit(c) else null }
     }
-    suspend fun link(title: String, entry: Entry): WordHit? = withContext(Dispatchers.IO) {
-        val key = title.substringBefore('#').replace('_',' ')
+    suspend fun link(target: EntryLink, entry: Entry): WordHit? = withContext(Dispatchers.IO) {
+        val key = if (target.targetFragment == null) target.title.replace('_',' ') else target.title
         if (entry.edition.isEmpty()) {
             val dictionary = entry.origin?.dictionary ?: return@withContext null
             return@withContext helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE normalized=substr(?,2) AND dictionary=? AND kind=? ORDER BY CASE WHEN title=substr(?,2) THEN 0 ELSE 1 END LIMIT 1",
@@ -706,7 +706,7 @@ class LibraryStore private constructor(private val context: Context) {
         if (entry.navigationKind == "language" && entry.navigationLanguage.isNullOrEmpty()) return@withContext null
         // A language heading names an owner only when that owner is installed in this edition.
         // Other fragments remain ordinary within-owner section destinations.
-        val fragment = title.substringAfter('#', "").replace('_', ' ')
+        val fragment = target.fragment.replace('_', ' ')
         val explicitOwner = entry.navigationKind == "language" && dictionaries.any {
             it.edition == entry.edition && it.kind == "language" && it.language == fragment
         }

@@ -50,6 +50,7 @@ class BlobDecoderTest {
         "bold" to span.bold, "italic" to span.italic, "code" to span.code, "small" to span.small,
         "superscript" to span.superscript, "subscript" to span.subscript, "strike" to span.strike,
         "underline" to span.underline, "role" to span.role).also { fields ->
+            span.targetFragment?.let { fields["target_fragment"] = it }
             span.fontScale?.let { fields["font_scale"] = it }
             if (span.fontScaleBasis == FontScaleBasis.NormalBody) fields["font_scale_basis"] = "normal_body"
             span.image?.let { image -> fields["image"] = linkedMapOf<String, Any?>("file" to image.file).also { values ->
@@ -113,7 +114,7 @@ class BlobDecoderTest {
 
     /** Configured producer case is a separate required run of the existing conformance target. */
     private fun requiredProducerConformance(version: Char) {
-        require(version in "789BCDE")
+        require(version in "789BCDEF")
         val prefix = "WIKBLB_DPR$version"
         fun name(suffix: String) = "${prefix}_$suffix"
         val fixtureTitle = when (version) {
@@ -123,6 +124,7 @@ class BlobDecoderTest {
             'B' -> "DPRB font scale basis"
             'D' -> "image-border-contract"
             'E' -> "dwa"
+            'F' -> "ISBN"
             else -> "נספח:שיבושי הגייה/תבנית"
         }
         require(producerEnvironment(name("REQUIRED")) == "1")
@@ -166,9 +168,10 @@ class BlobDecoderTest {
             require(headerBytes.contentEquals(headerFile.readBytes()))
             actualHeader = linkedMapOf("kind" to kind, "language" to language, "language_code" to code)
             var recordCount = 0
+            val recordTitles = mutableListOf<String>()
             while (input.filePointer < input.length()) {
                 val title = nul(); require(title.isNotEmpty())
-                val length = size(); val offset = input.filePointer; recordCount++
+                val length = size(); val offset = input.filePointer; recordCount++; recordTitles.add(title)
                 if (title == wantedTitle) {
                     require(selected == null) { "Producer fixture title is duplicated" }
                     val payload = ByteArray(length); input.readFully(payload)
@@ -178,7 +181,15 @@ class BlobDecoderTest {
                     selectedOffset = offset; selectedLength = length
                 } else input.seek(offset + length)
             }
-            require(recordCount == 1 && selected != null) { "Genuine Writer fixture must contain its one selected record" }
+            if (version == 'F') {
+                require(recordCount == 3 && recordTitles.toSet() == setOf(
+                    "ISBN", "page", "Special:Booksources/9781234567890#tail")) {
+                    "Controlled Writer fixture must contain the source and two exact destinations"
+                }
+                require(selected != null)
+            } else {
+                require(recordCount == 1 && selected != null) { "Writer fixture must contain its one selected record" }
+            }
         }
         if (version == '9') {
             // This required Writer case exercises fragment-first footer order; the
@@ -238,6 +249,16 @@ class BlobDecoderTest {
             // The complete modeled graph below is compared with actual Writer/Reader outputs
             // by the existing producer comparator. Do not substitute a synthetic E byte fixture.
         }
+        if (version == 'F') {
+            val entry = checkNotNull(selected)
+            require(entry.kind == "language" && entry.language == "English" && entry.languageCode == "en")
+            val actions = buildList<Span> {
+                addAll(entry.displayTitle); addAll(entry.preamble)
+                entry.sections.forEach { section -> section.blocks.forEach { it.visitSpanRuns { spans, _ -> addAll(spans) } } }
+                entry.references.forEach { it.visitSpanRuns { spans, _ -> addAll(spans) } }
+            }.filter { it.targetFragment != null }
+            require(actions.any { it.kind == "link" && it.target == "Special:Booksources/9781234567890#tail" && it.targetFragment == "" })
+        }
         val output = File(producerEnvironment(name("ACTUAL"))).canonicalFile
         require(output.parentFile.isDirectory && output.createNewFile()) { "Use a fresh owned output path" }
         output.writeText(producerJson(linkedMapOf(
@@ -279,6 +300,14 @@ class BlobDecoderTest {
         }
     }
 
+    @Test fun producerLinkProjectionOmitsAbsentAndPreservesEmptyOrExplicitFragment() {
+        val legacy = Span("link", "label", "Title#literal")
+        assertFalse(producerSpan(legacy).containsKey("target_fragment"))
+        assertEquals("", producerSpan(legacy.copy(targetFragment = ""))["target_fragment"])
+        assertEquals("part#literal", producerSpan(legacy.copy(targetFragment = "part#literal"))["target_fragment"])
+        assertTrue(producerJson(producerSpan(legacy.copy(targetFragment = ""))).contains("\"target_fragment\":\"\""))
+    }
+
     @Test fun producerImageProjectionOmitsFalseBorderAndRetainsTrueWithoutLosingNullableFields() {
         val plain = InlineImage("Controlled.svg", 40, alt = "", tooltip = "Detail")
         val span = Span("link", "", "File:Controlled.svg", image = plain)
@@ -291,7 +320,7 @@ class BlobDecoderTest {
     }
 
     @Test fun everyRealCorpusRecordDecodesDirectly() {
-        val requiredVersions = "789BCDE".filter { System.getenv("WIKBLB_DPR${it}_REQUIRED") != null }
+        val requiredVersions = "789BCDEF".filter { System.getenv("WIKBLB_DPR${it}_REQUIRED") != null }
         if (requiredVersions.isNotEmpty()) {
             require(requiredVersions.length == 1) { "Select exactly one required producer case" }
             requiredProducerConformance(requiredVersions.single())

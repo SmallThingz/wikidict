@@ -143,11 +143,11 @@ class AliasDeviceTest {
             val unscoped = install("aliases.wikblb",compressed(aliases))
             val unscopedTargets = install("English.wikblb",targets)
             assertFalse(library.read(selected(unscoped.id,"Animus")).redirect!!.followed)
-            val localAlias = library.link("animus",library.read(selected(unscoped.id,"Animus")))!!
+            val localAlias = library.link(EntryLink("animus"),library.read(selected(unscoped.id,"Animus")))!!
             assertEquals(unscoped.id,localAlias.dictionary)
             assertFalse(library.read(localAlias).redirect!!.followed)
-            assertEquals(unscoped.id,library.link("ChainB",library.read(selected(unscoped.id,"ChainA")))!!.dictionary)
-            assertEquals(unscopedTargets.id,library.link("gainst",library.read(selected(unscopedTargets.id,"animus")))!!.dictionary)
+            assertEquals(unscoped.id,library.link(EntryLink("ChainB"),library.read(selected(unscoped.id,"ChainA")))!!.dictionary)
+            assertEquals(unscopedTargets.id,library.link(EntryLink("gainst"),library.read(selected(unscopedTargets.id,"animus")))!!.dictionary)
             assertEquals("ChainB",library.read(selected(unscoped.id,"ChainA")).title)
             val ids = library.dictionaries.map { it.id }
             for ((name,bytes) in listOf("testwiktionary-20261001-aliases.wikblb" to targets,

@@ -81,7 +81,7 @@ class EgyptianFontDeviceTest {
                 val recording = remember(platform) { RecordingClipboard(platform) }
                 SideEffect { clipboard.set(recording) }
                 CompositionLocalProvider(LocalClipboard provides recording) {
-                    MaterialTheme { EntryView(entry, false, {}, onLink = { clicked.set(it) }, settings = AppSettings(collapseDetails = false)) }
+                    MaterialTheme { EntryView(entry, false, {}, onLink = { clicked.set(it.target) }, settings = AppSettings(collapseDetails = false)) }
                 }
             }
         }
@@ -471,7 +471,7 @@ class EgyptianFontDeviceTest {
                         MaterialTheme(colorScheme = lightColorScheme(primary = Color.Red)) {
                             androidx.compose.material3.Surface {
                                 androidx.compose.foundation.layout.Box(Modifier.width(180.dp)) {
-                                    EntryView(entry, false, {}, onLink = { clicked += it },
+                                    EntryView(entry, false, {}, onLink = { clicked += it.target },
                                         settings = AppSettings(collapseOtherSections = false, collapseDetails = false))
                                 }
                             }
@@ -611,7 +611,7 @@ class EgyptianFontDeviceTest {
                                 }
                             }
                         }) {
-                            EntryView(selected, false, {}, onLink = { clicked += it },
+                            EntryView(selected, false, {}, onLink = { clicked += it.target },
                                 settings = AppSettings(collapseOtherSections = false, collapseDetails = true))
                         }
                     }
@@ -938,7 +938,7 @@ class EgyptianFontDeviceTest {
         compose.runOnUiThread {
             compose.activity.setContent {
                 MaterialTheme { androidx.compose.material3.Surface {
-                    EntryView(entry, false, {}, onLink = { escaped += it },
+                    EntryView(entry, false, {}, onLink = { escaped += it.target },
                         settings = AppSettings(collapseOtherSections = false, collapseDetails = true))
                 } }
             }

@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2-DPRE decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2-DPRF decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
@@ -13,14 +13,15 @@ object BlobDecoder {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val magicVersion = r.byte()
-        require(magicVersion in 50..57 || magicVersion in 65..69) { "Unsupported presentation format" }
-        val version = if (magicVersion in 65..69) 57 else magicVersion
-        r.fontScales = magicVersion in 65..69
-        r.fontScaleBases = magicVersion in 66..69
-        r.tableStyles = magicVersion in 67..69
-        r.inlineImages = magicVersion in 67..69
+        require(magicVersion in 50..57 || magicVersion in 65..70) { "Unsupported presentation format" }
+        val version = if (magicVersion in 65..70) 57 else magicVersion
+        r.fontScales = magicVersion in 65..70
+        r.fontScaleBases = magicVersion in 66..70
+        r.tableStyles = magicVersion in 67..70
+        r.inlineImages = magicVersion in 67..70
         r.imageBorders = magicVersion >= 68
-        r.blockLayouts = magicVersion == 69
+        r.blockLayouts = magicVersion >= 69
+        r.targetFragments = magicVersion == 70
         r.explanations = version >= 51
         r.colors = version >= 52
         r.anchors = version >= 53
@@ -76,7 +77,7 @@ object BlobDecoder {
             etymologySections = etymologySections.toSet())
         // E extends the semantic catalog capacity; older wire versions retain 128.
         // Historical media-only entries do not acquire a typed-image catalog limit.
-        require(magicVersion == 69 || entry.inlineImages.isEmpty() || media.size <= 128) {
+        require(magicVersion >= 69 || entry.inlineImages.isEmpty() || media.size <= 128) {
             "Too many inline image assets for legacy presentation"
         }
         return entry
@@ -98,6 +99,7 @@ object BlobDecoder {
         var inlineImages = false
         var imageBorders = false
         var blockLayouts = false
+        var targetFragments = false
         fun byte(): Int { require(buffer.remaining() >= 1); return buffer.get().toInt() and 255 }
         fun u16(): Int { require(buffer.remaining() >= 2); return buffer.short.toInt() and 65535 }
         fun u32(): Long { require(buffer.remaining() >= 4); return buffer.int.toLong() and 0xffffffffL }
@@ -120,7 +122,7 @@ object BlobDecoder {
             return if (n == 0xffffffffL) null else n.toInt()
         }
         fun indices(limit: Int) { repeat(count(4)) { index(limit) } }
-        fun spans(): List<Span> = List(count(if (inlineImages) 35 else if (fontScales) 34 else if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27)) {
+        fun spans(): List<Span> = List(count(if (targetFragments) 36 else if (inlineImages) 35 else if (fontScales) 34 else if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27)) {
             val kind = enum(inline); val role = enum(roles); val f = byte()
             val text = string(); val target = string(); val trail = string()
             val language = string(); val classes = string(); val direction = string()
@@ -148,9 +150,10 @@ object BlobDecoder {
                     if (flags and 4 != 0) string() else null, if (flags and 8 != 0) string() else null,
                     border = flags and 0x10 != 0)
             } else null
+            val targetFragment = if (targetFragments && presence()) string() else null
             Span(kind, text, target, trail, language, classes, direction,
                 bold=f and 1 != 0, italic=f and 2 != 0, code=f and 4 != 0, small=f and 8 != 0,
-                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image)
+                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment)
         }
         private fun styleLength(): StyleLength {
             val unit = when (byte()) { 0 -> StyleLengthUnit.Px; 1 -> StyleLengthUnit.Em; else -> error("Unknown style length unit") }

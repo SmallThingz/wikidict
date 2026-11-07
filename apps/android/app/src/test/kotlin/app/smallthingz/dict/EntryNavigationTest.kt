@@ -56,7 +56,7 @@ class EntryNavigationTest {
     private inner class Harness(scope: CoroutineScope, state: EntryNavigationState = EntryNavigationState()) {
         val dictionaries = mutableSetOf("fixture")
         var read: suspend (WordHit) -> Entry = { entry(it.title) }
-        var link: suspend (String, Entry) -> WordHit? = { _, _ -> null }
+        var link: suspend (EntryLink, Entry) -> WordHit? = { _, _ -> null }
         var saved: suspend (SavedWord) -> WordHit? = { null }
         var random: suspend () -> WordHit? = { null }
         var initial: suspend () -> WordHit? = { null }
@@ -64,6 +64,7 @@ class EntryNavigationTest {
         var screen = "Dictionary"
         var title: String? = null
         var target = ""
+        var targetComponents = EntryLink("")
         var loading = false
         val loadingEvents = mutableListOf<Boolean>()
         val history = mutableListOf<String>()
@@ -81,7 +82,8 @@ class EntryNavigationTest {
             { saved(it) }, { random() }, { initial() },
             { hit, entry, fragment ->
                 title = entry.title
-                target = fragment
+                target = fragment.target
+                targetComponents = fragment
                 history += hit.title
                 screen = "Dictionary"
             },
@@ -94,10 +96,32 @@ class EntryNavigationTest {
                 restoredHit = hit
                 title = entry.title
                 target = ""
+                targetComponents = EntryLink("")
                 history += hit.title
                 screen = "Dictionary"
             },
         )
+    }
+
+    @Test fun lookupAndCommitCarrySeparateComponentsAndBackKeepsExactVisit() = runBlocking {
+        withTimeout(5_000) {
+            val h = Harness(this)
+            h.navigation.open(hit("source")).join()
+            val actions = listOf(EntryLink("Page#Noun"), EntryLink("Page#literal", ""),
+                EntryLink("Page#literal%23?&語", "Noun#part"))
+            for (action in actions) {
+                var observed: EntryLink? = null
+                h.link = { target, _ -> observed = target; hit(target.title) }
+                h.navigation.openLink(action, entry("source")).join()
+                assertEquals(action, observed)
+                assertEquals(action, h.targetComponents)
+                assertEquals(action.title, h.title)
+                assertTrue(h.navigation.goBack())
+                yield()
+                assertEquals("source", h.title)
+                assertEquals(EntryLink(""), h.targetComponents)
+            }
+        }
     }
 
     @Test fun linkedBackRereadsExactOwnerAndRestoresTheOriginalVisit() = runBlocking {
@@ -110,14 +134,14 @@ class EntryNavigationTest {
             h.navigation.open(a).join()
             val originalId = h.visits.currentId
             h.link = { _, _ -> b }
-            h.navigation.openLink("same#Noun", entry("same")).join()
+            h.navigation.openLink(EntryLink("same#Noun"), entry("same")).join()
             val secondId = requireNotNull(h.visits.currentId)
             assertNotEquals(originalId, secondId)
             val committed = state.snapshot()
             // A successor owns committed state even before old disposal/cancellation.
             val late = Completion<Entry>()
             h.read = { late.await() }
-            val pending = h.navigation.openLink("late", entry("same"))
+            val pending = h.navigation.openLink(EntryLink("late"), entry("same"))
             late.started.await()
             val recreated = Harness(this, state)
             recreated.dictionaries += "other"
@@ -139,10 +163,10 @@ class EntryNavigationTest {
             assertEquals("", recreated.target) // Never replay the consumed fragment.
             assertFalse(recreated.navigation.goBack())
             recreated.link = { _, _ -> b }
-            recreated.navigation.openLink("same", entry("same")).join()
+            recreated.navigation.openLink(EntryLink("same"), entry("same")).join()
             assertTrue(requireNotNull(recreated.visits.currentId) > secondId)
             // Keep the existing 32 previous visits plus one current visit bound.
-            repeat(35) { recreated.navigation.openLink("same", entry("same")).join() }
+            repeat(35) { recreated.navigation.openLink(EntryLink("same"), entry("same")).join() }
             assertEquals(33, recreated.visits.retainedIds.size)
             recreated.navigation.open(a).join()
             assertEquals(1, recreated.visits.retainedIds.size)
@@ -156,14 +180,14 @@ class EntryNavigationTest {
                 val h = Harness(this)
                 h.navigation.open(hit("A")).join()
                 h.link = { _, _ -> hit("B") }
-                h.navigation.openLink("B", entry("A")).join()
+                h.navigation.openLink(EntryLink("B"), entry("A")).join()
                 val before = h.visits
                 val history = h.history.toList()
                 val completion = Completion<Entry>()
                 h.read = { completion.await() }
                 val pending = if (returning) {
                     assertTrue(h.navigation.goBack()); null
-                } else h.navigation.openLink("C", entry("B"))
+                } else h.navigation.openLink(EntryLink("C"), entry("B"))
                 completion.started.await()
                 assertTrue(h.navigation.goBack())
                 assertEquals(before, h.visits)
@@ -187,7 +211,7 @@ class EntryNavigationTest {
             val h = Harness(this)
             h.navigation.open(hit("A")).join()
             h.link = { _, _ -> hit("B") }
-            h.navigation.openLink("B", entry("A")).join()
+            h.navigation.openLink(EntryLink("B"), entry("A")).join()
             val before = h.visits
             h.read = { throw IOException("Unavailable") }
             assertTrue(h.navigation.goBack())
@@ -210,7 +234,7 @@ class EntryNavigationTest {
             h.dictionaries += "other"
             h.navigation.open(hit("A")).join()
             h.link = { _, _ -> hit("B").copy(dictionary = "other") }
-            h.navigation.openLink("B", entry("A")).join()
+            h.navigation.openLink(EntryLink("B"), entry("A")).join()
             h.dictionaries -= "fixture"
             h.navigation.libraryChanged()
             assertFalse(h.navigation.goBack())
@@ -234,7 +258,7 @@ class EntryNavigationTest {
             returning.dictionaries += "other"
             returning.navigation.open(hit("A")).join()
             returning.link = { _, _ -> hit("B").copy(dictionary = "other") }
-            returning.navigation.openLink("B", entry("A")).join()
+            returning.navigation.openLink(EntryLink("B"), entry("A")).join()
             val returnRead = Completion<Entry>()
             returning.read = { returnRead.await() }
             assertTrue(returning.navigation.goBack())
@@ -313,7 +337,7 @@ class EntryNavigationTest {
                 h.random = { old.await() }
                 h.initial = { old.await() }
                 val pending = when (kind) {
-                    "internal" -> h.navigation.openLink("old#Noun", entry("source"))
+                    "internal" -> h.navigation.openLink(EntryLink("old#Noun"), entry("source"))
                     "saved" -> h.navigation.openSaved(word("old"))
                     "random" -> h.navigation.openRandom()
                     else -> h.navigation.openInitial()
@@ -349,7 +373,7 @@ class EntryNavigationTest {
                 try {
                     old.started.await()
                     val latest = when (kind) {
-                        "internal" -> h.navigation.openLink("new#Usage_notes", entry("source"))
+                        "internal" -> h.navigation.openLink(EntryLink("new#Usage_notes"), entry("source"))
                         "saved" -> h.navigation.openSaved(word("new"))
                         else -> h.navigation.openRandom()
                     }
@@ -407,7 +431,7 @@ class EntryNavigationTest {
             val h = Harness(this)
             h.link = { _, _ -> lookup.await() }
             h.read = { next.await() }
-            val first = h.navigation.openLink("old", entry("source"))
+            val first = h.navigation.openLink(EntryLink("old"), entry("source"))
             try {
                 lookup.started.await()
                 val latest = h.navigation.open(hit("new"))
@@ -435,7 +459,7 @@ class EntryNavigationTest {
             val next = Completion<Entry>()
             val h = Harness(this)
             h.showError = { dismissal.await() }
-            val first = h.navigation.openLink("absent", entry("source"))
+            val first = h.navigation.openLink(EntryLink("absent"), entry("source"))
             try {
                 dismissal.started.await()
                 assertEquals(listOf("This word is not in your installed dictionaries."), h.errors)
@@ -470,7 +494,7 @@ class EntryNavigationTest {
     @Test fun missingTargetsKeepTheirMessagesAndRandomAndInitialRemainSilent() = runBlocking {
         withTimeout(5_000) {
             val h = Harness(this)
-            h.navigation.openLink("absent", entry("source")).join()
+            h.navigation.openLink(EntryLink("absent"), entry("source")).join()
             h.navigation.openSaved(word("lost", null)).join()
             h.navigation.openSaved(word("lost")).join()
             h.navigation.openRandom().join()
@@ -565,7 +589,7 @@ class EntryNavigationTest {
             h.read = { body.await() }
             var initialCalls = 0
             h.initial = { initialCalls++; hit("fallback") }
-            val pending = h.navigation.openLink("dog#Usage_notes", cat)
+            val pending = h.navigation.openLink(EntryLink("dog#Usage_notes"), cat)
             try {
                 lookup.started.await()
                 // The displayed cat disappears while the latest destination is still unknown.

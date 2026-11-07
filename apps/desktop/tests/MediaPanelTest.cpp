@@ -288,6 +288,28 @@ private slots:
         QCOMPARE(panel.requestInlineImage("Opaque.svg", &owner, "wrong-alias", [](const auto &) {}).state, State::Error);
     }
 
+    void inlineImageSourcePreservesSeparateTitleAndFragment() {
+        Network network;
+        MediaPanel panel(nullptr, &network);
+        panel.setEntry(entry(), QStringLiteral("de.wiktionary.org"));
+        const QString target = QString::fromUtf8("File:Flag%23?x&Ω#literal.svg");
+        const QUrl legacy = panel.inlineImageSource(target);
+        QCOMPARE(legacy.path(QUrl::FullyDecoded), QString::fromUtf8("/wiki/File:Flag%23?x&Ω"));
+        QCOMPARE(legacy.fragment(QUrl::FullyDecoded), QStringLiteral("literal.svg"));
+        const QUrl whole = panel.inlineImageSource(target, QStringLiteral(""));
+        QCOMPARE(whole.path(QUrl::FullyDecoded), QStringLiteral("/wiki/") + target);
+        QVERIFY(!whole.hasFragment()); QVERIFY(!whole.hasQuery());
+        const QString fragment = QString::fromUtf8("detail#%23?x&Ω");
+        const QUrl separate = panel.inlineImageSource(target, fragment);
+        QCOMPARE(separate.path(QUrl::FullyDecoded), QStringLiteral("/wiki/") + target);
+        QCOMPARE(separate.fragment(QUrl::FullyDecoded), fragment);
+        QVERIFY(!separate.hasQuery());
+        QCOMPARE(separate.host(), QStringLiteral("de.wiktionary.org"));
+        QVERIFY(network.urls.isEmpty());
+        panel.setEntry(entry(), {});
+        QVERIFY(panel.inlineImageSource(target, QStringLiteral("")).isEmpty());
+    }
+
     void inlineImageQueueBoundsAndAdvancesAcrossCancelAndFailure() {
         using State = MediaPanel::InlineImageState;
         Network network;

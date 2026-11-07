@@ -31,7 +31,7 @@ class TermBlockDeviceTest {
         compose.runOnUiThread {
             compose.activity.setContent {
                 MaterialTheme {
-                    EntryView(entry, false, {}, onLink = onLink,
+                    EntryView(entry, false, {}, onLink = { onLink(it.target) },
                         settings = AppSettings(collapseOtherSections = false))
                 }
             }

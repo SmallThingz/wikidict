@@ -23,6 +23,79 @@ class SectionLinkDeviceTest {
     @get:Rule val compose = createLegacyPhysicalComposeRule()
     private val forwarded = mutableListOf<String>()
 
+    @Test fun separateComponentsSurviveTextImageAndNativeKeyboardAccessibilityActions() {
+        val textAction = EntryLink("Literal#title%23?&語", "")
+        val imageAction = EntryLink("Literal#image", "Caption#part")
+        val clicks = mutableListOf<EntryLink>()
+        val text = Span("link", "Literal component link", textAction.target, targetFragment = textAction.targetFragment)
+        val image = Span("link", "", imageAction.target, targetFragment = imageAction.targetFragment,
+            image = InlineImage("Controlled.svg", 20, alt = "Component image"))
+        val paragraph = Block("paragraph", 0, listOf(text, Span("text", " "), image))
+        val float = Block("table", 0, emptyList(), table = Table(emptyList(),
+            listOf(listOf(Cell(listOf(Span("text", "Float")), false, 1, 1))),
+            style = TableStyle(floatSide = TableFloatSide.Left)))
+        fun show(native: Boolean) {
+            val entry = Entry("Component actions", emptyList(), "supplemental", null, "",
+                listOf(Section(2, "Actions", if (native) listOf(float, paragraph) else listOf(paragraph))), emptyList(),
+                media = listOf(Media("Controlled.svg", "image", "")))
+            compose.runOnUiThread { compose.activity.setContent {
+                DictTheme("light") { androidx.compose.material3.Surface {
+                    EntryView(entry, false, {}, onLink = { clicks += it },
+                        settings = AppSettings(collapseOtherSections = false, collapseDetails = false, allowImages = false, allowAudio = false))
+                } }
+            } }
+            compose.waitForIdle()
+        }
+        try {
+            show(false)
+            touchLink(text.text)
+            compose.onNodeWithContentDescription("Component image", useUnmergedTree = true).performClick()
+            compose.runOnIdle { assertEquals(listOf(textAction, imageAction), clicks); clicks.clear() }
+            show(true)
+            compose.runOnIdle {
+                fun owner(view: android.view.View): NativeFloatTextView? {
+                    if (view is NativeFloatTextView && view.logicalText.contains(text.text)) return view
+                    if (view is android.view.ViewGroup) for (index in 0 until view.childCount) owner(view.getChildAt(index))?.let { return it }
+                    return null
+                }
+                val view = checkNotNull(owner(compose.activity.window.decorView))
+                val provider = checkNotNull(view.accessibilityNodeProvider)
+                val link = checkNotNull(provider.createAccessibilityNodeInfo(0))
+                try { assertEquals(text.text, link.text.toString()); assertTrue(link.isClickable) } finally { link.recycle() }
+                assertTrue(provider.performAction(0, android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+                assertTrue(provider.performAction(0, android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS, null))
+                assertTrue(view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER)))
+                view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER))
+                val imageNode = checkNotNull(provider.createAccessibilityNodeInfo(1))
+                try { assertTrue(imageNode.isClickable) } finally { imageNode.recycle() }
+                assertTrue(provider.performAction(1, android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+                assertEquals(listOf(textAction, textAction, imageAction), clicks)
+            }
+            // A component-only update must also invalidate the inline image's cached source URL.
+            val fragment = androidx.compose.runtime.mutableStateOf("")
+            val urls = mutableListOf<String>()
+            compose.runOnUiThread { compose.activity.setContent {
+                val sourceImage = Span("link", "", "File:Controlled.svg#literal", targetFragment = fragment.value,
+                    image = InlineImage("Controlled.svg", 20, alt = "Changing component"))
+                val entry = Entry("Image source component", emptyList(), "supplemental", null, "",
+                    listOf(Section(2, "Image", listOf(Block("paragraph", 0, listOf(sourceImage))))), emptyList(),
+                    media = listOf(Media("Controlled.svg", "image", "")), edition = "euwiktionary-20261001")
+                androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalUriHandler provides
+                    object : androidx.compose.ui.platform.UriHandler { override fun openUri(uri: String) { urls += uri } }) {
+                    DictTheme("light") { androidx.compose.material3.Surface {
+                        EntryView(entry, false, {}, settings = AppSettings(collapseOtherSections = false, allowImages = false))
+                    } }
+                }
+            } }
+            compose.onNodeWithContentDescription("Changing component", useUnmergedTree = true).performClick()
+            compose.runOnIdle { fragment.value = "Caption#two" }
+            compose.onNodeWithContentDescription("Changing component", useUnmergedTree = true).performClick()
+            compose.runOnIdle { assertEquals(listOf(
+                "https://eu.wiktionary.org/wiki/File%3AControlled.svg%23literal",
+                "https://eu.wiktionary.org/wiki/File%3AControlled.svg%23literal#Caption%23two"), urls) }
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+    }
+
     private fun show(target: String, label: String, sectionTitle: String, references: List<Reference> = emptyList()) {
         val entry = Entry("Section link fixture", emptyList(), "language", "English", "en", listOf(
             Section(3, "Noun", listOf(
@@ -32,7 +105,7 @@ class SectionLinkDeviceTest {
         ), references, preamble = listOf(Span("text", "Preamble keeps its own list row")))
         compose.runOnUiThread {
             compose.activity.setContent {
-                MaterialTheme { EntryView(entry, false, {}, onLink = { forwarded.add(it) }, settings = AppSettings()) }
+                MaterialTheme { EntryView(entry, false, {}, onLink = { forwarded.add(it.target) }, settings = AppSettings()) }
             }
         }
     }
@@ -91,7 +164,7 @@ class SectionLinkDeviceTest {
         val displayed = androidx.compose.runtime.mutableStateOf(entry)
         compose.runOnUiThread {
             compose.activity.setContent {
-                MaterialTheme { EntryView(displayed.value, false, {}, onLink = { forwarded.add(it) }, settings = AppSettings()) }
+                MaterialTheme { EntryView(displayed.value, false, {}, onLink = { forwarded.add(it.target) }, settings = AppSettings()) }
             }
         }
         fun assertBlankContent() {
@@ -179,7 +252,7 @@ class SectionLinkDeviceTest {
         compose.runOnUiThread {
             compose.activity.setContent {
                 androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalUriHandler provides uri) {
-                    MaterialTheme { EntryView(displayed.value, false, {}, onLink = { forwarded.add(it) }, settings = AppSettings()) }
+                    MaterialTheme { EntryView(displayed.value, false, {}, onLink = { forwarded.add(it.target) }, settings = AppSettings()) }
                 }
             }
         }
@@ -244,7 +317,7 @@ class SectionLinkDeviceTest {
             media = listOf(Media("Tone.ogg", "audio", "Fragment audio")))
         compose.runOnUiThread {
             compose.activity.setContent {
-                MaterialTheme { EntryView(entry, false, {}, onLink = { forwarded.add(it) },
+                MaterialTheme { EntryView(entry, false, {}, onLink = { forwarded.add(it.target) },
                     settings = AppSettings(allowImages = false, allowAudio = false)) }
             }
         }
@@ -276,7 +349,7 @@ class SectionLinkDeviceTest {
             preamble = listOf(Span("text", "Preamble keeps a separate row")))
         compose.runOnUiThread {
             compose.activity.setContent {
-                MaterialTheme { EntryView(entry, false, {}, onLink = { forwarded.add(it) },
+                MaterialTheme { EntryView(entry, false, {}, onLink = { forwarded.add(it.target) },
                     settings = AppSettings(collapseOtherSections = false, collapseDetails = false)) }
             }
         }
@@ -541,7 +614,7 @@ class SectionLinkDeviceTest {
                 DictTheme("system") { androidx.compose.material3.Surface(
                     modifier = androidx.compose.ui.Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
-                ) { EntryView(entry, false, {}, onLink = { forwarded.add(it) }, settings = AppSettings()) } }
+                ) { EntryView(entry, false, {}, onLink = { forwarded.add(it.target) }, settings = AppSettings()) } }
             }
         }
         fun layout(label: String): TextLayoutResult {
@@ -619,7 +692,7 @@ class SectionLinkDeviceTest {
                         // Consume Surface's full minimum constraints before narrowing the inner owned viewport.
                         androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
                             androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.width(280.dp).fillMaxSize().testTag("self-heading-rtl-viewport")) {
-                                EntryView(rtlEntry, false, {}, onLink = { forwarded.add(it) }, settings = AppSettings(collapseOtherSections = true))
+                                EntryView(rtlEntry, false, {}, onLink = { forwarded.add(it.target) }, settings = AppSettings(collapseOtherSections = true))
                             }
                         }
                     } }

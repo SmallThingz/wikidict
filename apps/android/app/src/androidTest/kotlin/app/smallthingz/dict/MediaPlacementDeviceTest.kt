@@ -108,7 +108,7 @@ class MediaPlacementDeviceTest {
             val clicked = mutableListOf<String>()
             compose.runOnUiThread {
                 compose.activity.setContent { MaterialTheme {
-                    EntryView(entry, false, {}, onLink = { clicked.add(it) }, settings = AppSettings(
+                    EntryView(entry, false, {}, onLink = { clicked.add(it.target) }, settings = AppSettings(
                         collapseOtherSections = false, collapseDetails = false, allowImages = false, allowAudio = false))
                 } }
             }
@@ -156,7 +156,7 @@ class MediaPlacementDeviceTest {
             }
             compose.runOnUiThread {
                 compose.activity.setContent { MaterialTheme {
-                    EntryView(entry, false, {}, onLink = { clicked.add(it) }, settings = AppSettings(
+                    EntryView(entry, false, {}, onLink = { clicked.add(it.target) }, settings = AppSettings(
                         collapseOtherSections = false, collapseDetails = false, allowImages = false, allowAudio = false))
                 } }
             }

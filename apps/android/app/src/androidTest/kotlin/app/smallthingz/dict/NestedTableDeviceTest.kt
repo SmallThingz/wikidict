@@ -45,7 +45,7 @@ class NestedTableDeviceTest {
             compose.activityRule.scenario.onActivity { activity -> activity.setContent {
                 CompositionLocalProvider(LocalLayoutDirection provides direction.value) {
                     DictTheme(mode.value) { androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
-                        CompiledTableView(table, null) { followed = it }
+                        CompiledTableView(table, null) { followed = it.target }
                     } }
                 }
             } }
@@ -162,7 +162,7 @@ class NestedTableDeviceTest {
                 androidx.compose.runtime.key(mode.value, direction.value) {
                     CompositionLocalProvider(LocalLayoutDirection provides direction.value) {
                         DictTheme(mode.value) { androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
-                            EntryView(entry, false, {}, onLink = { followed = it }, settings = AppSettings(collapseDetails = true),
+                            EntryView(entry, false, {}, onLink = { followed = it.target }, settings = AppSettings(collapseDetails = true),
                                 anchorRequest = request.value, onAnchorConsumed = { consumed++; request.value = null })
                         } }
                     }
@@ -339,7 +339,7 @@ class NestedTableDeviceTest {
             compose.activityRule.scenario.onActivity { activity -> activity.setContent {
                 CompositionLocalProvider(LocalLayoutDirection provides direction.value) {
                     DictTheme("light") { androidx.compose.foundation.layout.Box(
-                        Modifier.requiredWidth(width.value.dp)) { CompiledTableView(table, null) { followed = it } } }
+                        Modifier.requiredWidth(width.value.dp)) { CompiledTableView(table, null) { followed = it.target } } }
                 }
             } }
             for (widthDp in listOf(260, 280, 320)) for (rtl in listOf(LayoutDirection.Ltr, LayoutDirection.Rtl)) {
@@ -383,7 +383,7 @@ class NestedTableDeviceTest {
                 val entry = Entry("Aligned heading", emptyList(), "language", "English", "en",
                     listOf(Section(3, "Pronunciation", listOf(rich, Block("paragraph", 0, listOf(Span("text", "Body")))))), emptyList())
                 CompositionLocalProvider(LocalLayoutDirection provides direction.value) {
-                    DictTheme("light") { EntryView(entry, false, {}, onLink = { followed = it }) }
+                    DictTheme("light") { EntryView(entry, false, {}, onLink = { followed = it.target }) }
                 }
             } }
             for (side in listOf(CellTextAlign.Center, CellTextAlign.Right)) for (rtl in listOf(LayoutDirection.Ltr, LayoutDirection.Rtl)) {
@@ -439,7 +439,7 @@ class NestedTableDeviceTest {
         }
         try {
             compose.activityRule.scenario.onActivity { activity -> activityRoot = activity.window.decorView; activity.setContent {
-                DictTheme("light") { EntryView(entry, false, {}, onLink = { followed = it }, settings = AppSettings(collapseDetails = false)) }
+                DictTheme("light") { EntryView(entry, false, {}, onLink = { followed = it.target }, settings = AppSettings(collapseDetails = false)) }
             } }
             compose.waitForIdle()
             compose.runOnIdle {

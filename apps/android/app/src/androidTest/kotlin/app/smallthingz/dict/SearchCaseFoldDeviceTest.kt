@@ -35,6 +35,31 @@ class SearchCaseFoldDeviceTest {
         "\uE000outside" to "\uE000outside",
     )
 
+    @Test fun componentLookupKeepsLiteralHashTitlesSeparateFromLegacyFragments(): Unit = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        assumeTrue(context.packageName.endsWith(".validation"))
+        val library = LibraryStore.get(context)
+        val heading = "Component owner"
+        val edition = "components${UUID.randomUUID().toString().replace("-", "")}wiktionary-20261001"
+        val ownerHash = MessageDigest.getInstance("SHA-256").digest(heading.toByteArray()).joinToString("") { "%02x".format(it) }
+        val titles = listOf("Source", "Literal", "Literal#title", "Literal%23title", "Literal#title?&語", "Literal_title", "Literal title")
+        try {
+            library.importFile(name = { "$edition-$ownerHash.wikblb" }) { ByteArrayInputStream(dictionary(heading, titles)) }.join()
+            assertNull(library.error)
+            val source = library.read(checkNotNull(library.exact("Source", heading, edition)))
+            assertEquals("Literal", library.link(EntryLink("Literal#title"), source)?.title)
+            assertEquals("Literal#title", library.link(EntryLink("Literal#title", ""), source)?.title)
+            assertEquals("Literal#title", library.link(EntryLink("Literal#title", "Noun#part"), source)?.title)
+            assertEquals("Literal%23title", library.link(EntryLink("Literal%23title", ""), source)?.title)
+            assertEquals("Literal#title?&語", library.link(EntryLink("Literal#title?&語", ""), source)?.title)
+            assertEquals("Literal title", library.link(EntryLink("Literal_title"), source)?.title)
+            assertEquals("Literal_title", library.link(EntryLink("Literal_title", ""), source)?.title)
+            assertEquals("Literal_title", library.link(EntryLink("Literal_title", "Noun"), source)?.title)
+        } finally {
+            library.dictionaries.filter { it.edition == edition }.forEach { library.remove(it.id).join() }
+        }
+    }
+
     @Test fun importedUnicodePrefixesFoldWithoutLosingExactTitlePreference(): Unit = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
@@ -72,8 +97,8 @@ class SearchCaseFoldDeviceTest {
             val fallback = library.exact("strasse", heading, edition)!!
             assertTrue(fallback.title in setOf("Straße", "STRASSE"))
             val source = library.read(library.exact("Straße", heading, edition)!!)
-            assertEquals("STRASSE", library.link("STRASSE", source)!!.title)
-            assertEquals("ΣΊΣΥΦΟΣ", library.link("ΣΊΣΥΦΟΣ", source)!!.title)
+            assertEquals("STRASSE", library.link(EntryLink("STRASSE"), source)!!.title)
+            assertEquals("ΣΊΣΥΦΟΣ", library.link(EntryLink("ΣΊΣΥΦΟΣ"), source)!!.title)
         } finally {
             library.dictionaries.filter { it.edition == edition }.forEach { library.remove(it.id).join() }
         }
@@ -97,37 +122,37 @@ class SearchCaseFoldDeviceTest {
             install("Latin", "la", otherEdition, listOf("κρώζω"))
             val modern = library.read(requireNotNull(library.exact("κρώζω", "Greek", edition)))
             val ancient = library.read(requireNotNull(library.exact("κρώζω", "Ancient Greek", edition)))
-            val explicit = requireNotNull(library.link("κρώζω#Ancient Greek", modern))
+            val explicit = requireNotNull(library.link(EntryLink("κρώζω#Ancient Greek"), modern))
             assertEquals("Ancient Greek", explicit.language)
             assertEquals(edition, explicit.edition)
             assertEquals("grc", library.read(explicit).languageCode)
-            assertEquals(explicit.key, library.link("κρώζω#Ancient_Greek", modern)?.key)
+            assertEquals(explicit.key, library.link(EntryLink("κρώζω#Ancient_Greek"), modern)?.key)
             assertEquals(ancient.origin?.key, explicit.key)
-            assertEquals(modern.origin?.key, library.link("κρώζω#Greek", ancient)?.key)
+            assertEquals(modern.origin?.key, library.link(EntryLink("κρώζω#Greek"), ancient)?.key)
             // Installed owner but absent entry must not fall back to the modern homograph.
-            assertNull(library.link("μόνο#Ancient Greek", modern))
+            assertNull(library.link(EntryLink("μόνο#Ancient Greek"), modern))
             // Ordinary subsections and owners absent from this edition keep existing lookup behavior.
             for (target in listOf("κρώζω", "κρώζω#Etymology_2", "κρώζω#Missing owner", "κρώζω#Latin"))
-                assertEquals(modern.origin?.key, library.link(target, modern)?.key)
+                assertEquals(modern.origin?.key, library.link(EntryLink(target), modern)?.key)
             val legacy = modern.copy(edition = "")
-            assertEquals(modern.origin?.key, library.link("κρώζω#Ancient Greek", legacy)?.key)
+            assertEquals(modern.origin?.key, library.link(EntryLink("κρώζω#Ancient Greek"), legacy)?.key)
             val supplemental = modern.copy(navigationKind = "supplemental", navigationLanguage = null)
-            assertNull(library.link("κρώζω#Ancient Greek", supplemental))
+            assertNull(library.link(EntryLink("κρώζω#Ancient Greek"), supplemental))
 
-            val committed = mutableListOf<Triple<WordHit, Entry, String>>()
+            val committed = mutableListOf<Triple<WordHit, Entry, EntryLink>>()
             val errors = mutableListOf<String>()
             val navigation = EntryNavigation(this, library::read, library::link, library::savedWord,
                 library::random, { null }, { hit, entry, target -> committed += Triple(hit, entry, target) },
                 {}, { errors += it }, { id -> library.dictionaries.any { it.id == id } })
             try {
-                navigation.openLink("κρώζω#Ancient_Greek", modern).join()
+                navigation.openLink(EntryLink("κρώζω#Ancient_Greek"), modern).join()
                 val (hit, entry, target) = committed.single()
                 assertEquals(explicit.key, hit.key)
                 assertEquals(explicit.key, entry.origin?.key)
                 assertEquals("Ancient Greek", entry.language)
-                assertEquals("κρώζω#Ancient_Greek", target)
+                assertEquals(EntryLink("κρώζω#Ancient_Greek"), target)
                 assertTrue(errors.isEmpty())
-                navigation.openLink("μόνο#Ancient Greek", modern).join()
+                navigation.openLink(EntryLink("μόνο#Ancient Greek"), modern).join()
                 assertEquals(1, committed.size)
                 assertEquals(listOf("This word is not in your installed dictionaries."), errors)
             } finally { navigation.cancel() }
@@ -158,39 +183,39 @@ class SearchCaseFoldDeviceTest {
             install("Unclassified", "", otherEdition, listOf("foreign-only"))
             val source = library.read(requireNotNull(library.exact("templlar", "aragonés", edition)))
             val target = requireNotNull(library.exact("templlar/conj.BEN", "Unclassified", edition))
-            val hit = requireNotNull(library.link("templlar/conj.BEN", source))
+            val hit = requireNotNull(library.link(EntryLink("templlar/conj.BEN"), source))
             assertEquals(target.key, hit.key)
             assertEquals("Unclassified", hit.language)
             assertEquals(edition, hit.edition)
-            assertEquals(target.key, library.link("templlar/conj.BEN#Conjugation", source)?.key)
-            assertEquals(library.exact("same", "aragonés", edition)?.key, library.link("same", source)?.key)
+            assertEquals(target.key, library.link(EntryLink("templlar/conj.BEN#Conjugation"), source)?.key)
+            assertEquals(library.exact("same", "aragonés", edition)?.key, library.link(EntryLink("same"), source)?.key)
             // Keep the old current-owner folded match ahead of an exact unowned match.
-            assertEquals("LOCAL", library.link("local", source)?.title)
-            assertNull(library.link("exactonly", source))
-            assertNull(library.link("elsewhere", source))
-            assertNull(library.link("foreign-only", source))
-            assertNull(library.link("templlar/conj.BEN#Other_owner", source))
-            assertNull(library.link("templlar/conj.BEN#aragonés", source))
-            assertEquals(target.key, library.link("templlar/conj.BEN#Unclassified", source)?.key)
-            assertNull(library.link("templlar/conj.BEN", source.copy(edition = "")))
-            assertNull(library.link("templlar/conj.BEN", source.copy(kind = "supplemental", navigationKind = "supplemental", navigationLanguage = null)))
-            assertNull(library.link("templlar/conj.BEN", source.copy(redirect = Redirect("old", "templlar", "", true))))
-            val committed = mutableListOf<Triple<WordHit, Entry, String>>()
+            assertEquals("LOCAL", library.link(EntryLink("local"), source)?.title)
+            assertNull(library.link(EntryLink("exactonly"), source))
+            assertNull(library.link(EntryLink("elsewhere"), source))
+            assertNull(library.link(EntryLink("foreign-only"), source))
+            assertNull(library.link(EntryLink("templlar/conj.BEN#Other_owner"), source))
+            assertNull(library.link(EntryLink("templlar/conj.BEN#aragonés"), source))
+            assertEquals(target.key, library.link(EntryLink("templlar/conj.BEN#Unclassified"), source)?.key)
+            assertNull(library.link(EntryLink("templlar/conj.BEN"), source.copy(edition = "")))
+            assertNull(library.link(EntryLink("templlar/conj.BEN"), source.copy(kind = "supplemental", navigationKind = "supplemental", navigationLanguage = null)))
+            assertNull(library.link(EntryLink("templlar/conj.BEN"), source.copy(redirect = Redirect("old", "templlar", "", true))))
+            val committed = mutableListOf<Triple<WordHit, Entry, EntryLink>>()
             val errors = mutableListOf<String>()
             val navigation = EntryNavigation(this, library::read, library::link, library::savedWord,
                 library::random, { null }, { selected, entry, action -> committed += Triple(selected, entry, action) },
                 {}, { errors += it }, { id -> library.dictionaries.any { it.id == id } })
             try {
                 navigation.open(requireNotNull(source.origin)).join()
-                navigation.openLink("templlar/conj.BEN#Conjugation", source).join()
+                navigation.openLink(EntryLink("templlar/conj.BEN#Conjugation"), source).join()
                 val (selected, entry, action) = committed.last()
                 assertEquals(2, committed.size)
                 assertEquals(target.key, selected.key)
                 assertEquals(target.key, entry.origin?.key)
                 assertEquals("Unclassified", entry.language)
-                assertEquals("templlar/conj.BEN#Conjugation", action)
+                assertEquals(EntryLink("templlar/conj.BEN#Conjugation"), action)
                 assertTrue(errors.isEmpty())
-                navigation.openLink("templlar/conj.BEN#Other_owner", source).join()
+                navigation.openLink(EntryLink("templlar/conj.BEN#Other_owner"), source).join()
                 assertEquals(2, committed.size)
                 assertEquals(listOf("This word is not in your installed dictionaries."), errors)
                 assertTrue(navigation.goBack())
@@ -212,7 +237,7 @@ class SearchCaseFoldDeviceTest {
             }, library::savedWord, library::random, { null }, { selected, _, _ -> cancelledCommits += selected },
                 {}, { cancelledErrors += it }, { id -> library.dictionaries.any { it.id == id } })
             try {
-                val pending = cancelled.openLink("templlar/conj.BEN", source)
+                val pending = cancelled.openLink(EntryLink("templlar/conj.BEN"), source)
                 kotlinx.coroutines.withTimeout(5_000) { entered.await() }
                 cancelled.cancel()
                 release.complete(Unit)

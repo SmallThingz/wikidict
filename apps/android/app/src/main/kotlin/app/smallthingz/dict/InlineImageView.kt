@@ -186,7 +186,7 @@ internal fun rememberInlineImageViewOwner(images: List<InlineImage>, media: List
 
 @Composable
 internal fun compiledInlineImageContent(spans: List<Span>, annotated: AnnotatedString, style: TextStyle,
-    media: List<Media>, settings: AppSettings, edition: String, onLink: (String) -> Unit,
+    media: List<Media>, settings: AppSettings, edition: String, onLink: (EntryLink) -> Unit,
     placeholderColor: Color): Map<String, InlineTextContent> {
     val density = LocalDensity.current
     val resolver = LocalFontFamilyResolver.current
@@ -268,7 +268,7 @@ internal fun compiledInlineImageContent(spans: List<Span>, annotated: AnnotatedS
 @Composable
 private fun InlineImageOccurrence(span: Span, pixels: InlineImagePixels, metrics: InlineImageFontMetrics,
     state: InlineImageAssetState, fallback: String?, fallbackStyle: TextStyle,
-    edition: String, onLink: (String) -> Unit, placeholderColor: Color, retry: () -> Unit) {
+    edition: String, onLink: (EntryLink) -> Unit, placeholderColor: Color, retry: () -> Unit) {
     val image = checkNotNull(span.image)
     val density = LocalDensity.current.density
     val borderWidth = if (image.border) density else 0f
@@ -276,11 +276,11 @@ private fun InlineImageOccurrence(span: Span, pixels: InlineImagePixels, metrics
     val ready = when (state) { is InlineImageAssetState.Ready -> state; is InlineImageAssetState.GeometryUnavailable -> state.resource; else -> null }
     val uri = LocalUriHandler.current
     var menu by remember { mutableStateOf(false) }
-    val actionUrl = remember(span.kind, span.target, edition) { inlineImageLinkUrl(span, edition) }
+    val actionUrl = remember(span.kind, span.target, span.targetFragment, edition) { inlineImageLinkUrl(span, edition) }
     val unresolvedSource = span.kind == "link" && span.target.startsWith("File:") && actionUrl == null
     val click: (() -> Unit)? = when {
         actionUrl != null -> { { uri.openUri(actionUrl) } }
-        span.kind == "link" && !unresolvedSource -> { { onLink(span.target) } }
+        span.kind == "link" && !unresolvedSource -> { { onLink(span.entryLink()) } }
         else -> null
     }
     val hasMenu = !image.tooltip.isNullOrEmpty() || ready != null || state == InlineImageAssetState.Failed

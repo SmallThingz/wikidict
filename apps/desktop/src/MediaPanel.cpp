@@ -327,15 +327,17 @@ struct MediaPanel::Impl {
         }
         return {State::Error, {}, QStringLiteral("This image is not in the dictionary's media catalogue.")};
     }
-    QUrl inlineSourceUrl(const QString &target) const {
+    QUrl inlineSourceUrl(const QString &target, const std::optional<QString> &fragment = std::nullopt) const {
         if (currentSourceHost.isEmpty() || !target.startsWith(QStringLiteral("File:")) || target.size() <= 5) return {};
-        const QString page = target.section(QChar('#'), 0, 0);
+        const QString page = fragment ? target : target.section(QChar('#'), 0, 0);
         QUrl source(QStringLiteral("https://") + currentSourceHost + QStringLiteral("/wiki/") + QString::fromLatin1(QUrl::toPercentEncoding(page)));
-        if (target.contains(QChar('#'))) source.setFragment(target.section(QChar('#'), 1));
+        if (fragment) {
+            if (!fragment->isEmpty()) source.setFragment(*fragment, QUrl::DecodedMode);
+        } else if (target.contains(QChar('#'))) source.setFragment(target.section(QChar('#'), 1));
         return allowedUrl(source, false, currentSourceHost) ? source : QUrl();
     }
-    bool openInlineSource(const QString &target) {
-        const QUrl source = inlineSourceUrl(target);
+    bool openInlineSource(const QString &target, const std::optional<QString> &fragment) {
+        const QUrl source = inlineSourceUrl(target, fragment);
         return !source.isEmpty() && QDesktopServices::openUrl(source);
     }
 
@@ -1068,8 +1070,8 @@ MediaPanel::MediaPanel(QWidget *parent, QNetworkAccessManager *network) : QWidge
 MediaPanel::~MediaPanel() = default;
 MediaPanel::InlineImageAsset MediaPanel::requestInlineImage(const QString &file, QObject *owner, const QString &key,
         std::function<void(const InlineImageAsset &)> changed) { return impl_->inlineImage(file, owner, key, std::move(changed)); }
-QUrl MediaPanel::inlineImageSource(const QString &compiledTarget) const { return impl_->inlineSourceUrl(compiledTarget); }
-bool MediaPanel::openInlineImageSource(const QString &compiledTarget) { return impl_->openInlineSource(compiledTarget); }
+QUrl MediaPanel::inlineImageSource(const QString &compiledTarget, const std::optional<QString> &fragment) const { return impl_->inlineSourceUrl(compiledTarget, fragment); }
+bool MediaPanel::openInlineImageSource(const QString &compiledTarget, const std::optional<QString> &fragment) { return impl_->openInlineSource(compiledTarget, fragment); }
 void MediaPanel::setEntry(const QJsonObject &entry, const QString &sourceHost) { impl_->setEntry(entry, sourceHost); }
 void MediaPanel::sayWord(const QString &title, const QString &languageCode) { impl_->say(title, languageCode); }
 void MediaPanel::stopPlayback() { impl_->stopSpeech(); impl_->stopAudio(); }

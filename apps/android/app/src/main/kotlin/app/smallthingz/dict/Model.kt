@@ -24,8 +24,11 @@ data class Span(
     val fontScale: Float? = null,
     val fontScaleBasis: FontScaleBasis = FontScaleBasis.Context,
     val image: InlineImage? = null,
+    val targetFragment: String? = null,
 ) {
     init {
+        require(targetFragment == null || kind == "link") { "Only internal links may carry a target fragment" }
+        require(targetFragment == null || validPresentationString(targetFragment)) { "Invalid link target fragment" }
         require(fontScaleBasis != FontScaleBasis.NormalBody || fontScale != null) {
             "Normal-body font scale requires a value"
         }
@@ -38,20 +41,31 @@ data class Span(
     }
 }
 
+/** A compiled internal action. Only absent components use the historical delimiter form. */
+data class EntryLink(val target: String, val targetFragment: String? = null) {
+    val title: String get() = if (targetFragment == null) target.substringBefore('#') else target
+    val fragment: String get() = targetFragment ?: target.substringAfter('#', "")
+    val hasFragment: Boolean get() = targetFragment != null || '#' in target
+    val local: Boolean get() = title.isEmpty() && hasFragment
+}
+internal fun Span.entryLink(): EntryLink = EntryLink(target, targetFragment)
+internal fun Span.hasInternalAction(): Boolean = kind == "link" &&
+    (target.isNotBlank() || !targetFragment.isNullOrEmpty())
+
 enum class FontScaleBasis { Context, NormalBody }
 
 data class InlineImage(val file: String, val widthPx: Long? = null, val heightPx: Long? = null,
     val alt: String? = null, val tooltip: String? = null, val border: Boolean = false) {
     init {
-        require(file.isNotEmpty() && validInlineImageString(file) && file.first() != ' ' && file.last() != ' ' &&
+        require(file.isNotEmpty() && validPresentationString(file) && file.first() != ' ' && file.last() != ' ' &&
             file.none { it.code < 32 || it.code == 127 || it.code in 0x80..0x9f || it in "[]{}<>|#_" }) { "Invalid inline image file" }
         require(widthPx == null || widthPx in 1L..0xffff_ffffL) { "Invalid inline image width" }
         require(heightPx == null || heightPx in 1L..0xffff_ffffL) { "Invalid inline image height" }
-        require(alt == null || validInlineImageString(alt)) { "Invalid inline image alt" }
-        require(tooltip == null || validInlineImageString(tooltip)) { "Invalid inline image tooltip" }
+        require(alt == null || validPresentationString(alt)) { "Invalid inline image alt" }
+        require(tooltip == null || validPresentationString(tooltip)) { "Invalid inline image tooltip" }
     }
 }
-private fun validInlineImageString(value: String): Boolean {
+private fun validPresentationString(value: String): Boolean {
     var bytes = 0L
     var index = 0
     while (index < value.length) {

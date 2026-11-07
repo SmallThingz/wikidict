@@ -216,7 +216,7 @@ class RendererDeviceTest {
         try {
             compose.activityRule.scenario.onActivity { activity -> activity.setContent {
                 DictTheme("light") {
-                    EntryView(entry, false, {}, onLink = { links += it }, settings = AppSettings(
+                    EntryView(entry, false, {}, onLink = { links += it.target }, settings = AppSettings(
                         allowImages = false, allowAudio = false, collapsePronunciation = false,
                         collapseOtherSections = false, collapseDetails = true))
                 }
@@ -315,7 +315,7 @@ class RendererDeviceTest {
                     CompositionLocalProvider(LocalInlineImageCache provides cache,
                         androidx.compose.ui.platform.LocalUriHandler provides object : androidx.compose.ui.platform.UriHandler {
                             override fun openUri(uri: String) { opened += uri }
-                        }) { EntryView(entry, false, {}, onLink = { links += it }, settings = settings.value) }
+                        }) { EntryView(entry, false, {}, onLink = { links += it.target }, settings = settings.value) }
                 }
             } }
             compose.waitUntil(15000) { compose.onAllNodes(images, useUnmergedTree = true).fetchSemanticsNodes(atLeastOneRootRequired = false).size == 3 }
@@ -685,7 +685,7 @@ class RendererDeviceTest {
         try {
             compose.activityRule.scenario.onActivity { activity ->
                 activity.setContent { androidx.compose.material3.MaterialTheme {
-                    CompiledTableView(table, feature.value) { followed = it }
+                    CompiledTableView(table, feature.value) { followed = it.target }
                 } }
             }
             compose.onNodeWithText("Color sample #ffff00").assertIsDisplayed().assertHasNoClickAction()
@@ -710,14 +710,25 @@ class RendererDeviceTest {
                 Cell(listOf(Span("text", "Header", foreground = "#000080")), true, 1, 1, "#00ff00")),
             listOf(Cell(listOf(Span("link", "Follow", target = "B", background = "#ffffe0"),
                 Span("link", " Base", target = "C")), false, 1, 1, "#0000ff"))))
+        val phaseCalls = LongArray(TablePhase.entries.size)
+        val phaseNanos = LongArray(TablePhase.entries.size)
+        val phaseItems = LongArray(TablePhase.entries.size)
+        var abortedPhases = 0
+        val phaseObserver = TablePhaseObserver { phase, nanos, items, completed ->
+            check(nanos >= 0 && items >= 0)
+            phaseCalls[phase.ordinal]++
+            phaseNanos[phase.ordinal] += nanos
+            phaseItems[phase.ordinal] += items
+            if (!completed) abortedPhases++
+        }
         val direction = mutableStateOf(androidx.compose.ui.unit.LayoutDirection.Ltr)
         val mode = mutableStateOf("light")
         var followed: String? = null
         try {
             compose.activityRule.scenario.onActivity { activity -> activity.setContent {
-                androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides direction.value) {
+                androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides direction.value, LocalTablePhaseObserver provides phaseObserver) {
                     DictTheme(mode.value) { androidx.compose.material3.Surface {
-                        CompiledTableView(table, null) { followed = it }
+                        CompiledTableView(table, null) { followed = it.target }
                     } }
                 }
             } }
@@ -757,6 +768,19 @@ class RendererDeviceTest {
                 }
                 compose.onNodeWithText("Color sample #ff0000").assertDoesNotExist()
             }
+            compose.runOnIdle {
+                assertEquals(0, abortedPhases)
+                assertTrue(phaseCalls.all { it > 0L })
+                assertTrue(phaseItems[TablePhase.Measurement.ordinal] >= 3L)
+                assertTrue(phaseItems[TablePhase.Composition.ordinal] >= 3L)
+                val report = TablePhase.entries.joinToString(";") { phase ->
+                    "${phase.name}:${phaseCalls[phase.ordinal]}:${phaseNanos[phase.ordinal]}:${phaseItems[phase.ordinal]}"
+                }
+                check(report.length <= 1024)
+                InstrumentationRegistry.getInstrumentation().sendStatus(0, android.os.Bundle().apply {
+                    putString("table_phase_totals", report)
+                })
+            }
         } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
     }
 
@@ -777,7 +801,7 @@ class RendererDeviceTest {
             compose.activityRule.scenario.onActivity { activity -> activity.setContent {
                 androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides direction.value) {
                     DictTheme(mode.value) { androidx.compose.material3.Surface {
-                        StyledText(spans, Modifier.width(300.dp).testTag("authored-foreground"), onLink = { clicked.add(it) })
+                        StyledText(spans, Modifier.width(300.dp).testTag("authored-foreground"), onLink = { clicked.add(it.target) })
                     } }
                 }
             } }
@@ -1207,7 +1231,7 @@ class RendererDeviceTest {
                                 density = LocalDensity.current.density
                                 expectedWeight = androidx.compose.material3.MaterialTheme.typography.titleMedium.fontWeight
                                 androidx.compose.material3.Surface(Modifier.fillMaxSize().testTag("heading-fixture")) {
-                                    EntryView(value(), false, {}, onLink = { followed = it }, settings = AppSettings(collapseDetails = false, collapseOtherSections = false))
+                                    EntryView(value(), false, {}, onLink = { followed = it.target }, settings = AppSettings(collapseDetails = false, collapseOtherSections = false))
                                 }
                             }
                         }
@@ -1335,7 +1359,7 @@ class RendererDeviceTest {
                         modifier = Modifier.fillMaxSize(),
                         color = androidx.compose.material3.MaterialTheme.colorScheme.background,
                     ) {
-                        EntryView(entry, false, {}, onLink = { followed = it }, settings = AppSettings(collapseDetails = false))
+                        EntryView(entry, false, {}, onLink = { followed = it.target }, settings = AppSettings(collapseDetails = false))
                     }
                 }
             } }
@@ -1597,7 +1621,7 @@ class RendererDeviceTest {
             sourceEntry.sections.flatMap { it.blocks }.flatMap { it.spans }
                 .filter { it.kind == "link" && it.target.isNotBlank() }
                 .map { it.target }.distinct().forEach { target ->
-                    library.link(target, sourceEntry)?.takeIf { it.key != sourceHit.key }?.let { hits[target] = it }
+                    library.link(EntryLink(target), sourceEntry)?.takeIf { it.key != sourceHit.key }?.let { hits[target] = it }
                 }
             hits
         }
@@ -1922,7 +1946,7 @@ class RendererDeviceTest {
             assertFalse(requireNotNull(missingEntry.redirect).followed)
             assertEquals(edition, missingEntry.edition)
             assertEquals("English", missingEntry.navigationLanguage)
-            assertNull(runBlocking { library.link("absent", missingEntry) })
+            assertNull(runBlocking { library.link(EntryLink("absent"), missingEntry) })
             assertTrue(previousLearning.history.size <= 99_998)
             compose.runOnIdle {
                 // Preserve prior history while allowing the two real navigation commits.

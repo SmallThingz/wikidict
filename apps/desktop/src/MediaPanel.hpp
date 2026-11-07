@@ -6,6 +6,7 @@
 #include <functional>
 #include <QWidget>
 #include <memory>
+#include <optional>
 
 class QNetworkAccessManager;
 class QSvgRenderer;
@@ -24,8 +25,8 @@ public:
     struct InlineImageAsset { InlineImageState state; QImage image; QString message; QSizeF intrinsic; QString originalMime; std::shared_ptr<QSvgRenderer> vector; };
     InlineImageAsset requestInlineImage(const QString &file, QObject *owner, const QString &key,
         std::function<void(const InlineImageAsset &)> changed);
-    QUrl inlineImageSource(const QString &compiledTarget) const;
-    bool openInlineImageSource(const QString &compiledTarget);
+    QUrl inlineImageSource(const QString &compiledTarget, const std::optional<QString> &fragment = std::nullopt) const;
+    bool openInlineImageSource(const QString &compiledTarget, const std::optional<QString> &fragment = std::nullopt);
 
 
 private:

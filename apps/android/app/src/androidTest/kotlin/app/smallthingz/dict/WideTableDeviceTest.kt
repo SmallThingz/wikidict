@@ -64,7 +64,7 @@ class WideTableDeviceTest {
         val clicked = AtomicReference<String?>()
         compose.runOnUiThread {
             compose.activity.setContent {
-                MaterialTheme { EntryView(entry, false, {}, onLink = { clicked.set(it) }, settings = AppSettings(collapseOtherSections = false, collapseDetails = false)) }
+                MaterialTheme { EntryView(entry, false, {}, onLink = { clicked.set(it.target) }, settings = AppSettings(collapseOtherSections = false, collapseDetails = false)) }
             }
         }
         val first = "Cell A \u2066$witness\u2069"
@@ -198,7 +198,7 @@ class WideTableDeviceTest {
             compose.activityRule.scenario.onActivity { activity ->
                 activity.setContent {
                     TableViewport(mode, 1f, fixedDensity = 1f) {
-                        EntryView(entry, false, {}, onLink = { opened += entry.key to it },
+                        EntryView(entry, false, {}, onLink = { opened += entry.key to it.target },
                             settings = AppSettings(collapseOtherSections = false, collapseDetails = false))
                     }
                 }
@@ -237,7 +237,7 @@ class WideTableDeviceTest {
             compose.activityRule.scenario.onActivity { activity ->
                 activity.setContent {
                     TableViewport(mode, 1f, fixedDensity = 1f) {
-                        EntryView(entry, false, {}, onLink = { opened += entry.key to it },
+                        EntryView(entry, false, {}, onLink = { opened += entry.key to it.target },
                             settings = AppSettings(collapseOtherSections = false, collapseDetails = false))
                     }
                 }
@@ -279,7 +279,7 @@ class WideTableDeviceTest {
                 activity.setContent {
                     TableViewport(mode, 2f) {
                         val current = displayed.value
-                        EntryView(current, false, {}, onLink = { opened += current.key to it },
+                        EntryView(current, false, {}, onLink = { opened += current.key to it.target },
                             settings = AppSettings(collapseOtherSections = false, collapseDetails = false))
                     }
                 }

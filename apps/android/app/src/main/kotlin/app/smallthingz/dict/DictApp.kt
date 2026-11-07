@@ -34,6 +34,7 @@ import androidx.lifecycle.findViewTreeViewModelStoreOwner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 
 enum class AppScreen { Dictionary, Library, Saved, History, Learn, Settings }
 
@@ -82,16 +83,16 @@ fun DictApp(library: LibraryStore, learning: LearningStore,
     val scope = rememberCoroutineScope()
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     val uri = androidx.compose.ui.platform.LocalUriHandler.current
-    fun showEntry(hit: WordHit, entry: Entry, target: String, returning: Boolean) {
+    fun showEntry(hit: WordHit, entry: Entry, target: EntryLink, returning: Boolean) {
         selected = entry
-        val fragment = if (returning) "" else if ('#' in target) target.substringAfter('#')
+        val fragment = if (returning) "" else if (target.hasFragment) target.fragment
             else entry.redirect?.takeIf { it.followed }?.fragment.orEmpty()
         anchorRequest = fragment.takeIf { it.isNotEmpty() }?.let { EntryAnchorRequest(entry.key, "#$it") }
         library.rememberWord(hit); learning.record(entry)
         query = ""; searching = false; screen = AppScreen.Dictionary; importLibraryVisit = false; keyboard?.hide()
     }
     val currentLibrary by rememberUpdatedState(library)
-    val currentShowEntry by rememberUpdatedState<(WordHit, Entry, String, Boolean) -> Unit> { hit, entry, target, returning ->
+    val currentShowEntry by rememberUpdatedState<(WordHit, Entry, EntryLink, Boolean) -> Unit> { hit, entry, target, returning ->
         showEntry(hit, entry, target, returning)
     }
     // Committed visits belong to the Activity session; each composition owns a new
@@ -114,7 +115,7 @@ fun DictApp(library: LibraryStore, learning: LearningStore,
                 if (session.controllerToken === controllerToken) currentShowEntry(hit, entry, target, false)
             },
             restore = { hit, entry ->
-                if (session.controllerToken === controllerToken) currentShowEntry(hit, entry, "", true)
+                if (session.controllerToken === controllerToken) currentShowEntry(hit, entry, EntryLink(""), true)
             },
             visitsChanged = { state ->
                 if (session.controllerToken === controllerToken) {
@@ -228,10 +229,9 @@ fun DictApp(library: LibraryStore, learning: LearningStore,
                                 EntryView(entry, learning.isBookmarked(entry), { learning.toggleBookmark(entry) }, readingState = visits.currentId?.takeIf { visits.entryKey == entry.key }?.let {
                                     readingStates.getOrPut(it) { EntryReadingState() }
                                 }, settings = learning.data.settings, onScrollDirection = { dockHidden = it }, anchorRequest = anchorRequest, onAnchorConsumed = { if (anchorRequest === it) anchorRequest = null }, onNavigate = { navigation.cancel() }, onLink = { target ->
-                                    val bookSource = bookSourcesUrl(entry, target)
-                                    if (target.startsWith("File:",true) || target.startsWith("Image:",true) || bookSource != null) {
-                                        readerUri.openUri(bookSource ?: sourcePage(entry,target))
-                                    } else navigation.openLink(target, entry)
+                                    dispatchEntryLink(entry, target, readerUri::openUri,
+                                        { navigation.openLink(it, entry) },
+                                        { scope.launch { snackbar.showSnackbar("The source edition for this link is unavailable.") } })
                                 })
                             }
                         } ?: LibraryScreen(library, autoRefresh = importNavigationRequest == 0L, onImport = onImport)

@@ -9,7 +9,7 @@ import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Size
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -70,10 +70,11 @@ private val spanClassWhitespace = Regex("\\s+")
 
 private data class TextCacheKey(val weight: FontWeight?, val direction: LayoutDirection,
     val background: String?, val normalBodySize: TextUnit, val contextSize: TextUnit, val density: Density)
-private class TextCache(val link: State<(String) -> Unit>) {
+private class TextCache(val link: State<(EntryLink) -> Unit>) {
     val values = java.util.IdentityHashMap<List<Span>, MutableMap<TextCacheKey, AnnotatedString>>()
 }
 private val LocalEntryMedia = staticCompositionLocalOf<List<Media>> { emptyList() }
+private val LocalEntryMediaOwners = staticCompositionLocalOf { MediaOwners(emptyList()) }
 private val LocalEntryEdition = staticCompositionLocalOf { "" }
 private val LocalReaderSettings = staticCompositionLocalOf { AppSettings() }
 private val LocalTextCache = staticCompositionLocalOf<TextCache?> { null }
@@ -85,7 +86,7 @@ private val LocalCellHeadingRequest = staticCompositionLocalOf<CellHeadingReques
 private val LocalCellHeadingReached = staticCompositionLocalOf<(CellHeadingRequest) -> Unit> { {} }
 
 @Composable
-private fun CellHeading(block: Block, path: String?, onLink: (String) -> Unit) {
+private fun CellHeading(block: Block, path: String?, onLink: (EntryLink) -> Unit) {
     val request = LocalCellHeadingRequest.current
     val reached = LocalCellHeadingReached.current
     val bringIntoView = remember { BringIntoViewRequester() }
@@ -122,12 +123,16 @@ class EntryReadingState {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink: (String) -> Unit = {}, settings: AppSettings = AppSettings(), onScrollDirection: (Boolean) -> Unit = {}, anchorRequest: EntryAnchorRequest? = null, onAnchorConsumed: (EntryAnchorRequest) -> Unit = {}, onNavigate: () -> Unit = {}, readingState: EntryReadingState? = null) {
+fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink: (EntryLink) -> Unit = {}, settings: AppSettings = AppSettings(), onScrollDirection: (Boolean) -> Unit = {}, anchorRequest: EntryAnchorRequest? = null, onAnchorConsumed: (EntryAnchorRequest) -> Unit = {}, onNavigate: () -> Unit = {}, readingState: EntryReadingState? = null) {
     val uri = LocalUriHandler.current
     val context = LocalContext.current
     DisposableEffect(entry.key) { onDispose { SpeechPlayback.stop() } }
     val colors = MaterialTheme.colorScheme
-    CompositionLocalProvider(LocalEntryMedia provides entry.media, LocalEntryEdition provides entry.edition, LocalReaderSettings provides settings) {
+    // Share immutable catalog indexes across all text in this entry, including
+    // table cells. A nested EntryView supplies its own catalog and owner scope.
+    val mediaOwners = remember(entry.key, entry.media) { MediaOwners(entry.media) }
+    CompositionLocalProvider(LocalEntryMedia provides entry.media, LocalEntryMediaOwners provides mediaOwners,
+        LocalEntryEdition provides entry.edition, LocalReaderSettings provides settings) {
       key(entry.key) {
         val scroll = readingState?.scroll ?: rememberLazyListState()
         val reportScroll by rememberUpdatedState(onScrollDirection)
@@ -204,9 +209,9 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             } else return false
             return true
         }
-        val readerLink: (String) -> Unit = { target ->
+        val readerLink: (EntryLink) -> Unit = { target ->
             onNavigate()
-            if (!jumpToAnchor(target) && !target.startsWith("#")) onLink(target)
+            if (target.local) jumpToAnchor("#${target.fragment}") else onLink(target)
         }
         LaunchedEffect(entry.key, anchorRequest) {
             anchorRequest?.takeIf { it.entryKey == entry.key }?.let {
@@ -398,14 +403,14 @@ private fun FoldHeading(title: String, folded: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun BlockView(block: Block, onLink: (String) -> Unit, path: String? = null, inCell: Boolean = false, gridPath: String = "root") {
+private fun BlockView(block: Block, onLink: (EntryLink) -> Unit, path: String? = null, inCell: Boolean = false, gridPath: String = "root") {
     CompositionLocalProvider(LocalCellTextAlign provides (block.textAlign?.composeAlign() ?: LocalCellTextAlign.current)) {
         BlockContent(block, onLink, path, inCell, gridPath)
     }
 }
 
 @Composable
-private fun BlockContent(block: Block, onLink: (String) -> Unit, path: String?, inCell: Boolean, gridPath: String) {
+private fun BlockContent(block: Block, onLink: (EntryLink) -> Unit, path: String?, inCell: Boolean, gridPath: String) {
     when {
         block.table != null -> Box(Modifier.padding(start = blockIndentDp(block).dp)) { RenderCompiledTable(block.table, block.feature, gridPath, inCell, path?.let { "$it/table" }.orEmpty(), onLink) }
         block.kind == "heading" -> CellHeading(block, path, onLink)
@@ -437,11 +442,11 @@ private fun BlockContent(block: Block, onLink: (String) -> Unit, path: String?, 
 }
 
 @Composable
-internal fun CompiledTableView(table: Table, feature: Feature?, onLink: (String) -> Unit) =
+internal fun CompiledTableView(table: Table, feature: Feature?, onLink: (EntryLink) -> Unit) =
     RenderCompiledTable(table, feature, "root", false, "", onLink)
 
 @Composable
-private fun RenderCompiledTable(table: Table, feature: Feature?, path: String, nested: Boolean, semanticPath: String, onLink: (String) -> Unit) {
+private fun RenderCompiledTable(table: Table, feature: Feature?, path: String, nested: Boolean, semanticPath: String, onLink: (EntryLink) -> Unit) {
     val sample = colorSwatch(feature)
     if (sample == null) {
         TableView(table, onLink, path, nested, semanticPath)
@@ -457,12 +462,13 @@ private fun RenderCompiledTable(table: Table, feature: Feature?, path: String, n
 }
 
 @Composable
-private fun TableView(table: Table, onLink: (String) -> Unit, path: String = "root", nested: Boolean = false, semanticPath: String = "") {
+private fun TableView(table: Table, onLink: (EntryLink) -> Unit, path: String = "root", nested: Boolean = false, semanticPath: String = "") {
   if (table.style?.floatSide != null && !LocalFloatMarginsConsumed.current) {
       NativeFloatBlockContext(listOf(Block(kind = "table", depth = 0, spans = emptyList(), table = table)),
           onLink, semanticPath, Modifier, nested, path, 0f, false)
       return
   }
+  val phaseObserver = LocalTablePhaseObserver.current
   val window = LocalWindowInfo.current.containerSize
   BoxWithConstraints(Modifier.fillMaxWidth()) {
     val decorationWidth = LocalFloatTableWidthReference.current ?: listOfNotNull(constraints.maxWidth.takeIf { constraints.hasBoundedWidth }, window.width.takeIf { it > 0 }).minOrNull()
@@ -470,11 +476,13 @@ private fun TableView(table: Table, onLink: (String) -> Unit, path: String = "ro
     val density = LocalDensity.current
     val fontPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
     var decorationProjection by remember(table, density.density, fontPixels, decorationWidth, decorationHeight) { mutableDoubleStateOf(1.0) }
-    val natural = remember(table, density.density, fontPixels, decorationProjection, decorationWidth, decorationHeight) {
+    val natural = remember(table, density.density, fontPixels, decorationProjection, decorationWidth, decorationHeight, phaseObserver) {
+      observeTablePhase(phaseObserver, TablePhase.Preparation) {
         tableRenderMetrics(table, with(density) { 136.dp.roundToPx() }, with(density) { 10.dp.roundToPx() },
             with(density) { 40.dp.roundToPx() }, density.density, containerFontPixels = fontPixels,
             decorationScale = decorationProjection, decorationViewportWidth = decorationWidth,
             decorationViewportHeight = decorationHeight)
+      }
     }
     val margin = natural?.style?.margins.takeUnless { LocalFloatMarginsConsumed.current }
     val marginModifier = if (margin == null) Modifier else with(density) {
@@ -499,10 +507,11 @@ private fun TableView(table: Table, onLink: (String) -> Unit, path: String = "ro
 }
 
 @Composable
-private fun TableGridView(table: Table, onLink: (String) -> Unit, path: String, widthReference: Int?, semanticPath: String,
+private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: String, widthReference: Int?, semanticPath: String,
     natural: TableRenderMetrics?, decorationProjection: Double, removeDecorations: () -> Unit) {
     val resolvedWidthReference = LocalFloatTableWidthReference.current ?: widthReference
-    val grid = remember(table) { tableGrid(table) }
+    val phaseObserver = LocalTablePhaseObserver.current
+    val grid = remember(table, phaseObserver) { observeTablePhase(phaseObserver, TablePhase.Preparation) { tableGrid(table) } }
     val density = LocalDensity.current
     val inheritedBackground = LocalAuthoredBackground.current
     val inheritedColor = canonicalColorArgb(inheritedBackground)?.let { Color(it) }
@@ -530,14 +539,20 @@ private fun TableGridView(table: Table, onLink: (String) -> Unit, path: String, 
         return
     }
     val styled = natural.style
-    val collapsedBorders = remember(grid, drawingPixels, styled) {
-        val pixels = drawingPixels
-        if (pixels != null && styled?.collapse == true) collapsedTableBorders(grid, pixels, styled) else emptyList()
-    }
     Layout(modifier = Modifier.testTag(if (path == "root") "compiled-table-grid" else "compiled-table-grid-$path")
         .semantics { collectionInfo = androidx.compose.ui.semantics.CollectionInfo(grid.rows, grid.columns) }
-        .drawBehind {
-            val pixels = drawingPixels ?: return@drawBehind
+        .drawWithCache {
+            // Measurement publishes paint geometry. Observe it in the draw cache,
+            // not composition: opening a large table must not schedule a second
+            // composition merely to calculate its collapsed border segments.
+            val pixels = drawingPixels
+            val collapsedBorders = observeTablePhase(phaseObserver, TablePhase.DrawCache) {
+                if (pixels != null && styled?.collapse == true)
+                    collapsedTableBorders(grid, pixels, styled) else emptyList()
+            }
+            onDrawBehind {
+            observeTablePhase(phaseObserver, TablePhase.Draw) {
+            if (pixels != null) {
             val tableBackground = styled?.background?.let { canonicalColorArgb(it)?.let { argb -> Color(argb) } }
             tableBackground?.let { drawRect(it) }
             grid.cells.forEachIndexed { index, placed ->
@@ -573,7 +588,11 @@ private fun TableGridView(table: Table, onLink: (String) -> Unit, path: String, 
                         style = androidx.compose.ui.graphics.drawscope.Stroke(strokeWidth))
                 }
             }
+            }
+            }
+            }
         }, content = {
+        observeTablePhase(phaseObserver, TablePhase.Composition, grid.cells.size) {
         grid.cells.forEachIndexed { index, placed ->
             val insets = styled?.cellInsets?.get(index)
             val padding = if (insets == null) with(density) { Modifier.padding((natural.cellPadding + natural.borderWidth).toDp()) }
@@ -605,19 +624,25 @@ private fun TableGridView(table: Table, onLink: (String) -> Unit, path: String, 
                 }
             }
         }
+        }
     }) { measurables, incoming ->
         val reference = resolvedWidthReference ?: incoming.maxWidth.takeIf { incoming.hasBoundedWidth }
         val metrics = tableMetricsInWidth(table, natural, grid.columns, reference)
         val heightLimit = metrics?.let { tableHeightLimit(it.width) }
         // One measure per cell. Native Egyptian descendants do not support intrinsic queries.
-        val children = if (metrics == null || heightLimit == null) emptyList() else measurables.mapIndexed { index, measurable ->
+        val children = if (metrics == null || heightLimit == null) emptyList() else
+          observeTablePhase(phaseObserver, TablePhase.Measurement, measurables.size) {
+          measurables.mapIndexed { index, measurable ->
             val placed = grid.cells[index]
             val width = metrics.cellWidth(placed.column, placed.colspan)
             measurable.measure(Constraints(minWidth = width, maxWidth = width, minHeight = 0, maxHeight = heightLimit))
         }
-        val pixels = if (metrics == null || heightLimit == null) null else tablePixelLayout(grid, metrics.columnWidth,
+        }
+        val pixels = observeTablePhase(phaseObserver, TablePhase.PixelLayout, children.size) {
+          if (metrics == null || heightLimit == null) null else tablePixelLayout(grid, metrics.columnWidth,
             metrics.minRowHeight, IntArray(children.size) { children[it].height }, metrics.cellSpacing, metrics.borderWidth,
             metrics.width, metrics.extraColumns)
+        }
         if (pixels == null) {
             drawingPixels = null
             // A decoration estimate cannot know the measured height of real body
@@ -678,11 +703,11 @@ internal fun inlineMediaFiles(entry: Entry): Set<String> = buildSet {
 }
 
 @Composable
-internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null, style: TextStyle = MaterialTheme.typography.bodyLarge, onLink: (String) -> Unit = {}, preserveWhitespace: Boolean = false) {
+internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null, style: TextStyle = MaterialTheme.typography.bodyLarge, onLink: (EntryLink) -> Unit = {}, preserveWhitespace: Boolean = false) {
     val cellTextAlign = LocalCellTextAlign.current
     val spans = remember(source, preserveWhitespace) { if (preserveWhitespace) source else compactSpans(source) }
     val availableMedia = LocalEntryMedia.current
-    val owners = remember(availableMedia) { MediaOwners(availableMedia) }
+    val owners = LocalEntryMediaOwners.current
     val embedded = owners.embedded(spans.filter { it.image == null })
     if (embedded.isNotEmpty()) {
         Column(modifier) {
@@ -712,7 +737,7 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
 
 @Composable
 private fun styledTextAnnotation(spans: List<Span>, weight: FontWeight?, style: TextStyle,
-    onLink: (String) -> Unit): AnnotatedString {
+    onLink: (EntryLink) -> Unit): AnnotatedString {
     val effectiveWeight = weight ?: LocalCellWeight.current
     val normalBodySize = MaterialTheme.typography.bodyLarge.fontSize
     val contextSize = LocalTextStyle.current.merge(style).fontSize
@@ -785,7 +810,7 @@ private fun styledTextAnnotation(spans: List<Span>, weight: FontWeight?, style: 
                         if (end > paintStart) addStyle(SpanStyle(background = background), paintStart, end)
                     }
                     if (span.image != null) Unit // The inline child owns this compiled action and its image semantics.
-                    else if (span.kind == "link" && span.target.isNotBlank()) addLink(LinkAnnotation.Clickable(span.target, linkStyle) { (cache?.link?.value ?: currentLink.value)(span.target) }, start, end)
+                    else if (span.hasInternalAction()) addLink(LinkAnnotation.Clickable(span.target, linkStyle) { (cache?.link?.value ?: currentLink.value)(span.entryLink()) }, start, end)
                     else {
                         val external = externalLinkUrl(span)
                         if (external != null) addLink(LinkAnnotation.Url(external, linkStyle), start, end)
@@ -816,7 +841,7 @@ private val LocalFloatTableWidthReference = staticCompositionLocalOf<Int?> { nul
 private val LocalFloatMarginsConsumed = staticCompositionLocalOf { false }
 
 @Composable
-private fun FloatBlockSequence(blocks: List<Block>, onLink: (String) -> Unit, path: String,
+private fun FloatBlockSequence(blocks: List<Block>, onLink: (EntryLink) -> Unit, path: String,
     modifier: Modifier = Modifier, inCell: Boolean = false, gridPath: String = "root", gapDp: Float,
     trailingGap: Boolean) {
     if (blocks.any { it.table?.style?.floatSide != null }) {
@@ -832,7 +857,7 @@ private fun FloatBlockSequence(blocks: List<Block>, onLink: (String) -> Unit, pa
 }
 
 @Composable
-private fun NativeFloatBlockContext(blocks: List<Block>, onLink: (String) -> Unit, path: String,
+private fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) -> Unit, path: String,
     modifier: Modifier, inCell: Boolean, gridPath: String, gapDp: Float, trailingGap: Boolean,
     containAtEnd: Boolean = true, blockPaths: List<String>? = null, gapsDp: List<Float>? = null,
     sectionRows: Map<Int, ReadingRow> = emptyMap(), sectionActions: Map<Int, List<NativeHeadingAction>> = emptyMap()) {
@@ -843,6 +868,7 @@ private fun NativeFloatBlockContext(blocks: List<Block>, onLink: (String) -> Uni
     val windowHeight = LocalWindowInfo.current.containerSize.height.takeIf { it > 0 }
     val linkColor = MaterialTheme.colorScheme.primary
     val media = LocalEntryMedia.current
+    val mediaOwners = LocalEntryMediaOwners.current
     val settings = LocalReaderSettings.current
     val edition = LocalEntryEdition.current
     val parts = blocks.mapIndexed { index, block ->
@@ -855,7 +881,7 @@ private fun NativeFloatBlockContext(blocks: List<Block>, onLink: (String) -> Uni
         val style = typography.copy(textAlign = block.textAlign?.composeAlign() ?: inheritedAlign ?: androidx.compose.ui.text.style.TextAlign.Unspecified)
         val nativeTextKinds = setOf("paragraph", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading")
         if (block.kind in nativeTextKinds && block.table == null && block.feature == null &&
-            MediaOwners(media).embedded(block.spans.filter { it.image == null }).isEmpty()) {
+            mediaOwners.embedded(block.spans.filter { it.image == null }).isEmpty()) {
             val spans = compactSpans(ordinaryInlineDisplaySpans(block))
             val annotated = styledTextAnnotation(spans, if (block.kind == "term") FontWeight.Bold else null, style, onLink)
             val prefixStyle = MaterialTheme.typography.labelMedium.copy(color =
