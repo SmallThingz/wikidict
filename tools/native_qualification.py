@@ -24,9 +24,12 @@ def require_presentation_source_contract(binding):
     assert binding.get('wire') == 'DPRF'
 
 
-def qualification_build_argv(args, cache, native_build_argv, *, family, prefix=None):
+def qualification_build_argv(args, cache, native_build_argv, *, family, prefix=None,
+                             prepare_test_error_tracing=False):
     """One source for every normal build's optional captured-source option."""
     assert family in ('prepare', 'full', 'install', 'bundle-pipeline', 'bundle')
+    assert type(prepare_test_error_tracing) is bool
+    assert family == 'prepare' or prepare_test_error_tracing is False
     if family in ('prepare', 'full'):
         argv = list(native_build_argv(args, cache))
         assert argv[:3] == [str(args.compiler), 'build', 'test'] and argv.count('-j1') == 1
@@ -46,6 +49,9 @@ def qualification_build_argv(args, cache, native_build_argv, *, family, prefix=N
                 '-Dtarget=x86_64-native', '-Dcpu=baseline', '--summary', 'all',
                 '--search-prefix', '/usr', '--cache-dir', str(cache / 'local'),
                 '--prefix', str(prefix)]
+    assert not any(arg.startswith('-Dprepare-test-error-tracing') for arg in argv)
+    if prepare_test_error_tracing:
+        argv.append('-Dprepare-test-error-tracing=true')
     assert not any(arg.startswith('-Dcaptured-source-fingerprint') for arg in argv)
     fingerprint = getattr(args, 'captured_source_fingerprint', None)
     if fingerprint is not None:
@@ -163,7 +169,7 @@ def validate_preparation_plan(cfg, group_binding, expect, ordered_groups, focus_
     normal_modes=normal_preparation_modes()
     assert prepared_names==tuple(name for name in normal_modes if name in selected_ids) and selected_ids==list(prepared_names) and cfg['focused_expected']==len(focus_cases)
     assert group_binding['compile_time_filtered_preparation'] is any(group['compile_time_filtered'] for group in cfg['groups']) and group_binding['prepare_target']=='prepare-tests' and group_binding['prepared_relative_directory']=='bin/wikidict-tests'
-    assert group_binding['prepare_test_error_tracing'] is False and group_binding['full_normal_partitioned_graph_required'] is True
+    assert type(group_binding['prepare_test_error_tracing']) is bool and group_binding['full_normal_partitioned_graph_required'] is True
     assert expect['expected']['logical_expected_groups']==23 and expect['expected']['expected_groups']==26 and expect['expected']['logical_global_occurrences_equal_physical'] is True
     all_roots={root['root']:root['expected_occurrences'] for root in expect['expected']['groups']}
     from collections import Counter
@@ -204,6 +210,7 @@ def execute_focused_cases(cases, *, binaries, phase, source_root, helper, guard,
                           validate_dynamic, auth, ref, result, save,
                           prepare_group=None, stop_on_failure=False):
     """Use the existing exact-name executor and retain group/failure guards."""
+    from collections import Counter
     offset = 0
     while offset < len(cases):
         group = cases[offset][0]
@@ -216,6 +223,7 @@ def execute_focused_cases(cases, *, binaries, phase, source_root, helper, guard,
         guard(); validate_dynamic()
         binary = binaries[group['prepared_group']]
         auth(binary)
+        prepared_occurrences = Counter(group.get('compiled_expected_occurrences', ()))
         command_error = None
         try:
             for _, index, name, declaration_name in cases[offset:end]:
@@ -223,11 +231,27 @@ def execute_focused_cases(cases, *, binaries, phase, source_root, helper, guard,
                 label = group['id'] + '-' + str(index).zfill(2)
                 command = helper['execute'](phase, label, [binary['path'], '--dict-run-test', name], source_root)
                 stdout, stderr = phase / (label + '.stdout'), phase / (label + '.stderr')
-                text = helper['ANSI'].sub('', stdout.read_text(errors='replace') + '\n' + stderr.read_text(errors='replace'))
-                passed = command.get('status') == 'exited' and command.get('returncode') == 0
+                stdout_text = helper['ANSI'].sub('', stdout.read_text(errors='replace'))
+                stderr_text = helper['ANSI'].sub('', stderr.read_text(errors='replace'))
+                exited = (command.get('status') == 'exited' and type(command.get('returncode')) is int
+                          and command['returncode'] >= 0)
+                unknown_name = (exited and command['returncode'] == 1 and stdout_text == '' and
+                                stderr_text in ('unknown test: ' + name + '\n',
+                                                'unknown test: ' + name + '\r\n'))
+                occurrences = prepared_occurrences[name]
+                # This is authenticated inventory discovery, not proof of body entry.
+                discovered = (type(occurrences) is int and occurrences == 1) if exited else None
+                if discovered is False:
+                    discovered = None
+                if unknown_name:
+                    discovered = False
+                passed = exited and command['returncode'] == 0
                 row = dict(name=name, group=group['id'], command=command, stdout=ref(stdout),
                            stderr=ref(stderr), outcome='passed' if passed else 'failed', passed=passed,
-                           binary=binary, exact_name_discovered=passed, runner_mode='--dict-run-test',
+                           binary=binary, exact_name_discovered=discovered,
+                           exact_name_discovery=dict(prepared_occurrences=occurrences,
+                                                     unknown_name_rejected=unknown_name),
+                           runner_mode='--dict-run-test',
                            full_suite_credit=False)
                 result['focused_tests'].append(row)
                 save(); auth(binary)
@@ -443,7 +467,7 @@ if __name__ == '__main__':
          return True
         guard=source_guard
         def prepare_tests_argv(args,cache,prefix,native_build_argv):
-         return qualification_build_argv(args,cache,native_build_argv,family='prepare',prefix=prefix)
+         return qualification_build_argv(args,cache,native_build_argv,family='prepare',prefix=prefix,prepare_test_error_tracing=group_binding['prepare_test_error_tracing'])
         import pathlib,re
         from types import SimpleNamespace
         sys.path.insert(0,str(R/'tools'));import build_resource_limits as limits
@@ -495,6 +519,10 @@ if __name__ == '__main__':
            assert failed_bundle['command']['status']=='exited' and type(failed_bundle['command']['returncode'])is int
            auth(failed_bundle['stdout']);auth(failed_bundle['stderr'])
            result['inherited_failed_bundle']=dict(phase=failed_bundle,status=prior['status'],error=prior['error'],passed=False,current_execution=False)
+          for inherited in prior['phases']:
+           if inherited['name'].startswith('focused-prepare-') or inherited['name'] in ('cli-ffi-install','full-native-suite','bundle-pipeline','bundle'):
+            tracing=[arg for arg in inherited['command']['argv'] if arg.startswith('-Dprepare-test-error-tracing')]
+            assert tracing==(['-Dprepare-test-error-tracing=true'] if group_binding['prepare_test_error_tracing'] and inherited['name'].startswith('focused-prepare-') else [])
           if captured_fingerprint is not None:
            for inherited in prior['phases']:
             if inherited['name'].startswith('focused-prepare-') or inherited['name'] in ('cli-ffi-install','full-native-suite','bundle-pipeline','bundle'):
@@ -536,14 +564,16 @@ if __name__ == '__main__':
           result['focused_execution_plan']='prepare-on-first-use.v1'
           result['focused_preparation_order']=[]
           result['compiled_discovery']=[]
-          compile_record=dict(groups=[],commands=prepared_commands,passed=False,binaries=binaries,compile_time_filtered=group_binding['compile_time_filtered_preparation'],external_compile_filters=prepare_filters,fixed_partition_filters={g['id']:g['compile_filter_names'] for g in cfg['groups']},compiled_only_discovery={g['id']:g['compiled_only_discovery_names'] for g in cfg['groups']},full_suite_credit=False,interleaved_with_focus=True)
+          compile_record=dict(groups=[],commands=prepared_commands,passed=False,binaries=binaries,compile_time_filtered=group_binding['compile_time_filtered_preparation'],external_compile_filters=prepare_filters,fixed_partition_filters={g['id']:g['compile_filter_names'] for g in cfg['groups']},compiled_only_discovery={g['id']:g['compiled_only_discovery_names'] for g in cfg['groups']},full_suite_credit=False,interleaved_with_focus=True,prepare_test_error_tracing=group_binding['prepare_test_error_tracing'])
           result['compiles'].append(compile_record);save()
           def prepare_focus_group(group):
            prepared=group['id']
            if prepared in binaries:
             auth(binaries[prepared]);return
            argv=prepare_tests_argv(args,cache,prepared_prefix,w['native_build_argv'])
-           assert not any(arg.startswith('-Dprepare-test-filter') or arg.startswith('-Dprepare-test-error-tracing') for arg in argv)
+           assert not any(arg.startswith('-Dprepare-test-filter') for arg in argv)
+           tracing=[arg for arg in argv if arg.startswith('-Dprepare-test-error-tracing')]
+           assert tracing==(['-Dprepare-test-error-tracing=true'] if group_binding['prepare_test_error_tracing'] else [])
            argv+=['-Dprepare-test-group='+prepared]
            execute('focused-prepare-'+prepared,argv)
            prepared_commands.append(result['phases'][-1])

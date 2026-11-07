@@ -13,7 +13,8 @@ import native_qualification as qualification
 def groups():
     return [dict(id=group, prepared_group=group + '_prepared',
                  test_names=[group + '.test.first', group + '.test.second'],
-                 declaration_names=['first', 'second'])
+                 declaration_names=['first', 'second'],
+                 compiled_expected_occurrences=[group + '.test.first', group + '.test.second'])
             for group in ('encoder', 'lua', 'tools')]
 
 
@@ -136,6 +137,8 @@ class FakeExecution:
         self.events = []
         self.saved = []
         self.outcomes = {}
+        self.outputs = {}
+        self.groups = groups()
         self.command_error = None
         self.guard_error = None
         self.dynamic_error = None
@@ -145,7 +148,7 @@ class FakeExecution:
         self.mutate_after = None
         self.result = dict(focused_tests=[])
         self.binaries = {}
-        for group in groups():
+        for group in self.groups:
             path = root / group['prepared_group']; path.write_bytes(group['id'].encode())
             self.binaries[group['prepared_group']] = self.ref(path)
 
@@ -181,15 +184,16 @@ class FakeExecution:
         self.events.append(('execute', label))
         if self.command_error is not None:
             raise self.command_error
-        (phase / (label + '.stdout')).write_text('selected assertion\n')
-        (phase / (label + '.stderr')).write_text('')
+        stdout, stderr = self.outputs.get(label, ('selected assertion\n', ''))
+        (phase / (label + '.stdout')).write_text(stdout)
+        (phase / (label + '.stderr')).write_text(stderr)
         command = self.outcomes.get(label, dict(status='exited', returncode=0))
         if label == self.mutate_after:
             Path(argv[0]).write_bytes(b'changed after execution')
         return command
 
     def run(self, priority=None):
-        _, cases = qualification.selected_focus_plan(groups(), priority or [])
+        _, cases = qualification.selected_focus_plan(self.groups, priority or [])
         qualification.execute_focused_cases(
             cases, binaries=self.binaries, phase=self.phase, source_root=self.source,
             helper=dict(execute=self.execute, ANSI=re.compile(r'\x1b\[[0-9;]*m')),
@@ -220,6 +224,7 @@ class FocusExecutionTests(unittest.TestCase):
                 stdout=self.fake.ref(self.fake.phase / (label + '.stdout')),
                 stderr=self.fake.ref(self.fake.phase / (label + '.stderr')),
                 outcome='passed', passed=True, binary=binary, exact_name_discovered=True,
+                exact_name_discovery=dict(prepared_occurrences=1, unknown_name_rejected=False),
                 runner_mode='--dict-run-test', full_suite_credit=False))
 
     def test_failed_assertions_are_retained_and_remaining_selectors_still_execute(self):
@@ -232,7 +237,8 @@ class FocusExecutionTests(unittest.TestCase):
                          ['encoder.test.second', 'lua.test.first'])
         self.assertFalse(all(row['passed'] for row in rows))
         self.assertTrue(all(not row['full_suite_credit'] for row in rows))
-        self.assertTrue(all(not row['exact_name_discovered'] for row in rows if not row['passed']))
+        self.assertTrue(next(row for row in rows if row['name'] == 'encoder.test.second')['exact_name_discovered'])
+        self.assertIsNone(next(row for row in rows if row['name'] == 'lua.test.first')['exact_name_discovered'])
         self.assertEqual(self.fake.saved[-1]['focused_tests'], rows)
 
     def test_executor_exception_is_not_converted_to_a_test_pass_and_final_guard_runs(self):
@@ -716,7 +722,7 @@ class CurrentTailRecoveryTests(unittest.TestCase):
         errors = root / 'stderr'; errors.write_text('')
         binary = root / 'binary'; binary.write_bytes(b'authenticated installed and prepared fixture')
         stdout, stderr, compiled = map(FakeExecution.ref, (output, errors, binary))
-        command = dict(status='exited', returncode=0)
+        command = dict(status='exited', returncode=0, argv=['zig', 'build'])
         phases = [dict(name=name, command=copy.deepcopy(command), stdout=stdout, stderr=stderr) for name in phase_names]
         report = dict(status='passed', cases=[dict(width=80, checks=['check'] * 68)])
         marks = dict(reader_checks=50, child_report='report', child_summary=dict(status='passed'),
@@ -1156,7 +1162,7 @@ class DiagnosticPreparationPlanTests(unittest.TestCase):
             elif defect == 'count': group['compiled_expected_count'] += 1
             elif defect == 'full-graph': proof['full_normal_partitioned_graph_required'] = False
             elif defect == 'target': proof['prepare_target'] = 'other'
-            else: proof['prepare_test_error_tracing'] = True
+            else: proof['prepare_test_error_tracing'] = 'true'
             proof['groups'] = copy.deepcopy(cfg['groups'])
             commands = []
             with self.subTest(defect=defect), self.assertRaises(AssertionError):
@@ -1398,6 +1404,118 @@ class BindingContractTests(unittest.TestCase):
             proof['compile_time_filtered_preparation'] = not expected_flag
             with self.subTest(selected=selected), self.assertRaises(AssertionError):
                 self.plan(cfg, proof, expectation)
+
+
+
+
+class ExactDiscoveryEvidenceTests(unittest.TestCase):
+    def fixture(self):
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        return FakeExecution(Path(tmp.name))
+
+    def test_exact_unknown_name_rejection_overrides_bound_inventory(self):
+        fake = self.fixture(); name = 'encoder.test.second'
+        fake.outcomes['encoder-01'] = dict(status='exited', returncode=1)
+        fake.outputs['encoder-01'] = ('', 'unknown test: ' + name + '\n')
+        fake.run(); rows = fake.result['focused_tests']
+        rejected = next(row for row in rows if row['name'] == name)
+        self.assertFalse(rejected['passed'] or rejected['exact_name_discovered'])
+        self.assertEqual(rejected['exact_name_discovery'], dict(prepared_occurrences=1, unknown_name_rejected=True))
+        self.assertEqual(len(rows), 6)
+        self.assertTrue(all(row['exact_name_discovered'] for row in rows if row is not rejected))
+
+    def test_page_prose_and_partial_unknown_lines_are_not_rejection_authority(self):
+        name = 'encoder.test.second'
+        for stdout, stderr in [('raw page unknown test: ' + name + '\n', ''),
+                               ('', 'context\nunknown test: ' + name + '\nInvalidPreContext\n'),
+                               ('', 'unknown test: other.test.name\n'),
+                               ('printed output\n', 'unknown test: ' + name + '\n')]:
+            with self.subTest(stdout=stdout, stderr=stderr):
+                fake = self.fixture(); fake.outcomes['encoder-01'] = dict(status='exited', returncode=1)
+                fake.outputs['encoder-01'] = stdout, stderr
+                fake.run(); row = fake.result['focused_tests'][1]
+                self.assertTrue(row['exact_name_discovered'])
+                self.assertFalse(row['passed'] or row['exact_name_discovery']['unknown_name_rejected'])
+
+    def test_unbound_or_nonunique_inventory_and_failed_dispatch_remain_uncertain(self):
+        for inventory in (None, [], {'encoder.test.second': 2}, {'encoder.test.second': True}):
+            with self.subTest(inventory=inventory):
+                fake = self.fixture()
+                if inventory is None: del fake.groups[0]['compiled_expected_occurrences']
+                else: fake.groups[0]['compiled_expected_occurrences'] = inventory
+                fake.outcomes['encoder-01'] = dict(status='exited', returncode=1)
+                fake.run(); row = fake.result['focused_tests'][1]
+                self.assertIsNone(row['exact_name_discovered']); self.assertFalse(row['passed'])
+        for status, returncode in (('timeout', None), ('running', None), ('unknown', None),
+                                   ('exited', -9), ('exited', False), ('exited', True),
+                                   ('exited', 0.0), ('exited', '0')):
+            fake = self.fixture(); fake.outcomes['encoder-01'] = dict(status=status, returncode=returncode)
+            fake.run(); row = fake.result['focused_tests'][1]
+            self.assertIsNone(row['exact_name_discovered']); self.assertFalse(row['passed'])
+
+
+class PreparationTracingTests(unittest.TestCase):
+    def test_tracing_is_explicit_correctness_prepare_only_with_old_default_argv(self):
+        from types import SimpleNamespace
+        args = SimpleNamespace(compiler=Path('/fixture/zig'))
+        cache, prefix = Path('/fixture/cache'), Path('/fixture/install')
+        def native(args, cache): return [str(args.compiler), 'build', 'test', '-j1']
+        old = [str(args.compiler), 'build', 'prepare-tests', '-j2', '--prefix', str(prefix)]
+        self.assertEqual(qualification.qualification_build_argv(args, cache, native, family='prepare', prefix=prefix), old)
+        traced = qualification.qualification_build_argv(args, cache, native, family='prepare', prefix=prefix, prepare_test_error_tracing=True)
+        self.assertEqual(traced, old + ['-Dprepare-test-error-tracing=true'])
+        for family in ('full', 'install', 'bundle-pipeline', 'bundle'):
+            options = dict(family=family, prefix=None if family == 'full' else prefix)
+            plain = qualification.qualification_build_argv(args, cache, native, **options)
+            self.assertFalse(any(arg.startswith('-Dprepare-test-error-tracing') for arg in plain))
+            with self.assertRaises(AssertionError):
+                qualification.qualification_build_argv(args, cache, native, prepare_test_error_tracing=True, **options)
+        for bad in (None, 1, 'true'):
+            with self.assertRaises(AssertionError):
+                qualification.qualification_build_argv(args, cache, native, family='prepare', prefix=prefix, prepare_test_error_tracing=bad)
+        with self.assertRaises(AssertionError):
+            qualification.qualification_build_argv(args, cache,
+                lambda args, cache: native(args, cache) + ['-Dprepare-test-error-tracing=true'], family='prepare', prefix=prefix, prepare_test_error_tracing=True)
+
+    def test_real_preparation_prefix_forwards_one_tracing_flag_in_both_correctness_stages(self):
+        for stage in ('full', 'focused-diagnostic'):
+            cfg, proof, expect = DiagnosticPreparationPlanTests().plan(['tools'], stage)
+            proof['prepare_test_error_tracing'] = True
+            commands = []
+            PreparationFailFastTests().execute_prefix(cfg, proof, expect, commands)
+            prepared = [argv for label, argv in commands if label.startswith('focused-prepare-')]
+            self.assertEqual(len(prepared), 1)
+            self.assertEqual([arg for arg in prepared[0] if arg.startswith('-Dprepare-test-error-tracing')], ['-Dprepare-test-error-tracing=true'])
+        for bad in (1, None, 'true'):
+            cfg, proof, expect = DiagnosticPreparationPlanTests().plan(['tools'], 'full')
+            proof['prepare_test_error_tracing'] = bad; commands = []
+            with self.assertRaises(AssertionError):
+                PreparationFailFastTests().execute_prefix(cfg, proof, expect, commands)
+            self.assertEqual(commands, [])
+
+    def test_traced_tail_requires_exact_inherited_prepare_flags_without_other_build_changes(self):
+        choices = [(True, defect) for defect in (None, 'missing', 'duplicate', 'false', 'full')] + [(False, None), (False, 'unexpected-trace')]
+        for traced, defect in choices:
+            owner = CurrentTailRecoveryTests(); self.addCleanup(owner.doCleanups)
+            value = owner.fixture(); namespace = value['namespace']
+            namespace['group_binding']['prepare_test_error_tracing'] = traced
+            phases = value['objects']['result']['phases']
+            for phase in phases:
+                phase['command']['argv'] = ['zig', 'build']
+                if traced and phase['name'].startswith('focused-prepare-'):
+                    phase['command']['argv'].append('-Dprepare-test-error-tracing=true')
+            first = next(phase for phase in phases if phase['name'].startswith('focused-prepare-'))
+            if defect == 'missing': first['command']['argv'].pop()
+            elif defect == 'duplicate': first['command']['argv'].append('-Dprepare-test-error-tracing=true')
+            elif defect == 'false': first['command']['argv'][-1] = '-Dprepare-test-error-tracing=false'
+            elif defect == 'full': next(phase for phase in phases if phase['name'] == 'full-native-suite')['command']['argv'].append('-Dprepare-test-error-tracing=true')
+            elif defect == 'unexpected-trace': first['command']['argv'].append('-Dprepare-test-error-tracing=true')
+            if defect is None:
+                exec(value['code'], namespace)
+                self.assertTrue(namespace['result']['full_native_pass'])
+            else:
+                with self.assertRaises(AssertionError): exec(value['code'], namespace)
+            self.assertEqual(value['commands'], [])
 
 
 if __name__ == '__main__':
