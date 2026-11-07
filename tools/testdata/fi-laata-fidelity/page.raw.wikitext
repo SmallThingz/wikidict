@@ -1,0 +1,74 @@
+*verbi '''{{l|fi|laata}}''', taivutustyyppi {{liite|Suomen sanojen taivutustyypit#73|73}} (taipuu vaillinaisesti vain muutamissa muodoissa)
+
+{{#invoke:fi-verbi-taiv|Taivutustaulukko
+ | vokaalisointu = -
+ | 1.inf = laata
+ | 1.inf.pitkä = -
+ | 2.inf.iness.akt = -
+ | 2.inf.iness.pass = -
+ | 2.inf.ins = -
+ | 3.inf.abess = -
+ | 3.inf.adess = -
+ | 3.inf.elat = -
+ | 3.inf.ill = -
+ | 3.inf.iness = -
+ | 3.inf.ins.akt = -
+ | 3.inf.ins.pass = -
+ | 4.inf.nom = -
+ | 4.inf.part = -
+ | 5.inf = -
+ | agpart.neg = -
+ | agpart = -
+ | akt.pperf = laannut
+ | akt.pperf.mon = laanneet
+ | akt.pprees = -
+ | imp.kon = laatko
+ | imp.m1p = -
+ | imp.m2p = -
+ | imp.m3p = laatkoot
+ | imp.pass = -
+ | imp.pass.kon = -
+ | imp.y2p = -
+ | imp.y2p.kon = -
+ | imp.y3p = laatkoon
+ | ind.i.m1p = -
+ | ind.i.m2p = -
+ | ind.i.m3p = -
+ | ind.i.y1p = -
+ | ind.i.y2p = -
+ | ind.i.y3p = -
+ | ind.imperf.pass = -
+ | ind.kon = -
+ | ind.p.m1p = -
+ | ind.p.m2p = -
+ | ind.p.m3p = -
+ | ind.p.y1p = -
+ | ind.p.y2p = -
+ | ind.p.y3p = -
+ | ind.prees.pass = -
+ | ind.prees.pass.kon = -
+ | kond.kon = -
+ | kond.m1p = -
+ | kond.m2p = -
+ | kond.m3p = -
+ | kond.pass = -
+ | kond.pass.kon = -
+ | kond.y1p = -
+ | kond.y2p = -
+ | kond.y3p = -
+ | pass.pperf = -
+ | pass-pprees = -
+ | pot.kon = laanne
+ | pot.m1p = -
+ | pot.m2p = -
+ | pot.m3p = laannevat
+ | pot.pass = -
+ | pot.pass.kon = -
+ | pot.y1p = -
+ | pot.y2p = -
+ | pot.y3p = laannee
+ | p = 3
+}}<includeonly>
+
+[[Luokka:Suomen verbien taivutusliitteet|{{{1}}}{{{2|a}}}jt{{{2|a}}}{{{2|a}}}]]
+</includeonly>

@@ -1,0 +1,95 @@
+== [[File:Flag of Italy.svg|40px|border|bandiera italiana]] [[Appendice:Italiano|Italiano]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[aggettivo|Aggettivo]]''===
+[[Categoria:Aggettivi in italiano]] 
+
+'''consistente'''<small></small> ''m'' e ''f sing'' (''pl.'': [[consistenti]])
+# ''definizione mancante; se vuoi, <span class="plainlinks">[//it.wiktionary.org/w/index.php?title=consistente&action=edit aggiungila]</span> tu''[[Categoria:Pagine senza definizione - italiano]]
+# <small>(''per estensione'')</small> di considerevole  [[grandezza]]
+
+===[[Image:Open_book_01.svg|30px|]]''[[voce verbale|Voce verbale]]''===
+[[Categoria:Voci verbali in italiano]] 
+
+'''consistente'''<small></small>
+# [[participio presente]] singolare di [[consistere]]
+
+=== [[File:Hyph abc.svg|45px]] [[sillabazione|Sillabazione]] ===
+
+; con | si | stèn | te
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/konsisˈtɛnte/</span>
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+dal latino ''[[consistens]]'' che deriva da ''[[consistĕre]]'' cioè "[[star saldo]]"
+
+===[[File:Icona_sinonimi.png|35px]] [[sinonimi|Sinonimi]]===
+
+*''(di materiale)'' [[coerente]], [[compatto]], [[denso]], [[duro]], [[fitto]], [[massiccio]], [[resistente]], [[robusto]], [[sodo]] [[solido]], [[spesso]]
+*''(di ragionamento)'' [[attendibile]], [[corretto]],  [[convincente]],  [[efficace]], [[fondato]], [[motivato]], [[provato]],  [[valido]],
+* <small>(''senso figurato'')</small> ''(di numero)'' [[considerevole]], [[cospicuo]], [[importante]], [[notevole]], [[ragguardevole]], [[rilevante]]
+* <small>(''per estensione'')</small> ''(di quantità, somma)''  [[apprezzabile]] 
+* [[fermo]],  [[ingente]],   [[saldo]]
+
+ 
+
+===[[immagine:Fairytale right blue.png|20px]][[immagine:Fairytale left blue.png|20px]] [[contrario|Contrari]]===
+
+*''(di oggetto)'' [[cedevole]], [[friabile]], [[debole]], [[fragile]], [[inconsistente]], [[incoerente]], [[molle]], [[poroso]], [[soffice]], [[sottile]], 
+*[[insignificante]], [[irrilevante]], [[trascurabile]]
+*''(di ragionamento)'' [[gratuito]], [[immotivato]],  [[infondato]], [[vago]]
+* <small>(''per estensione'')</small>  [[esiguo]], [[limitato]], [[scarso]] 
+* <small>(''senso figurato'')</small> ''(di argomento, prova)'' [[inconsistente]], [[inefficace]], [[inattendibile]]
+
+===[[File:Nuvola apps tree.svg|30px]]  [[parole|Parole]] [[derivate]]===
+  
+*[[consistentemente]]
+
+===[[Image:Books-aj.svg aj ashton 01.svg|30px]] [[termine|Termini]] [[correlato|correlati]]===
+
+* [[consistenza]], [[consistere]]
+
+=== [[Image:Gnome-globe.svg|30px]] [[traduzione|Traduzione]] ===
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">denso
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+: [[inglese]]: [[thick]], [[dense]]
+
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">compatto
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]:[[firm]], [[compact]], [[solid]]
+:*[[spagnolo]]:[[consistente]], [[sólido
+|}</div></div>]]
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">convincente
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]:[[convincing]], [[sound]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">Vedi le traduzioni
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]: [[substantial]], [[stiff]],  substantial, [[sizeable]], [[valid]]
+|}</div></div>
+
+<div class="NonModificabile">
+== [[Image:Nuvola apps bookcase.svg|30px|]] [[note|Note]] / [[riferimenti|Riferimenti]] ==
+</div>
+* Francesco Sabatini e Vittorio Coletti, [http://dizionari.corriere.it/dizionario_italiano/C/consistente.shtml ''Il Sabatini Coletti''] edizione online su ''[http://dizionari.corriere.it corriere.it]'', RCS Mediagroup
+* AA.VV., [https://dizionari.corriere.it/dizionario_sinonimi_contrari/C/consistente.shtml ''Dizionario dei Sinonimi e dei Contrari''] edizione on line su ''[https://dizionari.corriere.it corriere.it]'', RCS Mediagroup
+* AA.VV., [https://www.treccani.it/vocabolario/ricerca/consistente/ ''Vocabolario Treccani''] edizione online su ''[https://www.treccani.it treccani.it]'', Istituto dell'Enciclopedia Italiana
+* Enrico Olivetti, [https://www.dizionario-italiano.it/dizionario-italiano.php?lemma=CONSISTENTE100 ''Dizionario Italiano Olivetti''] edizione on line su ''[https://www.dizionario-italiano.it www.dizionario-italiano.it]'', Olivetti Media Communication
+*AA.VV., ''Dizionario sinonimi e contrari'', Mariotti, 2006, pagina 141

@@ -1,0 +1,481 @@
+*verbi '''<span class="Zzzz linkki" lang="fi">[[laata#Suomi|laata]]</span>''', taivutustyyppi [[:Liite:Suomen sanojen taivutustyypit#73|73]] (taipuu vaillinaisesti vain muutamissa muodoissa)
+
+<div class="fiwikt-liitemetada" style="display:none;">
+<span class="fiwikt-kielikoodi">fi</span>
+<span class="fiwikt-kieliotsikko">Suomi</span>
+<span class="fiwikt-sanaluokkaotsikko">Verbi</span>
+<span class="fiwikt-artikkeli">'''laata'''</span>
+<span class="fiwikt-hakusana">'''laata'''</span>
+
+</div>
+{| class="piilotettu fi-taiv-vartalot-table"
+|+ Vartalot
+|-
+| vokaalivartalo || {{{vart.vok}}}
+|-
+| heikko vokaalivartalo || {{{vart.heik}}}
+|-
+| vahva vokaalivartalo || {{{vart.vah}}}
+|-
+| konsonanttivartalo || {{{vart.kons}}}
+|-
+|}
+
+==Persoonamuodot==
+{| class="wikitable" style="font-size:96%;white-space:nowrap;"
+|-
+! colspan="7" style="background:#e2e4c0" align=center| Indikatiivi
+|-
+! colspan="3" align=center| preesens
+! colspan="1" align=center|
+! colspan="3" align=center| perfekti
+|-
+! persoona
+! myönteinen
+! kielteinen
+!
+! persoona
+! myönteinen
+! kielteinen
+|-
+| minä
+| &ndash;
+| &ndash;
+|
+| minä
+| &ndash;
+| &ndash;
+|-
+| sinä
+| &ndash;
+| &ndash;
+|
+| sinä
+| &ndash;
+| &ndash;
+|-
+| hän
+| –
+| ei –
+|
+| hän
+| on <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/fi/v/akt.pperf" data-kuvaus-param="{&amp;quot;8&amp;quot;:&amp;quot;laata&amp;quot;}">[[laannut#Suomi|laannut]]</span>
+| ei ole <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/fi/v/akt.pperf" data-kuvaus-param="{&amp;quot;8&amp;quot;:&amp;quot;laata&amp;quot;}">[[laannut#Suomi|laannut]]</span>
+|-
+| me
+| &ndash;
+| &ndash;
+|
+| me
+| &ndash;
+| &ndash;
+|-
+| te<br/>Te
+| &ndash;
+| &ndash;
+|
+| te<br/>Te
+| &ndash;
+| &ndash;
+|-
+| he
+| –
+| eivät –
+|
+| he
+| ovat <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/*/v/akt.pperf.mon" data-kuvaus-param="{&amp;quot;8&amp;quot;:{&amp;quot;1&amp;quot;:&amp;quot;laannut&amp;quot;}}">[[laanneet#Suomi|laanneet]]</span>
+| eivät ole <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/*/v/akt.pperf.mon" data-kuvaus-param="{&amp;quot;8&amp;quot;:{&amp;quot;1&amp;quot;:&amp;quot;laannut&amp;quot;}}">[[laanneet#Suomi|laanneet]]</span>
+|-
+! colspan="3" align=center|
+! colspan="1" align=center|
+! colspan="3" align=center|
+|-
+| '''passiivi'''
+| &ndash;
+| &ndash;
+|
+| '''passiivi'''
+| &ndash;
+| &ndash;
+|-
+! colspan="3" align=center| imperfekti
+! colspan="1" align=center|
+! colspan="3" align=center| pluskvamperfekti
+|-
+! persoona
+! myönteinen
+! kielteinen
+!
+! persoona
+! myönteinen
+! kielteinen
+|-
+| minä
+| &ndash;
+| &ndash;
+|
+| minä
+| &ndash;
+| &ndash;
+|-
+| sinä
+| &ndash;
+| &ndash;
+|
+| sinä
+| &ndash;
+| &ndash;
+|-
+| hän
+|–
+| ei <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/fi/v/akt.pperf" data-kuvaus-param="{&amp;quot;8&amp;quot;:&amp;quot;laata&amp;quot;}">[[laannut#Suomi|laannut]]</span>
+|
+| hän
+| oli <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/fi/v/akt.pperf" data-kuvaus-param="{&amp;quot;8&amp;quot;:&amp;quot;laata&amp;quot;}">[[laannut#Suomi|laannut]]</span>
+| ei ollut <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/fi/v/akt.pperf" data-kuvaus-param="{&amp;quot;8&amp;quot;:&amp;quot;laata&amp;quot;}">[[laannut#Suomi|laannut]]</span>
+|-
+| me
+| &ndash;
+| &ndash;
+|
+| me
+| &ndash;
+| &ndash;
+|-
+| te<br/>Te
+| &ndash;
+| &ndash;
+|
+| te<br/>Te
+| &ndash;
+| &ndash;
+|-
+| he
+| –
+| eivät <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/*/v/akt.pperf.mon" data-kuvaus-param="{&amp;quot;8&amp;quot;:{&amp;quot;1&amp;quot;:&amp;quot;laannut&amp;quot;}}">[[laanneet#Suomi|laanneet]]</span>
+|
+| he
+| olivat <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/*/v/akt.pperf.mon" data-kuvaus-param="{&amp;quot;8&amp;quot;:{&amp;quot;1&amp;quot;:&amp;quot;laannut&amp;quot;}}">[[laanneet#Suomi|laanneet]]</span>
+| eivät olleet <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/*/v/akt.pperf.mon" data-kuvaus-param="{&amp;quot;8&amp;quot;:{&amp;quot;1&amp;quot;:&amp;quot;laannut&amp;quot;}}">[[laanneet#Suomi|laanneet]]</span>
+|-
+! colspan="3" align=center|
+! colspan="1" align=center|
+! colspan="3" align=center|
+|-
+| '''passiivi'''
+| &ndash;
+| &ndash;
+|
+| '''passiivi'''
+| &ndash;
+| &ndash;
+|-
+|}
+
+{| class="wikitable" style="font-size:96%;white-space:nowrap;"
+! colspan="7" style="background:#c0cfe4" align=center| Konditionaali
+|-
+! colspan="3" align=center| preesens
+! colspan="1" align=center|
+! colspan="3" align=center| perfekti
+|-
+! persoona
+! myönteinen
+! kielteinen
+!
+! persoona
+! myönteinen
+! kielteinen
+|-
+| minä
+| &ndash;
+| &ndash;
+|
+| minä
+| &ndash;
+| &ndash;
+|-
+| sinä
+| &ndash;
+| &ndash;
+|
+| sinä
+| &ndash;
+| &ndash;
+|-
+| hän
+|–
+| ei –
+|
+| hän
+| olisi <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/fi/v/akt.pperf" data-kuvaus-param="{&amp;quot;8&amp;quot;:&amp;quot;laata&amp;quot;}">[[laannut#Suomi|laannut]]</span>
+| ei olisi <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/fi/v/akt.pperf" data-kuvaus-param="{&amp;quot;8&amp;quot;:&amp;quot;laata&amp;quot;}">[[laannut#Suomi|laannut]]</span>
+|-
+| me
+| &ndash;
+| &ndash;
+|
+| me
+| &ndash;
+| &ndash;
+|-
+| te<br/>Te
+| &ndash;
+| &ndash;
+|
+| te<br/>Te
+| &ndash;
+| &ndash;
+|-
+| he
+| –
+| eivät –
+|
+| he
+| olisivat <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/*/v/akt.pperf.mon" data-kuvaus-param="{&amp;quot;8&amp;quot;:{&amp;quot;1&amp;quot;:&amp;quot;laannut&amp;quot;}}">[[laanneet#Suomi|laanneet]]</span>
+| eivät olisi <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/*/v/akt.pperf.mon" data-kuvaus-param="{&amp;quot;8&amp;quot;:{&amp;quot;1&amp;quot;:&amp;quot;laannut&amp;quot;}}">[[laanneet#Suomi|laanneet]]</span>
+|-
+! colspan="3" align=center|
+! colspan="1" align=center|
+! colspan="3" align=center|
+|-
+| '''passiivi'''
+| &ndash;
+| &ndash;
+|
+| '''passiivi'''
+| &ndash;
+| &ndash;
+|-
+|}
+
+{| class="wikitable" style="font-size:96%;white-space:nowrap;"
+! colspan="7" style="background:#c0e4c0" align=center| Potentiaali
+|-
+! colspan="3" align=center| preesens
+! colspan="1" align=center|
+! colspan="3" align=center| perfekti
+|-
+! persoona
+! myönteinen
+! kielteinen
+!
+! persoona
+! myönteinen
+! kielteinen
+|-
+| minä
+| &ndash;
+| &ndash;
+|
+| minä
+| &ndash;
+| &ndash;
+|-
+| sinä
+| &ndash;
+| &ndash;
+|
+| sinä
+| &ndash;
+| &ndash;
+|-
+| hän
+|<span class="Zzzz linkki" lang="fi" data-kuvaus="tm/*/v/pot.y3p">[[laannee#Suomi|laannee]]</span>
+| ei –
+|
+| hän
+| lienee <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/fi/v/akt.pperf" data-kuvaus-param="{&amp;quot;8&amp;quot;:&amp;quot;laata&amp;quot;}">[[laannut#Suomi|laannut]]</span>
+| ei liene <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/fi/v/akt.pperf" data-kuvaus-param="{&amp;quot;8&amp;quot;:&amp;quot;laata&amp;quot;}">[[laannut#Suomi|laannut]]</span>
+|-
+| me
+| &ndash;
+| &ndash;
+|
+| me
+| &ndash;
+| &ndash;
+|-
+| te<br>Te
+| &ndash;
+| &ndash;
+|
+| te<br>Te
+| &ndash;
+| &ndash;
+|-
+| he
+| <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/*/v/pot.m3p">[[laannevat#Suomi|laannevat]]</span>
+| eivät –
+|
+| he
+| lienevät <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/*/v/akt.pperf.mon" data-kuvaus-param="{&amp;quot;8&amp;quot;:{&amp;quot;1&amp;quot;:&amp;quot;laannut&amp;quot;}}">[[laanneet#Suomi|laanneet]]</span>
+| eivät liene <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/*/v/akt.pperf.mon" data-kuvaus-param="{&amp;quot;8&amp;quot;:{&amp;quot;1&amp;quot;:&amp;quot;laannut&amp;quot;}}">[[laanneet#Suomi|laanneet]]</span>
+|-
+! colspan="3" align=center|
+! colspan="1" align=center|
+! colspan="3" align=center|
+|-
+| '''passiivi'''
+| &ndash;
+| &ndash;
+|
+| '''passiivi'''
+| &ndash;
+| &ndash;
+|-
+|}
+
+{| class="wikitable" style="font-size:96%;white-space:nowrap;"
+! colspan="7" style="background:#e4d4c0" align=center| Imperatiivi
+|-
+! colspan="3" align=center| preesens
+! colspan="1" align=center|
+! colspan="3" align=center| perfekti
+|-
+! persoona
+! myönteinen
+! kielteinen
+!
+! persoona
+! myönteinen
+! kielteinen
+|-
+| minä
+| &ndash;
+| &ndash;
+|
+| minä
+| &ndash;
+| &ndash;
+|-
+| sinä
+| &ndash;
+| &ndash;
+|
+| sinä
+| &ndash;
+| &ndash;
+|-
+| hän
+|<span class="Zzzz linkki" lang="fi" data-kuvaus="tm/*/v/imp.y3p">[[laatkoon#Suomi|laatkoon]]</span>
+| älköön –
+|
+| hän
+| olkoon <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/fi/v/akt.pperf" data-kuvaus-param="{&amp;quot;8&amp;quot;:&amp;quot;laata&amp;quot;}">[[laannut#Suomi|laannut]]</span>
+| älköön olko <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/fi/v/akt.pperf" data-kuvaus-param="{&amp;quot;8&amp;quot;:&amp;quot;laata&amp;quot;}">[[laannut#Suomi|laannut]]</span>
+|-
+| me
+| &ndash;
+| &ndash;
+|
+| me
+| &ndash;
+| &ndash;
+|-
+| te<br>Te
+| &ndash;
+| &ndash;
+|
+| te<br>Te
+| &ndash;
+| &ndash;
+|-
+| he
+| <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/*/v/imp.m3p">[[laatkoot#Suomi|laatkoot]]</span>
+| älkööt –
+|
+| he
+| olkoot <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/*/v/akt.pperf.mon" data-kuvaus-param="{&amp;quot;8&amp;quot;:{&amp;quot;1&amp;quot;:&amp;quot;laannut&amp;quot;}}">[[laanneet#Suomi|laanneet]]</span>
+| älkööt olko <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/*/v/akt.pperf.mon" data-kuvaus-param="{&amp;quot;8&amp;quot;:{&amp;quot;1&amp;quot;:&amp;quot;laannut&amp;quot;}}">[[laanneet#Suomi|laanneet]]</span>
+|-
+! colspan="3" align=center|
+! colspan="1" align=center|
+! colspan="3" align=center|
+|-
+| '''passiivi'''
+| &ndash;
+| &ndash;
+|
+| '''passiivi'''
+| &ndash;
+| &ndash;
+|-
+|}
+
+==Nominaalimuodot==
+{| class="wikitable" style="font-size:96%;white-space:nowrap;"
+|-
+! style="background:rgb(80%,80%,100%)" colspan="4" width="50%" | infinitiivit
+! style="background:rgb(80%,80%,100%)" colspan="3" width="50%" | partisiipit
+|-
+| style="background:rgb(80%,80%,100%)" colspan="2" |
+! width="25%" | aktiivi
+! width="25%" | passiivi
+| style="background:rgb(80%,80%,100%)" |
+! width="25%" | aktiivi
+! width="25%" | passiivi
+|-
+! style="background:rgb(80%,80%,100%)" colspan="2" | 1.
+| colspan="2" style="background:rgb(95%,95%,100%)" | '''laata'''
+! style="background:rgb(80%,80%,100%)" | preesens
+| style="background:rgb(95%,95%,100%)" | –
+| style="background:rgb(95%,95%,100%)" | 
+|-
+! style="background:rgb(80%,80%,100%)" colspan="2" | pitkä 1.
+| colspan="2" style="background:rgb(95%,95%,100%)" | –<sup>1</sup>
+! style="background:rgb(80%,80%,100%)" | perfekti
+| style="background:rgb(95%,95%,100%)" | <span class="Zzzz linkki" lang="fi" data-kuvaus="tm/fi/v/akt.pperf" data-kuvaus-param="{&amp;quot;8&amp;quot;:&amp;quot;laata&amp;quot;}">[[laannut#Suomi|laannut]]</span>
+| style="background:rgb(95%,95%,100%)" | –
+|-
+! style="background:rgb(80%,80%,100%)" rowspan="2" | 2.
+! inessiivi
+| style="background:rgb(95%,95%,100%)" | –<sup>2</sup>
+| style="background:rgb(95%,95%,100%)" | –
+! style="background:rgb(80%,80%,100%)" | agentti
+| colspan="2" style="background:rgb(95%,95%,100%)" | –<sup>4</sup>
+|-
+! instruktiivi
+| style="background:rgb(95%,95%,100%)" | –
+| style="background:rgb(95%,95%,100%)" | &ndash;
+! style="background:rgb(80%,80%,100%)" | kielteinen agentti
+| colspan="2" style="background:rgb(95%,95%,100%)" | –
+|-
+! style="background:rgb(80%,80%,100%)" rowspan="6" | 3.
+! inessiivi
+| style="background:rgb(95%,95%,100%)" | –
+| style="background:rgb(95%,95%,100%)" | &ndash;
+| colspan="3" rowspan="9" style="background:rgb(95%,95%,100%);text-align:left;vertical-align:top;font-size:smaller;" | <sup>1)</sup> käytetään vain [[:Luokka:Suomen kielen possessiivisuffiksit|omistusliitteen]] kanssa; tämä on yksikön ja monikon kolmannen persoonan muoto<br/>
+<sup>2)</sup> voidaan käyttää [[:Luokka:Suomen kielen possessiivisuffiksit|omistusliitteen]] kanssa<br/>
+<sup>3)</sup> käytetään vain [[:Luokka:Suomen kielen possessiivisuffiksit|omistusliitteen]] kanssa; tämä on yksikön ja monikon kolmannen persoonan muoto<br/>
+<sup>4)</sup> käytetään vain transitiiviverbeistä kuten "tehdä", esim. "äidin tekemä ruoka"; ei intransitiiviverbeistä kuten "kuolla"
+|-
+! elatiivi
+| style="background:rgb(95%,95%,100%)" | –
+| style="background:rgb(95%,95%,100%)" | &ndash;
+|-
+! illatiivi
+| style="background:rgb(95%,95%,100%)" | –
+| style="background:rgb(95%,95%,100%)" | &ndash;
+|-
+! adessiivi
+| style="background:rgb(95%,95%,100%)" | –
+| style="background:rgb(95%,95%,100%)" | &ndash;
+|-
+! abessiivi
+| style="background:rgb(95%,95%,100%)" | –
+| style="background:rgb(95%,95%,100%)" | &ndash;
+|-
+! instruktiivi
+| style="background:rgb(95%,95%,100%)" | –
+| style="background:rgb(95%,95%,100%)" | –
+|-
+! style="background:rgb(80%,80%,100%)" colspan="2" | 4.
+| colspan="2" style="background:rgb(95%,95%,100%)" | –
+|-
+! style="background:rgb(80%,80%,100%)" colspan="2" | 5
+| colspan="2" style="background:rgb(95%,95%,100%)" | –<sup>3</sup>
+|}<includeonly>
+
+[[Luokka:Suomen verbien taivutusliitteet|{{{1}}}ajtaa]]
+</includeonly>

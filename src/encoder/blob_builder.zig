@@ -1209,6 +1209,104 @@ fn resolveCodedSpanHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLan
 // Accept only a whole trusted name followed by categories for that same language.
 // A neutral file icon decorates one independently trusted whole language name.
 // Neither the filename nor a code-shaped template title supplies ownership.
+// A complete decorative banner supplies a whole independently Strong name.
+// Its File identity, sizing, wrappers and the edition never supply a language.
+fn decorativeBannerAttrs(tag: blobs.wikitext_syntax.Tag) bool {
+    const attrs = std.mem.trim(u8, tag.attrs, " \t");
+    if (attrs.len == 0) return true;
+    if (!tag.is("div") or attrs.len > 128) return false;
+    var at: usize = 0;
+    var id = false;
+    var class = false;
+    while (at < attrs.len) {
+        while (at < attrs.len and (attrs[at] == ' ' or attrs[at] == '\t')) : (at += 1) {}
+        if (at == attrs.len) break;
+        const key_start = at;
+        while (at < attrs.len and std.ascii.isAlphabetic(attrs[at])) : (at += 1) {}
+        if (key_start == at) return false;
+        const key = attrs[key_start..at];
+        while (at < attrs.len and (attrs[at] == ' ' or attrs[at] == '\t')) : (at += 1) {}
+        if (at == attrs.len or attrs[at] != '=') return false;
+        at += 1;
+        while (at < attrs.len and (attrs[at] == ' ' or attrs[at] == '\t')) : (at += 1) {}
+        if (at == attrs.len) return false;
+        const quote = attrs[at];
+        const quoted = quote == '\'' or quote == '"';
+        if (quoted) at += 1;
+        const value_start = at;
+        while (at < attrs.len and (if (quoted) attrs[at] != quote else attrs[at] != ' ' and attrs[at] != '\t')) : (at += 1) {}
+        const value = attrs[value_start..at];
+        if (quoted) {
+            if (at == attrs.len) return false;
+            at += 1;
+            if (at < attrs.len and attrs[at] != ' ' and attrs[at] != '\t') return false;
+        }
+        if (std.ascii.eqlIgnoreCase(key, "id") and !id and std.mem.eql(u8, value, "toc")) id = true else if
+            (std.ascii.eqlIgnoreCase(key, "class") and !class and std.mem.eql(u8, value, "toccolours")) class = true else return false;
+    }
+    return id and class;
+}
+fn resolveDecorativeFileBanner(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
+    if (section.hyphen_marker or section.source.len == 0 or section.heading.len > 4096) return null;
+    const syntax = blobs.wikitext_syntax;
+    const line_end = std.mem.indexOfScalar(u8, section.source, '\n') orelse section.source.len;
+    const line = std.mem.trimEnd(u8, section.source[0..line_end], "\r");
+    const physical = syntax.controlHeading(line, null) orelse return null;
+    if (physical.level != 2 or !std.mem.eql(u8, physical.title, section.heading)) return null;
+    if (!std.unicode.utf8ValidateSlice(section.heading)) return null;
+    for (section.heading) |byte| if (std.ascii.isControl(byte) and byte != '\t') return null;
+    var body = std.mem.trim(u8, section.heading, " \t");
+    const outer = syntax.tagAt(body, 0) orelse return null;
+    if (!outer.is("div") or outer.closing or outer.self_closing or !decorativeBannerAttrs(outer)) return null;
+    const outer_pair = syntax.matchingTag(body, outer) orelse return null;
+    if (outer_pair.end != body.len) return null;
+    const outer_close = syntax.tagAt(body, outer_pair.inner_end) orelse return null;
+    if (!outer_close.closing or outer_close.self_closing or std.mem.trim(u8, outer_close.attrs, " \t").len != 0) return null;
+    body = std.mem.trim(u8, body[outer.end..outer_pair.inner_end], " \t");
+    var big_count: usize = 0;
+    while (body.len != 0 and body[0] == '<') {
+        if (big_count == 3) return null;
+        const big = syntax.tagAt(body, 0) orelse return null;
+        if (!big.is("big") or big.closing or big.self_closing or !decorativeBannerAttrs(big)) return null;
+        const pair = syntax.matchingTag(body, big) orelse return null;
+        if (pair.end != body.len) return null;
+        const big_close = syntax.tagAt(body, pair.inner_end) orelse return null;
+        if (!big_close.closing or big_close.self_closing or std.mem.trim(u8, big_close.attrs, " \t").len != 0) return null;
+        body = std.mem.trim(u8, body[big.end..pair.inner_end], " \t");
+        big_count += 1;
+    }
+    if (big_count == 0 or !std.mem.startsWith(u8, body, "[[")) return null;
+    const pair = syntax.balanced(body, 0) orelse return null;
+    const image = body[2..pair.inner_end];
+    if (std.mem.indexOfAny(u8, image, "[]{}<>&#\r\n") != null) return null;
+    const pipe = std.mem.indexOfScalar(u8, image, '|') orelse return null;
+    const target = std.mem.trim(u8, image[0..pipe], " \t");
+    if (target.len == 0 or target[0] == ':') return null;
+    const namespaces = codes.namespace_catalog orelse return null;
+    const file = namespaces.ofTitle(target);
+    if (file.id != 6 or @import("presentation_media.zig").referencedKind(file.text) != .image) return null;
+    var width = false;
+    var border = false;
+    var options = std.mem.splitScalar(u8, image[pipe + 1 ..], '|');
+    while (options.next()) |part| {
+        const option = std.mem.trim(u8, part, " \t");
+        if (option.len == 0) return null;
+        const option_module = @import("namespace_registry").image_options;
+        const matched = (if (codes.image_options) |registry| registry.match(option, .image) else option_module.matchEnglish(option, .image)) orelse return null;
+        if (std.mem.eql(u8, matched.id, "img_width") and !width) {
+            const number = matched.value orelse return null;
+            for (number) |byte| if (!std.ascii.isDigit(byte)) return null;
+            const pixels = std.fmt.parseInt(u16, number, 10) catch return null;
+            if (pixels == 0 or pixels > 4096) return null;
+            width = true;
+        } else if (std.mem.eql(u8, matched.id, "img_border") and !border) border = true else return null;
+    }
+    if (!width or pair.end >= body.len or (body[pair.end] != ' ' and body[pair.end] != '\t')) return null;
+    const label = std.mem.trim(u8, body[pair.end..], " \t");
+    if (label.len == 0 or std.mem.indexOfAny(u8, label, "[]{}<>&|=\"'\r\n\t") != null or knownOuterSupportOrPos(label)) return null;
+    return codes.resolveStrong(label);
+}
+
 fn resolveFlaggedLanguageHeading(codes: LanguageCodes, value: []const u8) ?ResolvedLanguage {
     const namespaces = codes.namespace_catalog orelse return null;
     const heading = std.mem.trim(u8, value, " \t");
@@ -1642,6 +1740,7 @@ fn resolveProjectParenthetical(codes: LanguageCodes, declaration: ProjectParenth
 }
 
 fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
+    if (resolveDecorativeFileBanner(codes, section)) |owner| return owner;
     if (projectParentheticalDeclaration(codes, section)) |declaration| return resolveProjectParenthetical(codes, declaration);
     if (supplementalIconLanguage(codes, section)) |owner| return owner;
     if (imageLanguageLabel(codes, section)) |label|
@@ -1758,6 +1857,7 @@ fn hasExplicitLanguageDeclaration(codes: LanguageCodes, section: language_source
 }
 
 fn boundaryLanguage(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
+    if (resolveDecorativeFileBanner(codes, section)) |owner| return owner;
     if (projectParentheticalDeclaration(codes, section)) |declaration| return resolveProjectParenthetical(codes, declaration);
     if (supplementalIconLanguage(codes, section)) |owner| return owner;
     if (imageLanguageLabel(codes, section)) |label|
@@ -12797,10 +12897,16 @@ const CapturedBulgarianStyleTest = struct {
             else => {},
         };
         try std.testing.expectEqual(paint_rule_numbers.len, paint_rule_index);
-        const cases = [_]struct { tag: []const u8, classes: []const u8 = "", id: []const u8 = "", declaration: ?[]const u8, uncertain: bool = false }{
+        // The shared selector inventory also carries font-size declarations.
+        // These exact captured rules remain distinct: fancy-btn has display,
+        // while .buttonlinks a is only a possible ancestor-dependent font rule
+        // for this iterator. It must never be mistaken for a display override.
+        const fancy_css = "\n\tbackground-color: #3366bb;\n\tbackground-image: linear-gradient(to bottom, #3670c8, #3366bb);\n\tborder: 1px solid #3366bb;\n\tborder-radius: 3px;\n\tcolor: #fff;\n\tdisplay: inline-block;\n\tline-height: 1;\n\tpadding: 0.7em;\n\ttext-align: center;\n\ttext-shadow: 0 -1px 0 rgba(0, 0, 0, 0.25);\n\tfont-size: 1.4em;\n\tmin-width: 200px;\n\tmargin: 4px;\n";
+        const ancestor_font_css = "\n\tcolor: #333333;\n\tbackground-color: #E0EEF7;\n\tbackground: linear-gradient(to bottom, #F4F9FB, #E0EEF7);\n\tfont-size: 0.9em;\n\ttext-decoration: none;\n\tborder: 1px solid #e0e0e0;\n\tpadding: 0.1em;\n";
+        const cases = [_]struct { tag: []const u8, classes: []const u8 = "", id: []const u8 = "", declaration: ?[]const u8, uncertain: bool = false, ancestor_font: bool = false }{
             .{ .tag = "div", .classes = "hidden-links", .declaration = "display: none;" },
             .{ .tag = "form", .id = "mw-upload-form", .declaration = "display: none;" },
-            .{ .tag = "a", .classes = "fancy-btn", .declaration = "display: inline-block;" },
+            .{ .tag = "a", .classes = "fancy-btn", .declaration = "display: inline-block;", .ancestor_font = true },
             // Page-ancestor selectors are possible overrides, never proved hiding.
             .{ .tag = "h1", .classes = "firstHeading", .declaration = "display: none;", .uncertain = true },
             .{ .tag = "div", .id = "lastmod", .declaration = "display: none;", .uncertain = true },
@@ -12810,7 +12916,7 @@ const CapturedBulgarianStyleTest = struct {
             .{ .tag = "div", .classes = "hidden-links-extra", .declaration = null },
             .{ .tag = "div", .classes = "Hidden-links", .declaration = null },
             .{ .tag = "form", .id = "mw-upload-form-extra", .declaration = null },
-            .{ .tag = "a", .classes = "fancy-btn-extra", .declaration = null },
+            .{ .tag = "a", .classes = "fancy-btn-extra", .declaration = null, .ancestor_font = true },
             .{ .tag = "h2", .classes = "firstHeading", .declaration = null },
         };
         for (cases) |case| {
@@ -12820,6 +12926,14 @@ const CapturedBulgarianStyleTest = struct {
                 const matched = matches.next() orelse return error.TestUnexpectedResult;
                 try std.testing.expectEqual(case.uncertain, matched.uncertain);
                 try std.testing.expect(std.mem.indexOf(u8, matched.css, declaration) != null);
+                if (case.ancestor_font) try std.testing.expectEqualStrings(fancy_css, matched.css);
+            }
+            if (case.ancestor_font) {
+                const font_match = matches.next() orelse return error.TestUnexpectedResult;
+                try std.testing.expect(font_match.uncertain);
+                try std.testing.expectEqual(std.math.maxInt(u32), font_match.specificity);
+                try std.testing.expectEqualStrings(ancestor_font_css, font_match.css);
+                try std.testing.expect(std.mem.indexOf(u8, font_match.css, "display:") == null);
             }
             try std.testing.expect(matches.next() == null);
         }
@@ -15043,4 +15157,104 @@ test "project parenthetical language header requires strong name and exact lower
     try std.testing.expect(projectParentheticalDeclaration(codes, absent_physical) == null);
     namespaces.content_language = "fr";
     try std.testing.expect(projectParentheticalDeclaration(codes, section) == null);
+}
+
+test "complete decorative File banners retain independent Strong owner and option authority" {
+    const ns = @import("namespace_registry");
+    var namespaces = try ns.Registry.init(std.testing.allocator, ns.english_test_fixture); defer namespaces.deinit();
+    var codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = TestLanguages.get,
+        .resolve_fn = TestLanguages.resolve, .strong_fn = TestLanguages.strong };
+    for ([_]struct { source: []const u8, code: []const u8 }{
+        .{ .source = "==<div id=\"toc\" class=\"toccolours\" ><big><big>[[File:Flag_of_Serbia.svg|border|32px]] English</big></big></div>==\n# body\n", .code = "en" },
+        .{ .source = "==<div><big>[[File:Any.svg|25px]] French</big></div>==\n# body\n", .code = "fr" },
+        .{ .source = "==<DIV class='toccolours' id='toc'><BIG><BIG><BIG>[[Image:Other.svg|32px|border]] French</BIG></BIG></BIG></DIV>==\n# body\n", .code = "fr" },
+    }) |row| {
+        const section = ImageHeadingTestLanguages.section(row.source);
+        try std.testing.expectEqualStrings(row.code, resolveDecorativeFileBanner(codes, section).?.code);
+        try std.testing.expectEqualStrings(row.code, resolveSection(codes, section).?.code);
+        try std.testing.expectEqualStrings(row.code, boundaryLanguage(codes, section).?.code);
+        try std.testing.expectEqualStrings(row.source, section.source);
+        const context: LanguageMarkers = .{ .codes = &codes };
+        var iterator = languageSections(row.source, &context);
+        const observed = iterator.next() orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(row.code, resolveSection(codes, observed).?.code);
+        try std.testing.expect(iterator.next() == null);
+    }
+    const snapshot = "# wikidict-image-options-v1\n# wiki\ttestwiktionary\n# dump-date\t20261001\n# content-language\ttest\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n# behavior-switches-sha256\t0000000000000000000000000000000000000000000000000000000000000000\nimg_width\t1\t\"$1lapad\"\nimg_border\t0\t\"hangganan\"\n";
+    var options = try ns.image_options.Registry.init(std.testing.allocator, snapshot, "testwiktionary", "20261001", "test", @splat(0), @splat(0)); defer options.deinit();
+    codes.image_options = &options;
+    const localized = ImageHeadingTestLanguages.section("==<div><big><big>[[File:Any.svg|hangganan|32lapad]] French</big></big></div>==\n# body\n");
+    try std.testing.expectEqualStrings("fr", resolveDecorativeFileBanner(codes, localized).?.code);
+    for ([_][]const u8{ "border|32lapad", "hangganan|32px" }) |option| {
+        const source = try std.fmt.allocPrint(std.testing.allocator, "==<div><big>[[File:Any.svg|{s}]] French</big></div>==\n", .{option});
+        defer std.testing.allocator.free(source);
+        try std.testing.expect(resolveDecorativeFileBanner(codes, ImageHeadingTestLanguages.section(source)) == null);
+    }
+    codes.image_options = null;
+    codes.strong_fn = null;
+    codes.trusted_fn = TestLanguages.trusted;
+    try std.testing.expect(resolveDecorativeFileBanner(codes, ImageHeadingTestLanguages.section("==<div><big>[[File:Any.svg|32px]] English</big></div>==\n")) == null);
+}
+
+test "decorative banner proof refuses malformed wrappers child authority and nested domains" {
+    const ns = @import("namespace_registry");
+    var namespaces = try ns.Registry.init(std.testing.allocator, ns.english_test_fixture); defer namespaces.deinit();
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .get_fn = TestLanguages.get,
+        .resolve_fn = TestLanguages.resolve, .strong_fn = TestLanguages.strong };
+    for ([_][]const u8{
+        "<div><big>[[File:Any.svg|32px]] Unknown</big></div>",
+        "<div><big>[[File:Any.svg|32px]] en</big></div>",
+        "<div><big>[[File:Any.svg|32px]] English extra</big></div>",
+        "<div><big>[[File:Any.svg|32px]] [[English]]</big></div>",
+        "<div><big>[[File:Any.svg|32px]] <nowiki>English</nowiki></big></div>",
+        "<div><big>[[File:Any.svg|32px]] {{English}}</big></div>",
+        "<div><big>[[File:Any.svg|32px]] \x7fGENERATED-English</big></div>",
+        "<div><big>[[File:Any.svg|32px]] &English;</big></div>",
+        "<div><big>[[File:Any.svg|32px]] English</big>",
+        "<div><big>[[File:Any.svg|32px]] English</big extra></div>",
+        "<div><big>[[File:Any.svg|32px]] English</big></div extra>",
+        "<div><big class=x>[[File:Any.svg|32px]] English</big></div>",
+        "<div><span>[[File:Any.svg|32px]] English</span></div>",
+        "<div style=\"display:none\"><big>[[File:Any.svg|32px]] English</big></div>",
+        "<div id=toc class=toccolours class=hidden><big>[[File:Any.svg|32px]] English</big></div>",
+        "<div id=toc><big>[[File:Any.svg|32px]] English</big></div>",
+        "<div><big>[[File:Any.svg|link=English|32px]] English</big></div>",
+        "<div><big>[[File:Any.svg|alt=English|32px]] English</big></div>",
+        "<div><big>[[File:Any.svg|caption|32px]] English</big></div>",
+        "<div><big>[[File:Any.svg|border|border|32px]] English</big></div>",
+        "<div><big>[[File:Any.svg|32px|33px]] English</big></div>",
+        "<div><big>[[File:Any.svg|0px]] English</big></div>",
+        "<div><big>[[File:Any.svg|4097px]] English</big></div>",
+        "<div><big>[[File:Any.svg|middle|32px]] English</big></div>",
+        "<div><big>[[File:Any.svg|border]] English</big></div>",
+        "<div><big>[[:File:Any.svg|32px]] English</big></div>",
+        "<div><big>[[Category:English|32px]] English</big></div>",
+        "<div><big>[[File:{{Any}}.svg|32px]] English</big></div>",
+        "prefix <div><big>[[File:Any.svg|32px]] English</big></div>",
+        "<div><big>[[File:Any.svg|32px]] English</big></div> trailing",
+    }) |heading| {
+        const source = try std.fmt.allocPrint(std.testing.allocator, "=={s}==\n# body\n", .{heading});
+        defer std.testing.allocator.free(source);
+        try std.testing.expect(resolveDecorativeFileBanner(codes, ImageHeadingTestLanguages.section(source)) == null);
+    }
+    const banner = "==<div><big><big>[[File:Any.svg|border|32px]] English</big></big></div>==\n# body\n";
+    const deeper = "===<div><big>[[File:Any.svg|32px]] English</big></div>===\n# body\n";
+    try std.testing.expect(resolveDecorativeFileBanner(codes, ImageHeadingTestLanguages.section(deeper)) == null);
+    for ([_]struct { start: []const u8, end: []const u8 }{
+        .{ .start = "<nowiki>\n", .end = "</nowiki>\n" },
+        .{ .start = "<pre>\n", .end = "</pre>\n" },
+        .{ .start = "<!--\n", .end = "-->\n" },
+        .{ .start = "{{template|\n", .end = "}}\n" },
+        .{ .start = "{|\n|\n", .end = "|}\n" },
+        .{ .start = "[[Target|\n", .end = "]]\n" },
+    }) |scope| {
+        const source = try std.fmt.allocPrint(std.testing.allocator, "{s}{s}{s}", .{ scope.start, banner, scope.end });
+        defer std.testing.allocator.free(source);
+        const context: LanguageMarkers = .{ .codes = &codes };
+        var iterator = languageSections(source, &context);
+        try std.testing.expect(iterator.next() == null);
+    }
+    var mismatched = ImageHeadingTestLanguages.section(banner);
+    mismatched.heading = "<div><big>[[File:Any.svg|32px]] French</big></div>";
+    try std.testing.expect(resolveDecorativeFileBanner(codes, mismatched) == null);
 }

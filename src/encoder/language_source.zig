@@ -171,7 +171,7 @@ pub const HtmlHeadingScopes = struct {
         const scope: LinkHeadingScopes = .{ .source = self.source, .openings = self.openings };
         if (!scope.admits(source, start)) return null;
         if (plainLineHtmlH2(line)) |label| return .{ .level = 2, .title = label };
-        const linked = linkedLineHtmlH1(line, self.namespace_catalog) orelse return null;
+        const linked = plainLineHtmlH1(line) orelse linkedLineHtmlH1(line, self.namespace_catalog) orelse return null;
         const filter = self.linked_h1_filter orelse return null;
         if (!filter.accepts(filter.ctx, linked)) return null;
         return .{ .level = 1, .title = linked };
@@ -181,9 +181,18 @@ pub const HtmlHeadingScopes = struct {
 /// Borrow the label of one complete plain HTML h2 line. This does not establish
 /// a language owner or authorize headings in a nested/protected source domain.
 pub fn plainLineHtmlH2(line: []const u8) ?[]const u8 {
+    return plainLineHtmlHeading(line, "h2");
+}
+
+/// Syntax only; an H1 owner still requires the observed root and trusted filter.
+pub fn plainLineHtmlH1(line: []const u8) ?[]const u8 {
+    return plainLineHtmlHeading(line, "h1");
+}
+
+fn plainLineHtmlHeading(line: []const u8, name: []const u8) ?[]const u8 {
     if (line.len == 0 or line[0] != '<' or std.mem.indexOfAny(u8, line, "\r\n") != null) return null;
     const tag = syntax.tagAt(line, 0) orelse return null;
-    if (!tag.is("h2") or tag.closing or tag.self_closing) return null;
+    if (!tag.is(name) or tag.closing or tag.self_closing) return null;
     const pair = syntax.matchingTag(line, tag) orelse return null;
     if (pair.end != line.len) return null;
     const label = std.mem.trim(u8, line[tag.end..pair.inner_end], " \t");
@@ -244,7 +253,8 @@ pub fn mayHaveLanguageHtmlHeading(source: []const u8, namespaces: ?*const @impor
     if (mayHavePlainLineHtmlH2(source)) return true;
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        if (linkedLineHtmlH1(std.mem.trimEnd(u8, line, "\r"), namespaces) != null) return true;
+        const physical = std.mem.trimEnd(u8, line, "\r");
+        if (plainLineHtmlH1(physical) != null or linkedLineHtmlH1(physical, namespaces) != null) return true;
     }
     return false;
 }
@@ -1544,4 +1554,38 @@ test "declared deep language peers split at active depth without promoting child
     var under_l2 = LeadingDeclaredLanguageTest.iterator(nested);
     try std.testing.expectEqualStrings(nested, under_l2.next().?.source);
     try std.testing.expect(under_l2.next() == null);
+}
+
+test "plain HTML H1 language boundary requires original observed source and trusted complete label" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const line = "<h1>Հայերեն</h1>";
+    const source = line ++ "\n# body";
+    try std.testing.expectEqualStrings("Հայերեն", plainLineHtmlH1(line).?);
+    try std.testing.expectEqualStrings("Հայերեն", plainLineHtmlH1("<H1 class='owner'> Հայերեն </H1>").?);
+    try std.testing.expect(mayHaveLanguageHtmlHeading(source, null));
+    try std.testing.expect(mayHaveLanguageHtmlHeading(line ++ "\r\n# body", null));
+    const offsets = [_]usize{0};
+    const Filter = struct {
+        fn accepts(_: ?*const anyopaque, label: []const u8) bool { return std.mem.eql(u8, label, "Հայերեն"); }
+    };
+    var scope: HtmlHeadingScopes = .{ .source = source, .openings = &offsets };
+    try std.testing.expect(scope.heading(source, 0, line) == null);
+    scope.linked_h1_filter = .{ .ctx = null, .accepts = Filter.accepts };
+    const heading = scope.heading(source, 0, line) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u8, 1), heading.level);
+    try std.testing.expectEqualStrings("Հայերեն", heading.title);
+    try std.testing.expect(scope.heading(try a.dupe(u8, source), 0, line) == null);
+    try std.testing.expect(scope.heading(source, 1, line) == null);
+    const unknown = "<h1>Unknown label</h1>\n# body";
+    scope.source = unknown;
+    try std.testing.expect(scope.heading(unknown, 0, "<h1>Unknown label</h1>") == null);
+    for ([_][]const u8{
+        " <h1>Հայերեն</h1>", "<h1>Հայերեն</h1> prose", "<h1>Հայերեն</h1>[[Category:Words]]",
+        "<h1>[[Հայերեն]]</h1>", "<h1><span>Հայերեն</span></h1>", "<h1>{{hy}}</h1>",
+        "<h1>Հայերեն&amp;</h1>", "<h1>Հայերեն|English</h1>", "<h1>Հայերեն\nEnglish</h1>",
+        "<h1></h1>", "<h1>Հայերեն", "<h1/>Հայերեն", "<h2>Հայերեն</h2>",
+    }) |invalid| try std.testing.expect(plainLineHtmlH1(invalid) == null);
+    try std.testing.expectEqualStrings("English", plainLineHtmlH2("<h2>English</h2>").?);
+    try std.testing.expect(plainLineHtmlH2(line) == null);
 }

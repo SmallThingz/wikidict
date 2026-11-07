@@ -171,6 +171,67 @@ pub fn resolveInlineAlignmentAlloc(a: std.mem.Allocator, legacy_align: ?[]const 
     return profile.resolveAlignment(a, "", "", "", legacy_align, css);
 }
 
+pub const FontSizeValue = union(enum) {
+    inherit,
+    absolute: f32,
+    relative: f32,
+    step: @import("font_scale.zig").RelativeKeyword,
+    unknown,
+};
+
+fn fontSizeValue(property: []const u8, raw: []const u8) ?FontSizeValue {
+    const value = trim(raw);
+    if (std.ascii.eqlIgnoreCase(value, "inherit") or std.ascii.eqlIgnoreCase(value, "unset")) return .inherit;
+    if (std.ascii.eqlIgnoreCase(value, "initial")) return .{ .absolute = 1 };
+    if (!std.ascii.eqlIgnoreCase(property, "font-size")) return if (value.len != 0) .unknown else null;
+    const font = @import("font_scale.zig");
+    if (font.absoluteKeyword(value)) |size| return .{ .absolute = size };
+    if (font.relativeKeyword(value)) |step| return .{ .step = step };
+    if (font.parseRelative(value)) |factor| return .{ .relative = factor };
+    if (std.ascii.eqlIgnoreCase(value, "revert") or std.ascii.eqlIgnoreCase(value, "revert-layer") or
+        std.mem.indexOfScalar(u8, value, '(') != null or std.mem.indexOfScalar(u8, value, '\\') != null) return .unknown;
+    // Valid but unsupported lengths must invalidate parent authority. Invalid
+    // identifiers/negative lengths do not replace a valid earlier declaration.
+    for ([_][]const u8{ "px", "pt", "pc", "in", "cm", "mm", "q", "rem", "ex", "ch", "cap", "ic", "lh", "rlh", "vw", "vh", "vi", "vb", "vmin", "vmax", "svw", "svh", "lvw", "lvh", "dvw", "dvh" }) |unit| {
+        if (value.len > unit.len and std.ascii.eqlIgnoreCase(value[value.len - unit.len ..], unit)) {
+            const number = value[0 .. value.len - unit.len];
+            const size = std.fmt.parseFloat(f64, number) catch continue;
+            if (std.math.isFinite(size) and size >= 0) return .unknown;
+        }
+    }
+    return null;
+}
+
+const FontCascade = struct {
+    value: ?FontSizeValue = null,
+    priority: Priority = .{},
+    fn declarations(self: *FontCascade, a: std.mem.Allocator, css: []const u8, specificity: u32, order: u32, uncertain: bool, inline_style: bool) !void {
+        var pos: usize = 0;
+        var next_order = order;
+        while (try nextDeclarationAlloc(a, css, &pos)) |raw| {
+            defer a.free(raw);
+            next_order += 1;
+            const colon = std.mem.indexOfScalar(u8, raw, ':') orelse continue;
+            const property = trim(raw[0..colon]);
+            const escaped = std.mem.indexOfScalar(u8, property, '\\') != null;
+            if (!escaped and !std.ascii.eqlIgnoreCase(property, "font-size") and !std.ascii.eqlIgnoreCase(property, "font") and !std.ascii.eqlIgnoreCase(property, "all")) continue;
+            const parsed_priority = customPriority(raw[colon + 1 ..]);
+            const selected = if (escaped or parsed_priority.unknown) FontSizeValue.unknown else fontSizeValue(property, parsed_priority.value) orelse continue;
+            const next: Priority = .{ .important = parsed_priority.important, .specificity = specificity, .order = next_order, .inline_style = inline_style };
+            if (self.value != null and !next.wins(self.priority)) continue;
+            self.value = if (uncertain) .unknown else selected;
+            self.priority = next;
+        }
+    }
+};
+
+pub fn resolveInlineFontSizeAlloc(a: std.mem.Allocator, css: []const u8) !?FontSizeValue {
+    if (css.len > max_css_bytes) return .unknown;
+    var cascade_value: FontCascade = .{};
+    try cascade_value.declarations(a, css, 0, max_rules * 1024, false, true);
+    return cascade_value.value;
+}
+
 // Visibility is resolved only during production; no CSS enters a reader record.
 // Its own-class namespace is separate from the table ancestor paint namespace.
 const DisplaySelector = struct {
@@ -248,6 +309,15 @@ pub const Profile = struct {
         while (matches.next()) |matched| try cascade_value.declarations(a, matched.css, matched.specificity, matched.order, matched.uncertain, false);
         try cascade_value.declarations(a, css, 0, max_rules * 1024, false, true);
         return cascade_value.resolution;
+    }
+
+    pub fn resolveFontSize(self: *const Profile, a: std.mem.Allocator, tag: []const u8, classes: []const u8, id: []const u8, css: []const u8) std.mem.Allocator.Error!?FontSizeValue {
+        if (self.globally_unresolved or css.len > max_css_bytes) return .unknown;
+        var cascade_value: FontCascade = .{};
+        var matches = self.displayRules(tag, classes, id);
+        while (matches.next()) |matched| try cascade_value.declarations(a, matched.css, matched.specificity, matched.order, matched.uncertain, false);
+        try cascade_value.declarations(a, css, 0, max_rules * 1024, false, true);
+        return cascade_value.value;
     }
 
     pub fn deinit(self: *Profile) void {
@@ -614,10 +684,13 @@ const Builder = struct {
     }
 
     fn uncertainPaintSelector(self: *Builder, text: []const u8) !?Selector {
-        // Unknown syntax remains a possible override. Only a proved final type
-        // or class/ID prefix may rule it out for the current element.
+        // Unknown syntax remains a possible override. Keep only necessary
+        // prefixes, never use them to claim that an unsupported selector matches.
         if (!std.unicode.utf8ValidateSlice(text) or std.mem.indexOf(u8, text, "/*") != null or std.mem.indexOfScalar(u8, text, '\\') != null or std.mem.indexOfScalar(u8, text, 0) != null)
             return .{ .target = .element, .mask = 0, .specificity = std.math.maxInt(u64), .unsupported = true };
+        var ancestors: std.ArrayList([]const u8) = .empty;
+        defer ancestors.deinit(self.a);
+        var safe_ancestors = true;
         var start: usize = 0;
         var depth: usize = 0;
         var quote: u8 = 0;
@@ -626,14 +699,27 @@ const Builder = struct {
                 if (byte == quote) quote = 0;
                 continue;
             }
-            if (byte == '\'' or byte == '"') quote = byte else if (byte == '(' or byte == '[') depth += 1 else if (byte == ')' or byte == ']') {
+            if (byte == '\'' or byte == '"') {
+                if (depth == 0) safe_ancestors = false;
+                quote = byte;
+            } else if (byte == '(' or byte == '[') depth += 1 else if (byte == ')' or byte == ']') {
+                if (depth == 0) safe_ancestors = false;
                 depth -|= 1;
-            } else if (depth == 0 and (std.ascii.isWhitespace(byte) or byte == '>' or byte == '+' or byte == '~')) start = pos + 1;
+            } else if (depth == 0 and (std.ascii.isWhitespace(byte) or byte == '>' or byte == '+' or byte == '~')) {
+                if (pos > start) if (try self.paintCompound(trim(text[start..pos]), false)) |prefix| {
+                    try ancestors.appendSlice(self.a, prefix.classes);
+                };
+                // A class on a sibling is not necessarily on this element or
+                // its ancestors. Retain the old uncertainty for that whole chain.
+                if (byte == '+' or byte == '~') safe_ancestors = false;
+                start = pos + 1;
+            } else if (depth == 0 and (byte == '|' or byte == '&')) safe_ancestors = false;
         }
+        const necessary: []const []const u8 = if (safe_ancestors and depth == 0 and quote == 0) try ancestors.toOwnedSlice(self.a) else &.{};
         if (try self.paintCompound(trim(text[start..]), false)) |last| {
-            return .{ .target = paintTarget(last.tag), .mask = 0, .own_classes = last.classes, .own_ids = last.ids, .specificity = std.math.maxInt(u64), .unsupported = true };
+            return .{ .target = paintTarget(last.tag), .mask = 0, .own_classes = last.classes, .own_ids = last.ids, .necessary_classes = necessary, .specificity = std.math.maxInt(u64), .unsupported = true };
         }
-        return .{ .target = .element, .mask = 0, .specificity = std.math.maxInt(u64), .unsupported = true };
+        return .{ .target = .element, .mask = 0, .necessary_classes = necessary, .specificity = std.math.maxInt(u64), .unsupported = true };
     }
 
     fn selector(self: *Builder, raw: []const u8, conditional: bool) !?Selector {
@@ -742,9 +828,11 @@ const Builder = struct {
             const display_order = self.declaration_order;
             var has_display = false;
             var has_alignment = false;
+            var has_font = false;
             while (try nextDeclarationAlloc(self.a, css[body_start..end], &declaration_pos)) |raw| {
                 if (std.mem.indexOfScalar(u8, raw, ':')) |colon| {
                     const property = trim(raw[0..colon]);
+                    has_font = has_font or std.ascii.eqlIgnoreCase(property, "font-size") or std.ascii.eqlIgnoreCase(property, "font") or std.ascii.eqlIgnoreCase(property, "all") or std.mem.indexOfScalar(u8, property, '\\') != null;
                     has_alignment = has_alignment or std.ascii.eqlIgnoreCase(property, "text-align") or std.ascii.eqlIgnoreCase(property, "all") or std.mem.indexOfScalar(u8, property, '\\') != null;
                     has_display = has_display or std.ascii.eqlIgnoreCase(property, "display") or std.ascii.eqlIgnoreCase(property, "all") or std.mem.indexOfScalar(u8, property, '\\') != null;
                 }
@@ -752,7 +840,7 @@ const Builder = struct {
                 if (self.declaration_order >= max_rules * 1024) return error.StyleProfileLimit;
                 if (try declarationAlloc(self.a, raw, self.declaration_order)) |declaration| try declarations.append(self.a, declaration);
             }
-            if (has_display or has_alignment) try self.appendDisplayRules(prelude, try self.a.dupe(u8, css[body_start..end]), conditional, display_order);
+            if (has_display or has_alignment or has_font) try self.appendDisplayRules(prelude, try self.a.dupe(u8, css[body_start..end]), conditional, display_order);
             var selectors = std.mem.splitScalar(u8, prelude, ',');
             var projected: std.ArrayList(Selector) = .empty;
             var list_uncertain = false;
@@ -1094,8 +1182,53 @@ fn declarationAlloc(a: std.mem.Allocator, raw: []const u8, order: u32) !?Declara
     return .{ .property = property, .value = projection, .important = important, .order = order, .affects_font_basis = std.ascii.eqlIgnoreCase(name, "font") or std.ascii.eqlIgnoreCase(name, "font-size") or std.ascii.eqlIgnoreCase(name, "all") };
 }
 
+// CSS Color 3 comma RGB: either three integer channels or three percentages.
+// Project opaque sRGB to the existing 8-bit wire color; alpha/dynamic forms
+// stay unsupported instead of discarding their opacity or dependencies.
+fn legacyRgb(value: []const u8) ?[3]u8 {
+    if (value.len < 5 or !std.ascii.startsWithIgnoreCase(value, "rgb(") or value[value.len - 1] != ')') return null;
+    var channels = std.mem.splitScalar(u8, value[4 .. value.len - 1], ',');
+    var percent: ?bool = null;
+    var result: [3]u8 = undefined;
+    for (&result) |*channel| {
+        const raw = trim(channels.next() orelse return null);
+        const is_percent = std.mem.endsWith(u8, raw, "%");
+        if (percent) |prior| {
+            if (prior != is_percent) return null;
+        } else percent = is_percent;
+        const number = if (is_percent) raw[0 .. raw.len - 1] else raw;
+        if (number.len == 0 or number.len > 128) return null;
+        var pos: usize = 0;
+        if (number[pos] == '+' or number[pos] == '-') pos += 1;
+        var digits: usize = 0;
+        while (pos < number.len and std.ascii.isDigit(number[pos])) : (pos += 1) digits += 1;
+        if (is_percent and pos < number.len and number[pos] == '.') {
+            pos += 1;
+            const fractional_start = pos;
+            while (pos < number.len and std.ascii.isDigit(number[pos])) : (pos += 1) digits += 1;
+            if (fractional_start == pos) return null;
+        }
+        if (digits == 0 or pos != number.len) return null;
+        const parsed = std.fmt.parseFloat(f64, number) catch return null;
+        if (!std.math.isFinite(parsed)) return null;
+        const limit: f64 = if (is_percent) 100 else 255;
+        const clipped = @max(0, @min(limit, parsed));
+        const scaled = if (is_percent) clipped * 255 / 100 else clipped;
+        channel.* = @intFromFloat(@floor(scaled + 0.5));
+    }
+    if (channels.next() != null) return null;
+    return result;
+}
+
 pub fn canonicalColorAlloc(a: std.mem.Allocator, raw: []const u8) std.mem.Allocator.Error!?[]const u8 {
     const value = trim(raw);
+    if (legacyRgb(value)) |channels| {
+        const digits = std.fmt.bytesToHex(channels, .lower);
+        const rgb_text = try a.alloc(u8, 7);
+        rgb_text[0] = '#';
+        @memcpy(rgb_text[1..], &digits);
+        return rgb_text;
+    }
     const names = .{ "aliceblue", "antiquewhite", "aqua", "aquamarine", "azure", "beige", "bisque", "black", "blanchedalmond", "blue", "blueviolet", "brown", "burlywood", "cadetblue", "chartreuse", "chocolate", "coral", "cornflowerblue", "cornsilk", "crimson", "cyan", "darkblue", "darkcyan", "darkgoldenrod", "darkgray", "darkgreen", "darkgrey", "darkkhaki", "darkmagenta", "darkolivegreen", "darkorange", "darkorchid", "darkred", "darksalmon", "darkseagreen", "darkslateblue", "darkslategray", "darkslategrey", "darkturquoise", "darkviolet", "deeppink", "deepskyblue", "dimgray", "dimgrey", "dodgerblue", "firebrick", "floralwhite", "forestgreen", "fuchsia", "gainsboro", "ghostwhite", "gold", "goldenrod", "gray", "green", "greenyellow", "grey", "honeydew", "hotpink", "indianred", "indigo", "ivory", "khaki", "lavender", "lavenderblush", "lawngreen", "lemonchiffon", "lightblue", "lightcoral", "lightcyan", "lightgoldenrodyellow", "lightgray", "lightgreen", "lightgrey", "lightpink", "lightsalmon", "lightseagreen", "lightskyblue", "lightslategray", "lightslategrey", "lightsteelblue", "lightyellow", "lime", "limegreen", "linen", "magenta", "maroon", "mediumaquamarine", "mediumblue", "mediumorchid", "mediumpurple", "mediumseagreen", "mediumslateblue", "mediumspringgreen", "mediumturquoise", "mediumvioletred", "midnightblue", "mintcream", "mistyrose", "moccasin", "navajowhite", "navy", "oldlace", "olive", "olivedrab", "orange", "orangered", "orchid", "palegoldenrod", "palegreen", "paleturquoise", "palevioletred", "papayawhip", "peachpuff", "peru", "pink", "plum", "powderblue", "purple", "rebeccapurple", "red", "rosybrown", "royalblue", "saddlebrown", "salmon", "sandybrown", "seagreen", "seashell", "sienna", "silver", "skyblue", "slateblue", "slategray", "slategrey", "snow", "springgreen", "steelblue", "tan", "teal", "thistle", "tomato", "turquoise", "violet", "wheat", "white", "whitesmoke", "yellow", "yellowgreen" };
     const colors = .{ "#f0f8ff", "#faebd7", "#00ffff", "#7fffd4", "#f0ffff", "#f5f5dc", "#ffe4c4", "#000000", "#ffebcd", "#0000ff", "#8a2be2", "#a52a2a", "#deb887", "#5f9ea0", "#7fff00", "#d2691e", "#ff7f50", "#6495ed", "#fff8dc", "#dc143c", "#00ffff", "#00008b", "#008b8b", "#b8860b", "#a9a9a9", "#006400", "#a9a9a9", "#bdb76b", "#8b008b", "#556b2f", "#ff8c00", "#9932cc", "#8b0000", "#e9967a", "#8fbc8f", "#483d8b", "#2f4f4f", "#2f4f4f", "#00ced1", "#9400d3", "#ff1493", "#00bfff", "#696969", "#696969", "#1e90ff", "#b22222", "#fffaf0", "#228b22", "#ff00ff", "#dcdcdc", "#f8f8ff", "#ffd700", "#daa520", "#808080", "#008000", "#adff2f", "#808080", "#f0fff0", "#ff69b4", "#cd5c5c", "#4b0082", "#fffff0", "#f0e68c", "#e6e6fa", "#fff0f5", "#7cfc00", "#fffacd", "#add8e6", "#f08080", "#e0ffff", "#fafad2", "#d3d3d3", "#90ee90", "#d3d3d3", "#ffb6c1", "#ffa07a", "#20b2aa", "#87cefa", "#778899", "#778899", "#b0c4de", "#ffffe0", "#00ff00", "#32cd32", "#faf0e6", "#ff00ff", "#800000", "#66cdaa", "#0000cd", "#ba55d3", "#9370db", "#3cb371", "#7b68ee", "#00fa9a", "#48d1cc", "#c71585", "#191970", "#f5fffa", "#ffe4e1", "#ffe4b5", "#ffdead", "#000080", "#fdf5e6", "#808000", "#6b8e23", "#ffa500", "#ff4500", "#da70d6", "#eee8aa", "#98fb98", "#afeeee", "#db7093", "#ffefd5", "#ffdab9", "#cd853f", "#ffc0cb", "#dda0dd", "#b0e0e6", "#800080", "#663399", "#ff0000", "#bc8f8f", "#4169e1", "#8b4513", "#fa8072", "#f4a460", "#2e8b57", "#fff5ee", "#a0522d", "#c0c0c0", "#87ceeb", "#6a5acd", "#708090", "#708090", "#fffafa", "#00ff7f", "#4682b4", "#d2b48c", "#008080", "#d8bfd8", "#ff6347", "#40e0d0", "#ee82ee", "#f5deb3", "#ffffff", "#f5f5f5", "#ffff00", "#9acd32" };
     inline for (names, colors) |name, color| if (std.ascii.eqlIgnoreCase(value, name)) return color;
@@ -2463,4 +2596,133 @@ test "custom property source order spans long declaration blocks and selected th
         .dark = true, .ancestors = &.{ .{ .tag = "html", .classes = "skin-theme-clientpref-night", .root = true }, .{ .tag = "body" } },
     });
     try CustomPropertyFixture.known(night.custom_properties.?.root_environment, "--ink", "#010203");
+}
+
+
+test "opaque comma RGB colors preserve integer percent clipping and reject alpha or mixed tokens" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, color: []const u8 }{
+        .{ .source = "rgb(80%,80%,100%)", .color = "#ccccff" },
+        .{ .source = "rgb(95%,95%,100%)", .color = "#f2f2ff" },
+        .{ .source = "RGB( 255, 0, +128 )", .color = "#ff0080" },
+        .{ .source = "rgb(110%,-5%,50%)", .color = "#ff0080" },
+        .{ .source = "rgb(300,-10,0)", .color = "#ff0000" },
+        .{ .source = "rgb(.5%,+0%,100.0%)", .color = "#0100ff" },
+    };
+    for (cases) |case| try std.testing.expectEqualStrings(case.color, (try canonicalColorAlloc(a, case.source)) orelse return error.TestUnexpectedResult);
+    for ([_][]const u8{
+        "rgb(1,2)", "rgb(1,2,3,4)", "rgb(1%,2,3%)", "rgb(1.5,2,3)",
+        "rgb(1.,2,3)", "rgb(1.%,2%,3%)", "rgb(1 % ,2%,3%)", "rgb(+%,2%,3%)",
+        "rgb(1e2%,0%,0%)", "rgb(NaN%,0%,0%)", "rgb(1 2 3)", "rgb(1,2,3)tail",
+        "rgba(1,2,3,0.5)", "rgba(1,2,3,1)", "rgb(var(--r),2,3)", "rgb(calc(1),2,3)",
+    }) |source| try std.testing.expect((try canonicalColorAlloc(a, source)) == null);
+}
+
+
+test "font-only stylesheet cascade selects exact winners and retains unknown computed-parent authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a,
+        ".exact{font-size:110%}.strong{font-size:150%!important}" ++
+        "@media print{.maybe{font-size:90%}} .ancestor .desc{font-size:80%}");
+    defer profile.deinit();
+    const exact = (try profile.resolveFontSize(a, "span", "exact", "", "")).?;
+    try std.testing.expect(exact == .relative);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.1), exact.relative, 0.000001);
+    const important = (try profile.resolveFontSize(a, "span", "strong", "", "font-size:small")).?;
+    try std.testing.expect(important == .relative);
+    try std.testing.expectEqual(@as(f32, 1.5), important.relative);
+    const override = (try profile.resolveFontSize(a, "span", "strong", "", "font-size:small!important")).?;
+    try std.testing.expect(override == .absolute);
+    try std.testing.expectEqual(@as(f32, 8.0 / 9.0), override.absolute);
+    for ([_][]const u8{ "maybe", "desc" }) |class| {
+        try std.testing.expect((try profile.resolveFontSize(a, "span", class, "", "")).? == .unknown);
+    }
+    try std.testing.expect((try profile.resolveFontSize(a, "span", "maybe", "", "font-size:medium!important")).? == .absolute);
+    for ([_][]const u8{ "font-size:20px", "font-size:calc(1em + 1px)", "font:caption", "all:revert", "font-size:var(--size)", "font-size:125%;font-size:20px!important;font-size:medium" }) |css| {
+        try std.testing.expect((try resolveInlineFontSizeAlloc(a, css)).? == .unknown);
+    }
+    const reset = (try resolveInlineFontSizeAlloc(a, "font-size:20px;font-size:medium")).?;
+    try std.testing.expect(reset == .absolute and reset.absolute == 1);
+    const invalid = (try resolveInlineFontSizeAlloc(a, "font-size:125%;font-size:nonsense;font-size:-20px")).?;
+    try std.testing.expect(invalid == .relative and invalid.relative == 1.25);
+    try std.testing.expect((try resolveInlineFontSizeAlloc(a, "font-size:inherit")).? == .inherit);
+    try std.testing.expect((try resolveInlineFontSizeAlloc(a, "all:unset")).? == .inherit);
+    var many: std.ArrayList(u8) = .empty;
+    try many.appendSlice(a, ".same{");
+    for (0..1100) |_| try many.appendSlice(a, "font-size:110%;");
+    try many.appendSlice(a, "}.same{font-size:125%}");
+    var ordered = try parseAlloc(a, many.items);
+    defer ordered.deinit();
+    const last = (try ordered.resolveFontSize(a, "span", "same", "", "")).?;
+    try std.testing.expect(last == .relative and last.relative == 1.25);
+}
+
+test "unsupported paint selectors retain necessary ancestor classes only as nonmatch proof" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    // Relevant background declarations from retained SR Common.css58c27434. The unknown
+    // :target/rgba state must not suppress an unrelated infobox's known paint.
+    const css = ".infobox {background-color:#f8f9fa}" ++
+        "body.action-info .mw-body-content :target, .citation:target {background-color:#def;background-color:rgba(0,127,255,0.133)}" ++
+        "table.inflection tr:nth-child(odd):not(.rowgroup) th {background:#f6f6f6}";
+    var profile = try parseAlloc(a, css); defer profile.deinit();
+    const table = try profile.resolveTableWithContext(a, 0, "infobox vcard", .{ .ancestor_classes = "", .own_id = "" }, null, "");
+    const style = table.style orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("#f8f9fa", style.background orelse return error.TestUnexpectedResult);
+    try std.testing.expect(!table.unresolved);
+    for ([_]bool{ true, false }) |header| {
+        const expected = if (header) "#ffffe0" else "#f4f4f4";
+        const cell = try profile.resolveCellWithContextAndHints(a, table.scope, 0, "", .{ .ancestor_classes = "infobox vcard", .own_id = "" }, header, expected, null, "");
+        try std.testing.expectEqualStrings(expected, cell.background orelse return error.TestUnexpectedResult);
+        try std.testing.expect(!cell.unresolved);
+    }
+    // Presence is not a match proof: unsupported pseudo/ancestor order and
+    // viewport/state still withhold the property. Null ancestry is unknown.
+    for ([_]?[]const u8{ "action-info mw-body-content", null }) |ancestors| {
+        const possible = try profile.resolveCellWithContextAndHints(a, table.scope, 0, "", .{ .ancestor_classes = ancestors, .own_id = "" }, true, "#f4f4f4", null, "");
+        try std.testing.expect(possible.unresolved and possible.background == null);
+    }
+    const inflection = try profile.resolveCellWithContextAndHints(a, 0, 0, "", .{ .ancestor_classes = "inflection", .own_id = "" }, true, "#f4f4f4", null, "");
+    try std.testing.expect(inflection.unresolved and inflection.background == null);
+    const inline_winner = try profile.resolveCellWithContextAndHints(a, 0, 0, "", .{ .ancestor_classes = "action-info mw-body-content", .own_id = "" }, true, "#f4f4f4", null, "background:yellow!important");
+    try std.testing.expectEqualStrings("#ffff00", inline_winner.background orelse return error.TestUnexpectedResult);
+}
+
+test "uncertain ancestor prefixes preserve child descendant sibling function escape and unknown context domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ ".missing td:hover", ".missing > td:hover", ".missing[data-note=\"a b\"] td:hover" }) |selector| {
+        errdefer std.debug.print("SR necessary-ancestor selector={s}\n", .{selector});
+        var profile = try parseAlloc(a, try std.fmt.allocPrint(a, "{s}{{background:blue}}", .{selector})); defer profile.deinit();
+        const absent = try profile.resolveCellWithContextAndHints(a, 0, 0, "", .{ .ancestor_classes = "", .own_id = "" }, false, "#f4f4f4", null, "");
+        try std.testing.expectEqualStrings("#f4f4f4", absent.background orelse return error.TestUnexpectedResult);
+        try std.testing.expect(!absent.unresolved);
+        for ([_]?[]const u8{ "missing", null }) |ancestors| {
+            const possible = try profile.resolveCellWithContextAndHints(a, 0, 0, "", .{ .ancestor_classes = ancestors, .own_id = "" }, false, "#f4f4f4", null, "");
+            try std.testing.expect(possible.unresolved and possible.background == null);
+        }
+    }
+    for ([_][]const u8{
+        ".missing + td:hover", ".missing ~ td:hover", ".missing > .other + td:hover",
+        ":not(.missing) td:hover", ":has(.missing + .other) td:hover", ":is(.missing,.other) td:hover",
+        ".missing\\:escaped td:hover", ".missing/*comment*/ td:hover", ".missing & td:hover",
+    }) |selector| {
+        errdefer std.debug.print("SR conservative-ancestor selector={s}\n", .{selector});
+        var profile = try parseAlloc(a, try std.fmt.allocPrint(a, "{s}{{background:blue}}", .{selector})); defer profile.deinit();
+        const possible = try profile.resolveCellWithContextAndHints(a, 0, 0, "", .{ .ancestor_classes = "", .own_id = "" }, false, "#f4f4f4", null, "");
+        try std.testing.expect(possible.unresolved and possible.background == null);
+    }
+    // The .container prefix is necessary; functional arguments are not ancestor
+    // classes. Their absence cannot prove :not/:has false or clear uncertainty.
+    for ([_][]const u8{ ".container:not(.missing) td:hover", ".container:has(.missing) td:hover" }) |selector| {
+        var profile = try parseAlloc(a, try std.fmt.allocPrint(a, "{s}{{background:blue}}", .{selector})); defer profile.deinit();
+        const possible = try profile.resolveCellWithContextAndHints(a, 0, 0, "", .{ .ancestor_classes = "container", .own_id = "" }, false, "#f4f4f4", null, "");
+        try std.testing.expect(possible.unresolved and possible.background == null);
+        const absent = try profile.resolveCellWithContextAndHints(a, 0, 0, "", .{ .ancestor_classes = "", .own_id = "" }, false, "#f4f4f4", null, "");
+        try std.testing.expectEqualStrings("#f4f4f4", absent.background orelse return error.TestUnexpectedResult);
+    }
 }

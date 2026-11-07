@@ -155,7 +155,7 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
                 .matched = matched,
                 .kind = kind,
                 .formatting = formatting,
-                .attributes = .{ .text_align = attributes.text_align, .classes = owned_classes, .css_ancestor_classes = owned_css_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set, .foreground = owned_foreground, .foreground_set = attributes.foreground_set, .font_scale = attributes.font_scale, .font_scale_basis = attributes.font_scale_basis, .font_scale_set = attributes.font_scale_set },
+                .attributes = .{ .text_align = attributes.text_align, .classes = owned_classes, .css_ancestor_classes = owned_css_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set, .foreground = owned_foreground, .foreground_set = attributes.foreground_set, .font_scale = attributes.font_scale, .font_scale_basis = attributes.font_scale_basis, .font_scale_set = attributes.font_scale_set, .font_size_unknown = attributes.font_size_unknown },
                 .target = owned_target,
                 .tag_name = hidden_tag,
                 .link_quotes = link_quotes,
@@ -10379,4 +10379,75 @@ test "retained JA Gyosha preserves complete body grouped references media action
     try std.testing.expectEqual(@as(usize, 6), external);
     try std.testing.expectEqual(@as(usize, 2), author_actions);
     for (citations_found) |present| try std.testing.expect(present);
+}
+
+
+test "computed font authority survives normal document heading scopes and restores siblings with full codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, ".outer{font-size:125%}.unknown{font-size:20px!important}");
+    defer styles.deinit();
+    const source = "<div class=outer>\n== English ==\n<span style='font-size:smaller'>[[Target|text]]</span>\n</div>\n[[Sibling|after]]\n<div class=unknown>\n== Unknown parent ==\n<span style='font-size:smaller'>[[Unknown|kept]]</span>\n</div>\n[[Restored|normal]]";
+    const reference = "<div class=outer>\n== English ==\n<span style='font-size:medium'><span style='font-size:103.3333333333333%'>[[Target|text]]</span></span>\n</div>\n[[Sibling|after]]\n<div class=unknown>\n== Unknown parent ==\n<span>[[Unknown|kept]]</span>\n</div>\n[[Restored|normal]]";
+    var actual_report: Fallbacks = .{};
+    var reference_report: Fallbacks = .{};
+    const actual_bytes = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, "computed font scopes", .language, "English", "en", MissingText.untracked(source), null, .{}, null, null, null, &actual_report, null, &styles);
+    const reference_bytes = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, "computed font scopes", .language, "English", "en", MissingText.untracked(reference), null, .{}, null, null, null, &reference_report, null, &styles);
+    try std.testing.expectEqualSlices(u8, reference_bytes, actual_bytes);
+    const stored = try codec.decodeAlloc(a, actual_bytes, "computed font scopes", .language, .{ .heading = "English", .code = "en" });
+    const expected = try codec.decodeAlloc(a, reference_bytes, "computed font scopes", .language, .{ .heading = "English", .code = "en" });
+    try std.testing.expectEqualDeep(expected, stored);
+    try std.testing.expectEqualSlices(u8, actual_bytes, try codec.encodeAlloc(a, stored));
+    var targets: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (span.target.len == 0) continue;
+        targets += 1;
+        if (std.mem.eql(u8, span.target, "Target")) {
+            try std.testing.expectApproxEqAbs(@as(f32, 1.0333333333), span.font_scale.?, 0.000001);
+            try std.testing.expect(span.font_scale_basis == .normal_body);
+        } else {
+            try std.testing.expect(std.mem.eql(u8, span.target, "Sibling") or std.mem.eql(u8, span.target, "Unknown") or std.mem.eql(u8, span.target, "Restored"));
+            try std.testing.expect(span.font_scale == null and span.font_scale_basis == .context);
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 4), targets);
+    try std.testing.expect(actual_report.unresolved_table_style and reference_report.unresolved_table_style);
+}
+
+test "plain HTML H1 owner observation retains top level source and protected boundary exclusions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try NamespaceRegistry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer namespaces.deinit();
+    const heading = "<h1>Հայերեն</h1>";
+    for ([_][]const u8{ heading ++ "\n# body", heading ++ "\r\n# body", "prefix\n" ++ heading ++ "\n# body", "<h1> Հայերեն </h1>\n# body" }) |source| {
+        const prepared = try compiler.preparePageExternalLinksAlloc(a, source, .{ .namespace_catalog = &namespaces });
+        var refs = try referenceDefinitionsWithMissingAlloc(a, prepared.missing); refs.citations = prepared.citations;
+        const observed = try observeHeadingAnchorsAlloc(a, "entry", prepared.missing, .{}, &namespaces, null, null, refs, prepared.poem_phase);
+        try std.testing.expectEqual(@as(usize, 1), observed.page_html_openings.len);
+        const opening = observed.page_html_openings[0];
+        try std.testing.expectEqual(std.mem.indexOf(u8, prepared.source, "<h1>").?, opening);
+        try std.testing.expect(observed.page_html_source.?.ptr == prepared.source.ptr);
+        try std.testing.expectEqualStrings(source, prepared.source);
+    }
+    for ([_][]const u8{
+        "<nowiki>\n" ++ heading ++ "\n</nowiki>", "<!--\n" ++ heading ++ "\n-->",
+        "<pre>\n" ++ heading ++ "\n</pre>", "<blockquote>\n" ++ heading ++ "\n</blockquote>",
+        "<div>\n" ++ heading ++ "\n</div>", "{|\n|\n" ++ heading ++ "\n|}",
+        "{|\n|+ " ++ heading ++ "\n| cell\n|}", "<table><tr><td>" ++ heading ++ "</td></tr></table>",
+        "<ref>\n" ++ heading ++ "\n</ref><references/>", "[[target|" ++ heading ++ "]]",
+        "prefix " ++ heading, " " ++ heading, "<h1>Հայերեն</h1> suffix", "<h1><span>Հայերեն</span></h1>",
+        "<h1>Հայերեն&amp;</h1>", "<h1>Հայերեն\nEnglish</h1>",
+    }) |source| {
+        const prepared = try compiler.preparePageExternalLinksAlloc(a, source, .{ .namespace_catalog = &namespaces });
+        var refs = try referenceDefinitionsWithMissingAlloc(a, prepared.missing); refs.citations = prepared.citations;
+        const observed = try observeHeadingAnchorsAlloc(a, "entry", prepared.missing, .{}, &namespaces, null, null, refs, prepared.poem_phase);
+        errdefer std.debug.print("plain H1 unexpected root observation: {s}\n", .{source});
+        try std.testing.expectEqual(@as(usize, 0), observed.page_html_openings.len);
+    }
 }

@@ -1,0 +1,202 @@
+'''недеља'''
+[[Категорија:Српски индекс]]__NOEDITSECTION__
+<templatestyles src="Модул:minitoc/styles.css"></templatestyles><div class="NavFrame" data-toggle-category="table of contents" style="max-width:40em;margin:0.5em 0" data-minitoc-length="1"><div class="NavHead" style="background:#eee;padding: 0.25em 0.5em">Језици (1)</div><div class="NavContent" style="text-align:center;padding:0.5em"><span style="white-space:nowrap;">[[#Референце|Референце]]</span><hr>[[#catlinks|Страна категорија]]</div></div><div data-toc-length="1">__TOC__</div>
+==<div id="toc" class="toccolours" ><big><big>[[File:Flag_of_Serbia.svg|border|32px]] Српски</big></big></div>==
+
+=== [[nedelja|недеља]] ([[Викиречник:Српски|српски]], [[Викиречник:Latinica|lat.]] [[nedelja]]) ===
+[[Категорија:sr:Ћирилица]]
+
+{| class="infobox vcard" style="float:right; border:1px solid #AAAAAA; border-collapse:collapse; margin-left:0.5em; margin-bottom:0.5em;" rules="all" cellpadding="3" cellspacing="0"
+! width="65" bgcolor="#F4F4F4" | [[Помоћ:Падеж|Падеж]]
+! bgcolor="#FFFFE0" | [[Помоћ:Једнина|Једнина]]
+! bgcolor="#FFFFE0" | [[Помоћ:Множина|Множина]]
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Номинатив|Номинатив]]'''
+| <span>sr:нед; sr-ec:нед; sr-ej:ned; sr-jc:недј; sr-jl:nedj</span>еља 
+| <span>sr:нед; sr-ec:нед; sr-ej:ned; sr-jc:недј; sr-jl:nedj</span>еље
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Генитив|Генитив]]'''
+| <span>sr:нед; sr-ec:нед; sr-ej:ned; sr-jc:недј; sr-jl:nedj</span>еље 
+| <span>sr:нед; sr-ec:нед; sr-ej:ned; sr-jc:недј; sr-jl:nedj</span>еља
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Датив|Датив]]'''
+| <span>sr:нед; sr-ec:нед; sr-ej:ned; sr-jc:недј; sr-jl:nedj</span>ељи 
+| <span>sr:нед; sr-ec:нед; sr-ej:ned; sr-jc:недј; sr-jl:nedj</span>ељама
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Акузатив|Акузатив]]'''
+| <span>sr:нед; sr-ec:нед; sr-ej:ned; sr-jc:недј; sr-jl:nedj</span>еља 
+| <span>sr:нед; sr-ec:нед; sr-ej:ned; sr-jc:недј; sr-jl:nedj</span>еље
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Вокатив|Вокатив]]'''
+| <span>sr:нед; sr-ec:нед; sr-ej:ned; sr-jc:недј; sr-jl:nedj</span>ељо 
+| <span>sr:нед; sr-ec:нед; sr-ej:ned; sr-jc:недј; sr-jl:nedj</span>еље
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Инструментал|Инструментал]]'''
+| <span>sr:нед; sr-ec:нед; sr-ej:ned; sr-jc:недј; sr-jl:nedj</span>ељом 
+| <span>sr:нед; sr-ec:нед; sr-ej:ned; sr-jc:недј; sr-jl:nedj</span>ељама
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Локатив|Локатив]]'''
+| <span>sr:нед; sr-ec:нед; sr-ej:ned; sr-jc:недј; sr-jl:nedj</span>ељи 
+| <span>sr:нед; sr-ec:нед; sr-ej:ned; sr-jc:недј; sr-jl:nedj</span>ељама
+|}
+
+=== Именица ===
+'''недеља''', ''[[Викиречник:Именица|ж]]''[[Категорија:Српскe именицe]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (IPA) и примери изговора речи">'''Изговор:'''</p>
+:[[Помоћ:МФА|IPA]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">[...] </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Sr-nedеlja.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:sr-nedеlja.ogg|датотека]])</td></tr></table>
+<table class="floatright wikitable">
+	
+	<tr>
+		
+		<th style="text-align:right;">Претходни:</th>
+		<td><b><span class="Cyrl" lang="sr">[[субота#Српски|субота]]</span></b></td>
+	</tr>
+	<tr>
+		<th style="text-align:right;">Следећи:</th>
+		<td><b><span class="Cyrl" lang="sr">[[понедељак#Српски|понедељак]]</span></b></td>
+	</tr>
+</table>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Раздвајање речи на слогове">'''Слогови:''' не·<span>sr:д; sr-ec:д; sr-ej:d ; sr-jc:дј ; sr-jl:dj</span>е·ља,&nbsp; [[мн.]] не·<span>sr:д; sr-ec:д; sr-ej:d ; sr-jc:дј ; sr-jl:dj</span>е·ље</p>
+
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+# Седми или задњи дан у недељи (седмици). Дан после суботе и пре понедељка.
+# Дан уочи ускршњег поста. <ref name="Речник српских говора Војводине, измењено и допуњено издање у 4 тома">Речник српских говора Војводине, измењено и допуњено издање у 4 тома, приредили мр Дејан Милорадов, Катарина Сунајко, мр Ивана Ћелић и др Драгољуб Петровић, Матица српска, Нови Сад.</ref>
+</p>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Акроними, скраћени облици писања или изговора">'''Скраћенице:''' 
+:[[не.]], [[нед.]]
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Етимологија речи">'''Порекло:''' 
+:Етимолошки гледано то је: дан кад се "не дела" то јест, не ради.<ref>Милан Шипка, Приче о речима. с. 286-8</ref>
+</p>
+
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Примери свакодневне употребе"></p>'''Примери:''' 
+#<span>sr:Нед; sr-ec:Нед; sr-ej:Ned ; sr-jc:Недј ; sr-jl:Nedj</span>еља је најбеља, мека као кудеља, шарена к'о [[кецеља]] - стара добра <span>sr:нед; sr-ec:нед; sr-ej:ned ; sr-jc:недј ; sr-jl:nedj</span>еља.
+# Беле недеље једу се млечни производи: млеко, сир, кајмак. Што год се скува на беле покладе (недеља), мора се појести тог дана, не сме се бацити (не знају зашто). На Беле покладе увече сви се пресвуку у чисто, мати донесе бела лука и сви у кући, како одрасли тако и млади, намажу се белим луком и то под пазухом, под коленима, око врата и прсију; неки намажу само табане, а када легну, сви под главу ставе чешањ белог лука, у врата и прозоре забоду ножеве и виљушке, а метлу обрнуто наслоне на врата. Био је обичај да целу ту ноћ гори светло, јер око поноћи иду вештице [...] Сутрадан је Чиста недеља. У Белој недељи стока се истерује рано ујутро и даје јој се свежа (тек извучена) вода, да би стока имала млека. <ref name="Софија Димитријевић, Етнолошка истр. живања у околини Сомбора.">Софија Димитријевић, Етнолошка истр. живања у околини Сомбора. — Рад, 18—19, 1969—1970, 83—100, стр. 99.</ref> <ref name="Речник српских говора Војводине, измењено и допуњено издање у 4 тома">Речник српских говора Војводине, измењено и допуњено издање у 4 тома, приредили мр Дејан Милорадов, Катарина Сунајко, мр Ивана Ћелић и др Драгољуб Петровић, Матица српска, Нови Сад.</ref>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Пробране српске пословице где та реч игра посебну улогу">'''Изреке и пословице:'''
+
+:
+</p>
+
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Изведенице и сложенице"></p>'''Изведене речи:''' 
+: [[недељник]]
+
+
+
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Белоруски: [1] -{ [[нядзеля (njadzelja) ž.]] [[:be:нядзеля (njadzelja) ž.|☞<sup>be</sup>]] }-
+
+*Бенгалски: [1] -{ [[রবিবার (rabibar)]] [[:bn:রবিবার (rabibar)|☞<sup>bn</sup>]] }-
+
+*Бошњачки: [1] -{ [[недјеља (nedjelja) ž.]] [[:bs:недјеља (nedjelja) ž.|☞<sup>bs</sup>]] }-
+
+*Бугарски: [1] -{ [[неделя (nedelja) ž.]] [[:bg:неделя (nedelja) ž.|☞<sup>bg</sup>]] }-
+
+*Грчки: [1] -{ [[Κυριακή (Kiriaki) ž.]] [[:el:Κυριακή (Kiriaki) ž.|☞<sup>el</sup>]] }-
+
+*Гварани : [1] -{ [[arateĩ]] [[:gn:arateĩ|☞<sup>gn</sup>]] }-
+
+*Гуџаратски : [1] -{ [[રવિવાર (ravivar)]] [[:gu:રવિવાર (ravivar)|☞<sup>gu</sup>]] }-
+
+*Енглески: [1] -{ [[Sunday]] [[:en:Sunday|☞<sup>en</sup>]] }-
+
+*Есперанто: [1] -{ [[dimanĉo]] [[:eo:dimanĉo|☞<sup>eo</sup>]] }-
+
+*Италијански: [1] -{ [[domenica]] [[:it:domenica|☞<sup>it</sup>]] }-
+
+*Казашки: [1] -{ [[жексенбі (žeksenbi)]] [[:kk:жексенбі (žeksenbi)|☞<sup>kk</sup>]] }-
+
+*Кашупски: [1] -{ [[niedzela ž.]] [[:csb:niedzela ž.|☞<sup>csb</sup>]] }-
+
+*Кинески: [1] -{ [[星期日 (ksingčiri)]] [[:zh:星期日 (ksingčiri)|☞<sup>zh</sup>]] }-
+
+*Киргиски: [1] -{ [[жекшемби (žekšembi)]] [[:ky:жекшемби (žekšembi)|☞<sup>ky</sup>]] }-
+
+*Курдски курманџи: [1] -{ [[yekşem (jekšem)]] [[:kmr:yekşem (jekšem)|☞<sup>kmr</sup>]] }-
+
+*Летонски: [1] -{ [[svētdiena]] [[:lv:svētdiena|☞<sup>lv</sup>]] }-
+
+*Литвански: [1] -{ [[sekmadienis]] [[:lt:sekmadienis|☞<sup>lt</sup>]] }-
+
+*Македонски: [1] -{ [[недела (nedela) ž.]] [[:mk:недела (nedela) ž.|☞<sup>mk</sup>]] }-
+
+*Маратски: [1] -{ [[रविवार (ravivar)]] [[:mr:रविवार (ravivar)|☞<sup>mr</sup>]] }-
+
+*Монголски: [1] -{ [[ням (njam)]] [[:mn:ням (njam)|☞<sup>mn</sup>]] }-
+
+*Немачки: [1] -{ [[Sonntag (Zontag) m.]] [[:de:Sonntag (Zontag) m.|☞<sup>de</sup>]] }-
+
+*Осетски: [1] -{ [[хуыцаубон (huicaubon)]] [[:os:хуыцаубон (huicaubon)|☞<sup>os</sup>]] }-
+
+*Пенџабски: [1] -{ [[ਐਤਵਾਰ (aitavara)]] [[:pa:ਐਤਵਾਰ (aitavara)|☞<sup>pa</sup>]] }-
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Персијски: [1] -{ [[یكشنبه (jek-šambe)]] [[:fa:یكشنبه (jek-šambe)|☞<sup>fa</sup>]] }-
+
+*Полапски: [1] -{ [[nideľă]] [[:pox:nideľă|☞<sup>pox</sup>]] }-
+
+*Пољски: [1] -{ [[niedziela ž.]] [[:pl:niedziela ž.|☞<sup>pl</sup>]] }-
+
+*Румунски: [1] -{ [[duminică]] [[:ro:duminică|☞<sup>ro</sup>]] }-
+
+*Русински: [1] -{ [[недїля (nedilja) ž.]] [[:rue:недїля (nedilja) ž.|☞<sup>rue</sup>]] }-
+
+*Руски: [1] -{ [[воскресенье (voskresene) s.]] [[:ru:воскресенье (voskresene) s.|☞<sup>ru</sup>]] }-
+
+*Санскрт: [1] -{ [[रविवार (ravivara) m.]] [[:sa:रविवार (ravivara) m.|☞<sup>sa</sup>]] }-
+
+*Словачки: [1] -{ [[nedeľa ž.]] [[:sk:nedeľa ž.|☞<sup>sk</sup>]] }-
+
+*Словеначки: [1] -{ [[nedelja ž.]] [[:sl:nedelja ž.|☞<sup>sl</sup>]] }-
+
+*Српски горњолужички: [1] -{ [[njedźela ž.]] [[:hsb:njedźela ž.|☞<sup>hsb</sup>]] }-
+
+*Српски доњолужички: [1] -{ [[njeźela ž.]] [[:dsb:njeźela ž.|☞<sup>dsb</sup>]] }-
+
+*Старословенски: [1] -{ [[нєдѣлꙗ (nedlja) ž.]] [[:cu:нєдѣлꙗ (nedlja) ž.|☞<sup>cu</sup>]] }-
+
+*Таџикистански: [1] -{ [[якшанбе (jakšambe)]] [[:tg:якшанбе (jakšambe)|☞<sup>tg</sup>]] }-
+
+*Татарски: [1] -{ [[якшәмбе (jakšambe)]] [[:-tt:якшәмбе (jakšambe)|☞<sup>-tt</sup>]] }-
+
+*Узбечки: [1] -{ [[yakshanba (jakšanba)]] [[:uz:yakshanba (jakšanba)|☞<sup>uz</sup>]] }-
+
+*Украјински: [1] -{ [[неділя (nedilja) ž.]] [[:uk:неділя (nedilja) ž.|☞<sup>uk</sup>]] }-
+
+*Урду: [1] -{ [[اتوار (itvar)]] [[:ur:اتوار (itvar)|☞<sup>ur</sup>]] }-
+
+*Француски: [1] -{ [[dimanche (dimanš)]] [[:fr:dimanche (dimanš)|☞<sup>fr</sup>]] }-
+
+*Хебрејски: [1] -{ [[יום ראשון (jom rišon)]] [[:he:יום ראשון (jom rišon)|☞<sup>he</sup>]] }-
+
+*Хинди: [1] -{ [[रविवार (ravivar)]] [[:hi:रविवार (ravivar)|☞<sup>hi</sup>]] }-
+
+*Хрватски: [1] -{ [[nedjelja ž.]] [[:hr:nedjelja ž.|☞<sup>hr</sup>]] }-
+
+*Чешки: [1] -{ [[neděle ž.]] [[:cs:neděle ž.|☞<sup>cs</sup>]] }-
+
+*Шпански: [1] -{ [[domingo m.]] [[:es:domingo m.|☞<sup>es</sup>]] }-
+
+|} 
+|}
+== Референце ==
+[[:Шаблон:reflist]]
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' </p>
+:[1] [[:w:недеља|недеља]]

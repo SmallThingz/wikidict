@@ -1,0 +1,66 @@
+== {{-it-}} ==
+{{-agg-|it}}
+{{Pn}} ''m'' e ''f sing'' {{Linkp|consistenti}}
+# {{Nodef|it}}
+# {{Est}} di considerevole  [[grandezza]]
+
+{{-verb form-|it}}
+{{Pn}}
+# [[participio presente]] singolare di [[consistere]]
+
+{{-sill-}}
+; con | si | stèn | te
+
+{{-pron-}}
+{{IPA|/konsisˈtɛnte/}}
+
+{{-etim-}}
+dal latino ''[[consistens]]'' che deriva da ''[[consistĕre]]'' cioè "[[star saldo]]"
+
+{{-sin-}}
+*''(di materiale)'' [[coerente]], [[compatto]], [[denso]], [[duro]], [[fitto]], [[massiccio]], [[resistente]], [[robusto]], [[sodo]] [[solido]], [[spesso]]
+*''(di ragionamento)'' [[attendibile]], [[corretto]],  [[convincente]],  [[efficace]], [[fondato]], [[motivato]], [[provato]],  [[valido]],
+* {{Fig}} ''(di numero)'' [[considerevole]], [[cospicuo]], [[importante]], [[notevole]], [[ragguardevole]], [[rilevante]]
+* {{Est}} ''(di quantità, somma)''  [[apprezzabile]] 
+* [[fermo]],  [[ingente]],   [[saldo]]
+
+ 
+
+{{-ant-}}
+*''(di oggetto)'' [[cedevole]], [[friabile]], [[debole]], [[fragile]], [[inconsistente]], [[incoerente]], [[molle]], [[poroso]], [[soffice]], [[sottile]], 
+*[[insignificante]], [[irrilevante]], [[trascurabile]]
+*''(di ragionamento)'' [[gratuito]], [[immotivato]],  [[infondato]], [[vago]]
+* {{Est}}  [[esiguo]], [[limitato]], [[scarso]] 
+* {{Fig}} ''(di argomento, prova)'' [[inconsistente]], [[inefficace]], [[inattendibile]]
+
+{{-der-}}  
+*[[consistentemente]]
+
+{{-rel-}}
+* [[consistenza]], [[consistere]]
+
+{{-trad-}}
+{{Trad1|denso}}
+: {{en}}: [[thick]], [[dense]]
+
+{{Trad2}}
+
+{{Trad1|compatto}}
+:* {{en}}:[[firm]], [[compact]], [[solid]]
+:*{{es}}:[[consistente]], [[sólido
+{{Trad2}}]]
+
+{{Trad1|convincente}}
+:* {{en}}:[[convincing]], [[sound]]
+{{Trad2}}
+
+{{Trad1|}}
+:* {{en}}: [[substantial]], [[stiff]],  substantial, [[sizeable]], [[valid]]
+{{Trad2}}
+
+{{-ref-}}
+* {{Fonte|sabco}}
+* {{Fonte|sin-co}}
+* {{Fonte|trec}}
+* {{Fonte|dizit}}
+*AA.VV., ''Dizionario sinonimi e contrari'', Mariotti, 2006, pagina 141

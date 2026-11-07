@@ -1,0 +1,20 @@
+==영어==
+
+===발음===
+* {{IPA|en|/ɪntəˈkɹʊəɹəl/<a:UK><ref:<<name:OED>>>}}
+* {{IPA|en|/ɪntɚˈkɹuɹəl/|a=US}}
+
+===형용사===
+{{en-adj|-}}
+
+# 다리 사이에서 일어나거나 위치하는.
+#: {{ux|en|'''Intercrural''' intercourse is frequently seen on ancient Greek ceramics.}} 고대 그리스 도자기에서 다리 사이 성교가 자주 묘사된다.
+#: ''the female '''intercrural''' [[foramen]]'' 여성의 다리 사이 구멍
+# ([[해부학]]) 많은 연골어류의 척추에 있는 신경 사이 판에 적용된다.
+
+====파생 어휘====
+* {{l|en|intercrurally}}
+* {{l|en|intercrural sex}}
+
+===주석===
+<references />

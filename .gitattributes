@@ -53,3 +53,15 @@ src/encoder/testdata/uk-tomato/imen-eo.xmlencoded.wikitext -whitespace
 # Preserve exact captured JA/KU regression source bytes.
 src/encoder/testdata/ja-gyosha/common.css -whitespace
 tools/testdata/ku-malper/page.expanded.wikitext -whitespace
+
+# Preserve exact captured font/FI/HY/IT/SR regression bytes.
+src/encoder/testdata/computed-font/ko-common.css -whitespace
+tools/testdata/fi-laata-fidelity/page.expanded.wikitext -whitespace
+tools/testdata/hy-kheght62/common.css -whitespace
+tools/testdata/hy-kheght62/expanded.wikitext -whitespace
+tools/testdata/it-consistente/expanded.wikitext -whitespace
+tools/testdata/it-consistente/it-common.css -whitespace
+tools/testdata/it-consistente/raw.wikitext -whitespace
+tools/testdata/sr-nedelja/common.css -whitespace
+tools/testdata/sr-nedelja/page.expanded.wikitext -whitespace
+tools/testdata/sr-nedelja/reference.expanded.wikitext -whitespace

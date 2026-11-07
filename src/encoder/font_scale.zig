@@ -40,6 +40,44 @@ pub fn absoluteKeyword(raw: []const u8) ?f32 {
     return null;
 }
 
+pub const RelativeKeyword = enum { smaller, larger };
+pub fn relativeKeyword(raw: []const u8) ?RelativeKeyword {
+    const value = std.mem.trim(u8, raw, " \t\r\n\x0c");
+    if (std.ascii.eqlIgnoreCase(value, "smaller")) return .smaller;
+    if (std.ascii.eqlIgnoreCase(value, "larger")) return .larger;
+    return null;
+}
+
+// Native UA policy: interpolate the adjacent-keyword mapping linearly between
+// known body-medium sizes; extrapolate with the nearest endpoint ratio. This
+// is a computed size, not a percentage to multiply against the parent again.
+pub fn resolveKeyword(parent: f32, direction: RelativeKeyword) error{InvalidFontScale}!f32 {
+    if (!valid(parent)) return error.InvalidFontScale;
+    const table = [_]f32{ 3.0 / 5.0, 3.0 / 4.0, 8.0 / 9.0, 1, 6.0 / 5.0, 3.0 / 2.0, 2 };
+    const x: f64 = parent;
+    var result: f64 = undefined;
+    if (x <= table[0]) {
+        result = x * (if (direction == .smaller) @as(f64, table[0]) / table[1] else @as(f64, table[1]) / table[0]);
+    } else if (x >= table[table.len - 1]) {
+        result = x * (if (direction == .smaller) @as(f64, table[table.len - 2]) / table[table.len - 1] else @as(f64, table[table.len - 1]) / table[table.len - 2]);
+    } else {
+        var i: usize = 0;
+        while (x > table[i + 1]) : (i += 1) {}
+        const lower: f64 = table[i];
+        const upper: f64 = table[i + 1];
+        const from: f64 = if (direction == .smaller)
+            (if (i == 0) lower * lower / upper else table[i - 1])
+        else upper;
+        const to: f64 = if (direction == .smaller) lower else
+            (if (i + 2 == table.len) upper * upper / lower else table[i + 2]);
+        result = from + (x - lower) / (upper - lower) * (to - from);
+    }
+    if (!std.math.isFinite(result) or result > std.math.floatMax(f32)) return error.InvalidFontScale;
+    const projected: f32 = @floatCast(result);
+    if (result > 0 and projected == 0) return error.InvalidFontScale;
+    return projected;
+}
+
 fn nonzeroMantissa(value: []const u8) bool {
     for (value) |c| {
         if (c == 'e' or c == 'E') break;
@@ -117,4 +155,24 @@ test "invalid unsupported and nonfinite values never become a scale" {
     try std.testing.expect(!valid(std.math.inf(f32)));
     try std.testing.expectError(error.InvalidFontScale, resolve(std.math.floatMax(f32), 2));
     try std.testing.expectError(error.InvalidFontScale, resolve(1, std.math.inf(f32)));
+}
+
+
+test "relative keyword native UA table interpolates computed sizes without repeated parent multiplication" {
+    const table = [_]f32{ 3.0 / 5.0, 3.0 / 4.0, 8.0 / 9.0, 1, 6.0 / 5.0, 3.0 / 2.0, 2 };
+    for (table, 0..) |size, i| {
+        if (i > 0) try std.testing.expectApproxEqAbs(table[i - 1], try resolveKeyword(size, .smaller), 0.000001);
+        if (i + 1 < table.len) try std.testing.expectApproxEqAbs(table[i + 1], try resolveKeyword(size, .larger), 0.000001);
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 0.838888888888889), try resolveKeyword(0.96, .smaller), 0.000001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.128), try resolveKeyword(0.96, .larger), 0.000001);
+    try std.testing.expectEqual(@as(f32, 0), try resolveKeyword(0, .smaller));
+    try std.testing.expectEqual(@as(f32, 0), try resolveKeyword(0, .larger));
+    try std.testing.expectApproxEqAbs(@as(f32, 0.24), try resolveKeyword(0.3, .smaller), 0.000001);
+    try std.testing.expectApproxEqAbs(@as(f32, 4), try resolveKeyword(3, .larger), 0.000001);
+    try std.testing.expectError(error.InvalidFontScale, resolveKeyword(std.math.floatMax(f32), .larger));
+    try std.testing.expectError(error.InvalidFontScale, resolveKeyword(-1, .smaller));
+    try std.testing.expectError(error.InvalidFontScale, resolveKeyword(std.math.nan(f32), .smaller));
+    try std.testing.expect(relativeKeyword(" SMALLER ") == .smaller);
+    try std.testing.expect(relativeKeyword("1.2") == null);
 }

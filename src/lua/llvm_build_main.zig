@@ -1752,7 +1752,44 @@ fn buildDynamicObjectShapes(
     };
 }
 
-fn run(io: std.Io, a: A, args: []const []const u8) !void {
+// Process CPU includes all analysis worker threads; awake wall time is separate.
+// Same fallible process clock used by runtime/work_stats.zig, without importing
+// the worker runtime into this compiler executable.
+fn compilerProcessCpuNow() ?u64 {
+    var ts: std.posix.timespec = undefined;
+    if (std.posix.errno(std.posix.system.clock_gettime(.PROCESS_CPUTIME_ID, &ts)) != .SUCCESS) return null;
+    const seconds = std.math.cast(u64, ts.sec) orelse return null;
+    const nanos = std.math.cast(u64, ts.nsec) orelse return null;
+    return std.math.add(u64, std.math.mul(u64, seconds, 1_000_000_000) catch return null, nanos) catch null;
+}
+
+const CompilerPhaseTimer = struct {
+    io: std.Io,
+    phase: []const u8,
+    wall_ns: i96,
+    cpu_ns: ?u64,
+
+    fn start(io: std.Io, phase: []const u8) CompilerPhaseTimer {
+        return .{ .io = io, .phase = phase, .wall_ns = std.Io.Clock.awake.now(io).toNanoseconds(), .cpu_ns = compilerProcessCpuNow() };
+    }
+
+    fn finish(self: CompilerPhaseTimer, failure: ?anyerror) void {
+        const cpu_end = compilerProcessCpuNow();
+        const cpu_ns: ?u64 = if (self.cpu_ns != null and cpu_end != null) cpu_end.? -| self.cpu_ns.? else null;
+        const wall_ns = std.Io.Clock.awake.now(self.io).toNanoseconds() - self.wall_ns;
+        std.debug.print("LLVM_BUILD_PHASE phase={s} status={s} wall_ns={d} process_cpu_ns={?d} error={s}\n", .{
+            self.phase, if (failure == null) "success" else "failed", wall_ns, cpu_ns,
+            if (failure) |err| @errorName(err) else "none",
+        });
+    }
+
+    fn next(self: *CompilerPhaseTimer, phase: []const u8) void {
+        self.finish(null);
+        self.* = start(self.io, phase);
+    }
+};
+
+fn run(io: std.Io, a: A, args: []const []const u8, failed_phase: *?CompilerPhaseTimer) !void {
     if (args.len < 4) return error.Usage;
     var analysis_only = false;
     var parse_workers: usize = @min(4, std.Thread.getCpuCount() catch 1);
@@ -1775,6 +1812,8 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     const manifest_path = args[1];
     const source_root = args[2];
     const output_root = args[3];
+    var phase_timer = CompilerPhaseTimer.start(io, "input_validation");
+    errdefer failed_phase.* = phase_timer;
     const inputs_lock_path = try std.fs.path.join(a, &.{ source_root, ".compiler-inputs.lock" });
     var inputs_lock = try std.Io.Dir.cwd().createFile(io, inputs_lock_path, .{ .truncate = false, .lock = .shared });
     defer inputs_lock.close(io);
@@ -1787,10 +1826,12 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         error.FileNotFound => {},
         else => return err,
     }
+    phase_timer.next("registry_load");
     var registry_storage = try Registry.load(io, a, source_root);
     defer registry_storage.deinit();
     const registry = &registry_storage;
 
+    phase_timer.next("analysis_setup");
     try std.Io.Dir.cwd().createDirPath(io, output_root);
     const manifest = try readAll(io, a, manifest_path);
     var globals = try analysis.Globals.init(a);
@@ -1804,6 +1845,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     var function_stats: FunctionAnalysisStats = .{};
     var dead_functions_by_module: std.ArrayList(u32) = .empty;
     defer dead_functions_by_module.deinit(a);
+    phase_timer.next("analyze_manifest");
     const analyzed = try analyzeManifest(
         io,
         a,
@@ -1842,6 +1884,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         shape_registry.fieldCount(),
     });
 
+    phase_timer.next("module_usage_planning");
     var module_ids = try buildModuleIds(io, a, registry, source_root, records);
     defer module_ids.deinit(a);
     if (module_ids.count() > std.math.maxInt(u32)) return error.TooManyModuleNames;
@@ -1972,10 +2015,12 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         .{ reachable_dead_functions, reachable_analysis_functions },
     );
     if (analysis_only) {
+        phase_timer.finish(null);
         std.debug.print("LLVM_ANALYSIS_ONLY_DONE modules={d}\n", .{selected_records.items.len});
         return;
     }
 
+    phase_timer.next("shape_preparation");
     const leaf_path = value_leaf_path orelse return error.MissingValueLeafBitcode;
     var leaf_file = try std.Io.Dir.cwd().openFile(io, leaf_path, .{});
     defer leaf_file.close(io);
@@ -2028,6 +2073,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
     std.debug.print("LLVM_JSON_OBJECT_SHAPE id={?d}\n", .{dynamic_object_shapes.json_object});
     std.debug.print("LLVM_URI_QUERY_SHAPE id={?d}\n", .{dynamic_object_shapes.uri_query});
 
+    phase_timer.next("emit_batches");
     try emitBatches(
         io,
         a,
@@ -2048,11 +2094,13 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         dynamic_object_shapes.uri_query,
     );
 
+    phase_timer.next("program_bitcode");
     var program_module = try program.generate(a, selected_records.items);
     defer program_module.deinit();
     const program_path = try std.fs.path.join(a, &.{ output_root, "program.bc" });
     try program_module.writeBitcode(a, program_path);
 
+    phase_timer.next("metadata");
     const metadata_path = try std.fs.path.join(a, &.{ output_root, "program.meta" });
     try program.writeMetadata(
         io,
@@ -2067,6 +2115,7 @@ fn run(io: std.Io, a: A, args: []const []const u8) !void {
         dynamic_object_shapes.json_object,
         dynamic_object_shapes.uri_query,
     );
+    phase_timer.finish(null);
     std.debug.print("LLVM_DONE modules={d} globals={d}\n", .{ selected_records.items.len, globals.names.items.len });
 }
 
@@ -2083,7 +2132,9 @@ pub export fn dict_llvm_build_main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c
 
     var args: [9][]const u8 = undefined;
     for (args[0..@intCast(argc)], 0..) |*arg, index| arg.* = std.mem.span(argv[index]);
-    run(threaded.io(), arena.allocator(), args[0..@intCast(argc)]) catch |err| {
+    var failed_phase: ?CompilerPhaseTimer = null;
+    run(threaded.io(), arena.allocator(), args[0..@intCast(argc)], &failed_phase) catch |err| {
+        if (failed_phase) |phase| phase.finish(err);
         std.debug.print("dict-llvm-build: {s}\n", .{@errorName(err)});
         return 1;
     };

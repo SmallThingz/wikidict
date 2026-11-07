@@ -1,0 +1,20 @@
+==영어==
+
+===발음===
+* <dl><dd>'''[[위키낱말사전:국제 음성 기호|<span style="color: #000">IPA</span>]]''' <span style="color: #000; font-size: 120%;">[<span class="IPA">[[도움말:IPA 발음 듣기|en]]</span>]</span>(/ɪntəˈkɹʊəɹəl/<a:UK><ref:<<name:OED>>>)</dd></dl>
+* <dl><dd>'''[[위키낱말사전:국제 음성 기호|<span style="color: #000">IPA</span>]]''' <span style="color: #000; font-size: 120%;">[<span class="IPA">[[도움말:IPA 발음 듣기|en]]</span>]</span>(/ɪntɚˈkɹuɹəl/)</dd></dl>
+
+===형용사===
+<span class="headword-line"><strong class="Latn headword" lang="en">intercrural</strong> ([[부록:용어사전#비교급|비교급]]으로는 쓰이지 않음)</span>[[분류:영어 기본형|INTERCRURAL]][[분류:영어 형용사|INTERCRURAL]][[분류:영어 비교급으로 쓰이지 않는 형용사|INTERCRURAL]][[분류:항목이 있는 문서|INTERCRURAL]][[분류:1개의 항목이 있는 문서|INTERCRURAL]]
+
+# 다리 사이에서 일어나거나 위치하는.
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="en">'''Intercrural''' intercourse is frequently seen on ancient Greek ceramics.</i><dl><dd><small>(이 용례의 한국어 번역을 추가해주세요)</small></dd></dl></div>[[분류:용례가 포함된 영어 낱말|INTERCRURAL]][[분류:Requests for translations of 영어 용례s|INTERCRURAL]] 고대 그리스 도자기에서 다리 사이 성교가 자주 묘사된다.
+#: ''the female '''intercrural''' [[foramen]]'' 여성의 다리 사이 구멍
+# ([[해부학]]) 많은 연골어류의 척추에 있는 신경 사이 판에 적용된다.
+
+====파생 어휘====
+* <span class="Latn" lang="en">[[:intercrurally#영어|intercrurally]]</span>
+* <span class="Latn" lang="en">[[:intercrural sex#영어|intercrural sex]]</span>
+
+===주석===
+<references />
