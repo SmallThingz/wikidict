@@ -1405,7 +1405,7 @@ def edition_cli_options(cfg, edition):
     """Forward existing canonical options, authenticating each selected input."""
     from build_wiktionaries import AUXILIARY_SNAPSHOT_NAMES
     options = cfg.get('edition_options', {}).get(edition, {})
-    require(isinstance(options, dict) and set(options) <= {'extraction_cache_root', 'auxiliary_snapshots', 'interwiki_snapshot'},
+    require(isinstance(options, dict) and set(options) <= {'extraction_cache_root', 'staged_input_root', 'auxiliary_snapshots', 'interwiki_snapshot'},
             'Unknown edition option')
     argv = []
     if 'llvm_workers' in cfg:
@@ -1430,6 +1430,24 @@ def edition_cli_options(cfg, edition):
         require((st.st_dev, st.st_ino, st.st_uid, st.st_mode & 0o777) == tuple(record[k] for k in ('device', 'inode', 'uid', 'mode'))
                 and st.st_uid == os.geteuid() and st.st_mode & 0o200, 'Extraction cache identity or ownership differs')
         argv += ['--extraction-cache-root', str(path)]
+    if 'staged_input_root' in options:
+        record = options['staged_input_root']
+        require(isinstance(record,dict) and set(record)=={'path','device','inode','uid','mode','completion'},
+                'Invalid borrowed staged input record')
+        require(isinstance(record['path'],str) and all(type(record[k]) is int for k in ('device','inode','uid','mode')),
+                'Invalid borrowed staged input identity fields')
+        path = Path(record['path'])
+        require(path.is_absolute() and path.resolve()==path and not any(p.is_symlink() for p in (path,*path.parents))
+                and path.is_dir(), 'Unsafe borrowed staged input')
+        st = path.stat()
+        require((st.st_dev,st.st_ino,st.st_uid,st.st_mode & 0o777)==tuple(record[k] for k in ('device','inode','uid','mode'))
+                and st.st_uid==os.geteuid(), 'Borrowed staged input identity or ownership differs')
+        reference=record['completion']
+        require(isinstance(reference,dict) and reference.get('path')==str(path/'.complete.json')
+                and descriptor(path/'.complete.json')==reference, 'Borrowed staged input completion differs')
+        # The builder authenticates this existing marker against selected XML
+        # inputs and verifies dump/index bytes. No copy or marker rewrite here.
+        argv += ['--staged-input-root',str(path)]
     return argv
 
 

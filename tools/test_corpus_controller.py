@@ -3051,3 +3051,38 @@ class RetainedProducerRootTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class BorrowedStagedInputOptionTests(unittest.TestCase):
+    def fixture(self, root):
+        path=root/'input';path.mkdir();(path/'.complete.json').write_text('{"version":"fixture"}\n')
+        st=path.stat()
+        record=dict(path=str(path),device=st.st_dev,inode=st.st_ino,uid=st.st_uid,mode=st.st_mode & 0o777,
+                    completion=controller.descriptor(path/'.complete.json'))
+        return path,record,dict(edition_options={'toy':dict(staged_input_root=record)})
+
+    def test_exact_owned_root_and_completion_forward_existing_cli(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path,record,cfg=self.fixture(Path(tmp));before=tuple(getattr((path/'.complete.json').stat(),k) for k in ('st_dev','st_ino','st_size','st_mtime_ns','st_ctime_ns'))
+            self.assertEqual(controller.edition_cli_options(cfg,'toy'),['--staged-input-root',str(path)])
+            self.assertEqual(tuple(getattr((path/'.complete.json').stat(),k) for k in ('st_dev','st_ino','st_size','st_mtime_ns','st_ctime_ns')),before)
+            self.assertEqual(controller.edition_cli_options({},'toy'),[])
+            cfg.update(build_timeout_seconds=60,now_unix=123,expansion_timeout_ms=1000,downloads=str(path.parent/'downloads'),output=str(path.parent/'output'),raw_shard_root=str(path.parent/'raw'),compiler=dict(path='/fixture/zig'))
+            with mock.patch.object(controller,'source_roots',return_value=(path.parent,path.parent)):
+                argv=controller.command(cfg,'toy',1)
+            self.assertEqual(argv.count('--staged-input-root'),1)
+            self.assertEqual(argv[argv.index('--staged-input-root')+1],str(path))
+            self.assertEqual(argv[argv.index('--watchdog-memory-limit-mib')+1],'8192')
+
+    def test_replaced_completion_wrong_root_and_symlink_refuse(self):
+        for mode in ('marker','inode','uid','completion-path','alias','extra'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);path,record,cfg=self.fixture(root)
+                if mode=='marker':(path/'.complete.json').write_text('changed')
+                if mode=='inode':record['inode']+=1
+                if mode=='uid':record['uid']+=1
+                if mode=='completion-path':record['completion']=controller.descriptor(path/'.complete.json')|{'path':str(root/'elsewhere')}
+                if mode=='alias':
+                    alias=root/'alias';alias.symlink_to(path,target_is_directory=True);record['path']=str(alias)
+                if mode=='extra':record['unverified_payloads']=True
+                with self.assertRaises((ValueError,OSError)):controller.edition_cli_options(cfg,'toy')

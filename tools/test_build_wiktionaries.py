@@ -4726,6 +4726,7 @@ class FileMetadataV2ReplayReuseTest(unittest.TestCase):
     def final_auxiliary_boundary(self, function, snapshots, hashes, identity, staging):
         # Execute the actual maintained finalization block; no native/subprocess boundary.
         import ast,inspect,textwrap
+        if function is b.build_locked:function=b._build_locked
         tree=ast.parse(textwrap.dedent(inspect.getsource(function)))
         blocks=[node for node in ast.walk(tree) if isinstance(node,ast.If) and
                 ast.unparse(node.test)=='auxiliary_hashes or build_identity is not None']
@@ -5595,3 +5596,248 @@ class RetainedWorkspaceTests(unittest.TestCase):
             native.assert_called_once_with(['zig','build','build-dictionary'],cwd=source,check=True)
             (source/'build.zig').write_text('actual producer mutation')
             self.assertNotEqual(b.source_fingerprint(),before)
+
+class BorrowedStagedInputTests(PreparedToolsFixture):
+    class RouteReached(RuntimeError):pass
+
+    def fixture(self, root):
+        folder=root/'testwiktionary/20260901';write_namespace_fixture(folder)
+        name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+        data=bz2.compress(b'<mediawiki><page>word</page></mediawiki>')
+        (folder/name).write_bytes(data)
+        item=dict(wiki='testwiktionary',date='20260901',name=name,
+                  url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,
+                  size=len(data),sha1=hashlib.sha1(data).hexdigest())
+        workspace=root/'original';workspace.mkdir()
+        dump=b.cached_shard_dump([item],root,workspace)
+        return item,dump.parent
+
+    def identities(self, root):
+        return {p.name:(p.read_bytes(),p.stat().st_dev,p.stat().st_ino,p.stat().st_size,
+                        p.stat().st_mtime_ns,p.stat().st_ctime_ns)
+                for p in (root/name for name in ('pages.xml.zst','pages-index.txt.bz2','.complete.json'))}
+
+    def test_reuses_one_real_repack_without_link_copy_or_physical_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'stage_seekable_dump',wraps=b.stage_seekable_dump) as stage:
+                item,borrowed=self.fixture(root);before=self.identities(borrowed)
+                for outcome in ('success','failure'):
+                    with self.subTest(outcome=outcome):
+                        try:
+                            with b.borrowed_staged_input([item],borrowed,root/'new-output') as (selected,check):
+                                self.assertEqual(selected,borrowed)
+                                b.validated_staged_dump([item],selected)
+                                if outcome=='failure':raise self.RouteReached()
+                        except self.RouteReached:pass
+                        self.assertEqual(self.identities(borrowed),before)
+                self.assertEqual(stage.call_count,1)
+
+    def test_rejects_invalid_marker_dump_and_index_without_repair(self):
+        for mode in ('marker','input','dump','index','symlink'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);item,borrowed=self.fixture(root)
+                if mode=='marker':(borrowed/'.complete.json').write_text('{')
+                if mode=='input':
+                    path=borrowed/'.complete.json';row=json.loads(path.read_text());row['input_sha256']='0'*64;path.write_text(json.dumps(row))
+                if mode in ('dump','index'):
+                    path=borrowed/('pages.xml.zst' if mode=='dump' else 'pages-index.txt.bz2')
+                    data=bytearray(path.read_bytes());data[-1]^=1;path.write_bytes(data)
+                if mode=='symlink':
+                    path=borrowed/'pages.xml.zst';data=path.read_bytes();path.unlink();other=root/'other';other.write_bytes(data);path.symlink_to(other)
+                def stamps():
+                    return {p.name:tuple(getattr(p.lstat(),k) for k in ('st_dev','st_ino','st_mode','st_size','st_mtime_ns','st_ctime_ns')) for p in borrowed.iterdir()}
+                before=stamps()
+                with patch.object(b,'stage_seekable_dump',side_effect=AssertionError('borrowed input repaired')):
+                    with self.assertRaises((ValueError,OSError)):
+                        with b.borrowed_staged_input([item],borrowed,root/'new-output'):self.fail('invalid input borrowed')
+                self.assertEqual(stamps(),before)
+
+    def test_borrowed_root_survives_owned_cleanup_success_and_failure(self):
+        for failure in (False,True):
+            with self.subTest(failure=failure),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);item,borrowed=self.fixture(root);before=self.identities(borrowed)
+                output=root/'output';workspace=output/item['wiki']/(item['date']+'.shards')
+                def finish(*args):
+                    workspace.mkdir(parents=True);(workspace/'input').mkdir();(workspace/'input/owned').write_bytes(b'owned')
+                    b.cleanup_shard_workspace(workspace)
+                    if failure:raise self.RouteReached()
+                    return 'fresh_production'
+                with patch.object(b,'_build_locked',side_effect=finish):
+                    if failure:
+                        with self.assertRaises(self.RouteReached):b.build_locked([item],root,output,'never-executed',staged_input_root=borrowed)
+                    else:self.assertEqual(b.build_locked([item],root,output,'never-executed',staged_input_root=borrowed),'fresh_production')
+                self.assertFalse(workspace.exists());self.assertEqual(self.identities(borrowed),before)
+
+    def test_owned_path_overlap_and_in_use_mutation_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);item,borrowed=self.fixture(root)
+            with self.assertRaisesRegex(ValueError,'overlaps'):
+                with b.borrowed_staged_input([item],borrowed,root,raw_shard_root=borrowed.parent):pass
+            with self.assertRaisesRegex(ValueError,'changed during build'):
+                with b.borrowed_staged_input([item],borrowed,root/'new-output'):
+                    path=borrowed/'pages.xml.zst';old=path.stat();data=path.read_bytes();path.write_bytes(data)
+                    os.utime(path,ns=(old.st_atime_ns,old.st_mtime_ns))
+
+    def test_original_dump_and_hashes_reach_both_native_preparation_routes(self):
+        for sharded in (False,True):
+            with self.subTest(sharded=sharded),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);item,borrowed=self.fixture(root);before=self.identities(borrowed)
+                tool=root/'zig';tool.write_bytes(b'fixture compiler identity');tool.chmod(0o700)
+                record=json.loads((borrowed/'.complete.json').read_text());calls=[]
+                def check(argv):
+                    self.assertEqual(argv[0],str(borrowed/'pages.xml.zst'))
+                    self.assertEqual(argv[argv.index('--verified-dump-sha256')+1],record['dump_sha256'])
+                    self.assertEqual(argv[argv.index('--verified-index-sha256')+1],record['index_sha256'])
+                    calls.append(argv);raise self.RouteReached()
+                def one_shot(argv,*args,**kwargs):check(tool_arguments(argv))
+                def preparation(*args,**kwargs):check(kwargs['expander_args'])
+                with patch.object(b,'PROJECT',root),patch.object(b,'source_fingerprint',return_value='source'), \
+                     patch.object(b,'SHARD_PAGES',0 if sharded else 100000), \
+                     patch.object(b,'stage_seekable_dump',side_effect=AssertionError('duplicate repack')), \
+                     patch.object(b,'timed_run',side_effect=one_shot),patch.object(b,'prepare_blob_tools',side_effect=preparation):
+                    with self.assertRaises(self.RouteReached):
+                        b.build([item],root,root/'output',str(tool),1,staged_input_root=borrowed)
+                self.assertEqual(len(calls),1);self.assertEqual(self.identities(borrowed),before)
+                self.assertFalse((root/'output'/item['wiki']/(item['date']+'.shards')/'input/pages.xml.zst').exists())
+
+    def test_explicit_cli_and_scheduler_forward_one_selected_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);item,borrowed=self.fixture(root);write_test_manifest(root,dict(files=[item]))
+            argv=['build_wiktionaries.py','--downloads',str(root),'--output',str(root/'output'),
+                  '--wikis','testwiktionary','--threads','1','--jobs','1','--staged-input-root',str(borrowed)]
+            with patch.object(sys,'argv',argv),patch.object(b,'safe_worker_budget',return_value=4),patch.object(b,'build_groups',return_value=[]) as groups:
+                b.main()
+            self.assertEqual(groups.call_args.kwargs['staged_input_root'],borrowed)
+            with patch.object(b,'build',return_value=None) as build,patch.object(b,'safe_worker_budget',return_value=4):
+                self.assertEqual(b.build_groups({('testwiktionary','20260901'):[item]},root,root/'output','zig',1,1,staged_input_root=borrowed),[])
+            self.assertEqual(build.call_args.kwargs['staged_input_root'],borrowed)
+            with self.assertRaisesRegex(ValueError,'exactly one edition'):
+                b.build_groups({('testwiktionary','20260901'):[item],('other','20260901'):[item]},root,root/'output','zig',1,1,staged_input_root=borrowed)
+
+    def test_borrowed_repack_survives_real_sharded_publication_and_merge_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            data=bz2.compress(b'<mediawiki><page>word</page><page>second</page></mediawiki>')
+            (folder/name).write_bytes(data)
+            item=dict(wiki='testwiktionary',date='20260901',name=name,
+                      url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,
+                      size=len(data),sha1=hashlib.sha1(data).hexdigest())
+            (folder/'language-registry.tsv').write_text('# content-language\ten\nen\tEnglish\n')
+            original=root/'original';original.mkdir()
+            borrowed=b.cached_shard_dump([item],root,original).parent
+            before=self.identities(borrowed)
+            merges=[]
+            def run(command):
+                if 'build-dictionary' in command:
+                    dest=Path(tool_arguments(command)[1]);exp=dest/'.bundle-expander';exp.mkdir(parents=True)
+                    (dest/'.incomplete').write_text('expander ready')
+                    (exp/'page-index.tsv').write_text('0\n1\n')
+                    (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
+                elif blob_command(command,'build-blobs'):
+                    dest=Path(tool_arguments(command)[1]);dest.mkdir(parents=True,exist_ok=True)
+                    write_coverage(dest,command)
+                elif blob_command(command,'merge-blobs'):
+                    merges.append(command)
+                    if len(merges)==1:raise subprocess.CalledProcessError(1,command)
+                    dest=Path(tool_arguments(command)[0]);dest.mkdir()
+                    (dest/'fallback-pages.jsonl').write_text('')
+                    if blob_command(command,'merge-blobs'):write_namespace_coverage(dest,sum(json.loads((Path(x)/'page-coverage.json').read_text())['pages_seen'] for x in tool_arguments(command)[1:]))
+            real_stage=b.stage_seekable_dump
+            with patch.object(b,'PROJECT',root), \
+                 patch.object(b,'SHARD_PAGES',1),patch.object(b,'source_fingerprint',return_value='source'), \
+                 patch.object(b.time,'time',return_value=123),patch.object(b,'run_checked',side_effect=run), \
+                 patch.object(b,'stage_seekable_dump',wraps=real_stage) as stage:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    b.build([item],root,root/'output','zig',1,staged_input_root=borrowed)
+                workspace=root/'output/testwiktionary/20260901.shards'
+                self.assertTrue((borrowed/'.complete.json').is_file())
+                self.assertFalse((workspace/'input/pages.xml.zst').exists())
+                self.assertEqual(stage.call_count,0)
+                b.build([item],root,root/'output','zig',1,staged_input_root=borrowed)
+                self.assertEqual(stage.call_count,0)
+                self.assertEqual(len(merges),2)
+                self.assertFalse(workspace.exists())
+                self.assertTrue((root/'output/testwiktionary/20260901/complete.json').is_file())
+
+                self.assertEqual(self.identities(borrowed),before)
+
+    def test_preseal_input_mutation_cannot_publish_or_mark_verified(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            data=bz2.compress(b'<mediawiki><page>word</page><page>second</page></mediawiki>')
+            (folder/name).write_bytes(data)
+            item=dict(wiki='testwiktionary',date='20260901',name=name,
+                      url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,
+                      size=len(data),sha1=hashlib.sha1(data).hexdigest())
+            (folder/'language-registry.tsv').write_text('# content-language\ten\nen\tEnglish\n')
+            original=root/'original';original.mkdir()
+            borrowed=b.cached_shard_dump([item],root,original).parent
+            before=self.identities(borrowed)
+            merges=[]
+            def run(command):
+                if 'build-dictionary' in command:
+                    dest=Path(tool_arguments(command)[1]);exp=dest/'.bundle-expander';exp.mkdir(parents=True)
+                    (dest/'.incomplete').write_text('expander ready')
+                    (exp/'page-index.tsv').write_text('0\n1\n')
+                    (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
+                elif blob_command(command,'build-blobs'):
+                    dest=Path(tool_arguments(command)[1]);dest.mkdir(parents=True,exist_ok=True)
+                    write_coverage(dest,command)
+                elif blob_command(command,'verify-blobs') and Path(tool_arguments(command)[0]).name=='20260901.building':
+                    path=borrowed/'pages.xml.zst';data=bytearray(path.read_bytes());data[-1]^=1;path.write_bytes(data)
+                elif blob_command(command,'merge-blobs'):
+                    merges.append(command)
+                    if len(merges)==1:raise subprocess.CalledProcessError(1,command)
+                    dest=Path(tool_arguments(command)[0]);dest.mkdir()
+                    (dest/'fallback-pages.jsonl').write_text('')
+                    if blob_command(command,'merge-blobs'):write_namespace_coverage(dest,sum(json.loads((Path(x)/'page-coverage.json').read_text())['pages_seen'] for x in tool_arguments(command)[1:]))
+            real_stage=b.stage_seekable_dump
+            with patch.object(b,'PROJECT',root), \
+                 patch.object(b,'SHARD_PAGES',1),patch.object(b,'source_fingerprint',return_value='source'), \
+                 patch.object(b.time,'time',return_value=123),patch.object(b,'run_checked',side_effect=run), \
+                 patch.object(b,'stage_seekable_dump',wraps=real_stage) as stage:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    b.build([item],root,root/'output','zig',1,staged_input_root=borrowed)
+                workspace=root/'output/testwiktionary/20260901.shards'
+                self.assertTrue((borrowed/'.complete.json').is_file())
+                self.assertFalse((workspace/'input/pages.xml.zst').exists())
+                self.assertEqual(stage.call_count,0)
+                with self.assertRaisesRegex(ValueError,'changed during build'):
+                    b.build([item],root,root/'output','zig',1,staged_input_root=borrowed)
+                self.assertEqual(stage.call_count,0)
+                self.assertEqual(len(merges),2)
+                staging=root/'output/testwiktionary/20260901.building'
+                self.assertFalse((staging/b.VERIFIED_MARKER).exists())
+                self.assertFalse((staging/'complete.json').exists())
+                self.assertFalse((root/'output/testwiktionary/20260901').exists())
+
+    def test_resolved_write_cache_and_recorded_raw_overlap_refuse_before_writes(self):
+        for mode in ('cache','resolved-output','recorded-raw'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);item,borrowed=self.fixture(root);before=self.identities(borrowed)
+                output=root/'new-output';options={}
+                if mode=='cache':options['extraction_cache_root']=borrowed/'new-cache'
+                if mode=='resolved-output':
+                    alias=root/'alias';alias.symlink_to(borrowed,target_is_directory=True);output=alias/'output'
+                if mode=='recorded-raw':
+                    workspace=output/item['wiki']/(item['date']+'.shards');workspace.mkdir(parents=True)
+                    (workspace/'state.json').write_text(json.dumps(dict(raw_shards_path=str(borrowed.parent))))
+                with patch.object(b,'_build_locked',side_effect=AssertionError('owned writes entered')):
+                    with self.assertRaisesRegex(ValueError,'overlaps'):
+                        b.build([item],root,output,'never-executed',staged_input_root=borrowed,**options)
+                self.assertEqual(self.identities(borrowed),before)
+                self.assertFalse((borrowed/'new-cache').exists());self.assertFalse((borrowed/'output').exists())
+
+    def test_postcheck_keeps_original_build_exception_as_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);item,borrowed=self.fixture(root);original=self.RouteReached('original build failure')
+            def fail(*args):
+                (borrowed/'pages.xml.zst').write_bytes(b'changed source')
+                raise original
+            with patch.object(b,'_build_locked',side_effect=fail):
+                with self.assertRaisesRegex(ValueError,'changed during build') as failed:
+                    b.build_locked([item],root,root/'output','never-executed',staged_input_root=borrowed)
+            self.assertIs(failed.exception.__context__,original)
