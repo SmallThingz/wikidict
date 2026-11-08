@@ -2252,14 +2252,16 @@ class ControllerAllReadyTests(unittest.TestCase):
         self.assertNotIn('enwiktionary',controller.selected_phase_editions(editions,'all',True,manifest))
         with self.assertRaises(ValueError):controller.selected_phase_editions(editions,'all')
 
-    def run_main(self,root,cleanup=True,unsafe=None,plan=None,history_rows=None,max_editions=None,execute_override=None,manifest_override=None,phase="all"):
+    def run_main(self,root,cleanup=True,unsafe=None,plan=None,history_rows=None,max_editions=None,execute_override=None,manifest_override=None,phase="all",cfg_overrides=None,observe_execute_kwargs=None):
         manifest=self.manifest() if manifest_override is None else manifest_override;cfg=dict(armed=True,source={'head':'a'*40,'fingerprint':'b'*64},
             compiler={'path':str(root/'zig'),'bytes':1,'sha256':'c'*64},
             manifest={'path':str(root/'downloads/manifest.json'),'bytes':1,'sha256':'d'*64},
             downloads=str(root/'downloads'),output=str(root/'output'),raw_shard_root=str(root/'raw'),state_directory=str(root/'state'),
             date='20261001',now_unix=1,expansion_timeout_ms=10,build_timeout_seconds=123,qualification={},diagnostic_disposition={})
+        cfg.update(cfg_overrides or {})
         seen=[];written=[];gates=[]
-        def execute(cfg,edition,workers,folder,sequence,context,locks,memory_limit_bytes):
+        def execute(cfg,edition,workers,folder,sequence,context,locks,memory_limit_bytes,**kwargs):
+            if observe_execute_kwargs is not None: observe_execute_kwargs(kwargs)
             seen.append(edition)
             if execute_override is not None:
                 return execute_override(edition, workers, memory_limit_bytes, sequence)
@@ -3676,3 +3678,308 @@ class SupersededGeneratedLifecycleTests(unittest.TestCase):
             self.assertEqual(actual['incomplete_removal'], str(f['paths'][1]))
             self.assertTrue(f['paths'][1].is_dir() and f['paths'][2].is_dir())
             self.assertEqual(f['row'], row)
+
+
+class DerivedGenerationLifecycleTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self, root, count=2):
+        import hashlib
+        import native_qualification
+        with SupersededGeneratedLifecycleTests().fixture(root) as f:
+            def directory(path):
+                s=path.stat()
+                return dict(path=str(path),device=s.st_dev,inode=s.st_ino,uid=s.st_uid,mode=s.st_mode&0o7777)
+            identity=dict(version=4,extractor_args=['--page-index'],dump_sha256='a'*64,index_sha256='b'*64,
+                namespace_registry_sha256='c'*64,transclusion_redirects_sha256=None,page_redirects_sha256=None,
+                unicode_case={'libraries':[]},tool={'extractor_sha256':'d'*64,'libraries':[]})
+            keep_identity=copy.deepcopy(identity);keep_identity['tool']['extractor_sha256']='e'*64
+            key=lambda v:hashlib.sha256(json.dumps(v,sort_keys=True).encode()).hexdigest()
+            parent=Path(f['old']['output'])/f['edition']/(f['cfg']['date']+'.shards')
+            aliases=[parent/'input/extraction-cache'/key(identity),f['paths'][0]]
+            for index in range(2,count):
+                aliases.append(root/'data'/('alias'+str(index))/(f['cfg']['date']+'.shards')/'input/extraction-cache'/key(identity))
+            keeper=root/'data/keeper/input/extraction-cache'/key(keep_identity)
+            names=['modules/1.lua','modules/nested/2.lua','page-index.tsv']
+            rows=[]
+            for name in names:
+                data=('derived '+name).encode();rows.append([name,len(data),hashlib.sha256(data).hexdigest()])
+                path=aliases[0]/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(data)
+                for alias in aliases[1:]:
+                    target=alias/name;target.parent.mkdir(parents=True,exist_ok=True);os.link(path,target)
+                target=keeper/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(data)
+            for path in aliases:
+                (path/'extraction-source.json').write_text('old source provenance')
+                (path/'lua-usage.tsv').write_text('retain usage evidence')
+            (keeper/'extraction-source.json').write_text('new keeper provenance')
+            def marker(where,value):
+                raw=(where/'extraction-source.json').read_bytes()
+                return f['doc'](where/'.complete.json',dict(identity=value,assets=sorted(rows+[
+                    ['extraction-source.json',len(raw),hashlib.sha256(raw).hexdigest()]])))
+            old=marker(aliases[0],identity);keep=marker(keeper,keep_identity)
+            authority=f['doc'](root/'source-authority.json',{'source':'selected immutable input'})
+            source=root/'data/current-source';source.mkdir();source_file=source/'input.xml';source_file.write_bytes(b'official input retained')
+            lock=f['locks'][0];s=os.fstat(lock.fd)
+            core=dict(selection_protocol='controller-lock-v1',lock=dict(path=str(lock.path),dev=s.st_dev,ino=s.st_ino),
+                authorities=[authority],paths=[dict(path=str(source_file),identity=list(controller._derived_identity(source_file)))],unresolved=[])
+            checkpoint=f['doc'](root/'selection.json',dict(committed_source_selection=core))
+            f['roles']['derived_source_pins']=dict(core,selection_checkpoint=checkpoint)
+            record=dict(manifest=old,keeper=keep,aliases=list(map(directory,aliases)),asset_groups=['modules','shared-indexes'])
+            f['record']['derived_assets']=[record]
+            f['roles']['records'][0]['released_derived_assets']=[record]
+            f['record']['runtime_roles']=f['doc'](root/'roles.json',f['roles'])
+            f['cfg']['build_timeout_seconds']=30
+            f.update(aliases=aliases,keeper=keeper,names=names,derived=record,core=core,checkpoint=root/'selection.json')
+            with mock.patch.object(native_qualification,'_retention_locks_clear',return_value=True), \
+                 mock.patch.object(controller.subprocess,'run',return_value=SimpleNamespace(returncode=1,stdout='',stderr='')):
+                yield f
+
+    def retire(self, f, callback=True):
+        return controller.cleanup_superseded_generated(f['cfg'],f['edition'],f['folder'],f['row'],f['locks'],
+            reconcile_derived_sources=controller._reconcile_derived_sources if callback else None)
+
+    def assert_kept(self, f):
+        self.assertTrue(all((root/name).is_file() for root in f['aliases'] for name in f['names']))
+        self.assertTrue(all((f['keeper']/name).is_file() for name in f['names']))
+
+    def test_manifest_aliases_remove_last_link_once_and_preserve_sources_and_unique_siblings(self):
+        for count in (2,4):
+            with self.subTest(count=count),tempfile.TemporaryDirectory() as tmp,self.fixture(Path(tmp),count) as f:
+                unique=f['aliases'][1]/'capture.json';unique.write_text('unique diagnostic')
+                before={p:p.read_bytes() for p in [unique,*f['keep'],Path(f['derived']['manifest']['path']),
+                    *[root/'extraction-source.json' for root in f['aliases']],*[root/'lua-usage.tsv' for root in f['aliases']]]}
+                allocated=sum((f['aliases'][0]/name).stat().st_blocks*512 for name in f['names'])
+                original=copy.deepcopy(f['row']);walk=os.walk
+                def bounded_walk(path,*args,**kwargs):
+                    self.assertFalse(any(Path(path).is_relative_to(root) for root in f['aliases']))
+                    return walk(path,*args,**kwargs)
+                with mock.patch.object(controller.os,'walk',side_effect=bounded_walk):out=self.retire(f)
+                result=out['generations'][0]['derived_assets']
+                self.assertEqual(out['status'],'superseded-generated-retired')
+                self.assertEqual((result['removed_names'],result['freed_inodes']),(3*count,3))
+                self.assertEqual(result['freed_allocated_inode_bytes'],allocated)
+                self.assertIsNone(result['exclusive_gain_bytes'])
+                self.assertEqual(f['row'],original)
+                self.assertTrue(all(not (root/name).exists() for root in f['aliases'] for name in f['names']))
+                self.assertEqual(before,{p:p.read_bytes() for p in before})
+
+    def test_current_physical_source_and_active_consumer_each_defer_derived_assets(self):
+        for mode in ('current-root','current-inode','active','active-parent'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp,self.fixture(Path(tmp)) as f:
+                if mode.startswith('current'):
+                    path=f['aliases'][0] if mode=='current-root' else f['aliases'][0]/f['names'][0]
+                    f['core']['paths'].append(dict(path=str(path),identity=list(controller._derived_identity(path))))
+                    checkpoint=f['doc'](f['checkpoint'],dict(committed_source_selection=f['core']))
+                    f['roles']['derived_source_pins']=dict(f['core'],selection_checkpoint=checkpoint)
+                    f['record']['runtime_roles']=f['doc'](f['root']/'roles.json',f['roles'])
+                inode=controller._derived_identity(f['aliases'][0] if mode=='active-parent' else f['aliases'][0]/f['names'][0])[:2]
+                real=controller._generated_consumers
+                with mock.patch.object(controller,'_generated_consumers',side_effect=lambda ids:
+                    ['active'] if mode.startswith('active') and inode in ids else real(ids)):
+                    out=self.retire(f)
+                self.assertEqual(out['status'],'cleanup-deferred');self.assert_kept(f)
+
+    def test_unique_assets_unknown_aliases_and_changed_keeper_are_not_removed(self):
+        for mode in ('unique','unknown-marker','unknown-alias','keeper-during-probe'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp,self.fixture(Path(tmp)) as f:
+                if mode in ('unique','unknown-marker'):
+                    old=controller.read_ref(f['derived']['manifest'])
+                    if mode=='unique':old['assets'].append(['modules/unique.lua',1,'a'*64])
+                    else:old['asset_ownership']='unsupported-v9'
+                    old['assets'].sort();f['derived']['manifest']=f['doc'](Path(f['derived']['manifest']['path']),old)
+                    f['record']['runtime_roles']=f['doc'](f['root']/'roles.json',f['roles'])
+                elif mode=='unknown-alias':os.link(f['aliases'][0]/f['names'][0],f['root']/'unreleased-source.lua')
+                else:
+                    def probe(*args,**kwargs):
+                        (f['keeper']/f['names'][0]).write_bytes(b'changed keeper')
+                        return SimpleNamespace(returncode=1,stdout='',stderr='')
+                    controller.subprocess.run.side_effect=probe
+                out=self.retire(f)
+                self.assertEqual(out['status'],'cleanup-deferred');self.assert_kept(f)
+
+    def test_new_committed_queue_after_original_selection_and_unknown_authority_defer(self):
+        for mode in ('new-queue','unknown','source-drift','legacy','no-callback'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp,self.fixture(Path(tmp)) as f:
+                if mode=='new-queue':
+                    # Publisher already holds the exact coordinator lock here.
+                    changed=copy.deepcopy(f['core']);path=f['aliases'][0]/f['names'][0]
+                    changed['paths'].append(dict(path=str(path),identity=list(controller._derived_identity(path))))
+                    f['doc'](f['checkpoint'],dict(committed_source_selection=changed))
+                elif mode=='unknown':
+                    f['roles']['derived_source_pins']['unresolved']=['queued source unresolved']
+                    f['record']['runtime_roles']=f['doc'](f['root']/'roles.json',f['roles'])
+                elif mode=='source-drift':Path(f['core']['paths'][0]['path']).write_bytes(b'changed source')
+                elif mode=='legacy':
+                    del f['roles']['derived_source_pins']
+                    f['record']['runtime_roles']=f['doc'](f['root']/'roles.json',f['roles'])
+                out=self.retire(f,callback=mode!='no-callback')
+                self.assertEqual(out['status'],'cleanup-deferred');self.assert_kept(f)
+                # Deferring the new branch does not disable old nlink1 cleanup.
+                self.assertTrue(all(not path.exists() for path in f['paths'][1:]))
+
+    def test_concurrent_committed_queue_writer_cannot_cross_held_controller_lock(self):
+        import sys
+        with tempfile.TemporaryDirectory() as tmp,self.fixture(Path(tmp)) as f:
+            checkpoint=f['checkpoint'].read_bytes();observed=[]
+            code="""import fcntl,os,sys
+fd=os.open(sys.argv[1],os.O_RDWR)
+try:fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+except BlockingIOError:sys.exit(23)
+open(sys.argv[2],'w').write('unexpected committed source')
+sys.exit(0)
+"""
+            def probe(*args,**kwargs):
+                child=controller.subprocess.Popen([sys.executable,'-I','-c',code,str(f['locks'][0].path),str(f['checkpoint'])],
+                    stdout=controller.subprocess.PIPE,stderr=controller.subprocess.PIPE)
+                stdout,stderr=child.communicate(timeout=5);observed.append(child.returncode)
+                self.assertEqual((child.returncode,stdout,stderr),(23,b'',b''))
+                return SimpleNamespace(returncode=1,stdout='',stderr='')
+            controller.subprocess.run.side_effect=probe
+            result=self.retire(f)
+            self.assertEqual(result['status'],'superseded-generated-retired');self.assertTrue(observed)
+            self.assertEqual(f['checkpoint'].read_bytes(),checkpoint)
+
+    def test_normal_cli_selects_reconciler_only_for_declared_derived_predecessor(self):
+        for enabled in (False,True):
+            with self.subTest(enabled=enabled),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);seen=[]
+                overrides={'superseded_generated':{'arwiktionary':[{'derived_assets':[{'declared':'selection'}]}]}} if enabled else {}
+                def observe(kwargs):seen.append(kwargs)
+                with mock.patch.object(controller,'ROOT',root):
+                    ControllerAllReadyTests().run_main(root,max_editions=1,cfg_overrides=overrides,observe_execute_kwargs=observe)
+                self.assertEqual(len(seen),1)
+                self.assertEqual(seen[0],{'reconcile_derived_sources':controller._reconcile_derived_sources} if enabled else {})
+
+    def test_actual_execute_forwards_custody_after_durable_result_without_changing_qualification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);cfg=ControllerMemoryPolicyTests().cfg(root);cfg['superseded_generated']={'arwiktionary':[{}]}
+            folder=root/'attempt';process=mock.Mock(pid=900123);process.poll.return_value=0;process.wait.return_value=0
+            start=dict(edition='arwiktionary',date='20261001',phase='edition_build',event='start')
+            end=dict(start,event='end',status='success',seconds=3.25,execution_mode=FRESH);original=[]
+            def spawn(*args,**kwargs):
+                write_json(Path(kwargs['cwd'])/'.tmp/build-watchdog-report.json',dict(termination_reason='child_exit',
+                    child_exit_status=0,guardian_exit_status=0,memory_limit_bytes=controller.MEMORY))
+                kwargs['stdout'].write(('BUILD_PHASE '+json.dumps(start)+'\nBUILD_PHASE '+json.dumps(end)+'\n').encode())
+                kwargs['stdout'].flush();return process
+            def cleanup(*args,**kwargs):
+                original.append((folder/'result.json').read_bytes())
+                self.assertIs(kwargs['reconcile_derived_sources'],controller._reconcile_derived_sources)
+                self.assertEqual(controller.read_json(folder/'result.json'),args[3]);raise ValueError('queue source changed')
+            with mock.patch.object(controller,'ROOT',root),mock.patch.object(controller.subprocess,'Popen',side_effect=spawn), \
+                 mock.patch.object(controller,'process_identity',return_value=dict(pid=900123,start_time_ticks=1)), \
+                 mock.patch.object(controller,'watchdog_closed',return_value=True),mock.patch.object(controller,'source_guard'), \
+                 mock.patch.object(controller,'accept',return_value=dict(input_pages=10)), \
+                 mock.patch.object(controller,'cleanup_superseded_generated',side_effect=cleanup):
+                row,_=controller.execute(cfg,'arwiktionary',4,folder,1,'context',[],reconcile_derived_sources=controller._reconcile_derived_sources)
+            self.assertEqual((folder/'result.json').read_bytes(),original[0]);self.assertEqual(row['outcome'],'passed')
+            self.assertEqual(row['production_elapsed_seconds'],3.25);self.assertIsNone(row['error'])
+            self.assertEqual(controller.read_json(folder/'superseded-generated-cleanup.json')['status'],'cleanup-deferred')
+
+    def test_actual_binder_commit_and_backend_share_checkpoint_tuple_units_and_lock(self):
+        import ast,fcntl,hashlib,stat
+        with tempfile.TemporaryDirectory() as tmp,self.fixture(Path(tmp)) as f:
+            caller=Path(controller.__file__).resolve().parents[2]/'caller-binder-body02.txt'
+            node=next(n for n in ast.parse(caller.read_text()).body if isinstance(n,ast.FunctionDef)
+                      and n.name=='commit_source_selection_checkpoint')
+            lock=f['locks'][0];s=os.fstat(lock.fd)
+            ns=dict(Path=Path,os=os,stat=stat,fcntl=fcntl,hashlib=hashlib,
+                FR_BINDING={'locks':[dict(path=str(lock.path),device=s.st_dev,inode=s.st_ino)]},
+                _bound_ref=lambda ref,metadata=False:controller.read_ref(ref))
+            exec(compile(ast.Module(body=[node],type_ignores=[]),str(caller),'exec'),ns)
+            replacement=f['doc'](f['root']/'next-selection.json',dict(epoch=2,committed_source_selection=f['core']))
+            update=dict(protocol='controller-lock-v1',before=controller.descriptor(f['checkpoint']),replacement=replacement,
+                after=dict(replacement,path=str(f['checkpoint'])))
+            joined=ns['commit_source_selection_checkpoint'](update,lock.fd)
+            self.assertEqual(joined['selection_checkpoint'],update['after'])
+            f['roles']['derived_source_pins']['selection_checkpoint']=joined['selection_checkpoint']
+            f['record']['runtime_roles']=f['doc'](f['root']/'roles.json',f['roles'])
+            self.assertEqual(self.retire(f)['status'],'superseded-generated-retired')
+
+    def test_open_use_locks_timeout_symlink_and_mount_refuse_without_derived_unlink(self):
+        import build_artifact_root,native_qualification
+        for mode in ('locked','open','timeout','symlink','mount'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp,self.fixture(Path(tmp)) as f:
+                if mode=='locked':native_qualification._retention_locks_clear.return_value=False
+                elif mode=='open':controller.subprocess.run.return_value=SimpleNamespace(returncode=0,stdout='owned open use',stderr='')
+                elif mode=='timeout':controller.subprocess.run.side_effect=controller.subprocess.TimeoutExpired('fuser',1)
+                elif mode=='symlink':
+                    path=f['aliases'][0]/f['names'][0];path.unlink();path.symlink_to(f['keeper']/f['names'][0])
+                points=build_artifact_root.execution_mounts()
+                if mode=='mount':points.append((f['aliases'][0]/'modules',(1,2),'/foreign'))
+                with mock.patch.object(build_artifact_root,'execution_mounts',return_value=points):out=self.retire(f)
+                self.assertEqual(out['status'],'cleanup-deferred');self.assert_kept(f)
+                self.assertEqual(out['generations'][0]['derived_assets']['removed_names'],0)
+
+    def test_unlisted_provenance_pin_is_preserved_without_blanket_freezing_derived_siblings(self):
+        with tempfile.TemporaryDirectory() as tmp,self.fixture(Path(tmp)) as f:
+            path=f['aliases'][0]/'lua-usage.tsv';before=path.read_bytes()
+            f['core']['paths'].append(dict(path=str(path),identity=list(controller._derived_identity(path))))
+            checkpoint=f['doc'](f['checkpoint'],dict(committed_source_selection=f['core']))
+            f['roles']['derived_source_pins']=dict(f['core'],selection_checkpoint=checkpoint)
+            f['record']['runtime_roles']=f['doc'](f['root']/'roles.json',f['roles'])
+            result=self.retire(f)
+            self.assertEqual(result['status'],'superseded-generated-retired')
+            self.assertEqual(path.read_bytes(),before)
+            self.assertEqual(result['generations'][0]['derived_assets']['freed_inodes'],3)
+
+    def test_parent_replacement_after_initial_authentication_defers_before_first_unlink(self):
+        with tempfile.TemporaryDirectory() as tmp,self.fixture(Path(tmp)) as f:
+            original=f['aliases'][0]/'modules';moved=original.with_name('preserved-modules')
+            before={p.relative_to(original):p.read_bytes() for p in original.rglob('*') if p.is_file()}
+            def probe(*args,**kwargs):
+                original.rename(moved);original.mkdir()
+                return SimpleNamespace(returncode=1,stdout='',stderr='')
+            controller.subprocess.run.side_effect=probe
+            result=self.retire(f)
+            self.assertEqual(result['status'],'cleanup-deferred')
+            self.assertEqual(result['generations'][0]['derived_assets']['removed_names'],0)
+            self.assertEqual(before,{p.relative_to(moved):p.read_bytes() for p in moved.rglob('*') if p.is_file()})
+            self.assertTrue(all((f['aliases'][1]/name).is_file() for name in f['names']))
+
+    def test_retained_source_uses_actual_workspace_data_not_source_copy_data(self):
+        with tempfile.TemporaryDirectory() as tmp,self.fixture(Path(tmp)) as f:
+            retained=f['root']/'.tmp/retained-source';retained.mkdir(parents=True)
+            with mock.patch.object(controller,'ROOT',retained), \
+                 mock.patch.object(controller,'source_roots',return_value=(retained,f['root'])):
+                result=self.retire(f)
+            self.assertEqual(result['status'],'superseded-generated-retired')
+            self.assertEqual(result['generations'][0]['derived_assets']['freed_inodes'],3)
+
+
+    def test_released_old_staged_parent_allows_only_manifest_proven_duplicate_children(self):
+        import build_wiktionaries
+        for mode in ('released','current','queued','unknown-schema','changed-raw'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp,self.fixture(Path(tmp)) as f:
+                stage=f['aliases'][0].parents[1]
+                self.assertEqual(stage.name,'input')
+                dump=stage/'pages.xml.zst';dump.write_bytes(b'original staged dump retained')
+                index=stage/'pages-index.txt.bz2';index.write_bytes(b'original staged index retained')
+                marker=f['doc'](stage/'.complete.json',dict(version=build_wiktionaries.DUMP_STAGING_VERSION if mode!='unknown-schema' else 'unknown',
+                    dump_codec='zstd',dump_stream_kind='multistream-zstd',dump_size=dump.stat().st_size,index_size=index.stat().st_size))
+                info=stage.stat();record=dict(path=str(stage),device=info.st_dev,inode=info.st_ino,uid=info.st_uid,
+                    mode=info.st_mode&0o7777,completion=marker)
+                f['old']['edition_options']={f['edition']:dict(staged_input_root=record)}
+                old_ref=f['doc'](f['root']/'old-config.json',f['old']);f['record']['configuration']=old_ref
+                f['closed']['configuration']=old_ref;f['record']['closure']=f['doc'](f['root']/'old-closure.json',f['closed'])
+                f['roles']['records'][0]['configuration']=old_ref
+                if mode=='current':f['cfg']['edition_options']={f['edition']:dict(staged_input_root=record)}
+                if mode=='queued':
+                    f['core']['paths'].append(dict(path=str(stage),identity=list(controller._derived_identity(stage))))
+                    checkpoint=f['doc'](f['checkpoint'],dict(committed_source_selection=f['core']))
+                    f['roles']['derived_source_pins']=dict(f['core'],selection_checkpoint=checkpoint)
+                f['record']['runtime_roles']=f['doc'](f['root']/'roles.json',f['roles'])
+                before={p:p.read_bytes() for p in [dump,index,stage/'.complete.json']}
+                if mode=='changed-raw':
+                    def probe(*args,**kwargs):
+                        dump.write_bytes(b'changed source')
+                        return SimpleNamespace(returncode=1,stdout='',stderr='')
+                    controller.subprocess.run.side_effect=probe
+                outcome=self.retire(f)
+                if mode=='released':
+                    self.assertEqual(outcome['status'],'superseded-generated-retired')
+                    self.assertEqual(outcome['generations'][0]['derived_assets']['freed_inodes'],3)
+                    self.assertTrue(all(not (root/name).exists() for root in f['aliases'] for name in f['names']))
+                else:
+                    self.assertEqual(outcome['status'],'cleanup-deferred');self.assert_kept(f)
+                    self.assertEqual(outcome['generations'][0]['derived_assets']['removed_names'],0)
+                self.assertEqual({p:data for p,data in before.items() if not(mode=='changed-raw' and p==dump)},
+                                 {p:p.read_bytes() for p in before if not(mode=='changed-raw' and p==dump)})

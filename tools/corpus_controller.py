@@ -1777,7 +1777,262 @@ def _generated_consumers(identities):
     return found
 
 
-def cleanup_superseded_generated(cfg, edition, folder, attempt, locks):
+DERIVED_SHARED_ASSETS = frozenset(('page-index.tsv', 'page-title-index.bin', 'dump-streams.tsv',
+                                  'template-source.bin', 'template-source.idx'))
+
+
+def _derived_identity(path):
+    s = path.lstat()
+    return (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_gid, s.st_nlink,
+            s.st_size, s.st_blocks, s.st_mtime_ns, s.st_ctime_ns)
+
+
+def _reconcile_derived_sources(reference, locks):
+    """The ordinary binder must publish committed selections under this lock.
+
+    Immutable old configs alone are not a queue authority. Legacy packets have
+    no such contract and defer; progress and unarmed planning are not selections.
+    """
+    import stat
+    roles = read_ref(reference); pins = roles.get('derived_source_pins')
+    require(isinstance(pins, dict) and set(pins) == {
+        'selection_protocol', 'lock', 'selection_checkpoint', 'authorities', 'paths', 'unresolved'},
+        'Fresh committed source-selection authority is unavailable')
+    require(pins['selection_protocol'] == 'controller-lock-v1' and pins['unresolved'] == []
+            and isinstance(pins['authorities'], list) and pins['authorities']
+            and isinstance(pins['paths'], list) and pins['paths'], 'Unresolved physical-source selection')
+    lock = locks[0]; lock.check(); held = os.fstat(lock.fd)
+    require(lock.own and pins['lock'] == dict(path=str(lock.path), dev=held.st_dev, ino=held.st_ino),
+            'Source-selection coordinator lock differs')
+    # This fd already holds the lock across main/execute/post-result cleanup.
+    fcntl.flock(lock.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    checkpoint = read_ref(pins['selection_checkpoint'])
+    require(checkpoint.get('committed_source_selection') ==
+            {key: pins[key] for key in pins if key != 'selection_checkpoint'},
+            'Committed source selection differs from its cleanup pins')
+    for authority in pins['authorities']: read_ref(authority)
+    paths, identities = [], set()
+    for row in pins['paths']:
+        require(isinstance(row, dict) and set(row) == {'path', 'identity'}, 'Invalid protected source tuple')
+        path = Path(row['path'])
+        require(path.is_absolute() and str(path) == os.path.normpath(str(path))
+                and not any(p.is_symlink() for p in (path, *path.parents)), 'Unsafe protected source path')
+        identity = _derived_identity(path)
+        require((stat.S_ISREG(identity[2]) or stat.S_ISDIR(identity[2]))
+                and list(identity) == row['identity'], 'Protected physical source changed')
+        paths.append(path); identities.add(identity[:2])
+    return dict(paths=paths, identities=identities)
+
+
+def _retire_derived_assets(records, *, roles_reference, cfg, folder, locks, protected,
+                           reconcile_sources, preserved_inputs=()):
+    """Manifest-only selection, closed consumer release, and exact alias groups.
+
+    Never walk/remove a tree: distinct provenance and unknown siblings survive.
+    The keeper proves retained bytes, not a new source or semantic acceptance.
+    """
+    import re, stat
+    from native_qualification import _retention_path_chunks, _retention_locks_clear, _retention_stamp
+    from build_artifact_root import execution_mounts, execution_mount_regions
+    result = dict(status='derived-assets-retired', removed_names=0, freed_inodes=0,
+                  freed_logical_inode_bytes=0, freed_allocated_inode_bytes=0,
+                  exclusive_gain_bytes=None, generations=[])
+    input_ids = {path:_derived_identity(path) for path in preserved_inputs}
+    def check_inputs():
+        require(all(_derived_identity(path) == value for path,value in input_ids.items()), 'Preserved old staged input changed')
+    journal = folder / 'superseded-derived-assets.jsonl'
+    def append(value):
+        with journal.open('a') as stream:
+            stream.write(json.dumps(value, sort_keys=True) + '\n'); stream.flush(); os.fsync(stream.fileno())
+    require(isinstance(records, list) and 0 < len(records) <= 1, 'Invalid derived-generation selection')
+    require(callable(reconcile_sources), 'Fresh committed source reconciliation is required')
+    environment = dict(os.environ); mounts = execution_mounts()
+    deadline = time.monotonic() + cfg['build_timeout_seconds']
+    for record in records:
+        require(isinstance(record, dict) and set(record) == {'manifest', 'keeper', 'aliases', 'asset_groups'},
+                'Invalid derived-asset fields')
+        old = read_ref(record['manifest']); keeper = read_ref(record['keeper'])
+        require(set(old) <= {'identity', 'assets', 'asset_ownership'} and set(keeper) <= {'identity', 'assets', 'asset_ownership'}
+                and {'identity','assets'} <= set(old) and {'identity','assets'} <= set(keeper), 'Unknown extraction marker')
+        require(all(marker.get('asset_ownership', 'wikidict.extraction-owned-assets.v1') ==
+                    'wikidict.extraction-owned-assets.v1' for marker in (old, keeper)), 'Unknown extraction ownership')
+        identities = [dict(marker['identity']) for marker in (old, keeper)]
+        for identity in identities:
+            require('tool' in identity, 'Extraction tool provenance is missing'); identity.pop('tool')
+        require(identities[0] == identities[1], 'Extraction input identity differs')
+        def assets(marker):
+            rows = marker['assets']; require(isinstance(rows, list) and rows, 'Missing extraction assets')
+            names = []
+            for row in rows:
+                require(isinstance(row, list) and len(row) == 3 and isinstance(row[0], str)
+                        and type(row[1]) is int and row[1] >= 0 and isinstance(row[2], str)
+                        and re.fullmatch('[0-9a-f]{64}', row[2]), 'Invalid extraction asset')
+                path = Path(row[0]); require(not path.is_absolute() and str(path) == row[0]
+                    and all(part not in ('.', '..') for part in path.parts), 'Escaped extraction asset')
+                names.append(row[0])
+            require(names == sorted(set(names)), 'Unordered or duplicate extraction assets')
+            return {row[0]: row[1:] for row in rows}
+        before, retained = assets(old), assets(keeper)
+        require({k:v for k,v in before.items() if k != 'extraction-source.json'} ==
+                {k:v for k,v in retained.items() if k != 'extraction-source.json'}, 'Unique derived assets lack a retained keeper')
+        groups = record['asset_groups']
+        require(isinstance(groups, list) and groups == sorted(set(groups)) and groups
+                and set(groups) <= {'modules', 'shared-indexes'}, 'Unknown derived asset selection')
+        names = [name for name in before if ('modules' in groups and name.startswith('modules/'))
+                 or ('shared-indexes' in groups and name in DERIVED_SHARED_ASSETS)]
+        require(names and len(names) * len(record['aliases']) <= GENERATED_RETIREMENT_MAX_ENTRIES,
+                'Derived asset selection exceeds bound')
+        aliases = [bound_directory(spec, 'Released derived alias') for spec in record['aliases']]
+        require(2 <= len(aliases) <= 4 and len(set(aliases)) == len(aliases)
+                and all(not a.is_relative_to(b) for a in aliases for b in aliases if a != b), 'Ambiguous derived aliases')
+        require(Path(record['manifest']['path']) == aliases[0]/'.complete.json', 'Old manifest root differs')
+        keeper_root = Path(record['keeper']['path']).parent
+        require(Path(record['keeper']['path']).name == '.complete.json' and keeper_root not in aliases,
+                'Keeper is not a separate generation')
+        old_key = hashlib.sha256(json.dumps(old['identity'], sort_keys=True).encode()).hexdigest()
+        keeper_key = hashlib.sha256(json.dumps(keeper['identity'], sort_keys=True).encode()).hexdigest()
+        require(aliases[0].name == old_key and keeper_root.name == keeper_key
+                and keeper_root.parent.name == 'extraction-cache', 'Extraction generation key differs')
+        _, workspace = source_roots(cfg)
+        require(all(path.is_relative_to(workspace/'data') for path in [*aliases, keeper_root]), 'Derived generation is outside owned data')
+        for root in aliases:
+            require(not any(point.is_relative_to(root) for point,_,_ in mounts),
+                    'Derived alias contains an unowned mount')
+            require((root.parent.name == 'extraction-cache' and root.name == old_key)
+                    or (root.name == '.bundle-expander' and (root.parent.name == 'expander'
+                        or root.parent.name.endswith('.building'))), 'Unknown derived generation role')
+        parent_ids = {}
+        def regular(path):
+            for parent in path.parents:
+                if parent in parent_ids: break
+                parent_ids[parent] = _generated_tree_identity(parent)
+            value = _derived_identity(path)
+            require(stat.S_ISREG(value[2]) and value[3:5] == (os.geteuid(),os.getegid()), 'Unsafe derived asset')
+            return value
+        def check_parents(paths):
+            parents = {parent for path in paths for parent in path.parents}
+            require(all(_generated_tree_identity(parent) == parent_ids[parent] for parent in parents),
+                    'Derived parent changed')
+        # Check directory users before opening our own cleanup-only directory
+        # fds. A lazy worker cwd is a consumer even before it opens an asset.
+        for root in aliases:
+            for parent in (root,*root.parents):
+                if parent not in parent_ids: parent_ids[parent] = _generated_tree_identity(parent)
+            for name in names:
+                for parent in (root/name).parents:
+                    if parent in parent_ids: break
+                    parent_ids[parent] = _generated_tree_identity(parent)
+        directory_ids = {value[:2] for path,value in parent_ids.items()
+                         if any(path.is_relative_to(root) for root in aliases)}
+        require(not _generated_consumers(directory_ids), 'Derived directory has a live consumer')
+        fds = []
+        try:
+            for root in sorted(aliases):
+                fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW); fds.append(fd)
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            selected = []; inode_keys = set()
+            fresh = reconcile_sources(roles_reference, locks)
+            baseline = fresh
+            def refresh():
+                current = reconcile_sources(roles_reference, locks)
+                require(current == baseline, 'Current or queued source selection changed')
+                check_inputs()
+                return current
+            check_inputs()
+            marker_ids = {Path(record[key]['path']): _derived_identity(Path(record[key]['path'])) for key in ('manifest','keeper')}
+            keep_paths = protected + fresh['paths'] + [keeper_root]
+            regions = [region for path in keep_paths for region in execution_mount_regions(path, mounts)]
+            overlapping_regions = {}
+            for root in aliases:
+                require(not any(root.is_relative_to(p) for p in keep_paths),
+                        'Derived alias overlaps protected source')
+                mapped = execution_mount_regions(root,mounts)
+                require(not any(device == other_device and region.is_relative_to(other)
+                    for device,region in mapped for other_device,other in regions),
+                    'Derived alias physically overlaps protected source')
+                overlapping_regions[root] = [(region,other) for device,region in mapped
+                    for other_device,other in regions if device == other_device and other.is_relative_to(region)]
+            for ordinal,name in enumerate(names):
+                require(time.monotonic() < deadline, 'Derived cleanup deadline reached')
+                require(not any(part in ('.presentation-first-failure','capture.json','diagnostic-result.json')
+                                for part in Path(name).parts), 'Unique diagnostic cannot be retired')
+                paths = [root/name for root in aliases]; observed = [regular(p) for p in paths]
+                require(not any(path.is_relative_to(p) or p.is_relative_to(path) for path in paths for p in keep_paths)
+                        and not any((region/name).is_relative_to(other) or other.is_relative_to(region/name)
+                            for root in aliases for region,other in overlapping_regions[root]),
+                        'Selected derived asset overlaps protected source')
+                require(all(value == observed[0] for value in observed) and observed[0][5] == len(aliases),
+                        'Unknown aliases or changed derived links')
+                value = observed[0]; retained_path = keeper_root/name; kept = regular(retained_path)
+                require(value[:2] != kept[:2] and value[:2] not in inode_keys
+                        and value[:2] not in fresh['identities']
+                        and value[:2] not in {v[:2] for v in input_ids.values()}, 'Derived inode is current or ambiguously shared')
+                inode_keys.add(value[:2])
+                require(value[6] == kept[6] == before[name][0] and digest(paths[0]) == before[name][1]
+                        and digest(retained_path) == before[name][1], 'Derived or keeper bytes differ')
+                require(all(regular(p) == value for p in paths) and regular(retained_path) == kept,
+                        'Derived assets changed during authentication')
+                selected.append((ordinal,name,value,kept))
+            check_parents(root/name for root in [*aliases,keeper_root] for name in names)
+            require(not _generated_consumers(inode_keys), 'Derived generation has a live consumer')
+            # The shared chunker budgets the frozen environment, pointers and NULs.
+            # Use its windows to retain complete hardlink groups in each transaction.
+            by_name = {row[1]:row for row in selected}; last_prefix = str(aliases[-1])+'/'
+            all_paths = [str(root/name) for _,name,_,_ in selected for root in aliases]
+            append(dict(event='selection', manifest=record['manifest'], keeper=record['keeper'],
+                        aliases=record['aliases'], asset_groups=groups, count=len(selected)))
+            for window in _retention_path_chunks(all_paths, environment=environment):
+                require(time.monotonic() < deadline, 'Derived cleanup deadline reached')
+                batch = [by_name[path[len(last_prefix):]] for path in window if path.startswith(last_prefix)]
+                if not batch: continue
+                fresh = refresh()
+                require(not inode_keys.intersection(fresh['identities']), 'New current source aliases derived assets')
+                nodes = [(root/name,_retention_stamp(root/name)) for _,name,_,_ in batch for root in aliases]
+                require(_retention_locks_clear(nodes), 'Derived inode is locked')
+                for chunk in _retention_path_chunks([str(p) for p,_ in nodes], environment=environment):
+                    probe = subprocess.run(['/usr/bin/fuser','-I',*chunk],capture_output=True,text=True,
+                        env=environment,timeout=max(0.001,deadline-time.monotonic()))
+                    require(probe.returncode == 1 and probe.stdout == probe.stderr == '', 'Derived inode has an open consumer')
+                require(_retention_locks_clear(nodes), 'Derived inode locked after open probe')
+                check_parents([*[p for p,_ in nodes], *[keeper_root/name for _,name,_,_ in batch]])
+                for _,name,value,kept in batch:
+                    require(all(regular(root/name) == value for root in aliases)
+                            and regular(keeper_root/name) == kept, 'Keeper or derived asset changed before unlink')
+                require(time.monotonic() < deadline, 'Derived cleanup deadline reached')
+                require(all(_derived_identity(p) == value for p,value in marker_ids.items()), 'Extraction manifest changed')
+                refresh()
+                append(dict(event='selected-chunk', ordinals=[row[0] for row in batch]))
+                for ordinal,name,value,kept in batch:
+                    expected = value
+                    for index,root in enumerate(aliases):
+                        path=root/name
+                        require(regular(path) == expected and regular(keeper_root/name) == kept,
+                                'Derived asset or keeper changed during unlink')
+                        path.unlink(); result['removed_names'] += 1
+                        if index+1 < len(aliases):
+                            after = regular(aliases[index+1]/name)
+                            require(after[:5] == expected[:5] and after[5] == expected[5]-1
+                                    and after[6:9] == expected[6:9], 'Unexpected hardlink transition')
+                            expected = after
+                        else:
+                            result['freed_inodes'] += 1; result['freed_logical_inode_bytes'] += value[6]
+                            result['freed_allocated_inode_bytes'] += value[7] * 512
+                append(dict(event='completed-chunk', removed_names=result['removed_names'],
+                            freed_inodes=result['freed_inodes'], freed_allocated_inode_bytes=result['freed_allocated_inode_bytes']))
+            require(all(regular(keeper_root/name) == kept for _,name,_,kept in selected), 'Keeper changed after retirement')
+            check_parents([keeper_root/name for name in names])
+            read_ref(record['manifest']); read_ref(record['keeper']); refresh()
+            result['generations'].append(dict(manifest=record['manifest'],keeper=record['keeper'],aliases=record['aliases']))
+        except (OSError, ValueError, KeyError, TypeError, AssertionError, subprocess.SubprocessError) as error:
+            result.update(status='cleanup-deferred',error=f'{type(error).__name__}: {error}',partial_removal_possible=bool(result['removed_names']))
+            append(dict(event='deferred', **result)); return result
+        finally:
+            for fd in reversed(fds): os.close(fd)
+    result['accounting'] = 'Distinct last-link inode allocation removed; exclusive filesystem gain unknown'
+    append(dict(event='result', **result)); return result
+
+
+def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconcile_derived_sources=None):
     """Retire explicitly released predecessor roles after a joined replacement.
 
     Config generation transfers only exact closed, consumer-released roles.
@@ -1819,7 +2074,8 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks):
         mounts = execution_mounts()
         seen = set()
         for record in selected:
-            require(isinstance(record, dict) and set(record) == {'configuration', 'result', 'closure', 'runtime_roles'},
+            require(isinstance(record, dict) and {'configuration', 'result', 'closure', 'runtime_roles'} <= set(record)
+                    and set(record) <= {'configuration', 'result', 'closure', 'runtime_roles', 'derived_assets'},
                     'Invalid predecessor role fields')
             old = read_ref(record['configuration']); prior = read_ref(record['result']); closed = read_ref(record['closure'])
             roles = read_ref(record['runtime_roles'])
@@ -1851,6 +2107,15 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks):
                      parent / (date + '.building') / '.bundle-expander']
             require(matches[0]['derived_generated_parent_candidates'] == list(map(str, paths)),
                     'Released generated roles differ')
+            derived = record.get('derived_assets', [])
+            require(isinstance(derived, list) and len(derived) <= 1
+                    and (not derived or matches[0].get('released_derived_assets') == derived),
+                    'Derived assets lack exact consumer release')
+            # The derived branch removes only declared files. Do not feed its
+            # roots to the legacy whole-tree path, even when that branch defers.
+            derived_roots = [Path(spec['path']) for row in derived for spec in row['aliases']]
+            paths = [path for path in paths if not any(path.is_relative_to(root) or root.is_relative_to(path)
+                                                      for root in derived_roots)]
             require(str(parent) not in seen, 'Duplicate predecessor generation'); seen.add(str(parent))
             preserved = protected + [Path(old[name]) for name in ('state_directory', 'raw_shard_root', 'downloads')]
             preserved.extend(Path(record[name]['path']) for name in ('configuration', 'result', 'closure', 'runtime_roles'))
@@ -1880,6 +2145,39 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks):
                 lock_info = os.fstat(fd)
                 require(lock_info.st_nlink == 1 and (lock_info.st_dev, lock_info.st_ino) ==
                         (lock_path.stat().st_dev, lock_path.stat().st_ino), 'Predecessor edition lock changed')
+                derived_result = None
+                if derived:
+                    # Mutable cache/output containers are not blanket pins. The
+                    # fresh coordinator supplies their exact consumed generations.
+                    derived_protected = [Path(replacement['root']), *[Path(cfg[key]) for key in ('raw_shard_root','state_directory','downloads')],
+                        *[Path(old[key]) for key in ('raw_shard_root','state_directory','downloads')],
+                        *[source / name for name in (*PRODUCER_SOURCE_FILES, *PRODUCER_SOURCE_DIRECTORIES)]]
+                    for options in cfg.get('edition_options',{}).values():
+                        if 'staged_input_root' in options: derived_protected.append(Path(options['staged_input_root']['path']))
+                    try:
+                        from build_wiktionaries import DUMP_STAGING_VERSION
+                        old_inputs = []
+                        for options in old.get('edition_options',{}).values():
+                            if 'staged_input_root' not in options: continue
+                            stage = options['staged_input_root']
+                            root = bound_directory({key:stage[key] for key in ('path','device','inode','uid','mode')},
+                                                   'Released old staged input')
+                            require(stage['completion']['path'] == str(root/'.complete.json'), 'Old staged completion path differs')
+                            marker = read_ref(stage['completion'])
+                            require(marker.get('version') == DUMP_STAGING_VERSION and marker.get('dump_codec') == 'zstd'
+                                    and marker.get('dump_stream_kind') == 'multistream-zstd', 'Unknown released old staged input schema')
+                            payloads = [('dump',root/'pages.xml.zst'),('index',root/'pages-index.txt.bz2')]
+                            require(all(path.is_file() and not path.is_symlink() and path.stat().st_size == marker.get(label+'_size')
+                                        for label,path in payloads), 'Old staged payload identity is unavailable')
+                            # Keep original input/provenance leaves; only the
+                            # explicitly released derived children may be removed.
+                            old_inputs.extend([root/'.complete.json',*[path for _,path in payloads]])
+                        derived_protected.extend(old_inputs)
+                        derived_result = _retire_derived_assets(derived, roles_reference=record['runtime_roles'],
+                            cfg=cfg, folder=folder, locks=locks, protected=derived_protected,
+                            reconcile_sources=reconcile_derived_sources, preserved_inputs=old_inputs)
+                    except (OSError, ValueError, KeyError, TypeError, AssertionError, subprocess.SubprocessError) as error:
+                        derived_result = dict(status='cleanup-deferred',error=f'{type(error).__name__}: {error}',removed_names=0)
                 present = [(path, _generated_tree_identity(path)) for path in paths if path.exists() or path.is_symlink()]
                 inventory = _generated_inventory([path for path, _ in present])
                 require(not inventory['identities'] or not _generated_consumers(inventory['identities']),
@@ -1891,6 +2189,7 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks):
                         'Generated descendants changed before retirement')
                 result = dict(configuration=record['configuration'], result=record['result'],
                               closure=record['closure'], removed=[], removed_file_count=0,
+                              **({'derived_assets':derived_result} if derived_result is not None else {}),
                               removed_logical_file_bytes=0, removed_allocated_file_bytes=0,
                               accounting='Completed removals from deduplicated inode inventory; not filesystem free-space delta',
                               preserved='Publication, inputs, raw shards, captures and all nonselected siblings')
@@ -1922,12 +2221,13 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks):
                             result['removed_allocated_file_bytes'] += value['allocated_bytes']
             finally:
                 os.close(fd)
-        return dict(status='superseded-generated-retired', generations=results)
+        return dict(status=('cleanup-deferred' if any(row.get('derived_assets',{}).get('status') == 'cleanup-deferred' for row in results)
+                            else 'superseded-generated-retired'), generations=results)
     finally:
         fcntl.flock(locks[1].fd, fcntl.LOCK_UN)
 
 
-def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limit_bytes=MEMORY):
+def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limit_bytes=MEMORY, *, reconcile_derived_sources=None):
     from build_resource_limits import _signal_owned
     folder.mkdir()
     start = dict(attempt_id=folder.name, sequence=sequence, edition=edition, date=cfg['date'],
@@ -2031,7 +2331,8 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
     if cfg.get('superseded_generated'):
         retirement_started = time.monotonic()
         try:
-            retirement = cleanup_superseded_generated(cfg, edition, folder, row, locks)
+            retirement = cleanup_superseded_generated(cfg, edition, folder, row, locks,
+                **({'reconcile_derived_sources':reconcile_derived_sources} if reconcile_derived_sources is not None else {}))
         except (OSError, ValueError, KeyError, TypeError) as exc:
             retirement = dict(status='cleanup-deferred', error=f'{type(exc).__name__}: {exc}',
                               partial_cleanup_possible=True)
@@ -2092,6 +2393,8 @@ def main(argv=None):
     require(isinstance(predecessors, dict) and set(predecessors) <= set(editions)
             and all(isinstance(rows, list) and len(rows) <= 1 for rows in predecessors.values()),
             'Predecessors must select at most one closed generation per edition')
+    derived_reconciler = _reconcile_derived_sources if any(record.get('derived_assets')
+        for rows in predecessors.values() for record in rows) else None
     campaign = campaign_selection(cfg, manifest)
     require({x['date'] for x in manifest['files']} == {cfg['date']} == {'20261001'}, 'Dump date selection changed')
     source_guard(cfg)
@@ -2146,7 +2449,8 @@ def main(argv=None):
                 source_guard(cfg)
                 sequence += 1
                 folder = state / 'attempts' / f'{sequence:06d}-{edition}-w{workers}-{uuid.uuid4().hex[:12]}'
-                row, wd = execute(cfg, edition, workers, folder, sequence, context, locks, memory_limit_bytes)
+                row, wd = execute(cfg, edition, workers, folder, sequence, context, locks, memory_limit_bytes,
+                    **({'reconcile_derived_sources':derived_reconciler} if derived_reconciler is not None else {}))
                 rows.append(row)
                 write_json(state / 'summary.json', summarize(rows, editions, preparations), replace=True)
                 if row['controller_interrupted']:
