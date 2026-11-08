@@ -225,7 +225,12 @@ function legacyDestinations(entry) {
   return new Map(candidates.filter(([,id]) => counts.get(id) === 1));
 }
 function styleObject(value){if(value==null)return null;if(typeof value!=='object'||Array.isArray(value)||!Object.values(value).some(field=>field!=null))throw Error('Invalid typed table style');return value;}
-function styleLength(value){if(!value||!['px','em'].includes(value.unit)||typeof value.value!=='number'||!Number.isFinite(value.value)||value.value<0)throw Error('Invalid style length');return value.value+value.unit;}
+function styleLength(value){
+  if(!value||!['px','em'].includes(value.unit)||typeof value.value!=='number'||!Number.isFinite(value.value)||value.value<0)throw Error('Invalid style length');
+  // Compiled table lengths share the native readers' normal-body font basis,
+  // independently of table typography and nested cell content.
+  return value.unit==='em'?`calc(var(--wikidict-normal-body-size) * ${value.value})`:value.value+'px';
+}
 function styleBorder(value){if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==1)throw Error('Invalid style border');if(Object.hasOwn(value,'none')){if(!value.none||typeof value.none!=='object'||Array.isArray(value.none)||Object.keys(value.none).length)throw Error('Invalid none border');return 'none';}const solid=value.solid;if(!solid||!canonicalRGB(solid.color))throw Error('Invalid style border color');return styleLength(solid.width)+' solid '+solid.color;}
 function styleEdges(el,name,value){if(!value||typeof value!=='object'||Array.isArray(value))throw Error('Invalid style edges');for(const side of ['top','right','bottom','left'])el.style[name+side[0].toUpperCase()+side.slice(1)]=styleLength(value[side]);}
 function applyTableStyle(el,value){const s=styleObject(value);if(!s)return;for(const key of Object.keys(s))if(!['background','border','collapse','margins','float_side'].includes(key))throw Error('Invalid table style field');if(s.background!=null){if(!canonicalRGB(s.background))throw Error('Invalid table background');el.style.backgroundColor=s.background;}if(s.border!=null)el.style.border=styleBorder(s.border);if(s.collapse!=null){if(!['separate','collapse'].includes(s.collapse))throw Error('Invalid border collapse');el.style.borderCollapse=s.collapse;}if(s.margins!=null)styleEdges(el,'margin',s.margins);if(s.float_side!=null&&!['left','right'].includes(s.float_side))throw Error('Invalid table float side');}

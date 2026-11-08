@@ -6,7 +6,7 @@ import {readFile} from 'node:fs/promises';
 const bundle=await build({entryPoints:[new URL('./renderer.js',import.meta.url).pathname],bundle:true,format:'iife',globalName:'Renderer',write:false});
 const browser=await chromium.launch({executablePath:process.env.CHROMIUM||'/opt/brave-bin/brave',headless:true,args:['--no-sandbox']});
 try{
- const page=await browser.newPage();await page.setContent('<main style="font-size:20px"></main>');await page.addScriptTag({content:bundle.outputFiles[0].text});
+ const page=await browser.newPage();await page.setContent('<style>:root{--wikidict-normal-body-size:20px}table{font-size:12px}</style><main style="font-size:20px"></main>');await page.addScriptTag({content:bundle.outputFiles[0].text});
  const result=await page.evaluate(()=>{
   const edges=(unit,value)=>Object.fromEntries(['top','right','bottom','left'].map(k=>[k,{unit,value}]));
   const border={solid:{width:{unit:'px',value:1},color:'#aaaaaa'}};
@@ -20,9 +20,31 @@ try{
   return {table:{collapse:t.style.borderCollapse,margin:t.style.marginTop,border:t.style.borderTopColor,background:t.style.backgroundColor},header:css(th),headerUnit:th.style.paddingTop,cell:css(td),nestedColor:getComputedStyle(nested.querySelector('td span')).color,invalid};
  });
  assert.equal(result.table.collapse,'collapse');assert.equal(result.table.margin,'10px');assert.equal(result.table.border,'rgb(170, 170, 170)');
- assert.equal(result.header.background,'rgb(242, 242, 242)');assert.equal(result.headerUnit,'0.2em');assert.equal(result.header.align,'center');
+  assert.equal(result.header.background,'rgb(242, 242, 242)');assert.match(result.headerUnit,/var\(--wikidict-normal-body-size\)/);assert.equal(result.header.padding,'4px');assert.equal(result.header.align,'center');
  assert.equal(result.cell.padding,'0px');assert.equal(result.cell.border,'none');assert.equal(result.cell.align,'left');assert.equal(result.nestedColor,'rgb(0, 0, 0)');assert.equal(result.invalid,4);
- const css=await readFile(new URL('./style.css',import.meta.url),'utf8');
+  const css=await readFile(new URL('./style.css',import.meta.url),'utf8');
+  await page.setContent('<style>'+css+'</style><main></main>');
+  await page.addScriptTag({content:bundle.outputFiles[0].text});
+  const sizes=await page.evaluate(()=>{
+   const edges=value=>Object.fromEntries(['top','right','bottom','left'].map(k=>[k,{unit:'em',value}]));
+   const text=text=>({kind:'text',text});
+   const cell={spans:[text('Nested padding')],style:{padding:edges(.5)}};
+   const child={kind:'table',table:{rows:[{cells:[cell]}]}};
+   const outer={kind:'table',table:{style:{margins:edges(.5)},rows:[{cells:[{spans:[],blocks:[child],style:{padding:edges(.5)}}]}]}};
+   document.querySelector('main').append(Renderer.renderEntry({title:'Font basis',sections:[{title:'S',blocks:[outer]}]},()=>{}));
+   return [null,'24px'].map(size=>{
+    if(size)document.documentElement.style.setProperty('--wikidict-normal-body-size',size);
+    const tables=[...document.querySelectorAll('table')];
+    const before=tables.map(t=>({padding:parseFloat(getComputedStyle(t.rows[0].cells[0]).paddingTop),font:getComputedStyle(t).fontSize}));
+    tables[1].style.fontSize='9px';
+    return {body:size?24:1.2*parseFloat(getComputedStyle(document.documentElement).fontSize),margin:parseFloat(getComputedStyle(tables[0]).marginTop),before,nestedAfter:parseFloat(getComputedStyle(tables[1].rows[0].cells[0]).paddingTop)};
+   });
+  });
+  for(const value of sizes){
+   assert.ok(Math.abs(value.margin-value.body*.5)<.02,'table margins use configured normal-body size');
+   for(const cell of value.before)assert.ok(Math.abs(cell.padding-value.body*.5)<.02,'nested cell padding does not compound table font size');
+   assert.ok(Math.abs(value.nestedAfter-value.body*.5)<.02,'changing nested text size does not change compiled lengths');
+  }
  for(const width of [320,640,900])for(const direction of ['ltr','rtl'])for(const side of ['left','right']){
   await page.setViewportSize({width,height:900});
   await page.setContent('<style>'+css+'</style><main dir="'+direction+'"></main>');
