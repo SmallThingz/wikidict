@@ -1,0 +1,41 @@
+== ภาษาอังกฤษ ==
+
+=== การออกเสียง ===
+* [[ภาคผนวก:การออกเสียงภาษาอังกฤษ|enPR]]: <span class="AHD enPR">kĭp</span>, [[วิกิพจนานุกรม:สัทอักษรสากล|ไอพีเอ]]<sup>([[ภาคผนวก:การออกเสียงภาษาอังกฤษ|อธิบาย]])</sup>:&#32;<span class="IPA nowrap">/kɪp/</span>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มี 1 พยางค์|KIP]][[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีการออกเสียงไอพีเอ|KIP]]
+
+=== รากศัพท์ 1 ===
+
+==== คำนาม[[หมวดหมู่:คำนามภาษาอังกฤษ|KIP]][[หมวดหมู่:แม่แบบหน้าที่คำนามภาษาอังกฤษ]] [[หมวดหมู่:คำหลักภาษาอังกฤษ]] ====
+<span class="headword-line"><strong class="Latn headword" lang="en">kip</strong> (<i>พหูพจน์</i> <b class="Latn form-of lang-en p-form-of" lang="en">[[:kips#ภาษาอังกฤษ|kips]]</b>)</span>[[หมวดหมู่:คำหลักภาษาอังกฤษ|KIP]][[หมวดหมู่:คำนามภาษาอังกฤษ|KIP]][[หมวดหมู่:คำนามนับได้ภาษาอังกฤษ|KIP]][[หมวดหมู่:หน้าที่มีรายการ|KIP]][[หมวดหมู่:หน้าที่มี 2 รายการ|KIP]][[หมวดหมู่:Pages with language headings in the wrong order|KIP]]
+
+# การงีบหลับ
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[ภาคผนวก:อภิธานศัพท์#ไม่ทางการ|ไม่ทางการ]][[หมวดหมู่:ศัพท์ภาษาอังกฤษที่ไม่เป็นทางการ|KIP]]</span><span class="ib-brac label-brac">)</span></span> [[เตียง]]
+
+=== รากศัพท์ 2 ===
+จาก<span class="etylcleanup"><strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q9211 site=thwiki</span></strong></span>[[Category:etyl cleanup/en]] <span class="Laoo" lang="lo">[[:ກີບ#ภาษาลาว|ກີບ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="lo" class="tr">กีบ</span><span class="mention-gloss-paren annotation-paren">)</span>
+
+==== คำนาม[[หมวดหมู่:คำนามภาษาอังกฤษ|KIP]][[หมวดหมู่:แม่แบบหน้าที่คำนามภาษาอังกฤษ]] [[หมวดหมู่:คำหลักภาษาอังกฤษ]] ====
+<span class="headword-line"><strong class="Latn headword" lang="en">kip</strong> (<i>พหูพจน์</i> <b class="Latn form-of lang-en p-form-of" lang="en">[[:kip#ภาษาอังกฤษ|kip]]</b>)</span>[[หมวดหมู่:คำหลักภาษาอังกฤษ|KIP]][[หมวดหมู่:คำนามภาษาอังกฤษ|KIP]][[หมวดหมู่:คำนามนับได้ภาษาอังกฤษ|KIP]][[หมวดหมู่:คำนามภาษาอังกฤษที่มีพหูพจน์ไม่ปรกติ|KIP]][[หมวดหมู่:คำนามผันรูปไม่ได้ภาษาอังกฤษ|KIP]][[หมวดหมู่:หน้าที่มีรายการ|KIP]][[หมวดหมู่:หน้าที่มี 2 รายการ|KIP]][[หมวดหมู่:Pages with language headings in the wrong order|KIP]]
+# [[กีบ]] (สกุลเงินของประเทศลาว)
+
+== ภาษาดัตช์ ==
+
+=== การออกเสียง ===
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">เบลเยียม</span></span><span class="ib-brac qualifier-brac">)</span> [[วิกิพจนานุกรม:สัทอักษรสากล|ไอพีเอ]]<sup>([[ภาคผนวก:การออกเสียงภาษาดัตช์|อธิบาย]])</sup>:&#32;<span class="IPA nowrap">/kɪp/</span>[[หมวดหมู่:ศัพท์ภาษาดัตช์ที่มีการออกเสียงไอพีเอ|KIP]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>เสียง (เบลเยียม)<span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:Nl-kip.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:Nl-kip.ogg|file]])</td></tr></table>[[หมวดหมู่:ศัพท์ภาษาดัตช์ที่มีไฟล์เสียง|KIP]]
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">เนเธอร์แลนด์</span></span><span class="ib-brac qualifier-brac">)</span> [[วิกิพจนานุกรม:สัทอักษรสากล|ไอพีเอ]]<sup>([[ภาคผนวก:การออกเสียงภาษาดัตช์|อธิบาย]])</sup>:&#32;<span class="IPA nowrap">/kɪp/</span>[[หมวดหมู่:ศัพท์ภาษาดัตช์ที่มีการออกเสียงไอพีเอ|KIP]]
+
+=== รากศัพท์ 1 ===
+
+==== คำนาม[[หมวดหมู่:คำนามภาษาดัตช์|KIP]][[หมวดหมู่:แม่แบบหน้าที่คำนามภาษาดัตช์]] [[หมวดหมู่:คำหลักภาษาดัตช์]] ====
+'''kip'''
+[[หมวดหมู่:บทความที่ยังใช้ pn อยู่]] [[:แม่แบบ:f]]
+# [[ไก่]]
+
+=== รากศัพท์ 2 ===
+จาก<span class="etylcleanup"><strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q9211 site=thwiki</span></strong></span><strong class="error"><span class="scribunto-error">Lua error in มอดูล:debug: This template is deprecated. Please use &lt;nowiki&gt;{{[[Template:der|der]]}}&lt;/nowiki&gt;, &lt;nowiki&gt;{{[[Template:inh|inh]]}}&lt;/nowiki&gt;, &lt;nowiki&gt;{{[[Template:bor|bor]]}}&lt;/nowiki&gt;, &lt;nowiki&gt;{{[[Template:cog|cog]]}}&lt;/nowiki&gt; or &lt;nowiki&gt;{{[[Template:noncog|noncog]]}}&lt;/nowiki&gt;.</span></strong> <span class="Laoo" lang="lo">[[:ກີບ#ภาษาลาว|ກີບ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="lo" class="tr">กีบ</span><span class="mention-gloss-paren annotation-paren">)</span>
+
+==== คำนาม[[หมวดหมู่:คำนามภาษาดัตช์|KIP]][[หมวดหมู่:แม่แบบหน้าที่คำนามภาษาดัตช์]] [[หมวดหมู่:คำหลักภาษาดัตช์]] ====
+'''kip'''
+[[หมวดหมู่:บทความที่ยังใช้ pn อยู่]] <span class="gender"><abbr title="เพศชาย">ช.</abbr></span>
+# [[กีบ]] (สกุลเงินของประเทศลาว)

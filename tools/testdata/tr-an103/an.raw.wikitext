@@ -1,0 +1,89 @@
+{{bakınız|ان|آن|إن|اَِنْ|-ان|ان-}}
+==Arapça==
+
+===Köken 1===
+
+====Söyleniş====
+* {{IPA|dil=ar|/ʔan/}}
+
+====Bağlaç====
+{{başlık başı|ar|bağlaç|tr=أَنْ}}
+
+# {{şerh olmayan tanım|<!--Introduces a verb clause in place of the definite verbal noun.-->Kesin sözlü ismin yerine bir fiil cümlesi ekler.}}
+#: {{eş anlamlılar|ar|مَا}}
+## [[-a]]/[[-e]], [[o]]; {{şerh olmayan tanım|dilek kipli bir fiil sunar}} {{şerh|genellikle mastar ekine karşılık gelir}}
+##: {{ux|ar|سَيَنْتَخِبُ الشَّعْبُ رَئِيسًا جَدِيدًا '''بَعْدَ أَنْ يُكْتَبَ''' الدُّسْتُور.|Halk, yeni anayasa '''yazıldıktan sonra''' yeni bir başkan seçecek.|lit=... '''[o]''' anayasa yazıldıktan sonra}}
+##: {{ux|ar|أُرِيدُ '''أَنْ''' آكُلَ.|Ye'''mek''' istiyorum.|lit='''O''' yemek [işini] istiyorum.}}
+##: {{ux|ar|أُرِيدُ '''أَنْ''' يَأْكُلَ.|Onun ye'''mesini''' istiyorum.|lit='''O''' yemesini istiyorum.}}
+## [[o]]; {{şerh olmayan tanım|geçmiş zamanda bir fiilden evvel gelir}}
+<!-- Translating the below as "so" rather than "that" in order to avoid confusion with the bolded term -->
+##: {{ux|ar|سَبَقَ '''أَنْ''' قُلْتُ لَكَ ذٰلِكَ|'''Onu''' sana söylemiştim.|lit='''O''' söylediğim gibi geçti.}}
+# {{t|dil=ar|edebî}} {{şerh olmayan tanım|rivâyet edilen bir konuşmadan evvel gelir}}
+#* {{AT:Kur'an|7|44|metin=وَنَادَىٰ أَصْحَابُ الْجَنَّةِ أَصْحَابَ النَّارِ "'''أَن''' قَدْ وَجَدْنَا مَا وَعَدَنَا رَبُّنَا حَقًّا فَهَلْ وَجَدتُّم مَّا وَعَدَ رَبُّكُمْ حَقًّا؟" قَالُوا "نَعَمْ!" فَأَذَّنَ مُؤَذِّنٌ بَيْنَهُمْ "'''أَن''' لَّعْنَةُ اللَّهِ عَلَى الظَّالِمِينَ!"|t=Cennetlikler, Cehennemliklere "Rabbimizin bize ['''o'''] va'dettiğini hakikat bulduk. Siz de Rabbinizin va'd ettiğini hakikat buldunuz mu?" diye seslenirler. Onlar "Evet!" der. O zaman aralarında bir duyurucu "Allah'ın laneti zalimlere!" diye seslenir.}}
+#* {{AT:Kur'an|7|117|metin=وَأَوْحَيْنَا إِلَى مُوسَى '''أَنْ''' أَلْقِ عَصَاكَ|t=Biz de Musa'ya “Sen de ['''[o]'''] asânı atıver!” diye vahyettik.}}
+# ''{{l|ar|أَنَّ}}'''nin bir şekli
+#: {{ux|ar|أَشْهَدُ '''أَنْ''' لَا إِلٰهَ إِلَّا ٱللّٰهُ.|'''[O]''' Allah'tan başka ilah olmadığına şehâdet ederim.}}
+#: {{ux|ar|عَلِمْتُ '''أَنْ''' سَيُسَافِرُ زُهَيْرٌ|'''[O]''' Zuheyr'in seyahat edeceğini biliyordum.}}
+#* {{AT:Kur'an|10|10|metin=وَآخِرُ دَعْوَاهُمْ '''أَنِ''' ٱلْحَمْدُ لِلَّهِ رَبِّ ٱلْعَالَمِينَ|t=Onların oradaki ['''[o]'''] duaları: "Allah'ım, sen yücelerden yücesin";}}
+<!--
+=====Açıklamalar=====
+* In sense 1.2, if {{m-self|ar|أَنْ}} and the clause it introduces pertain to a verb, then they are syntactically its ''subject''. However, this clause is never allowed to precede the verb: Arabic does not accept the phrasing {{z|ar|'''أَنْ''' قُلْتُ لَكَ ذٰلِكَ سَبَقَ|lit='''that''' I told you so has passed}}.
+** If the verb phrase inside the clause is relatively short, this can serve to distinguish an {{lang|ar|أَنْ}}-phrase from the equivalent verbal noun. A sentence like {{z|ar||سَبَقَ '''أَنْ''' تَعَامَلْنَا|t=we have already done business together}} is perfectly fine being reworded to {{z|ar||تَعَامُلُنَا سَبَقَ}} instead of {{z|ar||سَبَقَ تَعَامُلُنَا}}, but {{z|ar||*'''أَنْ''' تَعَامَلْنَا سَبَقَ}} is ungrammatical.
+* Notice that sense 1 is twice shown introducing the complement of prepositions like {{z|ar|قَبْلَ|t=before}} and {{z|ar|بَعْدَ|t=after}}; this also includes phrasal ones like {{z|ar|بِمُجَرَّدِ|tr=bi-mujarradi|t=as soon as|pos={{z|ar|بِـ|t=with}} + {{z|ar|مُجَرَّد|t=merely}}}}. If this preposition is in a past context, then the verb inside the clause can in fact be either past ''or'' nonpast: the overall meaning will be past-tense either way. Compare the example above that translates to "the people elected...", which shows the use of a past-tense verb with {{z|ar||بَعْدَ أَن}}, to the following:
+*: {{ux|ar|مَرِضَ قَبْلَ '''أَنْ''' يُسَافِرَ|He fell sick before he traveled.|lit=he fell sick before '''[that]''' he travel}}-->
+
+=====Türetilmiş kavramlar=====
+* {{l|ar|أَن التَّفْسِيرِيَّة}} ،{{l|ar|لِأَنْ}} ،{{l|ar|لِئَلَّا}} ،{{l|ar|أَلَّا}}
+
+===Köken 2===
+
+====Söyleniş====
+* {{IPA|dil=ar|/ʔan.na/}}
+
+====Bağlaç====
+{{başlık başı|ar|bağlaç|tr=أَنَّ}}
+
+# [[o]] {{şerh|bir eşitlik cümlesini veya bir fiil cümlesini sunar<!--introduces an equational clause or a verb phrase-->}}
+#: {{ux|ar|هَلْ تَعْلَمُ '''أَنَّ'''نِي أَطْوَلُ مِنْكَ؟|Senden boylu old'''uğumu''' bilir misin?}}
+#: {{ux|ar|أَعْرِفُ '''أَنَّ''' ٱبْنَكَ سَرَقَ سَيَّارَتِي.|Oğlunun otomobilimi çald'''ığını''' biliyorum.}}
+<!--
+=====Açıklamalar=====
+* If pertaining to a verb, {{m-self|ar|أَنَّ}} and the clause it introduces are syntactically its ''object''. This distinguishes {{m-self|ar|أَنَّ}} from {{m-self|ar|أَنْ}}, especially in the case outlined in the usage note above.
+* {{m-self|ar|أَنَّ}} must be followed immediately by the subject of the clause it introduces, in the accusative case. An attached object pronoun can satisfy this condition.
+** The sole exception is in the relevant sense of {{m-self|ar|أَنْ}} above. In that case, such a subject ''can'' appear and cause the {{m-self|ar|أَنَّ}} pronunciation to resurface, but it is only optional. Compare the following alternative phrasing: {{misal|ar|أَشْهَدُ '''أَنَّهُ''' لَا إِلٰهَ إِلَّا اللَّهُ|t=I bear witness '''that''' there is no god but God.}}-->
+
+=====Çekimleme=====
+{{ar-ilgeç-tablo|أَنَّ|ni=+}}
+
+=====Farklı yazılışlar=====
+* {{l|ar|إِنَّ}} {{şerh|belli fiillerin sonra}}
+
+=====Türetilmiş kavramlar=====
+* {{l|ar|لِأَنَّ}} ،{{l|ar|أَنَّمَا}}
+
+===Köken 3===
+:{{kök|ء|ن|ن}}
+
+====Söyleniş====
+* {{mânâ|fiil}} {{IPA|dil=ar|/ʔan.na/}} 
+* {{mânâ|isim}} {{IPA|dil=ar|/ʔann/}}
+
+====Eylem====
+{{ar-eylem|I|a|i}}
+
+# [[inlemek]]
+#: {{ux|ar|كُلَّمَا '''أَنَّ''' بِالْعِرَاقِ جَرِيحٌ / لَمَسَ الشَّرْقُ جَنْبَهُ فِي عُمَانِهِ}}
+
+=====Çekimleme=====
+{{ar-eylem-tablo|I|a|i|passive=?|vn=أَنٌّ،أَنِينٌ}}
+
+====Ad====
+{{ar-ad|أَنّ|m}}
+
+# {{ar-mastarı|أَنَّ}}
+
+=====Çekimleme=====
+{{ar-ad-tablo|أَنّ}}
+
+===Kaynakça===
+* {{R:sem-pro:FS Militarev|page=207–209}}

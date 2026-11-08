@@ -194,11 +194,29 @@ pub const Registry = struct {
         // This source profile is proved against the exact captured core; other
         // revisions/languages keep manual alternatives unresolved until proved.
         const core_value = general.object.get("git-hash") orelse return;
-        if (core_value != .string or !std.mem.eql(u8, core_value.string, "79b81ba96674efc8a803fc956bc501d347d440d2") or
-            !std.mem.eql(u8, self.content_language, "ku")) return;
+        if (core_value != .string or !std.mem.eql(u8, core_value.string, "79b81ba96674efc8a803fc956bc501d347d440d2")) return;
+        const SourceProfile = struct {
+            variants: []const []const u8,
+            fallbacks: []const []const u8,
+            separators: []const []const u8,
+            converter_sha256: []const u8,
+        };
+        const source_profile: SourceProfile = if (std.mem.eql(u8, self.content_language, "ku")) .{
+            .variants = &.{ "ku", "ku-arab", "ku-latn" },
+            .fallbacks = &.{"ku-latn"},
+            .separators = &.{ "ku", "ku-arab", "ku-Arab", "ku-latn", "ku-Latn" },
+            .converter_sha256 = "1f610f299bfc5b2976c440312a30958325006c36fb7b67e33810324f4c50e47e",
+        } else if (std.mem.eql(u8, self.content_language, "uz")) .{
+            // Matched UzConverter has an empty base table, but both script
+            // variants transliterate. This capability selects only base uz.
+            .variants = &.{ "uz", "uz-latn", "uz-cyrl" },
+            .fallbacks = &.{"uz-latn"},
+            .separators = &.{ "uz", "uz-latn", "uz-cyrl" },
+            .converter_sha256 = "88eece8419be72be06a0fe8dfe9d7f80c19ea291e44ec2aee54f6c83ec6d647f",
+        } else return;
         const selected = self.language_conversion.?;
-        if (selected.len != 3) return;
-        for ([_][]const u8{ "ku", "ku-arab", "ku-latn" }) |required| {
+        if (selected.len != source_profile.variants.len) return;
+        for (source_profile.variants) |required| {
             var found = false;
             for (selected) |code| if (std.mem.eql(u8, code, required)) { found = true; break; };
             if (!found) return;
@@ -206,13 +224,13 @@ pub const Registry = struct {
         var site_digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(raw, &site_digest, .{});
         self.manual_conversion_context = .{
-            .base = self.content_language, .fallbacks = &.{"ku-latn"},
-            .separator_variants = &.{ "ku", "ku-arab", "ku-Arab", "ku-latn", "ku-Latn" },
+            .base = self.content_language, .fallbacks = source_profile.fallbacks,
+            .separator_variants = source_profile.separators,
             // Defaults alone do not prove the effective table: ordinary
-            // Conversiontable/ku overrides must be authenticated separately.
+            // Conversiontable/<base> overrides must be authenticated separately.
             .automatic_identity = false,
             .source_core = "79b81ba96674efc8a803fc956bc501d347d440d2",
-            .source_converter_sha256 = "1f610f299bfc5b2976c440312a30958325006c36fb7b67e33810324f4c50e47e",
+            .source_converter_sha256 = source_profile.converter_sha256,
             .siteinfo_sha256 = try a.dupe(u8, &std.fmt.bytesToHex(site_digest, .lower)),
         };
     }

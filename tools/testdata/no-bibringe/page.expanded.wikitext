@@ -1,0 +1,119 @@
+==Norsk==
+===Substantiv===
+'''bibringe''' ''m'' (<span style="font-variant:small-caps; font-size:0.9em;">bokmål</span>), ''c'' (<span style="font-variant:small-caps; font-size:0.9em;">riksmål</span>)[[Kategori:Substantiv i bokmål]][[Kategori:Substantiv i riksmål]]
+
+# ''([[matlaging]], [[utellelig]])'' [[Kategori:no:Stykningsdeler]][[Kategori:no:Masseord]] bestemt [[stykningsdel]] på storfekjøtt etter norsk storfepartering; sidebryststykke (bringen) på høyde med de nederste ribbenene
+#: ''Man bruker '''bibringe''' mest som suppekjøtt.''
+
+====Uttale====
+<templatestyles src="Mal:Mangler-boks/stilark.css"/><div class="noprint request-box">
+{| class="request-etymology-box"
+| [[Fil:Phonetik.svg|40px]]
+
+| Dette ordet har ikke fått spesifisert noen [[Wiktionary:Uttale|uttale]]. Hvis du er fortrolig med [[w:Det internasjonale fonetiske alfabetet|IPA]], kan du legge den til.
+
+|}
+</div>
+[[Kategori:Uttale mangler (norsk)]]
+
+====Grammatikk====
+<templatestyles src="Mal:No-sub-topp/stilark.css"/>
+{| class="grammar"
+|-
+!colspan="5" |Bøyning (''regelrett substantiv hankjønn'')
+|- valign="middle"
+!colspan="2"|Entall
+!colspan="2"|Flertall
+|rowspan="2"|&zwnj;
+|-
+!Ubestemt
+!Bestemt
+!Ubestemt
+!Bestemt
+
+|-
+|ein [[bibringe]]
+|[[bibringen]]
+|[[bibringar]]
+|[[bibringane]]
+|(<span style="font-variant:small-caps; font-size:0.9em;">nynorsk</span>)
+|-
+|[[bibringe]]
+|[[bibringen]]
+|[[bibringer]]
+|[[bibringene]]
+|(<span style="font-variant:small-caps; font-size:0.9em;">bokmål/riksmål</span>)
+|-
+|colspan="5"|''For '''genitiv av substantiv''', se [[Tillegg:Eigeform i norsk#Substantiv|eieform]]''.
+|}[[Kategori:Hankjønnsord i norsk]]
+
+====Oversettelser====
+<templatestyles src="Mal:overs-topp/stilark.css"/>
+<div class="NavFrame">
+<div class="NavHead" align="left">kjøttstykke av storfebringe</div>
+<div class="NavContent">
+{| border="0" width="100%" class="translations oversettelser"
+|-
+| valign="top" width="48%" align="left" |
+* <span class="mallang mallang-en">engelsk</span>: [[chuck#Engelsk|<span språk="en" xml:lang="en">chuck</span>]]<span class="tunk">&nbsp;[[:en:chuck|<span class="tlc">en</span><span class="tlcp">(en)</span>]]</span>, [[chuck shortrib#Engelsk|<span språk="en" xml:lang="en">chuck shortrib</span>]]<span class="tunk">&nbsp;[[:en:chuck shortrib|<span class="tlc">en</span><span class="tlcp">(en)</span>]]</span>
+| width=1% |
+| valign=top align=left width=48%|
+|}</div></div>
+
+====Etymologi====
+''[[bi-#Bokmål|bi-]]'' + ''[[bringe#Bokmål|bringe]]''[[Kategori:Ord i norsk dannet av prefikset «bi-»]]
+
+===Verb===
+'''bibringe''' (<span style="font-variant:small-caps; font-size:0.9em;">bokmål/riksmål</span>) [[Kategori:Verb i bokmål]][[Kategori:Verb i riksmål]]
+
+# meddele; få noen til oppfatte noe
+#:''Kan du vennligst '''bibringe''' denne kunnskapen videre?''
+
+====Grammatikk====
+{| class="grammar"
+|-
+! colspan="8" | Bøyning (''blandingsform'')
+|- 
+! Infinitiv
+! Presens
+! Preteritum
+! Perfektum
+! Imperativ
+! Presens partisipp
+! Passiv
+|&zwnj;
+
+|-
+|å [[bibringe#Norsk|bibringe]]
+|[[bibringer#Norsk|bibringer]]
+|[[bibrakte#Norsk|bibrakte]]
+|har [[bibrakt#Norsk|bibrakt]]
+|[[bibring#Norsk|bibring]]
+|[[bibringende#Norsk|bibringende]]
+|
+|(<span style="font-variant:small-caps; font-size:0.9em;">bokmål</span>) 
+|-
+|å [[bibringe#Norsk|bibringe]]
+|[[bibringer#Norsk|bibringer]]
+|[[bibragte#Norsk|bibragte]]
+|har [[bibragt#Norsk|bibragt]]
+|[[bibring#Norsk|bibring]]
+|[[bibringende#Norsk|bibringende]]
+|
+|(<span style="font-variant:small-caps; font-size:0.9em;">riksmål</span>) 
+   <includeonly>
+      Nynorskordboka har ikke dette verbet listet. Lar det foreløpig ligge som includeonly. Teodor
+      |-
+|å [[bibringe#Norsk|bibringe]]
+|[[bibringar#Norsk|bibringar]]
+|[[bibringa#Norsk|bibringa]]
+|har [[bibringa#Norsk|bibringa]]
+|[[bibring#Norsk|bibring]]
+|[[bibringande#Norsk|bibringande]]
+|
+|(<span style="font-variant:small-caps; font-size:0.9em;">nynorsk</span>) 
+   </includeonly>
+|}
+
+====Etymologi====
+''[[bi-#Norsk|bi-]]'' + ''[[bringe#Norsk|bringe]]''[[Kategori:Ord i norsk dannet av prefikset «bi-»]]

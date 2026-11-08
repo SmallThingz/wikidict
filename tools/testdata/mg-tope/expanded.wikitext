@@ -1,0 +1,45 @@
+
+==Ainò==
+
+===<span class="icone">[[Image:Nuvola apps bookcase.svg|30px|link=Fanoroana:Etimôlôjia|Fiaviana ary tantaran'i « トペ »]]</span>&nbsp;Etimôlôjia===
+:Azo inoana fa avy amin'ny ''ト'' (soratana hoe ''to'') (midika hoe ''nono'' (anglisy: ''breast'')) + ''ペッ'' (soratana hoe ''pet'') (midika hoe ''rano'' (anglisy: ''water'')).
+===[[Image:Open book 01.svg|30px|link=help:karazan-teny]] Anarana iombonana [[sokajy:ainò]][[Catégorie:Anarana iombonana amin'ny teny ainò]]===
+'''トペ''' 
+# [[ronono]]
+
+====<span title="Fampahalalàna ara-peo an'ilay teny トペ">[[Image:Nuvola apps edu languages.svg|30px|link=help:fanononana]] Fanononana</span>==== 
+* [[File:MapOfAinuLanguage-Milk.svg|thumb|400px|Map of Ainu Language: Milk]]
+* {|class="wikitable"
+* |+ dialect table: [[milk]] (1960)<ref>[[:Endrika:R:ain:HattoriAndChiri:1960]]</ref>
+* ! area !! pronunciation
+* |-
+* ! Yakumo (八雲)
+* | tópe
+* ! Oshamambe (長万部)
+* ! Horobetsu (幌別)
+* ! Hiratori (平取)
+* ! Nukkibetsu (貫気別)
+* ! Niikappu (新冠)
+* ! Samani (様似)
+* ! Obihiro (帯広)
+* ! Kushiro (釧路)
+* ! Bihoro (美幌)
+* ! Asahikawa (旭川)
+* ! Nayoro (名寄)
+* ! Soya (宗谷)
+* ! Ochiho (落帆)
+* | toope
+* ! Tarantomari (多蘭泊)
+* ! Maoka (真岡)
+* ! Shiraura (白浦)
+* ! Raichishka (ライチシカ)
+* ! Nairo (内路)
+* |}
+* [[w:Abidy Ara-drafipeo Iraisam-pirenena|<span class="API" title="fanononana AAI">/tóꜜpè/</span>]]
+
+<h4>[[File:Books-aj.svg aj ashton 01f.svg|35px|link=Wiktionary:Tsiahy]] Tsiahy</h4>
+* :* [[w:John Batchelor|John Batchelor]]&#32;(1905)&#32;<cite>An Ainu-English-Japanese dictionary (including a grammar of the Ainu language)</cite>&lrm;<sup>[https://archive.org/details/ainuenglishjapan00batcuoft]</sup>, Tokyo; London&#58; Methodist Publishing House; Kegan Paul, Trench, Trubner Co., [https://archive.org/details/ainuenglishjapan00batcuoft/page/453 page&nbsp;453]
+* :* &#32;<cite><i class="Jpan mention" lang="ja">DYBOWSKI のシュムシュ島アイヌ語資料について（第1部）</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">DYBOWSKI No Shumushu Tō Ainu Go Shiryō Ni Tsuite (Dai 1 Bu)</span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">On DYBOWSKI's Shumshu Island Ainu Language Materials (Part 1)</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span></cite>&lrm;<sup>[https://api.lib.kyushu-u.ac.jp/opac_download_md/2332776/pa019.pdf]</sup>, [[w:Fukuoka|Fukuoka]]&#58; <i class="Jpan mention" lang="ja">村山七郎</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">Murayama Shichirō</span><span class="mention-gloss-paren annotation-paren">)</span>, 1970 loksamborgisy
+
+* 
+* Ity pejy ity dia nadika avy amin'ny pejy [[:en:トペ|トペ]] tao amin'ny Wikibolana amin'ny teny anglisy. ([http://en.wiktionary.org//w/index.php?title=%E3%83%88%E3%83%9A&action=history lisitry ny mpandray anjara])[[sokajy:Pejy avy any amin'ny wikibolana anglisy]]

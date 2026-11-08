@@ -1,0 +1,151 @@
+<div id="Vorlage_Dieser_Artikel">
+{| cellspacing="8" cellpadding="0" style="border:#E9E9E9; width: 100%; font-size: 95%; border-bottom-style: solid; margin-bottom: 1em; position:relative;"
+| style="width: 25px; vertical-align: middle;" | [[Resim:Disambig.svg|25px]]
+| Ayrıca bakınız: '''[[ان|ان]]''', '''[[آن|آن]]''', '''[[إن|إن]]''', '''[[اَِنْ|اَِنْ]]''', '''[[-ان|-ان]]''', '''[[ان-|ان-]]'''
+|}</div>
+==Arapça==
+
+===Köken 1===
+
+====Söyleniş====
+* [[Vikisözlük:Uluslararası Fonetik Alfabesi|IPA]]<sup>([[wikipedia:Arapça|anahtar]])</sup>:&#32;<span class="IPA">/ʔan/</span>[[Kategori:Arapça IPA okunuşu olan sözcükler|أن]]
+
+====Bağlaç====
+<strong class="Arab headword" lang="ar">أن</strong> (<span lang="ar-Latn" class="headword-tr tr Latn" dir="ltr">أَنْ</span>)[[Category:Arapça sözcükler]][[Category:Arapça bağlaçlar]]
+
+# <span class="use-with-mention">Kesin sözlü ismin yerine bir fiil cümlesi ekler.</span>
+#: eş anlamlısı: <span class="Arab" lang="ar">[[ما#Arapça|مَا]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">mā</span><span class="mention-gloss-paren annotation-paren">)</span>
+## [[-a]]/[[-e]], [[o]]; <span class="use-with-mention">dilek kipli bir fiil sunar</span> <span class="gloss-brac">(</span><span class="gloss-content">genellikle mastar ekine karşılık gelir</span><span class="gloss-brac">)</span>
+##: <span style="cursor:help;">[[Dosya:Bootstrap arrow-return-right.svg|16x16px]]</span>&nbsp;''<span class="Arab" lang="ar">سَيَنْتَخِبُ الشَّعْبُ رَئِيسًا جَدِيدًا '''بَعْدَ أَنْ يُكْتَبَ''' الدُّسْتُور.</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">seyentaḫibü eş-şaʿbü raʾīsen cedīden '''baʿde ʾen yüktebe''' ed-düstūr.</span><span class="mention-gloss-paren annotation-paren">)</span>''&nbsp;— Halk, yeni anayasa '''yazıldıktan sonra''' yeni bir başkan seçecek.
+##: <span style="cursor:help;">[[Dosya:Bootstrap arrow-return-right.svg|16x16px]]</span>&nbsp;''<span class="Arab" lang="ar">أُرِيدُ '''أَنْ''' آكُلَ.</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾürīdü '''ʾen''' ʾāküle.</span><span class="mention-gloss-paren annotation-paren">)</span>''&nbsp;— Ye'''mek''' istiyorum.
+##: <span style="cursor:help;">[[Dosya:Bootstrap arrow-return-right.svg|16x16px]]</span>&nbsp;''<span class="Arab" lang="ar">أُرِيدُ '''أَنْ''' يَأْكُلَ.</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾürīdü '''ʾen''' yeʾküle.</span><span class="mention-gloss-paren annotation-paren">)</span>''&nbsp;— Onun ye'''mesini''' istiyorum.
+## [[o]]; <span class="use-with-mention">geçmiş zamanda bir fiilden evvel gelir</span>
+##: <span style="cursor:help;">[[Dosya:Bootstrap arrow-return-right.svg|16x16px]]</span>&nbsp;''<span class="Arab" lang="ar">سَبَقَ '''أَنْ''' قُلْتُ لَكَ ذٰلِكَ</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">sebaḳa '''ʾen''' ḳultü leke ẕālike</span><span class="mention-gloss-paren annotation-paren">)</span>''&nbsp;— '''Onu''' sana söylemiştim.
+# (''edebî'') <span class="use-with-mention">rivâyet edilen bir konuşmadan evvel gelir</span>
+#* '''[[Ek:Açıklamalar#MS|M.S.]] 609–632''', ''[[w:tr:Kur'an|Kur'an]]'', [https://quran.com/7/44 7<nowiki/>:44]<br>وَنَادَىٰ أَصْحَابُ الْجَنَّةِ أَصْحَابَ النَّارِ "'''أَن''' قَدْ وَجَدْنَا مَا وَعَدَنَا رَبُّنَا حَقًّا فَهَلْ وَجَدتُّم مَّا وَعَدَ رَبُّكُمْ حَقًّا؟" قَالُوا "نَعَمْ!" فَأَذَّنَ مُؤَذِّنٌ بَيْنَهُمْ "'''أَن''' لَّعْنَةُ اللَّهِ عَلَى الظَّالِمِينَ!"&nbsp;–&nbsp;Cennetlikler, Cehennemliklere "Rabbimizin bize ['''o'''] va'dettiğini hakikat bulduk. Siz de Rabbinizin va'd ettiğini hakikat buldunuz mu?" diye seslenirler. Onlar "Evet!" der. O zaman aralarında bir duyurucu "Allah'ın laneti zalimlere!" diye seslenir.
+#* '''[[Ek:Açıklamalar#MS|M.S.]] 609–632''', ''[[w:tr:Kur'an|Kur'an]]'', [https://quran.com/7/117 7<nowiki/>:117]<br>وَأَوْحَيْنَا إِلَى مُوسَى '''أَنْ''' أَلْقِ عَصَاكَ&nbsp;–&nbsp;Biz de Musa'ya “Sen de ['''[o]'''] asânı atıver!” diye vahyettik.
+# ''<span class="Arab" lang="ar">[[أن#Arapça|أَنَّ]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾenne</span><span class="mention-gloss-paren annotation-paren">)</span>'''nin bir şekli
+#: <span style="cursor:help;">[[Dosya:Bootstrap arrow-return-right.svg|16x16px]]</span>&nbsp;''<span class="Arab" lang="ar">أَشْهَدُ '''أَنْ''' لَا إِلٰهَ إِلَّا ٱللّٰهُ.</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾeşhedü '''ʾen''' lā ʾilāhe ʾillā llāhü.</span><span class="mention-gloss-paren annotation-paren">)</span>''&nbsp;— '''[O]''' Allah'tan başka ilah olmadığına şehâdet ederim.
+#: <span style="cursor:help;">[[Dosya:Bootstrap arrow-return-right.svg|16x16px]]</span>&nbsp;''<span class="Arab" lang="ar">عَلِمْتُ '''أَنْ''' سَيُسَافِرُ زُهَيْرٌ</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʿalimtü '''ʾen''' seyüsāfiru züheyrun</span><span class="mention-gloss-paren annotation-paren">)</span>''&nbsp;— '''[O]''' Zuheyr'in seyahat edeceğini biliyordum.
+#* '''[[Ek:Açıklamalar#MS|M.S.]] 609–632''', ''[[w:tr:Kur'an|Kur'an]]'', [https://quran.com/10/10 10<nowiki/>:10]<br>وَآخِرُ دَعْوَاهُمْ '''أَنِ''' ٱلْحَمْدُ لِلَّهِ رَبِّ ٱلْعَالَمِينَ&nbsp;–&nbsp;Onların oradaki ['''[o]'''] duaları: "Allah'ım, sen yücelerden yücesin";
+
+=====Türetilmiş kavramlar=====
+* <span class="Arab" lang="ar">[[أن التفسيرية#Arapça|أَن التَّفْسِيرِيَّة]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾen et-tefsīriyye</span><span class="mention-gloss-paren annotation-paren">)</span> ،<span class="Arab" lang="ar">[[لأن#Arapça|لِأَنْ]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">liʾen</span><span class="mention-gloss-paren annotation-paren">)</span> ،<span class="Arab" lang="ar">[[لئلا#Arapça|لِئَلَّا]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">liʾellā</span><span class="mention-gloss-paren annotation-paren">)</span> ،<span class="Arab" lang="ar">[[ألا#Arapça|أَلَّا]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾellā</span><span class="mention-gloss-paren annotation-paren">)</span>
+
+===Köken 2===
+
+====Söyleniş====
+* [[Vikisözlük:Uluslararası Fonetik Alfabesi|IPA]]<sup>([[wikipedia:Arapça|anahtar]])</sup>:&#32;<span class="IPA">/ʔan.na/</span>[[Kategori:Arapça IPA okunuşu olan sözcükler|أن]]
+
+====Bağlaç====
+<strong class="Arab headword" lang="ar">أن</strong> (<span lang="ar-Latn" class="headword-tr tr Latn" dir="ltr">أَنَّ</span>)[[Category:Arapça sözcükler]][[Category:Arapça bağlaçlar]]
+
+# [[o]] <span class="gloss-brac">(</span><span class="gloss-content">bir eşitlik cümlesini veya bir fiil cümlesini sunar</span><span class="gloss-brac">)</span>
+#: <span style="cursor:help;">[[Dosya:Bootstrap arrow-return-right.svg|16x16px]]</span>&nbsp;''<span class="Arab" lang="ar">هَلْ تَعْلَمُ '''أَنَّ'''نِي أَطْوَلُ مِنْكَ؟</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">hel taʿlemü '''ʾenne'''nī ʾaṭvelü minke?</span><span class="mention-gloss-paren annotation-paren">)</span>''&nbsp;— Senden boylu old'''uğumu''' bilir misin?
+#: <span style="cursor:help;">[[Dosya:Bootstrap arrow-return-right.svg|16x16px]]</span>&nbsp;''<span class="Arab" lang="ar">أَعْرِفُ '''أَنَّ''' ٱبْنَكَ سَرَقَ سَيَّارَتِي.</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾaʿrifü '''ʾenne''' bneke seraḳa seyyāratī.</span><span class="mention-gloss-paren annotation-paren">)</span>''&nbsp;— Oğlunun otomobilimi çald'''ığını''' biliyorum.
+
+=====Çekimleme=====
+<div class="NavFrame">
+<div class="NavHead" align=left>&nbsp; &nbsp; Çekimlemiş biçimler</div>
+<div class="NavContent" style="text-align: center;">
+{| style="margin:1em; margin-left: 0; border: 1px solid #AAAAAA; border-collapse:collapse; text-align: center;" cellpadding="4" rules="all"
+|-
+! style="background:#E2E4C0;" colspan="5" |asıl biçim
+|<big><span class="Arab" lang="ar"><strong class="selflink">أَنَّ</strong></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾenne</span><span class="mention-gloss-paren annotation-paren">)</span></big>
+|-
+! style="background:#E2E4C0;" rowspan="2"| kişi adılları-<br />biçimler dâhil
+! style="background:#C0CFE4;" colspan="2" | tekil
+! style="background:#C0CFE4;" | ikil
+! style="background:#C0CFE4;" colspan="2" | çoğul
+|-
+! style="background:#C0CFE4;" | eril
+! style="background:#C0CFE4;" | dişil
+! style="background:#C0CFE4;" | genel
+! style="background:#C0CFE4;" | eril
+! style="background:#C0CFE4;" | dişil
+|-
+! style="background:#C0CFE4; text-align: right;"| birinci kişi
+| colspan="2" | <span class="Arab" lang="ar">[[أنني#Arapça|أَنَّنِي]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾennenī</span><span class="mention-gloss-paren annotation-paren">)</span>
+|
+| colspan="2" | <span class="Arab" lang="ar">[[أننا#Arapça|أَنَّنَا]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾennenā</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! style="background:#C0CFE4; text-align: right;"| ikinci kişi
+| <span class="Arab" lang="ar">[[أنك#Arapça|أَنَّكَ]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾenneke</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Arab" lang="ar">[[أنك#Arapça|أَنَّكِ]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾenneki</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Arab" lang="ar">[[أنكما#Arapça|أَنَّكُمَا]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾennekümā</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Arab" lang="ar">[[أنكم#Arapça|أَنَّكُمْ]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾenneküm</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Arab" lang="ar">[[أنكن#Arapça|أَنَّكُنَّ]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾennekünne</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! style="background:#C0CFE4; text-align: right;"| üçüncü kişi
+| <span class="Arab" lang="ar">[[أنه#Arapça|أَنَّهُ]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾennehü</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Arab" lang="ar">[[أنها#Arapça|أَنَّهَا]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾennehā</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Arab" lang="ar">[[أنهما#Arapça|أَنَّهُمَا]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾennehümā</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Arab" lang="ar">[[أنهم#Arapça|أَنَّهُمْ]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾennehüm</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Arab" lang="ar">[[أنهن#Arapça|أَنَّهُنَّ]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾennehünne</span><span class="mention-gloss-paren annotation-paren">)</span>
+|}</div></div>
+
+=====Farklı yazılışlar=====
+* <span class="Arab" lang="ar">[[إن#Arapça|إِنَّ]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾinne</span><span class="mention-gloss-paren annotation-paren">)</span> <span class="gloss-brac">(</span><span class="gloss-content">belli fiillerin sonra</span><span class="gloss-brac">)</span>
+
+=====Türetilmiş kavramlar=====
+* <span class="Arab" lang="ar">[[لأن#Arapça|لِأَنَّ]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">liʾenne</span><span class="mention-gloss-paren annotation-paren">)</span> ،<span class="Arab" lang="ar">[[أنما#Arapça|أَنَّمَا]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾennemā</span><span class="mention-gloss-paren annotation-paren">)</span>
+
+===Köken 3===
+:<span class="Arab" lang="ar">[[ء ن ن#Arapça|ء ن ن]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾ n n</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategori:Gereğinden fazla başka alfabeye çevirmeler]][[Kategori:Arapça gereğinden fazla başka alfabeye çevirmeler]][[Category:ء ن ن kökünden türetilmiş Arapça sözcükler]]
+
+====Söyleniş====
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">fiil</span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon sense-qualifier-colon">:</span> [[Vikisözlük:Uluslararası Fonetik Alfabesi|IPA]]<sup>([[wikipedia:Arapça|anahtar]])</sup>:&#32;<span class="IPA">/ʔan.na/</span>[[Kategori:Arapça IPA okunuşu olan sözcükler|أن]] 
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">isim</span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon sense-qualifier-colon">:</span> [[Vikisözlük:Uluslararası Fonetik Alfabesi|IPA]]<sup>([[wikipedia:Arapça|anahtar]])</sup>:&#32;<span class="IPA">/ʔann/</span>[[Kategori:Arapça IPA okunuşu olan sözcükler|أن]]
+
+====Eylem====
+<strong class="headword" style="font-weight:normal !important;font-size:1.29em !important;">أَنَّ</strong> (<span lang="ar-Latn" class="headword-tr tr Latn" dir="ltr">ʾenne</span>)[[Category:Arapça sözcükler]][[Category:Arapça eylemler]] <span class="gender">[[Appendix:Arabic verbs#Form I|<abbr title="Verb form I">I</abbr>]]</span>, <i>geniş zaman</i> [[يئن|<span class="Arab" lang="ar" style="font-size:125%;color:#202122;">يَئِنُّ</span>]]‎ (yeʾinnü)[[Category:Arapça biçim-I eylemler]][[Category:Arapça birleşimlerine göre muzaaf eylemler]][[Category:Arapça muzaaf biçim-I eylemler]][[Category:Arapça muzaaf eylemler]][[Category:Arapça hemzeli biçim-I eylemler]][[Category:Arapça hemzeli eylemler]][[Category:Arapça ilk kökünde ء kullanan biçim-I eylemler]]
+
+# [[inlemek]]
+#: <span style="cursor:help;">[[Dosya:Bootstrap arrow-return-right.svg|16x16px]]</span>&nbsp;''<span class="Arab" lang="ar">كُلَّمَا '''أَنَّ''' بِالْعِرَاقِ جَرِيحٌ / لَمَسَ الشَّرْقُ جَنْبَهُ فِي عُمَانِهِ</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">küllemā '''ʾenne''' bi-l-ʿirāḳi cerīḥun / lemese eş-şerḳu cenbehü fī ʿumānihi</span><span class="mention-gloss-paren annotation-paren">)</span>''
+
+=====Çekimleme=====
+<strong class="error"><span class="scribunto-error">Lua error in Modül:ar-eylem: NotCallable</span></strong>
+
+====Ad====
+<strong class="Arab headword" lang="ar" style="font-size:1.25em !important;font-weight:normal !important;">أَنّ</strong> (<span lang="ar-Latn" class="headword-tr tr Latn" dir="ltr">ʾenn</span>)&nbsp;<span class="gender"><abbr title="eril cinsiyet">e</abbr></span>[[Category:Arapça sözcükler]][[Category:Arapça adlar]][[Category:Arapça eril adlar]][[Category:Arapça eril adlar]]
+
+# '''<span class="Arab" lang="ar">[[أن#Arapça|أَنَّ]]</span>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʾenne</span><span class="mention-gloss-paren annotation-paren">)</span>''' eyleminin ''[[mastar]]ı''[[Kategori:Arapça mastarlar]]
+
+=====Çekimleme=====
+<div class="NavFrame">
+<div class="NavHead"><span style="font-size:125% !important;font-weight:normal !important;"><span class="Arab" lang="ar" style="font-size:125 !important;font-weight:normal !important;">أَنّ</span> (<span lang="ar-Latn" class="tr Latn" style="font-size:125 !important;font-weight:normal !important;">ʾenn</span>)</span> ad çekimi</div>
+<div class="NavContent">
+{| class="çekim inflection-table wikitable" style="background:#f0faf0; text-align:center; width:100%; font-size:105%"
+|-
+! style="background: #b3deb3;" rowspan=2 | tekil
+! style="background: #b3deb3;" colspan=3 | basit tekil munsarıf
+|-
+! style="background: #b3deb3;" | belirtisiz
+! style="background: #b3deb3;" | belirtili
+! style="background: #b3deb3;" | izafet
+|-
+! style="background: #c5e8c5;" | ölçüsüz
+| <span class="Arab" lang="ar" style="font-size:125%;">أَنّ</span><br /><span lang="ar-Latn" class="tr Latn" style="color: #888;">ʾenn</span>
+| [[الأن|<span class="Arab" lang="ar" style="font-size:125%;color:#202122;">الْأَنّ</span>]]<br /><span lang="ar-Latn" class="tr Latn" style="color: #888;">el-ʾenn</span>
+| <span class="Arab" lang="ar" style="font-size:125%;">أَنّ</span><br /><span lang="ar-Latn" class="tr Latn" style="color: #888;">ʾenn</span>
+|-
+! style="background: #c5e8c5;" | yalın
+| <span class="Arab" lang="ar" style="font-size:125%;">أَنٌّ</span><br /><span lang="ar-Latn" class="tr Latn" style="color: #888;">ʾennün</span>
+| [[الأن|<span class="Arab" lang="ar" style="font-size:125%;color:#202122;">الْأَنُّ</span>]]<br /><span lang="ar-Latn" class="tr Latn" style="color: #888;">el-ʾennü</span>
+| <span class="Arab" lang="ar" style="font-size:125%;">أَنُّ</span><br /><span lang="ar-Latn" class="tr Latn" style="color: #888;">ʾennü</span>
+|-
+! style="background: #c5e8c5;" | belirtme
+| [[أنا|<span class="Arab" lang="ar" style="font-size:125%;">أَنًّا</span>]]<br /><span lang="ar-Latn" class="tr Latn" style="color: #888;">ʾennen</span>
+| [[الأن|<span class="Arab" lang="ar" style="font-size:125%;color:#202122;">الْأَنَّ</span>]]<br /><span lang="ar-Latn" class="tr Latn" style="color: #888;">el-ʾenne</span>
+| <span class="Arab" lang="ar" style="font-size:125%;">أَنَّ</span><br /><span lang="ar-Latn" class="tr Latn" style="color: #888;">ʾenne</span>
+|-
+! style="background: #c5e8c5;" | tamlayan
+| <span class="Arab" lang="ar" style="font-size:125%;">أَنٍّ</span><br /><span lang="ar-Latn" class="tr Latn" style="color: #888;">ʾennin</span>
+| [[الأن|<span class="Arab" lang="ar" style="font-size:125%;color:#202122;">الْأَنِّ</span>]]<br /><span lang="ar-Latn" class="tr Latn" style="color: #888;">el-ʾenni</span>
+| <span class="Arab" lang="ar" style="font-size:125%;">أَنِّ</span><br /><span lang="ar-Latn" class="tr Latn" style="color: #888;">ʾenni</span>
+|}
+</div>
+</div>[[Category:Arapça basit munsarıf tekil adlar]]
+
+===Kaynakça===
+* Tropper, Josef (2003) , “Sekundäres wortanlautendes Alif im Arabischen”, Kogan, Leonid, editör, Studia Semitica (Orientalia: Papers of the Oriental Institute; III), Moskova, [[Special:BookSources/978-5-7281-0690-6|→ISBN]]<nowiki>.</nowiki>

@@ -1,0 +1,27 @@
+==فارسی==
+
+حِسابداری
+
+===اسم===
+# عمل منظم نگه داشتن [[حساب‌]]ها.
+# (اسم) شعبه‌ای در یک [[اداره]] یا [[مؤسسه]] که به حساب‌های آن اداره یا [[بنگاه]] رسیدگی می‌کند.
+#حسابداری یک سیستم است که در آن فرایند جمع آوری، طبقه بندی، ثبت، خلاصه کردن اطلاعات و تهیه گزارش های مالی و صورتهای حسابداری در شکل های مختلف صورت می گیرد.
+
+====برگردان‌ها====
+{|style="border: 1px solid black;" class="notheme mw-collapsible mw-collapsed" width=100% cellpadding="3" cellspacing="1"
+|-
+! style="background:#F8F9FA; text-align: right" colspan="9"| ترجمه
+|-
+|
+*انگلیسی: [[accounting]]
+فرانسوی: [[La comptabilité]]|}
+
+<table class="infobox sisterproject" style="border:1px solid #aaa; background-color:#f9f9f9; font-size: 80%">
+<tr>
+<td class="mbox-image">[[Image:Wikipedia-logo-v2-fa.svg|30px|link=w:Special:Search/حسابداری|جستجو در ویکی‌پدیا]]</td>
+<td class="mbox-text" style=""> [[ویکی‌پدیا]] مقاله‌ای دربارهٔ [[w:حسابداری|حسابداری]] دارد </td>
+
+</tr>
+</table>
+
+[[رده:اسم‌های فارسی]]

@@ -1,0 +1,65 @@
+== {{-it-}} ==
+{{-agg-|it}}
+{{Pn}} ''m sing''
+{{Tabs|giunto|giunti|giunta|giunte}}
+# {{Nodef|it}}
+
+{{-sost-|it}}
+{{Pn|w}} ''m'' ''sing'' {{Linkp|giunti}}
+# {{Term|architettura|it}} {{Term|edilizia|it}} [[sottile]] [[interstizio]] tra un [[elemento]] di [[costruzione]] e l'[[altro]]
+# {{Term|meccanica|it}} {{Term|tecnologia|it}} {{Term|ingegneria|it}} [[dispositivo]] in [[grado]] di [[rendere]] [[solidali]] tra [[loro]] [[due]] [[estremità]] d'[[albero]] in [[modo]] [[tale]] che l'[[uno]] possa [[trasmettere]] un [[movimento]] [[torcente]] all'[[altro]]
+
+{{-verb form-|it}}
+{{Pn}}
+#participio passato  maschile singolare  di [[giungere]]
+
+{{-sill-}} 
+; giùn | to
+
+{{-pron-}}
+{{IPA|/ˈd͡ʒunto/}}
+
+{{-etim-}}
+participio passato di giungere
+
+{{-sin-}}
+*[[venuto]], [[arrivato]], [[capitato]], [[pervenuto]], [[sopraggiunto]]
+*[[unito]], [[collegato]], [[congiunto]], [[accostato]], [[intrecciato]]
+*''(tecnologia)'' organo di collegamento, [[raccordo]], [[giuntura]], [[accoppiamento]]
+
+{{-ant-}}
+*[[partito]], [[andato]], [[allontanato]]
+*[[diviso]], [[staccato]], [[separato]], [[disgiunto]]
+
+{{-trad-}}
+{{Trad1|[[unito]], [[congiunto]]}}
+:*{{en}}: [[clasped, [[joined]]
+{{Trad2}}
+
+{{Trad1|[[arrivato]], [[pervenuto]]}}
+:*{{en}}: [[arrived]]
+{{Trad2}}
+
+{{Trad1|{{Term|meccanica|it}}}}
+:*{{en}}: [[joint]], [[coupling]]
+{{Trad2}}
+
+{{Trad1|participio passato di [[giungere]]}}
+:*{{en}}: [[clasped]]
+{{Trad2}}
+
+{{-ref-}}
+*[http://www.garzantilinguistica.it/ricerca/?q=giunto]]Lemmario italiano, Garzanti linguistica edizione on line
+* {{Fonte|trec}}
+* {{Fonte|hoep}}
+* {{Fonte|sape}}
+* {{Fonte|gar}}
+* {{Fonte|sabco}}
+* {{Fonte|sin-co}}
+* {{Fonte|dizit}}
+* {{Fonte|dem}}
+* {{Fonte|rep}}
+* {{Fonte|writen}}
+
+==Altri progetti==
+{{Interprogetto|w}}

@@ -1,0 +1,29 @@
+{{-gl-}}
+{{etim|do {{gl|latín}} ''{{gl|servitium}}'', '{{gl|escravitude}}', '{{gl|servidume}}'.}}
+{{pronuncia|/seɾ,ˈβi,θʊ/}}.
+{{-substf-|gl}}
+'''{{PAGENAME}}''' {{VarN|serviz|o|os}}
+# {{Gl|acción}} e {{gl|efecto}} de {{gl|servir}}.
+#*{{exemplo|Prestar un <u>servizo</u>. Restaurante de <u>servizo</u> rápido}}.
+# {{Gl|conxunto}} de {{gl|servente}}s dunha {{gl|casa}} ou dunha {{gl|institución}}.
+#*{{exemplo|O novo director do hotel deu instrucciós ao <u>servizo</u>}}.
+# {{Gl|favor}} que {{gl|ser|se}} lle {{gl|facer|fai}} a {{gl|alguén}}.
+#*{{exemplo|Os meus sobriños sempre están ao meu <u>servizo</u>}}.
+# {{Gl|organización}} e {{gl|persoal}} {{gl|destinar|destinados}} a {{gl|coidar}} os {{gl|interés|intereses}} ou a {{gl|satisfacer}} as {{gl|necesidade}}s do {{gl|público}} ou {{gl|de|dalgunha}} {{gl|entidade}} {{gl|oficial}} ou {{gl|privado|privada}}.
+#*{{exemplo|<u>Servizo</u> de correos. <u>Servizo</u> de incendios. Morreu en acto de <u>sevizo</u>.}}
+# {{Gl|conxunto}} de {{gl|obxecto}}s {{gl|utilizar|utilizados}} para {{gl|servir}} unha {{gl|mesa}}. 
+#*{{exemplo|Hoxe vai vir o coselleiro, hai que poñer un <u>servizo</u> de porcelana de Sargadelos}}.
+# {{Gl|conxunto}} de {{gl|utensilio}}s que se lle {{gl|poñer|pon}} a {{gl|cada}} {{gl|comensal}} na mesa.
+#*{{exemplo|Hai que poñer un <u>servizo</u> máis, que chegou un novo convidado}}.
+# {{Gl|peza}} dunha {{gl|casa}} ou dun {{gl|local}} {{gl|onde}} {{gl|estar|está}} o {{gl|inodoro}}. 
+# {{Gl|paso}} de {{gl|pé}} ou de {{gl|carro}} polo que se {{gl|acceder|accede}} a unha {{gl|leira}}.
+#*{{exemplo|O prado ten o <u<>servizo</u> por unha corredoira}}.
+# ({{sem|Deportes}}) {{Gl|saque}}, en {{gl|deporte}}s como o {{gl|fútbol}}, o {{gl|tenis}} ou o {{gl|voleibol}}, etc.
+#*{{exemplo|O extremo fixo o <u>servizo</u> do saque de esquina. O tenista fallou o tamén o segundo <u>servizo</u>}}.
+# ({{sem|Relixión}}) {{Gl|celebración}} {{gl|relixioso|relixiosa}}.
+#*{{exemplo|O <u>servizo</u> fúnebre tivo lugar na catedral}}.
+{{-obs-}}
+# {{Gl|en|na}} 6ª {{gl|acepción}} {{gl|seu}} '''sinónimo''' {{gl|ser|é}} {{gl|cuberto}}.
+# {{Gl|en|na}} 7ª {{gl|acepción}} {{gl|ser|son}} '''sinónimos''' {{gl|retrete}} e {{gl|váter}}.
+{{-relac-}}
+{{gl|dar servizo}}, {{gl|en servizo}}, {{gl|estar ao servizo de alguén}}, {{gl|de servizo}}, {{gl|facerlle un flaco servizo a alguén}}, {{gl|folla de servizos}}, {{gl|fóra de servizo}}, {{gl|romperlle o servizo a alguén}}, {{gl|servizo a domicilio}}, {{gl|servizo activo}}, {{gl|servizo de intelixencia}}, {{gl|servizo de mantemento}}, {{gl|servizo de mensaxes curtas}}, {{gl|servizo discrecional}}, {{gl|servizo doméstico}}, {{gl|servizo militar}}, {{gl|servizo público}}, {{gl|servicio secreto}}, {{gl|servizos mínimos}}, {{gl|servizos sanitarios}}.

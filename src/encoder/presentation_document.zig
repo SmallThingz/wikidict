@@ -274,6 +274,86 @@ pub const preparePageTocSourceWithMissingAlloc = compiler.preparePageTocSourceWi
 pub const preparePageExternalLinksWithMissingAlloc = compiler.preparePageExternalLinksWithMissingAlloc;
 pub const preparePageExternalLinksAlloc = compiler.preparePageExternalLinksAlloc;
 
+// Build-only failure evidence. Copy the bounded window before the page arena
+// unwinds; no borrowed page bytes, allocation, or reader fields are retained.
+pub const RejectedFieldCapture = struct {
+    pub const Field = enum { parsed_display_run, heading, image_file, image_alt, image_tooltip, internal_target, external_target, template };
+    pub const Location = struct {
+        field: Field,
+        span_start: ?usize = null,
+        span_end: ?usize = null,
+        span_kind: ?ir.InlineKind = null,
+        provenance: ?compiler.Provenance = null,
+    };
+    pub const Snapshot = struct {
+        scope: []const u8 = "first observed semantic validation rejection in this page; source offset unavailable after projection",
+        error_name: []const u8,
+        reason: []const u8,
+        location: Location,
+        field_bytes: usize,
+        rejected_field_offset: ?usize,
+        window_start: usize,
+        window_hex: []const u8,
+        truncated: bool,
+    };
+    error_value: ?anyerror = null,
+    reason: []const u8 = "",
+    location: Location = .{ .field = .parsed_display_run },
+    field_bytes: usize = 0,
+    rejected_field_offset: ?usize = null,
+    window_start: usize = 0,
+    window_bytes: usize = 0,
+    // Unread until record writes every byte in the exposed prefix.
+    window_hex: [512]u8 = undefined,
+
+    fn record(self: *@This(), err: anyerror, reason: []const u8, text: []const u8, offset: ?usize, location: Location) void {
+        if (self.error_value != null) return;
+        self.reason = reason;
+        self.location = location;
+        self.field_bytes = text.len;
+        self.rejected_field_offset = offset;
+        const at = @min(offset orelse 0, text.len);
+        self.window_start = at -| 64;
+        self.window_bytes = @min(text.len - self.window_start, self.window_hex.len / 2);
+        const hex = "0123456789abcdef";
+        for (text[self.window_start..][0..self.window_bytes], 0..) |byte, i| {
+            self.window_hex[i * 2] = hex[byte >> 4];
+            self.window_hex[i * 2 + 1] = hex[byte & 15];
+        }
+        self.error_value = err;
+    }
+    pub fn snapshot(self: *const @This(), err: anyerror) ?Snapshot {
+        if (self.error_value == null or self.error_value.? != err) return null;
+        return .{ .error_name = @errorName(err), .reason = self.reason, .location = self.location,
+            .field_bytes = self.field_bytes, .rejected_field_offset = self.rejected_field_offset,
+            .window_start = self.window_start, .window_hex = self.window_hex[0 .. self.window_bytes * 2],
+            .truncated = self.window_start != 0 or self.window_bytes != self.field_bytes };
+    }
+    pub const Scope = struct {
+        previous: ?*RejectedFieldCapture,
+        pub fn deinit(self: @This()) void { rejected_field_capture = self.previous; }
+    };
+    pub fn suspendCapture() Scope {
+        const previous = rejected_field_capture;
+        rejected_field_capture = null;
+        return .{ .previous = previous };
+    }
+    pub fn begin(self: *@This()) Scope {
+        const previous = rejected_field_capture;
+        self.* = .{};
+        rejected_field_capture = self;
+        return .{ .previous = previous };
+    }
+};
+threadlocal var rejected_field_capture: ?*RejectedFieldCapture = null;
+pub fn rejectedFieldCaptureActive() bool { return rejected_field_capture != null; }
+pub fn rejectedFieldSnapshot(err: anyerror) ?RejectedFieldCapture.Snapshot {
+    return if (rejected_field_capture) |capture| capture.snapshot(err) else null;
+}
+fn recordRejectedField(err: anyerror, reason: []const u8, text: []const u8, offset: ?usize, location: RejectedFieldCapture.Location) void {
+    if (rejected_field_capture) |capture| capture.record(err, reason, text, offset, location);
+}
+
 fn requireCompiledText(text: []const u8) !void {
     return compiler.requireCompiledText(text);
 }
@@ -282,18 +362,24 @@ fn requireCompiledSpans(a: A, spans: []const compiler.Span) !void {
     try requireCompiledText(try compiler.plainText(a, spans));
 }
 
-fn validateText(text: []const u8, report: ?*Fallbacks) !void {
+fn validateField(text: []const u8, report: ?*Fallbacks, location: RejectedFieldCapture.Location) !void {
     requireCompiledText(text) catch |err| {
         if (report) |fallback| fallback.literal_markup = true;
-        // Reported diagnostics do not authorize raw parsed source in a record.
-        // Protected/entity literals are excluded by validateSpans provenance.
+        if (rejected_field_capture != null) if (compiler.compiledTextRejection(text)) |rejection|
+            recordRejectedField(err, @tagName(rejection.reason), text, rejection.offset, location);
         return err;
     };
 }
+fn validateText(text: []const u8, report: ?*Fallbacks) !void {
+    return validateField(text, report, .{ .field = .heading });
+}
 
 fn validateSpans(a: A, spans: []const compiler.Span, report: ?*Fallbacks) !void {
-    if (report == null) for (spans) |span| {
-        if (span.kind == .template) return error.UncompiledTemplate;
+    if (report == null) for (spans, 0..) |span, index| {
+        if (span.kind == .template) {
+            recordRejectedField(error.UncompiledTemplate, "uncompiled_template", span.target, null, .{ .field = .template, .span_start = index, .span_end = index + 1, .span_kind = span.kind, .provenance = span.provenance });
+            return error.UncompiledTemplate;
+        }
     };
     if (report) |fallback| {
         // A missing template is a normal red link in MediaWiki. Never serialize
@@ -308,33 +394,44 @@ fn validateSpans(a: A, spans: []const compiler.Span, report: ?*Fallbacks) !void 
     // Check after template presentation conversion as well as ordinary actions.
     // Display protected/code provenance never authorizes an action target.
     // The explicit parameter exception revalidates its complete borrowed source token.
-    for (spans) |span| {
+    for (spans, 0..) |span, index| {
+        const location: RejectedFieldCapture.Location = .{ .field = .image_file, .span_start = index, .span_end = index + 1, .span_kind = span.kind, .provenance = span.provenance };
         if (span.generated_link != null and !compiler.hasCompiledGeneratedLinkTarget(span)) return error.InvalidLiteralProvenance;
         if (span.image) |image| {
-            try validateText(image.file, report);
+            try validateField(image.file, report, location);
             if (!span.image_fields_compiled) {
-                if (image.alt) |value| try validateText(value, report);
-                if (image.tooltip) |value| try validateText(value, report);
+                if (image.alt) |value| { var field = location; field.field = .image_alt; try validateField(value, report, field); }
+                if (image.tooltip) |value| { var field = location; field.field = .image_tooltip; try validateField(value, report, field); }
             }
         }
         if (span.kind == .external_link and compiler.unresolvedExternalActionTarget(span.target) and
             !compiler.hasCompiledExternalLiteralParameterTarget(span))
+        {
+            var field = location; field.field = .external_target;
+            recordRejectedField(error.UncompiledTemplate, "unresolved_action_target", span.target, null, field);
             return error.UncompiledTemplate;
+        }
         if (span.kind == .link and compiler.unresolvedActionTarget(span.target) and !compiler.hasCompiledGeneratedLinkTarget(span))
+        {
+            var field = location; field.field = .internal_target;
+            recordRejectedField(error.UncompiledTemplate, "unresolved_action_target", span.target, null, field);
             return error.UncompiledTemplate;
+        }
     }
     // Only explicitly generated diagnostic spans may receive boundary spaces.
     // Authored text and protected/entity provenance are never rewritten here.
     try compiler.separateGeneratedDiagnosticBoundaries(a, @constCast(spans));
     var parsed: std.ArrayList(u8) = .empty;
     defer parsed.deinit(a);
-    for (spans) |span| {
+    var run_start: usize = 0;
+    for (spans, 0..) |span, index| {
         if (span.provenance != .parsed or span.image != null) {
-            try validateText(parsed.items, report);
+            try validateField(parsed.items, report, .{ .field = .parsed_display_run, .span_start = run_start, .span_end = index, .span_kind = if (index == run_start + 1) spans[run_start].kind else null, .provenance = .parsed });
             parsed.clearRetainingCapacity();
+            run_start = index + 1;
         } else if (span.kind == .line_break) try parsed.append(a, '\n') else try parsed.appendSlice(a, span.text);
     }
-    try validateText(parsed.items, report);
+    try validateField(parsed.items, report, .{ .field = .parsed_display_run, .span_start = run_start, .span_end = spans.len, .span_kind = if (spans.len == run_start + 1) spans[run_start].kind else null, .provenance = .parsed });
 }
 
 pub const DisplayTitle = struct {
@@ -350,6 +447,7 @@ pub const HeadingObservation = struct {
     items: []const HeadingAnchor = &.{},
     page_html_openings: []const usize = &.{},
     page_wiki_openings: []const usize = &.{},
+    page_wiki_rule_openings: []const usize = &.{},
     // Opt-in evidence only; ordinary observation grants no wiki-root proof.
     page_wiki_scope_complete: bool = false,
     page_html_source: ?[]const u8 = null,
@@ -372,6 +470,7 @@ const Work = struct {
     sections: []const WorkSection,
     page_html_openings: []const usize = &.{},
     page_wiki_openings: []const usize = &.{},
+    page_wiki_rule_openings: []const usize = &.{},
     references: []const compiler.Reference,
     media: []const compiler.media_types.Media,
     media_caption_spans: []const []const compiler.Span,
@@ -615,9 +714,14 @@ fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, so
     defer html_openings.deinit(a);
     var wiki_openings: std.ArrayList(usize) = .empty;
     defer wiki_openings.deinit(a);
+    var wiki_rule_openings: std.ArrayList(usize) = .empty;
+    defer wiki_rule_openings.deinit(a);
     var renderer: compiler.Renderer = .{ .a = a, .context = .{ .title = title, .language = if (language.len == 0) "English" else language, .link_trail = link_trail, .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .image_options = image_options, .table_styles = table_styles, .poem_phase = poem_phase } };
     if (fragments.len == 0) renderer.page_html_heading_openings = &html_openings;
-    if (fragments.len == 0 and observe_wiki_scope) renderer.page_wiki_heading_openings = &wiki_openings;
+    if (fragments.len == 0 and observe_wiki_scope) {
+        renderer.page_wiki_heading_openings = &wiki_openings;
+        renderer.page_wiki_rule_openings = &wiki_rule_openings;
+    }
     renderer.context.citations = reference_context.citations;
     renderer.context.content_conversion = try compiler.pageContentConversion(a, source.bytes, .{ .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .content_conversion = reference_context.content_conversion });
     renderer.context.external_links_prepared = reference_context.citations != null;
@@ -644,7 +748,7 @@ fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, so
         renderer.heading_source = null;
         try builder.consume(try rendered.toOwnedSlice(a));
     }
-    return .{ .sections = try builder.sections.toOwnedSlice(a), .page_html_openings = try html_openings.toOwnedSlice(a), .page_wiki_openings = try wiki_openings.toOwnedSlice(a), .references = try renderer.finishReferences(), .media = try renderer.media.toOwnedSlice(a), .media_caption_spans = try renderer.media_caption_spans.toOwnedSlice(a), .rendered_templates = renderer.rendered_templates, .unresolved_templates = renderer.unresolved_templates, .fallbacks = renderer.fallbacks };
+    return .{ .sections = try builder.sections.toOwnedSlice(a), .page_html_openings = try html_openings.toOwnedSlice(a), .page_wiki_openings = try wiki_openings.toOwnedSlice(a), .page_wiki_rule_openings = try wiki_rule_openings.toOwnedSlice(a), .references = try renderer.finishReferences(), .media = try renderer.media.toOwnedSlice(a), .media_caption_spans = try renderer.media_caption_spans.toOwnedSlice(a), .rendered_templates = renderer.rendered_templates, .unresolved_templates = renderer.unresolved_templates, .fallbacks = renderer.fallbacks };
 }
 
 pub fn observeHeadingAnchorsAlloc(a: A, title: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase) !HeadingObservation {
@@ -665,7 +769,7 @@ pub fn observeHeadingAnchorsWithWikiScopeAlloc(a: A, title: []const u8, source: 
         if (section.is_heading) try observe.add(section.heading_source_offset, section.heading_authored_id, section.title_spans);
         try walk.blocks(&observe, section.blocks, 0);
     }
-    return .{ .items = try result.toOwnedSlice(a), .page_html_openings = work.page_html_openings, .page_wiki_openings = work.page_wiki_openings, .page_wiki_scope_complete = observe_wiki_scope and !work.fallbacks.render_limit, .page_html_source = source.bytes };
+    return .{ .items = try result.toOwnedSlice(a), .page_html_openings = work.page_html_openings, .page_wiki_openings = work.page_wiki_openings, .page_wiki_rule_openings = work.page_wiki_rule_openings, .page_wiki_scope_complete = observe_wiki_scope and !work.fallbacks.render_limit, .page_html_source = source.bytes };
 }
 
 fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, fallbacks: ?*Fallbacks, poem_phase: ?*const PoemPhase) ![]const compiler.Span {
@@ -12211,4 +12315,112 @@ test "retained EO Eimer preserves complete body missing links source URL actions
     try std.testing.expect(report.missing_template and !report.rejected_external_target and !report.render_limit);
     reference_report.missing_template = true;
     try std.testing.expectEqualDeep(reference_report, report);
+}
+
+test "rejected field capture owns bounded bytes preserves first failure and restores nested scope" {
+    try std.testing.expect(!rejectedFieldCaptureActive());
+    var outer: RejectedFieldCapture = .{};
+    const outer_scope = outer.begin(); defer outer_scope.deinit();
+    var text: [600]u8 = @splat('x');
+    text[300] = '['; text[301] = '['; text[302] = 0xff;
+    try std.testing.expectError(error.UncompiledPresentation, validateField(&text, null, .{ .field = .heading }));
+    const first = outer.snapshot(error.UncompiledPresentation) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("wiki_delimiter", first.reason);
+    try std.testing.expectEqual(@as(?usize, 300), first.rejected_field_offset);
+    try std.testing.expectEqual(@as(usize, 236), first.window_start);
+    try std.testing.expectEqual(@as(usize, 512), first.window_hex.len);
+    try std.testing.expectEqualStrings("5b5bff", first.window_hex[128..134]);
+    try std.testing.expect(first.truncated and first.field_bytes == 600);
+    @memset(&text, 'y');
+    try std.testing.expectEqualStrings("5b5bff", first.window_hex[128..134]);
+    try std.testing.expectError(error.UncompiledPresentation, validateField("<b>later</b>", null, .{ .field = .image_alt }));
+    try std.testing.expectEqualDeep(first, outer.snapshot(error.UncompiledPresentation).?);
+    try std.testing.expect(outer.snapshot(error.OutOfMemory) == null);
+    {
+        var nested: RejectedFieldCapture = .{};
+        const nested_scope = nested.begin(); defer nested_scope.deinit();
+        try std.testing.expect(rejectedFieldSnapshot(error.UncompiledPresentation) == null);
+        try std.testing.expectError(error.UncompiledPresentation, validateField("<b>nested</b>", null, .{ .field = .image_tooltip }));
+        try std.testing.expectEqualStrings("html_token", rejectedFieldSnapshot(error.UncompiledPresentation).?.reason);
+    }
+    {
+        const suspended = RejectedFieldCapture.suspendCapture(); defer suspended.deinit();
+        try std.testing.expect(!rejectedFieldCaptureActive());
+        try std.testing.expectError(error.UncompiledPresentation, validateField("[[optional proof", null, .{ .field = .heading }));
+        try std.testing.expect(rejectedFieldSnapshot(error.UncompiledPresentation) == null);
+    }
+    try std.testing.expectEqualDeep(first, rejectedFieldSnapshot(error.UncompiledPresentation).?);
+}
+
+test "rejected field capture retains parsed run ranges action provenance and allocation failure" {
+    const a = std.testing.allocator;
+    var capture: RejectedFieldCapture = .{};
+    {
+        const scope = capture.begin(); defer scope.deinit();
+        const spans = [_]compiler.Span{
+            .{ .text = "safe", .provenance = .protected_literal },
+            .{ .text = "[", .flags = .{ .bold = true } },
+            .{ .text = "[bad", .flags = .{ .italic = true } },
+        };
+        var report: Fallbacks = .{};
+        try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &spans, &report));
+        const evidence = capture.snapshot(error.UncompiledPresentation) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(evidence.location.field == .parsed_display_run and evidence.location.provenance.? == .parsed);
+        try std.testing.expectEqual(@as(?usize, 1), evidence.location.span_start);
+        try std.testing.expectEqual(@as(?usize, 3), evidence.location.span_end);
+        try std.testing.expect(evidence.location.span_kind == null and report.literal_markup);
+        try std.testing.expectEqualStrings("5b5b626164", evidence.window_hex);
+    }
+    {
+        const scope = capture.begin(); defer scope.deinit();
+        const spans = [_]compiler.Span{.{ .kind = .link, .text = "label", .target = "{{missing}}", .provenance = .protected_literal }};
+        try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &spans, null));
+        const evidence = capture.snapshot(error.UncompiledTemplate) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(evidence.location.field == .internal_target and evidence.location.provenance.? == .protected_literal);
+        try std.testing.expect(evidence.location.span_kind.? == .link and evidence.rejected_field_offset == null);
+    }
+    {
+        const scope = capture.begin(); defer scope.deinit();
+        const literal = [_]compiler.Span{.{ .text = "[[literal]]", .provenance = .entity_literal }};
+        try validateSpans(a, &literal, null);
+        try std.testing.expect(capture.error_value == null);
+        var failing = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
+        const parsed = [_]compiler.Span{.{ .text = "ordinary" }};
+        try std.testing.expectError(error.OutOfMemory, validateSpans(failing.allocator(), &parsed, null));
+        try std.testing.expect(capture.error_value == null);
+        try std.testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+    }
+    try std.testing.expect(!rejectedFieldCaptureActive());
+}
+
+test "wiki boundary observation records actual root rules separately from nested and opaque rules" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "missing\n----\n==English==\n# root\n";
+    const ranges = [_]missing_dependency.Range{.{ .start = 0, .end = 7, .occurrence = 1 }};
+    const tracked: MissingText = .{ .bytes = source, .ranges = &ranges, .unknown = true };
+    const references = try referenceDefinitionsAlloc(a, source);
+    const observed = try observeHeadingAnchorsWithWikiScopeAlloc(a, "rules", tracked, .{}, null, null, null, references, null, true);
+    try std.testing.expect(observed.page_wiki_scope_complete);
+    try std.testing.expectEqualSlices(usize, &.{8}, observed.page_wiki_rule_openings);
+    try std.testing.expectEqualSlices(usize, &.{13}, observed.page_wiki_openings);
+    try std.testing.expect(tracked.unknown);
+    try std.testing.expectEqualDeep(ranges[0], tracked.ranges[0]);
+    const ordinary = try observeHeadingAnchorsAlloc(a, "rules", tracked, .{}, null, null, null, references, null);
+    try std.testing.expect(!ordinary.page_wiki_scope_complete);
+    try std.testing.expectEqual(@as(usize, 0), ordinary.page_wiki_rule_openings.len);
+    for ([_][]const u8{
+        "<nowiki>\n----\n==English==\n# local\n</nowiki>\n",
+        "<pre>\n----\n==English==\n# local\n</pre>\n",
+        "<!--\n----\n==English==\n# local\n-->\n",
+        "<div>\n----\n==English==\n# local\n</div>\n",
+        "<ref>\n----\n==English==\n# local\n</ref>\n<references/>\n",
+        "{|\n|\n----\n==English==\n# local\n|}\n",
+    }) |nested| {
+        const nested_references = try referenceDefinitionsAlloc(a, nested);
+        const local = try observeHeadingAnchorsWithWikiScopeAlloc(a, "rules", .{ .bytes = nested }, .{}, null, null, null, nested_references, null, true);
+        try std.testing.expect(local.page_wiki_scope_complete);
+        try std.testing.expectEqual(@as(usize, 0), local.page_wiki_rule_openings.len);
+        try std.testing.expectEqual(@as(usize, 0), local.page_wiki_openings.len);
+    }
 }

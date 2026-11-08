@@ -88,6 +88,10 @@ tools/testdata/it-vigilia/raw.wikitext -whitespace
 # Preserve the exact retained FA progressive source and Common.css bytes.
 src/encoder/testdata/fa-progressive/* -whitespace
 
+# Retained MG115 original source bytes are the full-page oracle.
+tools/testdata/mg-tope/raw.wikitext -whitespace
+tools/testdata/mg-tope/expanded.wikitext -whitespace
+
 # Preserve exact retained BN longingly source and genuine stylesheet bytes.
 src/encoder/testdata/bn-longingly/* -whitespace
 
@@ -152,3 +156,64 @@ tools/testdata/el-katasvestir110/page.expanded.wikitext -whitespace
 # Exact retained DE113 source/metadata fixture bytes.
 tools/testdata/de-saint-vincent113/language-names.tsv -whitespace
 tools/testdata/de-saint-vincent113/page.expanded.wikitext -whitespace
+tools/testdata/tr-an103/* -whitespace
+
+# Preserve exact retained IT105 source and metadata bytes.
+tools/testdata/it-giunto105/raw.wikitext -whitespace
+tools/testdata/it-giunto105/expanded.wikitext -whitespace
+tools/testdata/it-giunto105/index-row.tsv -whitespace
+tools/testdata/it-giunto105/language-names.tsv -whitespace
+tools/testdata/fr-abbreviations116/raw.wikitext -text
+tools/testdata/fr-abbreviations116/expanded.wikitext -text
+tools/testdata/fr-abbreviations116/index-row.tsv -text
+tools/testdata/fr-abbreviations116/common.css -text
+tools/testdata/fr-abbreviations116/namespace-registry.tsv -text
+tools/testdata/fr-abbreviations116/interwiki-map.tsv -text
+tools/testdata/fr-abbreviations116/behavior-switches.tsv -text
+tools/testdata/fr-abbreviations116/image-options.tsv -text
+tools/testdata/fr-abbreviations116/namespace-siteinfo.raw.json -text
+tools/testdata/fr-abbreviations116/language-registry.tsv -text
+tools/testdata/fr-abbreviations116/language-names.tsv -text
+tools/testdata/fr-abbreviations116/first-cells.txt -text
+tools/testdata/fr-abbreviations116/expanded.wikitext -whitespace
+tools/testdata/fr-abbreviations116/language-names.tsv -whitespace
+tools/testdata/fr-abbreviations116/raw.wikitext -whitespace
+tools/testdata/ru-denaske114/common.css -whitespace
+tools/testdata/ru-denaske114/page.expanded.wikitext -whitespace
+tools/testdata/ru-denaske114/page.raw.wikitext -whitespace
+tools/testdata/th-kip-role/language-names.tsv -whitespace
+tools/testdata/th-kip-role/module-272817.lua -whitespace
+tools/testdata/th-kip-role/module-324680.lua -whitespace
+tools/testdata/th-kip-role/module-36044.lua -whitespace
+tools/testdata/tr-an103/an.expanded.wikitext -whitespace
+tools/testdata/tr-an103/an.raw.wikitext -whitespace
+tools/testdata/ms-tooth124/raw.wikitext -whitespace
+tools/testdata/ms-tooth124/expanded.wikitext -whitespace
+tools/testdata/fa-hesabdari125/raw.wikitext -whitespace
+tools/testdata/fa-hesabdari125/expanded.wikitext -whitespace
+
+# Exact retained TE122 physical whitespace.
+tools/testdata/te-muttadi122/raw.wikitext -whitespace
+tools/testdata/te-muttadi122/expanded.wikitext -whitespace
+
+tools/testdata/gl-servizo-owner124/* -whitespace
+
+# Exact upstream AZ module snapshots preserve authored whitespace.
+tools/testdata/az-vladenie/modules/58057.lua -whitespace
+tools/testdata/az-vladenie/modules/58059.lua -whitespace
+tools/testdata/az-vladenie/modules/58067.lua -whitespace
+tools/testdata/az-vladenie/modules/58184.lua -whitespace
+tools/testdata/az-vladenie/modules/58347.lua -whitespace
+tools/testdata/az-vladenie/modules/58358.lua -whitespace
+tools/testdata/az-vladenie/modules/58368.lua -whitespace
+tools/testdata/az-vladenie/modules/69114.lua -whitespace
+
+# Retained registry columns and original captured page whitespace.
+tools/testdata/az-vladenie/language-names.tsv -whitespace
+tools/testdata/az-vladenie/page.expanded.wikitext -whitespace
+tools/testdata/az-vladenie/page.raw.wikitext -whitespace
+tools/testdata/no-bibringe/page.expanded.wikitext -whitespace
+tools/testdata/uz-ipak125/31257.lua -whitespace
+tools/testdata/uz-ipak125/interface-messages.tsv -whitespace
+tools/testdata/uz-ipak125/language-fallbacks.tsv -whitespace
+tools/testdata/uz-ipak125/original-interface-messages.tsv -whitespace

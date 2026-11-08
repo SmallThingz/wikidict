@@ -1,0 +1,35 @@
+= {{-uz-}} =
+== Morfologik va sintaktik xususiyatlari ==
+'''i-pak'''
+[[File:Lao Textile Museum 5.jpg|thumb|Ipak ip]]
+
+[[File:Length of woven silk MET TP208.jpg|thumb|Toʻqilgan ipak, golland yoki ingliz, detal (MET, 1979.387.1)]]
+
+== Aytilishi ==
+
+== Etimologiyasi ==
+{{OʻTEL|I|IPAK 'pilladan olinadigan ingichka pishiq mayin tola'. Xonatlas toza i p a k d a n toʻhiladi. Bu soʻz ip otidan kichraytirish maʼnosini ifodalovchi -{ä)k qoʻshimchasi bilan hosil qilingan, shunga koʻra asli ’oʻta ingichka tola’ maʼnosini bildirgan, ’pilla tolasi’ maʼnosi shu maʼnodan oʻsib chiqqan: ip + äk <nowiki>=</nowiki> ipäk.}}
+
+== Maʼnoviy xususiyatlari ==
+=== Maʼnosi ===
+'''1''' Pilla qurti chiqargan juda ingichka, pishiq, yaltiroq, tovlanib turadigan muloyim tola va undan yigirilgan ip. {{misol|Xom {{ajrat|ipak}}. Pishitilgan {{ajrat|ipak}}.}} {{misol|{{ajrat|Ipak}} tolalari sifatini yanada yaxshilash borasida olib borilgan izlanishlar ijobiy yakunlandi.|[[w:Gazetadan|Gazetadan.]]}} {{misol|Adolat qopchigʻini ochdi. Unda angishvonadan tortib, ip, {{ajrat|ipak}}largacha bor edi.|[[w:I. Rahim|I. Rahim]]|Chin muhabbat.}}
+
+'''2''' Shunday iplardan toʻqilgan mato, shoyi va undan tikilgan kiyim yoki buyum. {{misol|{{ajrat|Ipak}} gilam. {{ajrat|Ipak}} roʻmol.}} {{misol|Zaynabham tamom {{ajrat|ipak}}larga koʻmilib yasangan, kecha erga tekkan yangi kelinlar suratiga kirgan edi. |[[w:A. Qodiriy|A. Qodiriy]]|Oʻtgan kunlar.}}
+
+'''3''' {{koʻchma|uz}} Muloyim, nozik. {{misol|Botirali xotinining qalin {{ajrat|ipak}} sochini silab gapirdi. |[[w:H. Gʻulom|H. Gʻulom]]|Mashʼal.}}
+
+=== Sinonimlari ===
+
+=== Antonimlari ===
+
+{{OʻTIL|ИПАК}}
+== Tarjimalari ==
+
+{{Tarjimalar
+|krc=[[дарий]]
+}}
+{{Tarjimalar
+|tur = keng
+|ru = <b>[[ipak]]</b></br>
+[[шёлк]]; // [[шёлковый]]; {{tarjmisoli|xom ~ }} шёлк-сырец; {{tarjmisoli|~ roʻmol }} шёлковый платок; {{tarjmisoli|~dek, ~day }} 1) похожий на шёлк, шелковистый; мягкий, как шёлк; {{tarjmisoli|~ day mayin paxta }} хлопок мягкий, словно шёлк; 2) {{izoh|перен}}. мягкий нравом; нежный, как шёлк; {{tarjmisoli|~ oyim }} женщина кроткого нрава; {{tarjmisoli|~ qurti }} шелковичный червь, гусеница шелкопряда; шелкопряд.</br>
+}}

@@ -897,6 +897,16 @@ fn parseInlineLinkAtPair(input: []const u8, start: usize, pair: syntax.Pair, lin
     var label = if (raw_label.len == 0) target else raw_label;
     var close_end = pair.end;
     var restored_label_close = false;
+    // Parser::handleInternalLinks2 requires a nonempty alternate field. When
+    // the apparent empty field is immediately followed by a third raw ], that
+    // first ] is the label and the following two bytes close the link. This is
+    // distinct from restoring a bracket to an already nonempty label below.
+    const single_closing_label = pipe != null and raw_label.len == 0 and
+        close_end < input.len and input[close_end] == ']';
+    if (single_closing_label) {
+        label = input[pair.inner_end .. pair.inner_end + 1];
+        close_end += 1;
+    }
     // MediaWiki returns one leading extra ] to a nonempty alternate label
     // containing a phase-visible [. Protected bodies are still raw here.
     if (pipe != null and raw_label.len != 0 and close_end < input.len and input[close_end] == ']' and
@@ -913,7 +923,7 @@ fn parseInlineLinkAtPair(input: []const u8, start: usize, pair: syntax.Pair, lin
         .label = label,
         .trail = input[close_end..trail_end],
         .has_pipe = pipe != null,
-        .empty_label = pipe != null and raw_label.len == 0,
+        .empty_label = pipe != null and raw_label.len == 0 and !single_closing_label,
         .restored_label_close = restored_label_close,
     } };
 }
@@ -1737,4 +1747,53 @@ test "unclosed conditional external URL has bounded literal grammar and explicit
     var too_long: [4097]u8 = @splat('x');
     @memcpy(too_long[0..target.len], target);
     try std.testing.expect(literalUnclosedConditionalUrl(&too_long) == null);
+}
+
+test "raw closing bracket is nonempty piped label before the complete close and trail" {
+    const Case = struct { source: []const u8, target: []const u8, label: []const u8, trail: []const u8, tail: []const u8 };
+    for ([_]Case{
+        .{ .source = "[[A|]]]", .target = "A", .label = "]", .trail = "", .tail = "" },
+        .{ .source = "[[Category:A|]]]", .target = "Category:A", .label = "]", .trail = "", .tail = "" },
+        .{ .source = "[[:Category:A|]]]s", .target = ":Category:A", .label = "]", .trail = "s", .tail = "" },
+        .{ .source = "[[A|]]]] tail", .target = "A", .label = "]", .trail = "", .tail = "] tail" },
+        .{ .source = "[[A|]]]]]", .target = "A", .label = "]", .trail = "", .tail = "]]" },
+    }) |case| {
+        var it: InlineIterator = .{ .input = case.source, .renderer_boundaries = true };
+        const token = it.next() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(token.kind == .link and token.link_has_pipe and !token.link_empty_label);
+        try std.testing.expect(!token.link_label_restored_close);
+        try std.testing.expectEqualStrings(case.target, token.target);
+        try std.testing.expectEqualStrings(case.label, token.text);
+        try std.testing.expectEqualStrings(case.trail, token.trail);
+        try std.testing.expectEqualStrings(case.tail, case.source[it.cursor..]);
+        const close_end = it.cursor - token.trail.len;
+        try std.testing.expectEqualStrings("]]", case.source[close_end - 2 .. close_end]);
+        try std.testing.expectEqual(@intFromPtr(case.source.ptr) + close_end - 3, @intFromPtr(token.text.ptr));
+    }
+}
+
+test "closing bracket label correction preserves empty labels ordinary tails and restored bracket domains" {
+    for ([_][]const u8{ "[[A|]]", "[[A|]]x", "[[Category:A|]]", "[[A|]]&#93;", "[[A|]]<nowiki>]</nowiki>" }) |source| {
+        var it: InlineIterator = .{ .input = source, .renderer_boundaries = true };
+        const token = it.next() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(token.kind == .link and token.link_empty_label and !token.link_label_restored_close);
+        try std.testing.expectEqualStrings(token.target, token.text);
+    }
+    for ([_][]const u8{ "[[A|x]]]", "[[A]]]", "[[A| ]]]" }) |source| {
+        var it: InlineIterator = .{ .input = source, .renderer_boundaries = true };
+        const token = it.next() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(token.kind == .link and !token.link_empty_label and !token.link_label_restored_close);
+        try std.testing.expectEqualStrings("]", source[it.cursor..]);
+    }
+    for ([_][]const u8{ "[[A|[x]]]", "[[A|<i>[x</i>]]]" }) |source| {
+        var it: InlineIterator = .{ .input = source, .renderer_boundaries = true };
+        const token = it.next() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(token.kind == .link and !token.link_empty_label and token.link_label_restored_close);
+        try std.testing.expect(std.mem.endsWith(u8, token.text, "]"));
+        try std.testing.expectEqual(source.len, it.cursor);
+    }
+    for ([_][]const u8{ "[[|]]]", "[[ |]]]", "[[A|]", "[[A|" }) |source| {
+        var it: InlineIterator = .{ .input = source, .renderer_boundaries = true };
+        while (it.next()) |token| try std.testing.expect(token.kind != .link);
+    }
 }

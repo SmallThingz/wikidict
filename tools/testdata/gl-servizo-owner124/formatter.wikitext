@@ -1,0 +1,5 @@
+<h1 style="font-size:185%;background:Gainsboro; border:0px solid DimGray; border-top-width:2px; border-bottom-width:2px; padding:6px; margin-top:10px; margin-botton:10px;clear:both;">{{#switch:{{NAMESPACE}}
+|=[[Categoría:{{ucfirst:{{nomelingua|{{{1}}}}}}}]]<span class="bluetogreen">[[:Categoría:{{ucfirst:{{nomelingua|{{{1}}}}}}}|{{ucfirst:{{nomelingua|{{{1}}}}}}}]]</span>
+|Modelo={{#ifeq:{{FULLPAGENAME}}|Modelo:-lingua-|[[Categoría:Wiktionary:Modelos de sección de lingua|*]]<span class="bluetogreen">[[:Categoría:Entradas por lingua|Lingua]]</span>|[[Categoría:Wiktionary:Modelos de sección de lingua|{{{1}}}]][[Categoría:Wiktionary:Modelos para o {{nomelingua|{{{1}}}}}]]<span class="bluetogreen">[[:Categoría:{{ucfirst:{{nomelingua|{{{1}}}}}}}|{{ucfirst:{{nomelingua|{{{1}}}}}}}]]</span>}}
+|Apéndice=[[Categoría:{{ucfirst:{{nomelingua|{{{1}}}}}}}|*]]<span class="bluetogreen">[[:Categoría:{{ucfirst:{{nomelingua|{{{1}}}}}}}|{{ucfirst:{{nomelingua|{{{1}}}}}}}]]</span>
+|#default=<span class="bluetogreen">[[:Categoría:{{ucfirst:{{nomelingua|{{{1}}}}}}}|{{ucfirst:{{nomelingua|{{{1}}}}}}}]]</span>}}</h1>__NOEDITSECTION__

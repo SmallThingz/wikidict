@@ -1,0 +1,129 @@
+# wikidict-interface-messages-v1
+# wiki	uzwiktionary
+# dump-date	20261001
+# content-language	uz
+en	and	V	 and
+en	apr	V	Apr
+en	april	V	April
+en	april-gen	V	April
+en	aug	V	Aug
+en	august	V	August
+en	august-gen	V	August
+en	comma-separator	V	, 
+en	dec	V	Dec
+en	december	V	December
+en	december-gen	V	December
+en	feb	V	Feb
+en	february	V	February
+en	february-gen	V	February
+en	fri	V	Fri
+en	friday	V	Friday
+en	jan	V	Jan
+en	january	V	January
+en	january-gen	V	January
+en	jul	V	Jul
+en	july	V	July
+en	july-gen	V	July
+en	jun	V	Jun
+en	june	V	June
+en	june-gen	V	June
+en	mar	V	Mar
+en	march	V	March
+en	march-gen	V	March
+en	may	V	May
+en	may-gen	V	May
+en	may_long	V	May
+en	mon	V	Mon
+en	monday	V	Monday
+en	nov	V	Nov
+en	november	V	November
+en	november-gen	V	November
+en	oct	V	Oct
+en	october	V	October
+en	october-gen	V	October
+en	parser-template-loop-warning	V	Template loop detected: [[:$1]]
+en	sandboxlink-subpage-name	V	sandbox
+en	sat	V	Sat
+en	saturday	V	Saturday
+en	scribunto-common-timeout	V	The time allocated for running scripts has expired.
+en	sep	V	Sep
+en	september	V	September
+en	september-gen	V	September
+en	sun	V	Sun
+en	sunday	V	Sunday
+en	thu	V	Thu
+en	thursday	V	Thursday
+en	translate-taction-translate	V	Translate
+en	tue	V	Tue
+en	tuesday	V	Tuesday
+en	wed	V	Wed
+en	wednesday	V	Wednesday
+en	wikibase-client-data-bridge-bailout-suggestion-go-to-repo-button	V	Edit the value on {{WBREPONAME}}
+en	wikibase-snakview-snaktypeselector-novalue	V	no value
+en	wikibase-snakview-snaktypeselector-somevalue	V	unknown value
+en	wikibase-time-calendar-gregorian	V	Gregorian
+en	wikibase-time-calendar-julian	V	Julian
+en	word-separator	V	 
+uz	and	V	 va
+uz	apr	V	apr
+uz	april	V	aprel
+uz	april-gen	V	aprel
+uz	aug	V	avg
+uz	august	V	avgust
+uz	august-gen	V	avgust
+uz	comma-separator	V	, 
+uz	conversiontable/uz	M
+uz	dec	V	dek
+uz	december	V	dekabr
+uz	december-gen	V	dekabr
+uz	feb	V	fev
+uz	february	V	fevral
+uz	february-gen	V	fevral
+uz	fri	V	Jum
+uz	friday	V	Juma
+uz	jan	V	yan
+uz	january	V	yanvar
+uz	january-gen	V	yanvar
+uz	jul	V	iyl
+uz	july	V	iyul
+uz	july-gen	V	iyul
+uz	jun	V	iyn
+uz	june	V	iyun
+uz	june-gen	V	iyun
+uz	mar	V	mar
+uz	march	V	mart
+uz	march-gen	V	mart
+uz	may	V	may
+uz	may-gen	V	may
+uz	may_long	V	may
+uz	mon	V	Dsh
+uz	monday	V	Dushanba
+uz	nov	V	noy
+uz	november	V	noyabr
+uz	november-gen	V	noyabr
+uz	oct	V	okt
+uz	october	V	oktyabr
+uz	october-gen	V	oktyabr
+uz	parser-template-loop-warning	V	Template loop detected: [[:$1]]
+uz	sandboxlink-subpage-name	V	qumloq
+uz	sat	V	Shn
+uz	saturday	V	Shanba
+uz	scribunto-common-timeout	V	The time allocated for running scripts has expired.
+uz	sep	V	sen
+uz	september	V	sentyabr
+uz	september-gen	V	sentyabr
+uz	sun	V	Yak
+uz	sunday	V	Yakshanba
+uz	thu	V	Pay
+uz	thursday	V	Payshanba
+uz	translate-taction-translate	V	Tarjima
+uz	tue	V	Ssh
+uz	tuesday	V	Seshanba
+uz	wed	V	Chr
+uz	wednesday	V	Chorshanba
+uz	wikibase-client-data-bridge-bailout-suggestion-go-to-repo-button	V	Edit the value on {{WBREPONAME}}
+uz	wikibase-snakview-snaktypeselector-novalue	V	no value
+uz	wikibase-snakview-snaktypeselector-somevalue	V	unknown value
+uz	wikibase-time-calendar-gregorian	V	Gregorian
+uz	wikibase-time-calendar-julian	V	Julian
+uz	word-separator	V	 

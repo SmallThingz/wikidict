@@ -1,0 +1,53 @@
+
+= Эсперанто[[Категория:Эсперанто|denaske]] =
+
+=== Морфологические и синтаксические свойства ===
+<b>denaske</b> 
+
+Наречие.[[Категория:Наречия эсперанто]]
+
+Корень: '''--'''.[[Категория:Нет сведений о составе слова]]
+
+=== Произношение ===
+[[w:Международный фонетический алфавит|МФА]]: [<span style="font-family:Arial Unicode MS,Lucida Sans Unicode,MS Mincho,Arial,sans-serif;text-decoration:none;font-size:130%;">[[Категория:Нужно произношение]]</span>] [[Категория:Статьи без звучащих примеров произношения]]
+
+=== Семантические свойства ===
+[[Категория:Нужна иллюстрация]]
+
+==== Значение ====
+# [[от природы]] <span class="example-fullblock example-absent-block">&#9670;&nbsp;<span class="example-block" style="color:var(--color-content-added, darkgreen)"><span class="example-absent" style="color:var(--wikt-palette-orange-7, darkorange)">Отсутствует пример употребления (см. [[ВС:ЦИТ|<span class="example-recommendations" style="color:darkorange; font-weight: bold; text-decoration: inherit; -moz-text-decoration-color: darkorange; text-decoration-color: darkorange;">рекомендации</span>]]).</span>[[Категория:Статьи без примеров употребления]] <span class="example-details" style="font-size:smaller;"> <i><span class="citation-source"> </span></i></span></span></span>
+
+==== Синонимы ====
+# 
+
+==== Антонимы ====
+# 
+
+==== Гиперонимы ====
+# 
+
+==== Гипонимы ====
+# 
+
+=== Родственные слова ===
+{{родств:eo:{{{родств-блок}}}}}
+
+=== Этимология ===
+Происходит от ??[[Категория:Нужна этимология]]
+
+=== Фразеологизмы и устойчивые сочетания ===
+* 
+
+=== Библиография ===
+* 
+
+<templatestyles src="Module:message box/fmbox.css"/><table class="plainlinks fmbox fmbox-editnotice stub-main-footer" role="presentation" style="background-color:#eeffee; border-color: #33bb33; margin-top: 0.5em !important;"><tr><td class="mbox-image">[[Файл:Interrobang.svg|30px]]</td><td class="mbox-text"><div class="mbox-text-div"><b>Статья нуждается в доработке</b>.<br/>
+Это [[:Категория:Статьи, нуждающиеся в доработке|незаконченная статья]]. Вы можете помочь проекту, <span class="plainlinks">[//ru.wiktionary.org/w/index.php?title=:denaske&action=edit исправив и дополнив её]</span>.
+<br />В частности, следует уточнить сведения о:
+* '''[[Категория:Нужны сведения о морфологии/eo]] морфологии'''
+* '''[[Категория:Нужно произношение/eo]]произношении'''
+* '''[[Категория:Нужны сведения о семантике/eo]]семантике'''
+* '''[[Категория:Нужна этимология/eo]]этимологии'''<br />
+(См. [[Викисловарь:Справка|Общепринятые правила]]).</div><div class="mbox-textsmall-div hide-when-compact"></div></td></tr></table>[[Категория:Статьи, нуждающиеся в доработке/eo|denaske]]
+[[Категория:Требуется категоризация/eo]]
+[[Категория:Слова из 7 букв/eo]]

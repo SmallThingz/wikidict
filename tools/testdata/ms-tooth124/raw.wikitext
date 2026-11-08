@@ -1,0 +1,53 @@
+==Bahasa Inggeris==
+{{wikipedia|lang=en}}
+[[Imej:Lower wisdom tooth.jpg|thumb|a tooth]]
+
+===Kata nama===
+{{en-kn|teeth}}
+# [[gigi]].
+
+===Etimologi===
+Daripada {{inh|en|enm|tothe}}, {{m|enm|toth}}, {{m|enm|tooth}}, daripada {{inh|en|ang|tōþ||gigi}}, from {{inh|en|gmw-pro|*tanþ}}, daripada {{inh|en|gem-pro|*tanþs||gigi}}, daripada {{inh|en|ine-pro|*h₃dónts||gigi}}. Berkaitan dengan {{m|en|tusk}}. {{doublet|en|dent|dens}}. 
+
+{{rel-top|Seasal:}}
+Seasal dengan {{cog|sco|tuth}}, {{m|sco|tuith||gigi}}, {{cog|frr|toth}}, {{m|frr|tos||gigi}}, {{cog|nl|tand||gigi}}, {{cog|de|Zahn||gigi}}, {{cog|da|tand||gigi}}, {{cog|sv|tand||gigi}}, {{cog|no|tann||gigi}}, {{cog|is|tönn||gigi}}, {{cog|cy|dant||gigi}}, {{cog|la|dēns||gigi}}, {{cog|lt|dantìs||gigi}}, {{cog|grc|ὀδούς}}/{{m|grc|ὀδών||gigi}}, {{cog|hy|ատամ}}, {{cog|fa|دندان||tr=dandân}}, {{cog|sa|दत्||tr=dát|gigi}}. {{rel-bottom}}
+
+===Sebutan===
+* {{enPR|to͞oth}}, {{AFA|en|/tuːθ/}}
+* {{audio|en|en-us-tooth.ogg|Audio (A.S.)}}
+* {{audio|en|En-uk-tooth.ogg|Audio (UK)}}
+* {{audio|en|LL-Q1860 (eng)-Back ache-tooth.wav|Audio}}
+* {{rima|en|uːθ}}
+* {{a|Wales|Midlands, biasanya}} {{AFA|en|/tʊθ/}}<!-- perkataan 1 suku kata !-->
+
+===Terbitan===
+{{der3|en|back tooth
+|cheektooth
+|clean as a hound's tooth
+|eyetooth
+|fight tooth and nail
+|foretooth
+|long in the tooth
+|milk tooth
+|sweet tooth
+|{{l|en|teethe|pos=v}}
+|toothache
+|tooth and nail
+|toothbrush
+|tooth fairy
+|toothless
+|toothpaste
+|toothpick
+|toothsome
+|toothlike
+|toothly
+|toothy
+|wangtooth
+|wisdom tooth
+}}
+
+===Anagram===
+* {{anagram|en|a=hoott|Hotot}}
+
+[[Kategori:Kata nama bahasa Inggeris dengan jamak tidak nalar]]
+[[Kategori:en:Gigi]]

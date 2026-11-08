@@ -1,0 +1,43 @@
+
+=={{=ain=}}==
+
+{{-etim-}}
+:Azo inoana fa avy amin'ny ''ト'' (soratana hoe ''to'') (midika hoe ''nono'' (anglisy: ''breast'')) + ''ペッ'' (soratana hoe ''pet'') (midika hoe ''rano'' (anglisy: ''water'')).
+{{-ana-|ain}}
+'''トペ''' 
+# [[ronono]]
+
+{{-fanononana-}}
+* [[File:MapOfAinuLanguage-Milk.svg|thumb|400px|Map of Ainu Language: Milk]]
+* {|class="wikitable"
+* |+ dialect table: [[milk]] (1960)<ref>{{R:ain:HattoriAndChiri:1960}}</ref>
+* ! area !! pronunciation
+* |-
+* ! Yakumo (八雲)
+* | tópe
+* ! Oshamambe (長万部)
+* ! Horobetsu (幌別)
+* ! Hiratori (平取)
+* ! Nukkibetsu (貫気別)
+* ! Niikappu (新冠)
+* ! Samani (様似)
+* ! Obihiro (帯広)
+* ! Kushiro (釧路)
+* ! Bihoro (美幌)
+* ! Asahikawa (旭川)
+* ! Nayoro (名寄)
+* ! Soya (宗谷)
+* ! Ochiho (落帆)
+* | toope
+* ! Tarantomari (多蘭泊)
+* ! Maoka (真岡)
+* ! Shiraura (白浦)
+* ! Raichishka (ライチシカ)
+* ! Nairo (内路)
+* |}
+* {{fanononana|/tóꜜpè/|ain}}
+
+{{-tsiahy-}}
+* :* {{R:ain:B|p=453}}
+* :* {{R:ain:Murayama1970}}
+* {{wikibolana|en|トペ}}

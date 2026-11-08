@@ -1,0 +1,36 @@
+# wikidict-namespace-registry-v1
+# wiki	thwiktionary
+# dump-date	20261001
+# content-language	th
+-2	สื่อ	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	พิเศษ	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	พูดคุย	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	ผู้ใช้	User	first-letter	1	0	0		compile_only	standard_build_input
+3	คุยกับผู้ใช้	User talk	first-letter	1	0	0		compile_only	discussion_namespace
+4	วิกิพจนานุกรม	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	คุยเรื่องวิกิพจนานุกรม	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk	คุยเรื่องWiktionary
+6	ไฟล์	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	ภาพ
+7	คุยเรื่องไฟล์	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	คุยเรื่องภาพ
+8	มีเดียวิกิ	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	คุยเรื่องมีเดียวิกิ	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	แม่แบบ	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	คุยเรื่องแม่แบบ	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	วิธีใช้	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	คุยเรื่องวิธีใช้	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	หมวดหมู่	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	คุยเรื่องหมวดหมู่	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+100	ภาคผนวก	ภาคผนวก	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+101	คุยเรื่องภาคผนวก	คุยเรื่องภาคผนวก	case-sensitive	1	0	0		compile_only	discussion_namespace
+102	ดัชนี	ดัชนี	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+103	คุยเรื่องดัชนี	คุยเรื่องดัชนี	case-sensitive	1	0	0		compile_only	discussion_namespace
+104	สัมผัส	สัมผัส	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Rhymes
+105	คุยเรื่องสัมผัส	คุยเรื่องสัมผัส	case-sensitive	1	0	0		compile_only	discussion_namespace	Rhymes talk
+110	อรรถาภิธาน	อรรถาภิธาน	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+111	คุยเรื่องอรรถาภิธาน	คุยเรื่องอรรถาภิธาน	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	มอดูล	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	คุยเรื่องมอดูล	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

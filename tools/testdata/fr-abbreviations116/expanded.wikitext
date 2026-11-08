@@ -1,0 +1,756 @@
+Cet article représente une '''liste d’abréviations en anglais'''. Ces [[abréviation]]s sont en réalité issues du [[jargon]] commun [[anglais]] et [[anglophone]] couramment et principalement utilisé par les [[internaute]]s durant des discussions ou envois de messages sur diverses [[messagerie instantanée]]s ([[IRC]], [[MSN]], [[réseaux sociaux]], [[SMS]], [[courriel]]s et [[forum]]s par le biais d’[[Internet]] ou tout type d’appareil relié à un réseau. Les abréviations anglaises représentent la première lettre des mots employés formant ainsi un sigle ou un mot.
+
+Plusieurs polémiques et débats ont été lancés<ref>[http://french.peopledaily.com.cn/Culture/6947545.html ''L’interdiction des abréviations en anglais alimente le débat'']</ref> qualifiant les abréviations anglophones de souvent incompréhensibles et inutiles.
+
+== Liste des abréviations en anglais ==
+{| class="wikitable" style="text-align:center;" border="1"
+|-
+!width=70|Abréviation
+!width=210|''Signification anglaise''
+!width=600|Traduction française
+|-
+| 2B 
+| ''To Be''
+| Être
+|-
+| A.m. ou AM
+| ''Ante Meridiem''
+| Abréviation de la matinée (heures comprises entre 0 h 00 et 11 h 59)
+|-
+| Abs
+| ''Abdominals''
+| Abdominaux
+|-
+| Abt
+| ''About''
+| À propos de, au sujet de…
+|-
+| AD
+| ''Anno Domini''
+| An du Seigneur
+|-
+| AFAIK 
+| ''As Far As I Know''
+| Autant que je sache 
+|-
+| AFK 
+| ''Away From Keyboard''
+| Absent de l’ordinateur 
+|-
+| Aka, AKA ou a.k.a
+| ''Also Known As''
+| Aussi connu sous…, également connu en tant que…
+|-
+| AML
+| ''All My Love''
+| De tout mon cœur, tout mon amour
+|-
+| Anon
+| ''Anonymous'' 
+| Anonyme
+|-
+| Anws
+| ''Answer''
+| Réponds, réponse
+|-
+| AOB
+| ''Any Other business''
+| Tout autre affaire
+|-
+| ASAFP
+| ''As Soon As Fucking Possible''
+| Aussitôt que foutrement possible (péjoratif)
+|-
+| ASAP
+| ''As Soon As Possible''
+| Aussitôt que possible 
+|-
+| ASF 
+| ''As fuck'' 
+| Extrêmement 
+|-
+| Atm
+| ''At the Moment''
+| En ce moment-même, présentement, actuellement
+|-
+| Aws
+| ''As We Speak''
+| Au moment où l’on parle
+|-
+| B
+| ''B<br />Be<br />Bee''
+| Lettre B<br />Être<br />Abeille
+|-
+| B4
+| ''Before''
+| Avant
+|- 
+| B.C.
+| ''Before Christ''
+| Avant Jésus-Christ
+|-
+| BAC 
+| ''Back At Computer''
+| De retour à l’ordinateur
+|-
+|BAE
+|''Before Anyone Else''
+|Avant tout le monde (surnom affectif)
+|-
+| BBIAF 
+| ''Be Back In A Few'' 
+| Je reviens dans un instant 
+|-
+| BBQ
+| ''BarBecue''
+| Barbecue
+|-
+| BBW
+| ''Big Beautiful Woman'' 
+| Femme ronde et belle
+|-
+| BC/BCS
+| ''Because''
+| Parce que, car
+|-
+| Bf
+| ''Boyfriend''
+| Petit ami, petit copain
+|-
+| BG
+| ''Bad Game'' 
+| Mauvais match
+|-
+|BG
+|''BackGround''
+|Arrière plan
+|-
+| BO
+| ''Best Of'' 
+| Au meilleur de... (Suivi du nombre de matchs à jouer, souvent impair pour éviter les égalités) 
+|-
+| BRB 
+| ''Be Right Back'' 
+| Je reviens tout de suite
+|-
+| BS
+| ''Bullshit''
+| Des conneries
+|-
+| BTW 
+| ''By The Way'' 
+| Au fait
+|-
+| BYOB
+| ''Bring Your Own Booze<br />Bring Your Own Bottle''
+| Apporte ta propre boisson<br />Apporte ta propre bouteille
+|- 
+| C
+| ''C<br />See<br />Sea''
+| Lettre C<br />Voir<br />Mer
+|-
+| C/o 
+| ''Care Of''
+| Aux bons soins de (a/s)<small>(notamment utilisé pour adresser un courrier à quelqu’un hébergé par quelqu’un d’autre</small><ref name="ortho2005">Bénédicte Gaillard, Jean-Pierre Colignon, ''Toute l’orthographe'', Magnard, 2005.</ref>).
+|-
+| Cause/Cuz
+| ''Because'' 
+| Parce que
+|-
+|CBA
+|''Can't Be Arsed''
+|Vraiment la flemme / Pas que ça à foutre
+|-
+| CCW
+| ''Counterclockwise''
+| Dans le sens contraire des aiguilles d'une montre
+|-
+| CM
+| ''Call Me''
+| Appelle-moi
+|-
+| CUL
+| ''See You Later''
+| On se voit plus tard
+|-
+| CUT
+| ''See You Tomorrow''
+| À demain
+|-
+| CW
+| ''Civil works''<br>''Clockwise''<br>''Cooling water''<br>''Content Warning''
+| Génie civil<br>Dans le sens des aiguilles d'une montre<br>Eau de refroidissement<br>Avertissement sur le contenu
+|-
+| CYA
+| ''See You Later (« see ya »)''
+| À bientôt, à plus
+|- 
+| CYA 
+| ''Cover Your Ass'' 
+| Couvre tes arrières 
+|-
+| DC
+| ''Disconnection/Disconnected'' 
+| Déconnexion/Déconnecté 
+|-
+| Dl
+| ''DownLoad''
+| Téléchargement
+|-
+| DIY
+| ''Do It Yourself''
+| Fait-maison (objet), fais-le toi-même
+|-
+|DM
+|''Direct Message''
+|Un message privé / Envoyer un message privé à
+|-
+| DW
+| ''Don't Worry''
+| Ne t'inquiètes pas, t'inquiètes
+|-
+| DYT
+| ''Don’t You Think''
+| Tu ne penses pas ?
+|-
+| EG
+| ''Exempli Gratia''
+| par exemple
+|-
+|Enby
+|''Non binary''
+| Non binaire
+|-
+|EOB
+|''End of Business Day''
+|Fin de journée (selon horaire de travail)
+|-
+| EVRY1
+| ''Everyone''
+| Tout le monde
+|-
+| EZ
+| ''Easy''
+| Facile, doucement (selon le contexte)
+|-
+| FF
+| ''ForFeit'' 
+| Reddition
+|-
+| FFS
+| ''For Fuck's Sake'' 
+| Bon sang ! (Exclamation, vulgaire) 
+|-
+| FO
+|''Fuck Off''
+| Va te faire foutre
+|-
+|FR/FRR
+|"For Real"
+|Pour de vrai
+|-
+| FTW 
+|''For The Win''
+| Qui gagne, qui est le meilleur / |le plus fort
+|-
+| FU
+| ''Fuck You<br />Fucked Up''
+| Va te faire foutre / enculer<br />Mal foutu
+|-
+| FYE
+| ''For Your Entertainment''
+| Pour te divertir / te distraire / t’occuper
+|-
+| FYI 
+|''For Your Information'' 
+| Pour ton information
+|-
+| G2G
+| ''Got To Go''
+| Je dois y aller
+|-
+| GF
+| ''Girlfriend''
+| Petite amie, petite copine
+|-
+| GFN
+| '' Go For Now''
+| Je suis parti
+|-
+| GG
+| ''Good Game''
+| Bien joué
+|-
+| GJ
+| ''Good Job''
+| Bon travail
+|-
+| GL
+| ''Good Luck''
+| Bonne chance
+|-
+| GOAT
+| ''Greatest Of All Time''
+| Le meilleur de tous les temps
+|-
+| GTG
+| '' Got To Go''
+| Je dois y aller
+|-
+| GTFO 
+| ''Get The Fuck Out'' 
+| Dégage ! (dehors)
+|-
+|Gz
+|''Congratulations ( « Gratz » )''
+|Bravo / Félicitation
+|-
+|HBU/WBU
+|''How (a)Bout You / What (a)Bout You''
+|Et toi ? (après avoir répondu à comment ça va)
+|-
+| HF 
+| ''Have Fun'' 
+| Amusez-vous bien 
+|-
+| HMP
+| ''Help Me Please''
+| Aidez-moi s’il vous plaît
+|-
+| HQ
+| ''Headquarter'' 
+| Quartier général 
+|-
+|HQ
+|''High Quality''
+|Haute qualité / Haute définition
+|-
+|HT
+|''Hi There''
+|Salut
+|-
+| IAC
+| ''In Any Case''
+| En tout cas
+|-
+| IC
+| ''I See''
+| Je vois…
+|-
+| IDC
+| ''I Don’t Care'' 
+| Ça m’est égal, peu m’importe
+|-
+| IDGAF 
+| ''I Don’t Give A Fuck''
+| Je n’en ai rien à foutre
+|-
+| IDK
+| ''I Don’t Know''
+| Je n’en sais rien, je ne sais pas
+|- 
+| i.e.
+| ''Id Est''
+| C'est à dire
+|-
+|IG
+|''I Guess''
+|Je suppose
+|-
+| IHA 
+| ''I Hate'' 
+| Je hais, je déteste
+|-
+| IINM 
+| ''If I’m Not Mistaken''
+| Si je ne me trompe pas
+|- 
+| IIRC 
+| ''If I remember correctly'' 
+| Si je me rappelle bien
+|-
+| IKR
+| ''I know right''
+| Je sais, pas vrai ?
+|-
+| ILY
+| ''I Love You''
+| Je t’aime
+|-
+| IMO 
+| ''In My Opinion'' 
+| À mon avis, selon moi
+|-
+| IMHO 
+| ''In My Honest/Humble Opinion'' 
+| À mon humble avis
+|-
+| IOU
+| ''I Owe You''
+| Je t’en dois une
+|-
+| IRL
+| ''In Real Life''
+| Dans la vraie vie
+|-
+| ISTG 
+| ''I swear to God''
+| Je jure devant Dieu 
+|-
+| JK
+| ''Just Kidding''
+| Je plaisante
+|-
+| KYS
+| ''Kill YourSelf''
+| Suicide-toi 
+|-
+| L8R
+| ''Later''
+| Plus tard
+|-
+| LF
+| ''Looking For'' 
+| Je recherche... 
+|-
+| LMAO
+| ''Laughing My Ass Off''
+| Rire à s’en taper le cul par terre
+|-
+| LMC
+| ''Let Me See''
+| Laisse-moi voir ça, laisse-moi jeter un coup d’œil
+|-
+| LMFAO
+| ''Laughing My Fucking Ass Off''
+| Rire à s'en taper le cul par terre (familier) 
+|-
+|LMK
+|''Let Me Know''
+|Faites le moi savoir
+|-
+| LOL
+| ''Laugh Out Loud'' 
+| Mort de rire (mdr)
+|-
+| LOLOL
+| ''Laughing Out Loud On Line<br />'' ''Lots Of Laughing Out Loud''
+| Enchaînement de rires, fou rire
+|-
+| LUV
+| ''Love''
+| Amour, aimer
+|-
+|MB
+|''My Bad''
+|(C'est) ma faute / Désolé
+|-
+| MILF 
+| ''Mother I’d Like To Fuck'' 
+| Mère que j’aimerais baiser
+|-
+| N.B.
+| ''Nota Bene''
+| Notez bien
+|-
+|NB
+|''Non Binary''
+| Non binaire
+|-
+|NGL
+|''Not Gonna Lie''
+|Pour être franc / Entre nous
+|-
+|NM
+|''Nothing Much''
+|Pas plus (en réponse à quoi de neuf)
+|-
+| NP 
+| ''No Problem'' 
+| Pas de problème
+|-
+|NSFW
+|''Not Safe For Work / Not Suitable For Work''
+|Inapproprié au bureau / Classé X / Contenu offensant
+|-
+| NVM
+| ''NeVerMind'' 
+| Peu importe
+|-
+|NW
+|''No Worries''
+|Pas de soucis / T'inquiète
+|-
+|OBV
+|''Obviously''
+|Evidemment
+|-
+| OFC
+| ''Of course''
+| Biensur
+|-
+| OMG
+| ''Oh My God!'' 
+| Oh mon dieu !
+|-
+| OMFG 
+| ''Oh My Fucking God!''
+| Oh mon dieu ! (péjoratif)
+|-
+|OMW
+|''On my way''
+|J'arrive, je suis en route
+|-
+|ONG
+| ''On God''
+| Sur Dieu
+|-
+| OOM
+| ''Out Of Mana'', ''Out Of Memory''
+| À court de mana, À court de mémoire vive
+|-
+| OP 
+| ''OverPowered'' 
+| Surpuissant 
+|-
+| OSA
+| ''Otherwise same as'' 
+| Autrement identique à 
+|-
+| OST
+| ''Original SoundTrack'' 
+| Bande originale
+|-
+| PLS / PLZ
+| ''Please''
+| S'il vous plait
+|-
+| P.m ou PM
+| ''Post Meridiem''
+| Abréviation de l’après-midi et de la soirée (heures comprises entre 12 h 00 et 23 h 59)
+|-
+|PM
+|''Private Message''
+|Un message privé / Envoyer un message privé à
+|-
+| POS 
+| ''Piece Of Shit'' 
+| Grosse merde, sac à merde
+|-
+| ROFLAS 
+| ''Rolling On Floor Laughing And Screaming''
+| Explosé et hurlé de rire
+|-
+| ROFL
+| ''Rolling On the Floor Laughing''
+| Explosé de rire
+|-
+| ROFLMAO 
+| ''Roll On Floor Laughing My Ass Off''
+|Je me roule par terre en explosant de rire
+|-
+| RGDS
+| ''Regards''
+| Cordialement
+|-
+| RIP
+| ''Rest In Peace (Requiescat In Pace)''
+| Repose en paix
+|-
+| RUMOF 
+| ''Are You Male Or Female ?''
+| T’es un gars ou une fille ?
+|-
+| SFAM 
+| ''Sister of another mother ''
+| Soeur d'une autre mère 
+|-
+| SMD
+| ''Suck My Dick'' 
+| Suce ma bite
+|-
+|SMH
+|''Shaking My Head<br />'' ''Somehow''
+|Secoue de la tête / Sérieusement ?<br /> En quelque sorte
+|-
+| SOAB
+| ''Son Of A Bitch''
+| Fils de pute
+|-
+| SS
+| ''Miss'' 
+| Disparu 
+|-
+| STFU 
+| ''Shut The Fuck Up'' 
+| Ferme ta gueule
+|-
+| Sup
+| ''What’s Up''
+| Quoi de neuf ?
+|-
+|Sus
+|''Suspect''
+|Suspect
+|-
+|TBF
+|''To Be Fair''
+|Pour être honnête
+|-
+|TBH
+|''To Be Honest''
+|Honnêtement / Franchement 
+|-
+|TG
+|''Together''
+|Ensemble
+|-
+|TL;DR
+|''Too Long; Didn't Read''
+|Introduit le résumé d'un long texte \ Exprime l'ignorance d'un texte à cause de sa longueur 
+|-
+| TM 
+| ''Trust Me'' 
+| Crois-moi, Fais-moi confiance
+|-
+|TTYL
+|''Talk To You Later''
+|On se parle plus tard
+|-
+| TW
+|''[[w:Trigger warning (psychologie)|Trigger Warning]]''
+| Annonce d'un avertissement lié à un traumatisme
+|-
+| TY / Thx / TYSM
+| ''Thank you /'' ''Thanks / Thank you so much''
+| Merci /Merci  Beaucoup
+|-
+| U2
+| ''You Too''
+| Toi aussi
+|-
+| U
+| ''You''
+| Toi, vous
+|-
+| Ur
+| ''Your''
+| Ton, ta, tes, votre, vos
+|-
+| W. 
+| ''Work'' 
+| Travail
+|-
+| WB
+| ''Welcome Back''
+| Bon retour 
+|-
+| WBMBF
+| ''Wanna Be My Boy Friend''
+| Tu veux être mon (petit) copain ?
+|-
+| WBMGF 
+| ''Wanna Be My Girl Friend''
+| Tu veux être ma (petite) copine ?
+|-
+| WD
+| ''Well Done''
+| Bien fait ! bien joué !
+|-
+|WDN
+|''We Don't Know''
+|On ne sait pas.
+|-
+|WDYM
+|''What Do You Mean''
+|Qu'est-ce que tu veux dire ?
+|-
+|WE
+|''Week End''
+|Week-end
+|-
+| WE ou W/e
+| ''Whatever''
+| Peu importe
+|-
+|WIP
+|''Work In Progress''
+|Travail en cours
+|-
+| WTF
+| ''What / Who The Fuck ?''
+| Qu’est-ce que / qui… (péjoratif)
+|-
+| WTH 
+| ''What / Who The Hell ? <br />What / Who The Heck ?''
+| Qu’est-ce que / qui…<br />Qu’est-ce que / qui…
+|-
+| WP
+| ''Well Played''
+| Bien joué
+|-
+| WU
+| ''What’s Up''
+| Quoi de neuf ?
+|-
+|WUU2/WUUT
+|''What (are) You Up To''
+|Tu fais quoi ?
+|-
+| WUWH
+| ''Wish You Were Here''
+| J’aurais aimé que tu sois là
+|-
+|WYA
+|''Where You At''
+|Où es-tu?
+|-
+|WYD/WUD
+|''What (are) You Doing''
+|Tu fais quoi ?
+|-
+|WYSIWYG
+|''What you see is what you get''
+| ce que vous voyez est ce que vous obtenez
+|-
+| XOXOXO
+| ''Kisses and Hugs''
+| Bisous et câlins
+|-
+| Ya
+| ''You''
+| Toi, Vous
+|-
+| YBL
+| ''You’ll Be Sorry''
+| Tu t’en mordras les doigts !
+|-
+| YK
+| ''You Know''
+| Tu sais
+|-
+| YNK
+| ''You Never Know''
+| On sait jamais
+|-
+| YOLO
+| ''You Only Live Once'' 
+| On ne vit qu'une fois
+|-
+| YW
+| ''You’re Welcome''
+| De rien, pas de quoi
+|}
+
+== Notes et références ==
+<div class="references-small" style="column-count:1;"><references group=""></references></div>
+
+=== Liens externes ===
+* français [http://www.meltingmots.com/liste-des-abreviations-anglaises.html Abréviations anglaises]
+* français [http://www.anglaisfacile.com/exercices/exercice-anglais-2/exercice-anglais-3208.php Anglais facile]
+* français [http://www.anglaisfacile.com/free/voc/sms.php Abréviations anglaises]
+[[Catégorie:Abréviations en anglais|*]]
+[[Catégorie:Annexes en anglais]]|}
+|
+|
+|}

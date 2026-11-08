@@ -1,0 +1,539 @@
+{
+  "scope": "Finite exact captured GL page links, no production output consulted. Plain nonnested explicit local targets; hidden category and image routes excluded from this textual-action list. All five authored link trails are ASCII s.",
+  "actions": [
+    {
+      "target": "Categoría:Galego",
+      "label": "Galego",
+      "source_character_offset": 229,
+      "source_spelling": "[[:Categoría:Galego|Galego]]"
+    },
+    {
+      "target": "latín#Galego",
+      "label": "latín",
+      "source_character_offset": 353,
+      "source_spelling": "[[latín#Galego|latín]]"
+    },
+    {
+      "target": "servitium#Galego",
+      "label": "servitium",
+      "source_character_offset": 378,
+      "source_spelling": "[[servitium#Galego|servitium]]"
+    },
+    {
+      "target": "escravitude#Galego",
+      "label": "escravitude",
+      "source_character_offset": 413,
+      "source_spelling": "[[escravitude#Galego|escravitude]]"
+    },
+    {
+      "target": "servidume#Galego",
+      "label": "servidume",
+      "source_character_offset": 451,
+      "source_spelling": "[[servidume#Galego|servidume]]"
+    },
+    {
+      "target": "AFI",
+      "label": "AFI",
+      "source_character_offset": 625,
+      "source_spelling": "[[AFI]]"
+    },
+    {
+      "target": "acción#Galego",
+      "label": "Acción",
+      "source_character_offset": 906,
+      "source_spelling": "[[acción#Galego|Acción]]"
+    },
+    {
+      "target": "efecto#Galego",
+      "label": "efecto",
+      "source_character_offset": 933,
+      "source_spelling": "[[efecto#Galego|efecto]]"
+    },
+    {
+      "target": "servir#Galego",
+      "label": "servir",
+      "source_character_offset": 961,
+      "source_spelling": "[[servir#Galego|servir]]"
+    },
+    {
+      "target": "conxunto#Galego",
+      "label": "Conxunto",
+      "source_character_offset": 1145,
+      "source_spelling": "[[conxunto#Galego|Conxunto]]"
+    },
+    {
+      "target": "servente#Galego",
+      "label": "serventes",
+      "source_character_offset": 1177,
+      "source_spelling": "[[servente#Galego|servente]]s"
+    },
+    {
+      "target": "casa#Galego",
+      "label": "casa",
+      "source_character_offset": 1213,
+      "source_spelling": "[[casa#Galego|casa]]"
+    },
+    {
+      "target": "institución#Galego",
+      "label": "institución",
+      "source_character_offset": 1243,
+      "source_spelling": "[[institución#Galego|institución]]"
+    },
+    {
+      "target": "favor#Galego",
+      "label": "Favor",
+      "source_character_offset": 1432,
+      "source_spelling": "[[favor#Galego|Favor]]"
+    },
+    {
+      "target": "ser#Galego",
+      "label": "se",
+      "source_character_offset": 1459,
+      "source_spelling": "[[ser#Galego|se]]"
+    },
+    {
+      "target": "facer#Galego",
+      "label": "fai",
+      "source_character_offset": 1481,
+      "source_spelling": "[[facer#Galego|fai]]"
+    },
+    {
+      "target": "alguén#Galego",
+      "label": "alguén",
+      "source_character_offset": 1504,
+      "source_spelling": "[[alguén#Galego|alguén]]"
+    },
+    {
+      "target": "organización#Galego",
+      "label": "Organización",
+      "source_character_offset": 1676,
+      "source_spelling": "[[organización#Galego|Organización]]"
+    },
+    {
+      "target": "persoal#Galego",
+      "label": "persoal",
+      "source_character_offset": 1715,
+      "source_spelling": "[[persoal#Galego|persoal]]"
+    },
+    {
+      "target": "destinar#Galego",
+      "label": "destinados",
+      "source_character_offset": 1742,
+      "source_spelling": "[[destinar#Galego|destinados]]"
+    },
+    {
+      "target": "coidar#Galego",
+      "label": "coidar",
+      "source_character_offset": 1775,
+      "source_spelling": "[[coidar#Galego|coidar]]"
+    },
+    {
+      "target": "interés#Galego",
+      "label": "intereses",
+      "source_character_offset": 1803,
+      "source_spelling": "[[interés#Galego|intereses]]"
+    },
+    {
+      "target": "satisfacer#Galego",
+      "label": "satisfacer",
+      "source_character_offset": 1837,
+      "source_spelling": "[[satisfacer#Galego|satisfacer]]"
+    },
+    {
+      "target": "necesidade#Galego",
+      "label": "necesidades",
+      "source_character_offset": 1873,
+      "source_spelling": "[[necesidade#Galego|necesidade]]s"
+    },
+    {
+      "target": "público#Galego",
+      "label": "público",
+      "source_character_offset": 1910,
+      "source_spelling": "[[público#Galego|público]]"
+    },
+    {
+      "target": "de#Galego",
+      "label": "dalgunha",
+      "source_character_offset": 1940,
+      "source_spelling": "[[de#Galego|dalgunha]]"
+    },
+    {
+      "target": "entidade#Galego",
+      "label": "entidade",
+      "source_character_offset": 1963,
+      "source_spelling": "[[entidade#Galego|entidade]]"
+    },
+    {
+      "target": "oficial#Galego",
+      "label": "oficial",
+      "source_character_offset": 1992,
+      "source_spelling": "[[oficial#Galego|oficial]]"
+    },
+    {
+      "target": "privado#Galego",
+      "label": "privada",
+      "source_character_offset": 2022,
+      "source_spelling": "[[privado#Galego|privada]]"
+    },
+    {
+      "target": "conxunto#Galego",
+      "label": "Conxunto",
+      "source_character_offset": 2232,
+      "source_spelling": "[[conxunto#Galego|Conxunto]]"
+    },
+    {
+      "target": "obxecto#Galego",
+      "label": "obxectos",
+      "source_character_offset": 2264,
+      "source_spelling": "[[obxecto#Galego|obxecto]]s"
+    },
+    {
+      "target": "utilizar#Galego",
+      "label": "utilizados",
+      "source_character_offset": 2292,
+      "source_spelling": "[[utilizar#Galego|utilizados]]"
+    },
+    {
+      "target": "servir#Galego",
+      "label": "servir",
+      "source_character_offset": 2328,
+      "source_spelling": "[[servir#Galego|servir]]"
+    },
+    {
+      "target": "mesa#Galego",
+      "label": "mesa",
+      "source_character_offset": 2358,
+      "source_spelling": "[[mesa#Galego|mesa]]"
+    },
+    {
+      "target": "conxunto#Galego",
+      "label": "Conxunto",
+      "source_character_offset": 2561,
+      "source_spelling": "[[conxunto#Galego|Conxunto]]"
+    },
+    {
+      "target": "utensilio#Galego",
+      "label": "utensilios",
+      "source_character_offset": 2593,
+      "source_spelling": "[[utensilio#Galego|utensilio]]s"
+    },
+    {
+      "target": "poñer#Galego",
+      "label": "pon",
+      "source_character_offset": 2636,
+      "source_spelling": "[[poñer#Galego|pon]]"
+    },
+    {
+      "target": "cada#Galego",
+      "label": "cada",
+      "source_character_offset": 2659,
+      "source_spelling": "[[cada#Galego|cada]]"
+    },
+    {
+      "target": "comensal#Galego",
+      "label": "comensal",
+      "source_character_offset": 2680,
+      "source_spelling": "[[comensal#Galego|comensal]]"
+    },
+    {
+      "target": "peza#Galego",
+      "label": "Peza",
+      "source_character_offset": 2879,
+      "source_spelling": "[[peza#Galego|Peza]]"
+    },
+    {
+      "target": "casa#Galego",
+      "label": "casa",
+      "source_character_offset": 2906,
+      "source_spelling": "[[casa#Galego|casa]]"
+    },
+    {
+      "target": "local#Galego",
+      "label": "local",
+      "source_character_offset": 2934,
+      "source_spelling": "[[local#Galego|local]]"
+    },
+    {
+      "target": "onde#Galego",
+      "label": "onde",
+      "source_character_offset": 2957,
+      "source_spelling": "[[onde#Galego|onde]]"
+    },
+    {
+      "target": "estar#Galego",
+      "label": "está",
+      "source_character_offset": 2978,
+      "source_spelling": "[[estar#Galego|está]]"
+    },
+    {
+      "target": "inodoro#Galego",
+      "label": "inodoro",
+      "source_character_offset": 3002,
+      "source_spelling": "[[inodoro#Galego|inodoro]]"
+    },
+    {
+      "target": "paso#Galego",
+      "label": "Paso",
+      "source_character_offset": 3033,
+      "source_spelling": "[[paso#Galego|Paso]]"
+    },
+    {
+      "target": "pé#Galego",
+      "label": "pé",
+      "source_character_offset": 3057,
+      "source_spelling": "[[pé#Galego|pé]]"
+    },
+    {
+      "target": "carro#Galego",
+      "label": "carro",
+      "source_character_offset": 3080,
+      "source_spelling": "[[carro#Galego|carro]]"
+    },
+    {
+      "target": "acceder#Galego",
+      "label": "accede",
+      "source_character_offset": 3115,
+      "source_spelling": "[[acceder#Galego|accede]]"
+    },
+    {
+      "target": "leira#Galego",
+      "label": "leira",
+      "source_character_offset": 3148,
+      "source_spelling": "[[leira#Galego|leira]]"
+    },
+    {
+      "target": "Categoría:Deportes",
+      "label": "Deportes",
+      "source_character_offset": 3319,
+      "source_spelling": "[[:Categoría:Deportes|Deportes]]"
+    },
+    {
+      "target": "saque#Galego",
+      "label": "Saque",
+      "source_character_offset": 3377,
+      "source_spelling": "[[saque#Galego|Saque]]"
+    },
+    {
+      "target": "deporte#Galego",
+      "label": "deportes",
+      "source_character_offset": 3404,
+      "source_spelling": "[[deporte#Galego|deporte]]s"
+    },
+    {
+      "target": "fútbol#Galego",
+      "label": "fútbol",
+      "source_character_offset": 3439,
+      "source_spelling": "[[fútbol#Galego|fútbol]]"
+    },
+    {
+      "target": "tenis#Galego",
+      "label": "tenis",
+      "source_character_offset": 3467,
+      "source_spelling": "[[tenis#Galego|tenis]]"
+    },
+    {
+      "target": "voleibol#Galego",
+      "label": "voleibol",
+      "source_character_offset": 3495,
+      "source_spelling": "[[voleibol#Galego|voleibol]]"
+    },
+    {
+      "target": "Categoría:Relixión",
+      "label": "Relixión",
+      "source_character_offset": 3730,
+      "source_spelling": "[[:Categoría:Relixión|Relixión]]"
+    },
+    {
+      "target": "celebración#Galego",
+      "label": "Celebración",
+      "source_character_offset": 3788,
+      "source_spelling": "[[celebración#Galego|Celebración]]"
+    },
+    {
+      "target": "relixioso#Galego",
+      "label": "relixiosa",
+      "source_character_offset": 3823,
+      "source_spelling": "[[relixioso#Galego|relixiosa]]"
+    },
+    {
+      "target": "en#Galego",
+      "label": "Na",
+      "source_character_offset": 4021,
+      "source_spelling": "[[en#Galego|Na]]"
+    },
+    {
+      "target": "acepción#Galego",
+      "label": "acepción",
+      "source_character_offset": 4041,
+      "source_spelling": "[[acepción#Galego|acepción]]"
+    },
+    {
+      "target": "seu#Galego",
+      "label": "seu",
+      "source_character_offset": 4070,
+      "source_spelling": "[[seu#Galego|seu]]"
+    },
+    {
+      "target": "ser#Galego",
+      "label": "é",
+      "source_character_offset": 4104,
+      "source_spelling": "[[ser#Galego|é]]"
+    },
+    {
+      "target": "cuberto#Galego",
+      "label": "cuberto",
+      "source_character_offset": 4121,
+      "source_spelling": "[[cuberto#Galego|cuberto]]"
+    },
+    {
+      "target": "en#Galego",
+      "label": "Na",
+      "source_character_offset": 4151,
+      "source_spelling": "[[en#Galego|Na]]"
+    },
+    {
+      "target": "acepción#Galego",
+      "label": "acepción",
+      "source_character_offset": 4171,
+      "source_spelling": "[[acepción#Galego|acepción]]"
+    },
+    {
+      "target": "ser#Galego",
+      "label": "son",
+      "source_character_offset": 4200,
+      "source_spelling": "[[ser#Galego|son]]"
+    },
+    {
+      "target": "retrete#Galego",
+      "label": "retrete",
+      "source_character_offset": 4235,
+      "source_spelling": "[[retrete#Galego|retrete]]"
+    },
+    {
+      "target": "váter#Galego",
+      "label": "váter",
+      "source_character_offset": 4264,
+      "source_spelling": "[[váter#Galego|váter]]"
+    },
+    {
+      "target": "dar servizo#Galego",
+      "label": "dar servizo",
+      "source_character_offset": 4319,
+      "source_spelling": "[[dar servizo#Galego|dar servizo]]"
+    },
+    {
+      "target": "en servizo#Galego",
+      "label": "en servizo",
+      "source_character_offset": 4355,
+      "source_spelling": "[[en servizo#Galego|en servizo]]"
+    },
+    {
+      "target": "estar ao servizo de alguén#Galego",
+      "label": "estar ao servizo de alguén",
+      "source_character_offset": 4389,
+      "source_spelling": "[[estar ao servizo de alguén#Galego|estar ao servizo de alguén]]"
+    },
+    {
+      "target": "de servizo#Galego",
+      "label": "de servizo",
+      "source_character_offset": 4455,
+      "source_spelling": "[[de servizo#Galego|de servizo]]"
+    },
+    {
+      "target": "facerlle un flaco servizo a alguén#Galego",
+      "label": "facerlle un flaco servizo a alguén",
+      "source_character_offset": 4489,
+      "source_spelling": "[[facerlle un flaco servizo a alguén#Galego|facerlle un flaco servizo a alguén]]"
+    },
+    {
+      "target": "folla de servizos#Galego",
+      "label": "folla de servizos",
+      "source_character_offset": 4571,
+      "source_spelling": "[[folla de servizos#Galego|folla de servizos]]"
+    },
+    {
+      "target": "fóra de servizo#Galego",
+      "label": "fóra de servizo",
+      "source_character_offset": 4619,
+      "source_spelling": "[[fóra de servizo#Galego|fóra de servizo]]"
+    },
+    {
+      "target": "romperlle o servizo a alguén#Galego",
+      "label": "romperlle o servizo a alguén",
+      "source_character_offset": 4663,
+      "source_spelling": "[[romperlle o servizo a alguén#Galego|romperlle o servizo a alguén]]"
+    },
+    {
+      "target": "servizo a domicilio#Galego",
+      "label": "servizo a domicilio",
+      "source_character_offset": 4733,
+      "source_spelling": "[[servizo a domicilio#Galego|servizo a domicilio]]"
+    },
+    {
+      "target": "servizo activo#Galego",
+      "label": "servizo activo",
+      "source_character_offset": 4785,
+      "source_spelling": "[[servizo activo#Galego|servizo activo]]"
+    },
+    {
+      "target": "servizo de intelixencia#Galego",
+      "label": "servizo de intelixencia",
+      "source_character_offset": 4827,
+      "source_spelling": "[[servizo de intelixencia#Galego|servizo de intelixencia]]"
+    },
+    {
+      "target": "servizo de mantemento#Galego",
+      "label": "servizo de mantemento",
+      "source_character_offset": 4887,
+      "source_spelling": "[[servizo de mantemento#Galego|servizo de mantemento]]"
+    },
+    {
+      "target": "servizo de mensaxes curtas#Galego",
+      "label": "servizo de mensaxes curtas",
+      "source_character_offset": 4943,
+      "source_spelling": "[[servizo de mensaxes curtas#Galego|servizo de mensaxes curtas]]"
+    },
+    {
+      "target": "servizo discrecional#Galego",
+      "label": "servizo discrecional",
+      "source_character_offset": 5009,
+      "source_spelling": "[[servizo discrecional#Galego|servizo discrecional]]"
+    },
+    {
+      "target": "servizo doméstico#Galego",
+      "label": "servizo doméstico",
+      "source_character_offset": 5063,
+      "source_spelling": "[[servizo doméstico#Galego|servizo doméstico]]"
+    },
+    {
+      "target": "servizo militar#Galego",
+      "label": "servizo militar",
+      "source_character_offset": 5111,
+      "source_spelling": "[[servizo militar#Galego|servizo militar]]"
+    },
+    {
+      "target": "servizo público#Galego",
+      "label": "servizo público",
+      "source_character_offset": 5155,
+      "source_spelling": "[[servizo público#Galego|servizo público]]"
+    },
+    {
+      "target": "servicio secreto#Galego",
+      "label": "servicio secreto",
+      "source_character_offset": 5199,
+      "source_spelling": "[[servicio secreto#Galego|servicio secreto]]"
+    },
+    {
+      "target": "servizos mínimos#Galego",
+      "label": "servizos mínimos",
+      "source_character_offset": 5245,
+      "source_spelling": "[[servizos mínimos#Galego|servizos mínimos]]"
+    },
+    {
+      "target": "servizos sanitarios#Galego",
+      "label": "servizos sanitarios",
+      "source_character_offset": 5291,
+      "source_spelling": "[[servizos sanitarios#Galego|servizos sanitarios]]"
+    }
+  ]
+}

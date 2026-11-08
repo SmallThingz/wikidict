@@ -1,0 +1,11 @@
+{{-lingua-|gl}}<noinclude>
+
+<!--Noutros wiktionaries:-->
+[[an:Plantilla:-gl-]]
+[[ast:Plantía:-gl-]]
+[[da:Skabelon:-gl-]]
+[[es:Plantilla:GL-ES]]
+[[eu:Txantiloi:-gl-]]
+[[it:Template:-gl-]]
+[[oc:Modèl:=gl=]]
+[[ru:Шаблон:-gl-]]</noinclude>

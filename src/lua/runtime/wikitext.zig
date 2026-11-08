@@ -1652,7 +1652,7 @@ pub const Expander = struct {
             return dependency.Text.transformed(try self.emptyComputedTransclusion(expanded_head, parts.items[1..], params, host_title, depth, true));
         }
         if (invalidTransclusionTitle(title)) {
-            if (invalidTransclusionNeedsProtection(title))
+            if (invalidTransclusionNeedsProtection(title) or literalComputedColonTitle(content, title, parts.items.len))
                 return dependency.Text.untracked(try std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content}));
             return dependency.Text.untracked(try std.fmt.allocPrint(self.runtime.allocator, "{{{{{s}}}}}", .{content}));
         }
@@ -3388,6 +3388,38 @@ pub const Expander = struct {
         return false;
     }
 
+    // This is called only after both actual parser-function dispatch attempts
+    // failed and title validation rejected the expanded name. A plain name
+    // containing only defaultless parameters has no child markup to suppress.
+    // Keep the unchanged invocation literal; renderer-side colon text alone
+    // cannot prove that dispatch outcome.
+    fn literalComputedColonTitle(content: []const u8, title: []const u8, part_count: usize) bool {
+        if (part_count != 1 or !std.mem.eql(u8, content, title) or
+            !std.unicode.utf8ValidateSlice(title)) return false;
+        const colon = preprocess.findTopParserColon(title) orelse return false;
+        if (colon.index == 0 or std.mem.indexOfAny(u8, title[0..colon.index], "{}") != null) return false;
+        var at: usize = 0;
+        var parameters: usize = 0;
+        while (at < title.len) {
+            if (std.mem.startsWith(u8, title[at..], "{{{")) {
+                if (at <= colon.index) return false;
+                const end = std.mem.indexOfPos(u8, title, at + 3, "}}}") orelse return false;
+                const name = title[at + 3 .. end];
+                if (name.len == 0) return false;
+                for (name) |byte| if (byte < 0x80 and !std.ascii.isAlphanumeric(byte) and byte != '_' and byte != '-') return false;
+                parameters += 1;
+                at = end + 3;
+                continue;
+            }
+            if (std.mem.startsWith(u8, title[at..], "：")) { at += "：".len; continue; }
+            const byte = title[at];
+            if (byte < 0x80 and !std.ascii.isAlphanumeric(byte) and
+                std.mem.indexOfScalar(u8, "_- /():", byte) == null) return false;
+            at += 1;
+        }
+        return parameters != 0;
+    }
+
     fn invalidTransclusionNeedsProtection(raw: []const u8) bool {
         for (raw) |byte| switch (byte) {
             0...31, 127, '[', ']', '<', '>' => return true,
@@ -3459,7 +3491,7 @@ pub const Expander = struct {
             return self.emptyComputedTransclusion(expanded_head, parts.items[1..], params, host_title, depth, true);
         }
         if (invalidTransclusionTitle(title)) {
-            if (invalidTransclusionNeedsProtection(title))
+            if (invalidTransclusionNeedsProtection(title) or literalComputedColonTitle(content, title, parts.items.len))
                 return std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content});
             return std.fmt.allocPrint(self.runtime.allocator, "{{{{{s}}}}}", .{content});
         }
@@ -9154,4 +9186,41 @@ test "ISBN native frame general strip values retain page ownership and reset on 
     try std.testing.expectError(error.FrameTooLarge, expander.isbnStrip("9788323999997"));
     try std.testing.expectEqual(std.math.maxInt(u32), expander.strip_counter);
     try std.testing.expectEqual(@as(usize, 0), expander.strip_values.count());
+}
+
+
+test "failed native dispatch preserves plain static colon computed title as literal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24); defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    const Source = struct {
+        fn parser(_: ?*anyopaque, name: []const u8) anyerror!?[]const u8 {
+            // Controlled explicit alias: callable heads must return before the
+            // invalid-title recovery, even when their argument contains braces.
+            return if (std.mem.eql(u8, name, "callable")) "#if" else null;
+        }
+    };
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .resolve_parser_function = Source.parser } };
+    for ([_][]const u8{ "родств:eo:{{{родств-блок}}}", "name：scope:{{{missing}}}" }) |name| {
+        const invocation = try std.fmt.allocPrint(a, "{{{{{s}}}}}", .{name});
+        const expected = try std.fmt.allocPrint(a, "<nowiki>{s}</nowiki>", .{invocation});
+        try std.testing.expectEqualStrings(expected, try expander.expandFragment("denaske", invocation, 1_791_731_560));
+        try std.testing.expect(!expander.unsupported_parser_function);
+        const params = try runtime.newTable();
+        try std.testing.expectEqualStrings(expected, try expander.expandConstruct(name, params, "denaske", 0));
+    }
+    try std.testing.expectEqualStrings("yes", try expander.expandFragment("Page", "{{callable:{{{missing}}}|yes|no}}", 1_791_731_560));
+    try std.testing.expectEqualStrings("{{plain_{{{missing}}}}}", try expander.expandFragment("Page", "{{plain_{{{missing}}}}}", 1_791_731_560));
+    for ([_][]const u8{
+        "{{{head}}}:{{{missing}}}", "name:{{{missing|default}}}", "name:{{{}}}",
+        "name:{{{bad:name}}}", "name:{{{missing}}}[[Target]]", "name:{{{missing}}}<b>x</b>",
+        "name:{{{missing}}}''x''", "name:{{{missing}}}|argument", "#unknown:{{{missing}}}",
+        "name:{{{missing}}}\n", "name:\xff{{{missing}}}",
+    }) |name| try std.testing.expect(!Expander.literalComputedColonTitle(name, name, 1));
+    try std.testing.expect(!Expander.literalComputedColonTitle("name:{{{missing}}}", "name:resolved", 1));
+    try std.testing.expect(!Expander.literalComputedColonTitle("name:{{{missing}}}", "name:{{{missing}}}", 2));
 }

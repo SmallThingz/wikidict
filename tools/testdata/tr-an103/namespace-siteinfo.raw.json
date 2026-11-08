@@ -1,0 +1,207 @@
+{
+  "content_language": "tr",
+  "date": "20261001",
+  "namespace_registry_sha256": "60e6e86d7b29891195d2f5da087f496b51b03879283760dd84f113f36889af18",
+  "profile": "general-and-seven-scribunto-statistics",
+  "query": {
+    "general": {
+      "allcentralidlookupproviders": [
+        "CentralAuth",
+        "local"
+      ],
+      "allunicodefixes": false,
+      "articlepath": "/wiki/$1",
+      "base": "https://tr.wiktionary.org/wiki/Vikis%C3%B6zl%C3%BCk:Anasayfa",
+      "case": "case-sensitive",
+      "categorycollation": "uca-tr",
+      "centralidlookupprovider": "CentralAuth",
+      "citeresponsivereferences": true,
+      "dbtype": "mysql",
+      "dbversion": "10.11.16-MariaDB-log",
+      "externallinktarget": false,
+      "fallback": [
+        {
+          "code": "en"
+        }
+      ],
+      "fallback8bitEncoding": "windows-1252",
+      "favicon": "https://tr.wiktionary.org/static/favicon/piece.ico",
+      "galleryoptions": {
+        "captionLength": true,
+        "imageHeight": 120,
+        "imageWidth": 120,
+        "imagesPerRow": 0,
+        "mode": "traditional",
+        "showBytes": true,
+        "showDimensions": true
+      },
+      "generator": "MediaWiki 1.47.0-wmf.22",
+      "git-branch": "wmf/1.47.0-wmf.22",
+      "git-hash": "79b81ba96674efc8a803fc956bc501d347d440d2",
+      "imagelimits": {
+        "0": {
+          "height": 240,
+          "width": 320
+        },
+        "1": {
+          "height": 480,
+          "width": 640
+        },
+        "2": {
+          "height": 600,
+          "width": 800
+        },
+        "3": {
+          "height": 768,
+          "width": 1024
+        },
+        "4": {
+          "height": 1024,
+          "width": 1280
+        },
+        "5": {
+          "height": 2048,
+          "width": 2560
+        }
+      },
+      "imagewhitelistenabled": false,
+      "interwikimagic": true,
+      "invalidusernamechars": "@:>=",
+      "lang": "tr",
+      "langconversion": true,
+      "legaltitlechars": " %!\"$&'()*,\\-.\\/0-9:;=?@A-Z\\\\^_`a-z~\\x80-\\xFF+",
+      "linkconversion": true,
+      "linkprefix": "",
+      "linkprefixcharset": "",
+      "linktrail": "/^([a-zÇĞçğİıÖöŞşÜüÂâÎîÛû]+)(.*)$/sDu",
+      "linter": {
+        "high": [
+          "deletable-table-tag",
+          "duplicate-ids",
+          "html5-misnesting",
+          "misc-tidy-replacement-issues",
+          "multiline-html-table-in-list",
+          "multiple-unclosed-formatting-tags",
+          "pwrap-bug-workaround",
+          "self-closed-tag",
+          "template-arg-in-extension-tag",
+          "tidy-font-bug",
+          "tidy-whitespace-bug",
+          "unclosed-quotes-in-heading"
+        ],
+        "low": [
+          "empty-heading",
+          "missing-end-tag",
+          "missing-end-tag-in-heading",
+          "night-mode-unaware-background-color",
+          "obsolete-tag",
+          "pre-expansion",
+          "stripped-tag"
+        ],
+        "medium": [
+          "bogus-image-options",
+          "fostered",
+          "misnested-tag",
+          "multi-colon-escape",
+          "wikilink-in-extlink"
+        ]
+      },
+      "logo": "//tr.wiktionary.org/static/images/project-logos/trwiktionary.png",
+      "magiclinks": {
+        "ISBN": true,
+        "PMID": true,
+        "RFC": true
+      },
+      "mainpage": "Vikisözlük:Anasayfa",
+      "mainpageisdomainroot": false,
+      "max-page-id": 1750338,
+      "maxarticlesize": 2097152,
+      "maxuploadsize": 5368709120,
+      "minuploadchunksize": 1024,
+      "misermode": true,
+      "mobileserver": "https://tr.wiktionary.org",
+      "nofollowdomainexceptions": [
+        "mediawiki.org",
+        "wikibooks.org",
+        "wikimedia.com",
+        "wikimedia.org",
+        "wikinews.org",
+        "wikipedia.org",
+        "wikiquote.org",
+        "wikisource.org",
+        "wikiversity.org",
+        "wiktionary.org",
+        "wikivoyage.org",
+        "wikidata.org",
+        "wikifunctions.org",
+        "tools.wmflabs.org",
+        "toolforge.org",
+        "etherpad.wmflabs.org"
+      ],
+      "nofollowlinks": true,
+      "nofollownsexceptions": [],
+      "pageviewservice-supported-metrics": {
+        "mostviewed": {
+          "pageviews": true,
+          "uniques": false
+        },
+        "pageviews": {
+          "pageviews": true,
+          "uniques": false
+        },
+        "siteviews": {
+          "pageviews": true,
+          "uniques": true
+        }
+      },
+      "phpsapi": "fpm-fcgi",
+      "phpversion": "8.3.35",
+      "readinglists-config": {
+        "deletedRetentionDays": 30,
+        "maxEntriesPerList": 5000,
+        "maxListsPerUser": 100
+      },
+      "readonly": false,
+      "rtl": false,
+      "script": "/w/index.php",
+      "scriptpath": "/w",
+      "server": "//tr.wiktionary.org",
+      "servername": "tr.wiktionary.org",
+      "sitename": "Vikisözlük",
+      "thumblimits": {
+        "0": 180,
+        "1": 250,
+        "2": 400
+      },
+      "time": "2026-10-06T01:40:18Z",
+      "timeoffset": 0,
+      "timezone": "UTC",
+      "titleconversion": true,
+      "uploadsenabled": true,
+      "variantarticlepath": false,
+      "wikiid": "trwiktionary",
+      "wmf-config": {
+        "wmfEtcdLastModifiedIndex": 3930249,
+        "wmfMasterDatacenter": "eqiad"
+      },
+      "writeapi": true
+    },
+    "statistics": {
+      "activeusers": 63,
+      "admins": 6,
+      "articles": 1495559,
+      "cirrussearch-article-words": 23566769,
+      "edits": 5872548,
+      "images": 1,
+      "jobs": 0,
+      "pages": 1617413,
+      "queued-massmessages": 0,
+      "users": 68522
+    }
+  },
+  "raw_response_sha256": "b171ee1d3295f0f7e598e7ae5bdef174c4f9af89aebe85e9d144cc08f29cce67",
+  "retrieved_utc": "2026-10-06T01:40:18.791603+00:00",
+  "schema": "wikidict.site-info.v2",
+  "temporal_scope": "current-api-observation",
+  "wiki": "trwiktionary"
+}

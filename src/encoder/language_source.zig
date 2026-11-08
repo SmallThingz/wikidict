@@ -11,6 +11,7 @@ pub const Section = struct {
     source: []const u8,
     hyphen_marker: bool = false,
     root_wiki_heading: bool = false,
+    adjacent_root_rule: ?usize = null,
 };
 
 /// A language declaration remains a boundary even when its label is unknown.
@@ -166,11 +167,19 @@ pub const HtmlHeadingScopes = struct {
     openings: []const usize,
     namespace_catalog: ?*const @import("namespace_registry").Registry = null,
     linked_h1_filter: ?Iterator.MarkerFilter = null,
+    category_h1_filter: ?Iterator.MarkerFilter = null,
 
     fn heading(self: HtmlHeadingScopes, source: []const u8, start: usize, line: []const u8) ?ParsedHeading {
         const scope: LinkHeadingScopes = .{ .source = self.source, .openings = self.openings };
         if (!scope.admits(source, start)) return null;
         if (plainLineHtmlH2(line)) |label| return .{ .level = 2, .title = label };
+        if (categoryLinkedLineHtmlH1(line, self.namespace_catalog)) |label| {
+            const source_filter = self.category_h1_filter orelse return null;
+            if (!source_filter.accepts(source_filter.ctx, line)) return null;
+            const owner_filter = self.linked_h1_filter orelse return null;
+            if (!owner_filter.accepts(owner_filter.ctx, label)) return null;
+            return .{ .level = 1, .title = label };
+        }
         const linked = plainLineHtmlH1(line) orelse literalBracketLineHtmlH1(line) orelse
             linkedLineHtmlH1(line, self.namespace_catalog) orelse return null;
         const filter = self.linked_h1_filter orelse return null;
@@ -259,13 +268,48 @@ pub fn linkedLineHtmlH1(line: []const u8, namespaces: ?*const @import("namespace
     return heading;
 }
 
+// Syntax only. The root observation and selected raw template-role callback
+// remain mandatory; a category name or this wrapper alone supplies no owner.
+pub fn categoryLinkedLineHtmlH1(line: []const u8, namespaces: ?*const @import("namespace_registry").Registry) ?[]const u8 {
+    const ns = namespaces orelse return null;
+    if (line.len == 0 or line[0] != '<' or std.mem.indexOfAny(u8, line, "\r\n") != null) return null;
+    const outer = syntax.tagAt(line, 0) orelse return null;
+    if (!outer.is("h1") or outer.closing or outer.self_closing) return null;
+    const whole = syntax.matchingTag(line, outer) orelse return null;
+    const tail = line[whole.end..];
+    if (tail.len != 0 and !std.mem.eql(u8, tail, "__NOEDITSECTION__")) return null;
+    const inner = line[outer.end..whole.inner_end];
+    if (!std.mem.startsWith(u8, inner, "[[")) return null;
+    const hidden = syntax.balanced(inner, 0) orelse return null;
+    const target = inner[2..hidden.inner_end];
+    if (target.len == 0 or target[0] == ':' or std.mem.indexOfAny(u8, target, "[]{}<>&|#\r\n") != null) return null;
+    const category = ns.ofTitle(target);
+    if (category.id != 14 or category.text.len == 0) return null;
+    const rest = inner[hidden.end..];
+    const span = syntax.tagAt(rest, 0) orelse return null;
+    if (!span.is("span") or span.closing or span.self_closing or
+        !std.mem.eql(u8, std.mem.trim(u8, span.attrs, " \t"), "class=\"bluetogreen\"")) return null;
+    const wrapped = syntax.matchingTag(rest, span) orelse return null;
+    if (wrapped.end != rest.len) return null;
+    const visible = rest[span.end..wrapped.inner_end];
+    if (!std.mem.startsWith(u8, visible, "[[:")) return null;
+    const link = syntax.balanced(visible, 0) orelse return null;
+    if (link.end != visible.len) return null;
+    const fields = visible[3..link.inner_end];
+    const pipe = std.mem.indexOfScalar(u8, fields, '|') orelse return null;
+    const label = fields[pipe + 1 ..];
+    if (!std.mem.eql(u8, fields[0..pipe], target) or !std.mem.eql(u8, label, category.text) or
+        std.mem.indexOfAny(u8, label, "[]{}<>&|#=\"'\r\n\t") != null) return null;
+    return label;
+}
+
 pub fn mayHaveLanguageHtmlHeading(source: []const u8, namespaces: ?*const @import("namespace_registry").Registry) bool {
     if (mayHavePlainLineHtmlH2(source)) return true;
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
         const physical = std.mem.trimEnd(u8, line, "\r");
         if (plainLineHtmlH1(physical) != null or literalBracketLineHtmlH1(physical) != null or
-            linkedLineHtmlH1(physical, namespaces) != null) return true;
+            linkedLineHtmlH1(physical, namespaces) != null or categoryLinkedLineHtmlH1(physical, namespaces) != null) return true;
     }
     return false;
 }
@@ -1220,6 +1264,17 @@ pub fn literalL2Section(section: Section, matcher: ?syntax.ControlMatcher) bool 
 }
 
 pub fn authoredL2LexicalSubtree(section: Section, matcher: ?syntax.ControlMatcher) bool {
+    return authoredL2LexicalSubtreePolicy(section, matcher, false);
+}
+
+// A complete leading qualifier template contributes no lexical or language
+// evidence. This separate policy requires a following complete ordinary link
+// with a plain nonempty target/display; the old leading policy is unchanged.
+pub fn authoredL2LexicalSubtreeWithLiteralTail(section: Section, matcher: ?syntax.ControlMatcher) bool {
+    return authoredL2LexicalSubtreePolicy(section, matcher, true);
+}
+
+fn authoredL2LexicalSubtreePolicy(section: Section, matcher: ?syntax.ControlMatcher, literal_tail: bool) bool {
     if (!literalL2Section(section, matcher)) return false;
     const first_end = std.mem.indexOfScalar(u8, section.source, '\n').?;
 
@@ -1241,7 +1296,7 @@ pub fn authoredL2LexicalSubtree(section: Section, matcher: ?syntax.ControlMatche
             // Only a top-level numbered meaning is evidence; examples and
             // nested list markers cannot supply the missing lexical subtree.
             if (body_start == 1 and body_start < line.len and line[body_start] != ':' and line[body_start] != '*') {
-                if (nonemptyAuthoredDefinition(line[body_start..])) found_definition = true;
+                if (nonemptyAuthoredDefinitionPolicy(line[body_start..], literal_tail)) found_definition = true;
             }
         }
         balance.update(section.source, cursor, end);
@@ -1272,14 +1327,64 @@ fn literalSubtreeHeading(line: []const u8, matcher: ?syntax.ControlMatcher) ?Par
     return heading;
 }
 
-fn nonemptyAuthoredDefinition(body: []const u8) bool {
+fn nonemptyAuthoredDefinitionPolicy(body: []const u8, literal_tail: bool) bool {
     var rest = std.mem.trim(u8, body, " \t\r");
     while (std.mem.startsWith(u8, rest, "<!--")) {
         const close = std.mem.indexOf(u8, rest[4..], "-->") orelse return false;
         rest = std.mem.trim(u8, rest[4 + close + 3 ..], " \t\r");
     }
+    var skipped_template = false;
+    if (literal_tail) while (std.mem.startsWith(u8, rest, "{{")) {
+        skipped_template = true;
+        const pair = syntax.balanced(rest, 0) orelse return false;
+        rest = std.mem.trim(u8, rest[pair.end..], " \t\r");
+        while (std.mem.startsWith(u8, rest, "<!--")) {
+            const close = std.mem.indexOf(u8, rest[4..], "-->") orelse return false;
+            rest = std.mem.trim(u8, rest[4 + close + 3 ..], " \t\r");
+        }
+    };
+    if (skipped_template) return authoredPlainDefinitionLink(rest);
     // A template-only meaning needs expansion authority, not this raw proof.
     return rest.len != 0 and !std.mem.startsWith(u8, rest, "{{");
+}
+
+// This is deliberately not an HTML/formatting visibility evaluator. Metadata
+// category/file links, empty labels, quote-only formatting and rich/template
+// labels cannot supply the new qualifier-tail certificate.
+fn authoredPlainDefinitionLink(source: []const u8) bool {
+    if (!std.mem.startsWith(u8, source, "[[")) return false;
+    const pair = syntax.balanced(source, 0) orelse return false;
+    const body = source[2..pair.inner_end];
+    const pipe = std.mem.indexOfScalar(u8, body, '|');
+    const target = std.mem.trim(u8, body[0..(pipe orelse body.len)], " \t\r");
+    if (std.mem.trim(u8, target, " \t\r'_").len == 0 or
+        std.mem.indexOfAny(u8, target, ":<>{}[]|&\r\n") != null or !std.unicode.utf8ValidateSlice(target)) return false;
+    if (pipe) |at| {
+        const label = std.mem.trim(u8, body[at + 1 ..], " \t\r'");
+        if (label.len == 0 or std.mem.indexOfAny(u8, label, "<>{}[]|&\r\n") != null or !std.unicode.utf8ValidateSlice(label)) return false;
+    }
+    return true;
+}
+
+// A lexical spelling is only a preflight. The final boundary additionally
+// requires the renderer to have observed BOTH the heading and this exact rule
+// in its original root domain. Earlier malformed source may recover normally;
+// a separate prefix parser cannot replace that actual observation.
+pub fn adjacentPhysicalRule(source: []const u8, section: Section) ?struct { start: usize, end: usize } {
+    const heading_start = std.math.sub(usize, @intFromPtr(section.source.ptr), @intFromPtr(source.ptr)) catch return null;
+    if (heading_start > source.len or section.source.len > source.len - heading_start) return null;
+    const before = std.mem.trimEnd(u8, source[0..heading_start], " \t\r\n");
+    if (before.len == 0) return null;
+    const rule_start = if (std.mem.lastIndexOfScalar(u8, before, '\n')) |at| at + 1 else 0;
+    if (!std.mem.eql(u8, before[rule_start..], "----")) return null;
+    return .{ .start = rule_start, .end = heading_start };
+}
+
+pub fn adjacentRootRule(source: []const u8, section: Section) ?struct { start: usize, end: usize } {
+    if (!section.root_wiki_heading) return null;
+    const rule = adjacentPhysicalRule(source, section) orelse return null;
+    if ((section.adjacent_root_rule orelse return null) != rule.start) return null;
+    return .{ .start = rule.start, .end = rule.end };
 }
 
 test "authored literal L2 lexical subtrees require active deeper numbered meaning" {
@@ -1599,4 +1704,18 @@ test "plain HTML H1 language boundary requires original observed source and trus
     }) |invalid| try std.testing.expect(plainLineHtmlH1(invalid) == null);
     try std.testing.expectEqualStrings("English", plainLineHtmlH2("<h2>English</h2>").?);
     try std.testing.expect(plainLineHtmlH2(line) == null);
+}
+
+
+test "qualifier lexical tail requires a complete plain visible link and leaves old policy unchanged" {
+    const prefix = "==Unrecorded==\n===Pronoun===\n# ";
+    inline for (.{ "{{demonstrative|lang=io}} [[ഈ]] ([[സാധനം]])", "{{cardinal|lang=no}} [[രണ്ട്]]", "{{context|demonstrative}} [[ഈ]]" }) |tail| {
+        const section: Section = .{ .heading = "Unrecorded", .source = prefix ++ tail ++ "\n" };
+        try std.testing.expect(!authoredL2LexicalSubtree(section, null));
+        try std.testing.expect(authoredL2LexicalSubtreeWithLiteralTail(section, null));
+    }
+    inline for (.{ "{{qualifier|x}}<span></span>", "{{qualifier|x}}''", "{{qualifier|x}}<!--empty-->", "{{qualifier|x}}[[Category:empty]]", "{{qualifier|x}}[[target|]]", "{{qualifier|x}}[[target|''']]", "{{qualifier|x}}[[target|<span></span>]]", "{{qualifier|x}}[[target|{{empty}}]]", "{{qualifier|x}}[[broken" }) |tail| {
+        const section: Section = .{ .heading = "Unrecorded", .source = prefix ++ tail ++ "\n" };
+        try std.testing.expect(!authoredL2LexicalSubtreeWithLiteralTail(section, null));
+    }
 }

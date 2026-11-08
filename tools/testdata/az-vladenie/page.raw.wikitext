@@ -1,0 +1,12 @@
+=={{Dil|Rus dili}}==
+==={{Söztipi|İsim|Rus dili}}===
+* {{ru}}: {{çevir|ru|владение}}
+*'''Heca''': вла-де-ние
+*'''Tələffüz''':  {{IPA|[vlá[d]e[n]je]|lang=ru}}
+{{Mənalar}} 
+# Mülk, malikanə;
+# Torpaq, ölkə;
+# Sahib olma, malik olma, yiyələnmə, yiyəlik, sahiblik
+*'''Tərcümə''': {{az}}: {{çevir|ru|mülk}}, {{çevir|ru|malikanə}}
+*'''Tərcümə''': {{az}}: {{çevir|ru|torpaq}}, {{çevir|ru|ölkə}} 
+*'''Tərcümə''': {{az}}: {{çevir|ru|sahib olmaq}}, {{çevir|ru|malik olmaq}}, {{çevir|ru|yiyələnmə}}, {{çevir|ru|yiyəlik}}, {{çevir|ru|sahiblik}}

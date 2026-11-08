@@ -1,0 +1,40 @@
+==Norsk==
+===Substantiv===
+{{nb-sub|m}}
+
+# {{kontekst|[[matlaging]]|[[utellelig]]|kat=no:Stykningsdeler|kat2=no:Masseord}} bestemt [[stykningsdel]] på storfekjøtt etter norsk storfepartering; sidebryststykke (bringen) på høyde med de nederste ribbenene
+#: ''Man bruker '''bibringe''' mest som suppekjøtt.''
+
+====Uttale====
+{{uttale mangler|språk=no}}
+
+====Grammatikk====
+{{no-sub-m1e|bibring}}
+
+====Oversettelser====
+{{overs-topp|kjøttstykke av storfebringe}}
+* {{overs|en|chuck|cross rib}}, {{o|en|chuck shortrib}}
+{{overs-midt}}
+{{overs-bunn}}
+
+====Etymologi====
+{{sammensetning|bi-|bringe|språk=nb}}
+
+===Verb===
+{{nb-verb}}
+
+# meddele; få noen til oppfatte noe
+#:''Kan du vennligst '''bibringe''' denne kunnskapen videre?''
+
+====Grammatikk====
+{{Verb-topp|reg=blandingsform}}
+{{Verb-rad|infinitiv=bibringe|presens=bibringer|preteritum=bibrakte|perfektum=bibrakt|imperativ=bibring|presp=bibringende|kontekst={{norm|nb=ja}}}}
+{{Verb-rad|infinitiv=bibringe|presens=bibringer|preteritum=bibragte|perfektum=bibragt|imperativ=bibring|presp=bibringende|kontekst={{norm|nrm=ja}}}}
+   <includeonly>
+      Nynorskordboka har ikke dette verbet listet. Lar det foreløpig ligge som includeonly. Teodor
+      {{Verb-rad|infinitiv=bibringe|presens=bibringar|preteritum=bibringa|perfektum=bibringa|imperativ=bibring|presp=bibringande|kontekst={{norm|nn=ja}}}}
+   </includeonly>
+{{Verb-bunn}}
+
+====Etymologi====
+{{sammensetning|bi-|bringe|språk=no}}

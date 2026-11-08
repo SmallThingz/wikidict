@@ -1,0 +1,757 @@
+/** Размещённый здесь CSS будет применяться ко всем темам оформления */
+
+  /************************/
+  /* CommonsTicker styles */
+  /************************/
+ 
+  /* links */
+  .tickerDiffLink { } /* diff links in ticker */
+  .tickerMiscLink { } /* misc links in ticker */
+ 
+  /* remove list bullets */
+  .tickerList ul,    .tickerList ul li    { list-style: none; text-indent:-2em; margin-left:2em;   text-align:left; }
+  .tickerList ul ul, .tickerList ul ul li { list-style: none; text-indent:0;    margin-left:1.5em; text-align:left; }
+
+  /* per-type styles */
+  .tickerEntry_deleted     { }  /* entry for image deletion */
+  .tickerEntry_restored    { }  /* entry for restored image */
+  .tickerEntry_replaced    { }  /* entry for image replacement */
+  .tickerEntry_tagged      { }  /* entry for adding/removing problem tags */
+  .tickerEntry_redir       { }  /* entry for critical redirection (fot tag redirects) */
+  .tickerEntry_recat       { }  /* entry for critical re-categorization (for tag categories) */
+  .tickerEntry_notify      { }  /* entry for global notifications */
+  .tickerEntry_changed     { }  /* entry for generic change */
+
+  /* per-status styles */
+  .tickerStatus_done     { text-decoration:line-through; }  /* strike through when entry has been handeled */
+
+  /* per-action styles */
+  .tickerAction_deleted:before     { content:" GONE "; color: #FF0000; font-family:monospace; font-weight:bold; font-size:100%; }  
+  .tickerAction_restored:before    { content:" BACK "; color: #00BB00; font-family:monospace; font-weight:bold; font-size:100%; }  
+  .tickerAction_deletedRev:before  { content:" -OLD "; color: #DDAAAA; font-family:monospace; font-weight:bold; font-size:100%; }  
+  .tickerAction_replaced:before    { content:" REPL "; color: #CC88FF; font-family:monospace; font-weight:bold; font-size:100%; }  
+  .tickerAction_replacedOwn:before { content:" UPDT "; color: #EEAAFF; font-family:monospace; font-weight:bold; font-size:100%; }  
+  .tickerAction_addedBad:before    { content:" +VfD "; color: #FF8800; font-family:monospace; font-weight:bold; font-size:100%; }  
+  .tickerAction_removedBad:before  { content:" -VfD "; color: #00BB00; font-family:monospace; font-weight:bold; font-size:100%; }  
+  .tickerAction_addedGood:before   { content:" +OK  "; color: #00BB00; font-family:monospace; font-weight:bold; font-size:100%; }  
+  .tickerAction_removedGood:before { content:" -OK  "; color: #FF8800; font-family:monospace; font-weight:bold; font-size:100%; }
+
+  /* ticker usage list */
+  .tickerUsage  { font-size:80%; }  
+
+  /* entry applies to a template used by multiple images */
+  .tickerTemplateEntry    { font-weight: bold; } 
+
+  /* entry applies to sub-entries, i.e. images that use a specific template */
+  .tickerSubEntry         { }                       
+
+  /* minor entry styles */ 
+  .tickerMinorEntry  { color:#666; }     /* minor entry */
+  .tickerMinorEntry a,
+  .tickerMinorEntry a:link,
+  .tickerMinorEntry a:visited { color:#669; }
+  #bodyContent .tickerMinorEntry a.extiw,
+  #bodyContent .tickerMinorEntry a.extiw:link,
+  #bodyContent .tickerMinorEntry a.extiw:visited { color:#669; }
+
+/* International Phonetic Alphabet */
+.IPA {
+  font-family: Gentium, GentiumAlt, DejaVu Sans, Segoe UI, Lucida Grande, Charis SIL, Doulos SIL, TITUS Cyberbit Basic, Code2000, Lucida Sans Unicode, sans-serif;
+  text-decoration: none;
+  font-size: 110%;
+}
+
+/* References */
+ol.references {
+	font-size:100%
+}
+.references-small {
+	font-size:90%;
+	margin-bottom: 0.5em;
+}
+
+/* highlight focused footnotes and references in some browsers */
+sup.reference:target, 
+ol.references li:target, 
+.highlight-target:target, 
+cite:target, 
+span.citation:target {
+	background: var(--background-color-progressive-subtle, #eaf3ff);
+}
+sup.reference:target {font-weight:bold}
+
+/* T156351: Support for Parsoid's Cite implementation */
+span[rel="mw:referencedBy"] {
+    counter-reset: mw-ref-linkback 0;
+}
+span[rel="mw:referencedBy"] > a::before {
+    font-weight: bold;
+    font-style: italic;
+    font-size: 80%; /* To mimic the sub,sup font-size:80% rule at top of file */
+    content: counter( mw-ref-linkback, decimal );
+}
+
+/* Class for links with loudspeaker icon next to them */
+ 
+.audiolink a {
+    background: url("//upload.wikimedia.org/wikipedia/commons/thumb/8/8a/Loudspeaker.svg/16px-Loudspeaker.svg.png") center left no-repeat !important;
+    padding-left: 20px !important;
+    padding-right: 0 !important;
+}
+.audiolink .ogg-player-options {
+   border: none;
+   white-space: pre;
+}
+
+.client-js .mw-edittools-section {
+	display: inline;
+}
+
+.client-js .audiometa {
+   display: none;
+}
+
+.client-nojs .audiofile {
+    display: none;
+}
+
+/* hide subtitle button on audio player */
+.vjs-control-bar > .vjs-subs-caps-button {
+  visibility: hidden;
+  width: 0;
+}
+
+/* Standard Navigationsleisten, aka box hiding thingy from .de.*/
+
+  div.Boxmerge,
+  div.NavFrame {
+          margin: 0px;
+          padding: 2px;
+          border: 1px solid var(--wikt-palette-grey, #9e9e9e);
+          text-align: center;
+          border-collapse: collapse;
+          font-size: 95%;
+  }
+  div.Boxmerge div.NavFrame {
+          border-style: none;
+          border-style: hidden;
+  }
+  div.NavFrame + div.NavFrame {
+          border-top-style: none;
+          border-top-style: hidden;
+  }
+  div.NavPic {
+          background-color: var(--background-color-base, #ffffff);
+          margin: 0px;
+          padding: 2px;
+          float: left;
+  }
+  div.NavFrame div.NavHead {
+          height: 1.6em;
+          font-weight: bold;
+          font-size: 100%;
+          background-color: var(--wikt-palette-dullcyan, #eaecf0);
+          position:relative;
+  }
+  div.NavFrame p {
+          font-size: 100%;
+  }
+  div.NavFrame div.NavContent {
+          font-size: 100%;
+  }
+  div.NavFrame div.NavContent p {
+          font-size: 100%;
+          border-top: 1px solid var(--wikt-palette-grey, #9e9e9e);
+  }
+  div.NavEnd {
+          margin: 0px;
+          padding: 0px;
+          line-height: 1px;
+          clear: both;
+  }
+  a.NavToggle {
+          position:absolute;
+          top:0px;
+          right:3px;
+          font-weight:normal;
+          font-size:smaller;
+  }
+  
+
+/* wikitable is part of core. prettytable is deprecated but still used in some
+	places, until fully replaced: */
+
+table.prettytable {
+	margin: 1em 1em 1em 0;
+	background: var(--wikt-palette-paleblue, #f8f9fa);
+	border: 1px var(--border-color-base, #aaaaaa) solid;
+	border-collapse: collapse;
+}
+
+table.prettytable th,
+table.prettytable td {
+	border: 1px var(--border-color-base, #aaaaaa) solid;
+	padding: 0.2em;
+}
+
+table.prettytable th {
+	background: var(--wikt-palette-lightergrey, #eeeeee);
+	text-align: center;
+}
+
+table.prettytable caption {
+	margin-left: inherit;
+	margin-right: inherit;
+}
+
+/* Style for horizontal lists (separator following item).
+   @source mediawiki.org/wiki/Snippets/Horizontal_lists
+   @revision 9 (2016-08-10)
+   @author [[User:Edokter]]
+ */
+.hlist dl,
+.hlist.hlist ol,
+.hlist.hlist ul {
+	margin: 0;
+	padding: 0;
+}
+/* Display list items inline */
+.hlist dd,
+.hlist dt,
+.hlist li {
+	margin: 0;
+	display: inline;
+}
+/* Display nested lists inline */
+.hlist.inline,
+.hlist.inline dl,
+.hlist.inline ol,
+.hlist.inline ul,
+.hlist dl dl, .hlist dl ol, .hlist dl ul,
+.hlist ol dl, .hlist ol ol, .hlist ol ul,
+.hlist ul dl, .hlist ul ol, .hlist ul ul {
+	display: inline;
+}
+/* Hide empty list items */
+.hlist .mw-empty-li,
+.hlist .mw-empty-elt {
+	display: none;
+}
+/* Generate bullets */
+.hlist dt:after {
+	content: ": ";
+}
+.hlist dd:after,
+.hlist li:after {
+	content: "\00a0· ";
+	font-weight: bold;
+}
+.hlist dd:last-child:after,
+.hlist dt:last-child:after,
+.hlist li:last-child:after {
+	content: none;
+}
+/* Add parentheses around nested lists */
+.hlist dd dd:first-child:before, .hlist dd dt:first-child:before, .hlist dd li:first-child:before,
+.hlist dt dd:first-child:before, .hlist dt dt:first-child:before, .hlist dt li:first-child:before,
+.hlist li dd:first-child:before, .hlist li dt:first-child:before, .hlist li li:first-child:before {
+	content: " (";
+	font-weight: normal;
+}
+.hlist dd dd:last-child:after, .hlist dd dt:last-child:after, .hlist dd li:last-child:after,
+.hlist dt dd:last-child:after, .hlist dt dt:last-child:after, .hlist dt li:last-child:after,
+.hlist li dd:last-child:after, .hlist li dt:last-child:after, .hlist li li:last-child:after {
+	content: ")";
+	font-weight: normal;
+}
+/* Put ordinals in front of ordered list items */
+.hlist ol {
+	counter-reset: listitem;
+}
+.hlist ol > li {
+	counter-increment: listitem;
+}
+.hlist ol > li:before {
+	content: " " counter(listitem) "\a0";
+}
+.hlist dd ol > li:first-child:before,
+.hlist dt ol > li:first-child:before,
+.hlist li ol > li:first-child:before {
+	content: " (" counter(listitem) "\a0";
+}
+
+/* lists without bullets */
+.plainlist ul {
+	list-style: none;
+	margin: 0;
+}
+
+/* prevent an unwanted break within a multi-column layout */
+
+.multicol li {
+  overflow: hidden; /* fix for Firefox */
+  page-break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+}
+
+/* To give a flexible column like structure to manual indices  */
+ 
+ul.index, div.index ul {
+	margin: 0;
+	column-count: 5;
+	column-width: 14em;
+	gap: 1em;
+}
+ 
+ul.index li, div.index ul li {
+	list-style-type: none;
+	width: 14em;
+	break-inside: avoid-column;
+}
+ 
+.index > section > .mw-heading {
+  display: block;
+  clear: both;
+}
+
+/* Main Page heading removal */
+.page-Викисловарь_Заглавная_страница #contentSub,
+.page-Викисловарь_Заглавная_страница #firstHeading {
+	display: none; /* NOT important */
+}
+
+/* Main page fixes */
+#interwiki-completelist {
+	font-weight: bold;
+}
+
+/* reverse index */
+div.reverseindex ol 
+{
+	margin: 0;
+	column-count: 5;
+	column-gap: 1em;
+	column-width: 14em;	
+}
+
+div.reverseindex li 
+{ 
+	width: 14em;
+	list-style-type: none;
+	text-align: right;
+}
+
+ .infobox {
+ 	border: 1px solid var(--border-color-base,#aaaaaa);
+ 	background: var(--background-color-neutral-subtle, #f9f9f9);
+ 	margin-bottom: 0.5em;
+ 	margin-left: 1em;
+ 	padding: .4em;
+ 	float: right;
+ 	clear: right;
+ 	font-size: 90%;
+ 	width: 18em;
+ 	vertical-align:middle
+ }
+ 
+ .infobox.sisterproject {
+ 	background-color: var(--background-color-neutral-subtle, #f9fafd);
+ }
+
+  /* не преломлять ссылку на заглавную страницу */
+  #n-mainpage { white-space:nowrap; }
+
+  /* цветовая маркировка изменений в байтах */
+
+  .mw-plusminus-pos {
+  	color: var(--color-content-added, #006400);
+  	font-weight: bold; 
+  }
+  .mw-plusminus-neg {
+  	color: var(--color-content-removed, #8b0000);
+  	font-weight: bold; 
+  }
+
+#userSummaryButtonsA a {
+  white-space:nowrap;
+  background: #C2F2FF;
+  border: 1px solid #9BD5F5;
+  padding: 0px 2px;
+  margin: 2px;
+  cursor: pointer;
+  font-size: 80%;
+  line-height: 17px;
+  color: #5B5B5B
+}
+#userSummaryButtonsA a:hover {
+  background: #B1EBFF;
+  border: 1px solid #64BDF0;
+  color: black;
+  text-decoration: none
+}
+
+.clickable-image a:hover {text-decoration: none}
+
+/* FlaggedRevs */
+.mw-fr-reviewlink, .fr-hist-basic-user, .fr-hist-basic-auto {font-weight:normal; font-size:smaller} 
+.flaggedrevs-pending {background:#ffc}
+.sitedir-ltr div.flaggedrevs_short {float:none; padding:1px}
+.sitedir-ltr div.flaggedrevs_short_details {width:95%; display:none}
+
+/* Для правильного отображения карточек в категориях */
+div#mw-subcategories {
+    display: table;
+}
+
+/*Language-specific*/
+:lang(chu), :lang(cu), :lang(orv) { 
+	font-family: /* Unicode 9.0 Slavonic fonts: */ 'Ponomar Unicode', 'Ponomar Unicode TT', 'Monomakh Unicode', 'Monomakh Unicode TT', 'Fedorovsk Unicode', 'Fedorovsk Unicode TT', 'Menaion Unicode', 'Menaion Unicode TT',
+	/* Unicode 5.1 Slavonic fonts: */ BukyVede, 'Hirmos Ponomar', 'Kliment Std', 'RomanCyrillic Std', Dilyana, Menaion, 'Menaion Medieval', Lazov, Code2000, 'DejaVu Sans', 
+	/* Unicode fallback: */ Code2001, 'Free Serif', 'TITUS Cyberbit Basic', 'Charis SIL', 'Doulos SIL', 'Chrysanthi Unicode', 'Bitstream Cyberbit', 'Bitstream CyberBase', 
+	Thryomanes, 'Lucida Grande', 'Free Sans', 'Arial Unicode MS', 'Microsoft Sans Serif', 'Lucida Sans Unicode' !important; 
+	font-size: 110%;
+	line-height: 1;
+	font-style: normal;
+}
+:lang(grc), :lang(el) {
+	font-family: 'Times New Roman', 'Arial Unicode MS', 'Lucida Sans Unicode', 'MS Mincho', Arial;
+	font-style: normal;
+}
+:lang(ar), :lang(fa), :lang(ps), :lang(ur) {
+	font-family: "Iranian Sans", Arial Unicode MS, Code2000, Traditional Arabic, sans-serif;
+	font-size: 110%;
+	direction: rtl;
+	unicode-bidi: isolate;
+	font-style: normal;
+}
+:lang(bo), :lang(tib) {
+	font-family: Jomolhari-ID, Tibetan Machine Uni, Tibetan Machine Web, Jomolhari, Microsoft Himalaya, sans-serif;
+	font-size: 130%;
+}
+:lang(egy) {
+	font-family: 'NewGardiner', 'Noto Sans Egyptian Hieroglyphs', Abydos, Aegyptus, 'Segoe UI Historic', sans-serif;
+	font-size: 150%;
+}
+:lang(syc) {
+	font-family: 'Estrangelo Edessa', 'San Francisco', 'Code2000', 'Bitstream Cyberbit', 'Bitstream CyberBase', 'Bitstream Vera', 'TITUS Cyberbit Basic', sans-serif;
+	font-size: 1.3em;
+	direction: rtl;
+	unicode-bidi: isolate;	
+}
+:lang(he) {
+	font-family: 'SBL Hebrew', 'SBL BibLit', 'Taamey David CLM', 'Taamey Frank CLM', Alef, 'Noto Sans Hebrew', Narkisim, Miriam, Kinryu, 'Arial Hebrew', Arial, 'Adobe Hebrew', serif;
+	direction: rtl;
+	unicode-bidi: isolate;
+}
+
+/* Watchlist details */
+.watchlist-msg {
+	background: var(--background-color-neutral-subtle, #f8f9fa);
+	border: 1px solid var(--border-color-base, #a2a9b1);
+	padding: 4px 0px 4px 4px;
+	font-size: 85%;
+	line-height: 1.4em;
+}
+
+.watchlist-msg-important {
+	background: var(--background-color-warning-subtle, #fef6e7);
+}
+
+.watchlist-msg-title {
+	float: right;
+	font-style: italic;
+	margin-left: 0.7em;
+}
+
+.watchlist-msg hr {
+	color: var(--wikt-palette-brightyellow, #fd4);
+    background-color: var(--wikt-palette-brightyellow, #fd4);
+}
+
+.watchlist-msg-close {
+	float: right;
+	margin-left: 0.5em;
+	cursor: pointer;
+	color: var(--color-progressiv, #04a);
+}
+
+.mw-rcfilters-enabled .watchlist-msg,
+.mw-rcfilters-enabled .mw-rcfilters-ui-watchlistTopSectionWidget-watchlistDetails .warningbox {
+	margin-top: 0.5em;
+}
+
+#mw-watchlist-form {
+	clear: both;
+}
+
+.mw-rcfilters-ui-watchlistTopSectionWidget-watchlistDetails .mw-rcfilters-ui-watchlistTopSectionWidget-editWatchlistButton {
+	margin-top: 1em;
+	text-align: inherit;
+}
+
+.mw-rcfilters-ui-watchlistTopSectionWidget-watchlistDetails .mw-rcfilters-ui-watchlistTopSectionWidget-editWatchlistButton .oo-ui-buttonWidget.oo-ui-buttonWidget {
+	margin-left: 0;
+}
+
+/* коррекция высоты строки первого заголовка для Google Chrome */
+#firstHeading { overflow: visible; }
+
+/* local wiktionary colors  */
+:root, .skin-invert, .notheme {
+	--wikt-palette-azureish-white: #DAEAFA;
+	--wikt-palette-light-slate: #CCFFFF;
+}
+@media screen {
+	.skin-theme-clientpref-night {
+	--wikt-palette-azureish-white: #666A86;
+	--wikt-palette-light-slate: #2B3856;
+	}
+}
+@media screen and (prefers-color-scheme: dark) {
+	.skin-theme-clientpref-os {
+	--wikt-palette-azureish-white: #666A86;
+	--wikt-palette-light-slate: #2B3856;
+	}
+}
+/* стили помет  */
+.label {
+	font-style: italic;	
+	cursor: help;
+}
+.mark {
+    background: var(--wikt-palette-light-slate, #CCFFFF);
+}
+/* стиль подсветки в [[Шаблон:выдел]] */
+.example-select {
+	background-color: var(--background-color-success-subtle, #dff2eb);
+	font-weight: bold;
+	color: inherit;
+}
+
+/* стиль таблиц словоизменения */
+table.morfotable {
+	float: right;
+    clear: right;
+    margin-left: 0.5em;
+    margin-bottom: 1em;
+    border: 1px solid var(--border-color-progressive, #6485d1);
+    border-collapse: collapse;
+}
+table.morfotable th {
+    background-color: var(--wikt-palette-alice-blue, #eef9ff);
+}
+table.morfotable th, table.morfotable td {
+    border: 1px solid var(--border-color-progressive, #6485d1);
+	padding: 0.2em 0.4em;
+}
+table.morfotable .grey {
+	background-color: var(--wikt-palette-lightergrey, #eeeeee);
+}
+
+/* Заголовки 1 уровня статей */
+.ns-0 #mw-content-text .mw-heading1 {
+   clear: none;
+   border-top: solid 1px var(--border-color-base);
+   padding-top: 0.2em;
+   background: var(--wikt-palette-azureish-white, #DAEAFA);
+   margin-bottom: 0.3em;
+}
+/* Заголовки 2 уровня статей */
+.ns-0 .mw-body .mw-heading2 h2 {
+  font-family: PT Sans;
+}
+
+/* Коррекция цвета кнопок в меню создания статей */
+#new-word-menu .mw-ui-button.mw-ui-progressive{
+    background: inherit;
+    color: inherit;
+    border: 1px solid var(--wikt-palette-grey-6, #B6B6B6);
+    text-shadow: inherit;
+}
+
+#new-word-menu .mw-ui-button.mw-ui-progressive:hover, 
+#new-word-menu .mw-ui-button.mw-ui-progressive:focus {
+    border-bottom-color: inherit;
+}
+
+/* точка после заголовка оглавления */
+.toclevel-1 > a > .tocnumber::after {
+    content: ".";
+}
+
+/* {древовидный список} */
+.treeview ul {
+    padding: 0;
+    margin: 0;
+}
+.treeview li {
+    padding: 0;
+    margin: 0;
+    list-style-type: none;
+    list-style-image: none;
+}
+.treeview li li {
+    background: url("//upload.wikimedia.org/wikipedia/commons/f/f2/Treeview-grey-line.png") no-repeat 0 -2981px;
+    /* @noflip */
+    padding-left: 20px;
+    text-indent: 0.3em;
+}
+.treeview li li.lastline {
+    background-position: 0 -5971px
+}
+.treeview li.emptyline > ul {
+    /* @noflip */
+    margin-left: -1px;
+}
+.treeview li.emptyline > ul > li:first-child {
+    background-position: 0 9px
+}
+
+/* три колонки */
+.col3 {
+-moz-column-count:3; 
+-moz-column-gap: 3em; 
+-webkit-column-count:3; 
+-webkit-column-gap: 3em; 
+column-count:3; 
+column-gap: 3em; 
+-webkit-column-width: 150px; 
+-moz-column-width: 150px; 
+column-width: 150px;
+}
+
+/* Скрыть содержимое */
+.offensive {
+ display: none;
+}
+
+/* Поддержка Tabbed Languages */
+ 
+#languageLinks .selectedTab a {
+	font-size: 19px;
+	color: var(--background-color-base, #000);
+	padding: 6px;
+	display: block;
+	border-left: 1px solid var(--wikt-palette-lightgrey, #CCC);
+	border-bottom: 1px solid var(--wikt-palette-lightgrey, #CCC);
+	margin-bottom: -3px;
+	background-color: var(--background-color-base, #000);
+	margin-right: -6px;
+	position: relative;
+	border-top: 1px solid var(--wikt-palette-lightgrey, #CCC);
+	white-space: nowrap;
+}
+ 
+#languageLinks .unselectedTab a {
+	font-size: 16px;
+	color: var(--wikt-palette-grey, #929292);
+	padding: 6px;
+	display: block;
+	border-left: 1px solid var(--wikt-palette-lightgrey, #CCC);
+	border-top: 1px solid var(--wikt-palette-lightgrey, #CCC);
+	border-bottom: 1px solid var(--wikt-palette-lightgrey, #CCC);
+	margin-bottom: -3px;
+	margin-left: 15px;
+	margin-right: -5px;
+	white-space: nowrap;
+	background-color: var(--wikt-palette-grey-1, #F6F6F6);
+}
+ 
+#languageLinks tr td {
+	padding: 0;
+}
+ 
+tr td.languageContainer {
+	padding-left: 8px;
+	padding-bottom: 10px;
+	padding-right: 8px;
+	border: 1px solid var(--wikt-palette-lightgrey, #CCC);
+	vertical-align: top;
+	width: 100%;
+}
+ 
+.unselectedtab {
+	margin-left: 5px;
+}
+ 
+.editlangsection {
+	margin-top: -13px;
+	margin-right: 5px;
+	border: 1px solid var(--wikt-palette-lightgrey, #CCC);
+	margin-bottom: -2px;
+	border-bottom-width: 0;
+	-webkit-border-top-left-radius: 5px;
+	-webkit-border-top-right-radius: 5px;
+	-moz-border-radius-topleft: 5px;
+	-moz-border-radius-topright: 5px;
+	border-top-left-radius: 5px;
+	border-top-right-radius: 5px;
+	color: var(--background-color-base, white);
+	line-height: 14px;
+	font-size: 12px;
+	padding: 0 7px;
+	text-align: center;
+	clear: both;
+	background-color: var(--background-color-base, white);
+	float: right;
+}
+ 
+#languageLinks a.addLanguageButton {
+	font-size: 12px;
+	padding: 3px 6px;
+}
+ 
+@media screen and (max-width:36em) {
+ 
+	#tabstable>tbody>tr>td {
+		display: block;
+		float: left;
+		width: 100%;
+	}
+ 
+	#languageLinks tr {
+		display: block;
+		float: left;
+		margin-bottom: -3px;
+		margin-left: -5px;
+		margin-top: 5px;
+	}
+ 
+	#languageLinks .unselectedTab a {
+		margin-left: 0;
+		margin-right: 5px;
+		border-right: 1px solid var(--wikt-palette-lightgrey, #CCC);
+	}
+ 
+	#languageLinks .selectedTab a {
+		margin-left: 0;
+		margin-right: 5px;
+		border-right: 1px solid var(--wikt-palette-lightgrey, #CCC);
+		border-bottom: 1px solid var(--border-color-inverted, #FFF);
+	}
+ 
+	#tabstable {
+		width: 100%;
+	}
+ 
+	#languageLinks a.addLanguageButton {
+		margin-top: 2px;
+		margin-bottom: 1px;
+	}
+ 
+	.editlangsection {
+		border-bottom-width: 1px;
+	}
+ 
+}
+
+/* Стили для расширения [[mw:Extension:Babel]] */
+/* Скрытие буквы N у родных языков, по аналогии со стандарными шаблонами */
+.mw-babel-box-level-N {
+	display: none;
+}
+
+/* for hidden inputbox in editintro */
+.cdx-text-input:has(input[type=hidden]) {
+  display: none;
+}

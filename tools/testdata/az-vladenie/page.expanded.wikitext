@@ -1,0 +1,12 @@
+==<div style="background:#EEEEFF">[[Rus dili|Rus dili]][[Kateqoriya:Rus dilindəki sözlər]]</div>==
+===[[:Kateqoriya:Nitq hissələri|İsim]][[Kateqoriya:İsim (Rus dili)]][[Kateqoriya:İsim]]===
+* [[şəkil:Flag of Russia.svg|22px]] rusca: <span lang="ru" xml:lang="ru">[[владение|владение]]</span> [[:ru:владение|<sup>(ru)</sup>]]
+*'''Heca''': вла-де-ние
+*'''Tələffüz''':  <span class="deprecated" title="This template call uses the deprecated 'lang' parameter. Use '1' instead.">''([[:Category:Successfully deprecated templates|deprecated use of <code>|lang=</code> parameter]])'' [[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[Appendix:Russian pronunciation|key]])</sup>:&#32;<span class="IPA">[vlá[d]e[n]je]</span><span class="previewonly error" style="font-size: small;>&#32;invalid IPA characters ([][])</span>[[Category:IPA pronunciations with invalid IPA characters|[]][[Category:IPA pronunciations with invalid IPA characters|]]][[Category:IPA pronunciations with invalid IPA characters|[]][[Category:IPA pronunciations with invalid IPA characters|]]][[Category:Russian 3-syllable words]][[Category:Russian terms with IPA pronunciation|ВЛАДЕНИЕ]]</span>[[Category:Pages using deprecated templates|ВЛАДЕНИЕ]]
+<p>[[Image:Ico_libri.png|20px]] '''Mənalar :''' 
+# Mülk, malikanə;
+# Torpaq, ölkə;
+# Sahib olma, malik olma, yiyələnmə, yiyəlik, sahiblik
+*'''Tərcümə''': [[şəkil:Flag of Azerbaijan.svg|22px]] azərbaycanca: <span lang="ru" xml:lang="ru">[[mülk|mülk]]</span> [[:ru:mülk|<sup>(ru)</sup>]], <span lang="ru" xml:lang="ru">[[malikanə|malikanə]]</span> [[:ru:malikanə|<sup>(ru)</sup>]]
+*'''Tərcümə''': [[şəkil:Flag of Azerbaijan.svg|22px]] azərbaycanca: <span lang="ru" xml:lang="ru">[[torpaq|torpaq]]</span> [[:ru:torpaq|<sup>(ru)</sup>]], <span lang="ru" xml:lang="ru">[[ölkə|ölkə]]</span> [[:ru:ölkə|<sup>(ru)</sup>]] 
+*'''Tərcümə''': [[şəkil:Flag of Azerbaijan.svg|22px]] azərbaycanca: <span lang="ru" xml:lang="ru">[[sahib olmaq|sahib olmaq]]</span> [[:ru:sahib olmaq|<sup>(ru)</sup>]], <span lang="ru" xml:lang="ru">[[malik olmaq|malik olmaq]]</span> [[:ru:malik olmaq|<sup>(ru)</sup>]], <span lang="ru" xml:lang="ru">[[yiyələnmə|yiyələnmə]]</span> [[:ru:yiyələnmə|<sup>(ru)</sup>]], <span lang="ru" xml:lang="ru">[[yiyəlik|yiyəlik]]</span> [[:ru:yiyəlik|<sup>(ru)</sup>]], <span lang="ru" xml:lang="ru">[[sahiblik|sahiblik]]</span> [[:ru:sahiblik|<sup>(ru)</sup>]]

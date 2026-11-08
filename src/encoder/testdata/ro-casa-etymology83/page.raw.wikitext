@@ -1,0 +1,123 @@
+{{wikipedia}}
+=={{limba|ron}}==
+{{-etimologie-}}
+Din latină ''[[casa]]''.
+{{-pronunție-}}
+* {{AFI}}: {{AFI|/'ka.sə/}}
+{{-substantiv-|ron}}
+{{substantiv-ron
+|gen={{f}}
+|nom-sg=casă
+|nom-pl=case
+|art-sg=casa
+|art-pl=casele
+|dat-sg=casei
+|dat-pl=caselor
+|voc-sg=casă
+|voc-pl=caselor
+}}
+#[[clădire]] [[destinat]]ă pentru a [[serv]]i de [[locuință]] [[om]]ului.
+#(''reg.'') [[cameră]], [[odaie]].
+#[[încăpere]] [[special]]ă într-o [[clădire]], [[avea|având]] o anumită [[destinație]].
+#[[cutie]] [[dreptunghiular]]ă în care se [[păstra|păstrează]] [[literă|literele]], [[semn]]ele etc. [[tipografic]]e de același [[caracter]].
+#[[gospodărie]].
+#[[totalitate]]a celor care [[locui]]esc împreună ([[forma|formând]] o [[familie]]); [[familie]].
+#[[dinastie]]; [[neam]].
+#:'''''Casa''' de Habsburg.''
+#[[căsnicie]], [[menaj]].
+#(''urmat de determinări'') [[nume]] [[dat]] unor [[instituție|instituții]], [[așezământ|așezăminte]], [[întreprindere|întreprinderi]], [[firmă|firme]] [[comercial]]e etc.
+#[[boală]] a [[vin]]urilor, pe care acestea o [[căpăta|capătă]] când [[ajunge|ajung]] în [[contact]] cu [[aer]]ul și care se [[caracteriza|caracterizează]] prin [[tulburare]] și prin [[schimbare]]a [[culoare|culorii]].
+{{-sin-}}
+[[locuință]], [[clădire]], [[locaș]]
+{{-deriv-}}
+* [[acasă]]
+* [[casnic]]
+* [[căscioară]]
+* [[căsean]]
+* [[căsișoară]]
+* [[căsoaie]]
+* [[căsulie]]
+* [[căsuță]]
+{{-comp-}}
+* [[casă de amanet]]
+* [[casă de bani]]
+* [[casă de veci]]
+* [[casa ascensorului]]
+* [[casa scării]]
+* [[casă de economii]]
+* [[casă de ajutor reciproc]]
+* [[casă de filme]]
+* [[casă de cultură]]
+* [[casă de nașteri]]
+* [[casă de vegetație]]
+* [[specialitatea casei]]
+{{-loc-}}
+*(''loc.adj.'') '''de casă''' = [[făcut]] în casă.
+{{-hiper-}}
+* [[clădire]]
+* [[localitate]]
+{{-expr-}}
+*''('''A avea''') ''' o casă de copii''' = (a avea) copii mulți''
+*'''''A-i fi cuiva casa casă și masa masă''' = a duce o viață ordonată, normală, liniștită''
+*'''''A nu avea ''' ('''nici''')''' casă, '''('''nici''')''' masă''' = a duce o viață neregulată, plină de griji, de frământări''
+*'''''A face''' (sau '''a duce''') '''casă '''('''bună''')''' cu cineva''' = a trăi cu cineva (în bună înțelegere), a se împăca bine''
+*'''''A duce casă bună cu ceva''' = a se împăca bine cu ceva''
+{{-trans-}}
+{{(}}
+*{{ara}}: {{trad|ar|بيت}} (bait) {{m}}
+*{{hrv}}: {{trad|hr|kuća}} {{f}}
+*{{eng}}: {{trad|en|house}}
+*{{epo}}: {{trad|eo|domo}}
+*{{fin}}: {{trad|fi|talo}}, {{trad|fi|koti}}
+*{{fra}}: {{trad|fr|maison}} {{f}}
+*{{dan}}: {{trad|da|hus}}
+*{{deu}}: {{trad|de|Haus}} {{n}}
+*{{heb}}: {{trad|he|בית}} (bait) {{m}}
+{{-}}
+*{{hun}}: {{trad|hu|ház}}
+*{{ita}}: {{trad|it|casa}} {{f}}
+*{{jpn}}: {{trad|ja|家}} (ie)
+*{{nld}}: {{trad|nl|huis}} {{n}}
+*{{pol}}: {{trad|pl|dom}} {{m}}
+*{{rus}}: {{trad|ru|дом}} {{m}}
+*{{spa}}: {{trad|es|casa}} {{f}}
+*{{swe}}: {{trad|sv|hus}} {{n}}
+{{)}}
+{{-etimologie-}}
+Din italiană ''[[cassa]]'', germană ''[[Kasse]]''.
+{{-pronunție-}}
+* {{AFI}}: {{AFI|/'ka.sə/}}
+{{-substantiv-|ron}}
+{{substantiv-ron
+|gen={{f}}
+|nom-sg=casă
+|nom-pl=case
+|art-sg=casa
+|art-pl=casele
+|dat-sg=casei
+|dat-pl=caselor
+|voc-sg=casă
+|voc-pl=caselor
+}}
+#[[dulap]] sau [[lădiță]] de [[fier]] în care [[fi|sunt]] [[ținut|ținuți]] [[ban]]i, [[hârtie|hârtii]] de [[valoare]] etc.
+#:'''''Casă''' de fier.''
+#:'''''Casă''' de bani.''
+#[[masă]], [[pupitru]] sau [[birou]] într-un [[magazin]], unde se [[achita|achită]] [[cost]]ul [[cumpărătură|cumpărăturilor]].
+#[[ghișeu]] sau [[încăpere]] într-o [[întreprindere]] sau într-o [[instituție]], unde se [[face|fac]] [[încasare|încasările]] și [[plată|plățile]], unde se [[elibera|eliberează]] [[bilet]]ele de [[călătorie]], de [[spectacol]] etc.
+#[[sumă]] de [[ban]]i de care [[dispune]] la un [[moment]] [[dat]] [[casierie|casieria]] unei [[instituție|instituții]] sau a unei [[întreprindere|întreprinderi]].
+{{-comp-}}
+* [[plus de casă]], [[minus de casă]]
+* [[registru de casă]]
+{{-expr-}}
+*'''''A face casa''' = a întocmi bilanțul încasărilor și al plăților unei zile''
+{{-trans-}}
+{{(}}
+{{-}}
+{{)}}
+{{-anagr-}}
+* [[ască|asca]]
+===Referințe===
+* DEX '98 via [https://dexonline.ro/ dexonline]
+
+[[Categorie:Casa în română]]
+[[Categorie:Enologie în română]]

@@ -1,0 +1,112 @@
+== [[File:Flag of Italy.svg|40px|border|bandiera italiana]] [[Appendice:Italiano|Italiano]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[aggettivo|Aggettivo]]''===
+[[Categoria:Aggettivi in italiano]] 
+
+'''giunto'''<small></small> ''m sing''
+
+{| style="float:right; margin-left:0.5em; margin-bottom:0.5em;border: 1px solid #AAAAAA; border-collapse:collapse;" cellpadding="3" rules="all"
+|- align="center"
+!&nbsp;
+! bgcolor="#FFFFE0" |&nbsp;''[[singolare]]''&nbsp;
+! bgcolor="#FFFFE0" |&nbsp;''[[plurale]]''&nbsp;
+|- align="center"
+! bgcolor="#FFFFE0" |&nbsp;''[[maschile]]''&nbsp;
+| &nbsp; [[giunto]]&nbsp;
+| &nbsp; [[giunti]]&nbsp;
+|- align="center"
+! bgcolor="#FFFFE0" |&nbsp;''[[femminile]]''&nbsp;
+| &nbsp; [[giunta]]&nbsp;
+| &nbsp; [[giunte]]&nbsp;
+|}
+
+# ''definizione mancante; se vuoi, <span class="plainlinks">[//it.wiktionary.org/w/index.php?title=giunto&action=edit aggiungila]</span> tu''[[Categoria:Pagine senza definizione - italiano]]
+
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in italiano]] 
+
+'''giunto'''<small>&nbsp;([[File:Wikipedia-logo.svg|20px|Wikipedia]] '''[[w:giunto|approfondimento]]''')</small> ''m'' ''sing'' (''pl.'': [[giunti]])
+# <small>(<i>[[architettura]]</i>)</small>[[Categoria:Architettura-IT]] <small>(<i>[[edilizia]]</i>)</small>[[Categoria:Edilizia-IT]] [[sottile]] [[interstizio]] tra un [[elemento]] di [[costruzione]] e l'[[altro]]
+# <small>(<i>[[meccanica]]</i>)</small>[[Categoria:Meccanica-IT]] <small>(<i>[[tecnologia]]</i>)</small>[[Categoria:Tecnologia-IT]] <small>(<i>[[ingegneria]]</i>)</small>[[Categoria:Ingegneria-IT]] [[dispositivo]] in [[grado]] di [[rendere]] [[solidali]] tra [[loro]] [[due]] [[estremità]] d'[[albero]] in [[modo]] [[tale]] che l'[[uno]] possa [[trasmettere]] un [[movimento]] [[torcente]] all'[[altro]]
+
+===[[Image:Open_book_01.svg|30px|]]''[[voce verbale|Voce verbale]]''===
+[[Categoria:Voci verbali in italiano]] 
+
+'''giunto'''<small></small>
+#participio passato  maschile singolare  di [[giungere]]
+
+=== [[File:Hyph abc.svg|45px]] [[sillabazione|Sillabazione]] ===
+ 
+; giùn | to
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/ˈd͡ʒunto/</span>
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+participio passato di giungere
+
+===[[File:Icona_sinonimi.png|35px]] [[sinonimi|Sinonimi]]===
+
+*[[venuto]], [[arrivato]], [[capitato]], [[pervenuto]], [[sopraggiunto]]
+*[[unito]], [[collegato]], [[congiunto]], [[accostato]], [[intrecciato]]
+*''(tecnologia)'' organo di collegamento, [[raccordo]], [[giuntura]], [[accoppiamento]]
+
+===[[immagine:Fairytale right blue.png|20px]][[immagine:Fairytale left blue.png|20px]] [[contrario|Contrari]]===
+
+*[[partito]], [[andato]], [[allontanato]]
+*[[diviso]], [[staccato]], [[separato]], [[disgiunto]]
+
+=== [[Image:Gnome-globe.svg|30px]] [[traduzione|Traduzione]] ===
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">[[unito]], [[congiunto]]
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[inglese]]: [[clasped, [[joined]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">[[arrivato]], [[pervenuto]]
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[inglese]]: [[arrived]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;"><small>(<i>[[meccanica]]</i>)</small>[[Categoria:Meccanica-IT]]
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[inglese]]: [[joint]], [[coupling]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">participio passato di [[giungere]]
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[inglese]]: [[clasped]]
+|}</div></div>
+
+<div class="NonModificabile">
+== [[Image:Nuvola apps bookcase.svg|30px|]] [[note|Note]] / [[riferimenti|Riferimenti]] ==
+</div>
+*[http://www.garzantilinguistica.it/ricerca/?q=giunto]]Lemmario italiano, Garzanti linguistica edizione on line
+* AA.VV., [https://www.treccani.it/vocabolario/ricerca/giunto/ ''Vocabolario Treccani''] edizione online su ''[https://www.treccani.it treccani.it]'', Istituto dell'Enciclopedia Italiana
+* Aldo Gabrielli, [https://grandidizionari.hoepli.it/Dizionario_Italiano/parola/G/giunto.aspx?query=giunto ''Grande Grande Libreria Online''] edizione online su ''[https://www.hoepli.it/ hoepli.it]'', Hoepli
+* AA.VV., [https://www.sapere.it/sapere/search.html?q=giunto&tipo_dizionario=Italiano ''Dizionario di italiano''] edizione on line su ''[https://www.sapere.it sapere.it]'', De Agostini Editore
+* AA.VV., [http://www.garzantilinguistica.it/ricerca/?q=giunto ''Lemmario italiano''] edizione on line su ''[http://www.garzantilinguistica.it garzantilinguistica.it]'', De Agostini Scuola
+* Francesco Sabatini e Vittorio Coletti, [http://dizionari.corriere.it/dizionario_italiano/G/giunto.shtml ''Il Sabatini Coletti''] edizione online su ''[http://dizionari.corriere.it corriere.it]'', RCS Mediagroup
+* AA.VV., [https://dizionari.corriere.it/dizionario_sinonimi_contrari/G/giunto.shtml ''Dizionario dei Sinonimi e dei Contrari''] edizione on line su ''[https://dizionari.corriere.it corriere.it]'', RCS Mediagroup
+* Enrico Olivetti, [https://www.dizionario-italiano.it/dizionario-italiano.php?lemma=GIUNTO100 ''Dizionario Italiano Olivetti''] edizione on line su ''[https://www.dizionario-italiano.it www.dizionario-italiano.it]'', Olivetti Media Communication
+* Tullio De Mauro, [https://dizionario.internazionale.it/parola/giunto ''Il nuovo De Mauro''] edizione online su ''[https://internazionale.it internazionale.it]'', Internazionale
+* Hoepli, [https://dizionari.repubblica.it/Italiano/G/giunto.html ''edizione 2018''] ospitato online su ''[https://dizionari.repubblica.it repubblica.it]''
+* WordReference.com, [http://www.wordreference.com/iten/giunto Versione on-line] Italiano-Inglese
+
+==Altri progetti==
+<div id="interProject" style="display: none; clear: both; border-top: 2px dotted #AAAAAA; margin-top: 2em"><div title="Collegamenti verso gli altri progetti Wikimedia">
+* [[w:giunto|Wikipedia]]
+</div></div>
+* [[File:Wikipedia-logo-v2.svg|link=w:|18px|Collabora a Wikipedia]] '''[[w:|Wikipedia]]''' contiene una voce  riguardante '''[[w:giunto|giunto]]'''

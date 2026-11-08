@@ -1256,6 +1256,34 @@ pub const Registry = struct {
         return try out.toOwnedSlice(a);
     }
 
+    /// A reviewed declaration role, not a claim that arbitrary Lua is pure.
+    /// The normal loader authenticates these complete module bodies and
+    /// their namespace/model roles before requesting this specialization.
+    pub const SourceSectionNameRole = enum { full_category_anchor };
+
+    pub const source_section_name_role_hashes = [_][]const u8{
+        "6a1d6dbc4244054c0c988e4ec699c471d838d3c27f5c1423489afe3e66d86ee5",
+        "cba69d1a55d3304ae1bd8bf9e22ea550bb7abc186ee76e08408d10fc72be3775",
+        "4e48c1836ba6a1d12efd360d7f43e9c926961bde376616feeab6196ad532b72f",
+        "289083173a85768300342e633300209a93af49e1d391e7a6495221e6487e78f4",
+    };
+
+    pub fn proveSourceSectionNameRole(provider: []const u8, links: []const u8, language_like: []const u8, language_data: []const u8) ?SourceSectionNameRole {
+        const sources = [_][]const u8{ provider, links, language_like, language_data };
+        for (sources, source_section_name_role_hashes) |source, digest| {
+            var hash: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(source, &hash, .{});
+            if (!std.mem.eql(u8, &std.fmt.bytesToHex(hash, .lower), digest)) return null;
+        }
+        return .full_category_anchor;
+    }
+
+    /// Only the finite literal full-language data declaration is imported. No
+    /// labels are stripped or inferred from a page's edition, script or title.
+    pub fn addSourceSectionLanguageDataLua(self: *Registry, source: []const u8, role: SourceSectionNameRole, module_base: []const u8) !void {
+        try positionalLanguageDataImportWithSections(self, source, module_base, role);
+    }
+
     /// An authenticated default L2 formatter is a heading role, never an alias.
     pub const SourceSectionHeading = struct { owner: ?Resolved };
 
@@ -3363,7 +3391,37 @@ test "positional provider proves finite getter finalizer selector and local iden
 
 // Finite positional-table proof; never evaluate Lua or follow aliases.
 // Commit names only after proving the complete literal table and export.
+fn sourceSectionFieldAllowsFull(key: []const u8, value: *const lua_parser.Expr) bool {
+    if (std.mem.eql(u8, key, "type")) return std.mem.eql(u8, literalString(value) orelse return false, "regular");
+    for ([_][]const u8{ "parent", "_code", "_fullCode", "_types", "_categoryName", "getTypes", "hasType", "getFullCode", "getCategoryName" }) |override|
+        if (std.mem.eql(u8, key, override)) return false;
+    return true;
+}
+
+fn sourceSectionFullLabel(registry: *const Registry, a: std.mem.Allocator, role: Registry.SourceSectionNameRole, code_value: []const u8, label: []const u8, family: ?[]const u8, full: bool) !?[]const u8 {
+    _ = role;
+    // In the pinned constructor, parentless ordinary language data gives
+    // _fullCode == _code; getTypes then marks it full. The ordinary finalizer
+    // supplies regular for an absent type. Parent/unknown type/override fields
+    // decline above, independently of the module's two/three-letter partition.
+    // The pinned languages/data alias table has no keys in that partition, so
+    // normalize_code cannot change an admitted record's code.
+    if (!full or !validLocalHeading(label) or family == null or std.mem.eql(u8, family.?, "qfa-sub")) return null;
+    const canonical = registry.resolveCanonicalName(label) orelse return null;
+    const trusted = registry.resolveTrusted(label) orelse return null;
+    if (!std.mem.eql(u8, canonical.code, code_value) or !std.mem.eql(u8, trusted.code, code_value)) return null;
+    // getCategoryName and Module:links agree on this exact section spelling.
+    // Already-prefixed names remain canonical, rather than gaining a prefix.
+    if (std.mem.startsWith(u8, label, "ภาษา") or std.mem.startsWith(u8, label, "ภาษณ์")) return null;
+    const section = try std.mem.concat(a, u8, &.{ "ภาษา", label });
+    return if (validLocalHeading(section)) section else null;
+}
+
 fn positionalLanguageDataImport(registry: *Registry, source: []const u8, module_base: []const u8) !void {
+    return positionalLanguageDataImportWithSections(registry, source, module_base, null);
+}
+
+fn positionalLanguageDataImportWithSections(registry: *Registry, source: []const u8, module_base: []const u8, section_role: ?Registry.SourceSectionNameRole) !void {
     var chunk = lua_parser.parse(registry.arena.child_allocator, source) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => return,
@@ -3409,10 +3467,15 @@ fn positionalLanguageDataImport(registry: *Registry, source: []const u8, module_
                 const fields = literalTable(assignment.values[0]) orelse return;
                 var first: ?[]const u8 = null;
                 var list_seen = false;
+                var list_count: usize = 0;
+                var family: ?[]const u8 = null;
+                var full = true;
                 var named: ?[]const u8 = null;
                 var has_parent = false;
                 for (fields) |field| switch (field) {
                     .list => |value| {
+                        list_count += 1;
+                        if (list_count == 3) family = literalString(value);
                         if (list_seen) continue;
                         list_seen = true;
                         first = literalString(value) orelse return;
@@ -3420,6 +3483,7 @@ fn positionalLanguageDataImport(registry: *Registry, source: []const u8, module_
                     },
                     .named => |value| {
                         if (std.mem.eql(u8, value.name, "parent")) has_parent = true;
+                        if (section_role != null and !sourceSectionFieldAllowsFull(value.name, value.value)) full = false;
                         if (std.mem.eql(u8, value.name, "canonicalName")) {
                             if (named != null) return;
                             named = literalString(value.value) orelse return;
@@ -3429,6 +3493,7 @@ fn positionalLanguageDataImport(registry: *Registry, source: []const u8, module_
                         // A numeric/computed key could replace positional 1.
                         const key_name = literalString(value.key) orelse return;
                         if (std.mem.eql(u8, key_name, "parent")) has_parent = true;
+                        if (section_role != null and !sourceSectionFieldAllowsFull(key_name, value.value)) full = false;
                         if (std.mem.eql(u8, key_name, "canonicalName")) {
                             if (named != null) return;
                             named = literalString(value.value) orelse return;
@@ -3437,7 +3502,10 @@ fn positionalLanguageDataImport(registry: *Registry, source: []const u8, module_
                 };
                 const label = first orelse return;
                 if (named) |name| if (!std.mem.eql(u8, name, label)) return;
-                try pending.append(temporary, .{ .key = key, .value = label, .has_parent = has_parent });
+                if (section_role) |role| {
+                    const section = (try sourceSectionFullLabel(registry, temporary, role, key, label, family, full)) orelse continue;
+                    try pending.append(temporary, .{ .key = key, .value = section, .has_parent = has_parent });
+                } else try pending.append(temporary, .{ .key = key, .value = label, .has_parent = has_parent });
             },
             .return_stmt => |statement| {
                 if (!initialized or statement.values.len != 1 or !positionalLanguageDataExport(statement.values[0])) return;
@@ -3449,7 +3517,7 @@ fn positionalLanguageDataImport(registry: *Registry, source: []const u8, module_
     if (!exported) return;
     for (pending.items) |entry| {
         try registry.addLocalAlias(entry.value, entry.key);
-        try registry.addSourceFullName(entry.key, if (entry.has_parent) null else entry.value);
+        if (section_role == null) try registry.addSourceFullName(entry.key, if (entry.has_parent) null else entry.value);
     }
 }
 
@@ -4499,4 +4567,163 @@ test "captured preferred case retains trust only across same owner strong promot
     try ambiguous.addLua("return { [\"angol\"]=\"fr\" }");
     try std.testing.expect(ambiguous.resolveTrusted("Angol") == null);
     try std.testing.expect(ambiguous.resolveStrong("angol") == null);
+}
+
+const SourceSectionNameRoleTest = struct {
+    const provider = @embedFile("testdata/th-kip-role/module-36388.lua");
+    const links = @embedFile("testdata/th-kip-role/module-36044.lua");
+    const language_like = @embedFile("testdata/th-kip-role/module-272817.lua");
+    const language_data = @embedFile("testdata/th-kip-role/module-324680.lua");
+    const finish = "\nreturn require(\"Module:languages\").finalizeData(m, \"language\")";
+    fn proof() !Registry.SourceSectionNameRole {
+        return Registry.proveSourceSectionNameRole(provider, links, language_like, language_data) orelse error.TestUnexpectedResult;
+    }
+    fn registry(a: std.mem.Allocator) !Registry {
+        var out = Registry.empty(a);
+        errdefer out.deinit();
+        // The declared content code must have its captured row even though the
+        // section-role controls below exercise independently installed owners.
+        try out.addTsv("# content-language\tth\n# mediawiki\nth\tไทย\tth\tThai\ttha\nen\tอังกฤษ\nnl\tดัตช์\nde\tเยอรมัน\nfr\tฝรั่งเศส\nit\tอิตาลี\nes\tสเปน\npt\tโปรตุเกส\nda\tภาษาเดนมาร์ก\ntr\tภาษณ์ตุรกี\nno\tนอร์เวย์\npl\tโปแลนด์\nru\tรัสเซีย\nar\tอาหรับ\nfi\tฟินแลนด์\nycr\tครีโอล\n");
+        try out.addLua("return { [\"อังกฤษ\"]=\"en\", [\"ดัตช์\"]=\"nl\", [\"เยอรมัน\"]=\"de\", [\"ฝรั่งเศส\"]=\"fr\", [\"อิตาลี\"]=\"it\", [\"สเปน\"]=\"es\", [\"โปรตุเกส\"]=\"pt\", [\"ภาษาเดนมาร์ก\"]=\"da\", [\"ภาษณ์ตุรกี\"]=\"tr\", [\"นอร์เวย์\"]=\"no\", [\"โปแลนด์\"]=\"pl\", [\"รัสเซีย\"]=\"ru\", [\"อาหรับ\"]=\"ar\", [\"ฟินแลนด์\"]=\"fi\", [\"ครีโอล\"]=\"ycr\" }");
+        return out;
+    }
+};
+
+test "section name declaration role requires all exact reviewed provider helper bodies" {
+    const F = SourceSectionNameRoleTest;
+    try std.testing.expect(Registry.proveSourceSectionNameRole(F.provider, F.links, F.language_like, F.language_data) != null);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const changed_provider = try std.mem.concat(a, u8, &.{ F.provider, "\n" });
+    const changed_links = try std.mem.replaceOwned(u8, a, F.links, "anchor_encode(lang:getCategoryName())", "anchor_encode(lang:getFullName())");
+    const changed_types = try std.mem.replaceOwned(u8, a, F.language_like, "local types = self:getTypes()", "local types = {} ");
+    try std.testing.expect(!std.mem.eql(u8, changed_links, F.links));
+    try std.testing.expect(!std.mem.eql(u8, changed_types, F.language_like));
+    try std.testing.expect(Registry.proveSourceSectionNameRole(changed_provider, F.links, F.language_like, F.language_data) == null);
+    try std.testing.expect(Registry.proveSourceSectionNameRole(F.provider, changed_links, F.language_like, F.language_data) == null);
+    try std.testing.expect(Registry.proveSourceSectionNameRole(F.provider, F.links, changed_types, F.language_data) == null);
+    try std.testing.expect(Registry.proveSourceSectionNameRole(F.links, F.provider, F.language_like, F.language_data) == null);
+    try std.testing.expect(Registry.proveSourceSectionNameRole(F.provider, F.links, "", F.language_data) == null);
+    const changed_aliases = try std.mem.replaceOwned(u8, a, F.language_data, "[\"EL.\"] = \"la-ecc\"", "[\"en\"] = \"nl\"");
+    try std.testing.expect(!std.mem.eql(u8, changed_aliases, F.language_data));
+    try std.testing.expect(Registry.proveSourceSectionNameRole(F.provider, F.links, F.language_like, changed_aliases) == null);
+}
+
+test "section name role admits proved full rows and preserves canonical prefixed and nonfull labels" {
+    const F = SourceSectionNameRoleTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var r = try F.registry(a); defer r.deinit();
+    try r.addTsv("# mediawiki\nsv\tunsafe<label>\n");
+    try r.addLua("return { [\"unsafe<label>\"] = \"sv\" }");
+    const before_heading = (r.resolve("en") orelse return error.TestUnexpectedResult).heading;
+    const data =
+        \\local m = {}
+        \\m["en"] = {"อังกฤษ", 1860, "gmw-ang", metadata = {"literal", 1, {flag = true}}}
+        \\m["nl"] = {"ดัตช์", 7411, "gmw-frk", type = "regular"}
+        \\m["de"] = {"เยอรมัน", 188, "gmw", parent = "en"}
+        \\m["fr"] = {"ฝรั่งเศส", 150, "roa", type = "etymology-only"}
+        \\m["it"] = {"อิตาลี", 652, "roa", type = unknown}
+        \\m["es"] = {"สเปน", 1321, "roa", getCategoryName = function() return "other" end}
+        \\m["pt"] = {"โปรตุเกส", 5146, "qfa-sub"}
+        \\m["da"] = {"ภาษาเดนมาร์ก", 9035, "gmw"}
+        \\m["tr"] = {"ภาษณ์ตุรกี", 256, "trk"}
+        \\m["no"] = {"นอร์เวย์", 9043, "gmw", type = "reconstructed"}
+        \\m["pl"] = {"โปแลนด์", 809, "zlw", _fullCode = "other"}
+        \\m["ru"] = {"Russian wrong", 7737, "zle"}
+        \\m["ar"] = {"อาหรับ", 13955, "sem", parent = nil}
+        \\m["fi"] = {"ฟินแลนด์", 1412, "urj", type = nil}
+        \\m["sv"] = {"unsafe<label>", 9027, "gmw"}
+    ;
+    try r.addSourceSectionLanguageDataLua(data ++ F.finish, try F.proof(), "languages/data/2");
+    try std.testing.expect(r.resolveTrusted("ภาษาunsafe<label>") == null);
+    try std.testing.expectEqualStrings("en", (r.resolveTrusted("ภาษาอังกฤษ") orelse return error.TestUnexpectedResult).code);
+    try std.testing.expectEqualStrings("nl", (r.resolveTrusted("ภาษาดัตช์") orelse return error.TestUnexpectedResult).code);
+    try std.testing.expectEqualStrings(before_heading, (r.resolve("en") orelse return error.TestUnexpectedResult).heading);
+    try std.testing.expectEqualStrings("en", (r.resolveStrong("อังกฤษ") orelse return error.TestUnexpectedResult).code);
+    try std.testing.expect(r.resolveStrong("ภาษาอังกฤษ") == null);
+    try std.testing.expectEqualStrings("da", (r.resolveTrusted("ภาษาเดนมาร์ก") orelse return error.TestUnexpectedResult).code);
+    try std.testing.expectEqualStrings("tr", (r.resolveTrusted("ภาษณ์ตุรกี") orelse return error.TestUnexpectedResult).code);
+    for ([_][]const u8{ "ภาษาเยอรมัน", "ภาษาฝรั่งเศส", "ภาษาอิตาลี", "ภาษาสเปน", "ภาษาโปรตุเกส", "ภาษานอร์เวย์", "ภาษาโปแลนด์", "ภาษาRussian wrong", "ภาษาอาหรับ", "ภาษาฟินแลนด์", "ภาษาภาษาเดนมาร์ก", "ภาษาภาษณ์ตุรกี", "ภาษาคำนาม", "ภาษาEnglish", "ภาษาอังกฤษเพิ่มเติม" }) |unknown|
+        try std.testing.expect(r.resolveTrusted(unknown) == null);
+    try r.addSourceSectionLanguageDataLua("local m = {}\nm[\"ycr\"] = {\"ครีโอล\", 1, \"crp\"}" ++ F.finish, try F.proof(), "languages/data/3/y");
+    try std.testing.expectEqualStrings("ycr", (r.resolveTrusted("ภาษาครีโอล") orelse return error.TestUnexpectedResult).code);
+}
+
+test "section name declarations keep ambiguity sticky and refuse unproved data exports" {
+    const F = SourceSectionNameRoleTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var checkpoint: []const u8 = "sticky local conflict";
+    errdefer std.debug.print("section-name ambiguity checkpoint={s}\n", .{checkpoint});
+    const data = "local m = {}\nm[\"en\"] = {\"อังกฤษ\", 1860, \"gmw-ang\"}";
+    var collision = try F.registry(a); defer collision.deinit();
+    try collision.addLocalAlias("ภาษาอังกฤษ", "nl");
+    try collision.addSourceSectionLanguageDataLua(data ++ F.finish, try F.proof(), "languages/data/2");
+    try std.testing.expect(collision.resolveTrusted("ภาษาอังกฤษ") == null);
+    try collision.addLocalAlias("ภาษาอังกฤษ", "en");
+    try std.testing.expect(collision.resolveTrusted("ภาษาอังกฤษ") == null);
+    checkpoint = "independent Strong canonical owner";
+    var exact_owner = try F.registry(a); defer exact_owner.deinit();
+    try exact_owner.addLua("return { [\"ภาษาอังกฤษ\"] = \"nl\" }");
+    try exact_owner.addSourceSectionLanguageDataLua(data ++ F.finish, try F.proof(), "languages/data/2");
+    // A new canonical source name is Strong, not a captured Trusted alias.
+    // Its exact owner still outranks the lower-authority section alias.
+    try std.testing.expectEqualStrings("nl", (exact_owner.resolveStrong("ภาษาอังกฤษ") orelse return error.TestUnexpectedResult).code);
+    try std.testing.expect(exact_owner.resolveTrusted("ภาษาอังกฤษ") == null);
+    for ([_][]const u8{
+        data ++ "\nreturn m",
+        data ++ "\nm[\"en\"][1] = \"replacement\"" ++ F.finish,
+        data ++ "\nm[\"nl\"] = {\"ดัตช์\", 7411, \"gmw\", poison = (function() m[\"en\"].parent = \"nl\"; return true end)()}" ++ F.finish,
+        "local m = {}\nm[\"en\"] = {\"อังกฤษ\", 1860, \"gmw-ang\", [1] = \"other\"}" ++ F.finish,
+        "local m = {}\nm[\"en\"] = {\"อังกฤษ\", 1860, \"gmw-ang\"}\nm[\"en\"] = {\"อังกฤษ\", 1860, \"gmw-ang\"}" ++ F.finish,
+    }, 0..) |unproved, index| {
+        checkpoint = switch (index) {
+            0 => "unproved bare export",
+            1 => "field-one replacement",
+            2 => "foreign row mutation",
+            3 => "numeric field override",
+            4 => "duplicate row",
+            else => unreachable,
+        };
+        var r = try F.registry(a); defer r.deinit();
+        try r.addSourceSectionLanguageDataLua(unproved, try F.proof(), "languages/data/2");
+        try std.testing.expect(r.resolveTrusted("ภาษาอังกฤษ") == null);
+    }
+}
+
+
+test "section aliases do not overwrite positional full name authority or parent refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const F = SourceSectionNameRoleTest;
+    const role = try F.proof();
+    const positional = (try Registry.provePositionalLanguageProvider(a, PositionalProviderSchema.source)) orelse return error.TestUnexpectedResult;
+    const data = "local m={} m['en']={'อังกฤษ',1860,'gmw-ang'} m['nl']={'ดัตช์',7411,'gmw-frk',parent='en'}" ++ F.finish;
+    for ([_]bool{ false, true }) |section_first| {
+        var registry = try F.registry(a); defer registry.deinit();
+        if (section_first) {
+            try registry.addSourceSectionLanguageDataLua(data, role, "languages/data/2");
+            try std.testing.expectEqual(@as(usize, 0), registry.source_full_names.count());
+            try std.testing.expectEqualStrings("en", (registry.resolveTrusted("ภาษาอังกฤษ") orelse return error.TestUnexpectedResult).code);
+        }
+        try registry.addPositionalLanguageDataLua(data, positional, "languages/data/2");
+        const original_name = (registry.source_full_names.get("en") orelse return error.TestUnexpectedResult) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("อังกฤษ", original_name);
+        try std.testing.expect(registry.source_full_names.contains("nl"));
+        try std.testing.expect(registry.source_full_names.get("nl").? == null);
+        try registry.addSourceSectionLanguageDataLua(data, role, "languages/data/2");
+        try std.testing.expectEqual(@as(usize, 2), registry.source_full_names.count());
+        try std.testing.expectEqualStrings(original_name, (registry.source_full_names.get("en") orelse return error.TestUnexpectedResult) orelse return error.TestUnexpectedResult);
+        try std.testing.expect(registry.source_full_names.get("nl").? == null);
+        try std.testing.expectEqualStrings("en", (registry.resolveTrusted("ภาษาอังกฤษ") orelse return error.TestUnexpectedResult).code);
+        try std.testing.expectEqualStrings("en", (registry.resolveStrong("อังกฤษ") orelse return error.TestUnexpectedResult).code);
+        try std.testing.expect(registry.resolveStrong("ภาษาอังกฤษ") == null);
+        try std.testing.expect(registry.resolveTrusted("ภาษาดัตช์") == null);
+        const parented = "local m={} m['en']={'อังกฤษ',1860,'gmw-ang',parent='nl'}" ++ F.finish;
+        try registry.addPositionalLanguageDataLua(parented, positional, "languages/data/2");
+        try std.testing.expect(registry.source_full_names.get("en").? == null);
+        try registry.addSourceSectionLanguageDataLua(data, role, "languages/data/2");
+        try std.testing.expect(registry.source_full_names.get("en").? == null);
+    }
 }

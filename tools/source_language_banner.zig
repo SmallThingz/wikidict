@@ -338,3 +338,41 @@ pub fn parseCodeDeclaration(source: []const u8, ns: *const namespaces.Registry) 
     if (ns.ofTitle(category_prefix).id != 14) return null;
     return category_prefix;
 }
+
+
+// A finite source contract for the selected wrapper, formatter and name table.
+// Hashes identify actual decoded NS10 bodies, not an edition or language alias.
+fn categoryRoleHash(source: []const u8, expected: []const u8) bool {
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    return std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), expected);
+}
+pub fn categoryH1ProofAlloc(a: std.mem.Allocator, wrapper: []const u8, formatter: []const u8, names: []const u8, ns: *const namespaces.Registry, registry: *const languages.Registry, code: []const u8) !?languages.SourceLanguageBanner {
+    if (!categoryRoleHash(wrapper, "81378725d19d6ef9825d615c24cf3b9ede71f20be1de3ff45fd8765620c374a2") or
+        !categoryRoleHash(formatter, "b3f929541a6e16f654ce30f05ce8edfd6caa72597b41d6bb4a57366b4c59748c") or
+        !categoryRoleHash(names, "5580cf3a6bdef83cb2e3be22fb14e8fcb37e200f398b2e58c15cf8957a836757")) return null;
+    const call = "{{-lingua-|";
+    const end = std.mem.indexOf(u8, wrapper, "}}") orelse return null;
+    if (!std.mem.startsWith(u8, wrapper, call) or end < call.len or !std.mem.eql(u8, wrapper[call.len..end], code) or
+        !registry.codes.contains(code) or ns.ofTitle("Categoría:proof").id != 14) return null;
+    var selected: ?[]const u8 = null;
+    var rows = std.mem.splitScalar(u8, names, '\n');
+    while (rows.next()) |row| {
+        if (!std.mem.startsWith(u8, row, "|")) continue;
+        const eq = std.mem.indexOfScalar(u8, row, '=') orelse continue;
+        if (!std.mem.eql(u8, std.mem.trim(u8, row[1..eq], " \t"), code)) continue;
+        if (selected != null) return null;
+        selected = std.mem.trim(u8, row[eq + 1 ..], " \t\r");
+    }
+    const name = selected orelse return null;
+    if (!plain(name) or name[0] < 'a' or name[0] > 'z' or !registry.sourceBannerNameMatches(code, name)) return null;
+    const label = try a.dupe(u8, name);
+    errdefer a.free(label);
+    label[0] = std.ascii.toUpper(label[0]);
+    if (!registry.sourceBannerNameMatches(code, label)) { a.free(label); return null; }
+    const trusted = registry.resolveStrong(label) orelse registry.resolveSourceTrusted(label) orelse { a.free(label); return null; };
+    if (!std.mem.eql(u8, trusted.code, code)) { a.free(label); return null; }
+    const close = std.mem.indexOfScalar(u8, formatter, '>') orelse { a.free(label); return null; };
+    const heading = try std.fmt.allocPrint(a, "{s}[[Categoría:{s}]]<span class=\"bluetogreen\">[[:Categoría:{s}|{s}]]</span></h1>", .{ formatter[0 .. close + 1], label, label, label });
+    return .{ .heading = heading, .level = 1, .target = label, .label = label };
+}
